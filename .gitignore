@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Python virtual environment
+venv/
+
+# Build output
+dist/
+build/
+
+# Environment variables (contains secrets)
+.env
+
+# Logs
+*.log
+logs/
+
+# Media uploads (user-generated content)
+media/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Static files (collected by Django)
+static/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+
+# Debug artifacts
+vite_error.txt
+vite_output.txt
