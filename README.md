@@ -1,11 +1,5 @@
 <div align="center">
 
-  <!-- ── Logo ── -->
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="frontend/public/logo.png">
-    <img src="frontend/public/logo.png" alt="E-Boses Logo" width="160" height="160">
-  </picture>
-
   <br/>
 
   <!-- ── Tagline ── -->
