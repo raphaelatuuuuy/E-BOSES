@@ -1,0 +1,8 @@
+{
+  "name": "@eboses/imports",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Import path aliases for monorepo",
+  "main": "src/index.ts",
+  "scripts": {}
+}
