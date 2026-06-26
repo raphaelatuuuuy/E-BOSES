@@ -1,9 +1,0 @@
-{
-  "name": "@eboses/shared",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "description": "Shared types, constants, and enums for E-Boses",
-  "main": "src/index.ts",
-  "scripts": {}
-}
