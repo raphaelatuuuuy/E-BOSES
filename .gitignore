@@ -8,8 +8,13 @@ venv/
 dist/
 build/
 
+# Old references
+old frontend reference/
+
 # Environment variables (contains secrets)
 .env
+.env.*
+!.env.example
 
 # Logs
 *.log
@@ -37,3 +42,6 @@ Thumbs.db
 # Debug artifacts
 vite_error.txt
 vite_output.txt
+
+# Turbo cache
+.turbo/
