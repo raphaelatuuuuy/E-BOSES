@@ -134,6 +134,8 @@ The `.env.example` contains configuration scaffolding for:
 | <img src="https://img.shields.io/badge/PaddleOCR-2563EB?style=flat-square&logo=python&logoColor=white" alt="PaddleOCR" /> | PaddleOCR | Document OCR pipeline |
 | <img src="https://img.shields.io/badge/IP2GEO-7C3AED?style=flat-square&logo=googlemaps&logoColor=white" alt="IP2GEO" /> | IP2GEO | Geolocation |
 | <img src="https://img.shields.io/badge/Google%20OAuth-4285F4?style=flat-square&logo=google&logoColor=white" alt="Google OAuth" /> | Google OAuth | Social login |
+| <img src="https://img.shields.io/badge/YOLOv8-111827?style=flat-square&logo=python&logoColor=white" alt="YOLOv8" /> | YOLOv8 | Image analysis model for assessing submitted complaint photos |
+| <img src="https://img.shields.io/badge/RoBERTa%20Tagalog-9333EA?style=flat-square&logo=huggingface&logoColor=white" alt="RoBERTa Tagalog" /> | RoBERTa (Tagalog) | NLP model for distinguishing genuine vs. fake complaint text |
 
 ## Getting Started
 
