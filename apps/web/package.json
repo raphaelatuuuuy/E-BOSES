@@ -12,9 +12,15 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@react-three/fiber": "^9.6.1",
+    "@shadergradient/react": "^2.4.20",
     "@workspace/ui": "*",
+    "lucide-react": "^0.561.0",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6"
+    "react-dom": "^19.2.6",
+    "three": "^0.184.0",
+    "three-stdlib": "^2.36.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^10",
