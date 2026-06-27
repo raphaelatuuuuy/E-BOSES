@@ -1,4 +1,5 @@
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Clash+Display:wght@500;600;700&display=swap");
 @import "tailwindcss";
 @source "../../../../apps/**/*.{ts,tsx}";
 @source "../../../../components/**/*.{ts,tsx}";
@@ -29,7 +30,7 @@
   --civic-heading: #020c4e;
   --civic-link: #1f6c98;
   --civic-primary-strong: #ff5003;
-  --radius: 0.75rem;
+  --radius: 0;
 }
 
 .dark {
@@ -79,7 +80,15 @@
   --font-sans:
     "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
+  --font-heading:
+    "Clash Display", "Inter", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --animate-fade-slide-up: fadeSlideUp 0.5s ease-out both;
+}
+
+@keyframes gradientShift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
 }
 
 @keyframes fadeSlideUp {
