@@ -12,12 +12,19 @@ const GRADIENTS = [
   "bg-gradient-to-tr from-[#ff5003] via-[#ff8133] to-[#020c4e]",
 ]
 
+const TAGLINES = [
+  "Stronger connections. Smarter communities.",
+  "Voices heard. Actions taken.",
+  "Every concern heard. Every emergency handled.",
+]
+
 export default function SignUpPage({ onSignIn }: SignUpPageProps) {
   const gradient = useMemo(() => GRADIENTS[Math.floor(Math.random() * GRADIENTS.length)], [])
+  const tagline = useMemo(() => TAGLINES[Math.floor(Math.random() * TAGLINES.length)], [])
 
   return (
-    <main className="grid min-h-svh w-full lg:grid-cols-[40fr_60fr]">
-      <section className="relative flex flex-col p-6 md:p-10 overflow-y-auto">
+    <main className="grid min-h-svh w-full lg:h-svh lg:grid-cols-[40fr_60fr] lg:overflow-hidden">
+      <section className="relative flex flex-col overflow-y-auto p-6 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden md:p-10 lg:min-h-0">
         <button
           type="button"
           onClick={onSignIn}
@@ -32,7 +39,7 @@ export default function SignUpPage({ onSignIn }: SignUpPageProps) {
         </div>
       </section>
       <section
-        className="relative hidden h-full min-h-screen lg:block overflow-hidden"
+        className="relative hidden overflow-hidden lg:block lg:h-svh"
         aria-hidden="true"
       >
         <div
@@ -42,7 +49,7 @@ export default function SignUpPage({ onSignIn }: SignUpPageProps) {
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
         <div className="absolute bottom-0 left-0 right-0 p-8 md:p-10">
           <h2 className="font-serif text-balance text-3xl leading-tight text-white md:text-4xl">
-            Stronger connections. Smarter communities.
+            {tagline}
           </h2>
         </div>
       </section>

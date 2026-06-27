@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { XIcon } from "lucide-react"
+import { FileImageIcon, FileTextIcon, XIcon } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Calendar } from "@workspace/ui/components/calendar"
@@ -21,6 +21,7 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 
 import { useSignUpForm } from "@/features/auth/hooks/use-sign-up-form"
+import { getProofOfResidencyFileError } from "@/features/auth/schemas/sign-up-schema"
 
 interface SignUpFormProps extends React.ComponentProps<"div"> {
   onSignIn?: () => void
@@ -31,28 +32,75 @@ export function SignUpForm({
   onSignIn,
   ...props
 }: SignUpFormProps) {
-  const { errors, handleChange, handleSubmit, statusMessage, values } =
+  const { errors, handleChange, handleSubmit, setFieldError, statusMessage, values } =
     useSignUpForm()
 
   const [dateOpen, setDateOpen] = React.useState(false)
   const [selectedDate, setSelectedDate] = React.useState<Date | undefined>()
-
-  const [agree, setAgree] = React.useState(false)
-  const [attachments, setAttachments] = React.useState<File[]>([])
+  const firstBirthMonth = React.useMemo(() => new Date(1900, 0), [])
+  const lastBirthMonth = React.useMemo(
+    () => new Date(new Date().getFullYear(), 11),
+    [],
+  )
 
   function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files || [])
-    const valid = files.filter((f) => {
-      const isImage = f.type.startsWith("image/")
-      const isPdf = f.type === "application/pdf"
-      return (isImage || isPdf) && f.size <= 5 * 1024 * 1024
-    })
-    setAttachments((prev) => [...prev, ...valid])
+    const files = Array.from(e.target.files ?? [])
+
+    if (files.length === 0) {
+      return
+    }
+
+    const nextFiles = [...values.proofOfResidency]
+    const invalidFiles: string[] = []
+
+    for (const file of files) {
+      const error = getProofOfResidencyFileError(file)
+
+      if (error) {
+        invalidFiles.push(`${file.name}: ${error}`)
+        continue
+      }
+
+      const alreadySelected = nextFiles.some(
+        (currentFile) =>
+          currentFile.name === file.name &&
+          currentFile.size === file.size &&
+          currentFile.lastModified === file.lastModified,
+      )
+
+      if (!alreadySelected) {
+        nextFiles.push(file)
+      }
+    }
+
+    handleChange("proofOfResidency", nextFiles)
+    setFieldError("proofOfResidency", invalidFiles[0])
     e.target.value = ""
   }
 
   function removeAttachment(index: number) {
-    setAttachments((prev) => prev.filter((_, i) => i !== index))
+    const nextFiles = values.proofOfResidency.filter((_, i) => i !== index)
+
+    handleChange("proofOfResidency", nextFiles)
+    setFieldError(
+      "proofOfResidency",
+      nextFiles.length === 0
+        ? "Upload at least one valid government-issued ID or bill."
+        : undefined,
+    )
+  }
+
+  function formatFileSize(size: number) {
+    if (size < 1024 * 1024) {
+      return `${Math.ceil(size / 1024)} KB`
+    }
+
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`
+  }
+
+  function getAttachmentTypeLabel(file: File) {
+    const extension = file.name.split(".").pop()?.toUpperCase()
+    return extension === "PDF" ? "PDF document" : `${extension ?? "Image"} image`
   }
 
   return (
@@ -119,7 +167,11 @@ export function SignUpForm({
                   className={cn(
                     "border-input bg-white flex h-9 w-full items-center rounded-none border px-3 py-1 text-sm shadow-xs",
                     selectedDate ? "text-foreground" : "text-muted-foreground",
+                    errors.dateOfBirth
+                      ? "border-destructive shadow-[0_0_0_3px_rgba(220,38,38,0.15)]"
+                      : "focus-visible:border-ring focus-visible:shadow-[0_0_0_3px_rgba(255,129,51,0.15)]",
                   )}
+                  aria-invalid={Boolean(errors.dateOfBirth)}
                 >
                   {selectedDate
                     ? (() => {
@@ -137,8 +189,8 @@ export function SignUpForm({
                   selected={selectedDate}
                   defaultMonth={selectedDate}
                   captionLayout="dropdown"
-                  fromYear={1900}
-                  toYear={new Date().getFullYear()}
+                  startMonth={firstBirthMonth}
+                  endMonth={lastBirthMonth}
                   className="bg-white"
                   onSelect={(date) => {
                     setSelectedDate(date)
@@ -167,6 +219,10 @@ export function SignUpForm({
             required
           />
           {errors.address ? <FieldError>{errors.address}</FieldError> : null}
+          <FieldDescription>
+            Make sure the required information is visible on your uploaded proof
+            of residency.
+          </FieldDescription>
         </Field>
 
         {/* Proof of Residency */}
@@ -175,31 +231,59 @@ export function SignUpForm({
           <Input
             id="proofOfResidency"
             type="file"
-            accept="image/*,.pdf"
+            accept=".pdf,.png,.jpg,.jpeg"
             multiple
             onChange={handleFileUpload}
-            className="h-auto rounded-none border border-input bg-white px-3 py-1.5 text-sm file:mr-3 file:border-0 file:bg-transparent file:px-0 file:text-sm file:font-medium file:text-foreground"
+            className={cn(
+              "h-auto rounded-none border border-input bg-white px-0 py-0 text-sm text-muted-foreground file:mr-3 file:border-0 file:border-r file:border-input file:bg-white file:px-3 file:py-2 file:text-sm file:font-medium file:text-foreground hover:file:bg-white focus-visible:shadow-none",
+              errors.proofOfResidency &&
+                "border-destructive shadow-[0_0_0_3px_rgba(220,38,38,0.15)] file:border-destructive/40",
+            )}
+            aria-invalid={Boolean(errors.proofOfResidency)}
           />
-          {attachments.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-2">
-              {attachments.map((file, i) => (
-                <div key={i} className="flex items-center gap-1.5 rounded-none border border-border bg-white px-2 py-1 text-xs">
-                  <span className="max-w-24 truncate">{file.name}</span>
-                  <span className="text-muted-foreground">
-                    {(file.size / 1024).toFixed(0)} KB
-                  </span>
+          {values.proofOfResidency.length > 0 && (
+            <div className="grid gap-2">
+              {values.proofOfResidency.map((file, i) => (
+                <div
+                  key={`${file.name}-${file.lastModified}-${i}`}
+                  className="flex items-start gap-3 border border-border bg-white p-3 shadow-xs"
+                >
+                  <div className="flex size-10 shrink-0 items-center justify-center border border-border bg-muted/40 text-muted-foreground">
+                    {file.type === "application/pdf" ? (
+                      <FileTextIcon className="size-4" />
+                    ) : (
+                      <FileImageIcon className="size-4" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {file.name}
+                    </p>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                      <span>{formatFileSize(file.size)}</span>
+                      <span className="hidden sm:inline">•</span>
+                      <span>{getAttachmentTypeLabel(file)}</span>
+                    </div>
+                  </div>
                   <button
                     type="button"
                     onClick={() => removeAttachment(i)}
-                    className="ml-1 text-muted-foreground hover:text-foreground"
+                    className="flex size-8 shrink-0 items-center justify-center border border-border bg-white text-muted-foreground transition-colors hover:text-foreground"
+                    aria-label={`Remove ${file.name}`}
                   >
-                    <XIcon className="size-3" />
+                    <XIcon className="size-4" />
                   </button>
                 </div>
               ))}
             </div>
           )}
-          <FieldDescription>Upload a government-issued ID or utility bill (max 5MB each).</FieldDescription>
+          <FieldDescription
+            className={cn(
+              errors.proofOfResidency && "font-medium text-destructive",
+            )}
+          >
+            Upload at least one valid government-issued id or bill in pdf, png, or jpg formats only
+          </FieldDescription>
         </Field>
 
         {/* Phone Number */}
@@ -254,9 +338,10 @@ export function SignUpForm({
         </Field>
         <label className="flex items-start gap-2 text-sm">
           <Checkbox
-            checked={agree}
-            onChange={() => setAgree(!agree)}
-            className="mt-0.5 accent-primary"
+            checked={values.agreeToTerms}
+            onChange={(event) => handleChange("agreeToTerms", event.target.checked)}
+            className="mt-0.5"
+            aria-invalid={Boolean(errors.agreeToTerms)}
           />
           <span className="text-muted-foreground">
             By signing up, you agree to our{" "}
@@ -265,6 +350,7 @@ export function SignUpForm({
             <a href="#" className="text-primary underline underline-offset-2">Privacy Policy</a>.
           </span>
         </label>
+        {errors.agreeToTerms ? <FieldError>{errors.agreeToTerms}</FieldError> : null}
         <div className="h-1" />
         <p className="text-sm text-foreground">
           Already have an account?{" "}

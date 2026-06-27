@@ -12,6 +12,7 @@ const initialValues: SignUpValues = {
   lastName: "",
   dateOfBirth: "",
   address: "",
+  proofOfResidency: [],
   phoneNumber: "",
   password: "",
   confirmPassword: "",
@@ -59,6 +60,16 @@ export function useSignUpForm() {
     })
   }
 
+  function setFieldError<K extends keyof SignUpValues>(
+    field: K,
+    message: string | undefined,
+  ) {
+    setErrors((currentErrors) => ({
+      ...currentErrors,
+      [field]: message,
+    }))
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
@@ -98,6 +109,7 @@ export function useSignUpForm() {
     handleChange,
     handleSubmit,
     passwordStrength,
+    setFieldError,
     setValues,
     statusMessage,
     values,

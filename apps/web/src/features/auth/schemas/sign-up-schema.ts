@@ -1,5 +1,54 @@
 import { z } from "zod"
 
+export const MAX_PROOF_OF_RESIDENCY_FILE_SIZE_BYTES = 5 * 1024 * 1024
+const ALLOWED_PROOF_OF_RESIDENCY_EXTENSIONS = new Set([
+  "pdf",
+  "png",
+  "jpg",
+  "jpeg",
+])
+const ALLOWED_PROOF_OF_RESIDENCY_MIME_TYPES = new Set([
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+])
+
+export function getProofOfResidencyFileError(file: File) {
+  const extension = file.name.split(".").pop()?.toLowerCase()
+  const hasAllowedExtension =
+    extension !== undefined &&
+    ALLOWED_PROOF_OF_RESIDENCY_EXTENSIONS.has(extension)
+  const hasAllowedMimeType =
+    file.type === "" || ALLOWED_PROOF_OF_RESIDENCY_MIME_TYPES.has(file.type)
+
+  if (!hasAllowedExtension || !hasAllowedMimeType) {
+    return "Only PDF, PNG, and JPG files are allowed."
+  }
+
+  if (file.size > MAX_PROOF_OF_RESIDENCY_FILE_SIZE_BYTES) {
+    return "Each file must be 5 MB or smaller."
+  }
+
+  return null
+}
+
+const proofOfResidencyFileSchema = z
+  .custom<File>((value) => value instanceof File, {
+    message: "Upload a valid file.",
+  })
+  .superRefine((file, context) => {
+    const error = getProofOfResidencyFileError(file)
+
+    if (!error) {
+      return
+    }
+
+    context.addIssue({
+      code: "custom",
+      message: error,
+    })
+  })
+
 export const signUpSchema = z
   .object({
     firstName: z.string().min(1, "First name is required.").max(50, "First name must be 50 characters or fewer."),
@@ -7,6 +56,9 @@ export const signUpSchema = z
     lastName: z.string().min(1, "Last name is required.").max(50, "Last name must be 50 characters or fewer."),
     dateOfBirth: z.string().min(1, "Date of birth is required."),
     address: z.string().min(5, "Enter a valid address.").max(200, "Address must be 200 characters or fewer."),
+    proofOfResidency: z
+      .array(proofOfResidencyFileSchema)
+      .min(1, "Upload at least one valid government-issued ID or bill."),
     phoneNumber: z
       .string()
       .regex(/^\+63\d{10}$/, "Enter a valid Philippine mobile number (e.g. +639821921234)."),
