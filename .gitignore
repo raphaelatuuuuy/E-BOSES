@@ -4,6 +4,10 @@ node_modules/
 # Python virtual environment
 venv/
 
+#agent
+.agents/
+.claude/
+
 # Build output
 dist/
 build/
@@ -45,3 +49,5 @@ vite_output.txt
 
 # Turbo cache
 .turbo/
+
+.understand-anything/

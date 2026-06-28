@@ -12,6 +12,7 @@ const ALLOWED_PROOF_OF_RESIDENCY_MIME_TYPES = new Set([
   "image/png",
   "image/jpeg",
 ])
+const MINIMUM_AGE = 18
 
 export function getProofOfResidencyFileError(file: File) {
   const extension = file.name.split(".").pop()?.toLowerCase()
@@ -30,6 +31,33 @@ export function getProofOfResidencyFileError(file: File) {
   }
 
   return null
+}
+
+export function isAtLeastMinimumAge(dateString: string, minimumAge = MINIMUM_AGE) {
+  const birthDate = new Date(dateString)
+
+  if (Number.isNaN(birthDate.getTime())) {
+    return false
+  }
+
+  const today = new Date()
+  let age = today.getFullYear() - birthDate.getFullYear()
+  const monthDifference = today.getMonth() - birthDate.getMonth()
+
+  if (
+    monthDifference < 0 ||
+    (monthDifference === 0 && today.getDate() < birthDate.getDate())
+  ) {
+    age -= 1
+  }
+
+  return age >= minimumAge
+}
+
+export function getLatestAllowedBirthDate(minimumAge = MINIMUM_AGE) {
+  const latestBirthDate = new Date()
+  latestBirthDate.setFullYear(latestBirthDate.getFullYear() - minimumAge)
+  return latestBirthDate
 }
 
 const proofOfResidencyFileSchema = z
@@ -54,7 +82,12 @@ export const signUpSchema = z
     firstName: z.string().min(1, "First name is required.").max(50, "First name must be 50 characters or fewer."),
     middleName: z.string().max(50, "Middle name must be 50 characters or fewer.").optional().default(""),
     lastName: z.string().min(1, "Last name is required.").max(50, "Last name must be 50 characters or fewer."),
-    dateOfBirth: z.string().min(1, "Date of birth is required."),
+    dateOfBirth: z
+      .string()
+      .min(1, "Date of birth is required.")
+      .refine((value) => isAtLeastMinimumAge(value), {
+        message: "You must be at least 18 years old.",
+      }),
     address: z.string().min(5, "Enter a valid address.").max(200, "Address must be 200 characters or fewer."),
     proofOfResidency: z
       .array(proofOfResidencyFileSchema)

@@ -1,8 +1,8 @@
 import { Button } from "@workspace/ui/components/button"
 import {
   Field,
-  FieldError,
   FieldDescription,
+  FieldError,
   FieldLabel,
 } from "@workspace/ui/components/field"
 import { Input } from "@workspace/ui/components/input"
@@ -12,15 +12,17 @@ import { useForgotPasswordForm } from "@/features/auth/hooks/use-forgot-password
 
 interface ForgotPasswordFormProps extends React.ComponentProps<"div"> {
   onBack?: () => void
+  onSuccess?: (email: string) => void
 }
 
 export function ForgotPasswordForm({
   className,
   onBack,
+  onSuccess,
   ...props
 }: ForgotPasswordFormProps) {
   const { errors, handleChange, handleSubmit, statusMessage, values } =
-    useForgotPasswordForm()
+    useForgotPasswordForm({ onSuccess })
 
   return (
     <div className={cn("flex flex-col", className)} {...props}>
@@ -28,7 +30,7 @@ export function ForgotPasswordForm({
         <div className="flex flex-col items-start gap-0">
           <h1 className="text-xl font-bold">Forgot password</h1>
           <p className="text-sm text-foreground">
-            Enter your email and we&apos;ll send you a reset link
+            Enter your email and we&apos;ll send you a reset code
           </p>
         </div>
         <div className="h-1" />
@@ -47,7 +49,7 @@ export function ForgotPasswordForm({
         </Field>
         <Field>
           <Button type="submit" className="w-full">
-            Send reset link
+            Send code
           </Button>
         </Field>
         {statusMessage ? (

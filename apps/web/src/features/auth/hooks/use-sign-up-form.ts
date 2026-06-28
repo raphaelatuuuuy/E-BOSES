@@ -34,7 +34,12 @@ function flattenErrors(values: SignUpValues) {
   return result
 }
 
-export function useSignUpForm() {
+interface UseSignUpFormOptions {
+  onSuccess?: () => void
+}
+
+export function useSignUpForm(options: UseSignUpFormOptions = {}) {
+  const { onSuccess } = options
   const [values, setValues] = useState<SignUpValues>(initialValues)
   const [errors, setErrors] = useState<SignUpErrors>({})
   const [statusMessage, setStatusMessage] = useState("")
@@ -82,9 +87,8 @@ export function useSignUpForm() {
       return
     }
 
-    setStatusMessage(
-      "Frontend validation passed. Backend registration will connect in Phase 2.",
-    )
+    setStatusMessage("")
+    onSuccess?.()
   }
 
   const passwordStrength = useMemo(() => {

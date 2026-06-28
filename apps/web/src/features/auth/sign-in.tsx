@@ -1,20 +1,18 @@
-import { useMemo } from "react"
 import { ChevronLeft } from "lucide-react"
 
 import { LoginForm } from "@/features/auth/components/login-form"
+import { useAuthPanelRotation } from "@/features/auth/hooks/use-auth-panel-rotation"
+import { usePageTitle } from "@/hooks/use-page-title"
 
 interface LoginPageProps {
   onForgotPassword?: () => void
   onSignUp?: () => void
 }
 
-const GRADIENTS = [
-  "bg-gradient-to-br from-[#020c4e] via-[#1f6c98] to-[#ff8133]",
-  "bg-gradient-to-tr from-[#ff5003] via-[#ff8133] to-[#020c4e]",
-]
-
 export default function LoginPage({ onForgotPassword, onSignUp }: LoginPageProps) {
-  const gradient = useMemo(() => GRADIENTS[Math.floor(Math.random() * GRADIENTS.length)], [])
+  const { gradient, taglineLines } = useAuthPanelRotation()
+
+  usePageTitle("Sign In")
 
   return (
     <main className="grid min-h-svh w-full lg:grid-cols-[40fr_60fr]">
@@ -43,7 +41,9 @@ export default function LoginPage({ onForgotPassword, onSignUp }: LoginPageProps
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
         <div className="absolute bottom-0 left-0 right-0 p-8 md:p-10">
           <h2 className="font-serif text-balance text-3xl leading-tight text-white md:text-4xl">
-            Stronger connections. Smarter communities.
+            {taglineLines[0]}
+            <br />
+            {taglineLines[1]}
           </h2>
         </div>
       </section>

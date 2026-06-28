@@ -20,7 +20,12 @@ function flattenErrors(values: ForgotPasswordValues) {
   return parsed.error.flatten().fieldErrors
 }
 
-export function useForgotPasswordForm() {
+interface UseForgotPasswordFormOptions {
+  onSuccess?: (email: string) => void
+}
+
+export function useForgotPasswordForm(options: UseForgotPasswordFormOptions = {}) {
+  const { onSuccess } = options
   const [values, setValues] = useState<ForgotPasswordValues>(initialValues)
   const [errors, setErrors] = useState<ForgotPasswordErrors>({})
   const [statusMessage, setStatusMessage] = useState("")
@@ -61,9 +66,8 @@ export function useForgotPasswordForm() {
       return
     }
 
-    setStatusMessage(
-      "If an account with that email exists, we've sent a reset link.",
-    )
+    setStatusMessage("")
+    onSuccess?.(values.email)
   }
 
   return {

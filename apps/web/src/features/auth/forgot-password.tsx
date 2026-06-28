@@ -1,21 +1,21 @@
-import { useMemo } from "react"
 import { ChevronLeft } from "lucide-react"
 
 import { ForgotPasswordForm } from "@/features/auth/components/forgot-password-form"
+import { useAuthPanelRotation } from "@/features/auth/hooks/use-auth-panel-rotation"
+import { usePageTitle } from "@/hooks/use-page-title"
 
 interface ForgotPasswordPageProps {
   onBack?: () => void
+  onSuccess?: (email: string) => void
 }
-
-const GRADIENTS = [
-  "bg-gradient-to-br from-[#020c4e] via-[#1f6c98] to-[#ff8133]",
-  "bg-gradient-to-tr from-[#ff5003] via-[#ff8133] to-[#020c4e]",
-]
 
 export default function ForgotPasswordPage({
   onBack,
+  onSuccess,
 }: ForgotPasswordPageProps) {
-  const gradient = useMemo(() => GRADIENTS[Math.floor(Math.random() * GRADIENTS.length)], [])
+  const { gradient, taglineLines } = useAuthPanelRotation()
+
+  usePageTitle("Forgot Password")
 
   return (
     <main className="grid min-h-svh w-full lg:grid-cols-[40fr_60fr]">
@@ -29,7 +29,7 @@ export default function ForgotPasswordPage({
         </button>
         <div className="flex flex-1 items-center justify-center">
           <div className="w-full max-w-lg">
-            <ForgotPasswordForm onBack={onBack} />
+            <ForgotPasswordForm onBack={onBack} onSuccess={onSuccess} />
           </div>
         </div>
       </section>
@@ -44,7 +44,9 @@ export default function ForgotPasswordPage({
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
         <div className="absolute bottom-0 left-0 right-0 p-8 md:p-10">
           <h2 className="font-serif text-balance text-3xl leading-tight text-white md:text-4xl">
-            Stronger connections. Smarter communities.
+            {taglineLines[0]}
+            <br />
+            {taglineLines[1]}
           </h2>
         </div>
       </section>

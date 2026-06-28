@@ -8,8 +8,8 @@ import { Calendar } from "@workspace/ui/components/calendar"
 import { Checkbox } from "@workspace/ui/components/checkbox"
 import {
   Field,
-  FieldError,
   FieldDescription,
+  FieldError,
   FieldLabel,
 } from "@workspace/ui/components/field"
 import { Input } from "@workspace/ui/components/input"
@@ -21,26 +21,34 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 
 import { useSignUpForm } from "@/features/auth/hooks/use-sign-up-form"
-import { getProofOfResidencyFileError } from "@/features/auth/schemas/sign-up-schema"
+import {
+  getLatestAllowedBirthDate,
+  getProofOfResidencyFileError,
+} from "@/features/auth/schemas/sign-up-schema"
 
 interface SignUpFormProps extends React.ComponentProps<"div"> {
   onSignIn?: () => void
+  onSuccess?: (recipient: string) => void
 }
 
 export function SignUpForm({
   className,
   onSignIn,
+  onSuccess,
   ...props
 }: SignUpFormProps) {
   const { errors, handleChange, handleSubmit, setFieldError, statusMessage, values } =
-    useSignUpForm()
+    useSignUpForm({
+      onSuccess: () => onSuccess?.(values.phoneNumber || "your registered mobile number"),
+    })
 
   const [dateOpen, setDateOpen] = React.useState(false)
   const [selectedDate, setSelectedDate] = React.useState<Date | undefined>()
   const firstBirthMonth = React.useMemo(() => new Date(1900, 0), [])
+  const lastAllowedBirthDate = React.useMemo(() => getLatestAllowedBirthDate(), [])
   const lastBirthMonth = React.useMemo(
-    () => new Date(new Date().getFullYear(), 11),
-    [],
+    () => new Date(lastAllowedBirthDate.getFullYear(), lastAllowedBirthDate.getMonth()),
+    [lastAllowedBirthDate],
   )
 
   function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -103,6 +111,13 @@ export function SignUpForm({
     return extension === "PDF" ? "PDF document" : `${extension ?? "Image"} image`
   }
 
+  function formatSelectedDate(date: Date) {
+    const m = String(date.getMonth() + 1).padStart(2, "0")
+    const d = String(date.getDate()).padStart(2, "0")
+    const y = String(date.getFullYear()).slice(-2)
+    return `${m}/${d}/${y}`
+  }
+
   return (
     <div className={cn("flex flex-col", className)} {...props}>
       <form className="flex flex-col gap-4" noValidate onSubmit={handleSubmit}>
@@ -115,7 +130,6 @@ export function SignUpForm({
 
         <div className="h-1" />
 
-        {/* Name fields */}
         <div className="grid grid-cols-2 gap-4">
           <Field>
             <FieldLabel htmlFor="firstName">First name</FieldLabel>
@@ -157,7 +171,6 @@ export function SignUpForm({
           {errors.lastName ? <FieldError>{errors.lastName}</FieldError> : null}
         </Field>
 
-        {/* Date of birth */}
         <Field>
           <FieldLabel htmlFor="date">Date of birth</FieldLabel>
           <div className="relative">
@@ -165,7 +178,7 @@ export function SignUpForm({
               <PopoverTrigger className="w-full">
                 <span
                   className={cn(
-                    "border-input bg-white flex h-9 w-full items-center rounded-none border px-3 py-1 text-sm shadow-xs",
+                    "border-input bg-white flex h-9 w-full items-center rounded-none border px-3 py-1 text-base shadow-xs",
                     selectedDate ? "text-foreground" : "text-muted-foreground",
                     errors.dateOfBirth
                       ? "border-destructive shadow-[0_0_0_3px_rgba(220,38,38,0.15)]"
@@ -173,14 +186,7 @@ export function SignUpForm({
                   )}
                   aria-invalid={Boolean(errors.dateOfBirth)}
                 >
-                  {selectedDate
-                    ? (() => {
-                        const m = String(selectedDate.getMonth() + 1).padStart(2, "0")
-                        const d = String(selectedDate.getDate()).padStart(2, "0")
-                        const y = String(selectedDate.getFullYear()).slice(-2)
-                        return `${m}/${d}/${y}`
-                      })()
-                    : "Select date"}
+                  {selectedDate ? formatSelectedDate(selectedDate) : "Select date"}
                 </span>
               </PopoverTrigger>
               <PopoverContent className="w-auto overflow-hidden p-0">
@@ -191,6 +197,7 @@ export function SignUpForm({
                   captionLayout="dropdown"
                   startMonth={firstBirthMonth}
                   endMonth={lastBirthMonth}
+                  disabled={{ after: lastAllowedBirthDate }}
                   className="bg-white"
                   onSelect={(date) => {
                     setSelectedDate(date)
@@ -206,7 +213,6 @@ export function SignUpForm({
           {errors.dateOfBirth ? <FieldError>{errors.dateOfBirth}</FieldError> : null}
         </Field>
 
-        {/* Address */}
         <Field>
           <FieldLabel htmlFor="address">Address</FieldLabel>
           <Input
@@ -215,7 +221,7 @@ export function SignUpForm({
             value={values.address}
             onChange={(e) => handleChange("address", e.target.value)}
             aria-invalid={Boolean(errors.address)}
-            placeholder="123 Barangay Street, City"
+            placeholder="123 Barangay Street"
             required
           />
           {errors.address ? <FieldError>{errors.address}</FieldError> : null}
@@ -225,7 +231,6 @@ export function SignUpForm({
           </FieldDescription>
         </Field>
 
-        {/* Proof of Residency */}
         <Field>
           <FieldLabel htmlFor="proofOfResidency">Proof of residency</FieldLabel>
           <Input
@@ -286,7 +291,6 @@ export function SignUpForm({
           </FieldDescription>
         </Field>
 
-        {/* Phone Number */}
         <Field>
           <FieldLabel htmlFor="phoneNumber">Phone number</FieldLabel>
           <Input
@@ -305,7 +309,6 @@ export function SignUpForm({
           {errors.phoneNumber ? <FieldError>{errors.phoneNumber}</FieldError> : null}
         </Field>
 
-        {/* Password */}
         <Field>
           <FieldLabel htmlFor="password">Password</FieldLabel>
           <Input
@@ -319,7 +322,6 @@ export function SignUpForm({
           {errors.password ? <FieldError>{errors.password}</FieldError> : null}
         </Field>
 
-        {/* Confirm Password */}
         <Field>
           <FieldLabel htmlFor="confirmPassword">Confirm password</FieldLabel>
           <Input
@@ -344,10 +346,7 @@ export function SignUpForm({
             aria-invalid={Boolean(errors.agreeToTerms)}
           />
           <span className="text-muted-foreground">
-            By signing up, you agree to our{" "}
-            <a href="#" className="text-primary underline underline-offset-2">Terms of Service</a>,{" "}
-            and{" "}
-            <a href="#" className="text-primary underline underline-offset-2">Privacy Policy</a>.
+            By signing up, you agree to our <a href="#" className="text-primary underline underline-offset-2">Terms of Service</a>, and <a href="#" className="text-primary underline underline-offset-2">Privacy Policy</a>.
           </span>
         </label>
         {errors.agreeToTerms ? <FieldError>{errors.agreeToTerms}</FieldError> : null}
