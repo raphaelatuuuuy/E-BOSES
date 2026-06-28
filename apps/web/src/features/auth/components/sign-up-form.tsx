@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { FileImageIcon, FileTextIcon, XIcon } from "lucide-react"
+import { FileImageIcon, FileTextIcon, InfoIcon, XIcon } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Calendar } from "@workspace/ui/components/calendar"
@@ -13,6 +13,11 @@ import {
   FieldLabel,
 } from "@workspace/ui/components/field"
 import { Input } from "@workspace/ui/components/input"
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@workspace/ui/components/hover-card"
 import {
   Popover,
   PopoverContent,
@@ -225,14 +230,37 @@ export function SignUpForm({
             required
           />
           {errors.address ? <FieldError>{errors.address}</FieldError> : null}
-          <FieldDescription>
-            Make sure the required information is visible on your uploaded proof
-            of residency.
-          </FieldDescription>
         </Field>
 
         <Field>
-          <FieldLabel htmlFor="proofOfResidency">Proof of residency</FieldLabel>
+          <div className="flex items-center gap-1.5">
+            <FieldLabel htmlFor="proofOfResidency">Proof of residency</FieldLabel>
+            <HoverCard>
+              <HoverCardTrigger
+                className="flex size-4 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                aria-label="Proof of residency requirements"
+              >
+                <InfoIcon className="size-4" />
+              </HoverCardTrigger>
+              <HoverCardContent>
+                <p className="mb-2 text-xs font-medium text-foreground">Make sure the following are clearly visible:</p>
+                <ul className="space-y-1 text-xs text-muted-foreground">
+                  <li className="flex items-start gap-1.5">
+                    <span className="mt-1 size-1 shrink-0 rounded-full bg-muted-foreground" />
+                    Name (must match the name entered above)
+                  </li>
+                  <li className="flex items-start gap-1.5">
+                    <span className="mt-1 size-1 shrink-0 rounded-full bg-muted-foreground" />
+                    Address
+                  </li>
+                  <li className="flex items-start gap-1.5">
+                    <span className="mt-1 size-1 shrink-0 rounded-full bg-muted-foreground" />
+                    Document must be valid and not expired
+                  </li>
+                </ul>
+              </HoverCardContent>
+            </HoverCard>
+          </div>
           <Input
             id="proofOfResidency"
             type="file"
@@ -345,7 +373,7 @@ export function SignUpForm({
             className="mt-0.5"
             aria-invalid={Boolean(errors.agreeToTerms)}
           />
-          <span className="text-muted-foreground">
+          <span className={cn("text-muted-foreground", errors.agreeToTerms && "text-destructive")}>
             By signing up, you agree to our <a href="#" className="text-primary underline underline-offset-2">Terms of Service</a>, and <a href="#" className="text-primary underline underline-offset-2">Privacy Policy</a>.
           </span>
         </label>

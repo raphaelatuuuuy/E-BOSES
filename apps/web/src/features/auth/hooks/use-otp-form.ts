@@ -38,6 +38,11 @@ export function useOtpForm(options: UseOtpFormOptions = {}) {
         code: undefined,
       }
     })
+
+    if (digitsOnly.length === OTP_LENGTH) {
+      setStatusMessage("")
+      onSuccess?.(digitsOnly)
+    }
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {

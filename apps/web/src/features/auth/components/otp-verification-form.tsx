@@ -22,6 +22,7 @@ interface OtpVerificationFormProps extends React.ComponentProps<"div"> {
   onResend?: () => void
   resendDisabled?: boolean
   resendLabel?: string
+  onSuccess?: (code: string) => void
 }
 
 const errorSlotClassName =
@@ -36,9 +37,10 @@ export function OtpVerificationForm({
   onResend,
   resendDisabled = false,
   resendLabel = "Resend",
+  onSuccess,
   ...props
 }: OtpVerificationFormProps) {
-  const { errors, handleChange, handleSubmit, statusMessage, values } = useOtpForm()
+  const { errors, handleChange, handleSubmit, statusMessage, values } = useOtpForm({ onSuccess })
 
   return (
     <div className={cn("flex flex-col", className)} {...props}>

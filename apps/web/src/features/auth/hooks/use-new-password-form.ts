@@ -1,18 +1,18 @@
 import { type FormEvent, useState } from "react"
 
 import {
-  type SignInErrors,
-  type SignInValues,
-  signInSchema,
-} from "@/features/auth/schemas/sign-in-schema"
+  type NewPasswordErrors,
+  type NewPasswordValues,
+  newPasswordSchema,
+} from "@/features/auth/schemas/new-password-schema"
 
-const initialValues: SignInValues = {
-  email: "",
+const initialValues: NewPasswordValues = {
   password: "",
+  confirmPassword: "",
 }
 
-function flattenErrors(values: SignInValues) {
-  const parsed = signInSchema.safeParse(values)
+function flattenErrors(values: NewPasswordValues) {
+  const parsed = newPasswordSchema.safeParse(values)
 
   if (parsed.success) {
     return {}
@@ -21,14 +21,19 @@ function flattenErrors(values: SignInValues) {
   return parsed.error.flatten().fieldErrors
 }
 
-export function useSignInForm() {
-  const [values, setValues] = useState<SignInValues>(initialValues)
-  const [errors, setErrors] = useState<SignInErrors>({})
+interface UseNewPasswordFormOptions {
+  onSuccess?: (password: string) => void
+}
+
+export function useNewPasswordForm(options: UseNewPasswordFormOptions = {}) {
+  const { onSuccess } = options
+  const [values, setValues] = useState<NewPasswordValues>(initialValues)
+  const [errors, setErrors] = useState<NewPasswordErrors>({})
   const [statusMessage, setStatusMessage] = useState("")
 
-  function handleChange<K extends keyof SignInValues>(
+  function handleChange<K extends keyof NewPasswordValues>(
     field: K,
-    value: SignInValues[K],
+    value: NewPasswordValues[K],
   ) {
     setValues((currentValues) => ({
       ...currentValues,
@@ -51,19 +56,20 @@ export function useSignInForm() {
     event.preventDefault()
 
     const fieldErrors = flattenErrors(values)
-    const nextErrors: SignInErrors = {
-      email: fieldErrors.email?.[0],
+    const nextErrors: NewPasswordErrors = {
       password: fieldErrors.password?.[0],
+      confirmPassword: fieldErrors.confirmPassword?.[0],
     }
 
     setErrors(nextErrors)
 
-    if (nextErrors.email || nextErrors.password) {
+    if (nextErrors.password || nextErrors.confirmPassword) {
       setStatusMessage("")
       return
     }
 
     setStatusMessage("")
+    onSuccess?.(values.password)
   }
 
   return {

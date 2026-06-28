@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client"
 
 import "@workspace/ui/globals.css"
 
+import { Toaster } from "@workspace/ui/components/sonner"
+
 import App from "./App"
 import { ThemeProvider } from "./components/theme-provider"
 
@@ -16,6 +18,7 @@ createRoot(rootElement).render(
   <StrictMode>
     <ThemeProvider defaultTheme="light">
       <App />
+      <Toaster />
     </ThemeProvider>
   </StrictMode>,
 )

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { ChevronLeft } from "lucide-react"
+import { toast } from "sonner"
 
 import { OtpVerificationForm } from "@/features/auth/components/otp-verification-form"
 import { useAuthPanelRotation } from "@/features/auth/hooks/use-auth-panel-rotation"
@@ -12,6 +13,7 @@ interface OtpVerificationPageProps {
   actionLabel: string
   resendStorageKey: string
   onBack?: () => void
+  onSuccess?: (code: string) => void
 }
 
 const RESEND_COOLDOWN_SECONDS = 60
@@ -48,6 +50,7 @@ export default function OtpVerificationPage({
   actionLabel,
   resendStorageKey,
   onBack,
+  onSuccess,
 }: OtpVerificationPageProps) {
   const { gradient, taglineLines } = useAuthPanelRotation()
   const [resendExpiry, setResendExpiryState] = useState(() => getResendExpiry(resendStorageKey))
@@ -73,13 +76,18 @@ export default function OtpVerificationPage({
 
   function handleResend() {
     setResendExpiryState(setResendExpiry(resendStorageKey))
+    toast.success("Code sent", {
+      description: "A new verification code has been sent to your email.",
+    })
   }
 
   const resendDisabled = secondsRemaining > 0
   const resendLabel = resendDisabled
     ? `Resend (${formatSeconds(secondsRemaining)})`
     : "Resend?"
-  const composedDescription = `${description} ${recipientHint}.`
+  const composedDescription = recipientHint
+    ? `${description} ${recipientHint}.`
+    : description
 
   return (
     <main className="grid min-h-svh w-full lg:h-svh lg:grid-cols-[40fr_60fr] lg:overflow-hidden">
@@ -101,6 +109,7 @@ export default function OtpVerificationPage({
               onResend={handleResend}
               resendDisabled={resendDisabled}
               resendLabel={resendLabel}
+              onSuccess={onSuccess}
             />
           </div>
         </div>
