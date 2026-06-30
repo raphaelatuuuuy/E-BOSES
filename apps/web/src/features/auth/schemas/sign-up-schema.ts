@@ -91,7 +91,8 @@ export const signUpSchema = z
     address: z.string().min(5, "Enter a valid address.").max(200, "Address must be 200 characters or fewer."),
     proofOfResidency: z
       .array(proofOfResidencyFileSchema)
-      .min(1, "Upload at least one valid government-issued ID or bill."),
+      .min(1, "Upload at least one valid government-issued ID or bill.")
+      .max(2, "You can upload a maximum of 2 files."),
     phoneNumber: z
       .string()
       .regex(/^\+63\d{10}$/, "Enter a valid Philippine mobile number (e.g. +639821921234)."),

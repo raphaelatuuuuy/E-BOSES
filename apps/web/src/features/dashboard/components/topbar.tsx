@@ -1,40 +1,91 @@
-import { BellIcon, PlusIcon, SearchIcon } from "lucide-react"
+import { SearchIcon, XIcon } from "lucide-react"
+import { useState } from "react"
 
 import { cn } from "@workspace/ui/lib/utils"
+import { Input } from "@workspace/ui/components/input"
+import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
+import { NotificationPopover } from "@/features/dashboard/components/notification-popover"
 
 export function Topbar() {
+  const [searchOpen, setSearchOpen] = useState(false)
+
   return (
-    <div className="flex h-16 items-center justify-between px-6">
-      {/* Left: Search */}
-      <div className="relative flex items-center">
-        <SearchIcon className="absolute left-3 size-4 text-muted-foreground" />
-        <input
-          type="text"
-          placeholder="Search"
-          className={cn(
-            "w-64 bg-transparent py-2 pl-10 pr-3 text-sm text-foreground outline-none placeholder:text-muted-foreground",
-            "border-b border-transparent focus:border-border/50 transition-colors",
-          )}
+    <>
+      <header className="flex h-16 items-center bg-background/95 px-4 md:relative md:gap-3 md:px-10">
+        {/* Left: Search icon (mobile) */}
+        <div className="md:hidden">
+          <button
+            type="button"
+            onClick={() => setSearchOpen(!searchOpen)}
+            className="flex size-10 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+            aria-label="Toggle search"
+          >
+            {searchOpen ? <XIcon className="size-5" /> : <SearchIcon className="size-5" />}
+          </button>
+        </div>
+
+        {/* Spacer on mobile so logo can center absolutely */}
+        <div className="flex-1 md:hidden" />
+
+        {/* Logo — absolutely centered on mobile, left on desktop */}
+        <img
+          src="/images/logo.png"
+          alt="E-Boses"
+          className="size-10 object-contain max-md:absolute max-md:left-1/2 max-md:-translate-x-1/2 md:mx-0"
         />
-      </div>
 
-      {/* Right: Create + Notification */}
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
-        >
-          <PlusIcon className="size-4" />
-          Create
-        </button>
+        {/* Spacer on mobile so logo can center absolutely */}
+        <div className="flex-1 md:hidden" />
 
-        <button
-          type="button"
-          className="flex size-10 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <BellIcon className="size-5" />
-        </button>
-      </div>
-    </div>
+        {/* Desktop search — absolutely centered relative to the header */}
+        <div className="hidden md:absolute md:left-1/2 md:flex md:w-full md:max-w-lg md:-translate-x-1/2">
+          <div className="group relative w-full max-w-lg">
+            <SearchIcon
+              aria-hidden="true"
+              className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground transition-colors group-focus-within:text-primary"
+            />
+            <Input
+              type="text"
+              aria-label="Search reports and community updates"
+              placeholder="Search reports, posts, or residents"
+              className={cn(
+                "h-10 rounded-none border-0 border-b-2 border-border bg-transparent pl-9 text-sm shadow-none",
+                "focus-visible:border-b-primary focus-visible:shadow-none",
+              )}
+            />
+          </div>
+        </div>
+
+        {/* Right: Create + Notification */}
+        <div className="flex items-center gap-3 md:ml-auto">
+          <div className="hidden md:block">
+            <CreateReportDialog />
+          </div>
+          <NotificationPopover />
+        </div>
+      </header>
+
+      {/* Mobile search expanded */}
+      {searchOpen && (
+        <div className="border-b border-border/60 bg-background/95 px-4 pb-4 pt-2 md:hidden">
+          <div className="group relative w-full">
+            <SearchIcon
+              aria-hidden="true"
+              className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground transition-colors group-focus-within:text-primary"
+            />
+            <Input
+              type="text"
+              aria-label="Search reports and community updates"
+              placeholder="Search reports, posts, or residents"
+              className={cn(
+                "h-10 rounded-none border-0 border-b-2 border-border bg-transparent pl-9 text-sm shadow-none",
+                "focus-visible:border-b-primary focus-visible:shadow-none",
+              )}
+              autoFocus
+            />
+          </div>
+        </div>
+      )}
+    </>
   )
 }

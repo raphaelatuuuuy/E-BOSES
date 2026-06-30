@@ -1,86 +1,110 @@
-import { useState } from "react"
+import { Navigate, Route, Routes, useNavigate } from "react-router-dom"
+import { toast } from "sonner"
 
 import ForgotPasswordPage from "@/features/auth/forgot-password"
 import NewPasswordPage from "@/features/auth/new-password"
 import OtpVerificationPage from "@/features/auth/otp-verification"
 import SignInPage from "@/features/auth/sign-in"
 import SignUpPage from "@/features/auth/sign-up"
-import { toast } from "sonner"
+import DashboardLayout from "@/features/dashboard/dashboard"
+import FeedPage from "@/features/dashboard/pages/feed"
+import HomePage from "@/features/dashboard/pages/home"
+import ProfilePage from "@/features/dashboard/pages/profile"
+import ReportsPage from "@/features/dashboard/pages/reports"
+import SettingsPage from "@/features/dashboard/pages/settings"
 
-type Page =
-  | "sign-in"
-  | "sign-up"
-  | "forgot-password"
-  | "sign-up-otp"
-  | "forgot-password-otp"
-  | "new-password"
+function AuthRoutes() {
+  const navigate = useNavigate()
 
-function App() {
-  const [page, setPage] = useState<Page>("sign-in")
-
-  switch (page) {
-    case "sign-up":
-      return (
-        <SignUpPage
-          onSignIn={() => setPage("sign-in")}
-          onSuccess={() => {
-            setPage("sign-up-otp")
-          }}
-        />
-      )
-    case "forgot-password":
-      return (
-        <ForgotPasswordPage
-          onBack={() => setPage("sign-in")}
-          onSuccess={() => {
-            setPage("forgot-password-otp")
-          }}
-        />
-      )
-    case "sign-up-otp":
-      return (
-        <OtpVerificationPage
-          title="Verify your account"
-          description="Enter the 6-digit verification code we sent to your email."
-          recipientHint=""
-          actionLabel="Verify code"
-          resendStorageKey="eboses-sign-up-otp-resend-expiry"
-          onBack={() => setPage("sign-up")}
-        />
-      )
-    case "forgot-password-otp":
-      return (
-        <OtpVerificationPage
-          title="Verify your reset request"
-          description="Enter the 6-digit code we sent to your email."
-          recipientHint=""
-          actionLabel="Continue"
-          resendStorageKey="eboses-forgot-password-otp-resend-expiry"
-          onBack={() => setPage("forgot-password")}
-          onSuccess={() => setPage("new-password")}
-        />
-      )
-    case "new-password":
-      return (
-        <NewPasswordPage
-          onBack={() => setPage("sign-in")}
-          onSuccess={() => {
-            setPage("sign-in")
-            toast.success("Password changed", {
-              description: "Your password has been updated successfully.",
-            })
-          }}
-        />
-      )
-    case "sign-in":
-    default:
-      return (
-        <SignInPage
-          onSignUp={() => setPage("sign-up")}
-          onForgotPassword={() => setPage("forgot-password")}
-        />
-      )
-  }
+  return (
+    <Routes>
+      <Route path="/" element={<Navigate to="/sign-in" replace />} />
+      <Route
+        path="/sign-in"
+        element={
+          <SignInPage
+            onForgotPassword={() => navigate("/forgot-password")}
+            onSignUp={() => navigate("/sign-up")}
+            onSuccess={() => navigate("/dashboard")}
+          />
+        }
+      />
+      <Route
+        path="/sign-up"
+        element={
+          <SignUpPage
+            onSignIn={() => navigate("/sign-in")}
+            onSuccess={() => navigate("/sign-up-otp")}
+          />
+        }
+      />
+      <Route
+        path="/sign-up-otp"
+        element={
+          <OtpVerificationPage
+            title="Verify your account"
+            description="Enter the 6-digit verification code we sent to your email."
+            recipientHint=""
+            actionLabel="Verify code"
+            resendStorageKey="eboses-sign-up-otp-resend-expiry"
+            onBack={() => navigate("/sign-up")}
+            onSuccess={() => navigate("/dashboard")}
+          />
+        }
+      />
+      <Route
+        path="/forgot-password"
+        element={
+          <ForgotPasswordPage
+            onBack={() => navigate("/sign-in")}
+            onSuccess={() => navigate("/forgot-password-otp")}
+          />
+        }
+      />
+      <Route
+        path="/forgot-password-otp"
+        element={
+          <OtpVerificationPage
+            title="Verify your reset request"
+            description="Enter the 6-digit code we sent to your email."
+            recipientHint=""
+            actionLabel="Continue"
+            resendStorageKey="eboses-forgot-password-otp-resend-expiry"
+            onBack={() => navigate("/forgot-password")}
+            onSuccess={() => navigate("/new-password")}
+          />
+        }
+      />
+      <Route
+        path="/new-password"
+        element={
+          <NewPasswordPage
+            onBack={() => navigate("/sign-in")}
+            onSuccess={() => {
+              navigate("/sign-in")
+              toast.success("Password changed", {
+                description: "Your password has been updated successfully.",
+              })
+            }}
+          />
+        }
+      />
+    </Routes>
+  )
 }
 
-export default App
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/dashboard" element={<DashboardLayout />}>
+        <Route index element={<Navigate to="/dashboard/home" replace />} />
+        <Route path="home" element={<HomePage />} />
+        <Route path="feed" element={<FeedPage />} />
+        <Route path="reports" element={<ReportsPage />} />
+        <Route path="profile" element={<ProfilePage />} />
+        <Route path="settings" element={<SettingsPage />} />
+      </Route>
+      <Route path="*" element={<AuthRoutes />} />
+    </Routes>
+  )
+}

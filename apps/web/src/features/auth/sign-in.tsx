@@ -7,9 +7,10 @@ import { usePageTitle } from "@/hooks/use-page-title"
 interface LoginPageProps {
   onForgotPassword?: () => void
   onSignUp?: () => void
+  onSuccess?: () => void
 }
 
-export default function LoginPage({ onForgotPassword, onSignUp }: LoginPageProps) {
+export default function LoginPage({ onForgotPassword, onSignUp, onSuccess }: LoginPageProps) {
   const { gradient, taglineLines } = useAuthPanelRotation()
 
   usePageTitle("Sign In")
@@ -26,7 +27,7 @@ export default function LoginPage({ onForgotPassword, onSignUp }: LoginPageProps
         </button>
         <div className="flex flex-1 items-center justify-center">
           <div className="w-full max-w-lg">
-            <LoginForm onForgotPassword={onForgotPassword} onSignUp={onSignUp} />
+            <LoginForm onForgotPassword={onForgotPassword} onSignUp={onSignUp} onSuccess={onSuccess} />
           </div>
         </div>
       </section>

@@ -50,13 +50,15 @@ export function GreetingCard() {
   const dateString = getFilipinoDateString()
 
   return (
-    <div className="relative flex h-64 items-center justify-center bg-gradient-to-br from-blue-900/30 to-indigo-900/40">
+    <div className="relative mx-4 mt-4 flex h-48 items-end justify-start overflow-hidden rounded-2xl bg-cover bg-center md:mx-10 md:mt-6 md:h-72" style={{ backgroundImage: "url(/images/marikina-1.jpg)" }}>
+      {/* Dark overlay */}
+      <div className="absolute inset-0 bg-black/20" />
       {/* Glass card */}
-      <div className="mx-auto max-w-lg rounded-xl border border-white/20 bg-white/10 px-8 py-6 text-center backdrop-blur-md">
-        <h1 className="font-heading text-3xl font-bold text-white md:text-4xl">
+      <div className="relative z-10 mb-4 ml-4 max-w-lg rounded-2xl border border-white/30 bg-white/07 px-4 py-3 text-left shadow-[0_4px_30px_rgba(0,0,0,0.1)] backdrop-blur-[5px] md:mb-8 md:ml-8 md:px-8 md:py-6">
+        <h1 className="font-heading text-xl font-bold text-white md:text-3xl lg:text-4xl text-left">
           {greeting}, {user.firstName}
         </h1>
-        <p className="mt-2 text-sm font-medium text-white/70">
+        <p className="mt-1 text-xs font-medium text-white/70 text-left md:mt-2 md:text-sm">
           {dateString}
         </p>
       </div>

@@ -99,7 +99,7 @@ const PopoverContent = React.forwardRef<
         else if (ref) ref.current = node
       }}
       className={cn(
-        "z-50 w-auto rounded-none border bg-popover p-0 text-popover-foreground shadow-md outline-none",
+        "z-50 w-auto max-h-[80vh] overflow-y-auto rounded-xl border bg-popover p-0 text-popover-foreground shadow-md outline-none",
         "absolute left-0 top-full mt-1",
         className,
       )}

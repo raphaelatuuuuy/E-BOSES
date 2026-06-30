@@ -21,7 +21,12 @@ function flattenErrors(values: SignInValues) {
   return parsed.error.flatten().fieldErrors
 }
 
-export function useSignInForm() {
+interface UseSignInFormOptions {
+  onSuccess?: () => void
+}
+
+export function useSignInForm(options: UseSignInFormOptions = {}) {
+  const { onSuccess } = options
   const [values, setValues] = useState<SignInValues>(initialValues)
   const [errors, setErrors] = useState<SignInErrors>({})
   const [statusMessage, setStatusMessage] = useState("")
@@ -64,6 +69,7 @@ export function useSignInForm() {
     }
 
     setStatusMessage("")
+    onSuccess?.()
   }
 
   return {

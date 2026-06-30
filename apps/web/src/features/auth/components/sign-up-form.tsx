@@ -14,6 +14,16 @@ import {
 } from "@workspace/ui/components/field"
 import { Input } from "@workspace/ui/components/input"
 import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogBody,
+  DialogTrigger,
+} from "@workspace/ui/components/dialog"
+import {
   HoverCard,
   HoverCardContent,
   HoverCardTrigger,
@@ -67,6 +77,11 @@ export function SignUpForm({
     const invalidFiles: string[] = []
 
     for (const file of files) {
+      if (nextFiles.length >= 2) {
+        invalidFiles.push("You can upload a maximum of 2 files.")
+        break
+      }
+
       const error = getProofOfResidencyFileError(file)
 
       if (error) {
@@ -183,7 +198,7 @@ export function SignUpForm({
               <PopoverTrigger className="w-full">
                 <span
                   className={cn(
-                    "border-input bg-white flex h-9 w-full items-center rounded-none border px-3 py-1 text-base shadow-xs",
+                    "border-input bg-white flex h-9 w-full items-center rounded-md border px-3 py-1 text-base shadow-xs",
                     selectedDate ? "text-foreground" : "text-muted-foreground",
                     errors.dateOfBirth
                       ? "border-destructive shadow-[0_0_0_3px_rgba(220,38,38,0.15)]"
@@ -261,27 +276,35 @@ export function SignUpForm({
               </HoverCardContent>
             </HoverCard>
           </div>
-          <Input
-            id="proofOfResidency"
-            type="file"
-            accept=".pdf,.png,.jpg,.jpeg"
-            multiple
-            onChange={handleFileUpload}
+          <label
+            htmlFor="proofOfResidency"
             className={cn(
-              "h-auto rounded-none border border-input bg-white px-0 py-0 text-sm text-muted-foreground file:mr-3 file:border-0 file:border-r file:border-input file:bg-white file:px-3 file:py-2 file:text-sm file:font-medium file:text-foreground hover:file:bg-white focus-visible:shadow-none",
+              "flex h-auto cursor-pointer items-center gap-2 rounded-md border border-input bg-white px-3 py-2 text-sm text-muted-foreground shadow-xs",
               errors.proofOfResidency &&
-                "border-destructive shadow-[0_0_0_3px_rgba(220,38,38,0.15)] file:border-destructive/40",
+                "border-destructive shadow-[0_0_0_3px_rgba(220,38,38,0.15)]",
             )}
-            aria-invalid={Boolean(errors.proofOfResidency)}
-          />
+          >
+            <Input
+              id="proofOfResidency"
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg"
+              multiple
+              onChange={handleFileUpload}
+              className="sr-only"
+              aria-invalid={Boolean(errors.proofOfResidency)}
+            />
+            {values.proofOfResidency.length > 0
+              ? `${values.proofOfResidency.length} / 2 files selected`
+              : "Upload files (max. 2)"}
+          </label>
           {values.proofOfResidency.length > 0 && (
             <div className="grid gap-2">
               {values.proofOfResidency.map((file, i) => (
                 <div
                   key={`${file.name}-${file.lastModified}-${i}`}
-                  className="flex items-start gap-3 border border-border bg-white p-3 shadow-xs"
+                  className="flex items-start gap-3 rounded-lg border border-border bg-white p-3 shadow-xs"
                 >
-                  <div className="flex size-10 shrink-0 items-center justify-center border border-border bg-muted/40 text-muted-foreground">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40 text-muted-foreground">
                     {file.type === "application/pdf" ? (
                       <FileTextIcon className="size-4" />
                     ) : (
@@ -301,7 +324,7 @@ export function SignUpForm({
                   <button
                     type="button"
                     onClick={() => removeAttachment(i)}
-                    className="flex size-8 shrink-0 items-center justify-center border border-border bg-white text-muted-foreground transition-colors hover:text-foreground"
+                    className="my-auto flex size-8 shrink-0 items-center justify-center rounded-lg bg-white text-muted-foreground transition-colors hover:text-foreground"
                     aria-label={`Remove ${file.name}`}
                   >
                     <XIcon className="size-4" />
@@ -315,7 +338,7 @@ export function SignUpForm({
               errors.proofOfResidency && "font-medium text-destructive",
             )}
           >
-            Upload at least one valid government-issued id or bill in pdf, png, or jpg formats only
+            Upload 1-2 government-issued IDs or bills (PDF, PNG, or JPG). Max 5 MB each.
           </FieldDescription>
         </Field>
 
@@ -374,7 +397,79 @@ export function SignUpForm({
             aria-invalid={Boolean(errors.agreeToTerms)}
           />
           <span className={cn("text-muted-foreground", errors.agreeToTerms && "text-destructive")}>
-            By signing up, you agree to our <a href="#" className="text-primary underline underline-offset-2">Terms of Service</a>, and <a href="#" className="text-primary underline underline-offset-2">Privacy Policy</a>.
+            By signing up, you agree to our{" "}
+            <Dialog>
+              <DialogTrigger className="text-primary underline underline-offset-2 cursor-pointer">Terms of Service</DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Terms of Service</DialogTitle>
+                </DialogHeader>
+                <DialogBody>
+                  <div className="space-y-4 text-sm text-muted-foreground">
+                    <h3 className="font-semibold text-foreground">1. Acceptance of Terms</h3>
+                    <p>By registering and using E-Boses, you agree to be bound by these Terms of Service. If you do not agree, you may not use the platform.</p>
+
+                    <h3 className="font-semibold text-foreground">2. Description of Service</h3>
+                    <p>E-Boses is a web-based, mobile-responsive barangay civic engagement platform that enables verified residents to submit community concerns with photo documentation and GPS location data, send GPS-tagged emergency alerts to barangay first responders, and monitor resolution status through official tracking numbers.</p>
+
+                    <h3 className="font-semibold text-foreground">3. User Eligibility and Registration</h3>
+                    <p>You must be a verified resident of the barangay served by the platform, at least 18 years of age, and not have an existing account with the system. Registration requires the submission of personal information, OTP verification, and a valid government-issued ID for identity verification. Accounts are subject to review and may be rejected if uploaded IDs are found to be edited, manipulated, AI-generated, duplicated, unreadable, or suspicious.</p>
+
+                    <h3 className="font-semibold text-foreground">4. User Responsibilities</h3>
+                    <p>You agree to provide accurate and truthful information when submitting concern reports or emergency alerts. You must not submit fake, irrelevant, duplicate, edited, manipulated, or AI-generated content. You must not submit reports with false or spoofed GPS locations. You must not misuse the emergency alert system by sending false alarms.</p>
+
+                    <h3 className="font-semibold text-foreground">5. Account Termination</h3>
+                    <p>The barangay reserves the right to suspend or terminate accounts found to be in violation of these terms, including but not limited to submission of fraudulent reports, misuse of the emergency alert system, or attempting to access data outside your role-based permissions.</p>
+
+                    <h3 className="font-semibold text-foreground">6. Limitation of Liability</h3>
+                    <p>E-Boses is provided as a tool to assist barangay governance and emergency coordination. The barangay does not guarantee immediate response to every report or alert. AI-generated severity scores and assessments are advisory in nature and subject to review by barangay officials. The platform is accessible via standard web browsers and requires internet connectivity; performance may vary depending on network conditions.</p>
+                  </div>
+                </DialogBody>
+                <DialogFooter>
+                  <DialogClose />
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+            {" and "}
+            <Dialog>
+              <DialogTrigger className="text-primary underline underline-offset-2 cursor-pointer">Privacy Policy</DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Privacy Policy</DialogTitle>
+                </DialogHeader>
+                <DialogBody>
+                  <div className="space-y-4 text-sm text-muted-foreground">
+                    <h3 className="font-semibold text-foreground">1. Data Collection</h3>
+                    <p>E-Boses collects personal information necessary for identity verification and platform functionality, including your full name, email address or phone number, barangay of residence, uploaded government-issued ID for verification, submitted concern reports with photos and GPS location, and emergency alert data including location and optional media.</p>
+
+                    <h3 className="font-semibold text-foreground">2. Legal Basis</h3>
+                    <p>All data collection and processing is conducted in compliance with Republic Act No. 10173, also known as the Data Privacy Act of 2012. Your consent is obtained through an explicit acknowledgment before you may proceed with registration.</p>
+
+                    <h3 className="font-semibold text-foreground">3. Use of Information</h3>
+                    <p>Your data is used exclusively for platform operations, including identity verification through OTP and ID validation, processing and tracking of concern reports, routing of emergency alerts to appropriate barangay responders (BHW, BDRRMO, or barangay tanods), AI-based analysis of submitted photos and text for severity scoring and relevance checking, and community witness notifications during emergencies.</p>
+
+                    <h3 className="font-semibold text-foreground">4. Data Access and Role-Based Control</h3>
+                    <p>Access to your data is governed by Role-Based Access Control (RBAC). Residents may only view their own submitted reports. Barangay officials may access all reports within their jurisdiction. First responders may only view emergency alerts assigned to their role. System administrators are restricted to technical logs. No data is disclosed to third parties, external government agencies, or private organizations.</p>
+
+                    <h3 className="font-semibold text-foreground">5. Media and Privacy Protection</h3>
+                    <p>Uploaded photos or media containing faces, license plates, injuries, or other personally identifiable information are subject to privacy blurring, restricted access, and consent-based controls. Raw media access is limited to authorized barangay personnel only.</p>
+
+                    <h3 className="font-semibold text-foreground">6. Data Security</h3>
+                    <p>All personal and location data is secured during transmission and storage using HTTPS/TLS encryption. Records are stored in cloud-based storage with automated daily backups to ensure data persistence and availability.</p>
+
+                    <h3 className="font-semibold text-foreground">7. Your Rights</h3>
+                    <p>You retain the right to request the deletion of your account and associated data at any time. Participation is entirely voluntary, and declining or withdrawing does not affect your access to barangay services. You may request access to your personal data held by the system.</p>
+
+                    <h3 className="font-semibold text-foreground">8. Data Retention</h3>
+                    <p>Records are retained for a period consistent with standard barangay record-management practice. After the retention period, records are disposed of in accordance with applicable regulations.</p>
+                  </div>
+                </DialogBody>
+                <DialogFooter>
+                  <DialogClose />
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+            .
           </span>
         </label>
         {errors.agreeToTerms ? <FieldError>{errors.agreeToTerms}</FieldError> : null}

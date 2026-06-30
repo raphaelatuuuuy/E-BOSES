@@ -13,16 +13,18 @@ import { useSignInForm } from "@/features/auth/hooks/use-sign-in-form"
 interface LoginFormProps extends React.ComponentProps<"div"> {
   onForgotPassword?: () => void
   onSignUp?: () => void
+  onSuccess?: () => void
 }
 
 export function LoginForm({
   className,
   onForgotPassword,
   onSignUp,
+  onSuccess,
   ...props
 }: LoginFormProps) {
   const { errors, handleChange, handleSubmit, statusMessage, values } =
-    useSignInForm()
+    useSignInForm({ onSuccess })
 
   return (
     <div className={cn("flex flex-col", className)} {...props}>
