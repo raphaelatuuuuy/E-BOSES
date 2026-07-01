@@ -1,5 +1,6 @@
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
+import { Slot } from "@radix-ui/react-slot"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { Button } from "@workspace/ui/components/button"
@@ -159,29 +160,6 @@ function AttachmentAction({
   )
 }
 
-type AttachmentTriggerChildProps = {
-  className?: string
-}
-
-function cloneAttachmentTriggerChild(
-  children: React.ReactNode,
-  props: Omit<React.ComponentProps<"button">, "children" | "type"> & {
-    className: string
-    "data-slot": string
-  },
-) {
-  const child = React.Children.only(children)
-
-  if (!React.isValidElement<AttachmentTriggerChildProps>(child)) {
-    throw new Error("AttachmentTrigger asChild expects a single valid React element")
-  }
-
-  return React.cloneElement(child, {
-    ...props,
-    className: cn(props.className, child.props.className),
-  } as Partial<AttachmentTriggerChildProps>)
-}
-
 function AttachmentTrigger({
   className,
   asChild = false,
@@ -190,21 +168,13 @@ function AttachmentTrigger({
 }: React.ComponentProps<"button"> & {
   asChild?: boolean
 }) {
-  const triggerClassName = cn("absolute inset-0 z-10 outline-none", className)
-
-  if (asChild) {
-    return cloneAttachmentTriggerChild(props.children, {
-      ...props,
-      "data-slot": "attachment-trigger",
-      className: triggerClassName,
-    })
-  }
+  const Comp = asChild ? Slot : "button"
 
   return (
-    <button
+    <Comp
       data-slot="attachment-trigger"
-      type={type ?? "button"}
-      className={triggerClassName}
+      type={asChild ? undefined : (type ?? "button")}
+      className={cn("absolute inset-0 z-10 outline-none", className)}
       {...props}
     />
   )
