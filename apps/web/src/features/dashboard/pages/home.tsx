@@ -1,4 +1,4 @@
-import { ImageIcon } from "lucide-react"
+import { ChevronRight } from "lucide-react"
 import { Link } from "react-router-dom"
 
 import { Badge } from "@workspace/ui/components/badge"
@@ -39,6 +39,11 @@ const announcements = [
   },
 ]
 
+const barangayEvents = [
+  { title: "Garbage collection", detail: "Zone 1 & 2", time: "6:00 AM" },
+  { title: "Barangay health clinic", detail: "Free blood pressure check", time: "8:00 AM" },
+]
+
 const activeReports = [
   {
     id: "RPT-001",
@@ -60,83 +65,110 @@ export default function HomePage() {
         <div className="grid gap-8 lg:grid-cols-5">
           {/* Left: Announcements column */}
           <section className="flex flex-col gap-4 lg:col-span-3 h-full">
-            <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
               <h2 className="font-heading text-xl font-bold text-foreground">
                 Announcements
               </h2>
-              <Link
-                to="/dashboard/feed"
-                className="text-sm font-medium text-muted-foreground underline underline-offset-2 transition-colors hover:text-primary"
-              >
-                View feed
-              </Link>
+              <div className="ml-auto">
+                <Link
+                  to="/dashboard/feed"
+                  className="inline-flex items-center gap-1 text-sm font-medium text-primary transition-colors hover:underline"
+                >
+                  View all
+                  <ChevronRight className="size-3.5" />
+                </Link>
+              </div>
             </div>
 
-            <div className="flex flex-1 flex-col gap-4">
+            <div className="flex flex-1 flex-col gap-3">
               {announcements.map((announcement) => (
-                <div key={announcement.title} className="flex flex-1 rounded-lg border border-border bg-white">
-                  <div className="flex aspect-[16/9] w-full items-center justify-center rounded-t-lg bg-muted md:hidden">
-                    <ImageIcon className="size-6 text-muted-foreground/40" />
-                  </div>
-                  <div className="flex w-full md:flex-row">
-                    <div className="hidden w-44 shrink-0 items-center justify-center bg-muted md:flex">
-                      <ImageIcon className="size-6 text-muted-foreground/40" />
-                    </div>
-                    <div className="flex min-w-0 flex-1 flex-col justify-between p-4">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-foreground">
-                            {announcement.title}
-                          </p>
-                          <p className="mt-0.5 text-xs text-muted-foreground">{announcement.date}</p>
-                        </div>
-                        <Badge variant="secondary">{announcement.tag}</Badge>
-                      </div>
-                      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                        {announcement.description}
+                <div key={announcement.title} className="rounded-lg border border-border bg-white p-4 transition-shadow hover:shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-foreground break-words">
+                        {announcement.title}
                       </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">{announcement.date}</p>
                     </div>
+                    <Badge variant="secondary" className="shrink-0">{announcement.tag}</Badge>
                   </div>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground break-words">
+                    {announcement.description}
+                  </p>
                 </div>
               ))}
             </div>
           </section>
 
-          {/* Right: Active Reports */}
+          {/* Right: sidebar */}
           <aside className="flex flex-col gap-4 lg:col-span-2 min-w-0">
-            <div className="flex items-center justify-between">
+            {/* Active Reports */}
+            <div className="flex items-center gap-2">
               <h2 className="font-heading text-xl font-bold text-foreground">
                 My Active Reports
               </h2>
-              <Link
-                to="/dashboard/reports"
-                className="text-sm font-medium text-muted-foreground underline underline-offset-2 transition-colors hover:text-primary"
-              >
-                View all
-              </Link>
+              <div className="ml-auto">
+                <Link
+                  to="/dashboard/reports"
+                  className="inline-flex items-center gap-1 text-sm font-medium text-primary transition-colors hover:underline"
+                >
+                  View all
+                  <ChevronRight className="size-3.5" />
+                </Link>
+              </div>
             </div>
 
-            {activeReports.map((report) => (
-              <Card key={report.id} className="bg-white">
-                <CardHeader>
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <CardTitle className="text-sm">{report.title}</CardTitle>
-                      <CardDescription className="text-[11px]">{report.detail}</CardDescription>
+            {activeReports.length > 0 ? (
+              activeReports.map((report) => (
+                <Card key={report.id} className="bg-white">
+                  <CardHeader>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <CardTitle className="text-sm">{report.title}</CardTitle>
+                        <CardDescription className="text-xs">{report.detail}</CardDescription>
+                      </div>
+                      <Badge className="bg-green-100 text-green-700 border-0">{report.status}</Badge>
                     </div>
-                    <Badge className="bg-green-100 text-green-700 border-0">{report.status}</Badge>
+                  </CardHeader>
+                  <CardContent>
+                    <Link
+                      to="/dashboard/reports"
+                      className="inline-flex items-center gap-1 text-sm font-medium text-primary transition-colors hover:underline"
+                    >
+                      Review status
+                      <ChevronRight className="size-3.5" />
+                    </Link>
+                  </CardContent>
+                </Card>
+              ))
+            ) : (
+              <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border bg-card p-8 text-center">
+                <p className="text-sm font-medium text-foreground">No active reports</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Submit a concern to track its progress here.
+                </p>
+              </div>
+            )}
+
+            {/* Today in Barangay */}
+            <div className="rounded-lg border border-border bg-white">
+              <div className="border-b border-border px-5 py-3.5">
+                <h3 className="font-heading text-sm font-bold text-foreground">
+                  Today in Barangay
+                </h3>
+              </div>
+              <div className="divide-y divide-border">
+                {barangayEvents.map((event) => (
+                  <div key={event.title} className="flex items-center justify-between px-5 py-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-foreground">{event.title}</p>
+                      <p className="text-xs text-muted-foreground">{event.detail}</p>
+                    </div>
+                    <span className="shrink-0 text-xs font-medium text-foreground/70">{event.time}</span>
                   </div>
-                </CardHeader>
-                <CardContent>
-                  <Link
-                    to="/dashboard/reports"
-                    className="text-sm font-medium text-primary underline underline-offset-2"
-                  >
-                    Review status
-                  </Link>
-                </CardContent>
-              </Card>
-            ))}
+                ))}
+              </div>
+            </div>
 
             {/* Calendar */}
             <CalendarBasic />

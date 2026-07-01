@@ -49,7 +49,7 @@ export function Topbar() {
               aria-label="Search reports and community updates"
               placeholder="Search reports, posts, or residents"
               className={cn(
-                "h-10 rounded-none border-0 border-b-2 border-border bg-transparent pl-9 text-sm shadow-none",
+                "h-10 rounded-none border-0 border-b border-border bg-transparent pl-9 text-sm shadow-none",
                 "focus-visible:border-b-primary focus-visible:shadow-none",
               )}
             />
@@ -78,7 +78,7 @@ export function Topbar() {
               aria-label="Search reports and community updates"
               placeholder="Search reports, posts, or residents"
               className={cn(
-                "h-10 rounded-none border-0 border-b-2 border-border bg-transparent pl-9 text-sm shadow-none",
+                "h-10 rounded-none border-0 border-b border-border bg-transparent pl-9 text-sm shadow-none",
                 "focus-visible:border-b-primary focus-visible:shadow-none",
               )}
               autoFocus

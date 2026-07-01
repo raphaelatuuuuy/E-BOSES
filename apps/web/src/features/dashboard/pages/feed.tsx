@@ -280,7 +280,7 @@ export default function FeedPage() {
                     <div className="mt-3 flex h-40 items-center justify-center rounded-lg border border-dashed border-border bg-muted/30">
                       <div className="flex flex-col items-center gap-1 text-muted-foreground">
                         <ImageIcon className="size-6" />
-                        <span className="text-[10px]">No image attached</span>
+                        <span className="text-xs">No image attached</span>
                       </div>
                     </div>
 
@@ -320,19 +320,19 @@ export default function FeedPage() {
                           return (
                             <div key={ci}>
                               <div className="flex gap-2">
-                                <div className={cn("flex size-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold", c.online ? avatarColors[c.colorIdx] : avatarGrey)}>
+                                <div className={cn("flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-bold", c.online ? avatarColors[c.colorIdx] : avatarGrey)}>
                                   {c.avatar}
                                 </div>
                                 <div className="flex-1">
                                   <div className="flex items-center gap-2">
                                     <span className="text-xs font-semibold text-foreground">{c.name}</span>
-                                    <span className="text-[10px] text-muted-foreground">{c.time}</span>
+                                    <span className="text-xs text-muted-foreground">{c.time}</span>
                                   </div>
                                   <p className="text-xs text-foreground">{c.text}</p>
                                   <button
                                     type="button"
                                     onClick={() => toggleReplies(replyKey)}
-                                    className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground hover:text-primary"
+                                    className="mt-1 flex items-center gap-1 text-xs text-muted-foreground hover:text-primary"
                                   >
                                     <ReplyIcon className="size-3" />
                                     Reply
@@ -348,19 +348,19 @@ export default function FeedPage() {
                                         return (
                                           <div key={ri}>
                                             <div className="flex gap-2">
-                                              <div className={cn("flex size-6 shrink-0 items-center justify-center rounded-full text-[9px] font-bold", r.online ? avatarColors[r.colorIdx] : avatarGrey)}>
+                                              <div className={cn("flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-bold", r.online ? avatarColors[r.colorIdx] : avatarGrey)}>
                                                 {r.avatar}
                                               </div>
                                               <div className="flex-1">
                                                 <div className="flex items-center gap-2">
-                                                  <span className="text-[11px] font-semibold text-foreground">{r.name}</span>
-                                                  <span className="text-[10px] text-muted-foreground">{r.time}</span>
+                                                  <span className="text-xs font-semibold text-foreground">{r.name}</span>
+                                                  <span className="text-xs text-muted-foreground">{r.time}</span>
                                                 </div>
-                                                <p className="text-[11px] text-foreground">{r.text}</p>
+                                                <p className="text-xs text-foreground">{r.text}</p>
                                                 <button
                                                   type="button"
                                                   onClick={() => toggleSubReplies(subReplyKey)}
-                                                  className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground hover:text-primary"
+                                                  className="mt-1 flex items-center gap-1 text-xs text-muted-foreground hover:text-primary"
                                                 >
                                                   <ReplyIcon className="size-3" />
                                                   Reply
@@ -372,7 +372,7 @@ export default function FeedPage() {
                                                       value={subReplyInputs[subReplyKey] ?? ""}
                                                       onChange={(e) => setSubReplyInputs((prev) => ({ ...prev, [subReplyKey]: e.target.value }))}
                                                       placeholder={`Reply to ${r.name}...`}
-                                                      className="h-7 flex-1 text-[10px]"
+                                                      className="h-7 flex-1 text-xs"
                                                     />
                                                     <Button type="button" variant="ghost" size="icon" className="size-7 text-muted-foreground hover:text-primary">
                                                       <SendIcon />
@@ -395,7 +395,7 @@ export default function FeedPage() {
                                         value={replyInputs[replyKey] ?? ""}
                                         onChange={(e) => setReplyInputs((prev) => ({ ...prev, [replyKey]: e.target.value }))}
                                         placeholder="Write a reply..."
-                                        className="h-8 flex-1 text-[11px]"
+                                        className="h-8 flex-1 text-xs"
                                       />
                                       <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-primary">
                                         <SendIcon />

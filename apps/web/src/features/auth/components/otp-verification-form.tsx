@@ -46,7 +46,7 @@ export function OtpVerificationForm({
     <div className={cn("flex flex-col", className)} {...props}>
       <form className="flex flex-col gap-4" noValidate onSubmit={handleSubmit}>
         <div className="flex flex-col items-start gap-0">
-          <h1 className="text-xl font-bold">{title}</h1>
+          <h1 className="text-2xl font-bold">{title}</h1>
           <p className="text-sm text-foreground">{description}</p>
         </div>
         <div className="h-1" />

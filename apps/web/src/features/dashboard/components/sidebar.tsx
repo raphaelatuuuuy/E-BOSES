@@ -54,7 +54,7 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        "fixed left-0 top-0 z-40 flex h-svh flex-col border-r border-background/10 bg-foreground transition-all duration-300",
+        "fixed left-0 top-0 z-40 flex h-svh flex-col border-r border-background/10 bg-foreground motion-safe:transition-all motion-safe:duration-300",
         isOpen ? "w-60" : "w-16",
       )}
     >
@@ -123,8 +123,9 @@ export function Sidebar() {
               <li key={item.path} className="group/nav relative">
                 <Link
                   to={item.path}
+                  aria-current={active ? "page" : undefined}
                   className={cn(
-                    "flex items-center rounded-none px-3 py-2 text-sm font-medium transition-colors",
+                    "flex items-center rounded-md px-3 py-2 text-sm font-medium motion-safe:transition-colors",
                     active
                       ? "text-primary"
                       : "text-background/65 hover:text-primary",
@@ -156,8 +157,9 @@ export function Sidebar() {
               <li key={item.path} className="group/btm relative">
                 <Link
                   to={item.path}
+                  aria-current={active ? "page" : undefined}
                   className={cn(
-                    "flex items-center rounded-none px-3 py-2 text-sm font-medium transition-colors",
+                    "flex items-center rounded-md px-3 py-2 text-sm font-medium motion-safe:transition-colors",
                     active
                       ? "text-primary"
                       : "text-background/65 hover:text-primary",
@@ -182,7 +184,7 @@ export function Sidebar() {
               type="button"
               onClick={toggle}
               className={cn(
-                "flex w-full items-center rounded-none px-3 py-2 text-sm font-medium text-background/65 transition-colors hover:text-primary",
+                "flex w-full items-center rounded-md px-3 py-2 text-sm font-medium text-background/65 transition-colors hover:text-primary",
                 isOpen ? "gap-3" : "justify-center px-0",
               )}
             >

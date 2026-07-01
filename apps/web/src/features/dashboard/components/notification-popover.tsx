@@ -20,7 +20,7 @@ export function NotificationPopover() {
           <BellIcon aria-hidden="true" className="size-5" />
         </PopoverTrigger>
 
-        <PopoverContent className="w-80 right-0 left-auto max-h-[calc(100vh-80px)] overflow-y-auto">
+        <PopoverContent className="w-80 max-sm:w-[calc(100vw-2rem)] max-sm:right-0 max-sm:left-auto max-sm:mx-2 right-0 left-auto max-h-[calc(100vh-80px)] overflow-y-auto">
           {/* Header */}
           <div className="border-b px-4 py-3">
             <h3 className="text-sm font-semibold text-foreground">Notifications</h3>

@@ -182,7 +182,7 @@ export function CreateReportDialog({
                         <Icon className="size-4" />
                       </div>
                       <span className="text-xs font-semibold">{c.label}</span>
-                      <span className="text-[10px] leading-tight opacity-70">{c.desc}</span>
+                      <span className="text-xs leading-tight opacity-70">{c.desc}</span>
                     </button>
                   )
                 })}
@@ -224,11 +224,11 @@ export function CreateReportDialog({
               <div className="grid grid-cols-2 gap-2">
                 <button type="button" className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-white text-muted-foreground transition-colors hover:border-primary hover:text-primary">
                   <ImageIcon className="size-5" />
-                  <span className="text-[10px] font-medium">Photo or Video</span>
+                  <span className="text-xs font-medium">Photo or Video</span>
                 </button>
                 <button type="button" className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-white text-muted-foreground transition-colors hover:border-primary hover:text-primary">
                   <PlusIcon className="size-5" />
-                  <span className="text-[10px] font-medium">Add more</span>
+                  <span className="text-xs font-medium">Add more</span>
                 </button>
               </div>
             </div>

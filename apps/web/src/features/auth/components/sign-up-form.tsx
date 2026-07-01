@@ -142,7 +142,7 @@ export function SignUpForm({
     <div className={cn("flex flex-col", className)} {...props}>
       <form className="flex flex-col gap-4" noValidate onSubmit={handleSubmit}>
         <div className="mt-4 flex flex-col items-start gap-0">
-          <h1 className="text-xl font-bold">Create an account</h1>
+          <h1 className="text-2xl font-bold">Create an account</h1>
           <p className="text-sm text-muted-foreground">
             Fill in the details below to get started
           </p>

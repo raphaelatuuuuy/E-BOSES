@@ -203,7 +203,7 @@ export default function ReportsPage() {
                         <p className="truncate text-sm font-semibold text-foreground">
                           {report.title}
                         </p>
-                        <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", statusColors[report.status])}>
+                        <span className={cn("rounded-full border px-2 py-0.5 text-xs font-medium", statusColors[report.status])}>
                           {report.status}
                         </span>
                       </div>
@@ -266,12 +266,12 @@ export default function ReportsPage() {
                 <CardHeader className="flex flex-row items-start justify-between gap-2 px-3 pb-1 pt-1.5">
                   <div className="min-w-0 flex-1">
                     <CardTitle className="text-sm">{selected.title}</CardTitle>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    <p className="mt-0.5 text-xs text-muted-foreground">
                       <MapPinIcon className="mr-0.5 inline size-2.5 align-text-bottom" />
                       {selected.address}
                     </p>
                   </div>
-                  <span className={cn("shrink-0 self-start rounded-full border px-2 py-0.5 text-[10px] font-medium", statusColors[selected.status])}>
+                  <span className={cn("shrink-0 self-start rounded-full border px-2 py-0.5 text-xs font-medium", statusColors[selected.status])}>
                     {selected.status}
                   </span>
                 </CardHeader>
@@ -283,7 +283,7 @@ export default function ReportsPage() {
                   <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-border bg-muted/50">
                     <div className="flex flex-col items-center gap-1 text-muted-foreground">
                       <ImageIcon className="size-5" />
-                      <span className="text-[10px]">Photo evidence</span>
+                      <span className="text-xs">Photo evidence</span>
                     </div>
                   </div>
                 </div>
@@ -292,9 +292,9 @@ export default function ReportsPage() {
 
                 {/* Description */}
                 <div className="px-3 py-1">
-                  <p className="text-[10px] font-medium uppercase text-muted-foreground">Description</p>
+                  <p className="text-xs font-medium uppercase text-muted-foreground">Description</p>
                   <p className="mt-1 text-xs leading-relaxed text-foreground">{selected.description}</p>
-                  <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
                     <ClockIcon className="size-3" />
                     <span>Submitted {selected.daysAgo} days ago &middot; {selected.date}</span>
                   </div>
@@ -307,7 +307,7 @@ export default function ReportsPage() {
                   <div className="flex items-center gap-1.5 min-w-0">
                     <Share2Icon className="size-3.5 shrink-0 text-muted-foreground" />
                     <span className="truncate text-xs text-foreground">Shared to community feed</span>
-                    <Badge variant={selected.shared ? "default" : "secondary"} className="shrink-0 text-[9px] px-1 py-0">
+                    <Badge variant={selected.shared ? "default" : "secondary"} className="shrink-0 text-xs px-1 py-0">
                       {selected.shared ? "Public" : "Private"}
                     </Badge>
                   </div>
@@ -347,14 +347,14 @@ export default function ReportsPage() {
                                 {step.status}
                               </p>
                               {step.time && (
-                                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                                   <span>{step.time}</span>
                                   <span>&middot;</span>
                                   <span>{step.user}</span>
                                 </div>
                               )}
                               {step.current && !step.time && (
-                                <p className="mt-0.5 text-[11px] text-muted-foreground animate-pulse">{selected.update}</p>
+                                <p className="mt-0.5 text-xs text-muted-foreground animate-pulse">{selected.update}</p>
                               )}
                             </div>
                           </div>
@@ -392,12 +392,12 @@ export default function ReportsPage() {
               <div className="mb-3 flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-foreground">{selected.title}</p>
-                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  <p className="mt-0.5 text-xs text-muted-foreground">
                     <MapPinIcon className="mr-0.5 inline size-2.5 align-text-bottom" />
                     {selected.address}
                   </p>
                 </div>
-                <span className={cn("shrink-0 self-start rounded-full border px-2 py-0.5 text-[10px] font-medium", statusColors[selected.status])}>
+                <span className={cn("shrink-0 self-start rounded-full border px-2 py-0.5 text-xs font-medium", statusColors[selected.status])}>
                   {selected.status}
                 </span>
               </div>
@@ -405,17 +405,17 @@ export default function ReportsPage() {
               <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-border bg-muted/50">
                 <div className="flex flex-col items-center gap-1 text-muted-foreground">
                   <ImageIcon className="size-5" />
-                  <span className="text-[10px]">Photo evidence</span>
+                  <span className="text-xs">Photo evidence</span>
                 </div>
               </div>
 
               <div className="mt-3 space-y-3">
                 <div>
-                  <p className="text-[10px] font-medium uppercase text-muted-foreground">Description</p>
+                  <p className="text-xs font-medium uppercase text-muted-foreground">Description</p>
                   <p className="mt-0.5 text-xs leading-relaxed text-foreground">{selected.description}</p>
                 </div>
 
-                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <ClockIcon className="size-3" />
                   <span>Submitted {selected.daysAgo} days ago</span>
                 </div>
@@ -424,7 +424,7 @@ export default function ReportsPage() {
                   <div className="flex items-center gap-1.5">
                     <Share2Icon className="size-3.5 text-muted-foreground" />
                     <span className="text-xs text-foreground">Shared to feed</span>
-                    <Badge variant={selected.shared ? "default" : "secondary"} className="text-[9px] px-1 py-0">
+                    <Badge variant={selected.shared ? "default" : "secondary"} className="text-xs px-1 py-0">
                       {selected.shared ? "Public" : "Private"}
                     </Badge>
                   </div>
@@ -449,16 +449,16 @@ export default function ReportsPage() {
                             {!isLast && <div className="mt-0.5 w-0.5 flex-1 rounded-full bg-border" />}
                           </div>
                           <div className="flex-1 pb-2.5">
-                            <p className={cn("text-[11px] font-medium", step.done ? "text-foreground" : "text-muted-foreground")}>
+                            <p className={cn("text-xs font-medium", step.done ? "text-foreground" : "text-muted-foreground")}>
                               {step.status}
                             </p>
                             {step.time && (
-                              <div className="text-[10px] text-muted-foreground">
+                              <div className="text-xs text-muted-foreground">
                                 <span>{step.time} &middot; {step.user}</span>
                               </div>
                             )}
                             {step.current && !step.time && (
-                              <p className="mt-0.5 text-[10px] text-muted-foreground animate-pulse">{selected.update}</p>
+                              <p className="mt-0.5 text-xs text-muted-foreground animate-pulse">{selected.update}</p>
                             )}
                           </div>
                         </div>

@@ -30,7 +30,7 @@ export function LoginForm({
     <div className={cn("flex flex-col", className)} {...props}>
       <form className="flex flex-col gap-4" noValidate onSubmit={handleSubmit}>
         <div className="flex flex-col items-start gap-0">
-          <h1 className="text-xl font-bold">Welcome</h1>
+          <h1 className="text-2xl font-bold">Welcome</h1>
           <p className="text-sm text-foreground">
             Sign in to connect with your barangay
           </p>

@@ -118,13 +118,10 @@ export default function OtpVerificationPage({
         className="relative hidden overflow-hidden lg:block lg:h-svh"
         aria-hidden="true"
       >
-        <div
-          className={`absolute inset-0 ${gradient} animate-[gradientShift_8s_ease_infinite]`}
-          style={{ backgroundSize: "200% 200%" }}
-        />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+        <div className={`absolute inset-0 ${gradient} bg-[length:200%_200%] animate-gradient-shift`} />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
         <div className="absolute bottom-0 left-0 right-0 p-8 md:p-10">
-          <h2 className="font-serif text-balance text-3xl leading-tight text-white md:text-4xl">
+          <h2 className="font-heading text-balance text-3xl leading-tight text-white md:text-4xl">
             {taglineLines[0]}
             <br />
             {taglineLines[1]}

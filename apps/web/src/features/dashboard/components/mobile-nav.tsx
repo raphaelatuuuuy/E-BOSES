@@ -42,7 +42,7 @@ export function MobileNav() {
                   <div className="flex size-12 items-center justify-center rounded-full bg-primary shadow-lg shadow-primary/30">
                     <PlusIcon className="size-6 text-primary-foreground" />
                   </div>
-                  <span className="text-[10px] font-semibold text-primary">
+                  <span className="text-xs font-semibold text-primary">
                     {item.label}
                   </span>
                 </button>
@@ -59,17 +59,15 @@ export function MobileNav() {
                 )}
               >
                 <Icon className="size-6" />
-                <span className="text-[10px] font-medium">{item.label}</span>
+                <span className="text-xs font-medium">{item.label}</span>
               </Link>
             )
           })}
         </div>
       </nav>
 
-      {/* Create Report dialog (hidden trigger, controlled by nav button) */}
-      <div className="hidden">
-        <CreateReportDialog open={createOpen} onOpenChange={setCreateOpen} />
-      </div>
+      {/* Create Report dialog (controlled by nav button) */}
+      {createOpen && <CreateReportDialog open={createOpen} onOpenChange={setCreateOpen} />}
     </>
   )
 }

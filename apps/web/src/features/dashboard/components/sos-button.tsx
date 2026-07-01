@@ -44,9 +44,9 @@ export function SOSButton() {
   return (
     <>
       {/* Floating SOS circle */}
-      <div className="group fixed bottom-24 right-6 z-40 animate-sos-drop md:bottom-6">
-        <span className="absolute inset-0 rounded-full bg-red-500/30 animate-sos-ping" />
-        <span className="absolute inset-0 rounded-full bg-red-500/20 animate-sos-ping-delayed" />
+      <div className="group fixed bottom-24 right-6 z-40 motion-safe:animate-sos-drop md:bottom-6">
+        <span className="absolute inset-0 rounded-full bg-red-500/30 motion-safe:animate-sos-ping" />
+        <span className="absolute inset-0 rounded-full bg-red-500/20 motion-safe:animate-sos-ping-delayed" />
 
         <button
           type="button"
@@ -70,8 +70,8 @@ export function SOSButton() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="group/sos relative flex size-10 items-center justify-center">
-                <span className="absolute inset-0 rounded-full bg-white/30 animate-sos-ping" />
-                <span className="absolute inset-0 rounded-full bg-white/20 animate-sos-ping-delayed" />
+                <span className="absolute inset-0 rounded-full bg-white/30 motion-safe:animate-sos-ping" />
+                <span className="absolute inset-0 rounded-full bg-white/20 motion-safe:animate-sos-ping-delayed" />
               <div className="relative flex size-10 items-center justify-center rounded-full border-2 border-red-300 bg-gradient-to-br from-red-300 via-red-500 to-red-800 shadow-[0_0_10px_rgba(220,38,38,0.4)]">
                 <div className="flex flex-col items-center">
                   <PhoneIcon className="size-4 rotate-[135deg] text-white drop-shadow-sm" fill="currentColor" />
@@ -123,7 +123,7 @@ export function SOSButton() {
                         <Icon className="size-4" />
                       </div>
                       <span className="text-xs font-semibold">{e.label}</span>
-                      <span className="text-[10px] leading-tight opacity-70">{e.desc}</span>
+                      <span className="text-xs leading-tight opacity-70">{e.desc}</span>
                     </button>
                   )
                 })}
@@ -151,11 +151,11 @@ export function SOSButton() {
               <div className="grid grid-cols-2 gap-2">
                 <button type="button" className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-white text-muted-foreground transition-colors hover:border-red-400 hover:text-red-600">
                   <ImageIcon className="size-5" />
-                  <span className="text-[10px] font-medium">Photo or Video</span>
+                  <span className="text-xs font-medium">Photo or Video</span>
                 </button>
                 <button type="button" className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-white text-muted-foreground transition-colors hover:border-red-400 hover:text-red-600">
                   <PlusIcon className="size-5" />
-                  <span className="text-[10px] font-medium">Add more</span>
+                  <span className="text-xs font-medium">Add more</span>
                 </button>
               </div>
             </div>

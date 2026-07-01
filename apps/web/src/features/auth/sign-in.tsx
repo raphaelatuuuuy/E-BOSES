@@ -17,6 +17,7 @@ export default function LoginPage({ onForgotPassword, onSignUp, onSuccess }: Log
 
   return (
     <main className="grid min-h-svh w-full lg:grid-cols-[40fr_60fr]">
+      {/* Left: Form panel */}
       <section className="relative flex flex-col p-6 md:p-10 overflow-y-auto">
         <button
           type="button"
@@ -31,17 +32,16 @@ export default function LoginPage({ onForgotPassword, onSignUp, onSuccess }: Log
           </div>
         </div>
       </section>
+
+      {/* Right: Gradient panel */}
       <section
         className="relative hidden h-full min-h-screen lg:block overflow-hidden"
         aria-hidden="true"
       >
-        <div
-          className={`absolute inset-0 ${gradient} animate-[gradientShift_8s_ease_infinite]`}
-          style={{ backgroundSize: "200% 200%" }}
-        />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+        <div className={`absolute inset-0 ${gradient} bg-[length:200%_200%] animate-gradient-shift`} />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
         <div className="absolute bottom-0 left-0 right-0 p-8 md:p-10">
-          <h2 className="font-serif text-balance text-3xl leading-tight text-white md:text-4xl">
+          <h2 className="font-heading text-balance text-3xl leading-tight text-white md:text-4xl">
             {taglineLines[0]}
             <br />
             {taglineLines[1]}
