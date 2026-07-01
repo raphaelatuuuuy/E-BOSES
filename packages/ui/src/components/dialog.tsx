@@ -215,5 +215,4 @@ export {
   DialogFooter,
   DialogTitle,
   DialogClose,
-  useDialog,
 }
