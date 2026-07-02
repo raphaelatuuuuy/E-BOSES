@@ -1,4 +1,5 @@
-import { ChevronRight } from "lucide-react"
+import { ChevronRight, FileTextIcon, CheckCircleIcon, AwardIcon } from "lucide-react"
+import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 
 import { Badge } from "@workspace/ui/components/badge"
@@ -10,6 +11,7 @@ import {
   CardTitle,
 } from "@workspace/ui/components/card"
 
+import { Skeleton } from "@workspace/ui/components/skeleton"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { Topbar } from "@/features/dashboard/components/topbar"
 import { GreetingCard } from "@/features/dashboard/components/greeting-card"
@@ -53,16 +55,58 @@ const activeReports = [
   },
 ]
 
+function HomeSkeleton() {
+  return (
+    <div className="flex-1 p-6 md:p-10">
+      {/* Greeting skeleton */}
+      <Skeleton className="h-48 w-full rounded-2xl md:h-72" />
+      <div className="mt-6 grid gap-8 lg:grid-cols-5">
+        <section className="flex flex-col gap-4 lg:col-span-3">
+          <div className="flex items-center justify-between">
+            <Skeleton className="h-7 w-36" />
+            <Skeleton className="h-5 w-16" />
+          </div>
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-28 rounded-lg" />
+          ))}
+        </section>
+        <aside className="flex flex-col gap-4 lg:col-span-2">
+          <div className="flex items-center justify-between">
+            <Skeleton className="h-7 w-44" />
+            <Skeleton className="h-5 w-16" />
+          </div>
+          <Skeleton className="h-32 rounded-xl" />
+          <Skeleton className="h-52 rounded-xl" />
+          <Skeleton className="h-64 rounded-xl" />
+        </aside>
+      </div>
+    </div>
+  )
+}
+
 export default function HomePage() {
   usePageTitle("Home")
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    const timer = setTimeout(() => setLoaded(true), 600)
+    return () => clearTimeout(timer)
+  }, [])
+
+  if (!loaded)
+    return (
+      <div className="flex min-h-svh flex-col">
+        <Topbar />
+        <HomeSkeleton />
+      </div>
+    )
 
   return (
     <div className="flex min-h-svh flex-col">
       <Topbar />
-      <GreetingCard />
-
       <div className="flex-1 p-6 md:p-10">
-        <div className="grid gap-8 lg:grid-cols-5">
+        <GreetingCard />
+        <div className="mt-6 grid gap-8 lg:grid-cols-5">
           {/* Left: Announcements column */}
           <section className="flex flex-col gap-4 lg:col-span-3 h-full">
             <div className="flex items-center gap-2">
@@ -82,7 +126,7 @@ export default function HomePage() {
 
             <div className="flex flex-1 flex-col gap-3">
               {announcements.map((announcement) => (
-                <div key={announcement.title} className="rounded-lg border border-border bg-white p-4 transition-shadow hover:shadow-sm">
+                <div key={announcement.title} className="rounded-lg border border-border bg-card p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)]">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-semibold text-foreground break-words">
@@ -120,7 +164,7 @@ export default function HomePage() {
 
             {activeReports.length > 0 ? (
               activeReports.map((report) => (
-                <Card key={report.id} className="bg-white">
+                <Card key={report.id} className="bg-card">
                   <CardHeader>
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -151,7 +195,7 @@ export default function HomePage() {
             )}
 
             {/* Today in Barangay */}
-            <div className="rounded-lg border border-border bg-white">
+            <div className="rounded-lg border border-border bg-card">
               <div className="border-b border-border px-5 py-3.5">
                 <h3 className="font-heading text-sm font-bold text-foreground">
                   Today in Barangay

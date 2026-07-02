@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   ChevronDownIcon,
   ChevronLeftIcon,
@@ -17,12 +17,12 @@ import { Button } from "@workspace/ui/components/button"
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@workspace/ui/components/card"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { Skeleton } from "@workspace/ui/components/skeleton"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { Topbar } from "@/features/dashboard/components/topbar"
 
@@ -143,9 +143,43 @@ const timelineDotColors: Record<string, string> = {
 
 export default function ReportsPage() {
   usePageTitle("Reports")
+  const filterRailRef = useRef<HTMLDivElement>(null)
+  const [loaded, setLoaded] = useState(false)
   const [activeFilter, setActiveFilter] = useState<string>("All")
   const [selectedReport, setSelectedReport] = useState<string | null>(null)
   const [timelineExpanded, setTimelineExpanded] = useState(true)
+
+  useEffect(() => {
+    const timer = setTimeout(() => setLoaded(true), 600)
+    return () => clearTimeout(timer)
+  }, [])
+
+  if (!loaded)
+    return (
+      <div className="flex min-h-svh flex-col">
+        <Topbar />
+        <div className="flex-1 p-4 md:p-10">
+          <Skeleton className="h-28 w-full rounded-2xl" />
+          <div className="scrollbar-hide mt-6 w-full max-w-full min-w-0 touch-pan-x overflow-x-scroll overscroll-x-contain [-webkit-overflow-scrolling:touch] lg:overflow-visible">
+            <div className="flex min-w-max flex-nowrap gap-2 pb-1 lg:grid lg:min-w-0 lg:grid-cols-5">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-8 w-20 shrink-0 rounded-full lg:w-full" />
+              ))}
+            </div>
+          </div>
+          <div className="mt-4 grid gap-6 lg:grid-cols-5">
+            <div className="flex flex-col gap-2 lg:col-span-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-[68px] rounded-lg" />
+              ))}
+            </div>
+            <div className="hidden lg:col-span-2 lg:block">
+              <Skeleton className="h-72 rounded-xl" />
+            </div>
+          </div>
+        </div>
+      </div>
+    )
 
   const filtered =
     activeFilter === "All"
@@ -153,6 +187,29 @@ export default function ReportsPage() {
       : sampleReports.filter((report) => report.status === activeFilter)
   const selected =
     sampleReports.find((report) => report.id === selectedReport) ?? filtered[0]
+
+  function scrollFilterRail(direction: -1 | 1) {
+    const rail = filterRailRef.current
+    const buttons = Array.from(
+      rail?.querySelectorAll<HTMLButtonElement>("[data-filter-option]") ?? [],
+    )
+
+    if (!rail || buttons.length === 0) return
+
+    const currentIndex = buttons.findIndex(
+      (button) => button.offsetLeft + button.offsetWidth > rail.scrollLeft + 4,
+    )
+    const fallbackIndex = direction > 0 ? 0 : buttons.length - 1
+    const targetIndex = Math.min(
+      buttons.length - 1,
+      Math.max(0, (currentIndex === -1 ? fallbackIndex : currentIndex) + direction * 2),
+    )
+
+    rail.scrollTo({
+      left: buttons[targetIndex].offsetLeft - buttons[0].offsetLeft,
+      behavior: "smooth",
+    })
+  }
 
   return (
     <div className="flex min-h-svh flex-col">
@@ -168,21 +225,47 @@ export default function ReportsPage() {
 
         <div className="mt-6 grid gap-6 lg:grid-cols-5">
           {/* Left: Filters + Report list */}
-          <section className="flex flex-col gap-4 lg:col-span-3">
-            <div className="flex flex-wrap gap-2">
-              {filters.map((filter) => (
-                <Button
-                  key={filter}
-                  type="button"
-                  size="sm"
-                  variant={activeFilter === filter ? "default" : "outline"}
-                  aria-pressed={activeFilter === filter}
-                  onClick={() => setActiveFilter(filter)}
-                  className={cn("h-8 rounded-full px-3 text-xs", activeFilter !== filter && "bg-white")}
-                >
-                  {filter}
-                </Button>
-              ))}
+          <section className="flex min-w-0 flex-col gap-4 lg:col-span-3">
+            <div className="relative w-full min-w-0">
+              <button
+                type="button"
+                aria-label="Scroll filters left"
+                onClick={() => scrollFilterRail(-1)}
+                className="absolute left-0 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden"
+              >
+                <ChevronLeftIcon className="size-4" />
+              </button>
+
+              <div
+                ref={filterRailRef}
+                className="scrollbar-hide mx-10 min-w-0 overflow-x-hidden lg:mx-0 lg:overflow-visible"
+              >
+                <div className="flex min-w-max flex-nowrap gap-2 lg:grid lg:min-w-0 lg:grid-cols-5">
+                  {filters.map((filter) => (
+                    <Button
+                      key={filter}
+                      data-filter-option
+                      type="button"
+                      size="sm"
+                      variant={activeFilter === filter ? "default" : "outline"}
+                      aria-pressed={activeFilter === filter}
+                      onClick={() => setActiveFilter(filter)}
+                      className={cn("h-8 shrink-0 rounded-full px-3 text-xs whitespace-nowrap lg:w-full lg:min-w-0 lg:shrink", activeFilter !== filter && "bg-card")}
+                    >
+                      {filter}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                aria-label="Scroll filters right"
+                onClick={() => scrollFilterRail(1)}
+                className="absolute right-0 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden"
+              >
+                <ChevronRightIcon className="size-4" />
+              </button>
             </div>
 
             <Card className="flex flex-col gap-0 overflow-hidden py-0">
@@ -224,7 +307,7 @@ export default function ReportsPage() {
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    className="flex size-7 items-center justify-center rounded-md border border-border bg-white text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-40"
+                    className="flex size-7 items-center justify-center rounded-md border border-border bg-card text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-40"
                     disabled
                   >
                     <ChevronLeftIcon className="size-3.5" />
@@ -237,19 +320,19 @@ export default function ReportsPage() {
                   </button>
                   <button
                     type="button"
-                    className="flex size-7 items-center justify-center rounded-md border border-border bg-white text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+                    className="flex size-7 items-center justify-center rounded-md border border-border bg-card text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary"
                   >
                     2
                   </button>
                   <button
                     type="button"
-                    className="flex size-7 items-center justify-center rounded-md border border-border bg-white text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+                    className="flex size-7 items-center justify-center rounded-md border border-border bg-card text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary"
                   >
                     3
                   </button>
                   <button
                     type="button"
-                    className="flex size-7 items-center justify-center rounded-md border border-border bg-white text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+                    className="flex size-7 items-center justify-center rounded-md border border-border bg-card text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary"
                   >
                     <ChevronRightIcon className="size-3.5" />
                   </button>
@@ -259,7 +342,7 @@ export default function ReportsPage() {
           </section>
 
           {/* Right: Detail view */}
-          <aside className="flex flex-col lg:col-span-2 lg:sticky lg:top-10">
+          <aside className="hidden flex-col lg:col-span-2 lg:sticky lg:top-10 lg:flex">
             {selected ? (
               <Card>
                 {/* Header with title + status */}

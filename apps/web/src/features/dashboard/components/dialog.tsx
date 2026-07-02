@@ -36,7 +36,9 @@ export function Dialog({ open, onClose, maxW = "max-w-lg", children }: DialogPro
   if (!open) return null
 
   return createPortal(
-    <div className="fixed inset-0 z-[200] flex items-center justify-center">
+    <div
+      className="fixed inset-0 z-[200] flex items-center justify-center motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200"
+    >
       {/* Overlay */}
       <div
         ref={overlayRef}
@@ -50,6 +52,7 @@ export function Dialog({ open, onClose, maxW = "max-w-lg", children }: DialogPro
         className={cn(
           "z-10 flex w-full flex-col overflow-hidden bg-background shadow-2xl",
           "fixed inset-0 md:relative md:max-h-[90vh] md:rounded-2xl md:border md:border-border/50",
+          "motion-safe:md:animate-in motion-safe:md:fade-in motion-safe:md:zoom-in-95 motion-safe:md:duration-200 motion-safe:md:ease-out",
           maxW,
         )}
       >

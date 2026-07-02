@@ -14,7 +14,7 @@ export function NotificationPopover() {
     <div className="relative">
       <Popover>
         <PopoverTrigger
-          className="flex size-10 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+          className="flex size-10 items-center justify-center rounded-full text-muted-foreground transition-colors duration-150 hover:bg-primary/10 hover:text-primary"
           aria-label="Open notifications"
         >
           <BellIcon aria-hidden="true" className="size-5" />

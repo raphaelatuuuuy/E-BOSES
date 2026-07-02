@@ -10,6 +10,12 @@ import SignUpPage from "@/features/auth/sign-up"
 import DashboardLayout from "@/features/dashboard/dashboard"
 import FeedPage from "@/features/dashboard/pages/feed"
 import HomePage from "@/features/dashboard/pages/home"
+import OfficialsLayout from "@/features/officials/officials-layout"
+import AlertsPage from "@/features/officials/pages/alerts"
+import AnalyticsPage from "@/features/officials/pages/analytics"
+import ConcernsPage from "@/features/officials/pages/concerns"
+import OfficialsProfilePage from "@/features/officials/pages/profile"
+import OverviewPage from "@/features/officials/pages/overview"
 import ProfilePage from "@/features/dashboard/pages/profile"
 import ReportsPage from "@/features/dashboard/pages/reports"
 import SettingsPage from "@/features/dashboard/pages/settings"
@@ -104,6 +110,14 @@ export default function App() {
         <Route path="reports" element={<ReportsPage />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="settings" element={<SettingsPage />} />
+      </Route>
+      <Route path="/officials" element={<OfficialsLayout />}>
+        <Route index element={<Navigate to="/officials/dashboard" replace />} />
+        <Route path="dashboard" element={<OverviewPage />} />
+        <Route path="concerns" element={<ConcernsPage />} />
+        <Route path="alerts" element={<AlertsPage />} />
+        <Route path="analytics" element={<AnalyticsPage />} />
+        <Route path="profile" element={<OfficialsProfilePage />} />
       </Route>
       <Route path="*" element={<AuthRoutes />} />
     </Routes>

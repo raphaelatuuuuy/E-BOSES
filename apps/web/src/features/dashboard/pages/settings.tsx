@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react"
+
 import { Checkbox } from "@workspace/ui/components/checkbox"
 import {
   Card,
@@ -13,6 +15,7 @@ import {
   FieldLabel,
 } from "@workspace/ui/components/field"
 
+import { Skeleton } from "@workspace/ui/components/skeleton"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { Topbar } from "@/features/dashboard/components/topbar"
 
@@ -55,8 +58,38 @@ const settingsGroups = [
   },
 ]
 
+function SettingsSkeleton() {
+  return (
+    <div className="flex-1 p-4 md:p-10">
+      <div className="max-w-3xl">
+        <Skeleton className="h-9 w-40 md:h-10" />
+        <Skeleton className="mt-2 h-5 w-72" />
+      </div>
+      <div className="mt-6 grid max-w-3xl gap-4">
+        {Array.from({ length: 2 }).map((_, i) => (
+          <Skeleton key={i} className="h-44 rounded-xl" />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   usePageTitle("Settings")
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    const timer = setTimeout(() => setLoaded(true), 600)
+    return () => clearTimeout(timer)
+  }, [])
+
+  if (!loaded)
+    return (
+      <div className="flex min-h-svh flex-col">
+        <Topbar />
+        <SettingsSkeleton />
+      </div>
+    )
 
   return (
     <div className="flex min-h-svh flex-col">

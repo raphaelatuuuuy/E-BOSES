@@ -1,8 +1,10 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { Topbar } from "@/features/dashboard/components/topbar"
 import {
   ArrowUpIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   FlagIcon,
   ImageIcon,
   MessageCircleIcon,
@@ -123,6 +125,8 @@ const activeResponders = [
 
 export default function FeedPage() {
   usePageTitle("Feed")
+  const filterRailRef = useRef<HTMLDivElement>(null)
+  const [loaded, setLoaded] = useState(false)
   const [activeFilter, setActiveFilter] = useState<string>("All")
   const [votes, setVotes] = useState<Record<number, number>>(
     Object.fromEntries(samplePosts.map((p) => [p.id, p.votes]))
@@ -137,6 +141,33 @@ export default function FeedPage() {
   const [reportOpen, setReportOpen] = useState<number | null>(null)
   const [reportReason, setReportReason] = useState<string>("")
   const [reportOther, setReportOther] = useState<string>("")
+
+  useEffect(() => {
+    const timer = setTimeout(() => setLoaded(true), 600)
+    return () => clearTimeout(timer)
+  }, [])
+
+  if (!loaded)
+    return (
+      <div className="flex min-h-svh flex-col">
+        <Topbar />
+        <div className="flex-1 p-4 md:p-10">
+          <Skeleton className="h-28 w-full rounded-2xl" />
+          <div className="scrollbar-hide mt-6 w-full max-w-full min-w-0 touch-pan-x overflow-x-scroll overscroll-x-contain [-webkit-overflow-scrolling:touch] lg:overflow-visible">
+            <div className="flex min-w-max flex-nowrap gap-2 pb-1 lg:grid lg:min-w-0 lg:grid-cols-6">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-8 w-24 shrink-0 rounded-full lg:w-full" />
+              ))}
+            </div>
+          </div>
+          <div className="mt-4 flex flex-col gap-4">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-72 rounded-lg" />
+            ))}
+          </div>
+        </div>
+      </div>
+    )
 
   function handleVote(postId: number) {
     const current = userVote[postId] ?? 0
@@ -176,6 +207,29 @@ export default function FeedPage() {
     })
   }
 
+  function scrollFilterRail(direction: -1 | 1) {
+    const rail = filterRailRef.current
+    const buttons = Array.from(
+      rail?.querySelectorAll<HTMLButtonElement>("[data-filter-option]") ?? [],
+    )
+
+    if (!rail || buttons.length === 0) return
+
+    const currentIndex = buttons.findIndex(
+      (button) => button.offsetLeft + button.offsetWidth > rail.scrollLeft + 4,
+    )
+    const fallbackIndex = direction > 0 ? 0 : buttons.length - 1
+    const targetIndex = Math.min(
+      buttons.length - 1,
+      Math.max(0, (currentIndex === -1 ? fallbackIndex : currentIndex) + direction * 2),
+    )
+
+    rail.scrollTo({
+      left: buttons[targetIndex].offsetLeft - buttons[0].offsetLeft,
+      behavior: "smooth",
+    })
+  }
+
   return (
     <div className="flex min-h-svh flex-col">
       <Topbar />
@@ -190,21 +244,47 @@ export default function FeedPage() {
 
         <div className="mt-6 grid gap-6 lg:grid-cols-7">
           {/* Left: Filters + Posts */}
-          <section className="flex flex-col gap-4 lg:col-span-5">
-            <div className="flex flex-wrap gap-2">
-              {filters.map((f) => (
-                <Button
-                  key={f}
-                  type="button"
-                  size="sm"
-                  variant={activeFilter === f ? "default" : "outline"}
-                  aria-pressed={activeFilter === f}
-                  onClick={() => setActiveFilter(f)}
-                  className={cn("h-8 rounded-full px-3 text-xs", activeFilter !== f && "bg-white")}
-                >
-                  {f}
-                </Button>
-              ))}
+          <section className="flex min-w-0 flex-col gap-4 lg:col-span-5">
+            <div className="relative w-full min-w-0">
+              <button
+                type="button"
+                aria-label="Scroll filters left"
+                onClick={() => scrollFilterRail(-1)}
+                className="absolute left-0 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden"
+              >
+                <ChevronLeftIcon className="size-4" />
+              </button>
+
+              <div
+                ref={filterRailRef}
+                className="scrollbar-hide mx-10 min-w-0 overflow-x-hidden lg:mx-0 lg:overflow-visible"
+              >
+                <div className="flex min-w-max flex-nowrap gap-2 lg:grid lg:min-w-0 lg:grid-cols-6">
+                  {filters.map((f) => (
+                    <Button
+                      key={f}
+                      data-filter-option
+                      type="button"
+                      size="sm"
+                      variant={activeFilter === f ? "default" : "outline"}
+                      aria-pressed={activeFilter === f}
+                      onClick={() => setActiveFilter(f)}
+                      className={cn("h-8 shrink-0 rounded-full px-3 text-xs whitespace-nowrap lg:w-full lg:min-w-0 lg:shrink", activeFilter !== f && "bg-card")}
+                    >
+                      {f}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                aria-label="Scroll filters right"
+                onClick={() => scrollFilterRail(1)}
+                className="absolute right-0 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden"
+              >
+                <ChevronRightIcon className="size-4" />
+              </button>
             </div>
 
             {/* Posts */}

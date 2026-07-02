@@ -69,22 +69,22 @@ export function SOSButton() {
         <DialogHeader className="border-red-800 bg-red-700">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <div className="group/sos relative flex size-10 items-center justify-center">
-                <span className="absolute inset-0 rounded-full bg-white/30 motion-safe:animate-sos-ping" />
-                <span className="absolute inset-0 rounded-full bg-white/20 motion-safe:animate-sos-ping-delayed" />
-              <div className="relative flex size-10 items-center justify-center rounded-full border-2 border-red-300 bg-gradient-to-br from-red-300 via-red-500 to-red-800 shadow-[0_0_10px_rgba(220,38,38,0.4)]">
-                <div className="flex flex-col items-center">
-                  <PhoneIcon className="size-4 rotate-[135deg] text-white drop-shadow-sm" fill="currentColor" />
-                  <span className="text-[8px] font-extrabold tracking-widest text-white drop-shadow-sm">SOS</span>
+              <div className="relative flex size-10 items-center justify-center">
+                <span className="absolute inset-0 rounded-full bg-card/30 motion-safe:animate-sos-ping" />
+                <span className="absolute inset-0 rounded-full bg-card/20 motion-safe:animate-sos-ping-delayed" />
+                <div className="relative flex size-10 items-center justify-center rounded-full border-2 border-red-300 bg-gradient-to-br from-red-300 via-red-500 to-red-800 shadow-[0_0_10px_rgba(220,38,38,0.4)]">
+                  <div className="flex flex-col items-center">
+                    <PhoneIcon className="size-4 rotate-[135deg] text-white drop-shadow-sm" fill="currentColor" />
+                    <span className="text-[8px] font-extrabold tracking-widest text-white drop-shadow-sm">SOS</span>
+                  </div>
                 </div>
-              </div>
               </div>
               <DialogTitle className="text-white">Send Emergency Alert</DialogTitle>
             </div>
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="flex size-8 items-center justify-center rounded-lg text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+              className="flex size-8 items-center justify-center rounded-lg text-white/60 transition-colors hover:bg-card/10 hover:text-white"
             >
               <XIcon className="size-4" />
             </button>
@@ -108,7 +108,7 @@ export function SOSButton() {
                       type="button"
                       onClick={() => setEmergency(e.label)}
                       className={cn(
-                        "group flex flex-col items-center gap-1.5 rounded-xl border-2 bg-white p-3 text-center transition-all",
+                        "group flex flex-col items-center gap-1.5 rounded-xl border-2 bg-card p-3 text-center transition-all",
                         selected
                           ? cn(colors.border, colors.bg, colors.text)
                           : "border-border text-muted-foreground hover:border-primary hover:bg-primary/5 hover:text-primary",
@@ -134,7 +134,7 @@ export function SOSButton() {
               <label className="text-sm font-medium text-foreground">Add a note</label>
               <textarea
                 placeholder="Any additional details for responders..."
-                className="h-full min-h-[180px] w-full resize-none rounded-lg border border-border bg-white px-3.5 py-2.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
+                className="h-full min-h-[180px] w-full resize-none rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
               />
             </div>
           </div>
@@ -149,11 +149,11 @@ export function SOSButton() {
                 <span className="text-xs text-muted-foreground">Help Responders</span>
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <button type="button" className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-white text-muted-foreground transition-colors hover:border-red-400 hover:text-red-600">
+                <button type="button" className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-card text-muted-foreground transition-colors hover:border-red-400 hover:text-red-600">
                   <ImageIcon className="size-5" />
                   <span className="text-xs font-medium">Photo or Video</span>
                 </button>
-                <button type="button" className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-white text-muted-foreground transition-colors hover:border-red-400 hover:text-red-600">
+                <button type="button" className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-card text-muted-foreground transition-colors hover:border-red-400 hover:text-red-600">
                   <PlusIcon className="size-5" />
                   <span className="text-xs font-medium">Add more</span>
                 </button>
@@ -167,27 +167,27 @@ export function SOSButton() {
                 <input
                   type="text"
                   placeholder="Search or pin location"
-                  className="w-full rounded-lg border border-border bg-white py-2.5 pl-10 pr-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  className="w-full rounded-lg border border-border bg-card py-2.5 pl-10 pr-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
                 />
               </div>
-              <button
-                type="button"
-                onClick={() => setShowMap(true)}
-                className={cn(
-                  "flex w-full flex-1 min-h-[180px] overflow-hidden rounded-lg border border-border bg-muted",
-                  showMap ? "hidden" : "items-center justify-center",
+              <div className="relative min-h-[180px] flex-1">
+                {showMap ? (
+                  <div className="absolute inset-0 overflow-hidden rounded-lg border border-border">
+                    <iframe title="Location map" src="https://www.openstreetmap.org/export/embed.html?bbox=120.9%2C14.5%2C121.1%2C14.7&layer=mapnik" className="h-full w-full border-0" />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowMap(true)}
+                    className="flex h-full w-full items-center justify-center rounded-lg border border-border bg-muted transition-colors hover:border-primary hover:bg-primary/5"
+                  >
+                    <div className="flex flex-col items-center gap-1 text-muted-foreground">
+                      <MapPinIcon className="size-6" />
+                      <span className="text-xs">Click to load map</span>
+                    </div>
+                  </button>
                 )}
-              >
-                <div className="flex flex-col items-center gap-1 text-muted-foreground">
-                  <MapPinIcon className="size-6" />
-                  <span className="text-xs">Click to load map</span>
-                </div>
-              </button>
-              {showMap && (
-                <div className="min-h-[180px] flex-1 overflow-hidden rounded-lg border border-border">
-                  <iframe title="Location map" src="https://www.openstreetmap.org/export/embed.html?bbox=120.9%2C14.5%2C121.1%2C14.7&layer=mapnik" className="h-full w-full border-0" />
-                </div>
-              )}
+              </div>
             </div>
           </div>
 
@@ -206,7 +206,7 @@ export function SOSButton() {
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="rounded-lg bg-white px-6 py-2.5 text-sm font-semibold text-red-700 shadow-sm transition-colors hover:bg-white/90 active:scale-[0.98]"
+              className="rounded-lg bg-card px-6 py-2.5 text-sm font-semibold text-red-700 shadow-sm transition-colors hover:bg-card/90 active:scale-[0.98]"
             >
               Back
             </button>

@@ -10,7 +10,6 @@ import {
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   UsersIcon,
-  SettingsIcon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -30,9 +29,7 @@ const topNavItems: NavItem[] = [
   { label: "Reports", path: "/dashboard/reports", icon: BarChart3Icon },
 ]
 
-const bottomNavItems: NavItem[] = [
-  { label: "Settings", path: "/dashboard/settings", icon: SettingsIcon },
-]
+const bottomNavItems: NavItem[] = []
 
 export function Sidebar() {
   const { isOpen, toggle } = useSidebar()

@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useId, useState } from "react"
 import {
   CheckIcon,
   ImageIcon,
@@ -52,6 +52,7 @@ export function CreateReportDialog({
   }
   const [concern, setConcern] = useState("")
   const [description, setDescription] = useState("")
+  const shareId = useId()
   const [shareOpen, setShareOpen] = useState(false)
   const [shareChoice, setShareChoice] = useState<"yes" | "no" | null>(null)
   const [showMap, setShowMap] = useState(false)
@@ -80,74 +81,79 @@ export function CreateReportDialog({
                     className={cn(
                       "flex size-8 items-center justify-center rounded-lg transition-colors",
                       shareOpen
-                        ? "bg-white/10 text-white"
-                        : "text-white/60 hover:bg-white/10 hover:text-white",
+                        ? "bg-card/10 text-white"
+                        : "text-white/60 hover:bg-card/10 hover:text-white",
                     )}
                   >
                     <ShareIcon className="size-4" />
                   </PopoverTrigger>
 
                   <PopoverContent className="w-72 right-0 left-auto top-full mt-2">
-                    <div className="p-4 space-y-4">
+                    <fieldset className="p-4 space-y-4">
                       <div className="flex items-center gap-2">
                         <div className="flex size-8 items-center justify-center rounded-full bg-primary/10">
                           <ShareIcon className="size-4 text-primary" />
                         </div>
-                        <h4 className="text-sm font-semibold text-foreground">Share with community?</h4>
+                        <legend className="text-sm font-semibold text-foreground">Share with community?</legend>
                       </div>
                       <p className="text-xs leading-relaxed text-muted-foreground">
                         Choose how your report will be visible. You can always change this later in settings.
                       </p>
                       <div className="space-y-2">
-                        <label
-                          className={cn(
-                            "flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors",
-                            shareChoice === "yes" ? "border-primary bg-primary/5" : "border-border hover:border-primary/50",
-                          )}
-                        >
-                          <div
+                        {(["yes", "no"] as const).map((value) => (
+                          <label
+                            key={value}
                             className={cn(
-                              "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border transition-colors",
-                              shareChoice === "yes" ? "border-primary bg-primary" : "border-muted-foreground",
+                              "flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors",
+                              shareChoice === value ? "border-primary bg-primary/5" : "border-border hover:border-primary/50",
                             )}
                           >
-                            {shareChoice === "yes" && <CheckIcon className="size-3 text-white" />}
-                          </div>
-                          <input type="checkbox" checked={shareChoice === "yes"} onChange={() => setShareChoice(shareChoice === "yes" ? null : "yes")} className="sr-only" />
-                          <div>
-                            <p className="text-sm font-medium text-foreground">Yes, share to community feed</p>
-                            <p className="text-xs text-muted-foreground">Others can see and engage with your report.</p>
-                          </div>
-                        </label>
-                        <label
-                          className={cn(
-                            "flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors",
-                            shareChoice === "no" ? "border-primary bg-primary/5" : "border-border hover:border-primary/50",
-                          )}
-                        >
-                          <div
-                            className={cn(
-                              "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border transition-colors",
-                              shareChoice === "no" ? "border-primary bg-primary" : "border-muted-foreground",
-                            )}
+                            <div
+                              className={cn(
+                                "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
+                                shareChoice === value ? "border-primary" : "border-muted-foreground",
+                              )}
+                            >
+                              {shareChoice === value && <div className="size-2 rounded-full bg-primary" />}
+                            </div>
+                            <input
+                              type="radio"
+                              name={shareId}
+                              value={value}
+                              checked={shareChoice === value}
+                              onChange={() => setShareChoice(value)}
+                              className="sr-only"
+                            />
+                            <div>
+                              <p className="text-sm font-medium text-foreground">
+                                {value === "yes" ? "Yes, share to community feed" : "No, keep it private"}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {value === "yes"
+                                  ? "Others can see and engage with your report."
+                                  : "Only you and the admin can view this report."}
+                              </p>
+                            </div>
+                          </label>
+                        ))}
+                        {shareChoice === "no" && (
+                          <button
+                            type="button"
+                            onClick={() => setShareChoice(null)}
+                            className="w-full rounded-lg border border-border p-2 text-xs text-muted-foreground transition-colors hover:bg-muted/50"
                           >
-                            {shareChoice === "no" && <CheckIcon className="size-3 text-white" />}
-                          </div>
-                          <input type="checkbox" checked={shareChoice === "no"} onChange={() => setShareChoice(shareChoice === "no" ? null : "no")} className="sr-only" />
-                          <div>
-                            <p className="text-sm font-medium text-foreground">No, keep it private</p>
-                            <p className="text-xs text-muted-foreground">Only you and the admin can view this report.</p>
-                          </div>
-                        </label>
+                            Clear selection
+                          </button>
+                        )}
                       </div>
-                    </div>
+                    </fieldset>
                   </PopoverContent>
                 </Popover>
               </div>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="flex size-8 items-center justify-center rounded-lg text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+                className="flex size-8 items-center justify-center rounded-lg text-white/60 transition-colors hover:bg-card/10 hover:text-white"
               >
                 <XIcon className="size-4" />
               </button>
@@ -172,7 +178,7 @@ export function CreateReportDialog({
                       type="button"
                       onClick={() => setConcern(c.label)}
                       className={cn(
-                        "group flex flex-col items-center gap-1.5 rounded-xl border-2 bg-white p-3 text-center transition-all",
+                        "group flex flex-col items-center gap-1.5 rounded-xl border-2 bg-card p-3 text-center transition-all",
                         selected
                           ? cn(colors.border, colors.bg, colors.text)
                           : "border-border text-muted-foreground hover:border-primary hover:bg-primary/5 hover:text-primary",
@@ -194,7 +200,7 @@ export function CreateReportDialog({
               <input
                 type="text"
                 placeholder="Brief summary of the issue"
-                className="w-full rounded-lg border border-border bg-white px-3.5 py-2.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
+                className="w-full rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
               />
             </div>
 
@@ -210,7 +216,7 @@ export function CreateReportDialog({
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Describe the issue in detail..."
-                className="h-full min-h-[120px] w-full resize-none rounded-lg border border-border bg-white px-3.5 py-2.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
+                className="h-full min-h-[120px] w-full resize-none rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
               />
             </div>
           </div>
@@ -222,11 +228,11 @@ export function CreateReportDialog({
                 Add media <span className="font-normal text-muted-foreground">(optional)</span>
               </label>
               <div className="grid grid-cols-2 gap-2">
-                <button type="button" className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-white text-muted-foreground transition-colors hover:border-primary hover:text-primary">
+                <button type="button" className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-card text-muted-foreground transition-colors hover:border-primary hover:text-primary">
                   <ImageIcon className="size-5" />
                   <span className="text-xs font-medium">Photo or Video</span>
                 </button>
-                <button type="button" className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-white text-muted-foreground transition-colors hover:border-primary hover:text-primary">
+                <button type="button" className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-card text-muted-foreground transition-colors hover:border-primary hover:text-primary">
                   <PlusIcon className="size-5" />
                   <span className="text-xs font-medium">Add more</span>
                 </button>
@@ -240,27 +246,27 @@ export function CreateReportDialog({
                 <input
                   type="text"
                   placeholder="Search or pin location"
-                  className="w-full rounded-lg border border-border bg-white py-2.5 pl-10 pr-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  className="w-full rounded-lg border border-border bg-card py-2.5 pl-10 pr-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
                 />
               </div>
-              <button
-                type="button"
-                onClick={() => setShowMap(true)}
-                className={cn(
-                  "flex w-full flex-1 overflow-hidden rounded-lg border border-border bg-muted",
-                  showMap ? "hidden" : "items-center justify-center",
+              <div className="relative flex-1 min-h-[180px]">
+                {showMap ? (
+                  <div className="absolute inset-0 overflow-hidden rounded-lg border border-border">
+                    <iframe title="Location map" src="https://www.openstreetmap.org/export/embed.html?bbox=120.9%2C14.5%2C121.1%2C14.7&layer=mapnik" className="h-full w-full border-0" />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowMap(true)}
+                    className="flex h-full w-full items-center justify-center rounded-lg border border-border bg-muted transition-colors hover:border-primary hover:bg-primary/5"
+                  >
+                    <div className="flex flex-col items-center gap-1 text-muted-foreground">
+                      <MapPinIcon className="size-6" />
+                      <span className="text-xs">Click to load map</span>
+                    </div>
+                  </button>
                 )}
-              >
-                <div className="flex flex-col items-center gap-1 text-muted-foreground">
-                  <MapPinIcon className="size-6" />
-                  <span className="text-xs">Click to load map</span>
-                </div>
-              </button>
-              {showMap && (
-                <div className="flex-1 overflow-hidden rounded-lg border border-border">
-                  <iframe title="Location map" src="https://www.openstreetmap.org/export/embed.html?bbox=120.9%2C14.5%2C121.1%2C14.7&layer=mapnik" className="h-full w-full border-0" />
-                </div>
-              )}
+              </div>
             </div>
           </div>
         </DialogBody>
@@ -271,7 +277,7 @@ export function CreateReportDialog({
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="rounded-lg bg-white px-6 py-2.5 text-sm font-semibold text-[#020c4e] shadow-sm transition-colors hover:bg-white/90 active:scale-[0.98]"
+              className="rounded-lg bg-card px-6 py-2.5 text-sm font-semibold text-[#020c4e] shadow-sm transition-colors hover:bg-card/90 active:scale-[0.98]"
             >
               Back
             </button>
