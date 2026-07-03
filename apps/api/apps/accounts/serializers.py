@@ -4,7 +4,12 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from .models import OTPChallenge, User
-from .services import validate_residence_proof_file
+from .services import (
+    ALLOWED_PROOF_EXTENSIONS,
+    ALLOWED_PROOF_MIME_TYPES,
+    MAX_PROOF_FILE_SIZE,
+    validate_residence_proof_file,
+)
 
 
 class RegisterSerializer(serializers.Serializer):
@@ -18,7 +23,15 @@ class RegisterSerializer(serializers.Serializer):
     date_of_birth = serializers.DateField()
     address = serializers.CharField(max_length=200)
     barangay = serializers.CharField(max_length=120, required=False, default="Pending")
-    proof = serializers.FileField()
+    proof = serializers.FileField(
+        allow_empty_file=False,
+        validators=[validate_residence_proof_file],
+        help_text=(
+            "Residence proof upload. Allowed MIME types: "
+            f"{', '.join(sorted(ALLOWED_PROOF_MIME_TYPES))}; allowed extensions: "
+            f"{', '.join(sorted(ALLOWED_PROOF_EXTENSIONS))}; max size: {MAX_PROOF_FILE_SIZE} bytes."
+        ),
+    )
     terms_version = serializers.CharField(max_length=32)
     privacy_version = serializers.CharField(max_length=32)
 
@@ -40,8 +53,7 @@ class RegisterSerializer(serializers.Serializer):
         return value
 
     def validate_proof(self, value):
-        validate_residence_proof_file(value)
-        return value
+        return validate_residence_proof_file(value)
 
 
 class LoginSerializer(serializers.Serializer):
