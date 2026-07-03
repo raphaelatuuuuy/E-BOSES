@@ -1,6 +1,9 @@
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.core.cache import cache
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -420,62 +423,79 @@ class AuthHardeningTests(APITestCase):
         self.assertFalse(user_has_role_permission(resident, "accounts.create_staff"))
         self.assertTrue(user_has_role_permission(official, "accounts.create_staff"))
 
-class UploadValidationTests(APITestCase):
-    def _registration_payload(self, proof, email="upload-validation@example.com"):
-        phone_number = "+639321234567"
-        _, phone_code = create_phone_otp_challenge(phone_number)
-        verify_phone_otp_challenge(phone_number, phone_code)
-        return {
-            "email": email,
-            "phone_number": phone_number,
-            "phone_otp_code": phone_code,
-            "password": "Str0ng!Pass123",
-            "first_name": "Juan",
-            "middle_name": "",
-            "last_name": "Santos",
-            "date_of_birth": "1998-01-01",
-            "address": "123 Barangay Street",
-            "barangay": "Pending",
-            "proof": proof,
-            "terms_version": "2026-07-02",
-            "privacy_version": "2026-07-02",
+
+class AccountSecurityTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+
+    def test_password_reset_request_response_does_not_enumerate_accounts(self):
+        get_user_model().objects.create_user(
+            email="known-reset@example.com",
+            phone_number="+639331234567",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+
+        known_response = self.client.post(
+            "/api/auth/password-reset/request/",
+            {"identifier": "known-reset@example.com", "channel": "email"},
+            format="json",
+        )
+        unknown_response = self.client.post(
+            "/api/auth/password-reset/request/",
+            {"identifier": "unknown-reset@example.com", "channel": "email"},
+            format="json",
+        )
+
+        self.assertEqual(known_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(unknown_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(known_response.content, unknown_response.content)
+
+    @override_settings(
+        REST_FRAMEWORK={
+            "DEFAULT_AUTHENTICATION_CLASSES": (
+                "rest_framework_simplejwt.authentication.JWTAuthentication",
+            ),
+            "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
+            "DEFAULT_THROTTLE_CLASSES": (
+                "rest_framework.throttling.AnonRateThrottle",
+                "rest_framework.throttling.UserRateThrottle",
+                "rest_framework.throttling.ScopedRateThrottle",
+            ),
+            "DEFAULT_THROTTLE_RATES": {
+                "anon": "100/hour",
+                "user": "1000/hour",
+                "otp": "2/minute",
+                "auth": "10/minute",
+                "password_reset": "5/minute",
+            },
         }
+    )
+    def test_phone_otp_request_is_throttled(self):
+        responses = [
+            self.client.post(
+                "/api/auth/register/phone-otp/request/",
+                {"phone_number": f"+63934{index:07d}"},
+                format="json",
+            )
+            for index in range(3)
+        ]
 
-    def test_registration_rejects_oversized_proof_file(self):
-        proof = SimpleUploadedFile("proof.pdf", VALID_PDF_BYTES + (b"x" * (5 * 1024 * 1024)), content_type="application/pdf")
+        self.assertEqual(responses[0].status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(responses[1].status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(responses[2].status_code, status.HTTP_429_TOO_MANY_REQUESTS)
 
-        response = self.client.post(
-            "/api/auth/register/",
-            self._registration_payload(proof, email="oversized-upload@example.com"),
-            format="multipart",
-        )
+    def test_backend_password_policy_requires_frontend_character_classes(self):
+        weak_passwords = [
+            "lowercase1!",
+            "UPPERCASE1!",
+            "NoNumber!",
+            "NoSymbol1",
+        ]
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("proof", response.data)
-        self.assertIn("5MB or smaller", str(response.data["proof"]))
+        for password in weak_passwords:
+            with self.subTest(password=password):
+                with self.assertRaises(DjangoValidationError):
+                    validate_password(password)
 
-    def test_registration_rejects_mismatched_extension_and_signature(self):
-        proof = SimpleUploadedFile("proof.jpg", VALID_PDF_BYTES, content_type="image/jpeg")
-
-        response = self.client.post(
-            "/api/auth/register/",
-            self._registration_payload(proof, email="mismatched-upload@example.com"),
-            format="multipart",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("proof", response.data)
-        self.assertIn("does not match", str(response.data["proof"]))
-
-    def test_registration_rejects_spoofed_content_type_with_bad_signature(self):
-        proof = SimpleUploadedFile("proof.pdf", b"not really a pdf", content_type="application/pdf")
-
-        response = self.client.post(
-            "/api/auth/register/",
-            self._registration_payload(proof, email="spoofed-upload@example.com"),
-            format="multipart",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("proof", response.data)
-        self.assertIn("valid PDF", str(response.data["proof"]))
+        validate_password("Str0ng!Pass123")

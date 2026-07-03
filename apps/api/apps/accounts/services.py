@@ -1,5 +1,5 @@
 import hashlib
-import importlib
+import logging
 import mimetypes
 import secrets
 from dataclasses import dataclass
@@ -7,11 +7,13 @@ from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
 
+import httpx
+
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import check_password, make_password
-from django.core.exceptions import ValidationError
-from django.core.files.uploadedfile import InMemoryUploadedFile
+from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.mail import send_mail
 from django.core.signing import TimestampSigner
 from django.db import transaction
 from django.utils import timezone
@@ -34,6 +36,77 @@ PASSWORD_RESET_MAX_AGE_SECONDS = 15 * 60
 ALLOWED_PROOF_MIME_TYPES = {"application/pdf", "image/jpeg", "image/png"}
 ALLOWED_PROOF_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
 MAX_PROOF_FILE_SIZE = 5 * 1024 * 1024
+logger = logging.getLogger(__name__)
+
+
+class OTPDeliveryError(Exception):
+    pass
+
+
+class BaseOTPProvider:
+    def deliver(self, destination, code, purpose):
+        raise NotImplementedError
+
+
+class DevelopmentOTPProvider(BaseOTPProvider):
+    def deliver(self, destination, code, purpose):
+        if not settings.DEBUG:
+            raise ImproperlyConfigured("Development OTP provider is only allowed when DEBUG=True.")
+        logger.info("Development OTP for %s (%s): %s", destination, purpose, code)
+
+
+class DjangoEmailOTPProvider(BaseOTPProvider):
+    def deliver(self, destination, code, purpose):
+        sent = send_mail(
+            subject="Your E-Boses verification code",
+            message=f"Your {purpose.replace('_', ' ')} verification code is {code}. It expires in 10 minutes.",
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[destination],
+            fail_silently=False,
+        )
+        if sent != 1:
+            raise OTPDeliveryError("Unable to deliver email OTP.")
+
+
+class HTTPSMSOTPProvider(BaseOTPProvider):
+    def deliver(self, destination, code, purpose):
+        url = getattr(settings, "SMS_OTP_WEBHOOK_URL", "")
+        if not url:
+            raise ImproperlyConfigured("SMS_OTP_WEBHOOK_URL is required for http_sms OTP delivery.")
+        response = httpx.post(
+            url,
+            json={"to": destination, "code": code, "purpose": purpose},
+            headers={"Authorization": f"Bearer {getattr(settings, 'SMS_OTP_WEBHOOK_TOKEN', '')}"},
+            timeout=10,
+        )
+        response.raise_for_status()
+
+
+class DisabledOTPProvider(BaseOTPProvider):
+    def deliver(self, destination, code, purpose):
+        raise ImproperlyConfigured("No OTP provider is configured for this channel.")
+
+
+def get_otp_provider(channel):
+    provider_name = (
+        settings.EMAIL_OTP_PROVIDER
+        if channel == OTPChallenge.Channel.EMAIL
+        else settings.SMS_OTP_PROVIDER
+    )
+    providers = {
+        "development": DevelopmentOTPProvider,
+        "django_email": DjangoEmailOTPProvider,
+        "http_sms": HTTPSMSOTPProvider,
+        "disabled": DisabledOTPProvider,
+    }
+    try:
+        return providers[provider_name]()
+    except KeyError as exc:
+        raise ImproperlyConfigured(f"Unknown OTP provider: {provider_name}") from exc
+
+
+def deliver_otp(channel, destination, code, purpose):
+    get_otp_provider(channel).deliver(destination, code, purpose)
 
 
 @dataclass(frozen=True)
@@ -218,7 +291,7 @@ def create_otp_challenge(user, channel, purpose, destination):
         code_hash=make_password(code),
         expires_at=timezone.now() + timedelta(minutes=10),
     )
-    print(f"{channel.upper()} OTP for {destination}: {code}", flush=True)
+    deliver_otp(channel, destination, code, purpose)
     return challenge, code
 
 
@@ -230,7 +303,7 @@ def create_phone_otp_challenge(phone_number):
         code_hash=make_password(code),
         expires_at=timezone.now() + timedelta(minutes=10),
     )
-    print(f"SMS OTP for {phone_number}: {code}", flush=True)
+    deliver_otp(OTPChallenge.Channel.SMS, phone_number, code, OTPChallenge.Purpose.REGISTRATION)
     return challenge, code
 
 
