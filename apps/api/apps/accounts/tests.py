@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 
 from apps.accounts.models import OTPChallenge, ResidenceProof
 from apps.accounts.services import (
@@ -89,6 +89,9 @@ class AuthAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertIn("access", response.data)
+        self.assertNotIn("refresh", response.data)
+        self.assertIn("eboses_refresh_token", response.cookies)
+        self.assertTrue(response.cookies["eboses_refresh_token"]["httponly"])
         user = get_user_model().objects.get(email="resident@example.com")
         self.assertEqual(user.status, get_user_model().Status.PENDING_OTP)
         self.assertIsNotNone(user.phone_verified_at)
@@ -215,6 +218,69 @@ class AuthAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("access", response.data)
+        self.assertNotIn("refresh", response.data)
+        self.assertIn("eboses_refresh_token", response.cookies)
+        self.assertTrue(response.cookies["eboses_refresh_token"]["httponly"])
+
+
+    def test_refresh_rotates_cookie_session_and_requires_csrf(self):
+        get_user_model().objects.create_user(
+            email="refresh@example.com",
+            phone_number="+639261111111",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+        client = APIClient(enforce_csrf_checks=True)
+        login_response = client.post(
+            "/api/auth/login/",
+            {"identifier": "refresh@example.com", "password": "Str0ng!Pass123"},
+            format="json",
+        )
+        self.assertEqual(login_response.status_code, status.HTTP_200_OK)
+
+        rejected_response = client.post("/api/auth/refresh/", {}, format="json")
+        self.assertEqual(rejected_response.status_code, status.HTTP_403_FORBIDDEN)
+
+        csrf_response = client.get("/api/auth/csrf/")
+        self.assertEqual(csrf_response.status_code, status.HTTP_200_OK)
+        csrf_token = client.cookies["csrftoken"].value
+        refresh_response = client.post(
+            "/api/auth/refresh/",
+            {},
+            format="json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+
+        self.assertEqual(refresh_response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", refresh_response.data)
+        self.assertNotIn("refresh", refresh_response.data)
+        self.assertIn("eboses_refresh_token", refresh_response.cookies)
+
+    def test_logout_clears_refresh_cookie_with_csrf(self):
+        get_user_model().objects.create_user(
+            email="logout@example.com",
+            phone_number="+639262222222",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+        client = APIClient(enforce_csrf_checks=True)
+        login_response = client.post(
+            "/api/auth/login/",
+            {"identifier": "logout@example.com", "password": "Str0ng!Pass123"},
+            format="json",
+        )
+        self.assertEqual(login_response.status_code, status.HTTP_200_OK)
+        client.get("/api/auth/csrf/")
+
+        logout_response = client.post(
+            "/api/auth/logout/",
+            {},
+            format="json",
+            HTTP_X_CSRFTOKEN=client.cookies["csrftoken"].value,
+        )
+
+        self.assertEqual(logout_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(logout_response.cookies["eboses_refresh_token"].value, "")
 
     def test_password_reset_request_generates_challenge(self):
         user = get_user_model().objects.create_user(

@@ -24,7 +24,7 @@ function flattenErrors(values: SignInValues) {
 }
 
 interface UseSignInFormOptions {
-  onSuccess?: (user: AuthUser, access: string, refresh: string) => void
+  onSuccess?: (user: AuthUser, access: string) => void
 }
 
 export function useSignInForm(options: UseSignInFormOptions = {}) {
@@ -79,7 +79,7 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
         identifier: values.email,
         password: values.password,
       })
-      onSuccess?.(response.user, response.access, response.refresh)
+      onSuccess?.(response.user, response.access)
     } catch (error) {
       if (error instanceof ApiError && error.status === 403 && error.data) {
         const detail = typeof error.data === "object" && error.data !== null

@@ -44,7 +44,7 @@ function flattenErrors(values: SignUpValues) {
 }
 
 interface UseSignUpFormOptions {
-  onSuccess?: (user: AuthUser, access: string, refresh: string) => void
+  onSuccess?: (user: AuthUser, access: string) => void
 }
 
 export function useSignUpForm(options: UseSignUpFormOptions = {}) {
@@ -178,7 +178,7 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     setSubmitError("")
     try {
       const response = await registerResident(formData)
-      onSuccess?.(response.user, response.access, response.refresh)
+      onSuccess?.(response.user, response.access)
     } catch (error) {
       if (error instanceof ApiError && error.data && typeof error.data === "object") {
         const proofError = (error.data as { proof?: unknown }).proof

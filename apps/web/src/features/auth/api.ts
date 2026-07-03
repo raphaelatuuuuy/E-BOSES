@@ -25,7 +25,6 @@ export interface AuthUser {
 
 export interface AuthResponse {
   access: string
-  refresh: string
   user: AuthUser
 }
 
