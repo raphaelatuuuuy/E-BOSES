@@ -123,11 +123,12 @@ class PhoneOTPChallenge(models.Model):
     max_attempts = models.PositiveSmallIntegerField(default=5)
     expires_at = models.DateTimeField()
     verified_at = models.DateTimeField(null=True, blank=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         indexes = [
-            models.Index(fields=["phone_number", "verified_at"]),
+            models.Index(fields=["phone_number", "verified_at", "consumed_at"]),
         ]
 
     @property

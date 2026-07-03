@@ -1,10 +1,13 @@
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.core.cache import cache
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 
-from apps.accounts.models import OTPChallenge, ResidenceProof
+from apps.accounts.models import OTPChallenge, PhoneOTPChallenge, ResidenceProof
 from apps.accounts.services import (
     create_otp_challenge,
     create_phone_otp_challenge,
@@ -12,6 +15,12 @@ from apps.accounts.services import (
     verify_otp_challenge,
     verify_phone_otp_challenge,
 )
+
+VALID_PDF_BYTES = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF"
+
+
+def pdf_upload(name="proof.pdf", content=VALID_PDF_BYTES):
+    return SimpleUploadedFile(name, content, content_type="application/pdf")
 
 
 class AccountServiceTests(TestCase):
@@ -21,7 +30,7 @@ class AccountServiceTests(TestCase):
             phone_number="+639191234567",
             password="Str0ng!Pass123",
         )
-        proof_file = SimpleUploadedFile("proof.pdf", b"proof bytes", content_type="application/pdf")
+        proof_file = pdf_upload("proof.pdf")
         digest = sha256_file(proof_file)
         ResidenceProof.objects.create(
             user=user,
@@ -65,8 +74,8 @@ class AuthAPITests(APITestCase):
         phone_number = "+639231234567"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        proof = SimpleUploadedFile("proof.pdf", b"proof bytes", content_type="application/pdf")
-        second_proof = SimpleUploadedFile("proof-2.pdf", b"second proof bytes", content_type="application/pdf")
+        proof = pdf_upload("proof.pdf")
+        second_proof = pdf_upload("proof-2.pdf", VALID_PDF_BYTES + b"2")
         response = self.client.post(
             "/api/auth/register/",
             {
@@ -99,8 +108,61 @@ class AuthAPITests(APITestCase):
         self.assertEqual(user.otp_challenges.get().channel, "email")
         self.assertEqual(user.residence_proofs.count(), 2)
 
+    def test_consumed_phone_otp_cannot_register_multiple_accounts(self):
+        phone_number = "+639231234571"
+        _, phone_code = create_phone_otp_challenge(phone_number)
+        verify_phone_otp_challenge(phone_number, phone_code)
+
+        first_response = self.client.post(
+            "/api/auth/register/",
+            {
+                "email": "first-consumed@example.com",
+                "phone_number": phone_number,
+                "phone_otp_code": phone_code,
+                "password": "Str0ng!Pass123",
+                "first_name": "Juan",
+                "middle_name": "",
+                "last_name": "Santos",
+                "date_of_birth": "1998-01-01",
+                "address": "123 Barangay Street",
+                "barangay": "Pending",
+                "proof": SimpleUploadedFile("first-proof.pdf", b"first proof bytes", content_type="application/pdf"),
+                "terms_version": "2026-07-02",
+                "privacy_version": "2026-07-02",
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(first_response.status_code, status.HTTP_201_CREATED)
+        challenge = PhoneOTPChallenge.objects.get(phone_number=phone_number)
+        self.assertIsNotNone(challenge.consumed_at)
+
+        second_response = self.client.post(
+            "/api/auth/register/",
+            {
+                "email": "second-consumed@example.com",
+                "phone_number": phone_number,
+                "phone_otp_code": phone_code,
+                "password": "Str0ng!Pass123",
+                "first_name": "Maria",
+                "middle_name": "",
+                "last_name": "Reyes",
+                "date_of_birth": "1999-01-01",
+                "address": "456 Barangay Street",
+                "barangay": "Pending",
+                "proof": SimpleUploadedFile("second-proof.pdf", b"second proof bytes", content_type="application/pdf"),
+                "terms_version": "2026-07-02",
+                "privacy_version": "2026-07-02",
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(second_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(second_response.data["detail"], "This OTP has already been used.")
+        self.assertFalse(get_user_model().objects.filter(email="second-consumed@example.com").exists())
+
     def test_registration_without_phone_otp_returns_400_not_500(self):
-        proof = SimpleUploadedFile("proof.pdf", b"proof bytes", content_type="application/pdf")
+        proof = pdf_upload("proof.pdf")
         response = self.client.post(
             "/api/auth/register/",
             {
@@ -131,7 +193,7 @@ class AuthAPITests(APITestCase):
             password="Str0ng!Pass123",
             status=get_user_model().Status.VERIFIED,
         )
-        existing_file = SimpleUploadedFile("same.pdf", b"duplicate bytes", content_type="application/pdf")
+        existing_file = pdf_upload("same.pdf", VALID_PDF_BYTES + b"duplicate")
         digest = sha256_file(existing_file)
         ResidenceProof.objects.create(
             user=existing,
@@ -144,8 +206,8 @@ class AuthAPITests(APITestCase):
         phone_number = "+639231234569"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        unique_file = SimpleUploadedFile("unique.pdf", b"unique bytes", content_type="application/pdf")
-        duplicate_file = SimpleUploadedFile("same.pdf", b"duplicate bytes", content_type="application/pdf")
+        unique_file = pdf_upload("unique.pdf", VALID_PDF_BYTES + b"unique")
+        duplicate_file = pdf_upload("same.pdf", VALID_PDF_BYTES + b"duplicate")
 
         response = self.client.post(
             "/api/auth/register/",
@@ -175,8 +237,8 @@ class AuthAPITests(APITestCase):
         phone_number = "+639231234570"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        first_file = SimpleUploadedFile("first.pdf", b"same upload bytes", content_type="application/pdf")
-        second_file = SimpleUploadedFile("second.pdf", b"same upload bytes", content_type="application/pdf")
+        first_file = pdf_upload("first.pdf", VALID_PDF_BYTES + b"same")
+        second_file = pdf_upload("second.pdf", VALID_PDF_BYTES + b"same")
 
         response = self.client.post(
             "/api/auth/register/",
@@ -328,7 +390,7 @@ class AuthHardeningTests(APITestCase):
         phone_number = "+639261234567"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        proof = SimpleUploadedFile("proof.pdf", b"proof bytes", content_type="application/pdf")
+        proof = pdf_upload("proof.pdf")
 
         response = self.client.post(
             "/api/auth/register/",
@@ -426,3 +488,80 @@ class AuthHardeningTests(APITestCase):
         self.assertTrue(user_has_role_permission(resident, "concerns.create"))
         self.assertFalse(user_has_role_permission(resident, "accounts.create_staff"))
         self.assertTrue(user_has_role_permission(official, "accounts.create_staff"))
+
+
+class AccountSecurityTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+
+    def test_password_reset_request_response_does_not_enumerate_accounts(self):
+        get_user_model().objects.create_user(
+            email="known-reset@example.com",
+            phone_number="+639331234567",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+
+        known_response = self.client.post(
+            "/api/auth/password-reset/request/",
+            {"identifier": "known-reset@example.com", "channel": "email"},
+            format="json",
+        )
+        unknown_response = self.client.post(
+            "/api/auth/password-reset/request/",
+            {"identifier": "unknown-reset@example.com", "channel": "email"},
+            format="json",
+        )
+
+        self.assertEqual(known_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(unknown_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(known_response.content, unknown_response.content)
+
+    @override_settings(
+        REST_FRAMEWORK={
+            "DEFAULT_AUTHENTICATION_CLASSES": (
+                "rest_framework_simplejwt.authentication.JWTAuthentication",
+            ),
+            "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
+            "DEFAULT_THROTTLE_CLASSES": (
+                "rest_framework.throttling.AnonRateThrottle",
+                "rest_framework.throttling.UserRateThrottle",
+                "rest_framework.throttling.ScopedRateThrottle",
+            ),
+            "DEFAULT_THROTTLE_RATES": {
+                "anon": "100/hour",
+                "user": "1000/hour",
+                "otp": "2/minute",
+                "auth": "10/minute",
+                "password_reset": "5/minute",
+            },
+        }
+    )
+    def test_phone_otp_request_is_throttled(self):
+        responses = [
+            self.client.post(
+                "/api/auth/register/phone-otp/request/",
+                {"phone_number": f"+63934{index:07d}"},
+                format="json",
+            )
+            for index in range(3)
+        ]
+
+        self.assertEqual(responses[0].status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(responses[1].status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(responses[2].status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_backend_password_policy_requires_frontend_character_classes(self):
+        weak_passwords = [
+            "lowercase1!",
+            "UPPERCASE1!",
+            "NoNumber!",
+            "NoSymbol1",
+        ]
+
+        for password in weak_passwords:
+            with self.subTest(password=password):
+                with self.assertRaises(DjangoValidationError):
+                    validate_password(password)
+
+        validate_password("Str0ng!Pass123")

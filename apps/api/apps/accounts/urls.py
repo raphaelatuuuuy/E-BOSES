@@ -15,6 +15,8 @@ from .views import (
     PhoneOTPVerifyView,
     RefreshTokenView,
     RegisterView,
+    ResidenceProofPreviewMediaView,
+    ResidenceProofRawMediaView,
 )
 
 urlpatterns = [
@@ -31,5 +33,7 @@ urlpatterns = [
     path("password-reset/request/", PasswordResetRequestView.as_view(), name="auth-password-reset-request"),
     path("password-reset/verify/", PasswordResetVerifyView.as_view(), name="auth-password-reset-verify"),
     path("password-reset/confirm/", PasswordResetConfirmView.as_view(), name="auth-password-reset-confirm"),
+    path("media/residence-proofs/<int:pk>/raw/", ResidenceProofRawMediaView.as_view(), name="residence-proof-raw"),
+    path("media/residence-proofs/<int:pk>/preview/", ResidenceProofPreviewMediaView.as_view(), name="residence-proof-preview"),
     path("admin/users/", AdminCreateUserView.as_view(), name="auth-admin-create-user"),
 ]
