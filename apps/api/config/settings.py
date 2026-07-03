@@ -121,7 +121,8 @@ CHANNEL_LAYERS = {
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator", "OPTIONS": {"min_length": 12}},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
@@ -137,6 +138,7 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = env("MEDIA_URL", default="/media/")
 MEDIA_ROOT = env("MEDIA_ROOT", default=BASE_DIR / "media")
+PRIVATE_MEDIA_ROOT = env("PRIVATE_MEDIA_ROOT", default=BASE_DIR / "private_media")
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

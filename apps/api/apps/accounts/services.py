@@ -1,9 +1,11 @@
 import hashlib
+import mimetypes
 import secrets
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import check_password, make_password
+from django.core.exceptions import ValidationError
 from django.core.signing import TimestampSigner
 from django.db import transaction
 from django.utils import timezone
@@ -21,6 +23,23 @@ from .models import (
 
 PASSWORD_RESET_SALT = "accounts.password-reset"
 PASSWORD_RESET_MAX_AGE_SECONDS = 15 * 60
+
+ALLOWED_PROOF_MIME_TYPES = {"application/pdf", "image/jpeg", "image/png"}
+ALLOWED_PROOF_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
+MAX_PROOF_FILE_SIZE = 5 * 1024 * 1024
+
+
+def validate_residence_proof_file(uploaded_file):
+    if uploaded_file.size > MAX_PROOF_FILE_SIZE:
+        raise ValidationError(f"Proof files must be {MAX_PROOF_FILE_SIZE // (1024 * 1024)}MB or smaller.")
+    suffix = (getattr(uploaded_file, "name", "") or "").lower().rsplit(".", 1)
+    extension = f".{suffix[-1]}" if len(suffix) == 2 else ""
+    if extension not in ALLOWED_PROOF_EXTENSIONS:
+        raise ValidationError("Proof files must be PDF, JPG, JPEG, or PNG.")
+    content_type = getattr(uploaded_file, "content_type", "") or mimetypes.guess_type(uploaded_file.name)[0] or ""
+    if content_type.lower() not in ALLOWED_PROOF_MIME_TYPES:
+        raise ValidationError("Proof files must be PDF, JPG, JPEG, or PNG.")
+    return uploaded_file
 
 
 class OTPVerificationError(Exception):
@@ -73,7 +92,7 @@ def create_phone_otp_challenge(phone_number):
     return challenge, code
 
 
-def verify_phone_otp_challenge(phone_number, code):
+def verify_phone_otp_challenge(phone_number, code, allow_verified=False):
     try:
         challenge = PhoneOTPChallenge.objects.filter(
             phone_number=phone_number,
@@ -85,14 +104,16 @@ def verify_phone_otp_challenge(phone_number, code):
         raise OTPVerificationError("This OTP has expired.")
     if not check_password(code, challenge.code_hash):
         if challenge.verified_at:
-            raise OTPVerificationError("Invalid OTP code.")
+            raise OTPVerificationError("This OTP has already been used.")
         if challenge.attempts >= challenge.max_attempts:
             raise OTPVerificationError("Too many OTP attempts.")
         challenge.attempts += 1
         challenge.save(update_fields=["attempts"])
         raise OTPVerificationError("Invalid OTP code.")
     if challenge.verified_at:
-        return challenge
+        if allow_verified:
+            return challenge
+        raise OTPVerificationError("This OTP has already been used.")
     if challenge.attempts >= challenge.max_attempts:
         raise OTPVerificationError("Too many OTP attempts.")
 
@@ -178,8 +199,12 @@ def register_resident(validated_data, request_meta=None):
     phone_challenge = verify_phone_otp_challenge(
         validated_data["phone_number"],
         validated_data["phone_otp_code"],
+        allow_verified=True,
     )
-    proof_hashes = [sha256_file(proof_file) for proof_file in registration_proof_files(validated_data)]
+    proof_files = registration_proof_files(validated_data)
+    for proof_file in proof_files:
+        validate_residence_proof_file(proof_file)
+    proof_hashes = [sha256_file(proof_file) for proof_file in proof_files]
     duplicate_in_upload = len(set(proof_hashes)) != len(proof_hashes)
     duplicate_existing = ResidenceProof.objects.filter(sha256_hash__in=proof_hashes).exists()
     if duplicate_in_upload or duplicate_existing:
@@ -193,13 +218,14 @@ def register_resident(validated_data, request_meta=None):
     )
     create_registration_profile(user, validated_data)
     create_otp_challenge(user, OTPChallenge.Channel.EMAIL, OTPChallenge.Purpose.REGISTRATION, user.email)
+    phone_challenge.delete()
     create_audit_log("auth.registered", actor=user, target_user=user, request_meta=request_meta)
     return user
 
 
 def verify_otp_challenge(challenge, code):
     if challenge.verified_at:
-        return challenge
+        raise OTPVerificationError("This OTP has already been used.")
     if challenge.is_expired:
         raise OTPVerificationError("This OTP has expired.")
     if challenge.attempts >= challenge.max_attempts:

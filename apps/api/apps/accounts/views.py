@@ -182,10 +182,8 @@ class PasswordResetRequestView(APIView):
         serializer.is_valid(raise_exception=True)
         user = find_user_by_identifier(serializer.validated_data["identifier"])
         if user is None:
-            return Response(
-                {"detail": "No account found with that email."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            create_audit_log("password_reset.requested_unknown", metadata={"channel": serializer.validated_data["channel"]}, request_meta=request_meta(request))
+            return Response(status=status.HTTP_204_NO_CONTENT)
         channel = serializer.validated_data["channel"]
         destination = user.email if channel == OTPChallenge.Channel.EMAIL else user.phone_number
         create_otp_challenge(user, channel, OTPChallenge.Purpose.PASSWORD_RESET, destination)
