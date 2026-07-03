@@ -58,8 +58,13 @@ export function useOtpForm(options: UseOtpFormOptions = {}) {
     setIsSubmitting(true)
     try {
       await onSuccess?.(values.code)
-    } catch {
-      // Parent is responsible for error display via toast
+    } catch (error) {
+      setErrors({
+        code: error instanceof Error
+          ? error.message
+          : "Invalid or expired code. Request a new one.",
+      })
+      setSubmitError("")
     } finally {
       setIsSubmitting(false)
     }

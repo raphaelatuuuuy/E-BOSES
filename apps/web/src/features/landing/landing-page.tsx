@@ -56,7 +56,7 @@ export default function LandingPage() {
             }`}
           >
             <img
-              src="/images/kamay.png"
+              src="/contents/kamay.png"
               alt="Community hands illustration"
               className="h-auto w-full"
             />
@@ -70,7 +70,7 @@ export default function LandingPage() {
           }`}
         >
           <img
-            src="/images/kamay.png"
+            src="/contents/kamay.png"
             alt="Community hands illustration"
             className="h-auto w-full object-contain"
           />

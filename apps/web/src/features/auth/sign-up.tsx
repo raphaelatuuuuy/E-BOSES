@@ -1,17 +1,17 @@
 import { ChevronLeft } from "lucide-react"
 
+import type { AuthUser } from "@/features/auth/api"
+import { AuthSidePanel } from "@/features/auth/components/auth-side-panel"
 import { SignUpForm } from "@/features/auth/components/sign-up-form"
-import { useAuthPanelRotation } from "@/features/auth/hooks/use-auth-panel-rotation"
 import { usePageTitle } from "@/hooks/use-page-title"
 
 interface SignUpPageProps {
+  onBack?: () => void
   onSignIn?: () => void
-  onSuccess?: (recipient: string) => void
+  onSuccess?: (user: AuthUser, access: string) => void
 }
 
-export default function SignUpPage({ onSignIn, onSuccess }: SignUpPageProps) {
-  const { gradient, taglineLines } = useAuthPanelRotation()
-
+export default function SignUpPage({ onBack, onSignIn, onSuccess }: SignUpPageProps) {
   usePageTitle("Sign Up")
 
   return (
@@ -19,7 +19,7 @@ export default function SignUpPage({ onSignIn, onSuccess }: SignUpPageProps) {
       <section className="relative flex flex-col overflow-y-auto p-6 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden md:p-10 lg:min-h-0">
         <button
           type="button"
-          onClick={onSignIn}
+          onClick={onBack ?? onSignIn}
           className="flex items-center gap-1.5 self-start text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
           <ChevronLeft className="size-4" /> Back
@@ -30,20 +30,7 @@ export default function SignUpPage({ onSignIn, onSuccess }: SignUpPageProps) {
           </div>
         </div>
       </section>
-      <section
-        className="relative hidden overflow-hidden lg:block lg:h-svh"
-        aria-hidden="true"
-      >
-        <div className={`absolute inset-0 ${gradient} bg-[length:200%_200%] animate-gradient-shift`} />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
-        <div className="absolute bottom-0 left-0 right-0 p-8 md:p-10">
-          <h2 className="font-heading text-balance text-3xl leading-tight text-white md:text-4xl">
-            {taglineLines[0]}
-            <br />
-            {taglineLines[1]}
-          </h2>
-        </div>
-      </section>
+      <AuthSidePanel />
     </main>
   )
 }

@@ -13,10 +13,12 @@ const HoverCardContext = React.createContext<HoverCardContextValue | null>(null)
 
 function HoverCard({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = React.useState(false)
-  const timeoutRef = React.useRef<ReturnType<typeof setTimeout>>()
+  const timeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleOpen = React.useCallback(() => {
-    clearTimeout(timeoutRef.current)
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current)
+    }
     setOpen(true)
   }, [])
 
@@ -25,7 +27,11 @@ function HoverCard({ children }: { children: React.ReactNode }) {
   }, [])
 
   React.useEffect(() => {
-    return () => clearTimeout(timeoutRef.current)
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current)
+      }
+    }
   }, [])
 
   return (

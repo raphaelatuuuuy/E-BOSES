@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
+import re
 
 from .models import OTPChallenge, User
 from .services import (
@@ -10,6 +11,25 @@ from .services import (
     MAX_PROOF_FILE_SIZE,
     validate_residence_proof_file,
 )
+
+NAME_PATTERN = re.compile(r"^[A-Za-zÑñ ]+$")
+NAME_MESSAGE = "Use letters only, including Ñ/ñ."
+
+
+def phone_number_variants(value):
+    digits = re.sub(r"\D", "", value)
+    variants = {value}
+    if digits.startswith("63") and len(digits) == 12:
+        variants.update({f"+{digits}", digits, f"0{digits[2:]}"})
+    elif digits.startswith("0") and len(digits) == 11:
+        variants.update({digits, f"+63{digits[1:]}", f"63{digits[1:]}"})
+    elif digits.startswith("9") and len(digits) == 10:
+        variants.update({digits, f"+63{digits}", f"63{digits}", f"0{digits}"})
+    return variants
+
+
+def phone_number_exists(value):
+    return get_user_model().objects.filter(phone_number__in=phone_number_variants(value)).exists()
 
 
 class RegisterSerializer(serializers.Serializer):
@@ -41,8 +61,24 @@ class RegisterSerializer(serializers.Serializer):
         return value
 
     def validate_phone_number(self, value):
-        if get_user_model().objects.filter(phone_number=value).exists():
+        if phone_number_exists(value):
             raise serializers.ValidationError("An account with this phone number already exists.")
+        return value
+
+    def validate_first_name(self, value):
+        return self.validate_name(value)
+
+    def validate_middle_name(self, value):
+        if value == "":
+            return value
+        return self.validate_name(value)
+
+    def validate_last_name(self, value):
+        return self.validate_name(value)
+
+    def validate_name(self, value):
+        if not NAME_PATTERN.fullmatch(value):
+            raise serializers.ValidationError(NAME_MESSAGE)
         return value
 
     def validate_password(self, value):
@@ -105,7 +141,7 @@ class PhoneOTPRequestSerializer(serializers.Serializer):
     phone_number = serializers.RegexField(regex=r"^\+63\d{10}$")
 
     def validate_phone_number(self, value):
-        if get_user_model().objects.filter(phone_number=value).exists():
+        if phone_number_exists(value):
             raise serializers.ValidationError("An account with this phone number already exists.")
         return value
 
@@ -131,6 +167,11 @@ class AdminCreateUserSerializer(serializers.Serializer):
             validate_password(value)
         except DjangoValidationError as exc:
             raise serializers.ValidationError(list(exc.messages)) from exc
+        return value
+
+    def validate_phone_number(self, value):
+        if phone_number_exists(value):
+            raise serializers.ValidationError("An account with this phone number already exists.")
         return value
 
     def create(self, validated_data):

@@ -2,8 +2,6 @@ import { Link } from "react-router-dom"
 import { MenuIcon, XIcon } from "lucide-react"
 import { useEffect, useState } from "react"
 
-import { Button } from "@workspace/ui/components/button"
-
 export function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [menuAnim, setMenuAnim] = useState(false)
@@ -34,7 +32,7 @@ export function Navbar() {
       >
         <div className="mx-auto flex h-20 max-w-7xl items-center px-4 md:px-8">
           <Link to="/" className="shrink-0">
-            <img src="/images/logo.png" alt="E-Boses" className="h-14 w-auto object-contain" />
+            <img src="/contents/logo.png" alt="E-Boses" className="h-14 w-auto object-contain" />
           </Link>
 
           {/* Desktop nav links — absolute centered */}
@@ -62,12 +60,12 @@ export function Navbar() {
             >
               Sign in
             </Link>
-            <Button
-              asChild
-              className="h-9 rounded-full bg-[#ff8133] px-4 text-sm font-semibold text-white hover:bg-[#ff5003] active:scale-[0.97]"
+            <Link
+              to="/sign-up"
+              className="inline-flex h-9 items-center justify-center rounded-full bg-[#ff8133] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#ff5003] active:scale-[0.97]"
             >
-              <Link to="/sign-up">Sign up</Link>
-            </Button>
+              Sign up
+            </Link>
           </div>
 
           {/* Hamburger */}
@@ -88,7 +86,7 @@ export function Navbar() {
           {/* Top bar with logo + close */}
           <div className="flex h-20 items-center justify-between px-4">
             <Link to="/" className="shrink-0" onClick={closeMenu}>
-              <img src="/images/logo.png" alt="E-Boses" className="h-14 w-auto object-contain" />
+              <img src="/contents/logo.png" alt="E-Boses" className="h-14 w-auto object-contain" />
             </Link>
             <button
               type="button"
@@ -147,13 +145,13 @@ export function Navbar() {
               menuAnim ? "translate-y-0 opacity-100" : "translate-y-8 opacity-0"
             }`}
           >
-            <Button
-              asChild
-              className="h-12 rounded-full bg-[#ff8133] px-10 text-base font-semibold text-white hover:bg-[#ff5003]"
+            <Link
+              to="/sign-up"
               onClick={closeMenu}
+              className="inline-flex h-12 items-center justify-center rounded-full bg-[#ff8133] px-10 text-base font-semibold text-white transition-colors hover:bg-[#ff5003]"
             >
-              <Link to="/sign-up">Sign up</Link>
-            </Button>
+              Sign up
+            </Link>
           </div>
         </div>
       )}

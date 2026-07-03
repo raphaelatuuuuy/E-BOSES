@@ -1,7 +1,8 @@
+import { LoaderCircleIcon } from "lucide-react"
+
 import { Button } from "@workspace/ui/components/button"
 import {
   Field,
-  FieldDescription,
   FieldError,
   FieldLabel,
 } from "@workspace/ui/components/field"
@@ -40,7 +41,7 @@ export function OtpVerificationForm({
   onSuccess,
   ...props
 }: OtpVerificationFormProps) {
-  const { errors, handleChange, handleSubmit, statusMessage, values } = useOtpForm({ onSuccess })
+  const { errors, handleChange, handleSubmit, isSubmitting, submitError, values } = useOtpForm({ onSuccess })
 
   return (
     <div className={cn("flex flex-col", className)} {...props}>
@@ -82,14 +83,15 @@ export function OtpVerificationForm({
           {errors.code ? <FieldError>{errors.code}</FieldError> : null}
         </Field>
         <Field>
-          <Button type="submit" className="w-full">
-            {actionLabel}
+          <Button type="submit" className="w-full" disabled={isSubmitting}>
+            {isSubmitting ? <LoaderCircleIcon className="size-4 animate-spin" /> : null}
+            {isSubmitting ? "Checking code" : actionLabel}
           </Button>
         </Field>
-        {statusMessage ? (
-          <FieldDescription className="text-center">
-            {statusMessage}
-          </FieldDescription>
+        {submitError ? (
+          <FieldError className="justify-center text-center">
+            {submitError}
+          </FieldError>
         ) : null}
         {onBack ? (
           <p className="mt-4 text-sm text-foreground">

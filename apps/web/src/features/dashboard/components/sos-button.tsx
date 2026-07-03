@@ -9,7 +9,6 @@ import {
   MapPinIcon,
   PhoneIcon,
   PlusIcon,
-  SirenIcon,
   XIcon,
 } from "lucide-react"
 

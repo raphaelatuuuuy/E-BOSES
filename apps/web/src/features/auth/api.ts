@@ -21,6 +21,8 @@ export interface AuthUser {
   email_verified_at: string | null
   phone_verified_at: string | null
   verified_at: string | null
+  firstName?: string
+  lastName?: string
 }
 
 export interface AuthResponse {
@@ -30,6 +32,13 @@ export interface AuthResponse {
 
 export function registerResident(formData: FormData) {
   return apiRequest<AuthResponse>("/auth/register/", {
+    method: "POST",
+    body: formData,
+  }, { auth: false })
+}
+
+export function checkRegistrationProof(formData: FormData) {
+  return apiRequest<void>("/auth/register/proof/check/", {
     method: "POST",
     body: formData,
   }, { auth: false })

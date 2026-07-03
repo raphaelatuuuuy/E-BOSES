@@ -15,12 +15,14 @@ from .views import (
     PhoneOTPVerifyView,
     RefreshTokenView,
     RegisterView,
+    ResidenceProofCheckView,
     ResidenceProofPreviewMediaView,
     ResidenceProofRawMediaView,
 )
 
 urlpatterns = [
     path("register/", RegisterView.as_view(), name="auth-register"),
+    path("register/proof/check/", ResidenceProofCheckView.as_view(), name="auth-register-proof-check"),
     path("register/phone-otp/request/", PhoneOTPRequestView.as_view(), name="auth-phone-otp-request"),
     path("register/phone-otp/verify/", PhoneOTPVerifyView.as_view(), name="auth-phone-otp-verify"),
     path("csrf/", CSRFTokenView.as_view(), name="auth-csrf"),

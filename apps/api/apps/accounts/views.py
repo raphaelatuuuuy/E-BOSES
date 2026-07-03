@@ -44,6 +44,7 @@ from .services import (
     create_password_reset_token,
     read_password_reset_token,
     register_resident,
+    validate_residence_proof_uploads,
     verify_phone_otp_challenge,
     verify_otp_challenge,
 )
@@ -65,7 +66,7 @@ def set_refresh_cookie(response, refresh_token):
         str(refresh_token),
         max_age=int(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds()),
         httponly=True,
-        secure=settings.SESSION_COOKIE_SECURE,
+        secure=settings.REFRESH_COOKIE_SECURE,
         samesite=settings.SESSION_COOKIE_SAMESITE or "Lax",
         path="/api/auth/",
     )
@@ -139,9 +140,33 @@ class PhoneOTPVerifyView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class ResidenceProofCheckView(APIView):
+    permission_classes = [AllowAny]
+    parser_classes = [MultiPartParser, FormParser]
+    throttle_scope = "auth"
+
+    def post(self, request):
+        proof_files = request.FILES.getlist("proof")
+        if not proof_files:
+            return Response(
+                {"proof": ["Upload at least one valid government-issued ID or bill."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(proof_files) > 2:
+            return Response(
+                {"proof": ["You can upload a maximum of 2 files."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            validate_residence_proof_uploads(proof_files)
+        except (DuplicateProofError, ValidationError) as exc:
+            return Response({"proof": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class LoginView(APIView):
     permission_classes = [AllowAny]
-    throttle_scope = "auth"
+    throttle_scope = "login"
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
@@ -169,9 +194,7 @@ class RefreshTokenView(APIView):
     def post(self, request):
         raw_refresh = request.COOKIES.get(REFRESH_COOKIE_NAME)
         if not raw_refresh:
-            response = Response({"detail": "Refresh session expired."}, status=status.HTTP_401_UNAUTHORIZED)
-            delete_refresh_cookie(response)
-            return response
+            return Response(status=status.HTTP_204_NO_CONTENT)
 
         try:
             refresh = RefreshToken(raw_refresh)
@@ -282,7 +305,10 @@ class PasswordResetRequestView(APIView):
         user = find_user_by_identifier(serializer.validated_data["identifier"])
         if user is None:
             create_audit_log("password_reset.requested_unknown", metadata={"channel": serializer.validated_data["channel"]}, request_meta=request_meta(request))
-            return Response(status=status.HTTP_204_NO_CONTENT)
+            return Response(
+                {"identifier": ["No account found with that email."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         channel = serializer.validated_data["channel"]
         destination = user.email if channel == OTPChallenge.Channel.EMAIL else user.phone_number
         create_otp_challenge(user, channel, OTPChallenge.Purpose.PASSWORD_RESET, destination)

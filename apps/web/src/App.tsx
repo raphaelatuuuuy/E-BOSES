@@ -153,7 +153,7 @@ function AppRoutes() {
               window.sessionStorage.setItem("eboses-reset-token", response.reset_token)
               navigate("/new-password")
             } catch {
-              toast.error("Invalid or expired reset code. Request a new one.")
+              throw new Error("Invalid or expired code. Request a new one.")
             }
           }}
         />
@@ -171,7 +171,7 @@ function AppRoutes() {
                 description: "Your password has been updated successfully.",
               })
             } catch {
-              toast.error("Could not reset password. Link may have expired. Try again.")
+              throw new Error("Could not reset password. Link may have expired. Try again.")
             }
           }}
         />

@@ -2,7 +2,7 @@ const DEFAULT_API_BASE_URL = "http://localhost:8000/api"
 const CSRF_COOKIE_NAME = "csrftoken"
 
 let accessToken: string | null = null
-let refreshPromise: Promise<SessionResponse> | null = null
+let refreshPromise: Promise<SessionResponse | null> | null = null
 
 export class ApiError extends Error {
   status: number
@@ -56,17 +56,19 @@ export async function ensureCsrfCookie() {
 }
 
 export async function refreshSession() {
-  refreshPromise ??= apiRequest<SessionResponse>(
+  refreshPromise ??= apiRequest<SessionResponse | null>(
     "/auth/refresh/",
     { method: "POST" },
     { auth: false, refreshOnUnauthorized: false, csrf: true },
-  ).finally(() => {
+  ).then((result) => {
+    if (!result) return null
+    setAuthTokens(result.access)
+    return result
+  }).finally(() => {
     refreshPromise = null
   })
 
-  const session = await refreshPromise
-  setAuthTokens(session.access)
-  return session
+  return refreshPromise
 }
 
 export async function logoutSession() {

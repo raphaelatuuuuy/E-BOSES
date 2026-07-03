@@ -11,13 +11,20 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
 
-const navItems = [
+type NavItem = {
+  label: string
+  path: string | null
+  icon: typeof HomeIcon
+  isCenter?: boolean
+}
+
+const navItems: NavItem[] = [
   { label: "Home", path: "/dashboard/home", icon: HomeIcon },
   { label: "Feed", path: "/dashboard/feed", icon: UsersIcon },
   { label: "Create", path: null, icon: PlusIcon, isCenter: true },
   { label: "Reports", path: "/dashboard/reports", icon: BarChart3Icon },
   { label: "Profile", path: "/dashboard/profile", icon: CircleUserIcon },
-] as const
+]
 
 export function MobileNav() {
   const location = useLocation()

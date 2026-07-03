@@ -1,4 +1,5 @@
 import hashlib
+import importlib
 import logging
 import mimetypes
 import secrets
@@ -16,6 +17,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.mail import send_mail
 from django.core.signing import TimestampSigner
 from django.db import transaction
+from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.utils import timezone
 from PIL import Image, UnidentifiedImageError
 
@@ -35,7 +37,7 @@ PASSWORD_RESET_MAX_AGE_SECONDS = 15 * 60
 
 ALLOWED_PROOF_MIME_TYPES = {"application/pdf", "image/jpeg", "image/png"}
 ALLOWED_PROOF_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
-MAX_PROOF_FILE_SIZE = 5 * 1024 * 1024
+MAX_PROOF_FILE_SIZE = 2 * 1024 * 1024
 logger = logging.getLogger(__name__)
 
 
@@ -52,6 +54,7 @@ class DevelopmentOTPProvider(BaseOTPProvider):
     def deliver(self, destination, code, purpose):
         if not settings.DEBUG:
             raise ImproperlyConfigured("Development OTP provider is only allowed when DEBUG=True.")
+        print(f"Development OTP for {destination} ({purpose}): {code}", flush=True)
         logger.info("Development OTP for %s (%s): %s", destination, purpose, code)
 
 
@@ -351,6 +354,18 @@ def registration_proof_files(validated_data):
     return validated_data.get("proof_files") or [validated_data["proof"]]
 
 
+def validate_residence_proof_uploads(proof_files):
+    validated_files = [
+        validate_residence_proof_file(proof_file) for proof_file in proof_files
+    ]
+    proof_hashes = [sha256_file(proof_file) for proof_file in validated_files]
+    duplicate_in_upload = len(set(proof_hashes)) != len(proof_hashes)
+    duplicate_existing = ResidenceProof.objects.filter(sha256_hash__in=proof_hashes).exists()
+    if duplicate_in_upload or duplicate_existing:
+        raise DuplicateProofError("Duplicate proof upload detected.")
+    return validated_files
+
+
 def create_registration_profile(user, validated_data):
     proof_files = registration_proof_files(validated_data)
     profile = ResidentProfile.objects.create(
@@ -416,15 +431,8 @@ def register_resident(validated_data, request_meta=None):
         validated_data["phone_otp_code"],
         allow_verified=True,
     )
-    proof_files = [
-        validate_residence_proof_file(proof_file) for proof_file in registration_proof_files(validated_data)
-    ]
+    proof_files = validate_residence_proof_uploads(registration_proof_files(validated_data))
     validated_data["proof_files"] = proof_files
-    proof_hashes = [sha256_file(proof_file) for proof_file in proof_files]
-    duplicate_in_upload = len(set(proof_hashes)) != len(proof_hashes)
-    duplicate_existing = ResidenceProof.objects.filter(sha256_hash__in=proof_hashes).exists()
-    if duplicate_in_upload or duplicate_existing:
-        raise DuplicateProofError("Duplicate proof upload detected.")
 
     user = get_user_model().objects.create_user(
         email=validated_data["email"],

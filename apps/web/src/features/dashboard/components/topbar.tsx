@@ -29,7 +29,7 @@ export function Topbar() {
 
         {/* Logo — absolutely centered on mobile, left on desktop */}
         <img
-          src="/images/logo.png"
+          src="/contents/logo.png"
           alt="E-Boses"
           className="size-10 object-contain max-md:absolute max-md:left-1/2 max-md:-translate-x-1/2 md:mx-0"
         />

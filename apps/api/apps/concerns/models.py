@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.db import models
 
-from apps.accounts.storage import PrivateMediaStorage
+from apps.accounts.storage import PrivateMediaStorage, PublicMediaStorage
 
 
 class Concern(models.Model):
@@ -18,8 +18,8 @@ class Concern(models.Model):
 
 class ConcernMedia(models.Model):
     concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="media")
-    file = models.FileField(storage=PrivateMediaStorage(), upload_to="concern-media/%Y/%m/")
-    preview_file = models.FileField(storage=PrivateMediaStorage(), upload_to="concern-media/previews/%Y/%m/", blank=True)
+    file = models.FileField(storage=PrivateMediaStorage(), upload_to="raw/concern-media/%Y/%m/")
+    preview_file = models.FileField(storage=PublicMediaStorage(), upload_to="previews/concern-media/%Y/%m/", blank=True)
     original_filename = models.CharField(max_length=255)
     mime_type = models.CharField(max_length=120, blank=True)
     file_size = models.PositiveIntegerField(default=0)

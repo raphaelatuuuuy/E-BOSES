@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from "react"
+import { type FormEvent, useMemo, useState } from "react"
 
 import {
   type NewPasswordErrors,
@@ -76,18 +76,43 @@ export function useNewPasswordForm(options: UseNewPasswordFormOptions = {}) {
 
     try {
       await onSuccess?.(values.password)
-    } catch {
-      // Parent handles error display
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : "Could not reset password. Link may have expired. Try again."
+      setErrors({
+        password: message,
+        confirmPassword: message,
+      })
+      setSubmitError("")
     } finally {
       setIsSubmitting(false)
     }
   }
+
+  const passwordStrength = useMemo(() => {
+    const checks = [
+      values.password.length >= 8,
+      /[A-Z]/.test(values.password),
+      /[a-z]/.test(values.password),
+      /[0-9]/.test(values.password),
+      /[^A-Za-z0-9]/.test(values.password),
+    ]
+    const passed = checks.filter(Boolean).length
+    return {
+      score: passed,
+      max: checks.length,
+      percent: (passed / checks.length) * 100,
+      checks,
+    }
+  }, [values.password])
 
   return {
     errors,
     handleChange,
     handleSubmit,
     isSubmitting,
+    passwordStrength,
     submitError,
     values,
   }

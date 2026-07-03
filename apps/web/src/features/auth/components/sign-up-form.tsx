@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { FileImageIcon, FileTextIcon, InfoIcon, XIcon } from "lucide-react"
+import { CheckIcon, FileImageIcon, FileTextIcon, InfoIcon, LoaderCircleIcon, XIcon } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Calendar } from "@workspace/ui/components/calendar"
@@ -36,14 +36,16 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 
 import { useSignUpForm } from "@/features/auth/hooks/use-sign-up-form"
+import { checkRegistrationProof, type AuthUser } from "@/features/auth/api"
 import {
   getLatestAllowedBirthDate,
   getProofOfResidencyFileError,
 } from "@/features/auth/schemas/sign-up-schema"
+import { ApiError } from "@/lib/api"
 
 interface SignUpFormProps extends React.ComponentProps<"div"> {
   onSignIn?: () => void
-  onSuccess?: (recipient: string) => void
+  onSuccess?: (user: AuthUser, access: string) => void
 }
 
 export function SignUpForm({
@@ -52,10 +54,24 @@ export function SignUpForm({
   onSuccess,
   ...props
 }: SignUpFormProps) {
-  const { errors, handleChange, handleSubmit, setFieldError, statusMessage, values } =
-    useSignUpForm({
-      onSuccess: () => onSuccess?.(values.phoneNumber || "your registered mobile number"),
-    })
+  const {
+    errors,
+    handleChange,
+    handleSendPhoneOtp,
+    handleSubmit,
+    handleVerifyPhoneOtp,
+    isSendingPhoneOtp,
+    isSubmitting,
+    isVerifyingPhoneOtp,
+    passwordStrength,
+    phoneOtpCooldownSeconds,
+    phoneOtpSent,
+    phoneOtpVerified,
+    setFieldError,
+    submitError,
+    values,
+  } =
+    useSignUpForm({ onSuccess })
 
   const [dateOpen, setDateOpen] = React.useState(false)
   const [selectedDate, setSelectedDate] = React.useState<Date | undefined>()
@@ -65,8 +81,16 @@ export function SignUpForm({
     () => new Date(lastAllowedBirthDate.getFullYear(), lastAllowedBirthDate.getMonth()),
     [lastAllowedBirthDate],
   )
+  const [isCheckingProof, setIsCheckingProof] = React.useState(false)
+  async function proofFileDigest(file: File) {
+    const buffer = await file.arrayBuffer()
+    const digest = await crypto.subtle.digest("SHA-256", buffer)
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("")
+  }
 
-  function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? [])
 
     if (files.length === 0) {
@@ -75,7 +99,13 @@ export function SignUpForm({
 
     const nextFiles = [...values.proofOfResidency]
     const invalidFiles: string[] = []
+    const selectedFileDigests = new Map<string, File>()
 
+    for (const currentFile of nextFiles) {
+      selectedFileDigests.set(await proofFileDigest(currentFile), currentFile)
+    }
+
+    setIsCheckingProof(true)
     for (const file of files) {
       if (nextFiles.length >= 2) {
         invalidFiles.push("You can upload a maximum of 2 files.")
@@ -96,14 +126,60 @@ export function SignUpForm({
           currentFile.lastModified === file.lastModified,
       )
 
-      if (!alreadySelected) {
-        nextFiles.push(file)
+      if (alreadySelected) {
+        const duplicateFile = nextFiles.find(
+          (currentFile) =>
+            currentFile.name === file.name &&
+            currentFile.size === file.size &&
+            currentFile.lastModified === file.lastModified,
+        )
+        if (duplicateFile) {
+          invalidFiles.push(
+            `"${file.name}" was not added because it is already attached. Duplicate proof uploads are not allowed.`,
+          )
+        }
+        continue
       }
+
+      const digest = await proofFileDigest(file)
+      const duplicateFile = selectedFileDigests.get(digest)
+      if (duplicateFile) {
+        invalidFiles.push(
+          `"${file.name}" was not added because it has the same content as "${duplicateFile.name}". Duplicate proof uploads are not allowed.`,
+        )
+        continue
+      }
+
+      const formData = new FormData()
+      for (const proofFile of [...nextFiles, file]) {
+        formData.append("proof", proofFile)
+      }
+
+      try {
+        await checkRegistrationProof(formData)
+      } catch (error) {
+        invalidFiles.push(
+          error instanceof ApiError
+            ? `"${file.name}" was not added. ${error.message}`
+            : `"${file.name}" was not added because it could not be checked.`,
+        )
+        continue
+      }
+
+      selectedFileDigests.set(digest, file)
+      nextFiles.push(file)
     }
 
-    handleChange("proofOfResidency", nextFiles)
-    setFieldError("proofOfResidency", invalidFiles[0])
+    setIsCheckingProof(false)
     e.target.value = ""
+
+    if (invalidFiles[0]) {
+      handleChange("proofOfResidency", nextFiles)
+      setFieldError("proofOfResidency", invalidFiles[0])
+      return
+    }
+    handleChange("proofOfResidency", nextFiles)
+    setFieldError("proofOfResidency", undefined)
   }
 
   function removeAttachment(index: number) {
@@ -138,6 +214,10 @@ export function SignUpForm({
     return `${m}/${d}/${y}`
   }
 
+  function sanitizeName(value: string) {
+    return value.replace(/[^A-Za-zÑñ ]/g, "")
+  }
+
   return (
     <div className={cn("flex flex-col", className)} {...props}>
       <form className="flex flex-col gap-4" noValidate onSubmit={handleSubmit}>
@@ -150,6 +230,20 @@ export function SignUpForm({
 
         <div className="h-1" />
 
+        <Field>
+          <FieldLabel htmlFor="email">Email</FieldLabel>
+          <Input
+            id="email"
+            type="email"
+            value={values.email}
+            onChange={(e) => handleChange("email", e.target.value)}
+            aria-invalid={Boolean(errors.email)}
+            placeholder="juan@example.com"
+            required
+          />
+          {errors.email ? <FieldError>{errors.email}</FieldError> : null}
+        </Field>
+
         <div className="grid grid-cols-2 gap-4">
           <Field>
             <FieldLabel htmlFor="firstName">First name</FieldLabel>
@@ -157,7 +251,7 @@ export function SignUpForm({
               id="firstName"
               type="text"
               value={values.firstName}
-              onChange={(e) => handleChange("firstName", e.target.value)}
+              onChange={(e) => handleChange("firstName", sanitizeName(e.target.value))}
               aria-invalid={Boolean(errors.firstName)}
               placeholder="Juan"
               required
@@ -170,7 +264,7 @@ export function SignUpForm({
               id="middleName"
               type="text"
               value={values.middleName}
-              onChange={(e) => handleChange("middleName", e.target.value)}
+              onChange={(e) => handleChange("middleName", sanitizeName(e.target.value))}
               aria-invalid={Boolean(errors.middleName)}
               placeholder="Dela Cruz"
             />
@@ -183,7 +277,7 @@ export function SignUpForm({
             id="lastName"
             type="text"
             value={values.lastName}
-            onChange={(e) => handleChange("lastName", e.target.value)}
+            onChange={(e) => handleChange("lastName", sanitizeName(e.target.value))}
             aria-invalid={Boolean(errors.lastName)}
             placeholder="Santos"
             required
@@ -294,15 +388,17 @@ export function SignUpForm({
               aria-invalid={Boolean(errors.proofOfResidency)}
             />
             {values.proofOfResidency.length > 0
-              ? `${values.proofOfResidency.length} / 2 files selected`
+              ? isCheckingProof
+                ? "Checking files..."
+                : `${values.proofOfResidency.length} / 2 files selected`
               : "Upload files (max. 2)"}
           </label>
           {values.proofOfResidency.length > 0 && (
-            <div className="grid gap-2">
+            <div className="grid w-full gap-2">
               {values.proofOfResidency.map((file, i) => (
                 <div
                   key={`${file.name}-${file.lastModified}-${i}`}
-                  className="flex items-start gap-3 rounded-lg border border-border bg-white p-3 shadow-xs"
+                  className="flex w-full items-start gap-3 overflow-hidden rounded-lg border border-border bg-white p-3 shadow-xs"
                 >
                   <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40 text-muted-foreground">
                     {file.type === "application/pdf" ? (
@@ -333,33 +429,88 @@ export function SignUpForm({
               ))}
             </div>
           )}
-          <FieldDescription
-            className={cn(
-              errors.proofOfResidency && "font-medium text-destructive",
-            )}
-          >
-            Upload 1-2 government-issued IDs or bills (PDF, PNG, or JPG). Max 5 MB each.
-          </FieldDescription>
+          {isCheckingProof ? (
+            <FieldDescription>Checking proof upload...</FieldDescription>
+          ) : errors.proofOfResidency ? (
+            <FieldError>{errors.proofOfResidency}</FieldError>
+          ) : (
+            <FieldDescription>
+              Upload 1-2 government-issued IDs or bills (PDF, PNG, or JPG). Max 2 MB each.
+            </FieldDescription>
+          )}
         </Field>
 
         <Field>
           <FieldLabel htmlFor="phoneNumber">Phone number</FieldLabel>
-          <Input
-            id="phoneNumber"
-            type="tel"
-            value={values.phoneNumber}
-            onChange={(e) => {
-              const digits = e.target.value.replace(/\D/g, "")
-              const formatted = digits.startsWith("63") ? "+" + digits.slice(0, 12) : digits ? "+63" + digits.slice(0, 10) : ""
-              handleChange("phoneNumber", formatted)
-            }}
-            aria-invalid={Boolean(errors.phoneNumber)}
-            placeholder="(+63) 982 928 9283"
-            required
-          />
+          <div className="flex gap-2">
+            <Input
+              id="phoneNumber"
+              type="tel"
+              value={values.phoneNumber}
+              onChange={(e) => {
+                const digits = e.target.value.replace(/\D/g, "")
+                const formatted = digits.startsWith("63") ? "+" + digits.slice(0, 12) : digits ? "+63" + digits.slice(0, 10) : ""
+                handleChange("phoneNumber", formatted)
+              }}
+              aria-invalid={Boolean(errors.phoneNumber)}
+              placeholder="(+63) 982 928 9283"
+              required
+            />
+            <Button
+              type="button"
+              className="shrink-0"
+              onClick={handleSendPhoneOtp}
+              disabled={isSendingPhoneOtp || phoneOtpVerified || phoneOtpCooldownSeconds > 0}
+            >
+              {isSendingPhoneOtp ? (
+                <LoaderCircleIcon className="size-4 animate-spin" />
+              ) : phoneOtpVerified ? (
+                <CheckIcon className="size-4" />
+              ) : null}
+              {phoneOtpVerified
+                ? "Verified"
+                : phoneOtpCooldownSeconds > 0
+                  ? `Resend ${phoneOtpCooldownSeconds}s`
+                  : phoneOtpSent
+                    ? "Resend"
+                    : "Send code"}
+            </Button>
+          </div>
           {errors.phoneNumber ? <FieldError>{errors.phoneNumber}</FieldError> : null}
         </Field>
 
+        {phoneOtpSent && !phoneOtpVerified ? (
+          <Field>
+            <FieldLabel htmlFor="phoneOtpCode">SMS code</FieldLabel>
+            <div className="flex gap-2">
+              <Input
+                id="phoneOtpCode"
+                inputMode="numeric"
+                maxLength={6}
+                value={values.phoneOtpCode ?? ""}
+                onChange={(e) => handleChange("phoneOtpCode", e.target.value.replace(/\D/g, "").slice(0, 6))}
+                aria-invalid={Boolean(errors.phoneOtpCode)}
+                placeholder="6-digit code"
+              />
+              <Button
+                type="button"
+                className="shrink-0"
+                onClick={handleVerifyPhoneOtp}
+                disabled={isVerifyingPhoneOtp}
+              >
+                {isVerifyingPhoneOtp ? (
+                  <LoaderCircleIcon className="size-4 animate-spin" />
+                ) : null}
+                Verify
+              </Button>
+            </div>
+            {errors.phoneOtpCode ? (
+              <FieldError>{errors.phoneOtpCode}</FieldError>
+            ) : (
+              <FieldDescription>Enter the SMS code sent to your phone.</FieldDescription>
+            )}
+          </Field>
+        ) : null}
         <Field>
           <FieldLabel htmlFor="password">Password</FieldLabel>
           <Input
@@ -370,6 +521,29 @@ export function SignUpForm({
             aria-invalid={Boolean(errors.password)}
             required
           />
+          {values.password.length > 0 ? (
+            <div className="space-y-2">
+              <div className="grid grid-cols-5 gap-1">
+                {Array.from({ length: passwordStrength.max }).map((_, i) => (
+                  <span
+                    key={i}
+                    className={cn(
+                      "h-1 rounded-full bg-muted transition-colors",
+                      i < passwordStrength.score &&
+                        (passwordStrength.score <= 2
+                          ? "bg-destructive"
+                          : passwordStrength.score <= 4
+                            ? "bg-amber-500"
+                            : "bg-primary"),
+                    )}
+                  />
+                ))}
+              </div>
+              <FieldDescription>
+                Use 8+ characters with uppercase, lowercase, number, and special character.
+              </FieldDescription>
+            </div>
+          ) : null}
           {errors.password ? <FieldError>{errors.password}</FieldError> : null}
         </Field>
 
@@ -387,7 +561,10 @@ export function SignUpForm({
         </Field>
 
         <Field>
-          <Button type="submit" className="w-full">Sign up</Button>
+          <Button type="submit" className="w-full" disabled={isSubmitting || isCheckingProof}>
+            {isSubmitting ? <LoaderCircleIcon className="size-4 animate-spin" /> : null}
+            {isSubmitting ? "Creating account" : "Sign up"}
+          </Button>
         </Field>
         <label className="flex items-start gap-2 text-sm">
           <Checkbox
@@ -484,10 +661,10 @@ export function SignUpForm({
             Sign in
           </button>
         </p>
-        {statusMessage ? (
-          <FieldDescription className="text-center">
-            {statusMessage}
-          </FieldDescription>
+        {submitError ? (
+          <FieldError className="justify-center text-center">
+            {submitError}
+          </FieldError>
         ) : null}
       </form>
     </div>

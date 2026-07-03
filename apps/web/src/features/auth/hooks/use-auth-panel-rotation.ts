@@ -2,15 +2,15 @@ import { useMemo, useState } from "react"
 
 const PANEL_VARIANTS = [
   {
-    image: "/images/marikina-area-1.png",
+    image: "/contents/marikina-area-1.png",
     lines: ["Stronger connections.", "Smarter communities."],
   },
   {
-    image: "/images/marikina-area-2.png",
+    image: "/contents/marikina-area-2.png",
     lines: ["Voices heard.", "Actions taken."],
   },
   {
-    image: "/images/marikina-area-3.png",
+    image: "/contents/marikina-area-3.png",
     lines: ["Every concern heard.", "Every emergency handled."],
   },
 ] as const

@@ -1,19 +1,21 @@
+import { LoaderCircleIcon } from "lucide-react"
+
 import { Button } from "@workspace/ui/components/button"
 import {
   Field,
   FieldError,
-  FieldDescription,
   FieldLabel,
 } from "@workspace/ui/components/field"
 import { Input } from "@workspace/ui/components/input"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { useSignInForm } from "@/features/auth/hooks/use-sign-in-form"
+import { SILENT_SIGN_IN_ERROR, useSignInForm } from "@/features/auth/hooks/use-sign-in-form"
+import type { AuthUser } from "@/features/auth/api"
 
 interface LoginFormProps extends React.ComponentProps<"div"> {
   onForgotPassword?: () => void
   onSignUp?: () => void
-  onSuccess?: () => void
+  onSuccess?: (user: AuthUser, access: string) => void
 }
 
 export function LoginForm({
@@ -23,7 +25,7 @@ export function LoginForm({
   onSuccess,
   ...props
 }: LoginFormProps) {
-  const { errors, handleChange, handleSubmit, statusMessage, values } =
+  const { errors, handleChange, handleSubmit, isSubmitting, submitError, values } =
     useSignInForm({ onSuccess })
 
   return (
@@ -47,7 +49,9 @@ export function LoginForm({
             placeholder="Enter your email"
             required
           />
-          {errors.email ? <FieldError>{errors.email}</FieldError> : null}
+          {errors.email && errors.email !== SILENT_SIGN_IN_ERROR ? (
+            <FieldError>{errors.email}</FieldError>
+          ) : null}
         </Field>
         <Field>
           <div className="flex items-center">
@@ -76,7 +80,10 @@ export function LoginForm({
           ) : null}
         </Field>
         <Field>
-          <Button type="submit" className="w-full">Sign in</Button>
+          <Button type="submit" className="w-full" disabled={isSubmitting}>
+            {isSubmitting ? <LoaderCircleIcon className="size-4 animate-spin" /> : null}
+            {isSubmitting ? "Signing in" : "Sign in"}
+          </Button>
         </Field>
         <p className="mt-4 text-sm text-foreground">
           Don&apos;t have an account?{" "}
@@ -88,10 +95,10 @@ export function LoginForm({
             Sign-up
           </button>
         </p>
-        {statusMessage ? (
-          <FieldDescription className="text-center">
-            {statusMessage}
-          </FieldDescription>
+        {submitError ? (
+          <FieldError className="justify-center text-center">
+            {submitError}
+          </FieldError>
         ) : null}
       </form>
     </div>

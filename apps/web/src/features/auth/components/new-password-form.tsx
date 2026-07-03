@@ -1,3 +1,5 @@
+import { LoaderCircleIcon } from "lucide-react"
+
 import { Button } from "@workspace/ui/components/button"
 import {
   Field,
@@ -21,7 +23,7 @@ export function NewPasswordForm({
   onSuccess,
   ...props
 }: NewPasswordFormProps) {
-  const { errors, handleChange, handleSubmit, statusMessage, values } =
+  const { errors, handleChange, handleSubmit, isSubmitting, passwordStrength, submitError, values } =
     useNewPasswordForm({ onSuccess })
 
   return (
@@ -45,6 +47,29 @@ export function NewPasswordForm({
             placeholder="Enter your new password"
             required
           />
+          {values.password.length > 0 ? (
+            <div className="space-y-2">
+              <div className="grid grid-cols-5 gap-1">
+                {Array.from({ length: passwordStrength.max }).map((_, i) => (
+                  <span
+                    key={i}
+                    className={cn(
+                      "h-1 rounded-full bg-muted transition-colors",
+                      i < passwordStrength.score &&
+                        (passwordStrength.score <= 2
+                          ? "bg-destructive"
+                          : passwordStrength.score <= 4
+                            ? "bg-amber-500"
+                            : "bg-primary"),
+                    )}
+                  />
+                ))}
+              </div>
+              <FieldDescription>
+                Use 8+ characters with uppercase, lowercase, number, and special character.
+              </FieldDescription>
+            </div>
+          ) : null}
           {errors.password ? <FieldError>{errors.password}</FieldError> : null}
         </Field>
         <Field>
@@ -65,14 +90,15 @@ export function NewPasswordForm({
           ) : null}
         </Field>
         <Field>
-          <Button type="submit" className="w-full">
-            Reset password
+          <Button type="submit" className="w-full" disabled={isSubmitting}>
+            {isSubmitting ? <LoaderCircleIcon className="size-4 animate-spin" /> : null}
+            {isSubmitting ? "Resetting password" : "Reset password"}
           </Button>
         </Field>
-        {statusMessage ? (
-          <FieldDescription className="text-center">
-            {statusMessage}
-          </FieldDescription>
+        {submitError ? (
+          <FieldError className="justify-center text-center">
+            {submitError}
+          </FieldError>
         ) : null}
         <p className="mt-4 text-sm text-foreground">
           Remember your password?{" "}

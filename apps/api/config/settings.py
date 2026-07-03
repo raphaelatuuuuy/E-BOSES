@@ -24,7 +24,7 @@ IS_LOCAL_DEVELOPMENT = ENVIRONMENT == "local"
 
 if IS_LOCAL_DEVELOPMENT:
     SECRET_KEY = env("DJANGO_SECRET_KEY", default="local-development-only-secret-key")
-    DEBUG = env.bool("DEBUG", default=True)
+    DEBUG = env.bool("DEBUG", default=False)
     ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 else:
     SECRET_KEY = env("DJANGO_SECRET_KEY")
@@ -146,7 +146,7 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = env("MEDIA_URL", default="/media/")
-MEDIA_ROOT = env("MEDIA_ROOT", default=BASE_DIR / "media")
+MEDIA_ROOT = env("MEDIA_ROOT", default=BASE_DIR / "public_media")
 PRIVATE_MEDIA_ROOT = env("PRIVATE_MEDIA_ROOT", default=BASE_DIR / "private_media")
 
 # Default primary key field type
@@ -175,6 +175,7 @@ REST_FRAMEWORK = {
         "user": "1000/hour",
         "otp": "5/minute",
         "auth": "10/minute",
+        "login": "5/minute",
         "password_reset": "5/minute",
     },
 }
@@ -200,7 +201,8 @@ CORS_ALLOWED_ORIGINS = (
 CORS_ALLOW_CREDENTIALS = True
 
 # Deployment security
-SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=not IS_LOCAL_DEVELOPMENT)
+SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=True)
+REFRESH_COOKIE_SECURE = env.bool("REFRESH_COOKIE_SECURE", default=not IS_LOCAL_DEVELOPMENT)
 CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=not IS_LOCAL_DEVELOPMENT)
 SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_HTTPONLY = env.bool("CSRF_COOKIE_HTTPONLY", default=False)

@@ -1,7 +1,8 @@
+import { LoaderCircleIcon } from "lucide-react"
+
 import { Button } from "@workspace/ui/components/button"
 import {
   Field,
-  FieldDescription,
   FieldError,
   FieldLabel,
 } from "@workspace/ui/components/field"
@@ -21,7 +22,7 @@ export function ForgotPasswordForm({
   onSuccess,
   ...props
 }: ForgotPasswordFormProps) {
-  const { errors, handleChange, handleSubmit, statusMessage, values } =
+  const { errors, handleChange, handleSubmit, isSubmitting, submitError, values } =
     useForgotPasswordForm({ onSuccess })
 
   return (
@@ -48,14 +49,15 @@ export function ForgotPasswordForm({
           {errors.email ? <FieldError>{errors.email}</FieldError> : null}
         </Field>
         <Field>
-          <Button type="submit" className="w-full">
-            Send code
+          <Button type="submit" className="w-full" disabled={isSubmitting}>
+            {isSubmitting ? <LoaderCircleIcon className="size-4 animate-spin" /> : null}
+            {isSubmitting ? "Sending code" : "Send code"}
           </Button>
         </Field>
-        {statusMessage ? (
-          <FieldDescription className="text-center">
-            {statusMessage}
-          </FieldDescription>
+        {submitError ? (
+          <FieldError className="justify-center text-center">
+            {submitError}
+          </FieldError>
         ) : null}
         <p className="mt-4 text-sm text-foreground">
           Remember your password?{" "}

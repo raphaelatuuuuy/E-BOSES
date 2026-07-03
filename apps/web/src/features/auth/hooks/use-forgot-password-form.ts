@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from "react"
 
 import { requestPasswordReset } from "@/features/auth/api"
+import { ApiError } from "@/lib/api"
 import {
   type ForgotPasswordErrors,
   type ForgotPasswordValues,
@@ -74,8 +75,13 @@ export function useForgotPasswordForm(options: UseForgotPasswordFormOptions = {}
     try {
       await requestPasswordReset({ identifier: values.email, channel: "email" })
       onSuccess?.(values.email)
-    } catch {
-      setSubmitError("Could not send reset code. Try again later.")
+    } catch (error) {
+      setErrors({
+        email: error instanceof ApiError
+          ? error.message
+          : "Could not send reset code. Try again later.",
+      })
+      setSubmitError("")
     } finally {
       setIsSubmitting(false)
     }

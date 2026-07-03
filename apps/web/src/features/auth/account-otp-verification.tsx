@@ -5,7 +5,6 @@ import { toast } from "sonner"
 import { Button } from "@workspace/ui/components/button"
 import {
   Field,
-  FieldDescription,
   FieldError,
   FieldLabel,
 } from "@workspace/ui/components/field"
@@ -47,6 +46,7 @@ export default function AccountOtpVerificationPage({
     }
 
     setIsVerifying(true)
+    setError("")
     setSubmitError("")
 
     try {
@@ -54,7 +54,7 @@ export default function AccountOtpVerificationPage({
       toast.success("Email verified")
       onSuccess?.()
     } catch {
-      setSubmitError("Invalid or expired code. Try again.")
+      setError("Invalid or expired code. Try again.")
     } finally {
       setIsVerifying(false)
     }
@@ -79,20 +79,16 @@ export default function AccountOtpVerificationPage({
     return (
       <Field data-invalid={Boolean(error)}>
         <div className="flex items-start justify-between gap-3">
-          <div>
-            <FieldLabel>Email code</FieldLabel>
-            <FieldDescription>Confirms your email address.</FieldDescription>
-          </div>
-          <Button
+          <FieldLabel>Email code</FieldLabel>
+          <button
             type="button"
-            variant="ghost"
-            size="sm"
             disabled={isResending || isVerifying}
             onClick={handleResend}
+            className="shrink-0 text-sm font-medium text-foreground underline underline-offset-2 disabled:cursor-not-allowed disabled:no-underline disabled:opacity-60"
           >
             {isResending ? <LoaderCircle className="size-4 animate-spin" /> : null}
-            {isResending ? "Sending" : "Send code"}
-          </Button>
+            {isResending ? "Sending" : "Resend?"}
+          </button>
         </div>
         <InputOTP
           maxLength={6}

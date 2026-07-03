@@ -13,6 +13,8 @@ const initialValues: SignInValues = {
   password: "",
 }
 
+export const SILENT_SIGN_IN_ERROR = "__silent_sign_in_error__"
+
 function flattenErrors(values: SignInValues) {
   const parsed = signInSchema.safeParse(values)
 
@@ -21,6 +23,10 @@ function flattenErrors(values: SignInValues) {
   }
 
   return parsed.error.flatten().fieldErrors
+}
+
+function apiMessage(error: unknown, fallback: string) {
+  return error instanceof ApiError ? error.message : fallback
 }
 
 interface UseSignInFormOptions {
@@ -81,24 +87,41 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
       })
       onSuccess?.(response.user, response.access)
     } catch (error) {
-      if (error instanceof ApiError && error.status === 403 && error.data) {
+      const message = apiMessage(error, "Invalid email or password.")
+      if (error instanceof ApiError && error.data) {
         const detail = typeof error.data === "object" && error.data !== null
           ? (error.data as Record<string, unknown>).detail
           : null
         if (typeof detail === "string" && detail.toLowerCase().includes("suspended")) {
-          setSubmitError("Account suspended. Please contact your barangay administrator.")
+          setErrors({
+            email: SILENT_SIGN_IN_ERROR,
+            password: "Account suspended. Please contact your barangay administrator.",
+          })
+          setSubmitError("")
           return
         }
         if (typeof detail === "string" && detail.toLowerCase().includes("rejected")) {
-          setSubmitError("Account not approved. Contact your barangay administrator for details.")
+          setErrors({
+            email: SILENT_SIGN_IN_ERROR,
+            password: "Account not approved. Contact your barangay administrator for details.",
+          })
+          setSubmitError("")
           return
         }
         if (typeof detail === "string" && detail.toLowerCase().includes("pending")) {
-          setSubmitError("Account still under verification. Please try again later.")
+          setErrors({
+            email: SILENT_SIGN_IN_ERROR,
+            password: "Account still under verification. Please try again later.",
+          })
+          setSubmitError("")
           return
         }
       }
-      setSubmitError("Invalid email or password.")
+      setErrors({
+        email: SILENT_SIGN_IN_ERROR,
+        password: message,
+      })
+      setSubmitError("")
     } finally {
       setIsSubmitting(false)
     }

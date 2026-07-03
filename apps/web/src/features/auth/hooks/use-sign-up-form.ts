@@ -1,4 +1,4 @@
-import { type FormEvent, useMemo, useState } from "react"
+import { type FormEvent, useEffect, useMemo, useState } from "react"
 
 import {
   registerResident,
@@ -43,6 +43,47 @@ function flattenErrors(values: SignUpValues) {
   return result
 }
 
+const PHONE_OTP_RESEND_COOLDOWN_SECONDS = 30
+
+function firstErrorMessage(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const message = firstErrorMessage(item)
+      if (message) {
+        return message
+      }
+    }
+  }
+  if (value && typeof value === "object") {
+    for (const item of Object.values(value)) {
+      const message = firstErrorMessage(item)
+      if (message) {
+        return message
+      }
+    }
+  }
+  return undefined
+}
+
+const backendFieldMap: Record<string, keyof SignUpValues> = {
+  address: "address",
+  barangay: "address",
+  date_of_birth: "dateOfBirth",
+  email: "email",
+  first_name: "firstName",
+  last_name: "lastName",
+  middle_name: "middleName",
+  password: "password",
+  phone_number: "phoneNumber",
+  phone_otp_code: "phoneOtpCode",
+  privacy_version: "agreeToTerms",
+  proof: "proofOfResidency",
+  terms_version: "agreeToTerms",
+}
+
 interface UseSignUpFormOptions {
   onSuccess?: (user: AuthUser, access: string) => void
 }
@@ -57,6 +98,43 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
   const [phoneOtpVerified, setPhoneOtpVerified] = useState(false)
   const [isSendingPhoneOtp, setIsSendingPhoneOtp] = useState(false)
   const [isVerifyingPhoneOtp, setIsVerifyingPhoneOtp] = useState(false)
+  const passwordStrength = useMemo(() => {
+    const checks = [
+      values.password.length >= 8,
+      /[A-Z]/.test(values.password),
+      /[a-z]/.test(values.password),
+      /[0-9]/.test(values.password),
+      /[^A-Za-z0-9]/.test(values.password),
+    ]
+    const passed = checks.filter(Boolean).length
+    return {
+      score: passed,
+      max: checks.length,
+      percent: (passed / checks.length) * 100,
+      checks,
+    }
+  }, [values.password])
+  const [phoneOtpResendAvailableAt, setPhoneOtpResendAvailableAt] = useState<number | null>(null)
+  const [phoneOtpCooldownSeconds, setPhoneOtpCooldownSeconds] = useState(0)
+
+  useEffect(() => {
+    if (!phoneOtpResendAvailableAt) {
+      setPhoneOtpCooldownSeconds(0)
+      return
+    }
+
+    function updateCooldown() {
+      const nextSeconds = Math.max(0, Math.ceil((phoneOtpResendAvailableAt - Date.now()) / 1000))
+      setPhoneOtpCooldownSeconds(nextSeconds)
+      if (nextSeconds === 0) {
+        setPhoneOtpResendAvailableAt(null)
+      }
+    }
+
+    updateCooldown()
+    const timer = window.setInterval(updateCooldown, 1000)
+    return () => window.clearInterval(timer)
+  }, [phoneOtpResendAvailableAt])
 
   function handleChange<K extends keyof SignUpValues>(
     field: K,
@@ -70,6 +148,8 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     if (field === "phoneNumber") {
       setPhoneOtpSent(false)
       setPhoneOtpVerified(false)
+      setPhoneOtpResendAvailableAt(null)
+      setPhoneOtpCooldownSeconds(0)
     }
 
     setErrors((currentErrors) => {
@@ -95,6 +175,11 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
   }
 
   async function handleSendPhoneOtp() {
+    if (phoneOtpCooldownSeconds > 0) {
+      setFieldError("phoneNumber", `Wait ${phoneOtpCooldownSeconds}s before requesting another code.`)
+      return
+    }
+
     const phoneError = signUpSchema.shape.phoneNumber.safeParse(values.phoneNumber)
     if (!phoneError.success) {
       setFieldError("phoneNumber", phoneError.error.issues[0]?.message ?? "Enter a valid phone number.")
@@ -107,9 +192,16 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
       await requestRegistrationPhoneOtp({ phone_number: values.phoneNumber })
       setPhoneOtpSent(true)
       setPhoneOtpVerified(false)
+      setPhoneOtpResendAvailableAt(Date.now() + PHONE_OTP_RESEND_COOLDOWN_SECONDS * 1000)
+      setFieldError("phoneNumber", undefined)
       setFieldError("phoneOtpCode", undefined)
-    } catch {
-      setFieldError("phoneNumber", "Could not send SMS code. Check your number and try again.")
+    } catch (error) {
+      setFieldError(
+        "phoneNumber",
+        error instanceof ApiError
+          ? error.message
+          : "Could not send SMS code. Check your number and try again.",
+      )
     } finally {
       setIsSendingPhoneOtp(false)
     }
@@ -130,6 +222,7 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
       })
       setPhoneOtpVerified(true)
       setFieldError("phoneOtpCode", undefined)
+      setFieldError("phoneNumber", undefined)
     } catch {
       setFieldError("phoneOtpCode", "Invalid or expired SMS code. Request a new one.")
     } finally {
@@ -141,19 +234,20 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     event.preventDefault()
 
     const fieldErrors = flattenErrors(values)
-
-    setErrors(fieldErrors)
-
-    if (Object.keys(fieldErrors).length > 0) {
-      setSubmitError("")
-      return
+    const nextErrors: SignUpErrors = {
+      ...fieldErrors,
+      ...(!phoneOtpVerified
+        ? {
+            phoneNumber: "Phone number must be verified.",
+            phoneOtpCode: undefined,
+          }
+        : {}),
     }
 
-    if (!phoneOtpVerified) {
-      setErrors((currentErrors) => ({
-        ...currentErrors,
-        phoneOtpCode: "Verify the SMS code before signing up.",
-      }))
+    setErrors(nextErrors)
+
+    if (Object.values(nextErrors).some(Boolean)) {
+      setSubmitError("")
       return
     }
 
@@ -181,41 +275,44 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
       onSuccess?.(response.user, response.access)
     } catch (error) {
       if (error instanceof ApiError && error.data && typeof error.data === "object") {
-        const proofError = (error.data as { proof?: unknown }).proof
-        const proofMessage = Array.isArray(proofError) && typeof proofError[0] === "string"
-          ? proofError[0]
-          : undefined
+        const backendErrors = error.data as Record<string, unknown>
+        const nextErrors: SignUpErrors = {}
 
-        if (proofMessage) {
+        for (const [backendField, value] of Object.entries(backendErrors)) {
+          const formField = backendFieldMap[backendField]
+          const message = firstErrorMessage(value)
+          if (formField && message) {
+            nextErrors[formField] = message
+          }
+        }
+
+        const detailMessage = firstErrorMessage(backendErrors.detail)
+        if (detailMessage) {
+          const targetField = detailMessage.toLowerCase().includes("phone")
+            || detailMessage.toLowerCase().includes("otp")
+            ? "phoneOtpCode"
+            : "email"
+          nextErrors[targetField] = detailMessage
+        }
+
+        if (Object.keys(nextErrors).length > 0) {
           setErrors((currentErrors) => ({
             ...currentErrors,
-            proofOfResidency: proofMessage,
+            ...nextErrors,
           }))
+          setSubmitError("")
           return
         }
       }
-      setSubmitError("Could not create account. Try again later.")
+      setErrors((currentErrors) => ({
+        ...currentErrors,
+        email: "Could not create account. Try again later.",
+      }))
+      setSubmitError("")
     } finally {
       setIsSubmitting(false)
     }
   }
-
-  const passwordStrength = useMemo(() => {
-    const checks = [
-      values.password.length >= 8,
-      /[A-Z]/.test(values.password),
-      /[a-z]/.test(values.password),
-      /[0-9]/.test(values.password),
-      /[^A-Za-z0-9]/.test(values.password),
-    ]
-    const passed = checks.filter(Boolean).length
-    return {
-      score: passed,
-      max: checks.length,
-      percent: (passed / checks.length) * 100,
-      checks,
-    }
-  }, [values.password])
 
   return {
     errors,
@@ -229,6 +326,7 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     passwordStrength,
     phoneOtpSent,
     phoneOtpVerified,
+    phoneOtpCooldownSeconds,
     setFieldError,
     setValues,
     submitError,

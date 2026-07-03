@@ -36,8 +36,11 @@ export function AuthSessionProvider({ children }: { children: React.ReactNode })
     try {
       if (!getAccessToken()) {
         const session = await refreshSession()
-        setUser(session.user as AuthUser)
-        return session.user as AuthUser
+        if (session) {
+          setUser(session.user as AuthUser)
+          return session.user as AuthUser
+        }
+        return null
       }
 
       const nextUser = await getMe()

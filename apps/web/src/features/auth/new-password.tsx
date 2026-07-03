@@ -1,7 +1,7 @@
 import { ChevronLeft } from "lucide-react"
 
+import { AuthSidePanel } from "@/features/auth/components/auth-side-panel"
 import { NewPasswordForm } from "@/features/auth/components/new-password-form"
-import { useAuthPanelRotation } from "@/features/auth/hooks/use-auth-panel-rotation"
 import { usePageTitle } from "@/hooks/use-page-title"
 
 interface NewPasswordPageProps {
@@ -13,8 +13,6 @@ export default function NewPasswordPage({
   onBack,
   onSuccess,
 }: NewPasswordPageProps) {
-  const { gradient, taglineLines } = useAuthPanelRotation()
-
   usePageTitle("Create New Password")
 
   return (
@@ -33,20 +31,7 @@ export default function NewPasswordPage({
           </div>
         </div>
       </section>
-      <section
-        className="relative hidden h-full min-h-screen lg:block overflow-hidden"
-        aria-hidden="true"
-      >
-        <div className={`absolute inset-0 ${gradient} bg-[length:200%_200%] animate-gradient-shift`} />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
-        <div className="absolute bottom-0 left-0 right-0 p-8 md:p-10">
-          <h2 className="font-heading text-balance text-3xl leading-tight text-white md:text-4xl">
-            {taglineLines[0]}
-            <br />
-            {taglineLines[1]}
-          </h2>
-        </div>
-      </section>
+      <AuthSidePanel />
     </main>
   )
 }

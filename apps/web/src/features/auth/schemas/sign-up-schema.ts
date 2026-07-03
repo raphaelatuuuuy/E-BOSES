@@ -1,6 +1,6 @@
 import { z } from "zod"
 
-export const MAX_PROOF_OF_RESIDENCY_FILE_SIZE_BYTES = 5 * 1024 * 1024
+export const MAX_PROOF_OF_RESIDENCY_FILE_SIZE_BYTES = 2 * 1024 * 1024
 const ALLOWED_PROOF_OF_RESIDENCY_EXTENSIONS = new Set([
   "pdf",
   "png",
@@ -13,6 +13,8 @@ const ALLOWED_PROOF_OF_RESIDENCY_MIME_TYPES = new Set([
   "image/jpeg",
 ])
 const MINIMUM_AGE = 18
+const NAME_PATTERN = /^[A-Za-zÑñ ]+$/
+const NAME_MESSAGE = "Use letters only, including Ñ/ñ."
 
 export function getProofOfResidencyFileError(file: File) {
   const extension = file.name.split(".").pop()?.toLowerCase()
@@ -27,7 +29,7 @@ export function getProofOfResidencyFileError(file: File) {
   }
 
   if (file.size > MAX_PROOF_OF_RESIDENCY_FILE_SIZE_BYTES) {
-    return "Each file must be 5 MB or smaller."
+    return "Each file must be 2 MB or smaller."
   }
 
   return null
@@ -80,9 +82,24 @@ const proofOfResidencyFileSchema = z
 export const signUpSchema = z
   .object({
     email: z.string().email("Enter a valid email address."),
-    firstName: z.string().min(1, "First name is required.").max(50, "First name must be 50 characters or fewer."),
-    middleName: z.string().max(50, "Middle name must be 50 characters or fewer.").optional().default(""),
-    lastName: z.string().min(1, "Last name is required.").max(50, "Last name must be 50 characters or fewer."),
+    firstName: z
+      .string()
+      .min(1, "First name is required.")
+      .max(50, "First name must be 50 characters or fewer.")
+      .regex(NAME_PATTERN, NAME_MESSAGE),
+    middleName: z
+      .string()
+      .max(50, "Middle name must be 50 characters or fewer.")
+      .refine((value) => value === "" || NAME_PATTERN.test(value), {
+        message: NAME_MESSAGE,
+      })
+      .optional()
+      .default(""),
+    lastName: z
+      .string()
+      .min(1, "Last name is required.")
+      .max(50, "Last name must be 50 characters or fewer.")
+      .regex(NAME_PATTERN, NAME_MESSAGE),
     dateOfBirth: z
       .string()
       .min(1, "Date of birth is required.")

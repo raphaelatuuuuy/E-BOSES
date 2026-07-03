@@ -50,7 +50,7 @@ export function GreetingCard() {
   const dateString = getFilipinoDateString()
 
   return (
-    <div className="relative flex h-48 w-full items-end justify-start overflow-hidden rounded-2xl bg-cover bg-center bg-foreground md:h-72" style={{ backgroundImage: "url(/images/marikina-1.jpg)" }}>
+    <div className="relative flex h-48 w-full items-end justify-start overflow-hidden rounded-2xl bg-cover bg-center bg-foreground md:h-72" style={{ backgroundImage: "url(/contents/marikina-area-1.png)" }}>
       {/* Dark overlay */}
       <div className="absolute inset-0 bg-black/20" />
       {/* Glass card */}

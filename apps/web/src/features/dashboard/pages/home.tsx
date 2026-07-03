@@ -1,4 +1,4 @@
-import { ChevronRight, FileTextIcon, CheckCircleIcon, AwardIcon } from "lucide-react"
+import { ChevronRight } from "lucide-react"
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 
