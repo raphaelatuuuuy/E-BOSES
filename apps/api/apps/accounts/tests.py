@@ -7,7 +7,7 @@ from django.test import TestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from apps.accounts.models import OTPChallenge, ResidenceProof
+from apps.accounts.models import OTPChallenge, PhoneOTPChallenge, ResidenceProof
 from apps.accounts.services import (
     create_otp_challenge,
     create_phone_otp_challenge,
@@ -15,6 +15,12 @@ from apps.accounts.services import (
     verify_otp_challenge,
     verify_phone_otp_challenge,
 )
+
+VALID_PDF_BYTES = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF"
+
+
+def pdf_upload(name="proof.pdf", content=VALID_PDF_BYTES):
+    return SimpleUploadedFile(name, content, content_type="application/pdf")
 
 
 class AccountServiceTests(TestCase):
@@ -24,7 +30,7 @@ class AccountServiceTests(TestCase):
             phone_number="+639191234567",
             password="Str0ng!Pass123",
         )
-        proof_file = SimpleUploadedFile("proof.pdf", b"proof bytes", content_type="application/pdf")
+        proof_file = pdf_upload("proof.pdf")
         digest = sha256_file(proof_file)
         ResidenceProof.objects.create(
             user=user,
@@ -68,8 +74,8 @@ class AuthAPITests(APITestCase):
         phone_number = "+639231234567"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        proof = SimpleUploadedFile("proof.pdf", b"proof bytes", content_type="application/pdf")
-        second_proof = SimpleUploadedFile("proof-2.pdf", b"second proof bytes", content_type="application/pdf")
+        proof = pdf_upload("proof.pdf")
+        second_proof = pdf_upload("proof-2.pdf", VALID_PDF_BYTES + b"2")
         response = self.client.post(
             "/api/auth/register/",
             {
@@ -99,8 +105,61 @@ class AuthAPITests(APITestCase):
         self.assertEqual(user.otp_challenges.get().channel, "email")
         self.assertEqual(user.residence_proofs.count(), 2)
 
+    def test_consumed_phone_otp_cannot_register_multiple_accounts(self):
+        phone_number = "+639231234571"
+        _, phone_code = create_phone_otp_challenge(phone_number)
+        verify_phone_otp_challenge(phone_number, phone_code)
+
+        first_response = self.client.post(
+            "/api/auth/register/",
+            {
+                "email": "first-consumed@example.com",
+                "phone_number": phone_number,
+                "phone_otp_code": phone_code,
+                "password": "Str0ng!Pass123",
+                "first_name": "Juan",
+                "middle_name": "",
+                "last_name": "Santos",
+                "date_of_birth": "1998-01-01",
+                "address": "123 Barangay Street",
+                "barangay": "Pending",
+                "proof": SimpleUploadedFile("first-proof.pdf", b"first proof bytes", content_type="application/pdf"),
+                "terms_version": "2026-07-02",
+                "privacy_version": "2026-07-02",
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(first_response.status_code, status.HTTP_201_CREATED)
+        challenge = PhoneOTPChallenge.objects.get(phone_number=phone_number)
+        self.assertIsNotNone(challenge.consumed_at)
+
+        second_response = self.client.post(
+            "/api/auth/register/",
+            {
+                "email": "second-consumed@example.com",
+                "phone_number": phone_number,
+                "phone_otp_code": phone_code,
+                "password": "Str0ng!Pass123",
+                "first_name": "Maria",
+                "middle_name": "",
+                "last_name": "Reyes",
+                "date_of_birth": "1999-01-01",
+                "address": "456 Barangay Street",
+                "barangay": "Pending",
+                "proof": SimpleUploadedFile("second-proof.pdf", b"second proof bytes", content_type="application/pdf"),
+                "terms_version": "2026-07-02",
+                "privacy_version": "2026-07-02",
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(second_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(second_response.data["detail"], "This OTP has already been used.")
+        self.assertFalse(get_user_model().objects.filter(email="second-consumed@example.com").exists())
+
     def test_registration_without_phone_otp_returns_400_not_500(self):
-        proof = SimpleUploadedFile("proof.pdf", b"proof bytes", content_type="application/pdf")
+        proof = pdf_upload("proof.pdf")
         response = self.client.post(
             "/api/auth/register/",
             {
@@ -131,7 +190,7 @@ class AuthAPITests(APITestCase):
             password="Str0ng!Pass123",
             status=get_user_model().Status.VERIFIED,
         )
-        existing_file = SimpleUploadedFile("same.pdf", b"duplicate bytes", content_type="application/pdf")
+        existing_file = pdf_upload("same.pdf", VALID_PDF_BYTES + b"duplicate")
         digest = sha256_file(existing_file)
         ResidenceProof.objects.create(
             user=existing,
@@ -144,8 +203,8 @@ class AuthAPITests(APITestCase):
         phone_number = "+639231234569"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        unique_file = SimpleUploadedFile("unique.pdf", b"unique bytes", content_type="application/pdf")
-        duplicate_file = SimpleUploadedFile("same.pdf", b"duplicate bytes", content_type="application/pdf")
+        unique_file = pdf_upload("unique.pdf", VALID_PDF_BYTES + b"unique")
+        duplicate_file = pdf_upload("same.pdf", VALID_PDF_BYTES + b"duplicate")
 
         response = self.client.post(
             "/api/auth/register/",
@@ -175,8 +234,8 @@ class AuthAPITests(APITestCase):
         phone_number = "+639231234570"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        first_file = SimpleUploadedFile("first.pdf", b"same upload bytes", content_type="application/pdf")
-        second_file = SimpleUploadedFile("second.pdf", b"same upload bytes", content_type="application/pdf")
+        first_file = pdf_upload("first.pdf", VALID_PDF_BYTES + b"same")
+        second_file = pdf_upload("second.pdf", VALID_PDF_BYTES + b"same")
 
         response = self.client.post(
             "/api/auth/register/",
@@ -265,7 +324,7 @@ class AuthHardeningTests(APITestCase):
         phone_number = "+639261234567"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        proof = SimpleUploadedFile("proof.pdf", b"proof bytes", content_type="application/pdf")
+        proof = pdf_upload("proof.pdf")
 
         response = self.client.post(
             "/api/auth/register/",
