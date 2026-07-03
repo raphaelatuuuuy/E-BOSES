@@ -100,13 +100,15 @@ def verify_phone_otp_challenge(phone_number, code, allow_verified=False):
     except PhoneOTPChallenge.DoesNotExist as exc:
         raise OTPVerificationError("No active phone OTP challenge.") from exc
 
+    if challenge.consumed_at:
+        raise OTPVerificationError("This OTP has already been used.")
     if challenge.is_expired:
         raise OTPVerificationError("This OTP has expired.")
+    if challenge.attempts >= challenge.max_attempts:
+        raise OTPVerificationError("Too many OTP attempts.")
     if not check_password(code, challenge.code_hash):
         if challenge.verified_at:
             raise OTPVerificationError("This OTP has already been used.")
-        if challenge.attempts >= challenge.max_attempts:
-            raise OTPVerificationError("Too many OTP attempts.")
         challenge.attempts += 1
         challenge.save(update_fields=["attempts"])
         raise OTPVerificationError("Invalid OTP code.")
@@ -114,8 +116,6 @@ def verify_phone_otp_challenge(phone_number, code, allow_verified=False):
         if allow_verified:
             return challenge
         raise OTPVerificationError("This OTP has already been used.")
-    if challenge.attempts >= challenge.max_attempts:
-        raise OTPVerificationError("Too many OTP attempts.")
 
     challenge.verified_at = timezone.now()
     challenge.save(update_fields=["verified_at"])
@@ -218,7 +218,8 @@ def register_resident(validated_data, request_meta=None):
     )
     create_registration_profile(user, validated_data)
     create_otp_challenge(user, OTPChallenge.Channel.EMAIL, OTPChallenge.Purpose.REGISTRATION, user.email)
-    phone_challenge.delete()
+    phone_challenge.consumed_at = timezone.now()
+    phone_challenge.save(update_fields=["consumed_at"])
     create_audit_log("auth.registered", actor=user, target_user=user, request_meta=request_meta)
     return user
 
