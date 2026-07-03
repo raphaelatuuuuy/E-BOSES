@@ -1,3 +1,6 @@
+from django.core.exceptions import ObjectDoesNotExist
+from django.http import FileResponse
+from django.shortcuts import get_object_or_404
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.signing import BadSignature, SignatureExpired
 from rest_framework import status
@@ -7,7 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import OTPChallenge
+from .models import OTPChallenge, ResidenceProof
 from .permissions import IsStaffOrSuperuser
 from .selectors import find_user_by_identifier, latest_active_otp_challenge
 from .serializers import (
@@ -22,6 +25,11 @@ from .serializers import (
     PhoneOTPVerifySerializer,
     RegisterSerializer,
     UserSummarySerializer,
+)
+from .media_services import (
+    ensure_residence_proof_preview,
+    log_raw_media_access,
+    user_can_access_residence_proof_raw,
 )
 from .services import (
     DuplicateProofError,
@@ -225,3 +233,29 @@ class PasswordResetConfirmView(APIView):
         user.save(update_fields=["password", "updated_at"])
         create_audit_log("password_reset.confirmed", target_user=user, request_meta=request_meta(request))
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ResidenceProofRawMediaView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        proof = get_object_or_404(ResidenceProof, pk=pk)
+        if not user_can_access_residence_proof_raw(request.user, proof):
+            return Response({"detail": "You do not have permission to access this media."}, status=status.HTTP_403_FORBIDDEN)
+        log_raw_media_access(
+            actor=request.user,
+            target_user=proof.user,
+            media_type="residence_proof",
+            object_id=proof.pk,
+            request_meta=request_meta(request),
+        )
+        return FileResponse(proof.file.open("rb"), content_type=proof.mime_type or "application/octet-stream")
+
+
+class ResidenceProofPreviewMediaView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request, pk):
+        proof = get_object_or_404(ResidenceProof, pk=pk)
+        preview = ensure_residence_proof_preview(proof)
+        return FileResponse(preview.open("rb"), content_type="text/plain")
