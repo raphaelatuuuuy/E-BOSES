@@ -1,4 +1,3 @@
-from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.signing import BadSignature, SignatureExpired
 from rest_framework import status
@@ -10,6 +9,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import OTPChallenge
 from .permissions import IsStaffOrSuperuser
+from .selectors import find_user_by_identifier, latest_active_otp_challenge
 from .serializers import (
     AdminCreateUserSerializer,
     LoginSerializer,
@@ -130,12 +130,11 @@ class OTPVerifyView(APIView):
         serializer = OTPVerifySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            challenge = OTPChallenge.objects.filter(
-                user=request.user,
-                channel=serializer.validated_data["channel"],
-                purpose=serializer.validated_data["purpose"],
-                verified_at__isnull=True,
-            ).latest("created_at")
+            challenge = latest_active_otp_challenge(
+                request.user,
+                serializer.validated_data["channel"],
+                serializer.validated_data["purpose"],
+            )
             verify_otp_challenge(challenge, serializer.validated_data["code"])
         except ObjectDoesNotExist:
             return Response({"detail": "No active OTP challenge."}, status=status.HTTP_404_NOT_FOUND)
@@ -169,10 +168,6 @@ class AdminCreateUserView(APIView):
         return Response(UserSummarySerializer(user).data, status=status.HTTP_201_CREATED)
 
 
-def find_user_by_identifier(identifier):
-    return get_user_model().objects.filter(email=identifier).first() or get_user_model().objects.filter(phone_number=identifier).first()
-
-
 class PasswordResetRequestView(APIView):
     permission_classes = [AllowAny]
     throttle_scope = "password_reset"
@@ -204,12 +199,11 @@ class PasswordResetVerifyView(APIView):
         if user is None:
             return Response({"detail": "Invalid reset request."}, status=status.HTTP_400_BAD_REQUEST)
         try:
-            challenge = OTPChallenge.objects.filter(
-                user=user,
-                channel=serializer.validated_data["channel"],
-                purpose=OTPChallenge.Purpose.PASSWORD_RESET,
-                verified_at__isnull=True,
-            ).latest("created_at")
+            challenge = latest_active_otp_challenge(
+                user,
+                serializer.validated_data["channel"],
+                OTPChallenge.Purpose.PASSWORD_RESET,
+            )
             verify_otp_challenge(challenge, serializer.validated_data["code"])
         except ObjectDoesNotExist:
             return Response({"detail": "No active reset challenge."}, status=status.HTTP_404_NOT_FOUND)
