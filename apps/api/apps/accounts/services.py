@@ -1,14 +1,21 @@
 import hashlib
+import importlib
 import mimetypes
 import secrets
+from dataclasses import dataclass
 from datetime import timedelta
+from io import BytesIO
+from pathlib import Path
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import check_password, make_password
 from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.core.signing import TimestampSigner
 from django.db import transaction
 from django.utils import timezone
+from PIL import Image, UnidentifiedImageError
 
 from .models import (
     AuditLog,
@@ -29,17 +36,152 @@ ALLOWED_PROOF_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
 MAX_PROOF_FILE_SIZE = 5 * 1024 * 1024
 
 
+@dataclass(frozen=True)
+class UploadValidationProfile:
+    label: str
+    allowed_mime_types: frozenset[str]
+    allowed_extensions: frozenset[str]
+    max_size: int
+
+
+RESIDENCE_PROOF_UPLOAD_PROFILE = UploadValidationProfile(
+    label="Proof",
+    allowed_mime_types=frozenset(ALLOWED_PROOF_MIME_TYPES),
+    allowed_extensions=frozenset(ALLOWED_PROOF_EXTENSIONS),
+    max_size=MAX_PROOF_FILE_SIZE,
+)
+CONCERN_MEDIA_UPLOAD_PROFILE = RESIDENCE_PROOF_UPLOAD_PROFILE
+EMERGENCY_MEDIA_UPLOAD_PROFILE = RESIDENCE_PROOF_UPLOAD_PROFILE
+_SIGNATURE_MIME_TYPES = {
+    b"%PDF-": "application/pdf",
+    b"\xff\xd8\xff": "image/jpeg",
+    b"\x89PNG\r\n\x1a\n": "image/png",
+}
+_EXTENSION_MIME_TYPES = {
+    ".pdf": "application/pdf",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+}
+
+
+def _read_upload(uploaded_file):
+    current_position = uploaded_file.tell() if hasattr(uploaded_file, "tell") else None
+    if hasattr(uploaded_file, "seek"):
+        uploaded_file.seek(0)
+    content = uploaded_file.read()
+    if hasattr(uploaded_file, "seek"):
+        uploaded_file.seek(current_position or 0)
+    return content
+
+
+def detect_file_signature(content):
+    for signature, mime_type in _SIGNATURE_MIME_TYPES.items():
+        if content.startswith(signature):
+            return mime_type
+    return ""
+
+
+def _extension(uploaded_file):
+    return Path(getattr(uploaded_file, "name", "") or "").suffix.lower()
+
+
+def _scanner_callable():
+    scanner_path = getattr(settings, "FILE_UPLOAD_SCANNER", "")
+    if not scanner_path:
+        return None
+    module_path, function_name = scanner_path.rsplit(".", 1)
+    return getattr(importlib.import_module(module_path), function_name)
+
+
+def scan_uploaded_file(uploaded_file, *, content, detected_mime_type):
+    scanner = _scanner_callable()
+    if scanner is None:
+        return
+    verdict = scanner(uploaded_file=uploaded_file, content=content, detected_mime_type=detected_mime_type)
+    if verdict is False or verdict == "infected":
+        raise ValidationError("Uploaded file failed malware scanning.")
+
+
+def _as_uploaded_file(original, *, content, content_type, extension=None):
+    name = getattr(original, "name", "upload") or "upload"
+    if extension and Path(name).suffix.lower() != extension:
+        name = f"{Path(name).stem}{extension}"
+    normalized = InMemoryUploadedFile(
+        file=BytesIO(content),
+        field_name=getattr(original, "field_name", None),
+        name=name,
+        content_type=content_type,
+        size=len(content),
+        charset=getattr(original, "charset", None),
+    )
+    normalized._validated_upload = True
+    normalized._detected_mime_type = content_type
+    return normalized
+
+
+def normalize_uploaded_file(uploaded_file, *, content, detected_mime_type):
+    if detected_mime_type == "application/pdf":
+        if b"%%EOF" not in content[-2048:]:
+            raise ValidationError("PDF uploads must be well-formed documents.")
+        return _as_uploaded_file(
+            uploaded_file,
+            content=content,
+            content_type=detected_mime_type,
+            extension=".pdf",
+        )
+    try:
+        with Image.open(BytesIO(content)) as image:
+            image.verify()
+        with Image.open(BytesIO(content)) as image:
+            output = BytesIO()
+            if detected_mime_type == "image/jpeg":
+                image.convert("RGB").save(output, format="JPEG", quality=90, optimize=True)
+                extension = ".jpg"
+            else:
+                image.save(output, format="PNG", optimize=True)
+                extension = ".png"
+    except (UnidentifiedImageError, OSError) as exc:
+        raise ValidationError("Image uploads must be valid JPG or PNG files.") from exc
+    return _as_uploaded_file(
+        uploaded_file,
+        content=output.getvalue(),
+        content_type=detected_mime_type,
+        extension=extension,
+    )
+
+
+def validate_uploaded_media_file(uploaded_file, *, profile=RESIDENCE_PROOF_UPLOAD_PROFILE):
+    if uploaded_file.size > profile.max_size:
+        raise ValidationError(f"{profile.label} files must be {profile.max_size // (1024 * 1024)}MB or smaller.")
+    extension = _extension(uploaded_file)
+    if extension not in profile.allowed_extensions:
+        raise ValidationError(f"{profile.label} files must be PDF, JPG, JPEG, or PNG.")
+    content = _read_upload(uploaded_file)
+    detected_mime_type = detect_file_signature(content)
+    expected_mime_type = _EXTENSION_MIME_TYPES.get(extension)
+    claimed_mime_type = (
+        getattr(uploaded_file, "content_type", "") or mimetypes.guess_type(uploaded_file.name)[0] or ""
+    ).lower()
+    if detected_mime_type not in profile.allowed_mime_types:
+        raise ValidationError(f"{profile.label} files must be valid PDF, JPG, JPEG, or PNG files.")
+    if detected_mime_type != expected_mime_type or (claimed_mime_type and claimed_mime_type != detected_mime_type):
+        raise ValidationError("Uploaded file content does not match its extension or MIME type.")
+    normalized_file = normalize_uploaded_file(uploaded_file, content=content, detected_mime_type=detected_mime_type)
+    scan_uploaded_file(normalized_file, content=_read_upload(normalized_file), detected_mime_type=detected_mime_type)
+    return normalized_file
+
+
 def validate_residence_proof_file(uploaded_file):
-    if uploaded_file.size > MAX_PROOF_FILE_SIZE:
-        raise ValidationError(f"Proof files must be {MAX_PROOF_FILE_SIZE // (1024 * 1024)}MB or smaller.")
-    suffix = (getattr(uploaded_file, "name", "") or "").lower().rsplit(".", 1)
-    extension = f".{suffix[-1]}" if len(suffix) == 2 else ""
-    if extension not in ALLOWED_PROOF_EXTENSIONS:
-        raise ValidationError("Proof files must be PDF, JPG, JPEG, or PNG.")
-    content_type = getattr(uploaded_file, "content_type", "") or mimetypes.guess_type(uploaded_file.name)[0] or ""
-    if content_type.lower() not in ALLOWED_PROOF_MIME_TYPES:
-        raise ValidationError("Proof files must be PDF, JPG, JPEG, or PNG.")
-    return uploaded_file
+    return validate_uploaded_media_file(uploaded_file, profile=RESIDENCE_PROOF_UPLOAD_PROFILE)
+
+
+def validate_concern_media_file(uploaded_file):
+    return validate_uploaded_media_file(uploaded_file, profile=CONCERN_MEDIA_UPLOAD_PROFILE)
+
+
+def validate_emergency_media_file(uploaded_file):
+    return validate_uploaded_media_file(uploaded_file, profile=EMERGENCY_MEDIA_UPLOAD_PROFILE)
 
 
 class OTPVerificationError(Exception):
@@ -201,9 +343,10 @@ def register_resident(validated_data, request_meta=None):
         validated_data["phone_otp_code"],
         allow_verified=True,
     )
-    proof_files = registration_proof_files(validated_data)
-    for proof_file in proof_files:
-        validate_residence_proof_file(proof_file)
+    proof_files = [
+        validate_residence_proof_file(proof_file) for proof_file in registration_proof_files(validated_data)
+    ]
+    validated_data["proof_files"] = proof_files
     proof_hashes = [sha256_file(proof_file) for proof_file in proof_files]
     duplicate_in_upload = len(set(proof_hashes)) != len(proof_hashes)
     duplicate_existing = ResidenceProof.objects.filter(sha256_hash__in=proof_hashes).exists()

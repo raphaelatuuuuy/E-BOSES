@@ -1,4 +1,4 @@
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.signing import BadSignature, SignatureExpired
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -70,7 +70,7 @@ class RegisterView(APIView):
             user = register_resident(validated_data, request_meta(request))
         except OTPVerificationError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        except DuplicateProofError as exc:
+        except (DuplicateProofError, ValidationError) as exc:
             return Response({"proof": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
         return token_response(user, status.HTTP_201_CREATED)
 

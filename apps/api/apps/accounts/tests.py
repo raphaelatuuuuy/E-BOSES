@@ -13,6 +13,12 @@ from apps.accounts.services import (
     verify_phone_otp_challenge,
 )
 
+VALID_PDF_BYTES = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF"
+
+
+def pdf_upload(name="proof.pdf", content=VALID_PDF_BYTES):
+    return SimpleUploadedFile(name, content, content_type="application/pdf")
+
 
 class AccountServiceTests(TestCase):
     def test_otp_verifies_both_channels_and_runs_system_verification(self):
@@ -21,7 +27,7 @@ class AccountServiceTests(TestCase):
             phone_number="+639191234567",
             password="Str0ng!Pass123",
         )
-        proof_file = SimpleUploadedFile("proof.pdf", b"proof bytes", content_type="application/pdf")
+        proof_file = pdf_upload("proof.pdf")
         digest = sha256_file(proof_file)
         ResidenceProof.objects.create(
             user=user,
@@ -65,8 +71,8 @@ class AuthAPITests(APITestCase):
         phone_number = "+639231234567"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        proof = SimpleUploadedFile("proof.pdf", b"proof bytes", content_type="application/pdf")
-        second_proof = SimpleUploadedFile("proof-2.pdf", b"second proof bytes", content_type="application/pdf")
+        proof = pdf_upload("proof.pdf")
+        second_proof = pdf_upload("proof-2.pdf", VALID_PDF_BYTES + b"2")
         response = self.client.post(
             "/api/auth/register/",
             {
@@ -150,7 +156,7 @@ class AuthAPITests(APITestCase):
         self.assertFalse(get_user_model().objects.filter(email="second-consumed@example.com").exists())
 
     def test_registration_without_phone_otp_returns_400_not_500(self):
-        proof = SimpleUploadedFile("proof.pdf", b"proof bytes", content_type="application/pdf")
+        proof = pdf_upload("proof.pdf")
         response = self.client.post(
             "/api/auth/register/",
             {
@@ -181,7 +187,7 @@ class AuthAPITests(APITestCase):
             password="Str0ng!Pass123",
             status=get_user_model().Status.VERIFIED,
         )
-        existing_file = SimpleUploadedFile("same.pdf", b"duplicate bytes", content_type="application/pdf")
+        existing_file = pdf_upload("same.pdf", VALID_PDF_BYTES + b"duplicate")
         digest = sha256_file(existing_file)
         ResidenceProof.objects.create(
             user=existing,
@@ -194,8 +200,8 @@ class AuthAPITests(APITestCase):
         phone_number = "+639231234569"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        unique_file = SimpleUploadedFile("unique.pdf", b"unique bytes", content_type="application/pdf")
-        duplicate_file = SimpleUploadedFile("same.pdf", b"duplicate bytes", content_type="application/pdf")
+        unique_file = pdf_upload("unique.pdf", VALID_PDF_BYTES + b"unique")
+        duplicate_file = pdf_upload("same.pdf", VALID_PDF_BYTES + b"duplicate")
 
         response = self.client.post(
             "/api/auth/register/",
@@ -225,8 +231,8 @@ class AuthAPITests(APITestCase):
         phone_number = "+639231234570"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        first_file = SimpleUploadedFile("first.pdf", b"same upload bytes", content_type="application/pdf")
-        second_file = SimpleUploadedFile("second.pdf", b"same upload bytes", content_type="application/pdf")
+        first_file = pdf_upload("first.pdf", VALID_PDF_BYTES + b"same")
+        second_file = pdf_upload("second.pdf", VALID_PDF_BYTES + b"same")
 
         response = self.client.post(
             "/api/auth/register/",
@@ -315,7 +321,7 @@ class AuthHardeningTests(APITestCase):
         phone_number = "+639261234567"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        proof = SimpleUploadedFile("proof.pdf", b"proof bytes", content_type="application/pdf")
+        proof = pdf_upload("proof.pdf")
 
         response = self.client.post(
             "/api/auth/register/",
@@ -413,3 +419,63 @@ class AuthHardeningTests(APITestCase):
         self.assertTrue(user_has_role_permission(resident, "concerns.create"))
         self.assertFalse(user_has_role_permission(resident, "accounts.create_staff"))
         self.assertTrue(user_has_role_permission(official, "accounts.create_staff"))
+
+class UploadValidationTests(APITestCase):
+    def _registration_payload(self, proof, email="upload-validation@example.com"):
+        phone_number = "+639321234567"
+        _, phone_code = create_phone_otp_challenge(phone_number)
+        verify_phone_otp_challenge(phone_number, phone_code)
+        return {
+            "email": email,
+            "phone_number": phone_number,
+            "phone_otp_code": phone_code,
+            "password": "Str0ng!Pass123",
+            "first_name": "Juan",
+            "middle_name": "",
+            "last_name": "Santos",
+            "date_of_birth": "1998-01-01",
+            "address": "123 Barangay Street",
+            "barangay": "Pending",
+            "proof": proof,
+            "terms_version": "2026-07-02",
+            "privacy_version": "2026-07-02",
+        }
+
+    def test_registration_rejects_oversized_proof_file(self):
+        proof = SimpleUploadedFile("proof.pdf", VALID_PDF_BYTES + (b"x" * (5 * 1024 * 1024)), content_type="application/pdf")
+
+        response = self.client.post(
+            "/api/auth/register/",
+            self._registration_payload(proof, email="oversized-upload@example.com"),
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("proof", response.data)
+        self.assertIn("5MB or smaller", str(response.data["proof"]))
+
+    def test_registration_rejects_mismatched_extension_and_signature(self):
+        proof = SimpleUploadedFile("proof.jpg", VALID_PDF_BYTES, content_type="image/jpeg")
+
+        response = self.client.post(
+            "/api/auth/register/",
+            self._registration_payload(proof, email="mismatched-upload@example.com"),
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("proof", response.data)
+        self.assertIn("does not match", str(response.data["proof"]))
+
+    def test_registration_rejects_spoofed_content_type_with_bad_signature(self):
+        proof = SimpleUploadedFile("proof.pdf", b"not really a pdf", content_type="application/pdf")
+
+        response = self.client.post(
+            "/api/auth/register/",
+            self._registration_payload(proof, email="spoofed-upload@example.com"),
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("proof", response.data)
+        self.assertIn("valid PDF", str(response.data["proof"]))
