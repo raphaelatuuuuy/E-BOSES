@@ -1,4 +1,4 @@
-import { useMockUser } from "@/features/dashboard/components/mock-user-context"
+import { useAuthSession } from "@/features/auth/auth-session"
 
 const FILIPINO_DAYS = [
   "Linggo",
@@ -45,7 +45,7 @@ function getFilipinoDateString(): string {
 }
 
 export function GreetingCard() {
-  const user = useMockUser()
+  const { user } = useAuthSession()
   const greeting = getFilipinoGreeting()
   const dateString = getFilipinoDateString()
 
@@ -56,7 +56,7 @@ export function GreetingCard() {
       {/* Glass card */}
       <div className="relative z-10 mb-4 ml-4 max-w-lg rounded-2xl border border-white/30 bg-white/07 px-4 py-3 text-left shadow-[0_4px_30px_rgba(0,0,0,0.1)] backdrop-blur-[5px] md:mb-8 md:ml-8 md:px-8 md:py-6">
         <h1 className="font-heading text-xl font-bold text-white md:text-3xl lg:text-4xl text-left">
-          {greeting}, {user.firstName}
+          {greeting}, {user?.firstName ?? "Resident"}
         </h1>
         <p className="mt-1 text-xs font-medium text-white/70 text-left md:mt-2 md:text-sm">
           {dateString}

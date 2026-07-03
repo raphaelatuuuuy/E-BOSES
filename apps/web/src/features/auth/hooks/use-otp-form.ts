@@ -21,7 +21,8 @@ export function useOtpForm(options: UseOtpFormOptions = {}) {
   const { onSuccess } = options
   const [values, setValues] = useState<OtpFormValues>(initialValues)
   const [errors, setErrors] = useState<OtpFormErrors>({})
-  const [statusMessage, setStatusMessage] = useState("")
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState("")
 
   function handleChange(code: string) {
     const digitsOnly = code.replace(/\D/g, "")
@@ -38,32 +39,38 @@ export function useOtpForm(options: UseOtpFormOptions = {}) {
         code: undefined,
       }
     })
+    setSubmitError("")
 
-    if (digitsOnly.length === OTP_LENGTH) {
-      setStatusMessage("")
+    if (digitsOnly.length === OTP_LENGTH && !isSubmitting) {
       onSuccess?.(digitsOnly)
     }
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-
+    if (isSubmitting) return
     if (values.code.length !== OTP_LENGTH) {
       setErrors({ code: "Enter the 6-digit code." })
-      setStatusMessage("")
       return
     }
-
     setErrors({})
-    setStatusMessage("")
-    onSuccess?.(values.code)
+    setSubmitError("")
+    setIsSubmitting(true)
+    try {
+      await onSuccess?.(values.code)
+    } catch {
+      // Parent is responsible for error display via toast
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return {
     errors,
     handleChange,
     handleSubmit,
-    statusMessage,
+    isSubmitting,
+    submitError,
     values,
   }
 }

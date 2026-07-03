@@ -1,12 +1,20 @@
 import { type FormEvent, useMemo, useState } from "react"
 
 import {
+  registerResident,
+  requestRegistrationPhoneOtp,
+  type AuthUser,
+  verifyRegistrationPhoneOtp,
+} from "@/features/auth/api"
+import {
   type SignUpErrors,
   type SignUpValues,
   signUpSchema,
 } from "@/features/auth/schemas/sign-up-schema"
+import { ApiError } from "@/lib/api"
 
 const initialValues: SignUpValues = {
+  email: "",
   firstName: "",
   middleName: "",
   lastName: "",
@@ -14,6 +22,7 @@ const initialValues: SignUpValues = {
   address: "",
   proofOfResidency: [],
   phoneNumber: "",
+  phoneOtpCode: "",
   password: "",
   confirmPassword: "",
   agreeToTerms: false,
@@ -35,14 +44,19 @@ function flattenErrors(values: SignUpValues) {
 }
 
 interface UseSignUpFormOptions {
-  onSuccess?: () => void
+  onSuccess?: (user: AuthUser, access: string, refresh: string) => void
 }
 
 export function useSignUpForm(options: UseSignUpFormOptions = {}) {
   const { onSuccess } = options
   const [values, setValues] = useState<SignUpValues>(initialValues)
   const [errors, setErrors] = useState<SignUpErrors>({})
-  const [statusMessage, setStatusMessage] = useState("")
+  const [submitError, setSubmitError] = useState("")
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [phoneOtpSent, setPhoneOtpSent] = useState(false)
+  const [phoneOtpVerified, setPhoneOtpVerified] = useState(false)
+  const [isSendingPhoneOtp, setIsSendingPhoneOtp] = useState(false)
+  const [isVerifyingPhoneOtp, setIsVerifyingPhoneOtp] = useState(false)
 
   function handleChange<K extends keyof SignUpValues>(
     field: K,
@@ -52,6 +66,11 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
       ...currentValues,
       [field]: value,
     }))
+    setSubmitError("")
+    if (field === "phoneNumber") {
+      setPhoneOtpSent(false)
+      setPhoneOtpVerified(false)
+    }
 
     setErrors((currentErrors) => {
       if (!currentErrors[field]) {
@@ -75,7 +94,50 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     }))
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSendPhoneOtp() {
+    const phoneError = signUpSchema.shape.phoneNumber.safeParse(values.phoneNumber)
+    if (!phoneError.success) {
+      setFieldError("phoneNumber", phoneError.error.issues[0]?.message ?? "Enter a valid phone number.")
+      return
+    }
+
+    setIsSendingPhoneOtp(true)
+    setSubmitError("")
+    try {
+      await requestRegistrationPhoneOtp({ phone_number: values.phoneNumber })
+      setPhoneOtpSent(true)
+      setPhoneOtpVerified(false)
+      setFieldError("phoneOtpCode", undefined)
+    } catch {
+      setFieldError("phoneNumber", "Could not send SMS code. Check your number and try again.")
+    } finally {
+      setIsSendingPhoneOtp(false)
+    }
+  }
+
+  async function handleVerifyPhoneOtp() {
+    if (!/^\d{6}$/.test(values.phoneOtpCode ?? "")) {
+      setFieldError("phoneOtpCode", "Enter the 6-digit SMS code.")
+      return
+    }
+
+    setIsVerifyingPhoneOtp(true)
+    setSubmitError("")
+    try {
+      await verifyRegistrationPhoneOtp({
+        phone_number: values.phoneNumber,
+        code: values.phoneOtpCode ?? "",
+      })
+      setPhoneOtpVerified(true)
+      setFieldError("phoneOtpCode", undefined)
+    } catch {
+      setFieldError("phoneOtpCode", "Invalid or expired SMS code. Request a new one.")
+    } finally {
+      setIsVerifyingPhoneOtp(false)
+    }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
     const fieldErrors = flattenErrors(values)
@@ -83,12 +145,59 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     setErrors(fieldErrors)
 
     if (Object.keys(fieldErrors).length > 0) {
-      setStatusMessage("")
+      setSubmitError("")
       return
     }
 
-    setStatusMessage("")
-    onSuccess?.()
+    if (!phoneOtpVerified) {
+      setErrors((currentErrors) => ({
+        ...currentErrors,
+        phoneOtpCode: "Verify the SMS code before signing up.",
+      }))
+      return
+    }
+
+    const formData = new FormData()
+    formData.append("email", values.email)
+    formData.append("phone_number", values.phoneNumber)
+    formData.append("phone_otp_code", values.phoneOtpCode ?? "")
+    formData.append("password", values.password)
+    formData.append("first_name", values.firstName)
+    formData.append("middle_name", values.middleName ?? "")
+    formData.append("last_name", values.lastName)
+    formData.append("date_of_birth", values.dateOfBirth)
+    formData.append("address", values.address)
+    formData.append("barangay", "Pending")
+    for (const proofFile of values.proofOfResidency) {
+      formData.append("proof", proofFile)
+    }
+    formData.append("terms_version", "2026-07-02")
+    formData.append("privacy_version", "2026-07-02")
+
+    setIsSubmitting(true)
+    setSubmitError("")
+    try {
+      const response = await registerResident(formData)
+      onSuccess?.(response.user, response.access, response.refresh)
+    } catch (error) {
+      if (error instanceof ApiError && error.data && typeof error.data === "object") {
+        const proofError = (error.data as { proof?: unknown }).proof
+        const proofMessage = Array.isArray(proofError) && typeof proofError[0] === "string"
+          ? proofError[0]
+          : undefined
+
+        if (proofMessage) {
+          setErrors((currentErrors) => ({
+            ...currentErrors,
+            proofOfResidency: proofMessage,
+          }))
+          return
+        }
+      }
+      setSubmitError("Could not create account. Try again later.")
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   const passwordStrength = useMemo(() => {
@@ -111,11 +220,18 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
   return {
     errors,
     handleChange,
+    handleSendPhoneOtp,
     handleSubmit,
+    handleVerifyPhoneOtp,
+    isSubmitting,
+    isSendingPhoneOtp,
+    isVerifyingPhoneOtp,
     passwordStrength,
+    phoneOtpSent,
+    phoneOtpVerified,
     setFieldError,
     setValues,
-    statusMessage,
+    submitError,
     values,
   }
 }

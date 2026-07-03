@@ -29,7 +29,8 @@ export function useNewPasswordForm(options: UseNewPasswordFormOptions = {}) {
   const { onSuccess } = options
   const [values, setValues] = useState<NewPasswordValues>(initialValues)
   const [errors, setErrors] = useState<NewPasswordErrors>({})
-  const [statusMessage, setStatusMessage] = useState("")
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState("")
 
   function handleChange<K extends keyof NewPasswordValues>(
     field: K,
@@ -50,10 +51,13 @@ export function useNewPasswordForm(options: UseNewPasswordFormOptions = {}) {
         [field]: undefined,
       }
     })
+
+    setSubmitError("")
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (isSubmitting) return
 
     const fieldErrors = flattenErrors(values)
     const nextErrors: NewPasswordErrors = {
@@ -64,19 +68,27 @@ export function useNewPasswordForm(options: UseNewPasswordFormOptions = {}) {
     setErrors(nextErrors)
 
     if (nextErrors.password || nextErrors.confirmPassword) {
-      setStatusMessage("")
       return
     }
 
-    setStatusMessage("")
-    onSuccess?.(values.password)
+    setSubmitError("")
+    setIsSubmitting(true)
+
+    try {
+      await onSuccess?.(values.password)
+    } catch {
+      // Parent handles error display
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return {
     errors,
     handleChange,
     handleSubmit,
-    statusMessage,
+    isSubmitting,
+    submitError,
     values,
   }
 }

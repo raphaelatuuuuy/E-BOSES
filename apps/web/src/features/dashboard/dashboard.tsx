@@ -3,7 +3,6 @@ import { Outlet } from "react-router-dom"
 
 import { Sidebar } from "@/features/dashboard/components/sidebar"
 import { SidebarProvider, useSidebar } from "@/features/dashboard/components/sidebar-context"
-import { MockUserProvider } from "@/features/dashboard/components/mock-user-context"
 import { SOSButton } from "@/features/dashboard/components/sos-button"
 import { MobileNav } from "@/features/dashboard/components/mobile-nav"
 
@@ -49,9 +48,7 @@ function DashboardContent() {
 export default function DashboardLayout() {
   return (
     <SidebarProvider>
-      <MockUserProvider>
-        <DashboardContent />
-      </MockUserProvider>
+      <DashboardContent />
     </SidebarProvider>
   )
 }

@@ -1,98 +1,162 @@
 import { Link } from "react-router-dom"
 import { MenuIcon, XIcon } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 import { Button } from "@workspace/ui/components/button"
 
 export function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [menuAnim, setMenuAnim] = useState(false)
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  useEffect(() => {
+    if (mobileOpen) {
+      requestAnimationFrame(() => setMenuAnim(true))
+    } else {
+      setMenuAnim(false)
+    }
+  }, [mobileOpen])
+
+  const openMenu = () => setMobileOpen(true)
+  const closeMenu = () => setMobileOpen(false)
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-gray-100 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80">
-      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 md:px-8">
-        {/* Logo — left */}
-        <Link to="/" className="shrink-0">
-          <img src="/images/logo.png" alt="E-Boses" className="h-10 w-auto object-contain" />
-        </Link>
+    <>
+      {/* Header bar — always transparent, just logo + hamburger */}
+      <header
+        className={`fixed top-0 left-0 right-0 z-50 w-full transition-all duration-700 ${
+          mounted ? "translate-y-0" : "-translate-y-full"
+        }`}
+      >
+        <div className="mx-auto flex h-20 max-w-7xl items-center px-4 md:px-8">
+          <Link to="/" className="shrink-0">
+            <img src="/images/logo.png" alt="E-Boses" className="h-14 w-auto object-contain" />
+          </Link>
 
-        {/* Desktop nav links — center */}
-        <nav className="hidden md:flex items-center gap-8">
-          <Link to="/" className="text-sm font-medium text-[#020c4e]/70 hover:text-[#020c4e] transition-colors">
-            Home
-          </Link>
-          <Link to="/about" className="text-sm font-medium text-[#020c4e]/70 hover:text-[#020c4e] transition-colors">
-            About E-Boses
-          </Link>
-          <Link to="/features" className="text-sm font-medium text-[#020c4e]/70 hover:text-[#020c4e] transition-colors">
-            Features
-          </Link>
-          <Link to="/contact" className="text-sm font-medium text-[#020c4e]/70 hover:text-[#020c4e] transition-colors">
-            Contact Us
-          </Link>
-        </nav>
-
-        {/* Auth buttons — right */}
-        <div className="hidden md:flex items-center gap-3">
-          <Link
-            to="/sign-in"
-            className="text-sm font-medium text-[#020c4e]/70 hover:text-[#020c4e] transition-colors px-3 py-2"
-          >
-            Sign in
-          </Link>
-          <Button
-            asChild
-            className="h-9 rounded-lg bg-[#ff8133] px-4 text-sm font-semibold text-white hover:bg-[#ff5003] active:scale-[0.97]"
-          >
-            <Link to="/sign-up">Sign up</Link>
-          </Button>
-        </div>
-
-        {/* Mobile hamburger */}
-        <button
-          type="button"
-          onClick={() => setMobileOpen(!mobileOpen)}
-          className="md:hidden flex size-10 items-center justify-center text-[#020c4e]"
-          aria-label={mobileOpen ? "Close menu" : "Open menu"}
-        >
-          {mobileOpen ? <XIcon className="size-6" /> : <MenuIcon className="size-6" />}
-        </button>
-      </div>
-
-      {/* Mobile menu overlay */}
-      {mobileOpen && (
-        <div className="md:hidden border-t border-gray-100 bg-white">
-          <nav className="flex flex-col items-center gap-4 px-4 py-6">
-            <Link to="/" onClick={() => setMobileOpen(false)} className="text-sm font-medium text-[#020c4e]/70 hover:text-[#020c4e]">
+          {/* Desktop nav links — absolute centered */}
+          <nav className="hidden md:flex absolute left-1/2 -translate-x-1/2 items-center gap-8">
+            <Link to="/" className="text-sm font-medium text-white/70 hover:text-white transition-colors">
               Home
             </Link>
-            <Link to="/about" onClick={() => setMobileOpen(false)} className="text-sm font-medium text-[#020c4e]/70 hover:text-[#020c4e]">
+            <span className="text-sm font-medium text-white/40 cursor-not-allowed">
               About E-Boses
-            </Link>
-            <Link to="/features" onClick={() => setMobileOpen(false)} className="text-sm font-medium text-[#020c4e]/70 hover:text-[#020c4e]">
+            </span>
+            <span className="text-sm font-medium text-white/40 cursor-not-allowed">
               Features
-            </Link>
-            <Link to="/contact" onClick={() => setMobileOpen(false)} className="text-sm font-medium text-[#020c4e]/70 hover:text-[#020c4e]">
+            </span>
+            <span className="text-sm font-medium text-white/40 cursor-not-allowed">
               Contact Us
-            </Link>
-            <div className="flex items-center gap-3 pt-3 border-t border-gray-200 w-full justify-center">
-              <Link
-                to="/sign-in"
-                onClick={() => setMobileOpen(false)}
-                className="text-sm font-medium text-[#020c4e]/70 hover:text-[#020c4e] px-3 py-2"
-              >
-                Sign in
-              </Link>
-              <Button
-                asChild
-                className="h-9 rounded-lg bg-[#ff8133] px-4 text-sm font-semibold text-white hover:bg-[#ff5003]"
-                onClick={() => setMobileOpen(false)}
-              >
-                <Link to="/sign-up">Sign up</Link>
-              </Button>
-            </div>
+            </span>
           </nav>
+
+          <div className="hidden md:flex flex-1" />
+
+          <div className="hidden md:flex items-center gap-3">
+            <Link
+              to="/sign-in"
+              className="text-sm font-medium text-white/70 hover:text-white transition-colors px-3 py-2"
+            >
+              Sign in
+            </Link>
+            <Button
+              asChild
+              className="h-9 rounded-full bg-[#ff8133] px-4 text-sm font-semibold text-white hover:bg-[#ff5003] active:scale-[0.97]"
+            >
+              <Link to="/sign-up">Sign up</Link>
+            </Button>
+          </div>
+
+          {/* Hamburger */}
+          <button
+            type="button"
+            onClick={openMenu}
+            className="md:hidden flex size-10 items-center justify-center text-white ml-auto"
+            aria-label="Open menu"
+          >
+            <MenuIcon className="size-6" />
+          </button>
+        </div>
+      </header>
+
+      {/* Fullscreen mobile overlay — covers EVERYTHING */}
+      {mobileOpen && (
+        <div className="md:hidden fixed inset-0 z-[60] flex flex-col bg-[#020c4e]">
+          {/* Top bar with logo + close */}
+          <div className="flex h-20 items-center justify-between px-4">
+            <Link to="/" className="shrink-0" onClick={closeMenu}>
+              <img src="/images/logo.png" alt="E-Boses" className="h-14 w-auto object-contain" />
+            </Link>
+            <button
+              type="button"
+              onClick={closeMenu}
+              className="flex size-10 items-center justify-center text-white"
+              aria-label="Close menu"
+            >
+              <XIcon className="size-6" />
+            </button>
+          </div>
+
+          <nav className="flex flex-col gap-8 px-8 pt-16">
+            <Link
+              to="/"
+              onClick={closeMenu}
+              className={`text-4xl font-bold text-white/70 hover:text-white transition-all duration-500 ${
+                menuAnim ? "translate-x-0 opacity-100" : "-translate-x-8 opacity-0"
+              }`}
+            >
+              Home
+            </Link>
+            <span
+              className={`text-4xl font-bold text-white/40 cursor-not-allowed transition-all duration-500 delay-100 ${
+                menuAnim ? "translate-x-0 opacity-100" : "-translate-x-8 opacity-0"
+              }`}
+            >
+              About E-Boses
+            </span>
+            <span
+              className={`text-4xl font-bold text-white/40 cursor-not-allowed transition-all duration-500 delay-200 ${
+                menuAnim ? "translate-x-0 opacity-100" : "-translate-x-8 opacity-0"
+              }`}
+            >
+              Features
+            </span>
+            <span
+              className={`text-4xl font-bold text-white/40 cursor-not-allowed transition-all duration-500 delay-[300ms] ${
+                menuAnim ? "translate-x-0 opacity-100" : "-translate-x-8 opacity-0"
+              }`}
+            >
+              Contact Us
+            </span>
+            <Link
+              to="/sign-in"
+              onClick={closeMenu}
+              className={`text-4xl font-bold text-white/70 hover:text-white transition-all duration-500 delay-[400ms] ${
+                menuAnim ? "translate-x-0 opacity-100" : "-translate-x-8 opacity-0"
+              }`}
+            >
+              Sign in
+            </Link>
+          </nav>
+
+          <div
+            className={`mt-auto flex items-center justify-center pb-10 transition-all duration-500 delay-[500ms] ${
+              menuAnim ? "translate-y-0 opacity-100" : "translate-y-8 opacity-0"
+            }`}
+          >
+            <Button
+              asChild
+              className="h-12 rounded-full bg-[#ff8133] px-10 text-base font-semibold text-white hover:bg-[#ff5003]"
+              onClick={closeMenu}
+            >
+              <Link to="/sign-up">Sign up</Link>
+            </Button>
+          </div>
         </div>
       )}
-    </header>
+    </>
   )
 }

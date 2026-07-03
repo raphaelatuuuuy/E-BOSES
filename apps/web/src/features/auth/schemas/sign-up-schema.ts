@@ -79,6 +79,7 @@ const proofOfResidencyFileSchema = z
 
 export const signUpSchema = z
   .object({
+    email: z.string().email("Enter a valid email address."),
     firstName: z.string().min(1, "First name is required.").max(50, "First name must be 50 characters or fewer."),
     middleName: z.string().max(50, "Middle name must be 50 characters or fewer.").optional().default(""),
     lastName: z.string().min(1, "Last name is required.").max(50, "Last name must be 50 characters or fewer."),
@@ -96,6 +97,7 @@ export const signUpSchema = z
     phoneNumber: z
       .string()
       .regex(/^\+63\d{10}$/, "Enter a valid Philippine mobile number (e.g. +639821921234)."),
+    phoneOtpCode: z.string().optional().default(""),
     password: z
       .string()
       .min(8, "Password must be at least 8 characters.")

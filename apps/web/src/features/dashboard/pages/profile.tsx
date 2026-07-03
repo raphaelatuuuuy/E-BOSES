@@ -1,4 +1,5 @@
 import { useEffect, useState, type ElementType } from "react"
+import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import {
   BellIcon,
@@ -25,7 +26,7 @@ import {
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { Topbar } from "@/features/dashboard/components/topbar"
-import { useMockUser } from "@/features/dashboard/components/mock-user-context"
+import { useAuthSession } from "@/features/auth/auth-session"
 
 // ---------------------------------------------------------------------------
 // Mock data – replace with real API data when backend is wired
@@ -182,7 +183,8 @@ function ProfileSkeleton() {
 
 export default function ProfilePage() {
   usePageTitle("Profile")
-  const user = useMockUser()
+  const { user, signOut } = useAuthSession()
+  const navigate = useNavigate()
 
   const [loaded, setLoaded] = useState(false)
 
@@ -191,7 +193,7 @@ export default function ProfilePage() {
     return () => clearTimeout(timer)
   }, [])
 
-  const initials = `${user.firstName[0]}${user.lastName[0]}`
+  const initials = user ? `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}` : "?"
 
   if (!loaded)
     return (
@@ -220,11 +222,11 @@ export default function ProfilePage() {
             {/* Name + role + meta */}
             <div className="min-w-0 max-w-full pb-1 md:pb-2">
               <h1 className="break-words text-xl font-bold leading-tight text-foreground md:text-2xl">
-                {user.firstName} {user.lastName}
+                {user?.firstName ?? ""} {user?.lastName ?? ""}
               </h1>
               <div className="mt-1 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 sm:justify-start">
                 <span className="text-xs font-medium text-primary">
-                  {user.role}
+                  {user?.role?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()) ?? "Resident"}
                 </span>
                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
                   <VerifiedIcon className="size-3 text-primary" />
@@ -274,12 +276,10 @@ export default function ProfilePage() {
                 <CardContent className="flex flex-col gap-2 px-4 sm:px-5 md:px-6">
                   <button
                     type="button"
-                    onClick={() =>
-                      toast.success("Signed out", {
-                        description:
-                          "You have been signed out successfully.",
-                      })
-                    }
+                    onClick={() => {
+                      signOut()
+                      navigate("/")
+                    }}
                     className="flex min-h-14 w-full items-start gap-3 rounded-lg p-3 text-left transition-colors hover:bg-muted/50 sm:items-center"
                   >
                     <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">

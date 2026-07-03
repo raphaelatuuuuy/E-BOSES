@@ -14,7 +14,7 @@ import {
 
 import { cn } from "@workspace/ui/lib/utils"
 
-import { useMockUser } from "@/features/dashboard/components/mock-user-context"
+import { useAuthSession } from "@/features/auth/auth-session"
 import { useSidebar } from "@/features/dashboard/components/sidebar-context"
 
 interface NavItem {
@@ -35,7 +35,7 @@ export function Sidebar() {
   const { isOpen, toggle } = useSidebar()
   const location = useLocation()
   const navigate = useNavigate()
-  const user = useMockUser()
+  const { user, signOut } = useAuthSession()
   const [profileOpen, setProfileOpen] = useState(false)
 
   function isActive(path: string) {
@@ -43,10 +43,13 @@ export function Sidebar() {
   }
 
   function handleSignOut() {
+    signOut()
     navigate("/")
   }
 
-  const initials = `${user.firstName[0]}${user.lastName[0]}`
+  const initials = user ? `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}` : "?"
+  const displayName = user ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() : "User"
+  const displayRole = user?.role?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()) ?? "Resident"
 
   return (
     <aside
@@ -72,10 +75,10 @@ export function Sidebar() {
             <>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-semibold text-background">
-                  {user.firstName} {user.lastName}
+                  {displayName}
                 </p>
                 <p className="truncate text-xs text-background/70">
-                  {user.role}
+                  {displayRole}
                 </p>
               </div>
               {profileOpen ? (

@@ -1,5 +1,7 @@
 import { type FormEvent, useState } from "react"
 
+import { ApiError } from "@/lib/api"
+import { login, type AuthUser } from "@/features/auth/api"
 import {
   type SignInErrors,
   type SignInValues,
@@ -22,14 +24,15 @@ function flattenErrors(values: SignInValues) {
 }
 
 interface UseSignInFormOptions {
-  onSuccess?: () => void
+  onSuccess?: (user: AuthUser, access: string, refresh: string) => void
 }
 
 export function useSignInForm(options: UseSignInFormOptions = {}) {
   const { onSuccess } = options
   const [values, setValues] = useState<SignInValues>(initialValues)
   const [errors, setErrors] = useState<SignInErrors>({})
-  const [statusMessage, setStatusMessage] = useState("")
+  const [submitError, setSubmitError] = useState("")
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   function handleChange<K extends keyof SignInValues>(
     field: K,
@@ -39,6 +42,7 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
       ...currentValues,
       [field]: value,
     }))
+    setSubmitError("")
 
     setErrors((currentErrors) => {
       if (!currentErrors[field]) {
@@ -52,7 +56,7 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
     })
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
     const fieldErrors = flattenErrors(values)
@@ -64,19 +68,48 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
     setErrors(nextErrors)
 
     if (nextErrors.email || nextErrors.password) {
-      setStatusMessage("")
+      setSubmitError("")
       return
     }
 
-    setStatusMessage("")
-    onSuccess?.()
+    setIsSubmitting(true)
+    setSubmitError("")
+    try {
+      const response = await login({
+        identifier: values.email,
+        password: values.password,
+      })
+      onSuccess?.(response.user, response.access, response.refresh)
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 403 && error.data) {
+        const detail = typeof error.data === "object" && error.data !== null
+          ? (error.data as Record<string, unknown>).detail
+          : null
+        if (typeof detail === "string" && detail.toLowerCase().includes("suspended")) {
+          setSubmitError("Account suspended. Please contact your barangay administrator.")
+          return
+        }
+        if (typeof detail === "string" && detail.toLowerCase().includes("rejected")) {
+          setSubmitError("Account not approved. Contact your barangay administrator for details.")
+          return
+        }
+        if (typeof detail === "string" && detail.toLowerCase().includes("pending")) {
+          setSubmitError("Account still under verification. Please try again later.")
+          return
+        }
+      }
+      setSubmitError("Invalid email or password.")
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return {
     errors,
     handleChange,
     handleSubmit,
-    statusMessage,
+    isSubmitting,
+    submitError,
     values,
   }
 }
