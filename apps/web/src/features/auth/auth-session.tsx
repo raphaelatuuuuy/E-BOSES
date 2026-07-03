@@ -2,14 +2,14 @@
 import * as React from "react"
 
 import { getMe, type AuthUser, type UserStatus } from "@/features/auth/api"
-import { clearAuthTokens, getAccessToken, setAuthTokens } from "@/lib/api"
+import { clearAuthTokens, getAccessToken, logoutSession, refreshSession, setAuthTokens } from "@/lib/api"
 
 interface AuthSessionContextValue {
   user: AuthUser | null
   loading: boolean
-  setAuthenticatedUser: (user: AuthUser, access: string, refresh: string) => void
+  setAuthenticatedUser: (user: AuthUser, access: string) => void
   refreshUser: () => Promise<AuthUser | null>
-  signOut: () => void
+  signOut: () => Promise<void>
 }
 
 const AuthSessionContext = React.createContext<AuthSessionContextValue | null>(null)
@@ -24,43 +24,52 @@ export function getStatusPath(status: UserStatus) {
 
 export function AuthSessionProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = React.useState<AuthUser | null>(null)
-  const [loading, setLoading] = React.useState(() => Boolean(getAccessToken()))
+  const [loading, setLoading] = React.useState(true)
+
+  const clearSession = React.useCallback(() => {
+    clearAuthTokens()
+    setUser(null)
+  }, [])
 
   const refreshUser = React.useCallback(async () => {
-    if (!getAccessToken()) {
-      setUser(null)
-      setLoading(false)
-      return null
-    }
-
+    setLoading(true)
     try {
+      if (!getAccessToken()) {
+        const session = await refreshSession()
+        setUser(session.user as AuthUser)
+        return session.user as AuthUser
+      }
+
       const nextUser = await getMe()
       setUser(nextUser)
       return nextUser
     } catch {
-      clearAuthTokens()
-      setUser(null)
+      clearSession()
       return null
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [clearSession])
 
   React.useEffect(() => {
     void refreshUser()
   }, [refreshUser])
 
-  const setAuthenticatedUser = React.useCallback((nextUser: AuthUser, access: string, refresh: string) => {
-    setAuthTokens(access, refresh)
+  const setAuthenticatedUser = React.useCallback((nextUser: AuthUser, access: string) => {
+    setAuthTokens(access)
     setUser(nextUser)
     setLoading(false)
   }, [])
 
-  const signOut = React.useCallback(() => {
-    clearAuthTokens()
-    setUser(null)
-    setLoading(false)
-  }, [])
+  const signOut = React.useCallback(async () => {
+    setLoading(true)
+    try {
+      await logoutSession()
+    } finally {
+      clearSession()
+      setLoading(false)
+    }
+  }, [clearSession])
 
   return (
     <AuthSessionContext.Provider value={{ user, loading, setAuthenticatedUser, refreshUser, signOut }}>

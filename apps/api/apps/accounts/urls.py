@@ -2,7 +2,9 @@ from django.urls import path
 
 from .views import (
     AdminCreateUserView,
+    CSRFTokenView,
     LoginView,
+    LogoutView,
     MeView,
     OTPResendView,
     OTPVerifyView,
@@ -11,6 +13,7 @@ from .views import (
     PasswordResetVerifyView,
     PhoneOTPRequestView,
     PhoneOTPVerifyView,
+    RefreshTokenView,
     RegisterView,
     ResidenceProofPreviewMediaView,
     ResidenceProofRawMediaView,
@@ -20,7 +23,10 @@ urlpatterns = [
     path("register/", RegisterView.as_view(), name="auth-register"),
     path("register/phone-otp/request/", PhoneOTPRequestView.as_view(), name="auth-phone-otp-request"),
     path("register/phone-otp/verify/", PhoneOTPVerifyView.as_view(), name="auth-phone-otp-verify"),
+    path("csrf/", CSRFTokenView.as_view(), name="auth-csrf"),
     path("login/", LoginView.as_view(), name="auth-login"),
+    path("refresh/", RefreshTokenView.as_view(), name="auth-refresh"),
+    path("logout/", LogoutView.as_view(), name="auth-logout"),
     path("me/", MeView.as_view(), name="auth-me"),
     path("otp/resend/", OTPResendView.as_view(), name="auth-otp-resend"),
     path("otp/verify/", OTPVerifyView.as_view(), name="auth-otp-verify"),

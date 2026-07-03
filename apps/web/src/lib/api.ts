@@ -1,4 +1,8 @@
 const DEFAULT_API_BASE_URL = "http://localhost:8000/api"
+const CSRF_COOKIE_NAME = "csrftoken"
+
+let accessToken: string | null = null
+let refreshPromise: Promise<SessionResponse> | null = null
 
 export class ApiError extends Error {
   status: number
@@ -12,22 +16,69 @@ export class ApiError extends Error {
   }
 }
 
+export interface SessionResponse {
+  access: string
+  user: unknown
+}
+
 function apiBaseUrl() {
   return (import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/$/, "")
 }
 
-export function getAccessToken() {
-  return window.localStorage.getItem("eboses-access-token")
+function csrfToken() {
+  return document.cookie
+    .split(";")
+    .map((cookie) => cookie.trim())
+    .find((cookie) => cookie.startsWith(`${CSRF_COOKIE_NAME}=`))
+    ?.split("=")[1]
 }
 
-export function setAuthTokens(access: string, refresh: string) {
-  window.localStorage.setItem("eboses-access-token", access)
-  window.localStorage.setItem("eboses-refresh-token", refresh)
+function isUnsafeMethod(method: string) {
+  return !["GET", "HEAD", "OPTIONS", "TRACE"].includes(method.toUpperCase())
+}
+
+export function getAccessToken() {
+  return accessToken
+}
+
+export function setAuthTokens(access: string) {
+  accessToken = access
 }
 
 export function clearAuthTokens() {
-  window.localStorage.removeItem("eboses-access-token")
-  window.localStorage.removeItem("eboses-refresh-token")
+  accessToken = null
+}
+
+export async function ensureCsrfCookie() {
+  await fetch(`${apiBaseUrl()}/auth/csrf/`, {
+    credentials: "include",
+  })
+}
+
+export async function refreshSession() {
+  refreshPromise ??= apiRequest<SessionResponse>(
+    "/auth/refresh/",
+    { method: "POST" },
+    { auth: false, refreshOnUnauthorized: false, csrf: true },
+  ).finally(() => {
+    refreshPromise = null
+  })
+
+  const session = await refreshPromise
+  setAuthTokens(session.access)
+  return session
+}
+
+export async function logoutSession() {
+  try {
+    await apiRequest<void>(
+      "/auth/logout/",
+      { method: "POST" },
+      { auth: false, refreshOnUnauthorized: false, csrf: true },
+    )
+  } finally {
+    clearAuthTokens()
+  }
 }
 
 function errorMessage(data: unknown, fallback: string) {
@@ -44,22 +95,31 @@ function errorMessage(data: unknown, fallback: string) {
   return fallback
 }
 
-export async function apiRequest<T>(path: string, init: RequestInit = {}, options: { auth?: boolean } = {}) {
+async function request<T>(path: string, init: RequestInit, options: ApiRequestOptions) {
   const headers = new Headers(init.headers)
   const isFormData = init.body instanceof FormData
+  const method = init.method ?? "GET"
 
   if (!isFormData && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json")
   }
 
-  if (options.auth !== false) {
-    const token = getAccessToken()
+  if (options.auth !== false && accessToken) {
+    headers.set("Authorization", `Bearer ${accessToken}`)
+  }
+
+  if (options.csrf && isUnsafeMethod(method)) {
+    let token = csrfToken()
+    if (!token) {
+      await ensureCsrfCookie()
+      token = csrfToken()
+    }
     if (token) {
-      headers.set("Authorization", `Bearer ${token}`)
+      headers.set("X-CSRFToken", decodeURIComponent(token))
     }
   }
 
-  const response = await fetch(`${apiBaseUrl()}${path}`, { ...init, headers })
+  const response = await fetch(`${apiBaseUrl()}${path}`, { ...init, headers, credentials: "include" })
 
   if (response.status === 204) {
     return undefined as T
@@ -73,4 +133,27 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, option
   }
 
   return data as T
+}
+
+interface ApiRequestOptions {
+  auth?: boolean
+  csrf?: boolean
+  refreshOnUnauthorized?: boolean
+}
+
+export async function apiRequest<T>(path: string, init: RequestInit = {}, options: ApiRequestOptions = {}) {
+  try {
+    return await request<T>(path, init, options)
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401 && options.auth !== false && options.refreshOnUnauthorized !== false) {
+      try {
+        await refreshSession()
+      } catch {
+        clearAuthTokens()
+        throw error
+      }
+      return request<T>(path, init, { ...options, refreshOnUnauthorized: false })
+    }
+    throw error
+  }
 }

@@ -99,8 +99,8 @@ function AppRoutes() {
           onBack={() => navigate("/")}
           onForgotPassword={() => navigate("/forgot-password")}
           onSignUp={() => navigate("/sign-up")}
-          onSuccess={(user, access, refresh) => {
-            setAuthenticatedUser(user, access, refresh)
+          onSuccess={(user, access) => {
+            setAuthenticatedUser(user, access)
             navigate(getStatusPath(user.status))
           }}
         />
@@ -109,8 +109,8 @@ function AppRoutes() {
         <SignUpPage
           onBack={() => navigate("/")}
           onSignIn={() => navigate("/sign-in")}
-          onSuccess={(user, access, refresh) => {
-            setAuthenticatedUser(user, access, refresh)
+          onSuccess={(user, access) => {
+            setAuthenticatedUser(user, access)
             navigate(getStatusPath(user.status))
           }}
         />

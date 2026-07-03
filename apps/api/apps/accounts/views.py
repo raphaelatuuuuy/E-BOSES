@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
@@ -8,6 +9,9 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
+from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import OTPChallenge, ResidenceProof
@@ -52,16 +56,40 @@ def request_meta(request):
     }
 
 
+REFRESH_COOKIE_NAME = "eboses_refresh_token"
+
+
+def set_refresh_cookie(response, refresh_token):
+    response.set_cookie(
+        REFRESH_COOKIE_NAME,
+        str(refresh_token),
+        max_age=int(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds()),
+        httponly=True,
+        secure=settings.SESSION_COOKIE_SECURE,
+        samesite=settings.SESSION_COOKIE_SAMESITE or "Lax",
+        path="/api/auth/",
+    )
+
+
+def delete_refresh_cookie(response):
+    response.delete_cookie(
+        REFRESH_COOKIE_NAME,
+        path="/api/auth/",
+        samesite=settings.SESSION_COOKIE_SAMESITE or "Lax",
+    )
+
+
 def token_response(user, response_status=status.HTTP_200_OK):
     refresh = RefreshToken.for_user(user)
-    return Response(
+    response = Response(
         {
             "access": str(refresh.access_token),
-            "refresh": str(refresh),
             "user": UserSummarySerializer(user).data,
         },
         status=response_status,
     )
+    set_refresh_cookie(response, refresh)
+    return response
 
 
 class RegisterView(APIView):
@@ -121,6 +149,74 @@ class LoginView(APIView):
         user = serializer.validated_data["user"]
         create_audit_log("auth.login_success", actor=user, target_user=user, request_meta=request_meta(request))
         return token_response(user)
+
+
+@method_decorator(ensure_csrf_cookie, name="dispatch")
+class CSRFTokenView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        return Response({"detail": "CSRF cookie set."})
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class RefreshTokenView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_scope = "auth"
+
+    def post(self, request):
+        raw_refresh = request.COOKIES.get(REFRESH_COOKIE_NAME)
+        if not raw_refresh:
+            response = Response({"detail": "Refresh session expired."}, status=status.HTTP_401_UNAUTHORIZED)
+            delete_refresh_cookie(response)
+            return response
+
+        try:
+            refresh = RefreshToken(raw_refresh)
+            user_id = refresh.get("user_id")
+            access = str(refresh.access_token)
+            if settings.SIMPLE_JWT.get("ROTATE_REFRESH_TOKENS"):
+                if settings.SIMPLE_JWT.get("BLACKLIST_AFTER_ROTATION"):
+                    refresh.blacklist()
+        except TokenError:
+            response = Response({"detail": "Refresh session expired."}, status=status.HTTP_401_UNAUTHORIZED)
+            delete_refresh_cookie(response)
+            return response
+
+        from django.contrib.auth import get_user_model
+        user = get_user_model().objects.filter(pk=user_id).first()
+        if user is None or not user.is_active:
+            response = Response({"detail": "Refresh session expired."}, status=status.HTTP_401_UNAUTHORIZED)
+            delete_refresh_cookie(response)
+            return response
+
+        if settings.SIMPLE_JWT.get("ROTATE_REFRESH_TOKENS"):
+            refresh = RefreshToken.for_user(user)
+            access = str(refresh.access_token)
+
+        response = Response({"access": access, "user": UserSummarySerializer(user).data})
+        if settings.SIMPLE_JWT.get("ROTATE_REFRESH_TOKENS"):
+            set_refresh_cookie(response, refresh)
+        return response
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class LogoutView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        raw_refresh = request.COOKIES.get(REFRESH_COOKIE_NAME)
+        if raw_refresh:
+            try:
+                RefreshToken(raw_refresh).blacklist()
+            except TokenError:
+                pass
+        response = Response(status=status.HTTP_204_NO_CONTENT)
+        delete_refresh_cookie(response)
+        return response
 
 
 class MeView(APIView):
