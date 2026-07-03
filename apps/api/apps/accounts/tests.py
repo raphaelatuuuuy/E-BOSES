@@ -1,6 +1,9 @@
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.core.cache import cache
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -360,3 +363,80 @@ class AuthHardeningTests(APITestCase):
         self.assertTrue(user_has_role_permission(resident, "concerns.create"))
         self.assertFalse(user_has_role_permission(resident, "accounts.create_staff"))
         self.assertTrue(user_has_role_permission(official, "accounts.create_staff"))
+
+
+class AccountSecurityTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+
+    def test_password_reset_request_response_does_not_enumerate_accounts(self):
+        get_user_model().objects.create_user(
+            email="known-reset@example.com",
+            phone_number="+639331234567",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+
+        known_response = self.client.post(
+            "/api/auth/password-reset/request/",
+            {"identifier": "known-reset@example.com", "channel": "email"},
+            format="json",
+        )
+        unknown_response = self.client.post(
+            "/api/auth/password-reset/request/",
+            {"identifier": "unknown-reset@example.com", "channel": "email"},
+            format="json",
+        )
+
+        self.assertEqual(known_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(unknown_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(known_response.content, unknown_response.content)
+
+    @override_settings(
+        REST_FRAMEWORK={
+            "DEFAULT_AUTHENTICATION_CLASSES": (
+                "rest_framework_simplejwt.authentication.JWTAuthentication",
+            ),
+            "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
+            "DEFAULT_THROTTLE_CLASSES": (
+                "rest_framework.throttling.AnonRateThrottle",
+                "rest_framework.throttling.UserRateThrottle",
+                "rest_framework.throttling.ScopedRateThrottle",
+            ),
+            "DEFAULT_THROTTLE_RATES": {
+                "anon": "100/hour",
+                "user": "1000/hour",
+                "otp": "2/minute",
+                "auth": "10/minute",
+                "password_reset": "5/minute",
+            },
+        }
+    )
+    def test_phone_otp_request_is_throttled(self):
+        responses = [
+            self.client.post(
+                "/api/auth/register/phone-otp/request/",
+                {"phone_number": f"+63934{index:07d}"},
+                format="json",
+            )
+            for index in range(3)
+        ]
+
+        self.assertEqual(responses[0].status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(responses[1].status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(responses[2].status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_backend_password_policy_requires_frontend_character_classes(self):
+        weak_passwords = [
+            "lowercase1!",
+            "UPPERCASE1!",
+            "NoNumber!",
+            "NoSymbol1",
+        ]
+
+        for password in weak_passwords:
+            with self.subTest(password=password):
+                with self.assertRaises(DjangoValidationError):
+                    validate_password(password)
+
+        validate_password("Str0ng!Pass123")

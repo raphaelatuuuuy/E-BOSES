@@ -19,9 +19,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Read .env file at the repo root
 environ.Env.read_env(BASE_DIR.parent.parent / ".env")
 
-SECRET_KEY = env("DJANGO_SECRET_KEY", default="change-me")
-DEBUG = env.bool("DEBUG", default=True)
-ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
+ENVIRONMENT = env("DJANGO_ENV", default="local")
+IS_LOCAL_DEVELOPMENT = ENVIRONMENT == "local"
+
+if IS_LOCAL_DEVELOPMENT:
+    SECRET_KEY = env("DJANGO_SECRET_KEY", default="local-development-only-secret-key")
+    DEBUG = env.bool("DEBUG", default=True)
+    ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
+else:
+    SECRET_KEY = env("DJANGO_SECRET_KEY")
+    DEBUG = env.bool("DEBUG")
+    ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
 
 # Application definition
 ENABLE_GIS = env.bool("ENABLE_GIS", default=False)
@@ -122,7 +130,8 @@ CHANNEL_LAYERS = {
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator", "OPTIONS": {"min_length": 12}},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator", "OPTIONS": {"min_length": 8}},
+    {"NAME": "apps.accounts.validators.CharacterClassPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
@@ -179,13 +188,34 @@ SIMPLE_JWT = {
 }
 
 # CORS
-frontend_url = env("FRONTEND_URL", default="http://localhost:5173")
+frontend_url = env("FRONTEND_URL", default="http://localhost:5173") if IS_LOCAL_DEVELOPMENT else env("FRONTEND_URL")
 frontend_parts = urlsplit(frontend_url)
 frontend_origin = f"{frontend_parts.scheme}://{frontend_parts.netloc}" if frontend_parts.scheme and frontend_parts.netloc else frontend_url
 
-CORS_ALLOWED_ORIGINS = [
-    frontend_origin,
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
+CORS_ALLOWED_ORIGINS = (
+    [frontend_origin, "http://localhost:5173", "http://127.0.0.1:5173"]
+    if IS_LOCAL_DEVELOPMENT
+    else [frontend_origin]
+)
 CORS_ALLOW_CREDENTIALS = True
+
+# Deployment security
+SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=not IS_LOCAL_DEVELOPMENT)
+CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=not IS_LOCAL_DEVELOPMENT)
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = env.bool("CSRF_COOKIE_HTTPONLY", default=False)
+SESSION_COOKIE_SAMESITE = env("SESSION_COOKIE_SAMESITE", default="Lax")
+CSRF_COOKIE_SAMESITE = env("CSRF_COOKIE_SAMESITE", default="Lax")
+SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=not IS_LOCAL_DEVELOPMENT)
+SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=0 if IS_LOCAL_DEVELOPMENT else 31536000)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=not IS_LOCAL_DEVELOPMENT)
+SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=not IS_LOCAL_DEVELOPMENT)
+CSRF_TRUSTED_ORIGINS = env.list(
+    "CSRF_TRUSTED_ORIGINS",
+    default=[frontend_origin, "http://localhost:5173", "http://127.0.0.1:5173"] if IS_LOCAL_DEVELOPMENT else [],
+)
+EMAIL_OTP_PROVIDER = env("EMAIL_OTP_PROVIDER", default="development" if IS_LOCAL_DEVELOPMENT else "django_email")
+SMS_OTP_PROVIDER = env("SMS_OTP_PROVIDER", default="development" if IS_LOCAL_DEVELOPMENT else "disabled")
+SMS_OTP_WEBHOOK_URL = env("SMS_OTP_WEBHOOK_URL", default="")
+SMS_OTP_WEBHOOK_TOKEN = env("SMS_OTP_WEBHOOK_TOKEN", default="")
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@localhost")
