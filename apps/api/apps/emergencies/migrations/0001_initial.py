@@ -1,0 +1,16 @@
+# Generated manually for E-Boses emergency workflows.
+import uuid
+from django.conf import settings
+from django.db import migrations, models
+import django.db.models.deletion
+
+class Migration(migrations.Migration):
+    initial = True
+    dependencies = [migrations.swappable_dependency(settings.AUTH_USER_MODEL)]
+    operations = [
+        migrations.CreateModel(name='EmergencyAlert', fields=[('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)), ('barangay', models.CharField(max_length=120)), ('alert_type', models.CharField(choices=[('medical', 'Medical'), ('fire', 'Fire'), ('crime', 'Crime'), ('disaster', 'Disaster'), ('other', 'Other')], max_length=30)), ('description', models.TextField(blank=True)), ('photo_url', models.URLField(blank=True, max_length=500)), ('latitude', models.DecimalField(decimal_places=7, max_digits=10)), ('longitude', models.DecimalField(decimal_places=7, max_digits=10)), ('address_text', models.CharField(blank=True, max_length=255)), ('status', models.CharField(choices=[('sent', 'Sent'), ('dispatched', 'Dispatched'), ('acknowledged', 'Acknowledged'), ('responding', 'Responding'), ('resolved', 'Resolved'), ('cancelled', 'Cancelled')], default='sent', max_length=40)), ('created_at', models.DateTimeField(auto_now_add=True)), ('updated_at', models.DateTimeField(auto_now=True)), ('resident', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='emergency_alerts', to=settings.AUTH_USER_MODEL))], options={'ordering': ['-created_at']}),
+        migrations.CreateModel(name='EmergencyStatusHistory', fields=[('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)), ('old_status', models.CharField(max_length=40)), ('new_status', models.CharField(max_length=40)), ('note', models.TextField(blank=True)), ('created_at', models.DateTimeField(auto_now_add=True)), ('alert', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='status_history', to='emergencies.emergencyalert')), ('updated_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='emergency_status_updates', to=settings.AUTH_USER_MODEL))]),
+        migrations.CreateModel(name='AlertAcknowledgement', fields=[('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)), ('status', models.CharField(default='assigned', max_length=30)), ('acknowledged_at', models.DateTimeField(blank=True, null=True)), ('resolved_at', models.DateTimeField(blank=True, null=True)), ('outcome_note', models.TextField(blank=True)), ('created_at', models.DateTimeField(auto_now_add=True)), ('alert', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='acknowledgements', to='emergencies.emergencyalert')), ('responder', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='alert_acknowledgements', to=settings.AUTH_USER_MODEL))], options={'unique_together': {('alert', 'responder')}}),
+        migrations.AddIndex(model_name='emergencyalert', index=models.Index(fields=['barangay', 'status'], name='emergencie_baranga_01dc54_idx')),
+        migrations.AddIndex(model_name='emergencyalert', index=models.Index(fields=['resident', 'created_at'], name='emergencie_residen_7c5831_idx')),
+    ]

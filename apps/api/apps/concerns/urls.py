@@ -1,3 +1,8 @@
-from django.urls import path
+from rest_framework.routers import DefaultRouter
+from .views import ConcernCategoryViewSet, ConcernMediaViewSet, ConcernReportViewSet
 
-urlpatterns = []
+router = DefaultRouter()
+router.register("categories", ConcernCategoryViewSet, basename="concern-category")
+router.register("reports", ConcernReportViewSet, basename="concern-report")
+router.register("media", ConcernMediaViewSet, basename="concern-media")
+urlpatterns = router.urls

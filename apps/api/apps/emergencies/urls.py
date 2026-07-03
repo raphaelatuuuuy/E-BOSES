@@ -1,3 +1,6 @@
-from django.urls import path
+from rest_framework.routers import DefaultRouter
+from .views import EmergencyAlertViewSet
 
-urlpatterns = []
+router = DefaultRouter()
+router.register("alerts", EmergencyAlertViewSet, basename="emergency-alert")
+urlpatterns = router.urls
