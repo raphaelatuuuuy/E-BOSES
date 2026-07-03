@@ -1,7 +1,10 @@
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from .models import OTPChallenge, User
+from .services import validate_residence_proof_file
 
 
 class RegisterSerializer(serializers.Serializer):
@@ -27,6 +30,17 @@ class RegisterSerializer(serializers.Serializer):
     def validate_phone_number(self, value):
         if get_user_model().objects.filter(phone_number=value).exists():
             raise serializers.ValidationError("An account with this phone number already exists.")
+        return value
+
+    def validate_password(self, value):
+        try:
+            validate_password(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages)) from exc
+        return value
+
+    def validate_proof(self, value):
+        validate_residence_proof_file(value)
         return value
 
 
@@ -100,6 +114,13 @@ class AdminCreateUserSerializer(serializers.Serializer):
         ]
     )
 
+    def validate_password(self, value):
+        try:
+            validate_password(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages)) from exc
+        return value
+
     def create(self, validated_data):
         return get_user_model().objects.create_user(
             **validated_data,
@@ -121,3 +142,10 @@ class PasswordResetVerifySerializer(serializers.Serializer):
 class PasswordResetConfirmSerializer(serializers.Serializer):
     reset_token = serializers.CharField()
     password = serializers.CharField(min_length=8, max_length=128, write_only=True)
+
+    def validate_password(self, value):
+        try:
+            validate_password(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages)) from exc
+        return value

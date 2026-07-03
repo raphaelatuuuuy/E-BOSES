@@ -239,12 +239,124 @@ class AuthAPITests(APITestCase):
             ).exists()
         )
 
-    def test_password_reset_request_rejects_unknown_email(self):
+    def test_password_reset_request_returns_generic_response_for_unknown_email(self):
         response = self.client.post(
             "/api/auth/password-reset/request/",
             {"identifier": "unknown@example.com", "channel": "email"},
             format="json",
         )
 
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+class AuthHardeningTests(APITestCase):
+    def test_password_reset_request_uses_generic_response_for_unknown_identifier(self):
+        response = self.client.post(
+            "/api/auth/password-reset/request/",
+            {"identifier": "unknown-generic@example.com", "channel": "email"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+    def test_password_policy_rejects_short_registration_password(self):
+        phone_number = "+639261234567"
+        _, phone_code = create_phone_otp_challenge(phone_number)
+        verify_phone_otp_challenge(phone_number, phone_code)
+        proof = SimpleUploadedFile("proof.pdf", b"proof bytes", content_type="application/pdf")
+
+        response = self.client.post(
+            "/api/auth/register/",
+            {
+                "email": "weak@example.com",
+                "phone_number": phone_number,
+                "phone_otp_code": phone_code,
+                "password": "short123",
+                "first_name": "Juan",
+                "middle_name": "",
+                "last_name": "Santos",
+                "date_of_birth": "1998-01-01",
+                "address": "123 Barangay Street",
+                "barangay": "Pending",
+                "proof": proof,
+                "terms_version": "2026-07-02",
+                "privacy_version": "2026-07-02",
+            },
+            format="multipart",
+        )
+
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data["detail"], "No account found with that email.")
+        self.assertIn("password", response.data)
+
+    def test_phone_otp_cannot_be_verified_twice(self):
+        phone_number = "+639271234567"
+        _, phone_code = create_phone_otp_challenge(phone_number)
+        verify_phone_otp_challenge(phone_number, phone_code)
+
+        with self.assertRaisesMessage(Exception, "already been used"):
+            verify_phone_otp_challenge(phone_number, phone_code)
+
+    def test_registration_rejects_unsupported_proof_type(self):
+        phone_number = "+639281234567"
+        _, phone_code = create_phone_otp_challenge(phone_number)
+        verify_phone_otp_challenge(phone_number, phone_code)
+        proof = SimpleUploadedFile("proof.exe", b"not allowed", content_type="application/octet-stream")
+
+        response = self.client.post(
+            "/api/auth/register/",
+            {
+                "email": "bad-upload@example.com",
+                "phone_number": phone_number,
+                "phone_otp_code": phone_code,
+                "password": "Str0ng!Pass123",
+                "first_name": "Juan",
+                "middle_name": "",
+                "last_name": "Santos",
+                "date_of_birth": "1998-01-01",
+                "address": "123 Barangay Street",
+                "barangay": "Pending",
+                "proof": proof,
+                "terms_version": "2026-07-02",
+                "privacy_version": "2026-07-02",
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("proof", response.data)
+
+    def test_login_writes_audit_log(self):
+        user = get_user_model().objects.create_user(
+            email="audit-login@example.com",
+            phone_number="+639291234567",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+
+        response = self.client.post(
+            "/api/auth/login/",
+            {"identifier": "audit-login@example.com", "password": "Str0ng!Pass123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(user.audit_actions.filter(action="auth.login_success").exists())
+
+    def test_role_specific_permissions(self):
+        from apps.accounts.permissions import user_has_role_permission
+
+        resident = get_user_model().objects.create_user(
+            email="resident-perms@example.com",
+            phone_number="+639301234567",
+            password="Str0ng!Pass123",
+            role=get_user_model().Role.RESIDENT,
+        )
+        official = get_user_model().objects.create_user(
+            email="official-perms@example.com",
+            phone_number="+639311234567",
+            password="Str0ng!Pass123",
+            role=get_user_model().Role.BARANGAY_OFFICIAL,
+        )
+
+        self.assertTrue(user_has_role_permission(resident, "concerns.create"))
+        self.assertFalse(user_has_role_permission(resident, "accounts.create_staff"))
+        self.assertTrue(user_has_role_permission(official, "accounts.create_staff"))

@@ -3,6 +3,8 @@ from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 from django.utils import timezone
 
+from .storage import PrivateMediaStorage
+
 
 class UserManager(BaseUserManager):
     use_in_migrations = True
@@ -135,13 +137,13 @@ class PhoneOTPChallenge(models.Model):
 
 class ResidenceProof(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="residence_proofs")
-    file = models.FileField(upload_to="residence-proofs/%Y/%m/")
+    file = models.FileField(storage=PrivateMediaStorage(), upload_to="residence-proofs/%Y/%m/")
     original_filename = models.CharField(max_length=255)
     mime_type = models.CharField(max_length=120, blank=True)
     file_size = models.PositiveIntegerField()
     sha256_hash = models.CharField(max_length=64, db_index=True)
     access_level = models.CharField(max_length=32, default="restricted")
-    blurred_preview_file = models.FileField(upload_to="residence-proofs/previews/%Y/%m/", blank=True)
+    blurred_preview_file = models.FileField(storage=PrivateMediaStorage(), upload_to="residence-proofs/previews/%Y/%m/", blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
