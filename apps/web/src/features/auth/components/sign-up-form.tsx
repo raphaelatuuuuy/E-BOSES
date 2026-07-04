@@ -648,7 +648,7 @@ export function SignUpForm({
         </label>
         {errors.agreeToTerms ? <FieldError>{errors.agreeToTerms}</FieldError> : null}
         <div className="h-1" />
-        <p className="text-sm text-foreground">
+        <p className="text-sm text-foreground text-center">
           Already have an account?{" "}
           <button
             type="button"

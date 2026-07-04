@@ -112,6 +112,9 @@ export default function OtpVerificationPage({
             />
           </div>
         </div>
+        <div className="flex justify-center pt-10 pb-4">
+          <img src="/contents/footer-auth.png" alt="" className="w-full h-auto" aria-hidden="true" />
+        </div>
       </section>
       <AuthSidePanel />
     </main>

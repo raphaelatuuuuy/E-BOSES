@@ -36,7 +36,7 @@ export default function LandingPage() {
               Report concerns. Send emergency alerts.<br className="md:hidden" /> Stay connected with your community.
             </p>
             <div
-              className={`mt-8 transition-all duration-700 delay-300 md:invisible ${
+              className={`mt-8 transition-all duration-700 delay-300 ${
                 mounted ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"
               }`}
             >
@@ -65,7 +65,7 @@ export default function LandingPage() {
 
         {/* Image outside main on desktop only */}
         <div
-          className={`hidden md:block w-full transition-all duration-700 delay-500 md:-mt-30 ${
+          className={`hidden md:block w-full transition-all duration-700 delay-500 ${
             mounted ? "translate-y-0 opacity-100" : "translate-y-12 opacity-0"
           }`}
         >

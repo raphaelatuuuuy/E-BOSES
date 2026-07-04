@@ -31,6 +31,9 @@ export default function LoginPage({ onBack, onForgotPassword, onSignUp, onSucces
             <LoginForm onForgotPassword={onForgotPassword} onSignUp={onSignUp} onSuccess={onSuccess} />
           </div>
         </div>
+        <div className="flex justify-center pt-10 pb-4">
+          <img src="/contents/footer-auth.png" alt="" className="w-full h-auto" aria-hidden="true" />
+        </div>
       </section>
 
       <AuthSidePanel />

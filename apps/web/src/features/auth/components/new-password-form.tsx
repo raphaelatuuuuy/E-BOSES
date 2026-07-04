@@ -100,7 +100,7 @@ export function NewPasswordForm({
             {submitError}
           </FieldError>
         ) : null}
-        <p className="mt-4 text-sm text-foreground">
+        <p className="mt-4 text-sm text-foreground text-center">
           Remember your password?{" "}
           <button
             type="button"

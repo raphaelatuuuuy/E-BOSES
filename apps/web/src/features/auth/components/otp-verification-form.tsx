@@ -94,7 +94,7 @@ export function OtpVerificationForm({
           </FieldError>
         ) : null}
         {onBack ? (
-          <p className="mt-4 text-sm text-foreground">
+          <p className="mt-4 text-sm text-foreground text-center">
             Wrong email?{" "}
             <button
               type="button"

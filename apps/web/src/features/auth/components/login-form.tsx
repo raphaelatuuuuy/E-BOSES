@@ -31,10 +31,11 @@ export function LoginForm({
   return (
     <div className={cn("flex flex-col", className)} {...props}>
       <form className="flex flex-col gap-4" noValidate onSubmit={handleSubmit}>
-        <div className="flex flex-col items-start gap-0">
-          <h1 className="text-2xl font-bold">Welcome</h1>
+        <div className="flex flex-col gap-3 pt-4 md:pt-8">
+          <img src="/contents/logo-name.png" alt="Logo" className="w-48 h-auto md:w-64 self-center" />
+          <h1 className="text-2xl font-bold">Welcome back</h1>
           <p className="text-sm text-foreground">
-            Sign in to connect with your barangay
+            Report concerns, get alerts, and stay connected to your barangay
           </p>
         </div>
         <div className="h-1" />
@@ -85,7 +86,7 @@ export function LoginForm({
             {isSubmitting ? "Signing in" : "Sign in"}
           </Button>
         </Field>
-        <p className="mt-4 text-sm text-foreground">
+        <p className="mt-4 text-sm text-foreground text-center">
           Don&apos;t have an account?{" "}
           <button
             type="button"
