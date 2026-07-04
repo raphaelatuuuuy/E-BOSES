@@ -54,7 +54,7 @@ export function GreetingCard() {
       {/* Dark overlay */}
       <div className="absolute inset-0 bg-black/20" />
       {/* Glass card */}
-      <div className="relative z-10 mb-4 ml-4 max-w-lg rounded-2xl border border-white/30 bg-white/07 px-4 py-3 text-left shadow-[0_4px_30px_rgba(0,0,0,0.1)] backdrop-blur-[5px] md:mb-8 md:ml-8 md:px-8 md:py-6">
+      <div className="relative z-10 mx-4 mb-4 max-w-lg rounded-2xl border border-white/30 bg-white/07 px-5 py-3 text-left shadow-[0_4px_30px_rgba(0,0,0,0.1)] backdrop-blur-[5px] md:mx-8 md:mb-8 md:px-8 md:py-6">
         <h1 className="font-heading text-xl font-bold text-white md:text-3xl lg:text-4xl text-left">
           {greeting}, {user?.firstName ?? "Resident"}
         </h1>

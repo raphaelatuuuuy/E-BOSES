@@ -11,7 +11,7 @@ export function Topbar() {
 
   return (
     <>
-      <header className="flex h-16 items-center bg-background/95 px-4 md:relative md:gap-3 md:px-10">
+      <header className="flex h-16 items-center bg-background/95 px-6 md:relative md:gap-3 md:px-10">
         {/* Left: Search icon (mobile) */}
         <div className="md:hidden">
           <button

@@ -1,12 +1,14 @@
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.utils import timezone
+from datetime import timedelta
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import AuditLog, ResidenceProof
 from apps.accounts.services import sha256_file
 
-from .models import Concern, ConcernMedia
+from .models import Announcement, BarangayEvent, Concern, ConcernComment, ConcernMedia, ConcernStatusEvent, ConcernVote
 
 
 class PrivateMediaAccessTests(APITestCase):
@@ -90,3 +92,135 @@ class PrivateMediaAccessTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertNotIn(b"evidence.jpg", body)
         self.assertNotIn(str(self.media.file.name).encode("utf-8"), body)
+
+
+class ResidentDashboardAPITests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.resident = User.objects.create_user(
+            email="resident-dashboard@example.com",
+            phone_number="+639100000101",
+            password="pass",
+            status=User.Status.VERIFIED,
+        )
+        self.other = User.objects.create_user(
+            email="other-dashboard@example.com",
+            phone_number="+639100000102",
+            password="pass",
+            status=User.Status.VERIFIED,
+        )
+        self.client.force_authenticate(self.resident)
+
+    def test_resident_can_create_report_with_initial_status_event(self):
+        response = self.client.post(
+            "/api/concerns/",
+            {
+                "title": "Broken streetlight",
+                "description": "Madilim sa kanto.",
+                "category": "infrastructure",
+                "visibility": "community",
+                "address": "Bayan-Bayanan St.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        concern = Concern.objects.get(pk=response.data["id"])
+        self.assertEqual(concern.reporter, self.resident)
+        self.assertEqual(concern.status, Concern.Status.SUBMITTED)
+        self.assertEqual(concern.status_events.count(), 1)
+        self.assertEqual(concern.status_events.get().status, Concern.Status.SUBMITTED)
+
+    def test_private_reports_are_hidden_from_feed_and_non_owner_detail(self):
+        private = Concern.objects.create(
+            reporter=self.resident,
+            title="Private concern",
+            visibility=Concern.Visibility.PRIVATE,
+        )
+        Concern.objects.create(
+            reporter=self.resident,
+            title="Public concern",
+            visibility=Concern.Visibility.COMMUNITY,
+        )
+
+        feed_response = self.client.get("/api/concerns/feed/")
+        self.assertEqual(feed_response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["title"] for item in feed_response.data], ["Public concern"])
+
+        self.client.force_authenticate(self.other)
+        detail_response = self.client.get(f"/api/concerns/{private.pk}/")
+        self.assertEqual(detail_response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_upvote_is_persistent_and_unique_per_user(self):
+        concern = Concern.objects.create(
+            reporter=self.other,
+            title="Community concern",
+            visibility=Concern.Visibility.COMMUNITY,
+        )
+
+        first_response = self.client.post(f"/api/concerns/{concern.pk}/vote/", {"value": 1}, format="json")
+        second_response = self.client.post(f"/api/concerns/{concern.pk}/vote/", {"value": 1}, format="json")
+
+        self.assertEqual(first_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(second_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(ConcernVote.objects.filter(concern=concern, user=self.resident).count(), 1)
+        self.assertEqual(second_response.data["vote_count"], 1)
+
+    def test_comments_and_nested_replies_persist(self):
+        concern = Concern.objects.create(
+            reporter=self.other,
+            title="Community concern",
+            visibility=Concern.Visibility.COMMUNITY,
+        )
+
+        comment_response = self.client.post(
+            f"/api/concerns/{concern.pk}/comments/",
+            {"body": "I saw this too."},
+            format="json",
+        )
+        reply_response = self.client.post(
+            f"/api/concerns/{concern.pk}/comments/",
+            {"body": "Thanks for confirming.", "parent": comment_response.data["id"]},
+            format="json",
+        )
+
+        self.assertEqual(comment_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(reply_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(ConcernComment.objects.filter(concern=concern).count(), 2)
+        self.assertEqual(ConcernComment.objects.get(pk=reply_response.data["id"]).parent_id, comment_response.data["id"])
+
+    def test_announcements_events_responders_and_summary(self):
+        User = get_user_model()
+        Concern.objects.create(reporter=self.resident, title="Active", status=Concern.Status.IN_PROGRESS)
+        Concern.objects.create(reporter=self.resident, title="Done", status=Concern.Status.RESOLVED)
+        Announcement.objects.create(title="Published", body="Body", is_published=True, published_at=timezone.now())
+        Announcement.objects.create(title="Draft", body="Body", is_published=False)
+        BarangayEvent.objects.create(title="Clinic", detail="BP check", starts_at=timezone.now(), is_published=True)
+        BarangayEvent.objects.create(title="Draft event", starts_at=timezone.now(), is_published=False)
+        responder = User.objects.create_user(
+            email="responder@example.com",
+            phone_number="+639100000103",
+            password="pass",
+            role=User.Role.FIRST_RESPONDER,
+            status=User.Status.VERIFIED,
+            last_seen_at=timezone.now(),
+        )
+        User.objects.create_user(
+            email="stale-responder@example.com",
+            phone_number="+639100000104",
+            password="pass",
+            role=User.Role.FIRST_RESPONDER,
+            status=User.Status.VERIFIED,
+            last_seen_at=timezone.now() - timedelta(minutes=10),
+        )
+
+        summary = self.client.get("/api/concerns/summary/")
+        announcements = self.client.get("/api/announcements/")
+        events = self.client.get("/api/barangay-events/today/")
+        responders = self.client.get("/api/responders/active/")
+
+        self.assertEqual(summary.data["reports_submitted"], 2)
+        self.assertEqual(summary.data["reports_resolved"], 1)
+        self.assertEqual([item["title"] for item in announcements.data], ["Published"])
+        self.assertEqual([item["title"] for item in events.data], ["Clinic"])
+        self.assertEqual([item["id"] for item in responders.data], [responder.pk])

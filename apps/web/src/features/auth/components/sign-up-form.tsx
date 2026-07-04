@@ -134,9 +134,7 @@ export function SignUpForm({
             currentFile.lastModified === file.lastModified,
         )
         if (duplicateFile) {
-          invalidFiles.push(
-            `"${file.name}" was not added because it is already attached. Duplicate proof uploads are not allowed.`,
-          )
+          invalidFiles.push("Duplicate file upload.")
         }
         continue
       }
@@ -144,9 +142,7 @@ export function SignUpForm({
       const digest = await proofFileDigest(file)
       const duplicateFile = selectedFileDigests.get(digest)
       if (duplicateFile) {
-        invalidFiles.push(
-          `"${file.name}" was not added because it has the same content as "${duplicateFile.name}". Duplicate proof uploads are not allowed.`,
-        )
+        invalidFiles.push("Duplicate file upload.")
         continue
       }
 
@@ -160,8 +156,8 @@ export function SignUpForm({
       } catch (error) {
         invalidFiles.push(
           error instanceof ApiError
-            ? `"${file.name}" was not added. ${error.message}`
-            : `"${file.name}" was not added because it could not be checked.`,
+            ? error.message
+            : "File could not be checked.",
         )
         continue
       }
@@ -447,6 +443,7 @@ export function SignUpForm({
               id="phoneNumber"
               type="tel"
               value={values.phoneNumber}
+              disabled={phoneOtpVerified || phoneOtpCooldownSeconds > 0}
               onChange={(e) => {
                 const digits = e.target.value.replace(/\D/g, "")
                 const formatted = digits.startsWith("63") ? "+" + digits.slice(0, 12) : digits ? "+63" + digits.slice(0, 10) : ""

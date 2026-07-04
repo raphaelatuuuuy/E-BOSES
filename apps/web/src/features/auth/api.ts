@@ -18,11 +18,19 @@ export interface AuthUser {
   status: UserStatus
   is_staff: boolean
   is_superuser: boolean
+  is_onboarded: boolean
   email_verified_at: string | null
   phone_verified_at: string | null
   verified_at: string | null
+  last_seen_at?: string | null
+  date_joined?: string
   firstName?: string
   lastName?: string
+  full_name?: string
+  address?: string
+  barangay?: string
+  date_of_birth?: string | null
+  member_since?: string
 }
 
 export interface AuthResponse {
@@ -95,6 +103,10 @@ export function verifyPasswordReset(payload: { identifier: string; channel: "ema
     method: "POST",
     body: JSON.stringify(payload),
   }, { auth: false })
+}
+
+export function completeOnboard() {
+  return apiRequest<AuthUser>("/auth/onboard/complete/", { method: "POST" })
 }
 
 export function confirmPasswordReset(payload: { reset_token: string; password: string }) {

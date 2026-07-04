@@ -111,6 +111,14 @@ class LoginSerializer(serializers.Serializer):
 
 
 class UserSummarySerializer(serializers.ModelSerializer):
+    firstName = serializers.SerializerMethodField()
+    lastName = serializers.SerializerMethodField()
+    full_name = serializers.SerializerMethodField()
+    address = serializers.SerializerMethodField()
+    barangay = serializers.SerializerMethodField()
+    date_of_birth = serializers.SerializerMethodField()
+    member_since = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = (
@@ -123,7 +131,46 @@ class UserSummarySerializer(serializers.ModelSerializer):
             "is_superuser",
             "email_verified_at",
             "phone_verified_at",
+            "last_seen_at",
+            "is_onboarded",
+            "date_joined",
+            "firstName",
+            "lastName",
+            "full_name",
+            "address",
+            "barangay",
+            "date_of_birth",
+            "member_since",
         )
+
+    def profile(self, obj):
+        return getattr(obj, "resident_profile", None)
+
+    def get_firstName(self, obj):
+        profile = self.profile(obj)
+        return profile.first_name if profile else obj.first_name
+
+    def get_lastName(self, obj):
+        profile = self.profile(obj)
+        return profile.last_name if profile else obj.last_name
+
+    def get_full_name(self, obj):
+        return f"{self.get_firstName(obj)} {self.get_lastName(obj)}".strip() or obj.email
+
+    def get_address(self, obj):
+        profile = self.profile(obj)
+        return profile.address if profile else ""
+
+    def get_barangay(self, obj):
+        profile = self.profile(obj)
+        return profile.barangay if profile else ""
+
+    def get_date_of_birth(self, obj):
+        profile = self.profile(obj)
+        return profile.date_of_birth if profile else None
+
+    def get_member_since(self, obj):
+        return obj.date_joined.strftime("%b %Y")
 
 
 class OTPVerifySerializer(serializers.Serializer):

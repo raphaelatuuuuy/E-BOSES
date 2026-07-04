@@ -1,4 +1,5 @@
 import { useId, useState } from "react"
+import { toast } from "sonner"
 import {
   ImageIcon,
   MapPinIcon,
@@ -14,6 +15,8 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/components/popover"
 
+import { createConcern, type ConcernCategory } from "@/features/dashboard/api"
+import { ApiError } from "@/lib/api"
 import {
   Dialog,
   DialogHeader,
@@ -36,6 +39,13 @@ const colorMap: Record<string, { border: string; bg: string; text: string; iconB
   gray: { border: "border-gray-400", bg: "bg-gray-50", text: "text-gray-700", iconBg: "bg-gray-100" },
 }
 
+const concernCategoryMap: Record<string, ConcernCategory> = {
+  Infrastructure: "infrastructure",
+  Environment: "environment",
+  "Public Safety": "public_safety",
+  Others: "others",
+}
+
 export function CreateReportDialog({
   open: controlledOpen,
   onOpenChange,
@@ -50,12 +60,63 @@ export function CreateReportDialog({
     onOpenChange?.(v)
   }
   const [concern, setConcern] = useState("")
+  const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
+  const [address, setAddress] = useState("")
+  const [mediaFiles, setMediaFiles] = useState<File[]>([])
   const shareId = useId()
   const [shareOpen, setShareOpen] = useState(false)
   const [shareChoice, setShareChoice] = useState<"yes" | "no" | null>(null)
   const [showMap, setShowMap] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [error, setError] = useState("")
   const maxChars = 150
+
+  function resetForm() {
+    setConcern("")
+    setTitle("")
+    setDescription("")
+    setAddress("")
+    setMediaFiles([])
+    setShareChoice(null)
+    setShowMap(false)
+    setError("")
+  }
+
+  async function handleSubmit() {
+    setError("")
+    if (!concern) {
+      setError("Choose a concern type.")
+      return
+    }
+    if (!title.trim()) {
+      setError("Enter a subject.")
+      return
+    }
+
+    const formData = new FormData()
+    formData.append("title", title.trim())
+    formData.append("description", description.trim())
+    formData.append("category", concernCategoryMap[concern] ?? "others")
+    formData.append("visibility", shareChoice === "no" ? "private" : "community")
+    formData.append("address", address.trim())
+    for (const file of mediaFiles) {
+      formData.append("media", file)
+    }
+
+    setIsSubmitting(true)
+    try {
+      await createConcern(formData)
+      toast.success("Report submitted")
+      window.dispatchEvent(new Event("eboses:report-created"))
+      resetForm()
+      setOpen(false)
+    } catch (submitError) {
+      setError(submitError instanceof ApiError ? submitError.message : "Could not submit report. Try again.")
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
 
   return (
     <>
@@ -198,6 +259,8 @@ export function CreateReportDialog({
               <label className="text-sm font-medium text-foreground">Subject</label>
               <input
                 type="text"
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
                 placeholder="Brief summary of the issue"
                 className="w-full rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
               />
@@ -227,15 +290,42 @@ export function CreateReportDialog({
                 Add media <span className="font-normal text-muted-foreground">(optional)</span>
               </label>
               <div className="grid grid-cols-2 gap-2">
-                <button type="button" className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-card text-muted-foreground transition-colors hover:border-primary hover:text-primary">
+                <label className="flex aspect-square cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-card text-muted-foreground transition-colors hover:border-primary hover:text-primary">
+                  <input
+                    type="file"
+                    accept=".pdf,.png,.jpg,.jpeg"
+                    multiple
+                    className="sr-only"
+                    onChange={(event) => {
+                      setMediaFiles(Array.from(event.target.files ?? []).slice(0, 2))
+                      event.target.value = ""
+                    }}
+                  />
                   <ImageIcon className="size-5" />
-                  <span className="text-xs font-medium">Photo or Video</span>
-                </button>
-                <button type="button" className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-card text-muted-foreground transition-colors hover:border-primary hover:text-primary">
+                  <span className="text-xs font-medium">{mediaFiles.length > 0 ? `${mediaFiles.length} file(s)` : "Photo or PDF"}</span>
+                </label>
+                <label className="flex aspect-square cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-card text-muted-foreground transition-colors hover:border-primary hover:text-primary">
+                  <input
+                    type="file"
+                    accept=".pdf,.png,.jpg,.jpeg"
+                    multiple
+                    className="sr-only"
+                    onChange={(event) => {
+                      setMediaFiles((current) => [...current, ...Array.from(event.target.files ?? [])].slice(0, 2))
+                      event.target.value = ""
+                    }}
+                  />
                   <PlusIcon className="size-5" />
                   <span className="text-xs font-medium">Add more</span>
-                </button>
+                </label>
               </div>
+              {mediaFiles.length > 0 && (
+                <div className="space-y-1 text-xs text-muted-foreground">
+                  {mediaFiles.map((file) => (
+                    <p key={`${file.name}-${file.lastModified}`} className="truncate">{file.name}</p>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="flex flex-1 flex-col space-y-2">
@@ -244,6 +334,8 @@ export function CreateReportDialog({
                 <MapPinIcon className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
                 <input
                   type="text"
+                  value={address}
+                  onChange={(event) => setAddress(event.target.value)}
                   placeholder="Search or pin location"
                   className="w-full rounded-lg border border-border bg-card py-2.5 pl-10 pr-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
                 />
@@ -272,7 +364,9 @@ export function CreateReportDialog({
 
         {/* Footer */}
         <DialogFooter className="border-[#0a1a5e] bg-[#020c4e]">
-          <div className="flex w-full items-center justify-end gap-3">
+          <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            {error ? <p className="text-sm font-medium text-white">{error}</p> : <span />}
+            <div className="flex items-center justify-end gap-3">
             <button
               type="button"
               onClick={() => setOpen(false)}
@@ -282,10 +376,13 @@ export function CreateReportDialog({
             </button>
             <button
               type="button"
+              onClick={handleSubmit}
+              disabled={isSubmitting}
               className="rounded-lg bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]"
             >
-              Submit
+              {isSubmitting ? "Submitting" : "Submit"}
             </button>
+            </div>
           </div>
         </DialogFooter>
       </Dialog>

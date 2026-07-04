@@ -10,6 +10,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.utils.decorators import method_decorator
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -55,6 +56,12 @@ def request_meta(request):
         "ip_address": request.META.get("REMOTE_ADDR"),
         "user_agent": request.META.get("HTTP_USER_AGENT", ""),
     }
+
+
+def touch_last_seen(user):
+    if user and user.is_authenticated:
+        user.last_seen_at = timezone.now()
+        user.save(update_fields=["last_seen_at", "updated_at"])
 
 
 REFRESH_COOKIE_NAME = "eboses_refresh_token"
@@ -246,6 +253,16 @@ class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        touch_last_seen(request.user)
+        return Response(UserSummarySerializer(request.user).data)
+
+
+class OnboardCompleteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        request.user.is_onboarded = True
+        request.user.save(update_fields=["is_onboarded", "updated_at"])
         return Response(UserSummarySerializer(request.user).data)
 
 

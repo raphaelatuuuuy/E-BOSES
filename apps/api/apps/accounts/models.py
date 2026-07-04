@@ -58,6 +58,8 @@ class User(AbstractUser):
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.PENDING_OTP)
     email_verified_at = models.DateTimeField(null=True, blank=True)
     phone_verified_at = models.DateTimeField(null=True, blank=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    is_onboarded = models.BooleanField(default=False)
     updated_at = models.DateTimeField(auto_now=True)
 
     USERNAME_FIELD = "email"

@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { ChevronLeft, LoaderCircle } from "lucide-react"
 import { toast } from "sonner"
 
@@ -26,6 +26,8 @@ interface AccountOtpVerificationPageProps {
 const errorSlotClassName =
   "border-destructive shadow-[0_0_0_3px_rgba(220,38,38,0.15)] data-[active=true]:border-destructive data-[active=true]:shadow-[0_0_0_3px_rgba(220,38,38,0.15)]"
 
+const RESEND_COOLDOWN_SECONDS = 60
+
 export default function AccountOtpVerificationPage({
   onBack,
   onSuccess,
@@ -36,8 +38,27 @@ export default function AccountOtpVerificationPage({
   const [submitError, setSubmitError] = useState("")
   const [isVerifying, setIsVerifying] = useState(false)
   const [isResending, setIsResending] = useState(false)
+  const [cooldownExpiry, setCooldownExpiry] = useState<number | null>(null)
+  const [cooldownSeconds, setCooldownSeconds] = useState(0)
 
   usePageTitle("Verify Account")
+
+  useEffect(() => {
+    if (!cooldownExpiry) {
+      setCooldownSeconds(0)
+      return
+    }
+
+    function tick() {
+      const remaining = Math.max(0, Math.ceil((cooldownExpiry - Date.now()) / 1000))
+      setCooldownSeconds(remaining)
+      if (remaining === 0) setCooldownExpiry(null)
+    }
+
+    tick()
+    const timer = window.setInterval(tick, 1000)
+    return () => window.clearInterval(timer)
+  }, [cooldownExpiry])
 
   async function handleVerify() {
     if (code.length !== 6) {
@@ -51,7 +72,6 @@ export default function AccountOtpVerificationPage({
 
     try {
       await verifyOtp({ channel: "email", purpose: "registration", code })
-      toast.success("Email verified")
       onSuccess?.()
     } catch {
       setError("Invalid or expired code. Try again.")
@@ -61,10 +81,12 @@ export default function AccountOtpVerificationPage({
   }
 
   async function handleResend() {
+    if (isResending) return
     setIsResending(true)
     setSubmitError("")
     try {
       await resendOtp({ channel: "email", purpose: "registration" })
+      setCooldownExpiry(Date.now() + RESEND_COOLDOWN_SECONDS * 1000)
       toast.success("Code sent", {
         description: "A new verification code has been sent to your email.",
       })
@@ -76,18 +98,19 @@ export default function AccountOtpVerificationPage({
   }
 
   function renderCodeField() {
+    const cooldownActive = cooldownSeconds > 0
+
     return (
       <Field data-invalid={Boolean(error)}>
         <div className="flex items-start justify-between gap-3">
           <FieldLabel>Email code</FieldLabel>
           <button
             type="button"
-            disabled={isResending || isVerifying}
+            disabled={isResending || cooldownActive || isVerifying}
             onClick={handleResend}
             className="shrink-0 text-sm font-medium text-foreground underline underline-offset-2 disabled:cursor-not-allowed disabled:no-underline disabled:opacity-60"
           >
-            {isResending ? <LoaderCircle className="size-4 animate-spin" /> : null}
-            {isResending ? "Sending" : "Resend?"}
+            {cooldownActive ? `Resend (${cooldownSeconds}s)` : "Resend?"}
           </button>
         </div>
         <InputOTP

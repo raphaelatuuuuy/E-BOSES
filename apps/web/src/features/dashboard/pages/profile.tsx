@@ -27,10 +27,7 @@ import { Skeleton } from "@workspace/ui/components/skeleton"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { Topbar } from "@/features/dashboard/components/topbar"
 import { useAuthSession } from "@/features/auth/auth-session"
-
-// ---------------------------------------------------------------------------
-// Mock data – replace with real API data when backend is wired
-// ---------------------------------------------------------------------------
+import { getDashboardSummary, type DashboardSummary } from "@/features/dashboard/api"
 
 const accountItems = [
   {
@@ -80,14 +77,6 @@ const legalItems = [
     icon: HelpCircleIcon,
   },
 ]
-
-const mockStats = {
-  reportsSubmitted: 12,
-  reportsResolved: 8,
-  badges: 3,
-  memberSince: "Jan 2026",
-  barangay: "Marikina Heights",
-}
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -183,17 +172,48 @@ function ProfileSkeleton() {
 
 export default function ProfilePage() {
   usePageTitle("Profile")
-  const { user, signOut } = useAuthSession()
+  const { user, loading, signOut } = useAuthSession()
   const navigate = useNavigate()
 
   const [loaded, setLoaded] = useState(false)
+  const [summary, setSummary] = useState<DashboardSummary | null>(null)
+  const [loadError, setLoadError] = useState("")
 
   useEffect(() => {
-    const timer = setTimeout(() => setLoaded(true), 600)
-    return () => clearTimeout(timer)
-  }, [])
+    if (loading) return
+    let cancelled = false
 
-  const initials = user ? `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}` : "?"
+    async function loadProfile() {
+      setLoaded(false)
+      setLoadError("")
+      try {
+        const nextSummary = await getDashboardSummary()
+        if (!cancelled) setSummary(nextSummary)
+      } catch {
+        if (!cancelled) setLoadError("Could not load report summary.")
+      } finally {
+        if (!cancelled) setLoaded(true)
+      }
+    }
+
+    void loadProfile()
+    return () => {
+      cancelled = true
+    }
+  }, [loading])
+
+  const fullName = user?.full_name || `${user?.firstName ?? ""} ${user?.lastName ?? ""}`.trim() || "Resident"
+  const initials = fullName
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase() || "?"
+  const barangay = user?.barangay || "Marikina Heights"
+  const memberSince = user?.member_since || (user?.date_joined
+    ? new Intl.DateTimeFormat("en", { month: "short", year: "numeric" }).format(new Date(user.date_joined))
+    : "Recently")
 
   if (!loaded)
     return (
@@ -219,10 +239,10 @@ export default function ProfilePage() {
               {initials}
             </div>
 
-            {/* Name + role + meta */}
-            <div className="min-w-0 max-w-full pb-1 md:pb-2">
-              <h1 className="break-words text-xl font-bold leading-tight text-foreground md:text-2xl">
-                {user?.firstName ?? ""} {user?.lastName ?? ""}
+              {/* Name + role + meta */}
+              <div className="min-w-0 max-w-full pb-1 md:pb-2">
+                <h1 className="break-words text-xl font-bold leading-tight text-foreground md:text-2xl">
+                  {fullName}
               </h1>
               <div className="mt-1 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 sm:justify-start">
                 <span className="text-xs font-medium text-primary">
@@ -234,9 +254,22 @@ export default function ProfilePage() {
                 </span>
               </div>
               <p className="mt-1 break-words text-xs leading-relaxed text-muted-foreground">
-                {mockStats.barangay} &middot; Member since{" "}
-                {mockStats.memberSince}
+                {barangay} &middot; Member since {memberSince}
               </p>
+              {loadError ? (
+                <p className="mt-1 text-xs text-destructive">{loadError}</p>
+              ) : null}
+              <div className="mt-2 flex flex-wrap justify-center gap-2 text-xs sm:justify-start">
+                <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
+                  {summary?.reports_submitted ?? 0} submitted
+                </span>
+                <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
+                  {summary?.reports_resolved ?? 0} resolved
+                </span>
+                <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
+                  {summary?.reports_active ?? 0} active
+                </span>
+              </div>
             </div>
           </div>
 

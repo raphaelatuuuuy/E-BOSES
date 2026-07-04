@@ -16,44 +16,27 @@ import { usePageTitle } from "@/hooks/use-page-title"
 import { Topbar } from "@/features/dashboard/components/topbar"
 import { GreetingCard } from "@/features/dashboard/components/greeting-card"
 import { CalendarBasic } from "@/features/dashboard/components/calendar-basic"
+import {
+  getDashboardSummary,
+  listAnnouncements,
+  listTodayBarangayEvents,
+  type Announcement,
+  type BarangayEvent,
+  type Concern,
+} from "@/features/dashboard/api"
 
-const announcements = [
-  {
-    title: "Road clearing on Bayan-Bayanan Street",
-    description:
-      "Expect one-lane traffic while the maintenance team clears drainage debris.",
-    tag: "Advisory",
-    date: "Today, 9:00 AM",
-  },
-  {
-    title: "Community cleanup registration",
-    description:
-      "Residents may register at the barangay hall for this weekend's cleanup drive.",
-    tag: "Barangay",
-    date: "Tomorrow",
-  },
-  {
-    title: "Flood watch near low-lying streets",
-    description:
-      "Monitor official alerts and keep emergency contacts available during heavy rain.",
-    tag: "Safety",
-    date: "Jun 30, 2026",
-  },
-]
+function categoryLabel(value: string) {
+  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+}
 
-const barangayEvents = [
-  { title: "Garbage collection", detail: "Zone 1 & 2", time: "6:00 AM" },
-  { title: "Barangay health clinic", detail: "Free blood pressure check", time: "8:00 AM" },
-]
+function statusLabel(value: string) {
+  if (["submitted", "under_review", "in_progress", "appealed"].includes(value)) return "Active"
+  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+}
 
-const activeReports = [
-  {
-    id: "RPT-001",
-    title: "Pothole on Bayan-Bayanan St.",
-    status: "Active",
-    detail: "Infrastructure · submitted Jun 28, 2026",
-  },
-]
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(new Date(value))
+}
 
 function HomeSkeleton() {
   return (
@@ -87,10 +70,39 @@ function HomeSkeleton() {
 export default function HomePage() {
   usePageTitle("Home")
   const [loaded, setLoaded] = useState(false)
+  const [announcements, setAnnouncements] = useState<Announcement[]>([])
+  const [barangayEvents, setBarangayEvents] = useState<BarangayEvent[]>([])
+  const [activeReports, setActiveReports] = useState<Concern[]>([])
+  const [error, setError] = useState("")
 
   useEffect(() => {
-    const timer = setTimeout(() => setLoaded(true), 600)
-    return () => clearTimeout(timer)
+    let cancelled = false
+    async function loadHome() {
+      setLoaded(false)
+      setError("")
+      try {
+        const [nextAnnouncements, nextEvents, summary] = await Promise.all([
+          listAnnouncements(),
+          listTodayBarangayEvents(),
+          getDashboardSummary(),
+        ])
+        if (cancelled) return
+        setAnnouncements(nextAnnouncements)
+        setBarangayEvents(nextEvents)
+        setActiveReports(summary.active_reports)
+      } catch {
+        if (!cancelled) setError("Could not load dashboard data.")
+      } finally {
+        if (!cancelled) setLoaded(true)
+      }
+    }
+    void loadHome()
+    function refresh() { void loadHome() }
+    window.addEventListener("eboses:report-created", refresh)
+    return () => {
+      cancelled = true
+      window.removeEventListener("eboses:report-created", refresh)
+    }
   }, [])
 
   if (!loaded)
@@ -104,7 +116,7 @@ export default function HomePage() {
   return (
     <div className="flex min-h-svh flex-col">
       <Topbar />
-      <div className="flex-1 p-6 md:p-10">
+      <div className="flex-1 overflow-x-hidden px-6 pb-6 md:px-10 md:pb-10">
         <GreetingCard />
         <div className="mt-6 grid gap-8 lg:grid-cols-5">
           {/* Left: Announcements column */}
@@ -125,6 +137,7 @@ export default function HomePage() {
             </div>
 
             <div className="flex flex-1 flex-col gap-3">
+              {error ? <p className="text-sm text-destructive">{error}</p> : null}
               {announcements.map((announcement) => (
                 <div key={announcement.title} className="rounded-lg border border-border bg-card p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)]">
                   <div className="flex items-start justify-between gap-3">
@@ -132,15 +145,20 @@ export default function HomePage() {
                       <p className="text-sm font-semibold text-foreground break-words">
                         {announcement.title}
                       </p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">{announcement.date}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">{announcement.date_label}</p>
                     </div>
                     <Badge variant="secondary" className="shrink-0">{announcement.tag}</Badge>
                   </div>
                   <p className="mt-2 text-sm leading-relaxed text-muted-foreground break-words">
-                    {announcement.description}
+                    {announcement.body}
                   </p>
                 </div>
               ))}
+              {announcements.length === 0 && !error ? (
+                <div className="rounded-lg border border-dashed border-border bg-card p-6 text-sm text-muted-foreground">
+                  No announcements yet.
+                </div>
+              ) : null}
             </div>
           </section>
 
@@ -169,9 +187,9 @@ export default function HomePage() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <CardTitle className="text-sm">{report.title}</CardTitle>
-                        <CardDescription className="text-xs">{report.detail}</CardDescription>
+                        <CardDescription className="text-xs">{categoryLabel(report.category)} · submitted {formatDate(report.created_at)}</CardDescription>
                       </div>
-                      <Badge className="bg-green-100 text-green-700 border-0">{report.status}</Badge>
+                      <Badge className="bg-green-100 text-green-700 border-0">{statusLabel(report.status)}</Badge>
                     </div>
                   </CardHeader>
                   <CardContent>
@@ -208,9 +226,12 @@ export default function HomePage() {
                       <p className="text-sm font-medium text-foreground">{event.title}</p>
                       <p className="text-xs text-muted-foreground">{event.detail}</p>
                     </div>
-                    <span className="shrink-0 text-xs font-medium text-foreground/70">{event.time}</span>
+                    <span className="shrink-0 text-xs font-medium text-foreground/70">{event.time_label}</span>
                   </div>
                 ))}
+                {barangayEvents.length === 0 ? (
+                  <div className="px-5 py-3 text-sm text-muted-foreground">No events today.</div>
+                ) : null}
               </div>
             </div>
 

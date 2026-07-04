@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from "react"
 import {
+  ArrowUpIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ChevronUpIcon,
   ClockIcon,
+  FileTextIcon,
+  GripHorizontalIcon,
   ImageIcon,
   MapPinIcon,
   Share2Icon,
-  ArrowUpIcon,
-  GripHorizontalIcon,
 } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
@@ -20,110 +21,22 @@ import {
   CardHeader,
   CardTitle,
 } from "@workspace/ui/components/card"
+import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { Skeleton } from "@workspace/ui/components/skeleton"
-import { usePageTitle } from "@/hooks/use-page-title"
+import {
+  listMyConcerns,
+  type Concern,
+  type ConcernCategory,
+  type ConcernStatus,
+  type ConcernStatusEvent,
+} from "@/features/dashboard/api"
 import { Topbar } from "@/features/dashboard/components/topbar"
+import { usePageTitle } from "@/hooks/use-page-title"
 
 const filters = ["All", "Active", "Resolved", "Rejected", "Appealed"] as const
 
-const sampleReports = [
-  {
-    id: "RPT-001",
-    title: "Pothole on Bayan-Bayanan St.",
-    status: "Active",
-    date: "Jun 28, 2026",
-    type: "Infrastructure",
-    update: "Queued for barangay engineering inspection.",
-    description: "Malaking butas sa kalsada malapit sa may pedestrian lane. Delikado lalo na sa gabi dahil walang ilaw. Ilang beses na pong may muntikang maaksidente.",
-    address: "Bayan-Bayanan St., Brgy. Marikina Heights",
-    daysAgo: 2,
-    upvotes: 12,
-    shared: true,
-    timeline: [
-      { status: "Submitted", time: "Jun 28, 8:15 AM", user: "You", done: true },
-      { status: "Under Review", time: "Jun 29, 9:00 AM", user: "Barangay Staff", done: true },
-      { status: "In Progress", time: "", user: "", done: false, current: true },
-      { status: "Resolved", time: "", user: "", done: false },
-    ],
-  },
-  {
-    id: "RPT-002",
-    title: "Flooding near Marikina River",
-    status: "Active",
-    date: "Jun 27, 2026",
-    type: "Environment",
-    update: "Forwarded to the disaster response desk for monitoring.",
-    description: "Mataas na ang tubig sa ilog malapit sa may Riverside. Need po ng monitoring lalo na kung uulan pa.",
-    address: "Riverside St., Brgy. Marikina Heights",
-    daysAgo: 3,
-    upvotes: 24,
-    shared: true,
-    timeline: [
-      { status: "Submitted", time: "Jun 27, 10:30 AM", user: "You", done: true },
-      { status: "Under Review", time: "Jun 28, 1:00 PM", user: "Barangay Staff", done: true },
-      { status: "In Progress", time: "Jun 29, 8:00 AM", user: "BDRRMO", done: true },
-      { status: "Resolved", time: "", user: "", done: false, current: true },
-    ],
-  },
-  {
-    id: "RPT-003",
-    title: "Broken streetlight on J.P. Rizal",
-    status: "Resolved",
-    date: "Jun 20, 2026",
-    type: "Infrastructure",
-    update: "Streetlight replacement was completed by maintenance.",
-    description: "Sirado ang poste ng ilaw sa may kanto ng J.P. Rizal at Bayan-Bayanan. Madilim sa gabi at delikado sa mga naglalakad.",
-    address: "J.P. Rizal St., Brgy. Marikina Heights",
-    daysAgo: 10,
-    upvotes: 8,
-    shared: false,
-    timeline: [
-      { status: "Submitted", time: "Jun 20, 6:00 PM", user: "You", done: true },
-      { status: "Under Review", time: "Jun 21, 8:30 AM", user: "Barangay Staff", done: true },
-      { status: "In Progress", time: "Jun 22, 9:00 AM", user: "Maintenance", done: true },
-      { status: "Resolved", time: "Jun 25, 4:00 PM", user: "Barangay Staff", done: true },
-    ],
-  },
-  {
-    id: "RPT-004",
-    title: "Noise complaint - construction",
-    status: "Rejected",
-    date: "Jun 15, 2026",
-    type: "Public Safety",
-    update: "Rejected because the reported work had a valid permit.",
-    description: "Maingay po ang construction sa kabilang kalsada simula alas-5 ng umaga. Hindi po makatulog ang mga residente.",
-    address: "Construction site, Bayan-Bayanan Ext., Brgy. Marikina Heights",
-    daysAgo: 15,
-    upvotes: 0,
-    shared: false,
-    timeline: [
-      { status: "Submitted", time: "Jun 15, 5:30 AM", user: "You", done: true },
-      { status: "Under Review", time: "Jun 15, 10:00 AM", user: "Barangay Staff", done: true },
-      { status: "Rejected", time: "Jun 16, 2:00 PM", user: "Barangay Staff", done: true },
-    ],
-  },
-  {
-    id: "RPT-005",
-    title: "Illegal dumping in vacant lot",
-    status: "Appealed",
-    date: "Jun 10, 2026",
-    type: "Environment",
-    update: "Appeal submitted for barangay review.",
-    description: "May nagtatapon ng basura sa bakanteng lote sa may likod ng paaralan. Paano po ito maaaksyunan?",
-    address: "Vacant lot, School Rd., Brgy. Marikina Heights",
-    daysAgo: 20,
-    upvotes: 5,
-    shared: true,
-    timeline: [
-      { status: "Submitted", time: "Jun 10, 2:00 PM", user: "You", done: true },
-      { status: "Under Review", time: "Jun 11, 9:00 AM", user: "Barangay Staff", done: true },
-      { status: "Rejected", time: "Jun 14, 11:00 AM", user: "Barangay Staff", done: true },
-      { status: "Appealed", time: "Jun 16, 8:00 AM", user: "You", done: true, current: true },
-    ],
-  },
-]
+const activeStatuses: ConcernStatus[] = ["submitted", "under_review", "in_progress"]
 
 const statusColors: Record<string, string> = {
   Active: "bg-blue-100 text-blue-700 border-blue-200",
@@ -141,17 +54,164 @@ const timelineDotColors: Record<string, string> = {
   Appealed: "bg-orange-500",
 }
 
+const categoryLabels: Record<ConcernCategory, string> = {
+  infrastructure: "Infrastructure",
+  environment: "Environment",
+  public_safety: "Public Safety",
+  others: "Others",
+}
+
+function statusLabel(status: ConcernStatus) {
+  return status.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function statusGroup(status: ConcernStatus) {
+  if (activeStatuses.includes(status)) return "Active"
+  return statusLabel(status)
+}
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(value))
+}
+
+function formatEventTime(value: string) {
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value))
+}
+
+function daysAgo(value: string) {
+  const diffMs = Date.now() - new Date(value).getTime()
+  return Math.max(0, Math.floor(diffMs / 86400000))
+}
+
+function filterReports(reports: Concern[], filter: string) {
+  if (filter === "All") return reports
+  return reports.filter((report) => statusGroup(report.status) === filter)
+}
+
+function reportUpdate(report: Concern) {
+  return report.update_text || report.status_events.at(-1)?.note || "Your report was received."
+}
+
+function ReportMedia({ report }: { report: Concern }) {
+  const media = report.media[0]
+
+  if (!media) {
+    return (
+      <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-border bg-muted/50">
+        <div className="flex flex-col items-center gap-1 text-muted-foreground">
+          <ImageIcon className="size-5" />
+          <span className="text-xs">Photo evidence</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (media.mime_type.startsWith("image/")) {
+    return (
+      <img
+        src={media.preview_url}
+        alt={media.original_filename}
+        className="h-24 w-full rounded-lg border border-border object-cover"
+      />
+    )
+  }
+
+  return (
+    <a
+      href={media.raw_url}
+      target="_blank"
+      rel="noreferrer"
+      className="flex h-24 items-center justify-center gap-2 rounded-lg border border-border bg-muted/50 px-3 text-xs text-muted-foreground hover:text-primary"
+    >
+      <FileTextIcon className="size-5" />
+      <span className="truncate">{media.original_filename}</span>
+    </a>
+  )
+}
+
+function Timeline({ report }: { report: Concern }) {
+  const events: ConcernStatusEvent[] = report.status_events.length
+    ? report.status_events
+    : [
+        {
+          id: 0,
+          status: report.status,
+          note: reportUpdate(report),
+          actor: report.reporter,
+          created_at: report.created_at,
+        },
+      ]
+
+  return (
+    <div className="relative mt-2 space-y-0">
+      {events.map((step, i) => {
+        const label = statusLabel(step.status)
+        const isLast = i === events.length - 1
+        const dotColor = timelineDotColors[label] ?? "bg-muted-foreground"
+        return (
+          <div key={`${step.id}-${step.status}`} className="flex gap-2">
+            <div className="flex flex-col items-center">
+              <div className={cn("flex size-4 shrink-0 items-center justify-center rounded-full", dotColor, isLast && activeStatuses.includes(report.status) && "animate-pulse")} />
+              {!isLast && <div className="mt-0.5 w-0.5 flex-1 rounded-full bg-border" />}
+            </div>
+            <div className={cn("flex-1 pb-3", isLast && "pb-0")}>
+              <p className="text-xs font-medium text-foreground">{label}</p>
+              <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                <span>{formatEventTime(step.created_at)}</span>
+                {step.actor ? (
+                  <>
+                    <span>&middot;</span>
+                    <span>{step.actor.full_name}</span>
+                  </>
+                ) : null}
+              </div>
+              {step.note ? <p className="mt-0.5 text-xs text-muted-foreground">{step.note}</p> : null}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function ReportsPage() {
   usePageTitle("Reports")
   const filterRailRef = useRef<HTMLDivElement>(null)
   const [loaded, setLoaded] = useState(false)
   const [activeFilter, setActiveFilter] = useState<string>("All")
-  const [selectedReport, setSelectedReport] = useState<string | null>(null)
+  const [selectedReport, setSelectedReport] = useState<number | null>(null)
   const [timelineExpanded, setTimelineExpanded] = useState(true)
+  const [reports, setReports] = useState<Concern[]>([])
+  const [error, setError] = useState("")
+
+  async function loadReports() {
+    setLoaded(false)
+    setError("")
+    try {
+      setReports(await listMyConcerns())
+    } catch {
+      setError("Could not load your reports.")
+    } finally {
+      setLoaded(true)
+    }
+  }
 
   useEffect(() => {
-    const timer = setTimeout(() => setLoaded(true), 600)
-    return () => clearTimeout(timer)
+    void loadReports()
+    function refresh() {
+      void loadReports()
+    }
+    window.addEventListener("eboses:report-created", refresh)
+    return () => window.removeEventListener("eboses:report-created", refresh)
   }, [])
 
   if (!loaded)
@@ -181,12 +241,9 @@ export default function ReportsPage() {
       </div>
     )
 
-  const filtered =
-    activeFilter === "All"
-      ? sampleReports
-      : sampleReports.filter((report) => report.status === activeFilter)
+  const filtered = filterReports(reports, activeFilter)
   const selected =
-    sampleReports.find((report) => report.id === selectedReport) ?? filtered[0]
+    reports.find((report) => report.id === selectedReport) ?? filtered[0]
 
   function scrollFilterRail(direction: -1 | 1) {
     const rail = filterRailRef.current
@@ -224,7 +281,6 @@ export default function ReportsPage() {
         </div>
 
         <div className="mt-6 grid gap-6 lg:grid-cols-5">
-          {/* Left: Filters + Report list */}
           <section className="flex min-w-0 flex-col gap-4 lg:col-span-3">
             <div className="relative w-full min-w-0">
               <button
@@ -268,46 +324,55 @@ export default function ReportsPage() {
               </button>
             </div>
 
+            {error ? <p className="text-sm text-destructive">{error}</p> : null}
+
             <Card className="flex flex-col gap-0 overflow-hidden py-0">
               <div className="flex flex-col">
-                {filtered.map((report, i) => (
-                  <button
-                    key={report.id}
-                    type="button"
-                    onClick={() => setSelectedReport(report.id)}
-                    className={cn(
-                      "flex w-full items-center justify-between bg-card p-3 text-left transition-colors hover:bg-muted/50",
-                      selected?.id === report.id && "bg-primary/5",
-                      i < filtered.length - 1 && "border-b border-border/50",
-                    )}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="truncate text-sm font-semibold text-foreground">
-                          {report.title}
+                {filtered.map((report, i) => {
+                  const group = statusGroup(report.status)
+                  return (
+                    <button
+                      key={report.id}
+                      type="button"
+                      onClick={() => setSelectedReport(report.id)}
+                      className={cn(
+                        "flex w-full items-center justify-between bg-card p-3 text-left transition-colors hover:bg-muted/50",
+                        selected?.id === report.id && "bg-primary/5",
+                        i < filtered.length - 1 && "border-b border-border/50",
+                      )}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="truncate text-sm font-semibold text-foreground">
+                            {report.title}
+                          </p>
+                          <span className={cn("rounded-full border px-2 py-0.5 text-xs font-medium", statusColors[group])}>
+                            {group}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {report.tracking_id} &middot; {categoryLabels[report.category]} &middot; {formatDate(report.created_at)}
                         </p>
-                        <span className={cn("rounded-full border px-2 py-0.5 text-xs font-medium", statusColors[report.status])}>
-                          {report.status}
-                        </span>
                       </div>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        {report.id} &middot; {report.type} &middot; {report.date}
-                      </p>
-                    </div>
-                    <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" />
-                  </button>
-                ))}
+                      <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" />
+                    </button>
+                  )
+                })}
+                {filtered.length === 0 ? (
+                  <div className="p-8 text-center text-sm text-muted-foreground">
+                    No reports match this filter.
+                  </div>
+                ) : null}
               </div>
 
-              {/* Pagination */}
               <div className="flex items-center justify-between border-t border-border/50 px-3 py-2.5">
                 <p className="text-xs text-muted-foreground">
-                  Page 1 of 3
+                  Showing {filtered.length} of {reports.length} reports
                 </p>
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    className="flex size-7 items-center justify-center rounded-md border border-border bg-card text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-40"
+                    className="flex size-7 items-center justify-center rounded-md border border-border bg-card text-xs text-muted-foreground disabled:opacity-40"
                     disabled
                   >
                     <ChevronLeftIcon className="size-3.5" />
@@ -320,19 +385,8 @@ export default function ReportsPage() {
                   </button>
                   <button
                     type="button"
-                    className="flex size-7 items-center justify-center rounded-md border border-border bg-card text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary"
-                  >
-                    2
-                  </button>
-                  <button
-                    type="button"
-                    className="flex size-7 items-center justify-center rounded-md border border-border bg-card text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary"
-                  >
-                    3
-                  </button>
-                  <button
-                    type="button"
-                    className="flex size-7 items-center justify-center rounded-md border border-border bg-card text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+                    className="flex size-7 items-center justify-center rounded-md border border-border bg-card text-xs text-muted-foreground disabled:opacity-40"
+                    disabled
                   >
                     <ChevronRightIcon className="size-3.5" />
                   </button>
@@ -341,70 +395,59 @@ export default function ReportsPage() {
             </Card>
           </section>
 
-          {/* Right: Detail view */}
           <aside className="hidden flex-col lg:col-span-2 lg:sticky lg:top-10 lg:flex">
             {selected ? (
               <Card>
-                {/* Header with title + status */}
                 <CardHeader className="flex flex-row items-start justify-between gap-2 px-3 pb-1 pt-1.5">
                   <div className="min-w-0 flex-1">
                     <CardTitle className="text-sm">{selected.title}</CardTitle>
                     <p className="mt-0.5 text-xs text-muted-foreground">
                       <MapPinIcon className="mr-0.5 inline size-2.5 align-text-bottom" />
-                      {selected.address}
+                      {selected.address || selected.barangay}
                     </p>
                   </div>
-                  <span className={cn("shrink-0 self-start rounded-full border px-2 py-0.5 text-xs font-medium", statusColors[selected.status])}>
-                    {selected.status}
+                  <span className={cn("shrink-0 self-start rounded-full border px-2 py-0.5 text-xs font-medium", statusColors[statusGroup(selected.status)])}>
+                    {statusGroup(selected.status)}
                   </span>
                 </CardHeader>
 
                 <div className="border-t border-border/50" />
 
-                {/* Image placeholder */}
                 <div className="px-3 py-1">
-                  <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-border bg-muted/50">
-                    <div className="flex flex-col items-center gap-1 text-muted-foreground">
-                      <ImageIcon className="size-5" />
-                      <span className="text-xs">Photo evidence</span>
-                    </div>
-                  </div>
+                  <ReportMedia report={selected} />
                 </div>
 
                 <div className="mx-3 border-t border-border/50" />
 
-                {/* Description */}
                 <div className="px-3 py-1">
                   <p className="text-xs font-medium uppercase text-muted-foreground">Description</p>
                   <p className="mt-1 text-xs leading-relaxed text-foreground">{selected.description}</p>
                   <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
                     <ClockIcon className="size-3" />
-                    <span>Submitted {selected.daysAgo} days ago &middot; {selected.date}</span>
+                    <span>Submitted {daysAgo(selected.created_at)} days ago &middot; {formatDate(selected.created_at)}</span>
                   </div>
                 </div>
 
                 <div className="mx-3 border-t border-border/50" />
 
-                {/* Sharing status */}
                 <div className="flex items-center justify-between px-3 py-1">
-                  <div className="flex items-center gap-1.5 min-w-0">
+                  <div className="flex min-w-0 items-center gap-1.5">
                     <Share2Icon className="size-3.5 shrink-0 text-muted-foreground" />
                     <span className="truncate text-xs text-foreground">Shared to community feed</span>
-                    <Badge variant={selected.shared ? "default" : "secondary"} className="shrink-0 text-xs px-1 py-0">
-                      {selected.shared ? "Public" : "Private"}
+                    <Badge variant={selected.visibility === "community" ? "default" : "secondary"} className="shrink-0 text-xs px-1 py-0">
+                      {selected.visibility === "community" ? "Public" : "Private"}
                     </Badge>
                   </div>
-                  {selected.shared && (
+                  {selected.visibility === "community" && (
                     <div className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
                       <ArrowUpIcon className="size-3.5" />
-                      <span>{selected.upvotes}</span>
+                      <span>{selected.vote_count}</span>
                     </div>
                   )}
                 </div>
 
                 <div className="mx-3 border-t border-border/50" />
 
-                {/* Timeline */}
                 <div className="px-3 py-1">
                   <button
                     type="button"
@@ -414,37 +457,7 @@ export default function ReportsPage() {
                     <p className="text-xs font-semibold text-foreground">Status Timeline</p>
                     {timelineExpanded ? <ChevronUpIcon className="size-3.5 text-muted-foreground" /> : <ChevronDownIcon className="size-3.5 text-muted-foreground" />}
                   </button>
-                  {timelineExpanded && (
-                    <div className="relative mt-2 space-y-0">
-                      {selected.timeline.map((step, i) => {
-                        const isLast = i === selected.timeline.length - 1
-                        const dotColor = timelineDotColors[step.status] ?? "bg-muted-foreground"
-                        return (
-                          <div key={step.status} className="flex gap-2">
-                            <div className="flex flex-col items-center">
-                              <div className={cn("flex size-4 shrink-0 items-center justify-center rounded-full", step.done || step.current ? dotColor : "bg-muted-foreground/30", step.current && "animate-pulse")} />
-                              {!isLast && <div className="mt-0.5 w-0.5 flex-1 rounded-full bg-border" />}
-                            </div>
-                            <div className={cn("flex-1 pb-3", isLast && "pb-0")}>
-                              <p className={cn("text-xs font-medium", step.done ? "text-foreground" : "text-muted-foreground")}>
-                                {step.status}
-                              </p>
-                              {step.time && (
-                                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                                  <span>{step.time}</span>
-                                  <span>&middot;</span>
-                                  <span>{step.user}</span>
-                                </div>
-                              )}
-                              {step.current && !step.time && (
-                                <p className="mt-0.5 text-xs text-muted-foreground animate-pulse">{selected.update}</p>
-                              )}
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
+                  {timelineExpanded && <Timeline report={selected} />}
                 </div>
               </Card>
             ) : (
@@ -460,8 +473,7 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      {/* Mobile bottom sheet */}
-      {selectedReport && (
+      {selectedReport && selected ? (
         <div className="fixed inset-0 z-[200] md:hidden" onClick={() => setSelectedReport(null)}>
           <div className="absolute inset-0 bg-black/40" />
           <div
@@ -477,20 +489,15 @@ export default function ReportsPage() {
                   <p className="text-sm font-semibold text-foreground">{selected.title}</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     <MapPinIcon className="mr-0.5 inline size-2.5 align-text-bottom" />
-                    {selected.address}
+                    {selected.address || selected.barangay}
                   </p>
                 </div>
-                <span className={cn("shrink-0 self-start rounded-full border px-2 py-0.5 text-xs font-medium", statusColors[selected.status])}>
-                  {selected.status}
+                <span className={cn("shrink-0 self-start rounded-full border px-2 py-0.5 text-xs font-medium", statusColors[statusGroup(selected.status)])}>
+                  {statusGroup(selected.status)}
                 </span>
               </div>
 
-              <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-border bg-muted/50">
-                <div className="flex flex-col items-center gap-1 text-muted-foreground">
-                  <ImageIcon className="size-5" />
-                  <span className="text-xs">Photo evidence</span>
-                </div>
-              </div>
+              <ReportMedia report={selected} />
 
               <div className="mt-3 space-y-3">
                 <div>
@@ -500,60 +507,34 @@ export default function ReportsPage() {
 
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <ClockIcon className="size-3" />
-                  <span>Submitted {selected.daysAgo} days ago</span>
+                  <span>Submitted {daysAgo(selected.created_at)} days ago</span>
                 </div>
 
                 <div className="flex items-center justify-between border-t border-border/50 pt-2">
                   <div className="flex items-center gap-1.5">
                     <Share2Icon className="size-3.5 text-muted-foreground" />
                     <span className="text-xs text-foreground">Shared to feed</span>
-                    <Badge variant={selected.shared ? "default" : "secondary"} className="text-xs px-1 py-0">
-                      {selected.shared ? "Public" : "Private"}
+                    <Badge variant={selected.visibility === "community" ? "default" : "secondary"} className="text-xs px-1 py-0">
+                      {selected.visibility === "community" ? "Public" : "Private"}
                     </Badge>
                   </div>
-                  {selected.shared && (
+                  {selected.visibility === "community" && (
                     <div className="flex items-center gap-1 text-xs text-muted-foreground">
                       <ArrowUpIcon className="size-3.5" />
-                      <span>{selected.upvotes}</span>
+                      <span>{selected.vote_count}</span>
                     </div>
                   )}
                 </div>
 
                 <div className="border-t border-border/50 pt-2">
                   <p className="mb-2 text-xs font-semibold text-foreground">Status Timeline</p>
-                  <div className="space-y-0">
-                    {selected.timeline.map((step, i) => {
-                      const isLast = i === selected.timeline.length - 1
-                      const dotColor = timelineDotColors[step.status] ?? "bg-muted-foreground"
-                      return (
-                        <div key={step.status} className="flex gap-2">
-                          <div className="flex flex-col items-center">
-                            <div className={cn("flex size-3.5 shrink-0 items-center justify-center rounded-full", step.done || step.current ? dotColor : "bg-muted-foreground/30", step.current && "animate-pulse")} />
-                            {!isLast && <div className="mt-0.5 w-0.5 flex-1 rounded-full bg-border" />}
-                          </div>
-                          <div className="flex-1 pb-2.5">
-                            <p className={cn("text-xs font-medium", step.done ? "text-foreground" : "text-muted-foreground")}>
-                              {step.status}
-                            </p>
-                            {step.time && (
-                              <div className="text-xs text-muted-foreground">
-                                <span>{step.time} &middot; {step.user}</span>
-                              </div>
-                            )}
-                            {step.current && !step.time && (
-                              <p className="mt-0.5 text-xs text-muted-foreground animate-pulse">{selected.update}</p>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
+                  <Timeline report={selected} />
                 </div>
               </div>
             </div>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

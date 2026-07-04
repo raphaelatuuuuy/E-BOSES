@@ -13,6 +13,7 @@ import OtpVerificationPage from "@/features/auth/otp-verification"
 import SignInPage from "@/features/auth/sign-in"
 import SignUpPage from "@/features/auth/sign-up"
 import DashboardLayout from "@/features/dashboard/dashboard"
+import OnboardingPage from "@/features/onboarding/onboarding-page"
 import FeedPage from "@/features/dashboard/pages/feed"
 import HomePage from "@/features/dashboard/pages/home"
 import ProfilePage from "@/features/dashboard/pages/profile"
@@ -37,6 +38,10 @@ function ProtectedDashboard() {
 
   if (user.status !== "verified") {
     return <Navigate to={getStatusPath(user.status)} replace />
+  }
+
+  if (!user.is_onboarded) {
+    return <Navigate to="/onboarding" replace />
   }
 
   return <DashboardLayout />
@@ -69,6 +74,32 @@ function ProtectedPending() {
   return <AccountPendingPage />
 }
 
+function ProtectedOnboarding() {
+  const { loading, user } = useAuthSession()
+
+  if (loading) {
+    return (
+      <div className="flex min-h-svh items-center justify-center">
+        <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <Navigate to="/sign-in" replace />
+  }
+
+  if (user.status !== "verified") {
+    return <Navigate to={getStatusPath(user.status)} replace />
+  }
+
+  if (user.is_onboarded) {
+    return <Navigate to="/dashboard" replace />
+  }
+
+  return <OnboardingPage />
+}
+
 function AppRoutes() {
   const navigate = useNavigate()
   const { refreshUser, setAuthenticatedUser } = useAuthSession()
@@ -92,6 +123,9 @@ function AppRoutes() {
 
       {/* Account pending page */}
       <Route path="/account-pending" element={<ProtectedPending />} />
+
+      {/* Onboarding */}
+      <Route path="/onboarding" element={<ProtectedOnboarding />} />
 
       {/* Auth routes */}
       <Route path="/sign-in" element={
