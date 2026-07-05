@@ -9,9 +9,10 @@ interface DialogProps {
   onClose: () => void
   maxW?: string
   children: ReactNode
+  containerClassName?: string
 }
 
-export function Dialog({ open, onClose, maxW = "max-w-lg", children }: DialogProps) {
+export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerClassName }: DialogProps) {
   const overlayRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
 
@@ -37,7 +38,10 @@ export function Dialog({ open, onClose, maxW = "max-w-lg", children }: DialogPro
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[200] flex items-center justify-center motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200"
+      className={cn(
+        "fixed inset-0 flex items-center justify-center motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200",
+        containerClassName ?? "z-[200]",
+      )}
     >
       {/* Overlay */}
       <div
@@ -75,7 +79,7 @@ export function DialogHeader({ className, ...props }: React.ComponentProps<"div"
 export function DialogBody({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
-      className={cn("scrollbar-hide flex-1 overflow-y-auto px-6 py-5 space-y-5", className)}
+      className={cn("flex-1 overflow-y-auto px-6 py-5 space-y-5", className)}
       {...props}
     />
   )

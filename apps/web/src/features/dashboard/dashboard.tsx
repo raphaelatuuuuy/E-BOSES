@@ -1,33 +1,27 @@
-import { useEffect, useState } from "react"
-import { Outlet } from "react-router-dom"
-
+import * as React from "react"
+import { useSidebar } from "@/features/dashboard/components/sidebar-context"
 import { Sidebar } from "@/features/dashboard/components/sidebar"
-import { SidebarProvider, useSidebar } from "@/features/dashboard/components/sidebar-context"
+import { SidebarProvider } from "@/features/dashboard/components/sidebar-context"
 import { SOSButton } from "@/features/dashboard/components/sos-button"
 import { MobileNav } from "@/features/dashboard/components/mobile-nav"
-
-function useIsMobile() {
-  const [isMobile, setIsMobile] = useState(false)
-
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767px)")
-    setIsMobile(mq.matches)
-    function onChange(e: MediaQueryListEvent) { setIsMobile(e.matches) }
-    mq.addEventListener("change", onChange)
-    return () => mq.removeEventListener("change", onChange)
-  }, [])
-
-  return isMobile
-}
+import { Outlet } from "react-router-dom"
 
 function DashboardContent() {
   const { isOpen } = useSidebar()
-  const isMobile = useIsMobile()
+  const [isMobile, setIsMobile] = React.useState(window.innerWidth < 768)
+
+  React.useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768)
+    window.addEventListener("resize", onResize)
+    return () => window.removeEventListener("resize", onResize)
+  }, [])
 
   return (
     <div className="flex min-h-svh">
-      {/* Sidebar — hidden on mobile */}
-      {!isMobile && <Sidebar />}
+      {/* Sidebar — CSS-hidden on mobile, no conditional unmount */}
+      <div className="hidden md:block">
+        <Sidebar />
+      </div>
 
       <main
         className="flex-1 pb-20 transition-all duration-300 md:pb-0"
@@ -36,10 +30,11 @@ function DashboardContent() {
         <Outlet />
       </main>
 
-      {/* Mobile bottom nav */}
-      {isMobile && <MobileNav />}
+      {/* Mobile bottom nav — CSS-shown on mobile only */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-30">
+        <MobileNav />
+      </div>
 
-      {/* SOS button */}
       <SOSButton />
     </div>
   )

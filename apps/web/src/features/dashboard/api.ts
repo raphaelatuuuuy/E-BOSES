@@ -11,6 +11,9 @@ export interface PublicUser {
   role: string
   last_seen_at: string | null
   email?: string
+  avatar?: string
+  gender?: string
+  date_of_birth?: string
 }
 
 export interface ConcernMedia {
@@ -99,13 +102,21 @@ export function createConcern(formData: FormData) {
   })
 }
 
-export function listMyConcerns(status?: string) {
-  const query = status && status !== "all" ? `?status=${encodeURIComponent(status)}` : ""
+export function listMyConcerns(status?: string, dateFrom?: string, dateTo?: string) {
+  const params = new URLSearchParams()
+  if (status && status !== "all") params.set("status", status)
+  if (dateFrom) params.set("date_from", dateFrom)
+  if (dateTo) params.set("date_to", dateTo)
+  const query = params.toString() ? `?${params.toString()}` : ""
   return apiRequest<Concern[]>(`/concerns/mine/${query}`)
 }
 
-export function listFeedConcerns(category?: string) {
-  const query = category && category !== "all" ? `?category=${encodeURIComponent(category)}` : ""
+export function listFeedConcerns(category?: string, dateFrom?: string, dateTo?: string) {
+  const params = new URLSearchParams()
+  if (category && category !== "all") params.set("category", category)
+  if (dateFrom) params.set("date_from", dateFrom)
+  if (dateTo) params.set("date_to", dateTo)
+  const query = params.toString() ? `?${params.toString()}` : ""
   return apiRequest<Concern[]>(`/concerns/feed/${query}`)
 }
 

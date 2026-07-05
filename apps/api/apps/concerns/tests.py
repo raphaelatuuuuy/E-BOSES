@@ -71,11 +71,12 @@ class PrivateMediaAccessTests(APITestCase):
             ).exists()
         )
 
-    def test_public_can_access_safe_concern_media_preview(self):
+    def test_public_can_access_community_image_concern_media_preview(self):
         response = self.client.get(f"/api/concerns/media/{self.media.pk}/preview/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn(b"E-BOSES SAFE PREVIEW", b"".join(response.streaming_content))
+        self.assertEqual(response["Content-Type"], "image/jpeg")
+        self.assertEqual(b"".join(response.streaming_content), b"raw evidence bytes")
 
     def test_public_cannot_access_private_concern_media_preview(self):
         self.concern.visibility = Concern.Visibility.PRIVATE
@@ -85,7 +86,10 @@ class PrivateMediaAccessTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_safe_preview_does_not_leak_uploaded_filename(self):
+    def test_non_image_preview_does_not_leak_uploaded_filename(self):
+        self.media.mime_type = "application/pdf"
+        self.media.save(update_fields=["mime_type"])
+
         response = self.client.get(f"/api/concerns/media/{self.media.pk}/preview/")
         body = b"".join(response.streaming_content)
 

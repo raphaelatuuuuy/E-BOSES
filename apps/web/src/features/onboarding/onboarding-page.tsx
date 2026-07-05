@@ -92,10 +92,8 @@ export default function OnboardingPage() {
   // Desktop last step and all other steps: image fills top, content below
   return (
     <div className="flex min-h-svh flex-col bg-white">
-      <div className="relative flex-1 md:flex-[4]">
-        <div className="md:absolute md:inset-0 md:flex md:items-center md:justify-center">
-          <img src={imgSrc} alt="" className="w-full object-cover md:h-full md:max-h-full md:max-w-full md:object-scale-down" />
-        </div>
+      <div className="relative flex-1 flex items-center justify-center md:flex-[5] md:py-8">
+        <img src={imgSrc} alt="" className="w-full md:max-h-screen md:w-auto md:max-w-full" />
       </div>
       <div className="flex flex-col items-center px-6 pb-16 pt-6 md:pb-8">
         {content}

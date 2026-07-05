@@ -376,6 +376,8 @@ def create_registration_profile(user, validated_data):
         date_of_birth=validated_data["date_of_birth"],
         address=validated_data["address"],
         barangay=validated_data.get("barangay") or "Pending",
+        gender=validated_data.get("gender", ""),
+        avatar=validated_data.get("avatar", ""),
     )
     proofs = []
     for proof_file in proof_files:

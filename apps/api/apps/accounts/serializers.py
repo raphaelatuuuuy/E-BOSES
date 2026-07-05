@@ -52,6 +52,8 @@ class RegisterSerializer(serializers.Serializer):
             f"{', '.join(sorted(ALLOWED_PROOF_EXTENSIONS))}; max size: {MAX_PROOF_FILE_SIZE} bytes."
         ),
     )
+    gender = serializers.ChoiceField(choices=["male", "female", "prefer_not_to_say"], allow_blank=True, required=False)
+    avatar = serializers.CharField(max_length=30, allow_blank=True, required=False)
     terms_version = serializers.CharField(max_length=32)
     privacy_version = serializers.CharField(max_length=32)
 
@@ -118,6 +120,8 @@ class UserSummarySerializer(serializers.ModelSerializer):
     barangay = serializers.SerializerMethodField()
     date_of_birth = serializers.SerializerMethodField()
     member_since = serializers.SerializerMethodField()
+    gender = serializers.SerializerMethodField()
+    avatar = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -141,6 +145,8 @@ class UserSummarySerializer(serializers.ModelSerializer):
             "barangay",
             "date_of_birth",
             "member_since",
+            "gender",
+            "avatar",
         )
 
     def profile(self, obj):
@@ -171,6 +177,28 @@ class UserSummarySerializer(serializers.ModelSerializer):
 
     def get_member_since(self, obj):
         return obj.date_joined.strftime("%b %Y")
+
+    def get_gender(self, obj):
+        profile = self.profile(obj)
+        return profile.gender if profile else ""
+
+    def get_avatar(self, obj):
+        profile = self.profile(obj)
+        if profile and profile.avatar:
+            return profile.avatar
+        # Compute default from gender + age
+        if profile and profile.gender and profile.gender != "prefer_not_to_say" and profile.date_of_birth:
+            from datetime import date
+            age = date.today().year - profile.date_of_birth.year
+            if age >= 55:
+                age_bucket = "senior"
+            elif age >= 30:
+                age_bucket = "middleaged"
+            else:
+                age_bucket = "young"
+            icon_type = "man" if profile.gender == "male" else "woman"
+            return f"{age_bucket}-{icon_type}"
+        return ""
 
 
 class OTPVerifySerializer(serializers.Serializer):

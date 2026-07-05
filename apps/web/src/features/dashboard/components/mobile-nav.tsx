@@ -74,7 +74,7 @@ export function MobileNav() {
       </nav>
 
       {/* Create Report dialog (controlled by nav button) */}
-      {createOpen && <CreateReportDialog open={createOpen} onOpenChange={setCreateOpen} />}
+      <CreateReportDialog open={createOpen} onOpenChange={setCreateOpen} />
     </>
   )
 }

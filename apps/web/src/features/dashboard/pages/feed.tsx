@@ -29,6 +29,7 @@ import {
   type Announcement,
   type Concern,
   type ConcernCategory,
+  type ConcernComment,
   type PublicUser,
 } from "@/features/dashboard/api"
 
@@ -80,12 +81,99 @@ function responderRoleLabel(value: string) {
 
 function Avatar({ user, index = 0 }: { user: PublicUser; index?: number }) {
   const online = Boolean(user.last_seen_at)
+  const avatarKey = user.avatar || (user.gender && user.gender !== "prefer_not_to_say" && user.date_of_birth
+    ? (() => {
+        const age = new Date().getFullYear() - new Date(user.date_of_birth!).getFullYear()
+        const bucket = age >= 55 ? "senior" : age >= 30 ? "middleaged" : "young"
+        const icon = user.gender === "male" ? "man" : "woman"
+        return `${bucket}-${icon}`
+      })()
+    : "")
+  // Use user.id for deterministic color instead of index
+  const colorIdx = user.id % avatarColors.length
   return (
-    <div className="relative">
-      <div className={cn("flex size-10 items-center justify-center rounded-full text-sm font-bold", online ? avatarColors[index % avatarColors.length] : avatarGrey)}>
-        {user.initials}
+    <div className="relative inline-flex shrink-0 self-start overflow-visible">
+      <div className={cn("flex size-10 items-center justify-center overflow-hidden rounded-full text-sm font-bold", online ? avatarColors[colorIdx] : avatarGrey)}>
+        {avatarKey ? <img src={`/contents/${avatarKey}.png`} alt="" className="h-full w-full scale-125 object-cover" /> : user.initials}
       </div>
-      <span className={cn("absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card", online ? "bg-primary" : "bg-muted-foreground/50")} />
+      <span className={cn("absolute bottom-0 right-0 z-10 size-3 translate-x-1/4 translate-y-1/4 rounded-full border-2 border-card", online ? "bg-primary" : "bg-muted-foreground/50")} />
+    </div>
+  )
+}
+
+function CommentItem({
+  postId,
+  comment,
+  depth = 0,
+  expandedReplies,
+  replyInputs,
+  onToggleReply,
+  onReplyInputChange,
+  onSubmitReply,
+}: {
+  postId: number
+  comment: ConcernComment
+  depth?: number
+  expandedReplies: Set<string>
+  replyInputs: Record<string, string>
+  onToggleReply: (key: string) => void
+  onReplyInputChange: (key: string, value: string) => void
+  onSubmitReply: (postId: number, parentId: number, key: string) => void
+}) {
+  const replyKey = `${postId}-${comment.id}`
+  const isReplyExpanded = expandedReplies.has(replyKey)
+  const nested = depth > 0
+
+  return (
+    <div className={cn(nested && "border-l-2 border-border pl-3")}>
+      <div className="flex gap-2">
+        <Avatar user={comment.author} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="text-xs font-semibold text-foreground">{comment.author.full_name}</span>
+            <span className="text-xs text-muted-foreground">{timeAgo(comment.created_at)}</span>
+          </div>
+          <p className="break-words text-xs text-foreground">{comment.body}</p>
+          <button type="button" onClick={() => onToggleReply(replyKey)} className="mt-1 flex items-center gap-1 text-xs text-muted-foreground hover:text-primary">
+            <ReplyIcon className="size-3" />
+            Reply
+            {comment.replies.length > 0 && <span>&middot; {comment.replies.length} {comment.replies.length === 1 ? "reply" : "replies"}</span>}
+          </button>
+
+          {isReplyExpanded && (
+            <div className="mt-2 flex gap-2">
+              <Input
+                type="text"
+                value={replyInputs[replyKey] ?? ""}
+                onChange={(e) => onReplyInputChange(replyKey, e.target.value)}
+                placeholder={`Reply to ${comment.author.full_name}...`}
+                className="h-8 min-w-0 flex-1 text-xs"
+              />
+              <Button type="button" variant="ghost" size="icon" className="shrink-0 text-muted-foreground hover:text-primary" onClick={() => onSubmitReply(postId, comment.id, replyKey)}>
+                <SendIcon />
+              </Button>
+            </div>
+          )}
+
+          {comment.replies.length > 0 && (
+            <div className="mt-2 flex flex-col gap-2">
+              {comment.replies.map((reply) => (
+                <CommentItem
+                  key={reply.id}
+                  postId={postId}
+                  comment={reply}
+                  depth={depth + 1}
+                  expandedReplies={expandedReplies}
+                  replyInputs={replyInputs}
+                  onToggleReply={onToggleReply}
+                  onReplyInputChange={onReplyInputChange}
+                  onSubmitReply={onSubmitReply}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -136,7 +224,7 @@ export default function FeedPage() {
 
   if (!loaded)
     return (
-      <div className="flex min-h-svh flex-col">
+      <div className="flex flex-col">
         <Topbar />
         <div className="flex-1 p-4 md:p-10">
           <Skeleton className="h-28 w-full rounded-2xl" />
@@ -183,6 +271,10 @@ export default function FeedPage() {
     setExpandedReplies((current) => new Set(current).add(key))
   }
 
+  function updateReplyInput(key: string, value: string) {
+    setReplyInputs((prev) => ({ ...prev, [key]: value }))
+  }
+
   function toggleComments(postId: number) {
     setExpandedComments((prev) => {
       const next = new Set(prev)
@@ -212,22 +304,26 @@ export default function FeedPage() {
   }
 
   return (
-    <div className="flex min-h-svh flex-col">
+    <div className="flex flex-col">
       <Topbar />
 
       <div className="flex-1 p-4 md:p-10">
-        <div className="rounded-2xl bg-primary px-6 py-4">
-          <p className="text-xs text-[#020c4e]/70">Marikina Heights</p>
-          <h1 className="mt-1 font-heading text-2xl font-bold text-[#020c4e] md:text-3xl">Community Feed</h1>
+        {/* Header image */}
+        <div className="flex h-32 w-full items-center justify-center md:h-48">
+          <img src="/contents/feed-header.png" alt="" className="h-full w-full object-contain" />
+        </div>
+        <div className="mt-4 text-center">
+          <p className="text-xs text-muted-foreground">Marikina Heights</p>
+          <h1 className="font-heading text-2xl font-bold text-foreground md:text-3xl">Community Feed</h1>
         </div>
 
         <div className="mt-6 grid gap-6 lg:grid-cols-7">
           <section className="flex min-w-0 flex-col gap-4 lg:col-span-5">
+            {/* Category pills */}
             <div className="relative w-full min-w-0">
               <button type="button" aria-label="Scroll filters left" onClick={() => scrollFilterRail(-1)} className="absolute left-0 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden">
                 <ChevronLeftIcon className="size-4" />
               </button>
-
               <div ref={filterRailRef} className="scrollbar-hide mx-10 min-w-0 overflow-x-hidden lg:mx-0 lg:overflow-visible">
                 <div className="flex min-w-max flex-nowrap gap-2 lg:grid lg:min-w-0 lg:grid-cols-6">
                   {filters.map((f) => (
@@ -237,7 +333,6 @@ export default function FeedPage() {
                   ))}
                 </div>
               </div>
-
               <button type="button" aria-label="Scroll filters right" onClick={() => scrollFilterRail(1)} className="absolute right-0 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden">
                 <ChevronRightIcon className="size-4" />
               </button>
@@ -277,11 +372,12 @@ export default function FeedPage() {
                         </div>
                       </div>
 
-                      <Popover open={reportOpen === post.id} onOpenChange={(open) => { if (!open) { setReportOpen(null); setReportReason(""); setReportOther("") } else { setReportOpen(post.id) } }}>
+                      <div className="relative">
+                        <Popover open={reportOpen === post.id} onOpenChange={(open) => { if (!open) { setReportOpen(null); setReportReason(""); setReportOther("") } else { setReportOpen(post.id) } }}>
                         <PopoverTrigger className="text-muted-foreground hover:text-destructive">
                           <FlagIcon className="size-4" />
                         </PopoverTrigger>
-                        <PopoverContent className="w-72 right-0 left-auto top-full mt-1">
+                        <PopoverContent className="w-72 max-sm:w-[calc(100vw-2rem)] right-0 left-auto">
                           <div className="flex flex-col gap-3 p-4">
                             <div className="flex items-center gap-2">
                               <div className="flex size-7 items-center justify-center rounded-full bg-destructive/10">
@@ -306,26 +402,25 @@ export default function FeedPage() {
                           </div>
                         </PopoverContent>
                       </Popover>
+                      </div>
                     </div>
 
                     <p className="mt-3 text-sm leading-relaxed text-foreground">{post.description || post.title}</p>
 
+                    {/* Media: display image if available, nothing if none */}
                     {post.media.length > 0 ? (
-                      <div className="mt-3 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-                        {post.media[0].original_filename}
-                      </div>
-                    ) : (
-                      <div className="mt-3 flex h-40 items-center justify-center rounded-lg border border-dashed border-border bg-muted/30">
-                        <div className="flex flex-col items-center gap-1 text-muted-foreground">
-                          <ImageIcon className="size-6" />
-                          <span className="text-xs">No image attached</span>
+                      post.media[0].mime_type?.startsWith("image/") ? (
+                        <img src={post.media[0].preview_url} alt="" className="mt-3 max-h-96 w-full rounded-lg border border-border object-contain" />
+                      ) : (
+                        <div className="mt-3 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                          {post.media[0].original_filename}
                         </div>
-                      </div>
-                    )}
+                      )
+                    ) : null}
 
                     <div className="mt-3 flex items-center gap-3 border-t border-border pt-3">
-                      <div className="flex items-center gap-1 rounded-full border border-border px-2 py-0.5">
-                        <button type="button" onClick={() => void handleVote(post)} className={cn("rounded-full p-0.5 transition-colors", post.user_vote === 1 ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-primary")}>
+                      <div className={cn("flex items-center gap-1 rounded-full border px-2 py-0.5 transition-colors", post.user_vote === 1 ? "border-primary bg-primary/10" : "border-border")}>
+                        <button type="button" onClick={() => void handleVote(post)} className={cn("rounded-full p-0.5 transition-colors", post.user_vote === 1 ? "text-primary" : "text-muted-foreground hover:text-primary")}>
                           <ArrowUpIcon className="size-4" />
                         </button>
                         <span className={cn("min-w-[12px] text-center text-xs font-bold", post.user_vote === 1 ? "text-primary" : "text-foreground")}>{post.vote_count}</span>
@@ -339,55 +434,18 @@ export default function FeedPage() {
 
                     {isExpanded && (
                       <div className="mt-3 flex flex-col gap-3 border-t border-border pt-3">
-                        {post.comments.map((comment, commentIndex) => {
-                          const replyKey = `${post.id}-${comment.id}`
-                          const isReplyExpanded = expandedReplies.has(replyKey)
-                          return (
-                            <div key={comment.id}>
-                              <div className="flex gap-2">
-                                <Avatar user={comment.author} index={commentIndex + 1} />
-                                <div className="flex-1">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs font-semibold text-foreground">{comment.author.full_name}</span>
-                                    <span className="text-xs text-muted-foreground">{timeAgo(comment.created_at)}</span>
-                                  </div>
-                                  <p className="text-xs text-foreground">{comment.body}</p>
-                                  <button type="button" onClick={() => toggleReplies(replyKey)} className="mt-1 flex items-center gap-1 text-xs text-muted-foreground hover:text-primary">
-                                    <ReplyIcon className="size-3" />
-                                    Reply
-                                    {comment.replies.length > 0 && <span>&middot; {comment.replies.length} {comment.replies.length === 1 ? "reply" : "replies"}</span>}
-                                  </button>
-
-                                  {comment.replies.length > 0 && (
-                                    <div className="mt-2 flex flex-col gap-2 border-l-2 border-border pl-3">
-                                      {comment.replies.map((reply, replyIndex) => (
-                                        <div key={reply.id} className="flex gap-2">
-                                          <Avatar user={reply.author} index={replyIndex + 2} />
-                                          <div>
-                                            <div className="flex items-center gap-2">
-                                              <span className="text-xs font-semibold text-foreground">{reply.author.full_name}</span>
-                                              <span className="text-xs text-muted-foreground">{timeAgo(reply.created_at)}</span>
-                                            </div>
-                                            <p className="text-xs text-foreground">{reply.body}</p>
-                                          </div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-
-                                  {isReplyExpanded && (
-                                    <div className="mt-2 flex gap-2">
-                                      <Input type="text" value={replyInputs[replyKey] ?? ""} onChange={(e) => setReplyInputs((prev) => ({ ...prev, [replyKey]: e.target.value }))} placeholder="Write a reply..." className="h-8 flex-1 text-xs" />
-                                      <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" onClick={() => void submitReply(post.id, comment.id, replyKey)}>
-                                        <SendIcon />
-                                      </Button>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          )
-                        })}
+                        {post.comments.map((comment) => (
+                          <CommentItem
+                            key={comment.id}
+                            postId={post.id}
+                            comment={comment}
+                            expandedReplies={expandedReplies}
+                            replyInputs={replyInputs}
+                            onToggleReply={toggleReplies}
+                            onReplyInputChange={updateReplyInput}
+                            onSubmitReply={(targetPostId, parentId, key) => void submitReply(targetPostId, parentId, key)}
+                          />
+                        ))}
 
                         <div className="flex gap-2 pt-1">
                           <Input type="text" value={commentInputs[post.id] ?? ""} onChange={(e) => setCommentInputs((prev) => ({ ...prev, [post.id]: e.target.value }))} placeholder="Write a comment..." className="h-8 flex-1 text-xs" />

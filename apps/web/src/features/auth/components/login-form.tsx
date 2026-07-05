@@ -32,7 +32,6 @@ export function LoginForm({
     <div className={cn("flex flex-col", className)} {...props}>
       <form className="flex flex-col gap-4" noValidate onSubmit={handleSubmit}>
         <div className="flex flex-col gap-3 pt-4 md:pt-8">
-          <img src="/contents/logo-name.png" alt="Logo" className="w-48 h-auto md:w-64 self-center" />
           <h1 className="text-2xl font-bold">Welcome back</h1>
           <p className="text-sm text-foreground">
             Report concerns, get alerts, and stay connected to your barangay

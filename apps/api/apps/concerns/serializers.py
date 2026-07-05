@@ -26,10 +26,13 @@ class ConcernMediaUploadSerializer(serializers.Serializer):
 class PublicUserSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
     initials = serializers.SerializerMethodField()
+    avatar = serializers.SerializerMethodField()
+    gender = serializers.SerializerMethodField()
+    date_of_birth = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ("id", "full_name", "initials", "role", "last_seen_at")
+        fields = ("id", "full_name", "initials", "role", "last_seen_at", "avatar", "gender", "date_of_birth")
 
     def get_full_name(self, obj):
         profile = getattr(obj, "resident_profile", None)
@@ -42,6 +45,26 @@ class PublicUserSerializer(serializers.ModelSerializer):
         if profile:
             return f"{profile.first_name[:1]}{profile.last_name[:1]}".upper() or "?"
         return obj.email[:2].upper()
+
+    def get_avatar(self, obj):
+        profile = getattr(obj, "resident_profile", None)
+        if profile and profile.avatar:
+            return profile.avatar
+        if profile and profile.gender and profile.gender != "prefer_not_to_say" and profile.date_of_birth:
+            from datetime import date
+            age = date.today().year - profile.date_of_birth.year
+            bucket = "senior" if age >= 55 else "middleaged" if age >= 30 else "young"
+            icon = "man" if profile.gender == "male" else "woman"
+            return f"{bucket}-{icon}"
+        return ""
+
+    def get_gender(self, obj):
+        profile = getattr(obj, "resident_profile", None)
+        return profile.gender if profile else ""
+
+    def get_date_of_birth(self, obj):
+        profile = getattr(obj, "resident_profile", None)
+        return profile.date_of_birth if profile else None
 
 
 class ConcernMediaSerializer(serializers.ModelSerializer):

@@ -1,26 +1,61 @@
+import { useEffect, useState } from "react"
 import { useAuthPanelRotation } from "@/features/auth/hooks/use-auth-panel-rotation"
 
 export function AuthSidePanel() {
-  const { image, taglineLines } = useAuthPanelRotation()
+  const { slide, total, current, next } = useAuthPanelRotation()
+  const [animate, setAnimate] = useState(true)
+
+  useEffect(() => {
+    // Reset animation trigger — just a simple crossfade
+    setAnimate(false)
+    requestAnimationFrame(() => setAnimate(true))
+  }, [current])
 
   return (
-    <section
-      className="relative hidden h-full min-h-screen overflow-hidden lg:block"
-      aria-hidden="true"
-    >
-      <div
-        className="absolute inset-0 bg-cover bg-center bg-no-repeat animate-[kenBurns_20s_ease-in-out_infinite_alternate]"
-        style={{ backgroundImage: `url(${image})` }}
-      />
-      <div className="absolute inset-0 bg-gradient-to-t from-black/65 via-black/25 to-black/10 animate-gradient-shift" />
-      <div className="absolute bottom-0 left-0 right-0 p-8 md:p-10">
-        <h2 className="font-heading text-balance text-3xl leading-tight text-white md:text-4xl">
-          <span className="inline-block animate-fade-slide-up">{taglineLines[0]}</span>
-          <br />
-          <span className="inline-block animate-fade-slide-up" style={{ animationDelay: "0.15s" }}>
-            {taglineLines[1]}
-          </span>
+    <section className="relative hidden h-full min-h-screen overflow-hidden lg:flex lg:flex-col" aria-hidden="true">
+      {/* Image area */}
+      <div className="relative flex-1 overflow-hidden">
+        <div
+          className={`h-full w-full bg-contain bg-bottom bg-no-repeat transition-opacity duration-700 ${
+            animate ? "opacity-100" : "opacity-0"
+          }`}
+          style={{ backgroundImage: `url(${slide.image})` }}
+        />
+      </div>
+
+      {/* Text area */}
+      <div className="flex flex-col items-center gap-3 p-8 text-center md:p-10">
+        <h2
+          className={`font-heading text-balance text-3xl leading-tight text-foreground transition-all duration-700 md:text-4xl ${
+            animate ? "opacity-100" : "opacity-0"
+          }`}
+        >
+          {slide.headline}
         </h2>
+        <p
+          className={`text-base text-muted-foreground transition-all duration-700 ${
+            animate ? "opacity-100" : "opacity-0"
+          }`}
+        >
+          {slide.description}
+        </p>
+
+        {/* Dot indicators */}
+        <div className="mt-2 flex items-center gap-2">
+          {Array.from({ length: total }).map((_, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={next}
+              className={`h-1.5 rounded-full transition-all duration-500 ${
+                i === current
+                  ? "w-8 bg-[#ff8133]"
+                  : "w-1.5 bg-muted-foreground/30 hover:bg-muted-foreground/50"
+              }`}
+              aria-label={`Slide ${i + 1}`}
+            />
+          ))}
+        </div>
       </div>
     </section>
   )

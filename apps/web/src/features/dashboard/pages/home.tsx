@@ -1,18 +1,15 @@
-import { ChevronRight } from "lucide-react"
+import { ChevronRight, WrenchIcon, TreePineIcon, ShieldCheckIcon, FileQuestionIcon } from "lucide-react"
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 
 import { Badge } from "@workspace/ui/components/badge"
 import {
   Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from "@workspace/ui/components/card"
 
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { usePageTitle } from "@/hooks/use-page-title"
+import { useAuthSession } from "@/features/auth/auth-session"
 import { Topbar } from "@/features/dashboard/components/topbar"
 import { GreetingCard } from "@/features/dashboard/components/greeting-card"
 import { CalendarBasic } from "@/features/dashboard/components/calendar-basic"
@@ -27,6 +24,13 @@ import {
 
 function categoryLabel(value: string) {
   return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+const categoryIcon: Record<string, React.ComponentType<{ className?: string }>> = {
+  infrastructure: WrenchIcon,
+  environment: TreePineIcon,
+  public_safety: ShieldCheckIcon,
+  others: FileQuestionIcon,
 }
 
 function statusLabel(value: string) {
@@ -69,6 +73,7 @@ function HomeSkeleton() {
 
 export default function HomePage() {
   usePageTitle("Home")
+  const { loading: authLoading } = useAuthSession()
   const [loaded, setLoaded] = useState(false)
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [barangayEvents, setBarangayEvents] = useState<BarangayEvent[]>([])
@@ -76,6 +81,7 @@ export default function HomePage() {
   const [error, setError] = useState("")
 
   useEffect(() => {
+    if (authLoading) return // wait for auth session to settle
     let cancelled = false
     async function loadHome() {
       setLoaded(false)
@@ -107,14 +113,14 @@ export default function HomePage() {
 
   if (!loaded)
     return (
-      <div className="flex min-h-svh flex-col">
+      <div className="flex flex-col">
         <Topbar />
         <HomeSkeleton />
       </div>
     )
 
   return (
-    <div className="flex min-h-svh flex-col">
+    <div className="flex flex-col">
       <Topbar />
       <div className="flex-1 overflow-x-hidden px-6 pb-6 md:px-10 md:pb-10">
         <GreetingCard />
@@ -181,28 +187,32 @@ export default function HomePage() {
             </div>
 
             {activeReports.length > 0 ? (
-              activeReports.map((report) => (
-                <Card key={report.id} className="bg-card">
-                  <CardHeader>
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <CardTitle className="text-sm">{report.title}</CardTitle>
-                        <CardDescription className="text-xs">{categoryLabel(report.category)} · submitted {formatDate(report.created_at)}</CardDescription>
-                      </div>
-                      <Badge className="bg-green-100 text-green-700 border-0">{statusLabel(report.status)}</Badge>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
+              <Card className="bg-card overflow-hidden py-0 gap-0">
+                <div className="divide-y divide-border">
+                  {activeReports.map((report) => (
                     <Link
+                      key={report.id}
                       to="/dashboard/reports"
-                      className="inline-flex items-center gap-1 text-sm font-medium text-primary transition-colors hover:underline"
+                      className="flex items-center justify-between gap-3 px-5 py-4 transition-colors hover:bg-muted/50"
                     >
-                      Review status
-                      <ChevronRight className="size-3.5" />
+                      <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted">
+                        {(() => {
+                          const Icon = categoryIcon[report.category] ?? FileQuestionIcon
+                          return <Icon className="size-4 text-muted-foreground" />
+                        })()}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-foreground break-words">{report.title}</p>
+                        <div className="mt-0.5 flex items-center gap-2 flex-wrap">
+                          <span className="text-xs text-muted-foreground">{categoryLabel(report.category)} · {formatDate(report.created_at)}</span>
+                          <Badge className="bg-green-100 text-green-700 border-0 text-[10px]">{statusLabel(report.status)}</Badge>
+                        </div>
+                      </div>
+                      <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
                     </Link>
-                  </CardContent>
-                </Card>
-              ))
+                  ))}
+                </div>
+              </Card>
             ) : (
               <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border bg-card p-8 text-center">
                 <p className="text-sm font-medium text-foreground">No active reports</p>

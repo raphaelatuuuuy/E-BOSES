@@ -85,14 +85,14 @@ export default function SettingsPage() {
 
   if (!loaded)
     return (
-      <div className="flex min-h-svh flex-col">
+      <div className="flex flex-col">
         <Topbar />
         <SettingsSkeleton />
       </div>
     )
 
   return (
-    <div className="flex min-h-svh flex-col">
+    <div className="flex flex-col">
       <Topbar />
 
       <div className="flex-1 p-4 md:p-10">

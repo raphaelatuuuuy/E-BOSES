@@ -72,6 +72,11 @@ class User(AbstractUser):
 
 
 class ResidentProfile(models.Model):
+    class Gender(models.TextChoices):
+        MALE = "male", "Male"
+        FEMALE = "female", "Female"
+        PREFER_NOT_TO_SAY = "prefer_not_to_say", "Prefer not to say"
+
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="resident_profile")
     first_name = models.CharField(max_length=50)
     middle_name = models.CharField(max_length=50, blank=True)
@@ -79,6 +84,8 @@ class ResidentProfile(models.Model):
     date_of_birth = models.DateField()
     address = models.CharField(max_length=200)
     barangay = models.CharField(max_length=120, default="Pending")
+    gender = models.CharField(max_length=20, choices=Gender.choices, blank=True)
+    avatar = models.CharField(max_length=30, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

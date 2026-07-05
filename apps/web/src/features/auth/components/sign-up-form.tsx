@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { CheckIcon, FileImageIcon, FileTextIcon, InfoIcon, LoaderCircleIcon, XIcon } from "lucide-react"
+import { CheckIcon, FileImageIcon, FileTextIcon, InfoIcon, LoaderCircleIcon, XIcon, CheckCircleIcon } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Calendar } from "@workspace/ui/components/calendar"
@@ -336,6 +336,69 @@ export function SignUpForm({
           />
           {errors.address ? <FieldError>{errors.address}</FieldError> : null}
         </Field>
+
+        {/* Gender + Avatar */}
+        <div className="flex flex-col gap-3">
+          <FieldLabel>Gender</FieldLabel>
+          <div className="flex gap-3">
+            {["male", "female", "prefer_not_to_say"].map((g) => (
+              <button
+                key={g}
+                type="button"
+                onClick={() => {
+                  handleChange("gender", g)
+                  // auto-assign avatar based on gender + dateOfBirth
+                  if (values.dateOfBirth && g !== "prefer_not_to_say") {
+                    const birth = new Date(values.dateOfBirth)
+                    const age = new Date().getFullYear() - birth.getFullYear()
+                    const base = g === "male" ? "man" : "woman"
+                    const type = age >= 55 ? "senior" : age >= 30 ? "middleaged" : "young"
+                    handleChange("avatar", `${type}-${base}`)
+                  }
+                }}
+                className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-all ${
+                  values.gender === g
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-input bg-white text-muted-foreground hover:border-primary"
+                }`}
+              >
+                {g === "male" ? "Male" : g === "female" ? "Female" : "Prefer not to say"}
+              </button>
+            ))}
+          </div>
+          {errors.gender ? <FieldError>{errors.gender}</FieldError> : null}
+
+          {values.gender && values.gender !== "prefer_not_to_say" && (
+            <>
+              <FieldLabel>Avatar</FieldLabel>
+              <div className="flex flex-wrap gap-2">
+                {["young", "middleaged", "senior"].map((age) => {
+                  const icon = values.gender === "male" ? "man" : "woman"
+                  const key = `${age}-${icon}`
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => handleChange("avatar", key)}
+                      className={`relative size-16 overflow-hidden rounded-full border-2 transition-all ${
+                        values.avatar === key
+                          ? "border-primary shadow-[0_0_0_3px_rgba(255,129,51,0.3)]"
+                          : "border-border hover:border-primary/50"
+                      }`}
+                    >
+                      <img src={`/contents/${key}.png`} alt={key} className="h-full w-full object-cover" />
+                      {values.avatar === key && (
+                        <span className="absolute bottom-0 right-0">
+                          <CheckCircleIcon className="size-4 fill-primary text-white" />
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </div>
 
         <Field>
           <div className="flex items-center gap-1.5">

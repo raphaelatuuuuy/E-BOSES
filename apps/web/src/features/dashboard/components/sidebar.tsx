@@ -48,7 +48,15 @@ export function Sidebar() {
   }
 
   const initials = user ? `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}` : "?"
-  const displayName = user ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() : "User"
+  const avatarKey = user?.avatar || (user?.gender && user?.gender !== "prefer_not_to_say" && user?.date_of_birth
+    ? (() => {
+        const age = new Date().getFullYear() - new Date(user.date_of_birth!).getFullYear()
+        const bucket = age >= 55 ? "senior" : age >= 30 ? "middleaged" : "young"
+        const icon = user.gender === "male" ? "man" : "woman"
+        return `${bucket}-${icon}`
+      })()
+    : "")
+  const displayName = user ? `${(user.firstName ?? "").split(/\s+/)[0]} ${user.lastName ?? ""}`.trim() : "User"
   const displayRole = user?.role?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()) ?? "Resident"
 
   return (
@@ -68,8 +76,8 @@ export function Sidebar() {
             !isOpen && "justify-center px-0",
           )}
         >
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-background/10 text-sm font-bold text-background">
-            {initials}
+          <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-background/10 text-sm font-bold text-background">
+            {avatarKey ? <img src={`/contents/${avatarKey}.png`} alt="" className="h-full w-full scale-125 object-cover" /> : initials}
           </span>
           {isOpen && (
             <>

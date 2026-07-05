@@ -72,10 +72,14 @@ const HoverCardTrigger = React.forwardRef<
 })
 HoverCardTrigger.displayName = "HoverCardTrigger"
 
+interface HoverCardContentProps extends React.ComponentProps<"div"> {
+  side?: "top" | "bottom"
+}
+
 const HoverCardContent = React.forwardRef<
   HTMLDivElement,
-  React.ComponentProps<"div">
->(({ className, ...props }, ref) => {
+  HoverCardContentProps
+>(({ className, side = "top", ...props }, ref) => {
   const { open } = useHoverCard()
 
   if (!open) return null
@@ -85,7 +89,8 @@ const HoverCardContent = React.forwardRef<
       ref={ref}
       className={cn(
         "z-50 w-72 rounded-md border bg-popover p-4 text-popover-foreground shadow-md outline-none",
-        "absolute bottom-full left-1/2 mb-2 -translate-x-1/2",
+        "absolute left-1/2 -translate-x-1/2",
+        side === "bottom" ? "top-full mt-2" : "bottom-full mb-2",
         className,
       )}
       {...props}

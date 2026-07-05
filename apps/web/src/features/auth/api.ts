@@ -31,6 +31,8 @@ export interface AuthUser {
   barangay?: string
   date_of_birth?: string | null
   member_since?: string
+  gender?: string
+  avatar?: string
 }
 
 export interface AuthResponse {

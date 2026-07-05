@@ -25,6 +25,8 @@ const initialValues: SignUpValues = {
   phoneOtpCode: "",
   password: "",
   confirmPassword: "",
+  gender: "",
+  avatar: "",
   agreeToTerms: false,
 }
 
@@ -262,6 +264,8 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     formData.append("date_of_birth", values.dateOfBirth)
     formData.append("address", values.address)
     formData.append("barangay", "Pending")
+    if (values.gender) formData.append("gender", values.gender)
+    if (values.avatar) formData.append("avatar", values.avatar)
     for (const proofFile of values.proofOfResidency) {
       formData.append("proof", proofFile)
     }

@@ -32,6 +32,7 @@ import {
   type ConcernStatusEvent,
 } from "@/features/dashboard/api"
 import { Topbar } from "@/features/dashboard/components/topbar"
+import { ReportStatusDialog, type StatusDialogMode } from "@/features/dashboard/components/report-status-dialog"
 import { usePageTitle } from "@/hooks/use-page-title"
 
 const filters = ["All", "Active", "Resolved", "Rejected", "Appealed"] as const
@@ -183,6 +184,13 @@ function Timeline({ report }: { report: Concern }) {
   )
 }
 
+function statusDialogModeFor(status: ConcernStatus): StatusDialogMode | null {
+  if (status === "in_progress") return "assigned"
+  if (status === "resolved") return "resolved"
+  if (status === "rejected") return "rejected"
+  return null
+}
+
 export default function ReportsPage() {
   usePageTitle("Reports")
   const filterRailRef = useRef<HTMLDivElement>(null)
@@ -192,12 +200,14 @@ export default function ReportsPage() {
   const [timelineExpanded, setTimelineExpanded] = useState(true)
   const [reports, setReports] = useState<Concern[]>([])
   const [error, setError] = useState("")
+  const [statusDialogOpen, setStatusDialogOpen] = useState(false)
+  const [statusDialogMode, setStatusDialogMode] = useState<StatusDialogMode>("assigned")
 
   async function loadReports() {
     setLoaded(false)
     setError("")
     try {
-      setReports(await listMyConcerns())
+      setReports(await listMyConcerns(activeFilter !== "All" ? activeFilter.toLowerCase() : undefined))
     } catch {
       setError("Could not load your reports.")
     } finally {
@@ -212,11 +222,11 @@ export default function ReportsPage() {
     }
     window.addEventListener("eboses:report-created", refresh)
     return () => window.removeEventListener("eboses:report-created", refresh)
-  }, [])
+  }, [activeFilter])
 
   if (!loaded)
     return (
-      <div className="flex min-h-svh flex-col">
+      <div className="flex flex-col">
         <Topbar />
         <div className="flex-1 p-4 md:p-10">
           <Skeleton className="h-28 w-full rounded-2xl" />
@@ -269,57 +279,37 @@ export default function ReportsPage() {
   }
 
   return (
-    <div className="flex min-h-svh flex-col">
+    <div className="flex flex-col">
       <Topbar />
 
       <div className="flex-1 p-4 md:p-10">
-        <div className="rounded-2xl bg-primary px-6 py-4">
-          <p className="text-xs text-[#020c4e]/70">Marikina Heights</p>
-          <h1 className="font-heading text-2xl font-bold text-[#020c4e] md:text-3xl">
-            My Reports
-          </h1>
+        {/* Header image — no overlay, no crop */}
+        <div className="flex h-32 w-full items-center justify-center rounded-2xl md:h-48">
+          <img src="/contents/reports-header.png" alt="" className="h-full w-full object-contain" />
+        </div>
+        <div className="mt-4 text-center">
+          <p className="text-xs text-muted-foreground">Marikina Heights</p>
+          <h1 className="font-heading text-2xl font-bold text-foreground md:text-3xl">My Reports</h1>
         </div>
 
         <div className="mt-6 grid gap-6 lg:grid-cols-5">
           <section className="flex min-w-0 flex-col gap-4 lg:col-span-3">
+            {/* Status pills */}
             <div className="relative w-full min-w-0">
-              <button
-                type="button"
-                aria-label="Scroll filters left"
-                onClick={() => scrollFilterRail(-1)}
-                className="absolute left-0 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden"
-              >
+              <button type="button" aria-label="Scroll filters left" onClick={() => scrollFilterRail(-1)} className="absolute left-0 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden">
                 <ChevronLeftIcon className="size-4" />
               </button>
-
-              <div
-                ref={filterRailRef}
-                className="scrollbar-hide mx-10 min-w-0 overflow-x-hidden lg:mx-0 lg:overflow-visible"
-              >
+              <div ref={filterRailRef} className="scrollbar-hide mx-10 min-w-0 overflow-x-hidden lg:mx-0 lg:overflow-visible">
                 <div className="flex min-w-max flex-nowrap gap-2 lg:grid lg:min-w-0 lg:grid-cols-5">
                   {filters.map((filter) => (
-                    <Button
-                      key={filter}
-                      data-filter-option
-                      type="button"
-                      size="sm"
-                      variant={activeFilter === filter ? "default" : "outline"}
-                      aria-pressed={activeFilter === filter}
-                      onClick={() => setActiveFilter(filter)}
-                      className={cn("h-8 shrink-0 rounded-full px-3 text-xs whitespace-nowrap lg:w-full lg:min-w-0 lg:shrink", activeFilter !== filter && "bg-card")}
-                    >
+                    <Button key={filter} data-filter-option type="button" size="sm" variant={activeFilter === filter ? "default" : "outline"} aria-pressed={activeFilter === filter} onClick={() => setActiveFilter(filter)}
+                      className={cn("h-8 shrink-0 rounded-full px-3 text-xs whitespace-nowrap lg:w-full lg:min-w-0 lg:shrink", activeFilter !== filter && "bg-card")}>
                       {filter}
                     </Button>
                   ))}
                 </div>
               </div>
-
-              <button
-                type="button"
-                aria-label="Scroll filters right"
-                onClick={() => scrollFilterRail(1)}
-                className="absolute right-0 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden"
-              >
+              <button type="button" aria-label="Scroll filters right" onClick={() => scrollFilterRail(1)} className="absolute right-0 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden">
                 <ChevronRightIcon className="size-4" />
               </button>
             </div>
@@ -406,9 +396,14 @@ export default function ReportsPage() {
                       {selected.address || selected.barangay}
                     </p>
                   </div>
-                  <span className={cn("shrink-0 self-start rounded-full border px-2 py-0.5 text-xs font-medium", statusColors[statusGroup(selected.status)])}>
-                    {statusGroup(selected.status)}
-                  </span>
+                  {(() => {
+                    const dialogMode = statusDialogModeFor(selected.status)
+                    return dialogMode ? (
+                      <button type="button" onClick={() => { setStatusDialogMode(dialogMode); setStatusDialogOpen(true) }} className={cn("shrink-0 self-start rounded-full border px-2 py-0.5 text-xs font-medium transition-colors hover:opacity-80", statusColors[statusGroup(selected.status)])}>{statusGroup(selected.status)}</button>
+                    ) : (
+                      <span className={cn("shrink-0 self-start rounded-full border px-2 py-0.5 text-xs font-medium", statusColors[statusGroup(selected.status)])}>{statusGroup(selected.status)}</span>
+                    )
+                  })()}
                 </CardHeader>
 
                 <div className="border-t border-border/50" />
@@ -492,9 +487,14 @@ export default function ReportsPage() {
                     {selected.address || selected.barangay}
                   </p>
                 </div>
-                <span className={cn("shrink-0 self-start rounded-full border px-2 py-0.5 text-xs font-medium", statusColors[statusGroup(selected.status)])}>
-                  {statusGroup(selected.status)}
-                </span>
+                {(() => {
+                  const mobMode = statusDialogModeFor(selected.status)
+                  return mobMode ? (
+                    <button type="button" onClick={() => { setStatusDialogMode(mobMode); setStatusDialogOpen(true) }} className={cn("shrink-0 self-start rounded-full border px-2 py-0.5 text-xs font-medium transition-colors hover:opacity-80", statusColors[statusGroup(selected.status)])}>{statusGroup(selected.status)}</button>
+                  ) : (
+                    <span className={cn("shrink-0 self-start rounded-full border px-2 py-0.5 text-xs font-medium", statusColors[statusGroup(selected.status)])}>{statusGroup(selected.status)}</span>
+                  )
+                })()}
               </div>
 
               <ReportMedia report={selected} />
@@ -534,6 +534,15 @@ export default function ReportsPage() {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {selected ? (
+        <ReportStatusDialog
+          open={statusDialogOpen}
+          onOpenChange={setStatusDialogOpen}
+          report={selected}
+          mode={statusDialogMode}
+        />
       ) : null}
     </div>
   )

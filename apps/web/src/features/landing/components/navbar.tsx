@@ -62,7 +62,7 @@ export function Navbar() {
             </Link>
             <Link
               to="/sign-up"
-              className="inline-flex h-9 items-center justify-center rounded-full bg-[#ff8133] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#ff5003] active:scale-[0.97]"
+              className="inline-flex h-9 items-center justify-center rounded-full bg-[#ff8133] px-4 text-sm font-semibold text-white transition-all duration-300 hover:bg-[#ff5003] hover:scale-105 active:scale-[0.97]"
             >
               Sign up
             </Link>
@@ -86,7 +86,7 @@ export function Navbar() {
           {/* Top bar with logo + close */}
           <div className="flex h-20 items-center justify-between px-4">
             <Link to="/" className="shrink-0" onClick={closeMenu}>
-              <img src="/contents/logo.png" alt="E-Boses" className="h-14 w-auto object-contain" />
+              <img src="/contents/logo-name.png" alt="E-Boses" className="h-14 w-auto object-contain" />
             </Link>
             <button
               type="button"
@@ -148,7 +148,7 @@ export function Navbar() {
             <Link
               to="/sign-up"
               onClick={closeMenu}
-              className="inline-flex h-12 items-center justify-center rounded-full bg-[#ff8133] px-10 text-base font-semibold text-white transition-colors hover:bg-[#ff5003]"
+              className="inline-flex h-12 items-center justify-center rounded-full bg-[#ff8133] px-10 text-base font-semibold text-white transition-all duration-300 hover:bg-[#ff5003] hover:scale-105 active:scale-[0.97]"
             >
               Sign up
             </Link>

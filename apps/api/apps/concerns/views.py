@@ -139,6 +139,12 @@ class MyConcernListView(APIView):
                 queryset = queryset.filter(status__in=ACTIVE_STATUSES)
             else:
                 queryset = queryset.filter(status=status_filter)
+        date_from = request.query_params.get("date_from")
+        if date_from:
+            queryset = queryset.filter(created_at__date__gte=date_from)
+        date_to = request.query_params.get("date_to")
+        if date_to:
+            queryset = queryset.filter(created_at__date__lte=date_to)
         concerns = decorate_concerns(queryset, request.user)
         return Response(ConcernSerializer(concerns, many=True, context={"request": request}).data)
 
@@ -164,6 +170,12 @@ class ConcernFeedView(APIView):
         category = request.query_params.get("category")
         if category and category != "all":
             queryset = queryset.filter(category=category)
+        date_from = request.query_params.get("date_from")
+        if date_from:
+            queryset = queryset.filter(created_at__date__gte=date_from)
+        date_to = request.query_params.get("date_to")
+        if date_to:
+            queryset = queryset.filter(created_at__date__lte=date_to)
         concerns = decorate_concerns(queryset, request.user)
         return Response(ConcernSerializer(concerns, many=True, context={"request": request}).data)
 
@@ -296,5 +308,7 @@ class ConcernMediaPreviewView(APIView):
         media = get_object_or_404(ConcernMedia.objects.select_related("concern__reporter"), pk=pk)
         if media.concern.visibility == media.concern.Visibility.PRIVATE and not user_can_access_concern_media_raw(request.user, media):
             return Response({"detail": "You do not have permission to access this media."}, status=status.HTTP_403_FORBIDDEN)
+        if media.concern.visibility == media.concern.Visibility.COMMUNITY and media.mime_type.startswith("image/"):
+            return FileResponse(media.file.open("rb"), content_type=media.mime_type)
         preview = ensure_concern_media_preview(media)
         return FileResponse(preview.open("rb"), content_type="text/plain")
