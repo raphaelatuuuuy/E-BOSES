@@ -1,8 +1,8 @@
 import { useState } from "react"
 import { Link, useLocation } from "react-router-dom"
 import {
+  AlertTriangleIcon,
   BarChart3Icon,
-  CircleUserIcon,
   HomeIcon,
   PlusIcon,
   UsersIcon,
@@ -10,35 +10,54 @@ import {
 
 import { cn } from "@workspace/ui/lib/utils"
 import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
+import { useAuthSession } from "@/features/auth/auth-session"
 
 type NavItem = {
   label: string
   path: string | null
-  icon: typeof HomeIcon
+  icon?: typeof HomeIcon
   isCenter?: boolean
+  isAvatar?: boolean
 }
-
-const navItems: NavItem[] = [
-  { label: "Home", path: "/dashboard/home", icon: HomeIcon },
-  { label: "Feed", path: "/dashboard/feed", icon: UsersIcon },
-  { label: "Create", path: null, icon: PlusIcon, isCenter: true },
-  { label: "Reports", path: "/dashboard/reports", icon: BarChart3Icon },
-  { label: "Profile", path: "/dashboard/profile", icon: CircleUserIcon },
-]
 
 export function MobileNav() {
   const location = useLocation()
   const [createOpen, setCreateOpen] = useState(false)
+  const { user } = useAuthSession()
+
+  const initials = user ? `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}` : "?"
+  const avatarKey = user?.avatar || (user?.gender && user?.gender !== "prefer_not_to_say" && user?.date_of_birth
+    ? (() => {
+        const age = new Date().getFullYear() - new Date(user.date_of_birth!).getFullYear()
+        const bucket = age >= 55 ? "senior" : age >= 30 ? "middleaged" : "young"
+        const icon = user.gender === "male" ? "man" : "woman"
+        return `${bucket}-${icon}`
+      })()
+    : "")
+
+  const isStaffRole = user?.role === "barangay_official" || user?.role === "first_responder" || user?.is_staff || user?.is_superuser
+  const navItems: NavItem[] = isStaffRole
+    ? [
+        { label: "Emergency", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
+        { label: "Profile", path: "/dashboard/profile", isAvatar: true },
+      ]
+    : [
+        { label: "Home", path: "/dashboard/home", icon: HomeIcon },
+        { label: "Feed", path: "/dashboard/feed", icon: UsersIcon },
+        { label: "Create", path: null, icon: PlusIcon, isCenter: true },
+        { label: "Reports", path: "/dashboard/reports", icon: BarChart3Icon },
+        { label: "Profile", path: "/dashboard/profile", isAvatar: true },
+      ]
 
   return (
     <>
-      <nav className="fixed bottom-0 left-0 right-0 z-30 bg-card shadow-lg md:hidden">
-        <div className="mx-3 mb-3 mt-1 flex items-end justify-around rounded-[2rem] border border-border/60 bg-background px-3 pb-3 pt-2 shadow-sm">
+      <nav className="fixed bottom-0 left-0 right-0 z-30 shadow-lg md:hidden">
+        <div className="mx-3 mb-3 mt-1 flex items-end justify-around rounded-[2rem] border border-border/60 bg-white px-3 pb-3 pt-2 shadow-sm">
           {navItems.map((item) => {
-            const Icon = item.icon
             const active = item.path ? location.pathname === item.path : false
 
             if (item.isCenter) {
+              const Icon = item.icon!
               return (
                 <button
                   key="create"
@@ -47,7 +66,7 @@ export function MobileNav() {
                   className="-mt-5 flex flex-col items-center gap-0.5"
                 >
                   <div className="flex size-12 items-center justify-center rounded-full bg-primary shadow-lg shadow-primary/30">
-                    <PlusIcon className="size-6 text-primary-foreground" />
+                    <Icon className="size-6 text-primary-foreground" />
                   </div>
                   <span className="text-xs font-semibold text-primary">
                     {item.label}
@@ -56,6 +75,25 @@ export function MobileNav() {
               )
             }
 
+            if (item.isAvatar) {
+              return (
+                <Link
+                  key={item.path}
+                  to={item.path!}
+                  className={cn(
+                    "flex flex-col items-center gap-0.5 px-2 py-1 transition-colors",
+                    active ? "text-primary" : "text-muted-foreground",
+                  )}
+                >
+                  <span className="flex size-9 items-center justify-center overflow-hidden rounded-full text-sm font-bold text-muted-foreground">
+                    {avatarKey ? <img src={`/contents/${avatarKey}.png`} alt="" className="h-full w-full object-cover" /> : initials}
+                  </span>
+                  <span className="text-[10px] font-medium">{item.label}</span>
+                </Link>
+              )
+            }
+
+            const Icon = item.icon!
             return (
               <Link
                 key={item.path}

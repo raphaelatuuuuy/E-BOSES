@@ -15,16 +15,18 @@ import SignUpPage from "@/features/auth/sign-up"
 import DashboardLayout from "@/features/dashboard/dashboard"
 import OnboardingPage from "@/features/onboarding/onboarding-page"
 import FeedPage from "@/features/dashboard/pages/feed"
+import EmergenciesPage from "@/features/dashboard/pages/emergencies"
 import HomePage from "@/features/dashboard/pages/home"
 import ProfilePage from "@/features/dashboard/pages/profile"
 import ReportsPage from "@/features/dashboard/pages/reports"
 import SettingsPage from "@/features/dashboard/pages/settings"
 import LandingPage from "@/features/landing/landing-page"
+import { getAccessToken } from "@/lib/api"
 
 function ProtectedDashboard() {
   const { loading, user } = useAuthSession()
 
-  if (loading) {
+  if (loading && !user) {
     return (
       <div className="flex min-h-svh items-center justify-center">
         <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
@@ -50,7 +52,7 @@ function ProtectedDashboard() {
 function ProtectedPending() {
   const { loading, user } = useAuthSession()
 
-  if (loading) {
+  if (loading && !user) {
     return (
       <div className="flex min-h-svh items-center justify-center">
         <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
@@ -77,7 +79,7 @@ function ProtectedPending() {
 function ProtectedOnboarding() {
   const { loading, user } = useAuthSession()
 
-  if (loading) {
+  if (loading && !user) {
     return (
       <div className="flex min-h-svh items-center justify-center">
         <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
@@ -100,9 +102,15 @@ function ProtectedOnboarding() {
   return <OnboardingPage />
 }
 
+function DashboardIndex() {
+  const { user } = useAuthSession()
+  const isStaffRole = user?.role === "barangay_official" || user?.role === "first_responder" || user?.is_staff || user?.is_superuser
+  return <Navigate to={isStaffRole ? "/dashboard/emergencies" : "/dashboard/home"} replace />
+}
+
 function AppRoutes() {
   const navigate = useNavigate()
-  const { refreshUser, setAuthenticatedUser } = useAuthSession()
+  const { setAuthenticatedUser } = useAuthSession()
   const [resetIdentifier, setResetIdentifier] = useState(() => window.sessionStorage.getItem("eboses-reset-identifier") ?? "")
   const [resetToken, setResetToken] = useState(() => window.sessionStorage.getItem("eboses-reset-token") ?? "")
 
@@ -113,10 +121,12 @@ function AppRoutes() {
 
       {/* Dashboard routes */}
       <Route path="/dashboard" element={<ProtectedDashboard />}>
-        <Route index element={<Navigate to="/dashboard/home" replace />} />
+        <Route index element={<DashboardIndex />} />
         <Route path="home" element={<HomePage />} />
         <Route path="feed" element={<FeedPage />} />
+        <Route path="emergencies" element={<EmergenciesPage />} />
         <Route path="reports" element={<ReportsPage />} />
+        <Route path="reports/:reportId" element={<ReportsPage />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
@@ -152,9 +162,10 @@ function AppRoutes() {
       <Route path="/sign-up-otp" element={
         <AccountOtpVerificationPage
           onBack={() => navigate("/sign-up")}
-          onSuccess={async () => {
-            const user = await refreshUser()
-            navigate(getStatusPath(user?.status ?? "verified"))
+          onSuccess={(user) => {
+            const access = getAccessToken()
+            if (access) setAuthenticatedUser(user, access)
+            navigate(getStatusPath(user.status))
           }}
         />
       } />

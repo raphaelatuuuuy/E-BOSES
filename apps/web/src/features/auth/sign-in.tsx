@@ -16,9 +16,9 @@ export default function LoginPage({ onBack, onForgotPassword, onSignUp, onSucces
   usePageTitle("Sign In")
 
   return (
-    <main className="grid min-h-svh w-full lg:grid-cols-[40fr_60fr]">
+    <main className="grid min-h-svh w-full lg:h-svh lg:grid-cols-[40fr_60fr] lg:overflow-hidden">
       {/* Left: Form panel */}
-      <section className="relative flex flex-col p-6 md:p-10 overflow-y-auto">
+      <section className="relative flex flex-col overflow-y-auto p-6 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden md:p-10 lg:min-h-0">
         <button
           type="button"
           onClick={onBack ?? (() => window.history.back())}

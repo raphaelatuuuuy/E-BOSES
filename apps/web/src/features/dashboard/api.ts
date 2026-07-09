@@ -3,6 +3,7 @@ import { apiRequest } from "@/lib/api"
 export type ConcernCategory = "infrastructure" | "environment" | "public_safety" | "others"
 export type ConcernStatus = "submitted" | "under_review" | "in_progress" | "resolved" | "rejected" | "appealed"
 export type ConcernVisibility = "private" | "community"
+export type ConcernValidationStatus = "pending_review" | "accepted" | "rejected" | "resolved"
 
 export interface PublicUser {
   id: number
@@ -10,6 +11,11 @@ export interface PublicUser {
   initials: string
   role: string
   last_seen_at: string | null
+  responder_unit?: "tanod" | "bhw" | "bdrrmo" | "other" | ""
+  is_on_duty?: boolean
+  current_latitude?: string | null
+  current_longitude?: string | null
+  location_updated_at?: string | null
   email?: string
   avatar?: string
   gender?: string
@@ -47,12 +53,17 @@ export interface ConcernComment {
 export interface Concern {
   id: number
   tracking_id: string
+  validation_status: ConcernValidationStatus
   reporter: PublicUser
   title: string
   description: string
   category: ConcernCategory
   status: ConcernStatus
   address: string
+  latitude: string | null
+  longitude: string | null
+  location_source: string
+  location_accuracy: number | null
   barangay: string
   update_text: string
   visibility: ConcernVisibility
@@ -61,6 +72,7 @@ export interface Concern {
   comments: ConcernComment[]
   vote_count: number
   comment_count: number
+  priority_score: number
   user_vote: 0 | 1
   created_at: string
   updated_at: string
@@ -111,17 +123,39 @@ export function listMyConcerns(status?: string, dateFrom?: string, dateTo?: stri
   return apiRequest<Concern[]>(`/concerns/mine/${query}`)
 }
 
-export function listFeedConcerns(category?: string, dateFrom?: string, dateTo?: string) {
+export function listManagedConcerns(status?: string, category?: string, search?: string) {
+  const params = new URLSearchParams()
+  if (status && status !== "all") params.set("status", status)
+  if (category && category !== "all") params.set("category", category)
+  if (search?.trim()) params.set("search", search.trim())
+  const query = params.toString() ? `?${params.toString()}` : ""
+  return apiRequest<Concern[]>(`/concerns/manage/${query}`)
+}
+
+export function listFeedConcerns(
+  category?: string,
+  dateFrom?: string,
+  dateTo?: string,
+  search?: string,
+) {
   const params = new URLSearchParams()
   if (category && category !== "all") params.set("category", category)
   if (dateFrom) params.set("date_from", dateFrom)
   if (dateTo) params.set("date_to", dateTo)
+  if (search?.trim()) params.set("search", search.trim())
   const query = params.toString() ? `?${params.toString()}` : ""
   return apiRequest<Concern[]>(`/concerns/feed/${query}`)
 }
 
 export function getConcern(id: number) {
   return apiRequest<Concern>(`/concerns/${id}/`)
+}
+
+export function updateConcernStatus(id: number, payload: { status: ConcernStatus; note?: string }) {
+  return apiRequest<Concern>(`/concerns/${id}/status/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
 }
 
 export function voteConcern(id: number, value: 0 | 1) {

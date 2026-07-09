@@ -1,13 +1,16 @@
 from rest_framework import serializers
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 from apps.accounts.models import User
-from apps.accounts.services import validate_concern_media_file
+from apps.accounts.services import validate_concern_media_file, validate_location_pair
 
 from .models import (
     Announcement,
     BarangayEvent,
     Concern,
+    ConcernAiAssessment,
     ConcernComment,
+    ContentFlag,
     ConcernMedia,
     ConcernStatusEvent,
 )
@@ -32,7 +35,21 @@ class PublicUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ("id", "full_name", "initials", "role", "last_seen_at", "avatar", "gender", "date_of_birth")
+        fields = (
+            "id",
+            "full_name",
+            "initials",
+            "role",
+            "last_seen_at",
+            "avatar",
+            "gender",
+            "date_of_birth",
+            "responder_unit",
+            "is_on_duty",
+            "current_latitude",
+            "current_longitude",
+            "location_updated_at",
+        )
 
     def get_full_name(self, obj):
         profile = getattr(obj, "resident_profile", None)
@@ -114,15 +131,60 @@ class ConcernCommentSerializer(serializers.ModelSerializer):
         replies = obj.replies.select_related("author", "author__resident_profile").all()
         return ConcernCommentSerializer(replies, many=True, context=self.context).data
 
+class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ConcernAiAssessment
+        fields = (
+            "status",
+            "image_objects",
+            "yolo_confidence",
+            "severity_estimate",
+            "nlp_validity",
+            "nlp_confidence",
+            "category_match",
+            "recommendation",
+            "explanation",
+            "model_version",
+            "updated_at",
+        )
+
+class ContentFlagSerializer(serializers.ModelSerializer):
+    reporter = PublicUserSerializer(read_only=True)
+    comment = serializers.IntegerField(required=False, allow_null=True)
+
+    class Meta:
+        model = ContentFlag
+        fields = (
+            "id",
+            "concern",
+            "comment",
+            "reporter",
+            "reason",
+            "note",
+            "status",
+            "staff_note",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "concern", "reporter", "status", "staff_note", "created_at", "updated_at")
+
 
 class ConcernSerializer(serializers.ModelSerializer):
     tracking_id = serializers.SerializerMethodField()
+    validation_status = serializers.SerializerMethodField()
+    address = serializers.SerializerMethodField()
+    latitude = serializers.SerializerMethodField()
+    longitude = serializers.SerializerMethodField()
+    location_source = serializers.SerializerMethodField()
+    location_accuracy = serializers.SerializerMethodField()
     reporter = PublicUserSerializer(read_only=True)
     media = ConcernMediaSerializer(many=True, read_only=True)
     status_events = ConcernStatusEventSerializer(many=True, read_only=True)
     comments = serializers.SerializerMethodField()
+    ai_assessment = ConcernAiAssessmentSerializer(read_only=True)
     vote_count = serializers.IntegerField(read_only=True, default=0)
     comment_count = serializers.IntegerField(read_only=True, default=0)
+    priority_score = serializers.IntegerField(read_only=True, default=0)
     user_vote = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
@@ -130,27 +192,72 @@ class ConcernSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "tracking_id",
+            "validation_status",
             "reporter",
             "title",
             "description",
             "category",
             "status",
             "address",
+            "latitude",
+            "longitude",
+            "location_source",
+            "location_accuracy",
             "barangay",
             "update_text",
             "visibility",
             "media",
             "status_events",
             "comments",
+            "ai_assessment",
             "vote_count",
             "comment_count",
+            "priority_score",
             "user_vote",
             "created_at",
             "updated_at",
         )
 
+    def is_privacy_safe(self):
+        return bool(self.context.get("privacy_safe"))
+
     def get_tracking_id(self, obj):
-        return f"RPT-{obj.pk:03d}"
+        year = obj.created_at.year if obj.created_at else 0
+        return f"RPT-{year}-{obj.pk:06d}"
+
+    def get_validation_status(self, obj):
+        if obj.status == Concern.Status.REJECTED:
+            return "rejected"
+        if obj.status == Concern.Status.SUBMITTED:
+            return "pending_review"
+        if obj.status == Concern.Status.RESOLVED:
+            return "resolved"
+        return "accepted"
+
+    def get_address(self, obj):
+        if self.is_privacy_safe():
+            return obj.barangay
+        return obj.address
+
+    def get_latitude(self, obj):
+        if self.is_privacy_safe() or obj.latitude is None:
+            return None
+        return str(obj.latitude)
+
+    def get_longitude(self, obj):
+        if self.is_privacy_safe() or obj.longitude is None:
+            return None
+        return str(obj.longitude)
+
+    def get_location_source(self, obj):
+        if self.is_privacy_safe():
+            return ""
+        return obj.location_source
+
+    def get_location_accuracy(self, obj):
+        if self.is_privacy_safe():
+            return None
+        return obj.location_accuracy
 
     def get_comments(self, obj):
         comments = obj.comments.filter(parent__isnull=True).select_related("author", "author__resident_profile")
@@ -163,6 +270,17 @@ class ConcernCreateSerializer(serializers.Serializer):
     category = serializers.ChoiceField(choices=Concern.Category.choices)
     visibility = serializers.ChoiceField(choices=Concern.Visibility.choices)
     address = serializers.CharField(max_length=255, allow_blank=True, required=False)
+    latitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
+    longitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
+    location_source = serializers.CharField(max_length=32, allow_blank=True, required=False)
+    location_accuracy = serializers.FloatField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        try:
+            validate_location_pair(attrs.get("latitude"), attrs.get("longitude"))
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc) from exc
+        return attrs
 
 
 class ConcernVoteSerializer(serializers.Serializer):
@@ -172,6 +290,16 @@ class ConcernVoteSerializer(serializers.Serializer):
 class ConcernCommentCreateSerializer(serializers.Serializer):
     body = serializers.CharField(max_length=1000)
     parent = serializers.IntegerField(required=False, allow_null=True)
+
+
+class ConcernStatusUpdateSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=Concern.Status.choices)
+    note = serializers.CharField(max_length=255, allow_blank=True, required=False)
+
+    def validate_status(self, value):
+        if value == Concern.Status.SUBMITTED:
+            raise serializers.ValidationError("Use a progress, resolved, rejected, or appealed status.")
+        return value
 
 
 class AnnouncementSerializer(serializers.ModelSerializer):
@@ -189,7 +317,10 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             "is_published",
             "published_at",
             "date_label",
+            "created_at",
+            "updated_at",
         )
+        read_only_fields = ("created_at", "updated_at")
 
     def get_date_label(self, obj):
         target = obj.published_at or obj.created_at
@@ -208,8 +339,12 @@ class BarangayEventSerializer(serializers.ModelSerializer):
             "barangay",
             "starts_at",
             "ends_at",
+            "is_published",
             "time_label",
+            "created_at",
+            "updated_at",
         )
+        read_only_fields = ("created_at", "updated_at")
 
     def get_time_label(self, obj):
         if not obj.starts_at:

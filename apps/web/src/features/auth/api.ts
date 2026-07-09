@@ -25,6 +25,7 @@ export interface AuthUser {
   last_seen_at?: string | null
   date_joined?: string
   firstName?: string
+  middleName?: string
   lastName?: string
   full_name?: string
   address?: string
@@ -33,11 +34,24 @@ export interface AuthUser {
   member_since?: string
   gender?: string
   avatar?: string
+  responder_unit?: "tanod" | "bhw" | "bdrrmo" | "other" | ""
+  is_on_duty?: boolean
+  current_latitude?: string | null
+  current_longitude?: string | null
+  location_updated_at?: string | null
 }
 
 export interface AuthResponse {
   access: string
   user: AuthUser
+}
+
+export interface ResidentSettings {
+  push_alerts: boolean
+  report_updates: boolean
+  community_sharing: boolean
+  location_confirmation: boolean
+  updated_at: string
 }
 
 export function registerResident(formData: FormData) {
@@ -77,6 +91,31 @@ export function login(payload: { identifier: string; password: string }) {
 
 export function getMe() {
   return apiRequest<AuthUser>("/auth/me/")
+}
+
+export function updateMe(payload: {
+  first_name?: string
+  middle_name?: string
+  last_name?: string
+  address?: string
+  gender?: "male" | "female" | "prefer_not_to_say" | ""
+  avatar?: string
+}) {
+  return apiRequest<AuthUser>("/auth/me/", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function getResidentSettings() {
+  return apiRequest<ResidentSettings>("/auth/settings/")
+}
+
+export function updateResidentSettings(payload: Partial<Omit<ResidentSettings, "updated_at">>) {
+  return apiRequest<ResidentSettings>("/auth/settings/", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  })
 }
 
 export function verifyOtp(payload: { channel: "email" | "sms"; purpose: "registration" | "password_reset"; code: string }) {

@@ -2,11 +2,13 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
 from .models import (
+    AccountRequest,
     AuditLog,
     ConsentRecord,
     OTPChallenge,
     ResidenceProof,
     ResidentProfile,
+    ResidentSettings,
     User,
     VerificationCheck,
 )
@@ -35,6 +37,8 @@ class AccountUserAdmin(UserAdmin):
 
 
 admin.site.register(ResidentProfile)
+admin.site.register(ResidentSettings)
+admin.site.register(AccountRequest)
 admin.site.register(OTPChallenge)
 admin.site.register(ResidenceProof)
 admin.site.register(ConsentRecord)

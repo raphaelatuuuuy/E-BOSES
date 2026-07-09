@@ -1,6 +1,9 @@
 from django.urls import path
 
 from .views import (
+    AccountRequestListCreateView,
+    AccountRequestManageListView,
+    AccountRequestReviewView,
     AdminCreateUserView,
     CSRFTokenView,
     LoginView,
@@ -19,6 +22,11 @@ from .views import (
     ResidenceProofCheckView,
     ResidenceProofPreviewMediaView,
     ResidenceProofRawMediaView,
+    ResidentSettingsView,
+    ResidentDirectoryView,
+    ResidentStatusUpdateView,
+    ResponderDirectoryView,
+    ResponderUpdateView,
 )
 
 urlpatterns = [
@@ -31,6 +39,10 @@ urlpatterns = [
     path("refresh/", RefreshTokenView.as_view(), name="auth-refresh"),
     path("logout/", LogoutView.as_view(), name="auth-logout"),
     path("me/", MeView.as_view(), name="auth-me"),
+    path("settings/", ResidentSettingsView.as_view(), name="auth-settings"),
+    path("account-requests/", AccountRequestListCreateView.as_view(), name="auth-account-requests"),
+    path("account-requests/manage/", AccountRequestManageListView.as_view(), name="auth-account-requests-manage"),
+    path("account-requests/<int:pk>/review/", AccountRequestReviewView.as_view(), name="auth-account-request-review"),
     path("onboard/complete/", OnboardCompleteView.as_view(), name="auth-onboard-complete"),
     path("otp/resend/", OTPResendView.as_view(), name="auth-otp-resend"),
     path("otp/verify/", OTPVerifyView.as_view(), name="auth-otp-verify"),
@@ -40,4 +52,8 @@ urlpatterns = [
     path("media/residence-proofs/<int:pk>/raw/", ResidenceProofRawMediaView.as_view(), name="residence-proof-raw"),
     path("media/residence-proofs/<int:pk>/preview/", ResidenceProofPreviewMediaView.as_view(), name="residence-proof-preview"),
     path("admin/users/", AdminCreateUserView.as_view(), name="auth-admin-create-user"),
+    path("residents/", ResidentDirectoryView.as_view(), name="auth-resident-directory"),
+    path("residents/<int:pk>/status/", ResidentStatusUpdateView.as_view(), name="auth-resident-status"),
+    path("responders/", ResponderDirectoryView.as_view(), name="auth-responder-directory"),
+    path("responders/<int:pk>/", ResponderUpdateView.as_view(), name="auth-responder-update"),
 ]

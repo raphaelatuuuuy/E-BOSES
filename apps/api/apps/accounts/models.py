@@ -43,6 +43,12 @@ class User(AbstractUser):
         BARANGAY_OFFICIAL = "barangay_official", "Barangay Official"
         FIRST_RESPONDER = "first_responder", "First Responder"
 
+    class ResponderUnit(models.TextChoices):
+        TANOD = "tanod", "Barangay Tanod"
+        BHW = "bhw", "Barangay Health Worker"
+        BDRRMO = "bdrrmo", "BDRRMO"
+        OTHER = "other", "Other Responder"
+
     class Status(models.TextChoices):
         PENDING_OTP = "pending_otp", "Pending OTP"
         PENDING_PROFILE = "pending_profile", "Pending Profile"
@@ -60,6 +66,11 @@ class User(AbstractUser):
     phone_verified_at = models.DateTimeField(null=True, blank=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
     is_onboarded = models.BooleanField(default=False)
+    responder_unit = models.CharField(max_length=24, choices=ResponderUnit.choices, blank=True)
+    is_on_duty = models.BooleanField(default=False)
+    current_latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    current_longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    location_updated_at = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     USERNAME_FIELD = "email"
@@ -91,6 +102,45 @@ class ResidentProfile(models.Model):
 
     def __str__(self):
         return f"{self.first_name} {self.last_name}"
+
+
+class ResidentSettings(models.Model):
+    class SosPlacement(models.TextChoices):
+        SIDEBAR = "sidebar", "Sidebar"
+        INLINE = "inline", "Inline"
+        COMPACT = "compact", "Compact"
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="resident_settings")
+    push_alerts = models.BooleanField(default=True)
+    report_updates = models.BooleanField(default=True)
+    community_sharing = models.BooleanField(default=False)
+    location_confirmation = models.BooleanField(default=True)
+    sos_placement = models.CharField(max_length=16, choices=SosPlacement.choices, default=SosPlacement.SIDEBAR)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+class AccountRequest(models.Model):
+    class Type(models.TextChoices):
+        DELETION = "deletion", "Deletion"
+        DATA_EXPORT = "data_export", "Data Export"
+
+    class Status(models.TextChoices):
+        SUBMITTED = "submitted", "Submitted"
+        REVIEWED = "reviewed", "Reviewed"
+        COMPLETED = "completed", "Completed"
+        REJECTED = "rejected", "Rejected"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="account_requests")
+    type = models.CharField(max_length=24, choices=Type.choices)
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.SUBMITTED)
+    note = models.CharField(max_length=255, blank=True)
+    staff_note = models.CharField(max_length=255, blank=True)
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="reviewed_account_requests")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
 
 
 class OTPChallenge(models.Model):
@@ -152,6 +202,7 @@ class ResidenceProof(models.Model):
     mime_type = models.CharField(max_length=120, blank=True)
     file_size = models.PositiveIntegerField()
     sha256_hash = models.CharField(max_length=64, db_index=True)
+    phash = models.CharField(max_length=16, blank=True, db_index=True)
     access_level = models.CharField(max_length=32, default="restricted")
     blurred_preview_file = models.FileField(storage=PublicMediaStorage(), upload_to="previews/residence-proofs/%Y/%m/", blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)

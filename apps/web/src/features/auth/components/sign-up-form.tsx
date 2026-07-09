@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { CheckIcon, FileImageIcon, FileTextIcon, InfoIcon, LoaderCircleIcon, XIcon, CheckCircleIcon } from "lucide-react"
+import { CheckIcon, FileImageIcon, FileTextIcon, InfoIcon, LoaderCircleIcon, XIcon } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Calendar } from "@workspace/ui/components/calendar"
@@ -21,7 +21,6 @@ import {
   DialogHeader,
   DialogTitle,
   DialogBody,
-  DialogTrigger,
 } from "@workspace/ui/components/dialog"
 import {
   HoverCard,
@@ -82,6 +81,51 @@ export function SignUpForm({
     [lastAllowedBirthDate],
   )
   const [isCheckingProof, setIsCheckingProof] = React.useState(false)
+  const termsBodyRef = React.useRef<HTMLDivElement>(null)
+  const privacyBodyRef = React.useRef<HTMLDivElement>(null)
+
+  const [termsDialogOpen, setTermsDialogOpen] = React.useState(false)
+  const [termsStep, setTermsStep] = React.useState<"terms" | "privacy">("terms")
+  const [termsScrolled, setTermsScrolled] = React.useState(false)
+  const [privacyScrolled, setPrivacyScrolled] = React.useState(false)
+  const termsSentinelRef = React.useRef<HTMLSpanElement>(null)
+  const privacySentinelRef = React.useRef<HTMLSpanElement>(null)
+
+  React.useEffect(() => {
+    if (termsStep !== "terms" || !termsDialogOpen || !termsSentinelRef.current || !termsBodyRef.current) return
+    setTermsScrolled(false)
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) setTermsScrolled(true) },
+      { root: termsBodyRef.current, threshold: 0 },
+    )
+    observer.observe(termsSentinelRef.current)
+    return () => observer.disconnect()
+  }, [termsStep, termsDialogOpen])
+
+  React.useEffect(() => {
+    if (termsStep !== "privacy" || !termsDialogOpen || !privacySentinelRef.current || !privacyBodyRef.current) return
+    setPrivacyScrolled(false)
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) setPrivacyScrolled(true) },
+      { root: privacyBodyRef.current, threshold: 0 },
+    )
+    observer.observe(privacySentinelRef.current)
+    return () => observer.disconnect()
+  }, [termsStep, termsDialogOpen])
+
+  React.useEffect(() => {
+    if (termsStep === "privacy" && privacyBodyRef.current) {
+      requestAnimationFrame(() => privacyBodyRef.current?.scrollTo(0, 0))
+    }
+  }, [termsStep])
+
+  function openTermsDialog() {
+    setTermsStep("terms")
+    setTermsScrolled(false)
+    setPrivacyScrolled(false)
+    setTermsDialogOpen(true)
+  }
+
   async function proofFileDigest(file: File) {
     const buffer = await file.arrayBuffer()
     const digest = await crypto.subtle.digest("SHA-256", buffer)
@@ -281,6 +325,36 @@ export function SignUpForm({
           {errors.lastName ? <FieldError>{errors.lastName}</FieldError> : null}
         </Field>
 
+        {/* Gender - Dropdown */}
+        <Field>
+          <FieldLabel htmlFor="gender">Gender</FieldLabel>
+          <select
+            id="gender"
+            value={values.gender}
+            onChange={(e) => {
+              handleChange("gender", e.target.value)
+              // auto-assign avatar based on gender + dateOfBirth
+              if (values.dateOfBirth && e.target.value && e.target.value !== "prefer_not_to_say") {
+                const birth = new Date(values.dateOfBirth)
+                const age = new Date().getFullYear() - birth.getFullYear()
+                const base = e.target.value === "male" ? "man" : "woman"
+                const type = age >= 55 ? "senior" : age >= 30 ? "middleaged" : "young"
+                handleChange("avatar", `${type}-${base}`)
+              }
+            }}
+            className={`flex h-9 w-full rounded-md border border-input bg-white px-2 py-1 text-sm shadow-xs transition-colors aria-invalid:border-destructive aria-invalid:shadow-[0_0_0_3px_rgba(220,38,38,0.15)] ${
+              values.gender ? "text-foreground" : "text-muted-foreground"
+            }`}
+            aria-invalid={Boolean(errors.gender)}
+          >
+            <option value="" disabled>Select gender</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+            <option value="prefer_not_to_say">Prefer not to say</option>
+          </select>
+          {errors.gender ? <FieldError>{errors.gender}</FieldError> : null}
+        </Field>
+
         <Field>
           <FieldLabel htmlFor="date">Date of birth</FieldLabel>
           <div className="relative">
@@ -288,7 +362,7 @@ export function SignUpForm({
               <PopoverTrigger className="w-full">
                 <span
                   className={cn(
-                    "border-input bg-white flex h-9 w-full items-center rounded-md border px-3 py-1 text-base shadow-xs",
+                    "border-input bg-white flex h-9 w-full items-center rounded-md border px-3 py-1 text-sm shadow-xs",
                     selectedDate ? "text-foreground" : "text-muted-foreground",
                     errors.dateOfBirth
                       ? "border-destructive shadow-[0_0_0_3px_rgba(220,38,38,0.15)]"
@@ -336,69 +410,6 @@ export function SignUpForm({
           />
           {errors.address ? <FieldError>{errors.address}</FieldError> : null}
         </Field>
-
-        {/* Gender + Avatar */}
-        <div className="flex flex-col gap-3">
-          <FieldLabel>Gender</FieldLabel>
-          <div className="flex gap-3">
-            {["male", "female", "prefer_not_to_say"].map((g) => (
-              <button
-                key={g}
-                type="button"
-                onClick={() => {
-                  handleChange("gender", g)
-                  // auto-assign avatar based on gender + dateOfBirth
-                  if (values.dateOfBirth && g !== "prefer_not_to_say") {
-                    const birth = new Date(values.dateOfBirth)
-                    const age = new Date().getFullYear() - birth.getFullYear()
-                    const base = g === "male" ? "man" : "woman"
-                    const type = age >= 55 ? "senior" : age >= 30 ? "middleaged" : "young"
-                    handleChange("avatar", `${type}-${base}`)
-                  }
-                }}
-                className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-all ${
-                  values.gender === g
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-input bg-white text-muted-foreground hover:border-primary"
-                }`}
-              >
-                {g === "male" ? "Male" : g === "female" ? "Female" : "Prefer not to say"}
-              </button>
-            ))}
-          </div>
-          {errors.gender ? <FieldError>{errors.gender}</FieldError> : null}
-
-          {values.gender && values.gender !== "prefer_not_to_say" && (
-            <>
-              <FieldLabel>Avatar</FieldLabel>
-              <div className="flex flex-wrap gap-2">
-                {["young", "middleaged", "senior"].map((age) => {
-                  const icon = values.gender === "male" ? "man" : "woman"
-                  const key = `${age}-${icon}`
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => handleChange("avatar", key)}
-                      className={`relative size-16 overflow-hidden rounded-full border-2 transition-all ${
-                        values.avatar === key
-                          ? "border-primary shadow-[0_0_0_3px_rgba(255,129,51,0.3)]"
-                          : "border-border hover:border-primary/50"
-                      }`}
-                    >
-                      <img src={`/contents/${key}.png`} alt={key} className="h-full w-full object-cover" />
-                      {values.avatar === key && (
-                        <span className="absolute bottom-0 right-0">
-                          <CheckCircleIcon className="size-4 fill-primary text-white" />
-                        </span>
-                      )}
-                    </button>
-                  )
-                })}
-              </div>
-            </>
-          )}
-        </div>
 
         <Field>
           <div className="flex items-center gap-1.5">
@@ -629,19 +640,31 @@ export function SignUpForm({
         <label className="flex items-start gap-2 text-sm">
           <Checkbox
             checked={values.agreeToTerms}
-            onChange={(event) => handleChange("agreeToTerms", event.target.checked)}
+            onChange={() => {
+              if (values.agreeToTerms) {
+                handleChange("agreeToTerms", false)
+              } else {
+                openTermsDialog()
+              }
+            }}
             className="mt-0.5"
             aria-invalid={Boolean(errors.agreeToTerms)}
           />
           <span className={cn("text-muted-foreground", errors.agreeToTerms && "text-destructive")}>
-            By signing up, you agree to our{" "}
-            <Dialog>
-              <DialogTrigger className="text-primary underline underline-offset-2 cursor-pointer">Terms of Service</DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Terms of Service</DialogTitle>
-                </DialogHeader>
-                <DialogBody>
+            By signing up, you agree to our <span className="font-semibold text-[#ff8133]">Terms of Service</span> and <span className="font-semibold text-[#ff8133]">Privacy Policy</span>.
+          </span>
+        </label>
+
+        <Dialog open={termsDialogOpen} onOpenChange={setTermsDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>
+                {termsStep === "terms" ? "Terms of Service" : "Privacy Policy"}
+              </DialogTitle>
+            </DialogHeader>
+            {termsStep === "terms" ? (
+              <>
+                <DialogBody ref={termsBodyRef}>
                   <div className="space-y-4 text-sm text-muted-foreground">
                     <h3 className="font-semibold text-foreground">1. Acceptance of Terms</h3>
                     <p>By registering and using E-Boses, you agree to be bound by these Terms of Service. If you do not agree, you may not use the platform.</p>
@@ -660,21 +683,21 @@ export function SignUpForm({
 
                     <h3 className="font-semibold text-foreground">6. Limitation of Liability</h3>
                     <p>E-Boses is provided as a tool to assist barangay governance and emergency coordination. The barangay does not guarantee immediate response to every report or alert. AI-generated severity scores and assessments are advisory in nature and subject to review by barangay officials. The platform is accessible via standard web browsers and requires internet connectivity; performance may vary depending on network conditions.</p>
+                    <span ref={termsSentinelRef} />
                   </div>
                 </DialogBody>
-                <DialogFooter>
-                  <DialogClose />
+                <DialogFooter className="flex-col gap-2 sm:flex-col">
+                  <Button type="button" className="w-full" disabled={!termsScrolled} onClick={() => {
+                    setTermsStep("privacy")
+                    setPrivacyScrolled(false)
+                  }}>
+                    Next
+                  </Button>
                 </DialogFooter>
-              </DialogContent>
-            </Dialog>
-            {" and "}
-            <Dialog>
-              <DialogTrigger className="text-primary underline underline-offset-2 cursor-pointer">Privacy Policy</DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Privacy Policy</DialogTitle>
-                </DialogHeader>
-                <DialogBody>
+              </>
+            ) : (
+              <>
+                <DialogBody ref={privacyBodyRef}>
                   <div className="space-y-4 text-sm text-muted-foreground">
                     <h3 className="font-semibold text-foreground">1. Data Collection</h3>
                     <p>E-Boses collects personal information necessary for identity verification and platform functionality, including your full name, email address or phone number, barangay of residence, uploaded government-issued ID for verification, submitted concern reports with photos and GPS location, and emergency alert data including location and optional media.</p>
@@ -699,16 +722,21 @@ export function SignUpForm({
 
                     <h3 className="font-semibold text-foreground">8. Data Retention</h3>
                     <p>Records are retained for a period consistent with standard barangay record-management practice. After the retention period, records are disposed of in accordance with applicable regulations.</p>
+                    <span ref={privacySentinelRef} />
                   </div>
                 </DialogBody>
-                <DialogFooter>
-                  <DialogClose />
+                <DialogFooter className="flex-col gap-2 sm:flex-col">
+                  <Button type="button" className="w-full" disabled={!privacyScrolled} onClick={() => {
+                    handleChange("agreeToTerms", true)
+                    setTermsDialogOpen(false)
+                  }}>
+                    Agree
+                  </Button>
                 </DialogFooter>
-              </DialogContent>
-            </Dialog>
-            .
-          </span>
-        </label>
+              </>
+            )}
+          </DialogContent>
+        </Dialog>
         {errors.agreeToTerms ? <FieldError>{errors.agreeToTerms}</FieldError> : null}
         <div className="h-1" />
         <p className="text-sm text-foreground text-center">

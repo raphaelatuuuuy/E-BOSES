@@ -1,3 +1,107 @@
-"""
-Notifications tests for E-Boses.
-"""
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+from rest_framework import status
+from rest_framework.test import APITestCase
+
+from apps.accounts.models import ResidentSettings
+from apps.concerns.models import Concern, ConcernStatusEvent
+
+from .models import BrowserPushSubscription, Notification
+
+
+class NotificationPreferenceTests(TestCase):
+    def test_status_event_does_not_create_notification_when_report_updates_disabled(self):
+        user = get_user_model().objects.create_user(
+            email="report-updates-off@example.com",
+            phone_number="+639351111111",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+        ResidentSettings.objects.create(user=user, report_updates=False)
+        concern = Concern.objects.create(
+            reporter=user,
+            title="Broken streetlight",
+            description="Streetlight near the corner is out.",
+        )
+
+        ConcernStatusEvent.objects.create(
+            concern=concern,
+            status=Concern.Status.IN_PROGRESS,
+            note="Responder assigned.",
+        )
+
+        self.assertFalse(Notification.objects.filter(recipient=user, concern=concern).exists())
+
+    def test_status_event_creates_notification_when_report_updates_enabled(self):
+        user = get_user_model().objects.create_user(
+            email="report-updates-on@example.com",
+            phone_number="+639352222222",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+        concern = Concern.objects.create(
+            reporter=user,
+            title="Drainage concern",
+            description="Drainage is blocked.",
+        )
+
+        ConcernStatusEvent.objects.create(
+            concern=concern,
+            status=Concern.Status.IN_PROGRESS,
+            note="Responder assigned.",
+        )
+
+        self.assertTrue(Notification.objects.filter(recipient=user, concern=concern).exists())
+
+
+class NotificationPreferenceAPITests(APITestCase):
+    def test_notification_list_and_count_are_hidden_when_push_alerts_disabled(self):
+        user = get_user_model().objects.create_user(
+            email="push-alerts-off@example.com",
+            phone_number="+639353333333",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+        ResidentSettings.objects.create(user=user, push_alerts=False)
+        concern = Concern.objects.create(
+            reporter=user,
+            title="Flooded sidewalk",
+            description="Water is pooling near the walkway.",
+        )
+        Notification.objects.create(
+            recipient=user,
+            concern=concern,
+            type=Notification.Type.SUBMITTED,
+            title=concern.title,
+            body="Your report was submitted.",
+        )
+        self.client.force_authenticate(user)
+
+        list_response = self.client.get("/api/notifications/")
+        count_response = self.client.get("/api/notifications/unread-count/")
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(count_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(list_response.data, [])
+        self.assertEqual(count_response.data["count"], 0)
+
+    def test_user_can_register_browser_push_subscription(self):
+        user = get_user_model().objects.create_user(
+            email="push-sub@example.com",
+            phone_number="+639353333334",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+        self.client.force_authenticate(user)
+
+        response = self.client.post(
+            "/api/notifications/browser-push/subscriptions/",
+            {
+                "endpoint": "https://push.example.test/sub/1",
+                "keys": {"p256dh": "p256dh-key", "auth": "auth-key"},
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(BrowserPushSubscription.objects.filter(user=user, endpoint="https://push.example.test/sub/1", is_active=True).exists())

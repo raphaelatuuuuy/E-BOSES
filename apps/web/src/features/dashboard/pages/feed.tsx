@@ -6,12 +6,18 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   FlagIcon,
-  ImageIcon,
+  LeafIcon,
   MessageCircleIcon,
   ReplyIcon,
+  SearchIcon,
   SendIcon,
+  ShieldCheckIcon,
+  SlidersHorizontalIcon,
+  TrafficConeIcon,
   TrendingUpIcon,
+  Trash2Icon,
   UsersIcon,
+  WrenchIcon,
   XIcon,
 } from "lucide-react"
 import { cn } from "@workspace/ui/lib/utils"
@@ -20,6 +26,7 @@ import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/components/popover"
+import { useHorizontalDragScroll } from "@/features/dashboard/hooks/use-horizontal-drag-scroll"
 import {
   commentOnConcern,
   listActiveResponders,
@@ -59,6 +66,27 @@ const filterCategoryMap: Record<string, ConcernCategory | "all"> = {
   Environment: "environment",
   "Public Safety": "public_safety",
   Others: "others",
+}
+
+const validationLabels: Record<Concern["validation_status"], string> = {
+  pending_review: "Pending",
+  accepted: "Validated",
+  rejected: "Rejected",
+  resolved: "Resolved",
+}
+
+const validationColors: Record<Concern["validation_status"], string> = {
+  pending_review: "border-amber-200 bg-amber-50 text-amber-700",
+  accepted: "border-blue-200 bg-blue-50 text-blue-700",
+  rejected: "border-red-200 bg-red-50 text-red-700",
+  resolved: "border-green-200 bg-green-50 text-green-700",
+}
+
+const categoryStyles: Record<ConcernCategory, { icon: typeof WrenchIcon; bg: string; text: string; label: string }> = {
+  infrastructure: { icon: TrafficConeIcon, bg: "bg-[#eef3ff]", text: "text-[#2447b3]", label: "Infrastructure" },
+  environment: { icon: LeafIcon, bg: "bg-[#e9f9ef]", text: "text-[#16a34a]", label: "Environment" },
+  public_safety: { icon: ShieldCheckIcon, bg: "bg-[#ffeceb]", text: "text-[#ff5003]", label: "Public Safety" },
+  others: { icon: SearchIcon, bg: "bg-[#fff1ea]", text: "text-[#ff6a1a]", label: "Others" },
 }
 
 function timeAgo(value: string) {
@@ -181,8 +209,11 @@ function CommentItem({
 export default function FeedPage() {
   usePageTitle("Feed")
   const filterRailRef = useRef<HTMLDivElement>(null)
+  const filterDragScroll = useHorizontalDragScroll<HTMLDivElement>()
+  const hasLoadedRef = useRef(false)
   const [loaded, setLoaded] = useState(false)
   const [activeFilter, setActiveFilter] = useState<string>("All")
+  const [search, setSearch] = useState("")
   const [concerns, setConcerns] = useState<Concern[]>([])
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [activeResponders, setActiveResponders] = useState<PublicUser[]>([])
@@ -196,12 +227,14 @@ export default function FeedPage() {
   const [error, setError] = useState("")
 
   async function loadFeed() {
-    setLoaded(false)
+    if (!hasLoadedRef.current) {
+      setLoaded(false)
+    }
     setError("")
     try {
       const category = filterCategoryMap[activeFilter]
       const [nextConcerns, nextAnnouncements, responders] = await Promise.all([
-        activeFilter === "Announcements" ? Promise.resolve([]) : listFeedConcerns(category),
+        activeFilter === "Announcements" ? Promise.resolve([]) : listFeedConcerns(category, undefined, undefined, search),
         activeFilter === "All" || activeFilter === "Announcements" ? listAnnouncements() : Promise.resolve([]),
         listActiveResponders(),
       ])
@@ -211,6 +244,7 @@ export default function FeedPage() {
     } catch {
       setError("Could not load feed.")
     } finally {
+      hasLoadedRef.current = true
       setLoaded(true)
     }
   }
@@ -220,7 +254,7 @@ export default function FeedPage() {
     function refresh() { void loadFeed() }
     window.addEventListener("eboses:report-created", refresh)
     return () => window.removeEventListener("eboses:report-created", refresh)
-  }, [activeFilter])
+  }, [activeFilter, search])
 
   if (!loaded)
     return (
@@ -303,79 +337,152 @@ export default function FeedPage() {
     rail.scrollTo({ left: buttons[targetIndex].offsetLeft - buttons[0].offsetLeft, behavior: "smooth" })
   }
 
+  const trendingConcerns = [...concerns]
+    .sort((a, b) => b.vote_count - a.vote_count || b.priority_score - a.priority_score)
+    .slice(0, 5)
+
   return (
     <div className="flex flex-col">
       <Topbar />
 
-      <div className="flex-1 p-4 md:p-10">
-        {/* Header image */}
-        <div className="flex h-32 w-full items-center justify-center md:h-48">
-          <img src="/contents/feed-header.png" alt="" className="h-full w-full object-contain" />
-        </div>
-        <div className="mt-4 text-center">
-          <p className="text-xs text-muted-foreground">Marikina Heights</p>
-          <h1 className="font-heading text-2xl font-bold text-foreground md:text-3xl">Community Feed</h1>
-        </div>
-
-        <div className="mt-6 grid gap-6 lg:grid-cols-7">
-          <section className="flex min-w-0 flex-col gap-4 lg:col-span-5">
-            {/* Category pills */}
-            <div className="relative w-full min-w-0">
-              <button type="button" aria-label="Scroll filters left" onClick={() => scrollFilterRail(-1)} className="absolute left-0 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden">
-                <ChevronLeftIcon className="size-4" />
-              </button>
-              <div ref={filterRailRef} className="scrollbar-hide mx-10 min-w-0 overflow-x-hidden lg:mx-0 lg:overflow-visible">
-                <div className="flex min-w-max flex-nowrap gap-2 lg:grid lg:min-w-0 lg:grid-cols-6">
-                  {filters.map((f) => (
-                    <Button key={f} data-filter-option type="button" size="sm" variant={activeFilter === f ? "default" : "outline"} aria-pressed={activeFilter === f} onClick={() => setActiveFilter(f)} className={cn("h-8 shrink-0 rounded-full px-3 text-xs whitespace-nowrap lg:w-full lg:min-w-0 lg:shrink", activeFilter !== f && "bg-card")}>
-                      {f}
-                    </Button>
-                  ))}
-                </div>
+      <div className="flex-1 bg-[#f7f8fc] p-4 md:p-8 xl:p-10">
+        <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_330px]">
+          <section className="min-w-0">
+            <div className="grid items-center gap-5 md:grid-cols-[minmax(0,0.72fr)_minmax(320px,1fr)]">
+              <div>
+                <p className="text-sm font-bold text-[#2447b3]">Marikina Heights</p>
+                <h1 className="mt-2 font-heading text-3xl font-extrabold leading-tight text-[#07145f] md:text-4xl">
+                  Community Feed
+                </h1>
+                <p className="mt-3 max-w-sm text-sm font-semibold leading-6 text-[#43507f]">
+                  Stay informed with the latest announcements, updates, and community concerns in your barangay.
+                </p>
               </div>
-              <button type="button" aria-label="Scroll filters right" onClick={() => scrollFilterRail(1)} className="absolute right-0 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden">
-                <ChevronRightIcon className="size-4" />
-              </button>
+              <img src="/contents/feed-header.png" alt="" className="mx-auto h-32 w-full object-contain md:h-40" />
             </div>
 
-            <div className="flex flex-col gap-4">
+            <div className="mt-7">
+              <div className="relative w-full min-w-0">
+                <div ref={filterRailRef} {...filterDragScroll} className="scrollbar-hide min-w-0 cursor-grab touch-pan-x overflow-x-scroll overscroll-x-contain active:cursor-grabbing lg:overflow-visible">
+                  <div className="flex min-w-max flex-nowrap gap-3 lg:grid lg:min-w-0 lg:grid-cols-6">
+                    {filters.map((f) => (
+                      <button
+                        key={f}
+                        data-filter-option
+                        type="button"
+                        aria-pressed={activeFilter === f}
+                        onClick={() => setActiveFilter(f)}
+                        className={cn(
+                          "h-10 shrink-0 rounded-full border px-6 text-sm font-bold transition-colors whitespace-nowrap lg:w-full lg:min-w-0 lg:shrink",
+                          activeFilter === f
+                            ? "border-[#ff6a1a] bg-[#ff6a1a] text-white"
+                            : "border-[#cbd8ee] bg-white text-[#07145f] hover:border-[#ff6a1a] hover:text-[#ff6a1a]",
+                        )}
+                      >
+                        {f}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {activeFilter !== "Announcements" ? (
+              <div className="mt-5 flex gap-3">
+                <div className="relative min-w-0 flex-1">
+                  <SearchIcon className="pointer-events-none absolute left-4 top-1/2 size-5 -translate-y-1/2 text-[#2447b3]" />
+                  <Input
+                    type="search"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search posts, concerns, or keywords"
+                    className="h-12 rounded-lg border-[#cbd8ee] bg-white pl-12 text-sm font-semibold text-[#07145f] placeholder:text-[#8b96b8] focus-visible:border-[#ff6a1a] focus-visible:ring-[#ff6a1a]/20"
+                    aria-label="Search validated community concerns"
+                  />
+                </div>
+                <button type="button" className="hidden h-12 items-center gap-2 rounded-lg border border-[#cbd8ee] bg-white px-5 text-sm font-bold text-[#07145f] transition-colors hover:border-[#ff6a1a] hover:text-[#ff6a1a] sm:inline-flex">
+                  <SlidersHorizontalIcon className="size-4" />
+                  Filters
+                </button>
+              </div>
+            ) : null}
+
+            <div className="mt-5 flex flex-col gap-3">
               {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
               {announcements.map((announcement) => (
-                <div key={`announcement-${announcement.id}`} className="rounded-lg border border-border bg-card p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-sm font-semibold text-foreground">{announcement.title}</p>
-                        <Badge variant="secondary">{announcement.tag}</Badge>
+                <article key={`announcement-${announcement.id}`} className="rounded-2xl border border-[#dfe7f5] bg-white p-4 shadow-sm">
+                  <div className="grid gap-4 md:grid-cols-[64px_minmax(0,1fr)_120px_150px] md:items-center">
+                    <div className="flex size-14 items-center justify-center rounded-full bg-[#fff1ea] text-[#2447b3]">
+                      <MegaphoneIcon className="size-7" />
+                    </div>
+                    <div className="min-w-0">
+                      <Badge className="mb-2 border-0 bg-[#fff1ea] text-[10px] font-extrabold uppercase text-[#ff6a1a] hover:bg-[#fff1ea]">{announcement.tag || "Announcement"}</Badge>
+                      <h2 className="truncate text-lg font-extrabold text-[#07145f]">{announcement.title}</h2>
+                      <p className="mt-1 line-clamp-2 text-sm font-semibold leading-6 text-[#43507f]">{announcement.body}</p>
+                      <p className="mt-2 text-xs font-bold text-[#2447b3]">Barangay Hall <span className="mx-2 text-[#8b96b8]">•</span>{announcement.date_label}</p>
+                    </div>
+                    <img src="/contents/feed-header.png" alt="" className="hidden h-20 w-full rounded-lg object-cover md:block" />
+                    <div className="flex items-center justify-end gap-5 border-[#dfe7f5] text-[#07145f] md:border-l md:pl-6">
+                      <div className="text-center">
+                        <p className="text-sm font-extrabold">0</p>
+                        <p className="text-xs font-semibold text-[#43507f]">Upvotes</p>
                       </div>
-                      <p className="mt-0.5 text-xs text-muted-foreground">{announcement.date_label}</p>
+                      <FlagIcon className="size-5 text-[#2447b3]" />
                     </div>
                   </div>
-                  <p className="mt-3 text-sm leading-relaxed text-foreground">{announcement.body}</p>
-                </div>
+                </article>
               ))}
 
               {concerns.map((post, index) => {
                 const isExpanded = expandedComments.has(post.id)
+                const style = categoryStyles[post.category]
+                const CategoryIcon = style.icon
                 return (
-                  <div key={post.id} className="rounded-lg border border-border bg-card p-4">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-3">
-                        <Avatar user={post.reporter} index={index} />
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="truncate text-sm font-semibold text-foreground">{post.reporter.full_name}</p>
-                            <Badge variant="secondary">{categoryLabel(post.category)}</Badge>
-                          </div>
-                          <p className="text-xs text-muted-foreground">{timeAgo(post.created_at)}</p>
-                        </div>
+                  <article key={post.id} className="rounded-2xl border border-[#dfe7f5] bg-white p-4 shadow-sm">
+                    <div className="grid gap-4 md:grid-cols-[64px_minmax(0,1fr)_120px_150px] md:items-center">
+                      <div className={cn("flex size-14 items-center justify-center rounded-full", style.bg, style.text)}>
+                        <CategoryIcon className="size-7" />
                       </div>
 
-                      <div className="relative">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge className={cn("border-0 text-[10px] font-extrabold uppercase hover:bg-transparent", style.bg, style.text)}>
+                            {categoryLabel(post.category)}
+                          </Badge>
+                          <Badge variant="outline" className={cn("text-[10px] font-bold", validationColors[post.validation_status])}>
+                            {validationLabels[post.validation_status]}
+                          </Badge>
+                        </div>
+                        <h2 className="mt-1 truncate text-lg font-extrabold text-[#07145f]">{post.title}</h2>
+                        <p className="mt-1 line-clamp-2 text-sm font-semibold leading-6 text-[#43507f]">{post.description}</p>
+                        <p className="mt-2 truncate text-xs font-bold text-[#2447b3]">
+                          {post.reporter.full_name} <span className="mx-1 text-[#8b96b8]">•</span> Verified Resident <span className="mx-1 text-[#8b96b8]">•</span> {timeAgo(post.created_at)}
+                        </p>
+                      </div>
+
+                      <div className="hidden md:block">
+                        {post.media.length > 0 && post.media[0].mime_type?.startsWith("image/") ? (
+                          <img src={post.media[0].preview_url} alt="" className="h-20 w-full rounded-lg object-cover" />
+                        ) : null}
+                      </div>
+
+                      <div className="flex items-center justify-between gap-4 border-[#dfe7f5] md:border-l md:pl-6">
+                        <div className="grid gap-3">
+                          <button type="button" onClick={() => void handleVote(post)} className={cn("flex items-center gap-2 text-sm font-extrabold transition-colors", post.user_vote === 1 ? "text-[#ff6a1a]" : "text-[#2447b3] hover:text-[#ff6a1a]")}>
+                            <ArrowUpIcon className="size-5" />
+                            <span>{post.vote_count}</span>
+                            <span className="text-xs font-semibold text-[#43507f]">Upvotes</span>
+                          </button>
+                          <button type="button" onClick={() => toggleComments(post.id)} className="flex items-center gap-2 text-sm font-extrabold text-[#2447b3] transition-colors hover:text-[#ff6a1a]">
+                            <MessageCircleIcon className="size-5" />
+                            <span>{post.comment_count}</span>
+                            <span className="text-xs font-semibold text-[#43507f]">Comments</span>
+                          </button>
+                        </div>
                         <Popover open={reportOpen === post.id} onOpenChange={(open) => { if (!open) { setReportOpen(null); setReportReason(""); setReportOther("") } else { setReportOpen(post.id) } }}>
-                        <PopoverTrigger className="text-muted-foreground hover:text-destructive">
-                          <FlagIcon className="size-4" />
+                        <PopoverTrigger className="flex size-9 items-center justify-center rounded-lg text-[#2447b3] transition-colors hover:bg-[#fff1ea] hover:text-[#ff6a1a]" aria-label="Flag post">
+                          <FlagIcon className="size-5" />
                         </PopoverTrigger>
                         <PopoverContent className="w-72 max-sm:w-[calc(100vw-2rem)] right-0 left-auto">
                           <div className="flex flex-col gap-3 p-4">
@@ -405,35 +512,8 @@ export default function FeedPage() {
                       </div>
                     </div>
 
-                    <p className="mt-3 text-sm leading-relaxed text-foreground">{post.description || post.title}</p>
-
-                    {/* Media: display image if available, nothing if none */}
-                    {post.media.length > 0 ? (
-                      post.media[0].mime_type?.startsWith("image/") ? (
-                        <img src={post.media[0].preview_url} alt="" className="mt-3 max-h-96 w-full rounded-lg border border-border object-contain" />
-                      ) : (
-                        <div className="mt-3 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                          {post.media[0].original_filename}
-                        </div>
-                      )
-                    ) : null}
-
-                    <div className="mt-3 flex items-center gap-3 border-t border-border pt-3">
-                      <div className={cn("flex items-center gap-1 rounded-full border px-2 py-0.5 transition-colors", post.user_vote === 1 ? "border-primary bg-primary/10" : "border-border")}>
-                        <button type="button" onClick={() => void handleVote(post)} className={cn("rounded-full p-0.5 transition-colors", post.user_vote === 1 ? "text-primary" : "text-muted-foreground hover:text-primary")}>
-                          <ArrowUpIcon className="size-4" />
-                        </button>
-                        <span className={cn("min-w-[12px] text-center text-xs font-bold", post.user_vote === 1 ? "text-primary" : "text-foreground")}>{post.vote_count}</span>
-                      </div>
-
-                      <button type="button" onClick={() => toggleComments(post.id)} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary">
-                        <MessageCircleIcon className="size-4" />
-                        {post.comment_count}
-                      </button>
-                    </div>
-
                     {isExpanded && (
-                      <div className="mt-3 flex flex-col gap-3 border-t border-border pt-3">
+                      <div className="mt-4 flex flex-col gap-3 border-t border-[#dfe7f5] pt-4">
                         {post.comments.map((comment) => (
                           <CommentItem
                             key={comment.id}
@@ -455,56 +535,83 @@ export default function FeedPage() {
                         </div>
                       </div>
                     )}
-                  </div>
-                )
-              })}
+                </article>
+              )
+            })}
 
               {announcements.length === 0 && concerns.length === 0 && !error ? (
-                <div className="rounded-lg border border-dashed border-border bg-card p-8 text-center text-sm text-muted-foreground">
+                <div className="rounded-2xl border border-dashed border-[#cbd8ee] bg-white p-8 text-center text-sm font-semibold text-[#68739c]">
                   Nothing to show yet.
                 </div>
               ) : null}
             </div>
           </section>
 
-          <aside className="flex flex-col gap-6 lg:col-span-2">
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center gap-2">
-                <TrendingUpIcon className="size-4 text-primary" />
-                <h3 className="text-sm font-semibold text-foreground">Trending in Marikina Heights</h3>
+          <aside className="flex flex-col gap-5 xl:sticky xl:top-6 xl:self-start">
+            <div className="rounded-2xl border border-[#dfe7f5] bg-white p-5 shadow-sm">
+              <div className="flex items-center gap-3">
+                <TrendingUpIcon className="size-5 text-[#ff6a1a]" />
+                <h3 className="text-lg font-extrabold text-[#07145f]">Trending in Marikina Heights</h3>
               </div>
-              <div className="flex flex-col gap-2">
-                {concerns.slice(0, 3).map((item) => (
-                  <div key={item.id} className="rounded-lg border border-border bg-card p-3">
-                    <p className="truncate text-sm font-medium text-foreground">{item.title}</p>
-                    <p className="text-xs text-muted-foreground">{item.vote_count} upvotes</p>
+              <div className="mt-4 divide-y divide-[#eef3ff]">
+                {trendingConcerns.map((item, index) => (
+                  <div key={item.id} className="flex items-center gap-3 py-3">
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#fff1ea] text-sm font-extrabold text-[#ff6a1a]">{index + 1}</span>
+                    <p className="min-w-0 flex-1 truncate text-sm font-extrabold text-[#07145f]">{item.title}</p>
+                    <p className="shrink-0 text-xs font-extrabold text-[#2447b3]">{item.vote_count} upvotes</p>
                   </div>
                 ))}
-                {concerns.length === 0 ? <Skeleton className="h-16 border border-border bg-card" /> : null}
+                {concerns.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-[#cbd8ee] bg-white p-4 text-sm font-semibold text-[#68739c]">
+                    No trending concerns yet.
+                  </div>
+                ) : null}
               </div>
+              <button type="button" className="mt-3 flex w-full items-center justify-between text-sm font-extrabold text-[#2447b3] transition-colors hover:text-[#ff6a1a]">
+                View all trending
+                <ChevronRightIcon className="size-4" />
+              </button>
             </div>
 
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center gap-2">
-                <UsersIcon className="size-4 text-primary" />
-                <h3 className="text-sm font-semibold text-foreground">Active Responders</h3>
+            <div className="rounded-2xl border border-[#dfe7f5] bg-white p-5 shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <UsersIcon className="size-5 text-[#ff6a1a]" />
+                  <h3 className="text-lg font-extrabold text-[#07145f]">Active Responders</h3>
+                </div>
+                <button type="button" className="text-sm font-extrabold text-[#2447b3] hover:text-[#ff6a1a]">View all</button>
               </div>
-              <div className="flex flex-col gap-2">
+              <div className="mt-4 flex flex-col gap-4">
                 {activeResponders.map((responder, index) => (
-                  <div key={responder.id} className="flex items-center gap-3 rounded-lg border border-border bg-card p-3">
+                  <div key={responder.id} className="flex items-center gap-3">
                     <Avatar user={responder} index={index} />
-                    <div>
-                      <p className="text-sm font-medium text-foreground">{responder.full_name}</p>
-                      <p className="text-xs text-muted-foreground">{responderRoleLabel(responder.role)}</p>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-extrabold text-[#07145f]">{responder.full_name}</p>
+                      <p className="text-xs font-semibold text-[#68739c]">{responderRoleLabel(responder.role)}</p>
                     </div>
+                    <span className="flex items-center gap-1.5 text-xs font-semibold text-[#2447b3]"><span className="size-2 rounded-full bg-green-500" />Online</span>
                   </div>
                 ))}
                 {activeResponders.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-border bg-card p-4 text-sm text-muted-foreground">
+                  <div className="rounded-lg border border-dashed border-[#cbd8ee] bg-white p-4 text-sm font-semibold text-[#68739c]">
                     No active responders right now.
                   </div>
                 ) : null}
               </div>
+            </div>
+
+            <div className="rounded-2xl border border-[#dfe7f5] bg-white p-5 shadow-sm">
+              <div className="flex items-center gap-3">
+                <ShieldCheckIcon className="size-5 text-[#2447b3]" />
+                <h3 className="text-lg font-extrabold text-[#07145f]">Community Guidelines</h3>
+              </div>
+              <p className="mt-4 text-sm font-semibold leading-6 text-[#43507f]">
+                Let's keep our community safe, respectful, and helpful to everyone.
+              </p>
+              <button type="button" className="mt-4 flex w-full items-center justify-between text-sm font-extrabold text-[#2447b3] transition-colors hover:text-[#ff6a1a]">
+                View guidelines
+                <ChevronRightIcon className="size-4" />
+              </button>
             </div>
           </aside>
         </div>

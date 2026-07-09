@@ -80,6 +80,7 @@ export function DialogBody({ className, ...props }: React.ComponentProps<"div">)
   return (
     <div
       className={cn("flex-1 overflow-y-auto px-6 py-5 space-y-5", className)}
+      style={{ scrollbarWidth: "none" }}
       {...props}
     />
   )

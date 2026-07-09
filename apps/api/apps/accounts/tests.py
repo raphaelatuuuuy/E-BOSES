@@ -10,7 +10,7 @@ from rest_framework.test import APIClient, APITestCase
 # Force DEBUG=True for all tests so DevelopmentOTPProvider works
 DEBUG_ALL = override_settings(DEBUG=True)
 
-from apps.accounts.models import OTPChallenge, PhoneOTPChallenge, ResidenceProof
+from apps.accounts.models import AccountRequest, OTPChallenge, PhoneOTPChallenge, ResidenceProof, ResidentProfile, ResidentSettings
 from apps.accounts.serializers import RegisterSerializer
 from apps.accounts.services import (
     create_otp_challenge,
@@ -368,6 +368,101 @@ class AuthAPITests(APITestCase):
         self.assertIn("eboses_refresh_token", response.cookies)
         self.assertTrue(response.cookies["eboses_refresh_token"]["httponly"])
 
+    def test_resident_can_update_profile_fields(self):
+        user = get_user_model().objects.create_user(
+            email="profile-update@example.com",
+            phone_number="+639241234568",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+        ResidentProfile.objects.create(
+            user=user,
+            first_name="Juan",
+            middle_name="",
+            last_name="Santos",
+            date_of_birth="1998-01-01",
+            address="Old address",
+            barangay="Marikina Heights",
+            gender="male",
+        )
+        self.client.force_authenticate(user)
+
+        response = self.client.patch(
+            "/api/auth/me/",
+            {
+                "first_name": "Maria",
+                "middle_name": "Ana",
+                "last_name": "Reyes",
+                "address": "New address",
+                "gender": "female",
+                "avatar": "young-woman",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        user.refresh_from_db()
+        self.assertEqual(user.resident_profile.first_name, "Maria")
+        self.assertEqual(user.resident_profile.avatar, "young-woman")
+        self.assertEqual(response.data["full_name"], "Maria Reyes")
+        self.assertEqual(response.data["middleName"], "Ana")
+
+    def test_resident_profile_update_rejects_invalid_name(self):
+        user = get_user_model().objects.create_user(
+            email="profile-invalid@example.com",
+            phone_number="+639241234570",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+        ResidentProfile.objects.create(
+            user=user,
+            first_name="Juan",
+            middle_name="",
+            last_name="Santos",
+            date_of_birth="1998-01-01",
+            address="Old address",
+            barangay="Marikina Heights",
+            gender="male",
+        )
+        self.client.force_authenticate(user)
+
+        response = self.client.patch(
+            "/api/auth/me/",
+            {"first_name": "Ju@n"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["first_name"][0], "Use letters only, including Ñ/ñ.")
+
+    def test_resident_settings_are_created_and_persisted(self):
+        user = get_user_model().objects.create_user(
+            email="settings@example.com",
+            phone_number="+639241234569",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+        self.client.force_authenticate(user)
+
+        get_response = self.client.get("/api/auth/settings/")
+        patch_response = self.client.patch(
+            "/api/auth/settings/",
+            {
+                "push_alerts": False,
+                "report_updates": True,
+                "community_sharing": True,
+                "location_confirmation": False,
+            },
+            format="json",
+        )
+
+        self.assertEqual(get_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(patch_response.status_code, status.HTTP_200_OK)
+        settings_obj = ResidentSettings.objects.get(user=user)
+        self.assertFalse(settings_obj.push_alerts)
+        self.assertTrue(settings_obj.community_sharing)
+        self.assertFalse(settings_obj.location_confirmation)
+
     def test_login_endpoint_is_throttled(self):
         responses = [
             self.client.post(
@@ -682,3 +777,80 @@ class AccountSecurityTests(APITestCase):
                     validate_password(password)
 
         validate_password("Str0ng!Pass123")
+
+@DEBUG_ALL
+class PhaseOneBAccountAPITests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        User = get_user_model()
+        self.resident = User.objects.create_user(
+            email="phase1b-resident@example.com",
+            phone_number="+639351234567",
+            password="Str0ng!Pass123",
+            status=User.Status.PENDING_VERIFICATION,
+        )
+        ResidentProfile.objects.create(
+            user=self.resident,
+            first_name="Cardu",
+            last_name="Dalisay",
+            date_of_birth="1998-01-01",
+            address="Marikina Heights",
+            barangay="Marikina Heights",
+        )
+        self.official = User.objects.create_user(
+            email="phase1b-official@example.com",
+            phone_number="+639351234568",
+            password="Str0ng!Pass123",
+            role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
+        )
+        self.responder = User.objects.create_user(
+            email="phase1b-responder@example.com",
+            phone_number="+639351234569",
+            password="Str0ng!Pass123",
+            role=User.Role.FIRST_RESPONDER,
+            status=User.Status.VERIFIED,
+            responder_unit=User.ResponderUnit.TANOD,
+        )
+
+    def test_official_can_review_account_request(self):
+        account_request = AccountRequest.objects.create(user=self.resident, type=AccountRequest.Type.DATA_EXPORT)
+        self.client.force_authenticate(self.official)
+
+        list_response = self.client.get("/api/auth/account-requests/manage/?status=submitted")
+        review_response = self.client.patch(
+            f"/api/auth/account-requests/{account_request.pk}/review/",
+            {"status": AccountRequest.Status.COMPLETED, "staff_note": "Export prepared."},
+            format="json",
+        )
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(list_response.data[0]["id"], account_request.pk)
+        self.assertEqual(review_response.status_code, status.HTTP_200_OK)
+        account_request.refresh_from_db()
+        self.assertEqual(account_request.status, AccountRequest.Status.COMPLETED)
+        self.assertEqual(account_request.reviewed_by, self.official)
+
+    def test_official_can_list_and_update_residents_and_responders(self):
+        self.client.force_authenticate(self.official)
+
+        residents = self.client.get("/api/auth/residents/?q=Cardu")
+        resident_update = self.client.patch(
+            f"/api/auth/residents/{self.resident.pk}/status/",
+            {"status": get_user_model().Status.VERIFIED},
+            format="json",
+        )
+        responders = self.client.get("/api/auth/responders/?unit=tanod")
+        responder_update = self.client.patch(
+            f"/api/auth/responders/{self.responder.pk}/",
+            {"responder_unit": "bhw", "is_on_duty": True},
+            format="json",
+        )
+
+        self.assertEqual(residents.status_code, status.HTTP_200_OK)
+        self.assertEqual(residents.data[0]["id"], self.resident.pk)
+        self.assertEqual(resident_update.data["status"], get_user_model().Status.VERIFIED)
+        self.assertEqual(responders.status_code, status.HTTP_200_OK)
+        self.assertEqual(responders.data[0]["id"], self.responder.pk)
+        self.assertEqual(responder_update.data["responder_unit"], "bhw")
+        self.assertTrue(responder_update.data["is_on_duty"])

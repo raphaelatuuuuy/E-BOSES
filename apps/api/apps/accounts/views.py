@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
@@ -15,10 +16,12 @@ from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import OTPChallenge, ResidenceProof
-from .permissions import IsStaffOrSuperuser
+from .models import AccountRequest, OTPChallenge, ResidenceProof, ResidentSettings
+from .permissions import IsStaffOrSuperuser, user_has_role_permission
 from .selectors import find_user_by_identifier, latest_active_otp_challenge
 from .serializers import (
+    AccountRequestSerializer,
+    AccountRequestReviewSerializer,
     AdminCreateUserSerializer,
     LoginSerializer,
     OTPResendSerializer,
@@ -29,6 +32,10 @@ from .serializers import (
     PhoneOTPRequestSerializer,
     PhoneOTPVerifySerializer,
     RegisterSerializer,
+    ResidentSettingsSerializer,
+    ResponderUpdateSerializer,
+    UserStatusUpdateSerializer,
+    UserProfileUpdateSerializer,
     UserSummarySerializer,
 )
 from .media_services import (
@@ -62,6 +69,13 @@ def touch_last_seen(user):
     if user and user.is_authenticated:
         user.last_seen_at = timezone.now()
         user.save(update_fields=["last_seen_at", "updated_at"])
+
+def can_manage_accounts(user):
+    return bool(
+        user
+        and user.is_authenticated
+        and (user.is_staff or user.is_superuser or user_has_role_permission(user, "accounts.verify_residents"))
+    )
 
 
 REFRESH_COOKIE_NAME = "eboses_refresh_token"
@@ -115,7 +129,8 @@ class RegisterView(APIView):
         except OTPVerificationError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except (DuplicateProofError, ValidationError) as exc:
-            return Response({"proof": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+            message = exc.message if hasattr(exc, "message") else str(exc)
+            return Response({"proof": [message]}, status=status.HTTP_400_BAD_REQUEST)
         return token_response(user, status.HTTP_201_CREATED)
 
 
@@ -167,7 +182,8 @@ class ResidenceProofCheckView(APIView):
         try:
             validate_residence_proof_uploads(proof_files)
         except (DuplicateProofError, ValidationError) as exc:
-            return Response({"proof": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+            message = exc.message if hasattr(exc, "message") else str(exc)
+            return Response({"proof": [message]}, status=status.HTTP_400_BAD_REQUEST)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -255,6 +271,178 @@ class MeView(APIView):
     def get(self, request):
         touch_last_seen(request.user)
         return Response(UserSummarySerializer(request.user).data)
+
+    def patch(self, request):
+        touch_last_seen(request.user)
+        if not hasattr(request.user, "resident_profile"):
+            return Response({"detail": "Profile is not available for this account."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = UserProfileUpdateSerializer(instance=request.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        create_audit_log("profile.updated", actor=request.user, target_user=request.user, metadata={"fields": sorted(serializer.validated_data.keys())}, request_meta=request_meta(request))
+        request.user.refresh_from_db()
+        return Response(UserSummarySerializer(request.user).data)
+
+
+class ResidentSettingsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_settings(self, user):
+        settings_obj, _ = ResidentSettings.objects.get_or_create(user=user)
+        return settings_obj
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        return Response(ResidentSettingsSerializer(self.get_settings(request.user)).data)
+
+    def patch(self, request):
+        touch_last_seen(request.user)
+        settings_obj = self.get_settings(request.user)
+        serializer = ResidentSettingsSerializer(settings_obj, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        create_audit_log("settings.updated", actor=request.user, target_user=request.user, metadata={"fields": sorted(serializer.validated_data.keys())}, request_meta=request_meta(request))
+        return Response(serializer.data)
+
+class AccountRequestListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        requests = AccountRequest.objects.filter(user=request.user)
+        return Response(AccountRequestSerializer(requests, many=True).data)
+
+    def post(self, request):
+        touch_last_seen(request.user)
+        serializer = AccountRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        account_request = serializer.save(user=request.user)
+        create_audit_log(
+            "account.request_submitted",
+            actor=request.user,
+            target_user=request.user,
+            metadata={"request_id": account_request.pk, "type": account_request.type},
+            request_meta=request_meta(request),
+        )
+        return Response(AccountRequestSerializer(account_request).data, status=status.HTTP_201_CREATED)
+
+class AccountRequestManageListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        if not can_manage_accounts(request.user):
+            return Response({"detail": "You do not have permission to manage account requests."}, status=status.HTTP_403_FORBIDDEN)
+        queryset = AccountRequest.objects.select_related("user", "user__resident_profile")
+        request_status = request.query_params.get("status")
+        if request_status and request_status != "all":
+            queryset = queryset.filter(status=request_status)
+        request_type = request.query_params.get("type")
+        if request_type and request_type != "all":
+            queryset = queryset.filter(type=request_type)
+        return Response(AccountRequestSerializer(queryset, many=True).data)
+
+class AccountRequestReviewView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        return self.patch(request, pk)
+
+    def patch(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_manage_accounts(request.user):
+            return Response({"detail": "You do not have permission to review account requests."}, status=status.HTTP_403_FORBIDDEN)
+        account_request = get_object_or_404(AccountRequest, pk=pk)
+        serializer = AccountRequestReviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        account_request.status = serializer.validated_data["status"]
+        account_request.staff_note = serializer.validated_data.get("staff_note", "")
+        account_request.reviewed_by = request.user
+        account_request.save(update_fields=["status", "staff_note", "reviewed_by", "updated_at"])
+        create_audit_log(
+            "account.request_reviewed",
+            actor=request.user,
+            target_user=account_request.user,
+            metadata={"request_id": account_request.pk, "status": account_request.status},
+            request_meta=request_meta(request),
+        )
+        return Response(AccountRequestSerializer(account_request).data)
+
+class ResidentDirectoryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        if not can_manage_accounts(request.user):
+            return Response({"detail": "You do not have permission to view residents."}, status=status.HTTP_403_FORBIDDEN)
+        User = get_user_model()
+        queryset = User.objects.filter(role=User.Role.RESIDENT).select_related("resident_profile")
+        status_filter = request.query_params.get("status")
+        if status_filter and status_filter != "all":
+            queryset = queryset.filter(status=status_filter)
+        search = (request.query_params.get("search") or request.query_params.get("q") or "").strip()
+        if search:
+            queryset = queryset.filter(email__icontains=search) | queryset.filter(phone_number__icontains=search) | queryset.filter(resident_profile__first_name__icontains=search) | queryset.filter(resident_profile__last_name__icontains=search)
+        return Response(UserSummarySerializer(queryset.order_by("-date_joined"), many=True).data)
+
+class ResidentStatusUpdateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_manage_accounts(request.user):
+            return Response({"detail": "You do not have permission to update residents."}, status=status.HTTP_403_FORBIDDEN)
+        User = get_user_model()
+        resident = get_object_or_404(User, pk=pk, role=User.Role.RESIDENT)
+        serializer = UserStatusUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        resident.status = serializer.validated_data["status"]
+        resident.save(update_fields=["status", "updated_at"])
+        create_audit_log("account.resident_status_updated", actor=request.user, target_user=resident, metadata={"status": resident.status}, request_meta=request_meta(request))
+        return Response(UserSummarySerializer(resident).data)
+
+class ResponderDirectoryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        if not can_manage_accounts(request.user):
+            return Response({"detail": "You do not have permission to view responders."}, status=status.HTTP_403_FORBIDDEN)
+        User = get_user_model()
+        queryset = User.objects.filter(role=User.Role.FIRST_RESPONDER).select_related("resident_profile")
+        status_filter = request.query_params.get("status")
+        if status_filter and status_filter != "all":
+            queryset = queryset.filter(status=status_filter)
+        unit = request.query_params.get("unit")
+        if unit and unit != "all":
+            queryset = queryset.filter(responder_unit=unit)
+        on_duty = request.query_params.get("on_duty")
+        if on_duty in {"true", "false"}:
+            queryset = queryset.filter(is_on_duty=on_duty == "true")
+        search = (request.query_params.get("search") or request.query_params.get("q") or "").strip()
+        if search:
+            queryset = queryset.filter(email__icontains=search) | queryset.filter(phone_number__icontains=search) | queryset.filter(resident_profile__first_name__icontains=search) | queryset.filter(resident_profile__last_name__icontains=search)
+        return Response(UserSummarySerializer(queryset.order_by("responder_unit", "email"), many=True).data)
+
+class ResponderUpdateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_manage_accounts(request.user):
+            return Response({"detail": "You do not have permission to update responders."}, status=status.HTTP_403_FORBIDDEN)
+        User = get_user_model()
+        responder = get_object_or_404(User, pk=pk, role=User.Role.FIRST_RESPONDER)
+        serializer = ResponderUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        fields = []
+        for field, value in serializer.validated_data.items():
+            setattr(responder, field, value)
+            fields.append(field)
+        if fields:
+            responder.save(update_fields=[*fields, "updated_at"])
+            create_audit_log("account.responder_updated", actor=request.user, target_user=responder, metadata={"fields": fields}, request_meta=request_meta(request))
+        return Response(UserSummarySerializer(responder).data)
 
 
 class OnboardCompleteView(APIView):

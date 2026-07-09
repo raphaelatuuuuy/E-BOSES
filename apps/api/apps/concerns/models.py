@@ -29,6 +29,10 @@ class Concern(models.Model):
     category = models.CharField(max_length=32, choices=Category.choices, default=Category.OTHERS)
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.SUBMITTED)
     address = models.CharField(max_length=255, blank=True)
+    latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    location_source = models.CharField(max_length=32, blank=True, default="")
+    location_accuracy = models.FloatField(null=True, blank=True)
     barangay = models.CharField(max_length=120, default="Marikina Heights")
     update_text = models.CharField(max_length=255, blank=True)
     visibility = models.CharField(max_length=16, choices=Visibility.choices, default=Visibility.COMMUNITY)
@@ -46,6 +50,8 @@ class ConcernMedia(models.Model):
     original_filename = models.CharField(max_length=255)
     mime_type = models.CharField(max_length=120, blank=True)
     file_size = models.PositiveIntegerField(default=0)
+    sha256_hash = models.CharField(max_length=64, blank=True, db_index=True)
+    phash = models.CharField(max_length=16, blank=True, db_index=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
 
@@ -115,3 +121,53 @@ class BarangayEvent(models.Model):
 
     class Meta:
         ordering = ["starts_at", "id"]
+
+class ContentFlag(models.Model):
+    class Reason(models.TextChoices):
+        IRRELEVANT = "irrelevant", "Irrelevant"
+        FALSE_INFO = "false_info", "False Information"
+        SENSITIVE = "sensitive", "Sensitive Content"
+        ABUSIVE = "abusive", "Abusive Content"
+        OTHER = "other", "Other"
+
+    class Status(models.TextChoices):
+        SUBMITTED = "submitted", "Submitted"
+        REVIEWED = "reviewed", "Reviewed"
+        DISMISSED = "dismissed", "Dismissed"
+        ACTION_TAKEN = "action_taken", "Action Taken"
+
+    concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="flags")
+    comment = models.ForeignKey(ConcernComment, null=True, blank=True, on_delete=models.CASCADE, related_name="flags")
+    reporter = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="content_flags")
+    reason = models.CharField(max_length=24, choices=Reason.choices)
+    note = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.SUBMITTED)
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="reviewed_content_flags")
+    staff_note = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+class ConcernAiAssessment(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        NOT_CONFIGURED = "not_configured", "Not Configured"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    concern = models.OneToOneField(Concern, on_delete=models.CASCADE, related_name="ai_assessment")
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.NOT_CONFIGURED)
+    image_objects = models.JSONField(default=list, blank=True)
+    yolo_confidence = models.FloatField(null=True, blank=True)
+    severity_estimate = models.CharField(max_length=32, blank=True)
+    nlp_validity = models.CharField(max_length=32, blank=True)
+    nlp_confidence = models.FloatField(null=True, blank=True)
+    category_match = models.BooleanField(null=True, blank=True)
+    recommendation = models.CharField(max_length=120, blank=True)
+    explanation = models.TextField(blank=True)
+    model_version = models.CharField(max_length=80, blank=True)
+    raw_result = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)

@@ -21,8 +21,14 @@ export interface SessionResponse {
   user: unknown
 }
 
-function apiBaseUrl() {
+export function apiBaseUrl() {
   return (import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/$/, "")
+}
+
+export function websocketUrl(path: string) {
+  const base = apiBaseUrl().replace(/\/api$/, "")
+  const wsBase = base.replace(/^https:/, "wss:").replace(/^http:/, "ws:")
+  return `${wsBase}${path.startsWith("/") ? path : `/${path}`}`
 }
 
 function csrfToken() {

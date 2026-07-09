@@ -14,13 +14,13 @@ import {
   InputOTPSlot,
 } from "@workspace/ui/components/input-otp"
 
-import { resendOtp, verifyOtp } from "@/features/auth/api"
-import { useAuthPanelRotation } from "@/features/auth/hooks/use-auth-panel-rotation"
+import { resendOtp, verifyOtp, type AuthUser } from "@/features/auth/api"
+import { AuthSidePanel } from "@/features/auth/components/auth-side-panel"
 import { usePageTitle } from "@/hooks/use-page-title"
 
 interface AccountOtpVerificationPageProps {
   onBack?: () => void
-  onSuccess?: () => void
+  onSuccess?: (user: AuthUser) => void
 }
 
 const errorSlotClassName =
@@ -32,7 +32,6 @@ export default function AccountOtpVerificationPage({
   onBack,
   onSuccess,
 }: AccountOtpVerificationPageProps) {
-  const { image, taglineLines } = useAuthPanelRotation()
   const [code, setCode] = useState("")
   const [error, setError] = useState("")
   const [submitError, setSubmitError] = useState("")
@@ -71,8 +70,8 @@ export default function AccountOtpVerificationPage({
     setSubmitError("")
 
     try {
-      await verifyOtp({ channel: "email", purpose: "registration", code })
-      onSuccess?.()
+      const user = await verifyOtp({ channel: "email", purpose: "registration", code })
+      onSuccess?.(user)
     } catch {
       setError("Invalid or expired code. Try again.")
     } finally {
@@ -177,18 +176,11 @@ export default function AccountOtpVerificationPage({
             </div>
           </div>
         </div>
-      </section>
-      <section className="relative hidden h-full min-h-screen overflow-hidden lg:block" aria-hidden="true">
-        <div className="absolute inset-0 bg-cover bg-center bg-no-repeat" style={{ backgroundImage: `url(${image})` }} />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
-        <div className="absolute bottom-0 left-0 right-0 p-8 md:p-10">
-          <h2 className="font-heading text-balance text-3xl leading-tight text-white md:text-4xl">
-            {taglineLines[0]}
-            <br />
-            {taglineLines[1]}
-          </h2>
+        <div className="flex justify-center mt-auto -mx-6 -mb-6 md:-mx-10 md:-mb-10">
+          <img src="/contents/footer-auth.png" alt="" className="w-full h-auto" aria-hidden="true" />
         </div>
       </section>
+      <AuthSidePanel />
     </main>
   )
 }

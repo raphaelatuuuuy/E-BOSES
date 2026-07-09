@@ -25,6 +25,11 @@ export function getStatusPath(status: UserStatus) {
 export function AuthSessionProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = React.useState<AuthUser | null>(null)
   const [loading, setLoading] = React.useState(true)
+  const userRef = React.useRef<AuthUser | null>(null)
+
+  React.useEffect(() => {
+    userRef.current = user
+  }, [user])
 
   const clearSession = React.useCallback(() => {
     clearAuthTokens()
@@ -32,7 +37,10 @@ export function AuthSessionProvider({ children }: { children: React.ReactNode })
   }, [])
 
   const refreshUser = React.useCallback(async () => {
-    setLoading(true)
+    const showBlockingLoader = !userRef.current
+    if (showBlockingLoader) {
+      setLoading(true)
+    }
     try {
       if (!getAccessToken()) {
         const session = await refreshSession()

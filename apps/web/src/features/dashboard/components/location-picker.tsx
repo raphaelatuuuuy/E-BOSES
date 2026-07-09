@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { LocateFixedIcon, SearchIcon } from "lucide-react"
+import { LocateFixedIcon, MapIcon, MapPinIcon, SearchIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -44,8 +44,13 @@ export default function LocationPicker({ onPin, address, onAddressChange }: Loca
       map = L.map(containerRef.current, {
         center: [14.6341, 121.0962],
         zoom: 14,
-        zoomControl: false,
+        zoomControl: true,
+        zoomSnap: 0.5,
+        attributionControl: false,
       })
+
+      // Move zoom controls to bottom-right
+      map.zoomControl.setPosition("bottomright")
 
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "&copy; OpenStreetMap contributors",
@@ -149,47 +154,24 @@ export default function LocationPicker({ onPin, address, onAddressChange }: Loca
   }
 
   return (
-    <div className="relative flex h-full w-full flex-col rounded-lg border border-border overflow-hidden">
-      {/* Top bar */}
-      <div className="absolute left-2 right-2 top-2 z-[1000] flex flex-col gap-1">
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
-            <input
-              type="text"
-              value={address}
-              onChange={(e) => handleSearch(e.target.value)}
-              placeholder="Search location"
-              className="w-full rounded-md bg-white py-1.5 pl-8 pr-3 text-xs text-foreground shadow-md ring-1 ring-border outline-none focus:ring-2 focus:ring-primary/30"
-            />
+    <div className="flex h-full w-full flex-col overflow-hidden">
+      <div className="relative">
+        {/* Map container */}
+        <div ref={containerRef} className="h-full w-full min-h-[260px]" />
+        {/* Barangay badge — bottom-left */}
+        <div className="absolute bottom-3 left-3 z-[1000] flex cursor-default items-center gap-3 rounded-sm bg-white/90 px-3 py-2 shadow-sm ring-1 ring-black/5 transition-opacity hover:opacity-60">
+          <MapPinIcon className="size-4 shrink-0 text-[#2447b3]" />
+          <div>
+            <p className="text-xs font-bold leading-tight text-[#07145f]">Your Barangay</p>
+            <p className="text-xs font-medium leading-tight text-[#68739c]">Brgy. Marikina Heights</p>
           </div>
-          <button
-            type="button"
-            onClick={handleLocate}
-            disabled={locating}
-            className={cn(
-              "flex shrink-0 items-center gap-1 rounded-md bg-white px-2.5 py-1.5 text-xs font-medium text-foreground shadow-md ring-1 ring-border transition-colors hover:bg-muted disabled:opacity-60",
-            )}
-          >
-            <LocateFixedIcon className="size-3.5" />
-            {locating ? "…" : "Locate"}
-          </button>
         </div>
-        {searchResults.length > 0 && (
-          <div className="max-h-[160px] overflow-y-auto rounded-md bg-white shadow-md ring-1 ring-border">
-            {searchResults.map((r, i) => (
-              <button key={i} type="button" onClick={() => goToResult(r.lat, r.lon)}
-                className="w-full px-3 py-2 text-left text-xs text-foreground transition-colors hover:bg-muted border-b border-border last:border-0"
-              >
-                {r.display}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
-
-      {/* Map container */}
-      <div ref={containerRef} className="h-full w-full min-h-[260px]" />
+      <div className="flex items-center gap-2 border-t border-border bg-white px-3 py-2 text-xs text-[#43507f]">
+        <MapIcon className="size-4 shrink-0 text-[#2447b3]" />
+        <span className="font-semibold">Selected location:</span>
+        <span className="truncate text-[#68739c]">{address || "None"}</span>
+      </div>
     </div>
   )
 }

@@ -123,7 +123,12 @@ export const signUpSchema = z
       .regex(/[a-z]/, "Password must contain at least one lowercase letter.")
       .regex(/[0-9]/, "Password must contain at least one number.")
       .regex(/[^A-Za-z0-9]/, "Password must contain at least one special character."),
-    gender: z.enum(["male", "female", "prefer_not_to_say"]).optional().default(""),
+    gender: z
+      .string()
+      .default("")
+      .refine((v) => ["male", "female", "prefer_not_to_say"].includes(v), {
+        message: "Select your gender.",
+      }),
     avatar: z.string().optional().default(""),
     confirmPassword: z.string(),
     agreeToTerms: z.boolean().refine((v) => v, {

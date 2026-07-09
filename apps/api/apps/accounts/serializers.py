@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 import re
 
-from .models import OTPChallenge, User
+from .models import AccountRequest, OTPChallenge, ResidentSettings, User
 from .services import (
     ALLOWED_PROOF_EXTENSIONS,
     ALLOWED_PROOF_MIME_TYPES,
@@ -14,6 +14,15 @@ from .services import (
 
 NAME_PATTERN = re.compile(r"^[A-Za-zÑñ ]+$")
 NAME_MESSAGE = "Use letters only, including Ñ/ñ."
+ALLOWED_AVATARS = {
+    "",
+    "young-man",
+    "young-woman",
+    "middleaged-man",
+    "middleaged-woman",
+    "senior-man",
+    "senior-woman",
+}
 
 
 def phone_number_variants(value):
@@ -114,6 +123,7 @@ class LoginSerializer(serializers.Serializer):
 
 class UserSummarySerializer(serializers.ModelSerializer):
     firstName = serializers.SerializerMethodField()
+    middleName = serializers.SerializerMethodField()
     lastName = serializers.SerializerMethodField()
     full_name = serializers.SerializerMethodField()
     address = serializers.SerializerMethodField()
@@ -137,8 +147,14 @@ class UserSummarySerializer(serializers.ModelSerializer):
             "phone_verified_at",
             "last_seen_at",
             "is_onboarded",
+            "responder_unit",
+            "is_on_duty",
+            "current_latitude",
+            "current_longitude",
+            "location_updated_at",
             "date_joined",
             "firstName",
+            "middleName",
             "lastName",
             "full_name",
             "address",
@@ -155,6 +171,10 @@ class UserSummarySerializer(serializers.ModelSerializer):
     def get_firstName(self, obj):
         profile = self.profile(obj)
         return profile.first_name if profile else obj.first_name
+
+    def get_middleName(self, obj):
+        profile = self.profile(obj)
+        return profile.middle_name if profile else ""
 
     def get_lastName(self, obj):
         profile = self.profile(obj)
@@ -199,6 +219,83 @@ class UserSummarySerializer(serializers.ModelSerializer):
             icon_type = "man" if profile.gender == "male" else "woman"
             return f"{age_bucket}-{icon_type}"
         return ""
+
+
+class UserProfileUpdateSerializer(serializers.Serializer):
+    first_name = serializers.CharField(max_length=50, required=False)
+    middle_name = serializers.CharField(max_length=50, allow_blank=True, required=False)
+    last_name = serializers.CharField(max_length=50, required=False)
+    address = serializers.CharField(max_length=200, required=False)
+    gender = serializers.ChoiceField(choices=["male", "female", "prefer_not_to_say"], allow_blank=True, required=False)
+    avatar = serializers.CharField(max_length=30, allow_blank=True, required=False)
+
+    def validate_first_name(self, value):
+        return self.validate_name(value)
+
+    def validate_middle_name(self, value):
+        if value == "":
+            return value
+        return self.validate_name(value)
+
+    def validate_last_name(self, value):
+        return self.validate_name(value)
+
+    def validate_name(self, value):
+        if not NAME_PATTERN.fullmatch(value):
+            raise serializers.ValidationError(NAME_MESSAGE)
+        return value
+
+    def validate_avatar(self, value):
+        if value not in ALLOWED_AVATARS:
+            raise serializers.ValidationError("Choose a valid avatar.")
+        return value
+
+    def update(self, instance, validated_data):
+        profile = instance.resident_profile
+        for field, value in validated_data.items():
+            setattr(profile, field, value)
+        profile.save(update_fields=[*validated_data.keys(), "updated_at"])
+        return instance
+
+
+class ResidentSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ResidentSettings
+        fields = (
+            "push_alerts",
+            "report_updates",
+            "community_sharing",
+            "location_confirmation",
+            "sos_placement",
+            "updated_at",
+        )
+        read_only_fields = ("updated_at",)
+
+class AccountRequestSerializer(serializers.ModelSerializer):
+    user = UserSummarySerializer(read_only=True)
+
+    class Meta:
+        model = AccountRequest
+        fields = ("id", "user", "type", "status", "note", "staff_note", "created_at", "updated_at")
+        read_only_fields = ("id", "user", "status", "staff_note", "created_at", "updated_at")
+
+class AccountRequestReviewSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=[
+            AccountRequest.Status.REVIEWED,
+            AccountRequest.Status.COMPLETED,
+            AccountRequest.Status.REJECTED,
+        ]
+    )
+    staff_note = serializers.CharField(max_length=255, allow_blank=True, required=False)
+
+class UserStatusUpdateSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=User.Status.choices)
+
+class ResponderUpdateSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=User.Status.choices, required=False)
+    responder_unit = serializers.ChoiceField(choices=User.ResponderUnit.choices, allow_blank=True, required=False)
+    is_on_duty = serializers.BooleanField(required=False)
 
 
 class OTPVerifySerializer(serializers.Serializer):

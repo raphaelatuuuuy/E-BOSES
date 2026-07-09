@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Count, Q
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
@@ -13,17 +14,27 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.media_services import log_raw_media_access
-from apps.accounts.services import validate_concern_media_file
+from apps.accounts.permissions import user_has_role_permission
+from apps.accounts.services import (
+    create_audit_log,
+    phash_file,
+    sha256_file,
+    validate_concern_media_file,
+)
 from apps.accounts.views import request_meta, touch_last_seen
+from apps.notifications.models import Notification
+from apps.notifications.services import broadcast_notification
 
 from .models import (
     Announcement,
     BarangayEvent,
     Concern,
+    ConcernAiAssessment,
     ConcernComment,
     ConcernMedia,
     ConcernStatusEvent,
     ConcernVote,
+    ContentFlag,
 )
 from .serializers import (
     ActiveResponderSerializer,
@@ -32,8 +43,10 @@ from .serializers import (
     ConcernCommentCreateSerializer,
     ConcernCommentSerializer,
     ConcernCreateSerializer,
+    ContentFlagSerializer,
     ConcernMediaSerializer,
     ConcernSerializer,
+    ConcernStatusUpdateSerializer,
     ConcernVoteSerializer,
 )
 from .services import ensure_concern_media_preview, user_can_access_concern_media_raw
@@ -43,6 +56,13 @@ ACTIVE_STATUSES = {
     Concern.Status.SUBMITTED,
     Concern.Status.UNDER_REVIEW,
     Concern.Status.IN_PROGRESS,
+    Concern.Status.APPEALED,
+}
+
+FEED_VISIBLE_STATUSES = {
+    Concern.Status.UNDER_REVIEW,
+    Concern.Status.IN_PROGRESS,
+    Concern.Status.RESOLVED,
     Concern.Status.APPEALED,
 }
 
@@ -59,12 +79,25 @@ def can_access_concern(user, concern):
     )
 
 
+def can_update_concern_status(user):
+    return bool(
+        user
+        and user.is_authenticated
+        and (
+            user.is_staff
+            or user.is_superuser
+            or user_has_role_permission(user, "concerns.manage")
+        )
+    )
+
+
 def decorate_concerns(queryset, user):
     concerns = list(
         queryset
         .select_related("reporter", "reporter__resident_profile")
         .prefetch_related(
             "media",
+            "ai_assessment",
             "status_events",
             "comments__author",
             "comments__author__resident_profile",
@@ -84,7 +117,23 @@ def decorate_concerns(queryset, user):
         voted_ids = set()
     for concern in concerns:
         concern.user_vote = 1 if concern.pk in voted_ids else 0
+        concern.priority_score = (concern.vote_count * 3) + (concern.comment_count * 2)
     return concerns
+
+def notify_announcement_published(announcement):
+    User = get_user_model()
+    recipients = User.objects.filter(
+        role=User.Role.RESIDENT,
+        status=User.Status.VERIFIED,
+    ).exclude(resident_settings__push_alerts=False)
+    for recipient in recipients:
+        notification = Notification.objects.create(
+            recipient=recipient,
+            type=Notification.Type.ANNOUNCEMENT,
+            title=announcement.title,
+            body=announcement.body[:240],
+        )
+        transaction.on_commit(lambda notification=notification: broadcast_notification(notification))
 
 
 class ConcernListCreateView(APIView):
@@ -95,6 +144,20 @@ class ConcernListCreateView(APIView):
         touch_last_seen(request.user)
         serializer = ConcernCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        validated_media = []
+        media_hashes = set()
+        for uploaded_file in request.FILES.getlist("media"):
+            try:
+                validated_file = validate_concern_media_file(uploaded_file)
+            except ValidationError as exc:
+                return Response({"media": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+            media_hash = sha256_file(validated_file)
+            raw_content = validated_file.read(); validated_file.seek(0)
+            media_phash = phash_file(raw_content)
+            if media_hash in media_hashes or ConcernMedia.objects.filter(sha256_hash=media_hash).exists():
+                return Response({"media": [f"{uploaded_file.name}: duplicate media upload detected."]}, status=status.HTTP_400_BAD_REQUEST)
+            media_hashes.add(media_hash)
+            validated_media.append((uploaded_file, validated_file, media_hash, media_phash))
         concern = Concern.objects.create(
             reporter=request.user,
             title=serializer.validated_data["title"],
@@ -102,6 +165,10 @@ class ConcernListCreateView(APIView):
             category=serializer.validated_data["category"],
             visibility=serializer.validated_data["visibility"],
             address=serializer.validated_data.get("address", ""),
+            latitude=serializer.validated_data.get("latitude"),
+            longitude=serializer.validated_data.get("longitude"),
+            location_source=serializer.validated_data.get("location_source", ""),
+            location_accuracy=serializer.validated_data.get("location_accuracy"),
             barangay=getattr(getattr(request.user, "resident_profile", None), "barangay", "") or "Marikina Heights",
             update_text="Submitted for barangay review.",
         )
@@ -111,17 +178,16 @@ class ConcernListCreateView(APIView):
             note="Report submitted.",
             actor=request.user,
         )
-        for uploaded_file in request.FILES.getlist("media"):
-            try:
-                validated_file = validate_concern_media_file(uploaded_file)
-            except ValidationError as exc:
-                return Response({"media": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+        ConcernAiAssessment.objects.create(concern=concern, status=ConcernAiAssessment.Status.NOT_CONFIGURED)
+        for uploaded_file, validated_file, media_hash, media_phash in validated_media:
             ConcernMedia.objects.create(
                 concern=concern,
                 file=validated_file,
                 original_filename=uploaded_file.name,
                 mime_type=getattr(validated_file, "content_type", "") or "",
                 file_size=validated_file.size,
+                sha256_hash=media_hash,
+                phash=media_phash,
             )
         decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
         return Response(ConcernSerializer(decorated, context={"request": request}).data, status=status.HTTP_201_CREATED)
@@ -149,6 +215,35 @@ class MyConcernListView(APIView):
         return Response(ConcernSerializer(concerns, many=True, context={"request": request}).data)
 
 
+class ManagedConcernListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to manage reports."}, status=status.HTTP_403_FORBIDDEN)
+        queryset = Concern.objects.all()
+        status_filter = request.query_params.get("status")
+        if status_filter and status_filter != "all":
+            if status_filter == "active":
+                queryset = queryset.filter(status__in=ACTIVE_STATUSES)
+            else:
+                queryset = queryset.filter(status=status_filter)
+        category = request.query_params.get("category")
+        if category and category != "all":
+            queryset = queryset.filter(category=category)
+        search = (request.query_params.get("search") or request.query_params.get("q") or "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(title__icontains=search)
+                | Q(description__icontains=search)
+                | Q(address__icontains=search)
+                | Q(barangay__icontains=search)
+                | Q(update_text__icontains=search)
+            )
+        concerns = decorate_concerns(queryset.order_by("-updated_at", "-created_at"), request.user)
+        return Response(ConcernSerializer(concerns, many=True, context={"request": request}).data)
+
 class ConcernDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -166,10 +261,21 @@ class ConcernFeedView(APIView):
 
     def get(self, request):
         touch_last_seen(request.user)
-        queryset = Concern.objects.filter(visibility=Concern.Visibility.COMMUNITY)
+        queryset = Concern.objects.filter(
+            visibility=Concern.Visibility.COMMUNITY,
+            status__in=FEED_VISIBLE_STATUSES,
+        )
         category = request.query_params.get("category")
         if category and category != "all":
             queryset = queryset.filter(category=category)
+        search = (request.query_params.get("search") or request.query_params.get("q") or "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(title__icontains=search)
+                | Q(description__icontains=search)
+                | Q(barangay__icontains=search)
+                | Q(update_text__icontains=search)
+            )
         date_from = request.query_params.get("date_from")
         if date_from:
             queryset = queryset.filter(created_at__date__gte=date_from)
@@ -177,7 +283,8 @@ class ConcernFeedView(APIView):
         if date_to:
             queryset = queryset.filter(created_at__date__lte=date_to)
         concerns = decorate_concerns(queryset, request.user)
-        return Response(ConcernSerializer(concerns, many=True, context={"request": request}).data)
+        concerns.sort(key=lambda item: (item.priority_score, item.updated_at, item.pk), reverse=True)
+        return Response(ConcernSerializer(concerns, many=True, context={"request": request, "privacy_safe": True}).data)
 
 
 class ConcernVoteView(APIView):
@@ -227,6 +334,88 @@ class ConcernCommentCreateView(APIView):
             status=status.HTTP_201_CREATED,
         )
 
+class ContentFlagCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        concern = get_object_or_404(Concern, pk=pk, visibility=Concern.Visibility.COMMUNITY)
+        serializer = ContentFlagSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        comment = None
+        comment_id = serializer.validated_data.get("comment")
+        if comment_id:
+            comment = get_object_or_404(ConcernComment, pk=comment_id, concern=concern)
+        flag = ContentFlag.objects.create(
+            concern=concern,
+            comment=comment,
+            reporter=request.user,
+            reason=serializer.validated_data["reason"],
+            note=serializer.validated_data.get("note", ""),
+        )
+        create_audit_log(
+            "content.flag_submitted",
+            actor=request.user,
+            target_user=concern.reporter,
+            metadata={"concern_id": concern.pk, "flag_id": flag.pk, "reason": flag.reason},
+            request_meta=request_meta(request),
+        )
+        return Response(ContentFlagSerializer(flag, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
+class ContentFlagListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to view content flags."}, status=status.HTTP_403_FORBIDDEN)
+        flags = ContentFlag.objects.select_related(
+            "concern",
+            "comment",
+            "reporter",
+            "reporter__resident_profile",
+        )
+        status_filter = request.query_params.get("status")
+        if status_filter and status_filter != "all":
+            flags = flags.filter(status=status_filter)
+        return Response(ContentFlagSerializer(flags, many=True, context={"request": request}).data)
+
+
+class ConcernStatusUpdateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to update report status."}, status=status.HTTP_403_FORBIDDEN)
+
+        concern = get_object_or_404(Concern, pk=pk)
+        serializer = ConcernStatusUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        next_status = serializer.validated_data["status"]
+        note = serializer.validated_data.get("note", "").strip()
+        if not note:
+            note = f"Report status updated to {next_status.replace('_', ' ')}."
+
+        concern.status = next_status
+        concern.update_text = note
+        concern.save(update_fields=["status", "update_text", "updated_at"])
+        ConcernStatusEvent.objects.create(
+            concern=concern,
+            status=next_status,
+            note=note,
+            actor=request.user,
+        )
+        create_audit_log(
+            "concern.status_updated",
+            actor=request.user,
+            target_user=concern.reporter,
+            metadata={"concern_id": concern.pk, "status": next_status},
+            request_meta=request_meta(request),
+        )
+        decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
+        return Response(ConcernSerializer(decorated, context={"request": request}).data)
+
 
 class ConcernSummaryView(APIView):
     permission_classes = [IsAuthenticated]
@@ -254,6 +443,63 @@ class AnnouncementListView(APIView):
         )
         return Response(AnnouncementSerializer(announcements, many=True).data)
 
+class AnnouncementManageListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to manage announcements."}, status=status.HTTP_403_FORBIDDEN)
+        announcements = Announcement.objects.all()
+        published = request.query_params.get("published")
+        if published in {"true", "false"}:
+            announcements = announcements.filter(is_published=published == "true")
+        return Response(AnnouncementSerializer(announcements, many=True).data)
+
+    def post(self, request):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to create announcements."}, status=status.HTTP_403_FORBIDDEN)
+        serializer = AnnouncementSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        announcement = serializer.save()
+        if announcement.is_published:
+            if not announcement.published_at:
+                announcement.published_at = timezone.now()
+                announcement.save(update_fields=["published_at", "updated_at"])
+            notify_announcement_published(announcement)
+        create_audit_log("announcement.created", actor=request.user, metadata={"announcement_id": announcement.pk, "is_published": announcement.is_published}, request_meta=request_meta(request))
+        return Response(AnnouncementSerializer(announcement).data, status=status.HTTP_201_CREATED)
+
+class AnnouncementManageDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to update announcements."}, status=status.HTTP_403_FORBIDDEN)
+        announcement = get_object_or_404(Announcement, pk=pk)
+        was_published = announcement.is_published
+        serializer = AnnouncementSerializer(announcement, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        announcement = serializer.save()
+        if announcement.is_published and not was_published:
+            if not announcement.published_at:
+                announcement.published_at = timezone.now()
+                announcement.save(update_fields=["published_at", "updated_at"])
+            notify_announcement_published(announcement)
+        create_audit_log("announcement.updated", actor=request.user, metadata={"announcement_id": announcement.pk}, request_meta=request_meta(request))
+        return Response(AnnouncementSerializer(announcement).data)
+
+    def delete(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to delete announcements."}, status=status.HTTP_403_FORBIDDEN)
+        announcement = get_object_or_404(Announcement, pk=pk)
+        create_audit_log("announcement.deleted", actor=request.user, metadata={"announcement_id": announcement.pk}, request_meta=request_meta(request))
+        announcement.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class BarangayEventTodayView(APIView):
     permission_classes = [IsAuthenticated]
@@ -267,18 +513,63 @@ class BarangayEventTodayView(APIView):
         )
         return Response(BarangayEventSerializer(events, many=True).data)
 
+class BarangayEventManageListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to manage events."}, status=status.HTTP_403_FORBIDDEN)
+        events = BarangayEvent.objects.all()
+        published = request.query_params.get("published")
+        if published in {"true", "false"}:
+            events = events.filter(is_published=published == "true")
+        return Response(BarangayEventSerializer(events, many=True).data)
+
+    def post(self, request):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to create events."}, status=status.HTTP_403_FORBIDDEN)
+        serializer = BarangayEventSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        event = serializer.save()
+        create_audit_log("event.created", actor=request.user, metadata={"event_id": event.pk, "is_published": event.is_published}, request_meta=request_meta(request))
+        return Response(BarangayEventSerializer(event).data, status=status.HTTP_201_CREATED)
+
+class BarangayEventManageDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to update events."}, status=status.HTTP_403_FORBIDDEN)
+        event = get_object_or_404(BarangayEvent, pk=pk)
+        serializer = BarangayEventSerializer(event, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        event = serializer.save()
+        create_audit_log("event.updated", actor=request.user, metadata={"event_id": event.pk}, request_meta=request_meta(request))
+        return Response(BarangayEventSerializer(event).data)
+
+    def delete(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to delete events."}, status=status.HTTP_403_FORBIDDEN)
+        event = get_object_or_404(BarangayEvent, pk=pk)
+        create_audit_log("event.deleted", actor=request.user, metadata={"event_id": event.pk}, request_meta=request_meta(request))
+        event.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class ActiveResponderListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         touch_last_seen(request.user)
-        cutoff = timezone.now() - timedelta(minutes=5)
         User = get_user_model()
         responders = User.objects.filter(
             role__in=[User.Role.FIRST_RESPONDER, User.Role.BARANGAY_OFFICIAL],
             status=User.Status.VERIFIED,
-            last_seen_at__gte=cutoff,
+            is_on_duty=True,
         ).select_related("resident_profile")
         return Response(ActiveResponderSerializer(responders, many=True).data)
 

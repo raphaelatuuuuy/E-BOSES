@@ -10,6 +10,7 @@ django-cors-headers>=4.7
 # WebSocket
 channels>=4.2
 channels-redis>=4.2
+daphne>=4.2
 
 # Database
 psycopg2-binary>=2.9
@@ -24,3 +25,6 @@ python-dateutil>=2.9
 
 # Async
 httpx>=0.28
+
+# Forensics / Media authenticity
+c2pa-python

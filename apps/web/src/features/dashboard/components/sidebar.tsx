@@ -1,21 +1,19 @@
-import { useState } from "react"
-import { Link, useLocation, useNavigate } from "react-router-dom"
+import { Link, useLocation } from "react-router-dom"
 import {
+  AlertTriangleIcon,
   BarChart3Icon,
-  ChevronDownIcon,
-  ChevronUpIcon,
   HomeIcon,
-  CircleUserIcon,
-  LogOutIcon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
+  PhoneIcon,
   UsersIcon,
 } from "lucide-react"
+import { useEffect, useState } from "react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
-import { useAuthSession } from "@/features/auth/auth-session"
 import { useSidebar } from "@/features/dashboard/components/sidebar-context"
+import { useAuthSession } from "@/features/auth/auth-session"
 
 interface NavItem {
   label: string
@@ -29,93 +27,87 @@ const topNavItems: NavItem[] = [
   { label: "Reports", path: "/dashboard/reports", icon: BarChart3Icon },
 ]
 
+const staffNavItems: NavItem[] = [
+  { label: "Emergency Ops", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
+  { label: "Profile", path: "/dashboard/profile", icon: UsersIcon },
+]
+
 const bottomNavItems: NavItem[] = []
+type SosPlacement = "floating" | "sidebar" | "compact"
+
+function normalizeSosPlacement(value: string | null): SosPlacement {
+  if (value === "bottom_bar") return "sidebar"
+  if (value === "sidebar" || value === "compact" || value === "floating") return value
+  return "floating"
+}
+
+function SidebarSosButton({ isOpen }: { isOpen: boolean }) {
+  const [placement, setPlacement] = useState<SosPlacement>(() => normalizeSosPlacement(localStorage.getItem("eboses:sos-placement")))
+
+  useEffect(() => {
+    function handlePlacement(event: Event) {
+      const nextPlacement = (event as CustomEvent<{ placement?: SosPlacement }>).detail?.placement
+      setPlacement(normalizeSosPlacement(nextPlacement || localStorage.getItem("eboses:sos-placement")))
+    }
+    window.addEventListener("eboses:sos-placement-change", handlePlacement)
+    return () => window.removeEventListener("eboses:sos-placement-change", handlePlacement)
+  }, [])
+
+  if (placement !== "sidebar") return null
+
+  return (
+    <li className="group/sos relative">
+      <button
+        type="button"
+        onClick={() => window.dispatchEvent(new Event("eboses:open-sos"))}
+        className={cn(
+          "sos-glow flex w-full items-center rounded-lg bg-red-600 text-sm font-extrabold text-white shadow-[0_8px_18px_rgba(220,38,38,0.28)] transition-colors hover:bg-red-700",
+          isOpen ? "gap-3 px-3 py-2.5" : "justify-center px-0 py-2.5",
+        )}
+      >
+        <PhoneIcon className="size-5 shrink-0" fill="currentColor" />
+        {isOpen && <span>SOS</span>}
+      </button>
+      {!isOpen && (
+        <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white opacity-0 shadow-lg transition-opacity group-hover/sos:opacity-100">
+          Send SOS
+        </span>
+      )}
+    </li>
+  )
+}
 
 export function Sidebar() {
   const { isOpen, toggle } = useSidebar()
   const location = useLocation()
-  const navigate = useNavigate()
-  const { user, signOut } = useAuthSession()
-  const [profileOpen, setProfileOpen] = useState(false)
+  const { user } = useAuthSession()
+  const isStaffRole = user?.role === "barangay_official" || user?.role === "first_responder" || user?.is_staff || user?.is_superuser
+  const navItems = isStaffRole ? staffNavItems : topNavItems
 
   function isActive(path: string) {
     return location.pathname === path
   }
 
-  function handleSignOut() {
-    signOut()
-    navigate("/")
-  }
-
-  const initials = user ? `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}` : "?"
-  const avatarKey = user?.avatar || (user?.gender && user?.gender !== "prefer_not_to_say" && user?.date_of_birth
-    ? (() => {
-        const age = new Date().getFullYear() - new Date(user.date_of_birth!).getFullYear()
-        const bucket = age >= 55 ? "senior" : age >= 30 ? "middleaged" : "young"
-        const icon = user.gender === "male" ? "man" : "woman"
-        return `${bucket}-${icon}`
-      })()
-    : "")
-  const displayName = user ? `${(user.firstName ?? "").split(/\s+/)[0]} ${user.lastName ?? ""}`.trim() : "User"
-  const displayRole = user?.role?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()) ?? "Resident"
-
   return (
     <aside
       className={cn(
         "fixed left-0 top-0 z-40 flex h-svh flex-col border-r border-background/10 bg-foreground motion-safe:transition-all motion-safe:duration-300",
-        isOpen ? "w-60" : "w-16",
+        isOpen ? "w-52" : "w-14",
       )}
     >
-      {/* Profile section */}
-      <div className="border-b border-white/10">
-        <button
-          type="button"
-          onClick={() => setProfileOpen((prev) => !prev)}
-          className={cn(
-            "flex w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-background/10",
-            !isOpen && "justify-center px-0",
-          )}
-        >
-          <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-background/10 text-sm font-bold text-background">
-            {avatarKey ? <img src={`/contents/${avatarKey}.png`} alt="" className="h-full w-full scale-125 object-cover" /> : initials}
-          </span>
-          {isOpen && (
-            <>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-background">
-                  {displayName}
-                </p>
-                <p className="truncate text-xs text-background/70">
-                  {displayRole}
-                </p>
-              </div>
-              {profileOpen ? (
-                <ChevronUpIcon className="size-4 shrink-0 text-background/60" />
-              ) : (
-                <ChevronDownIcon className="size-4 shrink-0 text-background/60" />
-              )}
-            </>
-          )}
-        </button>
-
-        {/* Expandable submenu */}
-        {isOpen && profileOpen && (
-          <div className="border-t border-white/10 pb-2 pt-1">
-            <Link
-              to="/dashboard/profile"
-              className="flex items-center gap-3 px-4 py-2 text-sm font-medium text-background/65 transition-colors hover:text-primary"
-            >
-              <CircleUserIcon className="size-4 shrink-0" />
-              <span>Profile</span>
-            </Link>
-            <button
-              type="button"
-              onClick={handleSignOut}
-              className="flex w-full items-center gap-3 px-4 py-2 text-sm font-medium text-background/65 transition-colors hover:text-primary"
-            >
-              <LogOutIcon className="size-4 shrink-0" />
-              <span>Sign out</span>
-            </button>
+      {/* Logo section */}
+      <div className={cn("flex items-start gap-3 border-b border-white/10 px-4 py-4", !isOpen && "justify-center px-0 py-4")}>
+        <img src="/contents/logo.png" alt="E-Boses" className="size-10 shrink-0 object-contain" />
+        {isOpen && (
+          <div>
+            <div className="text-lg font-bold tracking-wide text-white">
+              E-<span className="text-orange-500">BOSES</span>
+            </div>
+            <div className="text-[10px] leading-tight text-white/80">
+              YOUR VOICE.<br />
+              OUR ACTION.<br />
+              BETTER COMMUNITY.
+            </div>
           </div>
         )}
       </div>
@@ -123,7 +115,7 @@ export function Sidebar() {
       {/* Main navigation */}
       <nav className="flex-1 p-2">
         <ul className="flex flex-col gap-1">
-          {topNavItems.map((item) => {
+          {navItems.map((item) => {
             const active = isActive(item.path)
             const Icon = item.icon
 
@@ -157,6 +149,8 @@ export function Sidebar() {
       {/* Footer section */}
       <div className="border-t border-white/10 p-2">
         <ul className="flex flex-col gap-1">
+          <SidebarSosButton isOpen={isOpen} />
+
           {bottomNavItems.map((item) => {
             const active = isActive(item.path)
             const Icon = item.icon

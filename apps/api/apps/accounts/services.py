@@ -8,6 +8,9 @@ from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
 
+import imagehash
+from PIL import Image, UnidentifiedImageError
+
 import httpx
 
 from django.conf import settings
@@ -19,8 +22,8 @@ from django.core.signing import TimestampSigner
 from django.db import transaction
 from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.utils import timezone
-from PIL import Image, UnidentifiedImageError
 
+from .media_forensics import check_media_authenticity
 from .models import (
     AuditLog,
     ConsentRecord,
@@ -38,7 +41,16 @@ PASSWORD_RESET_MAX_AGE_SECONDS = 15 * 60
 ALLOWED_PROOF_MIME_TYPES = {"application/pdf", "image/jpeg", "image/png"}
 ALLOWED_PROOF_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
 MAX_PROOF_FILE_SIZE = 2 * 1024 * 1024
+MAX_IMAGE_WIDTH = 4000
+MAX_IMAGE_HEIGHT = 4000
 logger = logging.getLogger(__name__)
+
+MARIKINA_HEIGHTS_BOUNDS = {
+    "min_latitude": 14.62,
+    "max_latitude": 14.68,
+    "min_longitude": 121.08,
+    "max_longitude": 121.15,
+}
 
 
 class OTPDeliveryError(Exception):
@@ -180,13 +192,11 @@ def scan_uploaded_file(uploaded_file, *, content, detected_mime_type):
 
 
 def _as_uploaded_file(original, *, content, content_type, extension=None):
-    name = getattr(original, "name", "upload") or "upload"
-    if extension and Path(name).suffix.lower() != extension:
-        name = f"{Path(name).stem}{extension}"
+    safe_name = f"{secrets.token_hex(16)}{extension or Path(getattr(original, 'name', 'upload') or 'upload').suffix}"
     normalized = InMemoryUploadedFile(
         file=BytesIO(content),
         field_name=getattr(original, "field_name", None),
-        name=name,
+        name=safe_name,
         content_type=content_type,
         size=len(content),
         charset=getattr(original, "charset", None),
@@ -210,6 +220,9 @@ def normalize_uploaded_file(uploaded_file, *, content, detected_mime_type):
         with Image.open(BytesIO(content)) as image:
             image.verify()
         with Image.open(BytesIO(content)) as image:
+            width, height = image.size
+            if width > MAX_IMAGE_WIDTH or height > MAX_IMAGE_HEIGHT:
+                raise ValidationError(f"Images must be {MAX_IMAGE_WIDTH}×{MAX_IMAGE_HEIGHT} pixels or smaller.")
             output = BytesIO()
             if detected_mime_type == "image/jpeg":
                 image.convert("RGB").save(output, format="JPEG", quality=90, optimize=True)
@@ -243,6 +256,9 @@ def validate_uploaded_media_file(uploaded_file, *, profile=RESIDENCE_PROOF_UPLOA
         raise ValidationError(f"{profile.label} files must be valid PDF, JPG, JPEG, or PNG files.")
     if detected_mime_type != expected_mime_type or (claimed_mime_type and claimed_mime_type != detected_mime_type):
         raise ValidationError("Uploaded file content does not match its extension or MIME type.")
+    # Forensics: block AI-generated and edited media
+    if detected_mime_type != "application/pdf":
+        check_media_authenticity(content)
     normalized_file = normalize_uploaded_file(uploaded_file, content=content, detected_mime_type=detected_mime_type)
     scan_uploaded_file(normalized_file, content=_read_upload(normalized_file), detected_mime_type=detected_mime_type)
     return normalized_file
@@ -258,6 +274,24 @@ def validate_concern_media_file(uploaded_file):
 
 def validate_emergency_media_file(uploaded_file):
     return validate_uploaded_media_file(uploaded_file, profile=EMERGENCY_MEDIA_UPLOAD_PROFILE)
+
+def validate_location_pair(latitude, longitude, *, required=False):
+    if latitude is None or longitude is None:
+        if required or latitude is not None or longitude is not None:
+            raise ValidationError("Latitude and longitude must be provided together.")
+        return
+    latitude = float(latitude)
+    longitude = float(longitude)
+    if not -90 <= latitude <= 90:
+        raise ValidationError({"latitude": "Latitude must be between -90 and 90."})
+    if not -180 <= longitude <= 180:
+        raise ValidationError({"longitude": "Longitude must be between -180 and 180."})
+    bounds = MARIKINA_HEIGHTS_BOUNDS
+    if not (
+        bounds["min_latitude"] <= latitude <= bounds["max_latitude"]
+        and bounds["min_longitude"] <= longitude <= bounds["max_longitude"]
+    ):
+        raise ValidationError("Location must be inside Barangay Marikina Heights.")
 
 
 class OTPVerificationError(Exception):
@@ -350,6 +384,15 @@ def sha256_file(uploaded_file):
     return digest.hexdigest()
 
 
+def phash_file(content: bytes) -> str:
+    """Compute perceptual hash (pHash) for image dedup via visual similarity."""
+    try:
+        with Image.open(BytesIO(content)) as image:
+            return str(imagehash.phash(image))
+    except (UnidentifiedImageError, OSError, ValueError):
+        return ""
+
+
 def registration_proof_files(validated_data):
     return validated_data.get("proof_files") or [validated_data["proof"]]
 
@@ -381,6 +424,7 @@ def create_registration_profile(user, validated_data):
     )
     proofs = []
     for proof_file in proof_files:
+        raw_content = proof_file.read(); proof_file.seek(0)
         proofs.append(
             ResidenceProof.objects.create(
                 user=user,
@@ -389,6 +433,7 @@ def create_registration_profile(user, validated_data):
                 mime_type=getattr(proof_file, "content_type", "") or "",
                 file_size=proof_file.size,
                 sha256_hash=sha256_file(proof_file),
+                phash=phash_file(raw_content),
             )
         )
     ConsentRecord.objects.create(
