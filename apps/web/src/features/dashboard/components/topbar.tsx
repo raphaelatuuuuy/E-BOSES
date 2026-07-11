@@ -8,6 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/component
 import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
 import { NotificationPopover } from "@/features/dashboard/components/notification-popover"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { computeDefaultAvatar } from "@/features/dashboard/avatar-utils"
 
 export function Topbar() {
   const [searchOpen, setSearchOpen] = useState(false)
@@ -15,14 +16,7 @@ export function Topbar() {
   const { user, signOut } = useAuthSession()
 
   const initials = user ? `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}` : "?"
-  const avatarKey = user?.avatar || (user?.gender && user?.gender !== "prefer_not_to_say" && user?.date_of_birth
-    ? (() => {
-        const age = new Date().getFullYear() - new Date(user.date_of_birth!).getFullYear()
-        const bucket = age >= 55 ? "senior" : age >= 30 ? "middleaged" : "young"
-        const icon = user.gender === "male" ? "man" : "woman"
-        return `${bucket}-${icon}`
-      })()
-    : "")
+  const avatarKey = user ? computeDefaultAvatar(user) : ""
   const displayName = user ? `${(user.firstName ?? "").split(/\s+/)[0]} ${user.lastName ?? ""}`.trim() : "User"
   const displayRole = user?.role?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()) ?? "Resident"
   const isStaffRole = user?.role === "barangay_official" || user?.role === "first_responder" || user?.is_staff || user?.is_superuser

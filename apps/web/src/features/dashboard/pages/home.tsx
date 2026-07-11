@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react"
-import { InfoIcon, PhoneIcon, ShieldCheckIcon } from "lucide-react"
-import { Link } from "react-router-dom"
+import { InfoIcon, ShieldCheckIcon } from "lucide-react"
 
 import { usePageTitle } from "@/hooks/use-page-title"
 import { useAuthSession } from "@/features/auth/auth-session"
@@ -11,9 +10,11 @@ import { ActiveReportsCard } from "@/features/dashboard/components/active-report
 import { QuickActionsCard } from "@/features/dashboard/components/quick-actions-card"
 import {
   getDashboardSummary,
+  getResidentDashboardSummary,
   listAnnouncements,
   type Announcement,
   type Concern,
+  type ResidentRoleSummary,
 } from "@/features/dashboard/api"
 
 function UrgentHelpCard() {
@@ -31,22 +32,25 @@ function UrgentHelpCard() {
         </div>
       </div>
 
-      <Link
-        to="#"
+      <button
+        type="button"
+        onClick={() => window.dispatchEvent(new Event("eboses:open-sos"))}
         className="mt-4 flex items-center gap-2 text-sm font-semibold text-[#0047b3] transition-colors hover:text-[#003580]"
       >
         How it works
         <InfoIcon className="size-4" strokeWidth={2} />
-      </Link>
+      </button>
     </section>
   )
 }
+
 
 export default function HomePage() {
   usePageTitle("Home")
   const { loading: authLoading } = useAuthSession()
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [activeReports, setActiveReports] = useState<Concern[]>([])
+  const [summary, setSummary] = useState<ResidentRoleSummary | null>(null)
   const [error, setError] = useState("")
 
   useEffect(() => {
@@ -55,13 +59,15 @@ export default function HomePage() {
     async function loadHome() {
       setError("")
       try {
-        const [nextAnnouncements, summary] = await Promise.all([
+        const [nextAnnouncements, concernSummary, roleSummary] = await Promise.all([
           listAnnouncements(),
           getDashboardSummary(),
+          getResidentDashboardSummary(),
         ])
         if (cancelled) return
         setAnnouncements(nextAnnouncements)
-        setActiveReports(summary.active_reports)
+        setActiveReports(concernSummary.active_reports)
+        setSummary(roleSummary)
       } catch {
         if (!cancelled) setError("Could not load dashboard data.")
       }

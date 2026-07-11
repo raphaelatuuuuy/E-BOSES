@@ -33,16 +33,14 @@ import { ApiError } from "@/lib/api"
 const LocationPicker = lazy(() => import("@/features/dashboard/components/location-picker"))
 
 const concernConfig = [
-  { label: "Infrastructure", icon: TrafficConeIcon, desc: "Roads, utilities, buildings", value: "infrastructure", color: "amber" },
-  { label: "Environment", icon: LeafIcon, desc: "Pollution, waste, nature", value: "environment", color: "green" },
-  { label: "Public Safety", icon: ShieldCheckIcon, desc: "Crime, hazards, alerts", value: "public_safety", color: "red" },
-  { label: "Others", icon: SearchIcon, desc: "Any other concern", value: "others", color: "slate" },
+  { label: "Infrastructure", img: "/contents/infrastructure.png", desc: "Roads, utilities, buildings", value: "infrastructure", color: "amber" },
+  { label: "Environment", img: "/contents/environment.png", desc: "Pollution, waste, nature", value: "environment", color: "green" },
+  { label: "Public Safety", img: "/contents/public-safety.png", desc: "Stray animals,<br/>weapon, suspicious item", value: "public_safety", color: "blue" },
+  { label: "Others", img: "/contents/others.png", desc: "Any other concern", value: "others", color: "slate" },
 ] as const
 
-const ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg"]
-const ALLOWED_DOCUMENT_TYPES = ["application/pdf"]
-const ALLOWED_TYPES = [...ALLOWED_IMAGE_TYPES, ...ALLOWED_DOCUMENT_TYPES]
-const ACCEPT_STRING = ".pdf,.png,.jpg,.jpeg," + ALLOWED_TYPES.join(",")
+const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/jpg"]
+const ACCEPT_STRING = ".png,.jpg,.jpeg," + ALLOWED_TYPES.join(",")
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const MAX_FILES = 5
 const titleMax = 80
@@ -216,7 +214,7 @@ export function CreateReportDialog({
   }
 
   const selectedConcern = concernConfig.find((item) => item.label === concern)
-  const SelectedConcernIcon = selectedConcern?.icon ?? AlertTriangleIcon
+  const selectedConcernImg = selectedConcern?.img ?? "/contents/others.png"
   const reviewMapUrl = locationPin
     ? `https://www.openstreetmap.org/export/embed.html?bbox=${locationPin.lng - 0.01}%2C${locationPin.lat - 0.01}%2C${locationPin.lng + 0.01}%2C${locationPin.lat + 0.01}&layer=mapnik&marker=${locationPin.lat}%2C${locationPin.lng}`
     : ""
@@ -278,18 +276,19 @@ export function CreateReportDialog({
                 <h2 className="text-base font-bold text-[#07145f]">1. What's the concern?</h2>
                 <div className="mt-4 grid grid-cols-2 gap-3">
                   {concernConfig.map((item) => {
-                    const Icon = item.icon
                     const selected = concern === item.label
                     const colorMap: Record<string, string> = {
                       amber: "border-amber-400 bg-amber-50 text-amber-600",
                       green: "border-green-400 bg-green-50 text-green-600",
                       red: "border-red-400 bg-red-50 text-red-600",
+                      blue: "border-blue-400 bg-blue-50 text-blue-600",
                       slate: "border-slate-400 bg-slate-100 text-slate-600",
                     }
                     const iconBgMap: Record<string, string> = {
                       amber: "bg-amber-100",
                       green: "bg-green-100",
                       red: "bg-red-100",
+                      blue: "bg-blue-100",
                       slate: "bg-slate-200",
                     }
                     return (
@@ -308,10 +307,10 @@ export function CreateReportDialog({
                         )}
                       >
                         <span className={cn("flex size-12 items-center justify-center rounded-full", selected ? iconBgMap[item.color] : "bg-[#eef3ff]")}>
-                          <Icon className="size-7" strokeWidth={2} />
+                          <img src={item.img} alt="" className="h-14 w-14 object-contain" />
                         </span>
                         <span className="text-sm font-bold">{item.label}</span>
-                        <span className="text-xs leading-5 text-[#43507f]">{item.desc}</span>
+                        <span className="text-xs leading-5 text-[#43507f]" dangerouslySetInnerHTML={{ __html: item.desc }} />
                       </button>
                     )
                   })}
@@ -408,7 +407,7 @@ export function CreateReportDialog({
                     <span className="text-sm font-semibold text-[#43507f]">
                       Browse files
                     </span>
-                    <p className="mt-3 text-xs text-[#8b96b8]">JPG, PNG, PDF up to 10MB each (max 5 files)</p>
+                    <p className="mt-3 text-xs text-[#8b96b8]">JPG or PNG up to 10MB each (max 5 files)</p>
                   </label>
                   {mediaFiles.length > 0 ? (
                     <div className="mt-3 grid gap-2">
@@ -495,7 +494,7 @@ export function CreateReportDialog({
                   <div className="mt-4 overflow-hidden rounded-xl border border-[#dfe7f5] bg-white">
                     <div className="flex items-start gap-4 border-b border-[#dfe7f5] px-4 py-4">
                       <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-[#fff1ea] text-[#ff6a1a]">
-                        <SelectedConcernIcon className="size-6" />
+                        <img src={selectedConcernImg} alt="" className="h-14 w-14 object-contain" />
                       </span>
                       <div>
                         <p className="text-[11px] font-bold text-[#68739c]">Category</p>

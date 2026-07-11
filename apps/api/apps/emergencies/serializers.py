@@ -7,6 +7,8 @@ from apps.concerns.serializers import PublicUserSerializer
 
 from .models import (
     EmergencyAlert,
+    EmergencyAppeal,
+    EmergencyEscalation,
     EmergencyLocationPing,
     EmergencyMedia,
     EmergencyResponderAssignment,
@@ -79,12 +81,34 @@ class EmergencyResponderAssignmentSerializer(serializers.ModelSerializer):
         ping = obj.location_pings.order_by("-created_at", "-id").first()
         return EmergencyLocationPingSerializer(ping).data if ping else None
 
+class EmergencyAppealSerializer(serializers.ModelSerializer):
+    appellant = PublicUserSerializer(read_only=True)
+    reviewed_by = PublicUserSerializer(read_only=True)
+    alert_id = serializers.IntegerField(read_only=True)
+    alert_type = serializers.CharField(source="alert.type", read_only=True)
+    alert_status = serializers.CharField(source="alert.status", read_only=True)
+
+    class Meta:
+        model = EmergencyAppeal
+        fields = ("id", "alert_id", "alert_type", "alert_status", "appellant", "reason", "status", "decision_note", "reviewed_by", "created_at", "decided_at")
+
+class EmergencyEscalationSerializer(serializers.ModelSerializer):
+    escalated_to = PublicUserSerializer(read_only=True)
+    triggered_by = PublicUserSerializer(read_only=True)
+
+    class Meta:
+        model = EmergencyEscalation
+        fields = ("id", "previous_assignment", "escalated_to", "triggered_by", "reason", "created_at")
+
 
 class EmergencyAlertSerializer(serializers.ModelSerializer):
     reporter = PublicUserSerializer(read_only=True)
+    reporter_phone = serializers.CharField(source="reporter.phone_number", read_only=True)
     media = EmergencyMediaSerializer(many=True, read_only=True)
     assignments = EmergencyResponderAssignmentSerializer(many=True, read_only=True)
     status_events = EmergencyStatusEventSerializer(many=True, read_only=True)
+    appeals = EmergencyAppealSerializer(many=True, read_only=True)
+    escalations = EmergencyEscalationSerializer(many=True, read_only=True)
     current_assignment = serializers.SerializerMethodField()
 
     class Meta:
@@ -92,6 +116,7 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "reporter",
+            "reporter_phone",
             "type",
             "note",
             "status",
@@ -103,6 +128,8 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
             "assignments",
             "current_assignment",
             "status_events",
+            "appeals",
+            "escalations",
             "created_at",
             "updated_at",
             "resolved_at",
@@ -114,7 +141,29 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
 
 
 class EmergencyAssignSerializer(serializers.Serializer):
-    responder_id = serializers.IntegerField()
+    responder_id = serializers.IntegerField(required=False)
+    responder_ids = serializers.ListField(child=serializers.IntegerField(), required=False, allow_empty=False)
+
+    def validate(self, attrs):
+        ids = []
+        if attrs.get("responder_id"):
+            ids.append(attrs["responder_id"])
+        ids.extend(attrs.get("responder_ids") or [])
+        ids = list(dict.fromkeys(ids))
+        if not ids:
+            raise serializers.ValidationError("Choose at least one responder.")
+        attrs["responder_ids"] = ids
+        return attrs
+
+class EmergencyAppealCreateSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=2000)
+
+class EmergencyAppealReviewSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=[EmergencyAppeal.Status.APPROVED, EmergencyAppeal.Status.DENIED])
+    decision_note = serializers.CharField(max_length=255, allow_blank=True, required=False)
+
+class EmergencyEscalateSerializer(serializers.Serializer):
+    minutes = serializers.IntegerField(min_value=1, max_value=120, default=5)
 
 
 class EmergencyLocationPingCreateSerializer(serializers.Serializer):

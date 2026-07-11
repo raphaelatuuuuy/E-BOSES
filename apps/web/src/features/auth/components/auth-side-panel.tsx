@@ -12,7 +12,10 @@ export function AuthSidePanel() {
   }, [current])
 
   return (
-    <section className="relative hidden h-full min-h-screen overflow-hidden lg:flex lg:flex-col" aria-hidden="true">
+    <section className="relative hidden flex-col overflow-hidden lg:flex lg:h-full lg:min-h-screen">
+      <div className="absolute left-6 top-6 z-10">
+        <img src="/contents/logo.png" alt="E-Boses" className="h-12 w-auto" />
+      </div>
       {/* Image area */}
       <div className="relative flex-1 overflow-hidden">
         <div

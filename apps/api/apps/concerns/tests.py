@@ -1,7 +1,11 @@
 from io import BytesIO
+from io import StringIO
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from django.utils import timezone
 from datetime import timedelta
 from PIL import Image
@@ -12,8 +16,11 @@ from apps.accounts.models import AccountRequest, AuditLog, ResidenceProof
 from apps.accounts.services import sha256_file
 from apps.emergencies.models import EmergencyAlert, EmergencyResponderAssignment
 from apps.notifications.models import Notification
+from apps.concerns.ai import process_concern_ai
+from apps.concerns.ai.image_detector import ImageDetectionResult
+from apps.concerns.ai.text_classifier import TextClassificationResult
 
-from .models import Announcement, BarangayEvent, Concern, ConcernAiAssessment, ConcernComment, ConcernMedia, ConcernStatusEvent, ConcernVote, ContentFlag
+from .models import Announcement, BarangayEvent, Concern, ConcernAiAssessment, ConcernAppeal, ConcernAssignment, ConcernClarification, ConcernComment, ConcernMedia, ConcernOfficialRemark, ConcernStatusEvent, ConcernVote, ContentFlag
 
 def png_bytes():
     output = BytesIO()
@@ -156,10 +163,94 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(concern.location_accuracy, 12.5)
         self.assertEqual(concern.status_events.count(), 1)
         self.assertEqual(concern.status_events.get().status, Concern.Status.SUBMITTED)
-        self.assertEqual(concern.ai_assessment.status, ConcernAiAssessment.Status.NOT_CONFIGURED)
-        self.assertEqual(response.data["ai_assessment"]["status"], ConcernAiAssessment.Status.NOT_CONFIGURED)
+        self.assertEqual(concern.ai_assessment.status, ConcernAiAssessment.Status.PENDING)
+        self.assertEqual(response.data["ai_assessment"]["status"], ConcernAiAssessment.Status.PENDING)
         self.assertRegex(response.data["tracking_id"], r"^RPT-\d{4}-\d{6}$")
         self.assertEqual(response.data["validation_status"], "pending_review")
+
+    def test_non_resident_roles_cannot_create_report(self):
+        User = get_user_model()
+        for role in [User.Role.BARANGAY_OFFICIAL, User.Role.FIRST_RESPONDER]:
+            user = User.objects.create_user(
+                email=f"{role}-cannot-create-concern@example.com",
+                phone_number=f"+63910{len(role):07d}",
+                password="pass",
+                role=role,
+                status=User.Status.VERIFIED,
+            )
+            self.client.force_authenticate(user)
+            response = self.client.post(
+                "/api/concerns/",
+                {
+                    "title": "Should not create",
+                    "description": "Staff direct API attempt.",
+                    "category": "infrastructure",
+                    "visibility": "community",
+                },
+                format="json",
+            )
+
+            self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.assertFalse(Concern.objects.filter(title="Should not create").exists())
+
+    @override_settings(EBOSES_YOLO_MODEL_PATH="", EBOSES_NLP_MODEL_PATH="")
+    def test_ai_command_marks_pending_assessment_not_configured(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="AI pending",
+            description="Basura sa kanto.",
+            category=Concern.Category.ENVIRONMENT,
+        )
+        ConcernAiAssessment.objects.create(concern=concern, status=ConcernAiAssessment.Status.PENDING)
+
+        output = StringIO()
+        call_command("process_concern_ai", "--pending", stdout=output)
+
+        concern.ai_assessment.refresh_from_db()
+        self.assertEqual(concern.ai_assessment.status, ConcernAiAssessment.Status.NOT_CONFIGURED)
+        self.assertIn("Concern", output.getvalue())
+        self.assertIn("manual official review", concern.ai_assessment.recommendation)
+
+    @override_settings(EBOSES_YOLO_MODEL_PATH="configured.pt", EBOSES_NLP_MODEL_PATH="configured-nlp")
+    def test_ai_pipeline_stores_completed_assessment(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Broken drainage",
+            description="Baradong kanal sa gilid ng kalsada.",
+            category=Concern.Category.INFRASTRUCTURE,
+        )
+        with patch("apps.concerns.ai.pipeline.YoloImageDetector") as detector, patch("apps.concerns.ai.pipeline.RobertaTagalogClassifier") as classifier:
+            detector.return_value.detect.return_value = ImageDetectionResult(
+                objects=[{"label": "drainage", "confidence": 0.91}],
+                confidence=0.91,
+                model_version="fake-yolo",
+            )
+            classifier.return_value.classify.return_value = TextClassificationResult(
+                label="valid_infrastructure",
+                confidence=0.88,
+                category=Concern.Category.INFRASTRUCTURE,
+                severity="medium",
+                model_version="fake-roberta",
+            )
+
+            assessment = process_concern_ai(concern.id)
+
+        self.assertEqual(assessment.status, ConcernAiAssessment.Status.COMPLETED)
+        self.assertEqual(assessment.nlp_validity, "valid_infrastructure")
+        self.assertTrue(assessment.category_match)
+        self.assertIn("fake-yolo", assessment.model_version)
+
+    @override_settings(EBOSES_YOLO_MODEL_PATH="configured.pt", EBOSES_NLP_MODEL_PATH="configured-nlp")
+    def test_ai_pipeline_records_failure_without_breaking_review(self):
+        concern = Concern.objects.create(reporter=self.resident, title="AI failure", category=Concern.Category.OTHERS)
+        with patch("apps.concerns.ai.pipeline.YoloImageDetector") as detector:
+            detector.return_value.detect.side_effect = RuntimeError("model crashed")
+
+            assessment = process_concern_ai(concern.id)
+
+        self.assertEqual(assessment.status, ConcernAiAssessment.Status.FAILED)
+        self.assertEqual(assessment.recommendation, "Manual review required.")
 
     def test_duplicate_concern_media_is_rejected_without_creating_report(self):
         response = self.client.post(
@@ -612,3 +703,78 @@ class PhaseOneFoundationAPITests(APITestCase):
                 title="Cleanup Drive",
             ).exists()
         )
+
+    def test_official_can_assign_request_clarification_and_add_remark(self):
+        concern = Concern.objects.create(reporter=self.resident, title="Needs workflow", status=Concern.Status.SUBMITTED)
+        self.client.force_authenticate(self.official)
+
+        assign_response = self.client.post(
+            f"/api/concerns/{concern.pk}/assign/",
+            {"assignee_id": self.responder.pk, "office": "Tanod Desk", "note": "Assigned for field validation."},
+            format="json",
+        )
+        clarify_response = self.client.post(
+            f"/api/concerns/{concern.pk}/clarifications/",
+            {"request_text": "Please add nearest landmark."},
+            format="json",
+        )
+        remark_response = self.client.post(
+            f"/api/concerns/{concern.pk}/remarks/",
+            {"body": "Resident-visible note.", "visible_to_resident": True},
+            format="json",
+        )
+
+        self.assertEqual(assign_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(clarify_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(remark_response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(ConcernAssignment.objects.filter(concern=concern, assignee=self.responder).exists())
+        self.assertTrue(ConcernClarification.objects.filter(concern=concern, status=ConcernClarification.Status.OPEN).exists())
+        self.assertTrue(ConcernOfficialRemark.objects.filter(concern=concern, visible_to_resident=True).exists())
+        self.assertTrue(Notification.objects.filter(recipient=self.resident, type=Notification.Type.CLARIFICATION_REQUESTED).exists())
+
+        self.client.force_authenticate(self.resident)
+        clarification = ConcernClarification.objects.get(concern=concern)
+        reply_response = self.client.post(
+            f"/api/concerns/{concern.pk}/clarifications/{clarification.pk}/reply/",
+            {"response_text": "Near the chapel."},
+            format="json",
+        )
+
+        self.assertEqual(reply_response.status_code, status.HTTP_200_OK)
+        clarification.refresh_from_db()
+        self.assertEqual(clarification.status, ConcernClarification.Status.ANSWERED)
+        self.assertTrue(Notification.objects.filter(recipient=self.official, type=Notification.Type.CLARIFICATION_REPLIED).exists())
+
+    def test_resident_can_appeal_and_official_can_review(self):
+        concern = Concern.objects.create(reporter=self.resident, title="Rejected report", status=Concern.Status.REJECTED)
+        self.client.force_authenticate(self.resident)
+
+        appeal_response = self.client.post(
+            f"/api/concerns/{concern.pk}/appeals/",
+            {"reason": "I have more context and this is valid."},
+            format="json",
+        )
+
+        self.assertEqual(appeal_response.status_code, status.HTTP_201_CREATED)
+        concern.refresh_from_db()
+        self.assertEqual(concern.status, Concern.Status.APPEALED)
+        appeal = ConcernAppeal.objects.get(concern=concern)
+        self.assertEqual(appeal.status, ConcernAppeal.Status.SUBMITTED)
+        self.assertTrue(Notification.objects.filter(recipient=self.official, type=Notification.Type.APPEAL_SUBMITTED).exists())
+
+        self.client.force_authenticate(self.official)
+        list_response = self.client.get("/api/concerns/appeals/?status=submitted")
+        review_response = self.client.post(
+            f"/api/concerns/appeals/{appeal.pk}/review/",
+            {"status": ConcernAppeal.Status.APPROVED, "decision_note": "Reopened for review."},
+            format="json",
+        )
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(list_response.data[0]["id"], appeal.pk)
+        self.assertEqual(review_response.status_code, status.HTTP_200_OK)
+        concern.refresh_from_db()
+        appeal.refresh_from_db()
+        self.assertEqual(appeal.status, ConcernAppeal.Status.APPROVED)
+        self.assertEqual(concern.status, Concern.Status.UNDER_REVIEW)
+        self.assertTrue(Notification.objects.filter(recipient=self.resident, type=Notification.Type.APPEAL_APPROVED).exists())

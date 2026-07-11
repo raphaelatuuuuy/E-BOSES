@@ -10,6 +10,11 @@ class Notification(models.Model):
         RESOLVED = "resolved", "Resolved"
         REJECTED = "rejected", "Rejected"
         ANNOUNCEMENT = "announcement", "Announcement"
+        CLARIFICATION_REQUESTED = "clarification_requested", "Clarification Requested"
+        CLARIFICATION_REPLIED = "clarification_replied", "Clarification Replied"
+        APPEAL_SUBMITTED = "appeal_submitted", "Appeal Submitted"
+        APPEAL_APPROVED = "appeal_approved", "Appeal Approved"
+        APPEAL_DENIED = "appeal_denied", "Appeal Denied"
         EMERGENCY_SUBMITTED = "emergency_submitted", "Emergency Submitted"
         EMERGENCY_ROUTED = "emergency_routed", "Emergency Routed"
         EMERGENCY_ACKNOWLEDGED = "emergency_acknowledged", "Emergency Acknowledged"
@@ -17,6 +22,10 @@ class Notification(models.Model):
         EMERGENCY_ARRIVED = "emergency_arrived", "Emergency Arrived"
         EMERGENCY_RESOLVED = "emergency_resolved", "Emergency Resolved"
         EMERGENCY_CANCELLED = "emergency_cancelled", "Emergency Cancelled"
+        EMERGENCY_ESCALATED = "emergency_escalated", "Emergency Escalated"
+        EMERGENCY_APPEAL_SUBMITTED = "emergency_appeal_submitted", "Emergency Appeal Submitted"
+        EMERGENCY_APPEAL_APPROVED = "emergency_appeal_approved", "Emergency Appeal Approved"
+        EMERGENCY_APPEAL_DENIED = "emergency_appeal_denied", "Emergency Appeal Denied"
         WITNESS_ALERT = "witness_alert", "Witness Alert"
 
     recipient = models.ForeignKey(

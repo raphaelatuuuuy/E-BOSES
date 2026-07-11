@@ -4,6 +4,7 @@ URL configuration for the E-Boses API backend.
 
 from django.contrib import admin
 from django.urls import include, path
+from config.health import health_check
 from apps.concerns.views import (
     ActiveResponderListView,
     AnnouncementListView,
@@ -17,6 +18,7 @@ from apps.dashboard_views import OfficialDashboardSummaryView, ResidentDashboard
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("api/health/", health_check, name="health-check"),
     path("api/auth/", include("apps.accounts.urls")),
     path("api/concerns/", include("apps.concerns.urls")),
     path("api/announcements/", AnnouncementListView.as_view(), name="announcement-list"),

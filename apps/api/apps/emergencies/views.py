@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -23,6 +25,8 @@ from apps.notifications.services import broadcast_emergency_update, create_emerg
 
 from .models import (
     EmergencyAlert,
+    EmergencyAppeal,
+    EmergencyEscalation,
     EmergencyLocationPing,
     EmergencyMedia,
     EmergencyResponderAssignment,
@@ -31,8 +35,13 @@ from .models import (
 )
 from .serializers import (
     EmergencyAlertSerializer,
+    EmergencyAppealCreateSerializer,
+    EmergencyAppealReviewSerializer,
+    EmergencyAppealSerializer,
     EmergencyAssignSerializer,
     EmergencyCreateSerializer,
+    EmergencyEscalateSerializer,
+    EmergencyEscalationSerializer,
     EmergencyLocationPingCreateSerializer,
     EmergencyNoteSerializer,
 )
@@ -138,6 +147,28 @@ def find_auto_responder(alert):
     candidates = preferred or responders
     return min(candidates, key=lambda responder: location_distance_score(alert, responder) or float("inf"))
 
+def find_backup_responder(alert):
+    User = get_user_model()
+    assigned_ids = alert.assignments.values_list("responder_id", flat=True)
+    responders = list(
+        User.objects
+        .filter(
+            role=User.Role.FIRST_RESPONDER,
+            status=User.Status.VERIFIED,
+            is_on_duty=True,
+            current_latitude__isnull=False,
+            current_longitude__isnull=False,
+        )
+        .exclude(pk__in=assigned_ids)
+        .select_related("resident_profile")
+    )
+    if not responders:
+        return None
+    preferred_units = preferred_units_for(alert.type)
+    preferred = [responder for responder in responders if responder.responder_unit in preferred_units]
+    candidates = preferred or responders
+    return min(candidates, key=lambda responder: location_distance_score(alert, responder) or float("inf"))
+
 def auto_route_alert(alert, request):
     responder = find_auto_responder(alert)
     if not responder:
@@ -201,6 +232,14 @@ def serialize_alert(alert, request):
             "media",
             "status_events__actor",
             "status_events__actor__resident_profile",
+            "appeals__appellant",
+            "appeals__appellant__resident_profile",
+            "appeals__reviewed_by",
+            "appeals__reviewed_by__resident_profile",
+            "escalations__escalated_to",
+            "escalations__escalated_to__resident_profile",
+            "escalations__triggered_by",
+            "escalations__triggered_by__resident_profile",
             "assignments__responder",
             "assignments__responder__resident_profile",
             "assignments__location_pings",
@@ -217,6 +256,8 @@ class EmergencyCreateView(APIView):
     @transaction.atomic
     def post(self, request):
         touch_last_seen(request.user)
+        if not user_has_role_permission(request.user, "emergencies.create"):
+            return Response({"detail": "Only residents can send emergency alerts."}, status=status.HTTP_403_FORBIDDEN)
         active_alert = (
             EmergencyAlert.objects
             .filter(reporter=request.user, status__in=ACTIVE_STATUSES)
@@ -407,31 +448,124 @@ class EmergencyAssignView(APIView):
         serializer = EmergencyAssignSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         User = get_user_model()
-        responder = get_object_or_404(
-            User,
-            pk=serializer.validated_data["responder_id"],
-            role__in=[User.Role.FIRST_RESPONDER, User.Role.BARANGAY_OFFICIAL],
-            status=User.Status.VERIFIED,
+        responders = list(
+            User.objects.filter(
+                pk__in=serializer.validated_data["responder_ids"],
+                role__in=[User.Role.FIRST_RESPONDER, User.Role.BARANGAY_OFFICIAL],
+                status=User.Status.VERIFIED,
+            )
         )
-        EmergencyResponderAssignment.objects.update_or_create(
-            alert=alert,
-            responder=responder,
-            defaults={"status": EmergencyResponderAssignment.Status.ASSIGNED},
-        )
+        if len(responders) != len(serializer.validated_data["responder_ids"]):
+            return Response({"responder_ids": ["One or more responders are invalid."]}, status=status.HTTP_400_BAD_REQUEST)
+        for responder in responders:
+            EmergencyResponderAssignment.objects.update_or_create(
+                alert=alert,
+                responder=responder,
+                defaults={"status": EmergencyResponderAssignment.Status.ASSIGNED},
+            )
         alert.status = EmergencyAlert.Status.ROUTED
         alert.save(update_fields=["status", "updated_at"])
-        create_status_event(alert, EmergencyAlert.Status.ROUTED, request.user, f"Assigned to {responder.email}.")
+        responder_labels = ", ".join(responder.email for responder in responders)
+        create_status_event(alert, EmergencyAlert.Status.ROUTED, request.user, f"Assigned to {responder_labels}.")
         notify_emergency_status(alert, type=EmergencyAlert.Status.ROUTED, body="A responder has been assigned to your emergency.")
-        create_emergency_notification(
-            alert=alert,
-            recipient=responder,
-            type=Notification.Type.EMERGENCY_ROUTED,
-            title=f"{alert.type.title()} emergency assigned",
-            body="Open your responder dashboard and acknowledge this assignment.",
-        )
-        create_audit_log("emergency.assigned", actor=request.user, target_user=alert.reporter, metadata={"alert_id": alert.pk, "responder_id": responder.pk}, request_meta=request_meta(request))
+        for responder in responders:
+            create_emergency_notification(
+                alert=alert,
+                recipient=responder,
+                type=Notification.Type.EMERGENCY_ROUTED,
+                title=f"{alert.type.title()} emergency assigned",
+                body="Open your responder dashboard and acknowledge this assignment.",
+            )
+        create_audit_log("emergency.assigned", actor=request.user, target_user=alert.reporter, metadata={"alert_id": alert.pk, "responder_ids": [responder.pk for responder in responders]}, request_meta=request_meta(request))
         return Response(serialize_alert(alert, request))
 
+
+class EmergencyAppealCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        alert = get_object_or_404(EmergencyAlert, pk=pk, reporter=request.user)
+        if alert.status not in {EmergencyAlert.Status.RESOLVED, EmergencyAlert.Status.CANCELLED}:
+            return Response({"detail": "Only resolved or cancelled emergencies can be appealed for review."}, status=status.HTTP_400_BAD_REQUEST)
+        if alert.appeals.filter(status=EmergencyAppeal.Status.SUBMITTED).exists():
+            return Response({"detail": "This emergency already has a pending appeal."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = EmergencyAppealCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        appeal = EmergencyAppeal.objects.create(alert=alert, appellant=request.user, reason=serializer.validated_data["reason"])
+        User = get_user_model()
+        for official in User.objects.filter(role=User.Role.BARANGAY_OFFICIAL, status=User.Status.VERIFIED):
+            create_emergency_notification(alert=alert, recipient=official, type=Notification.Type.EMERGENCY_APPEAL_SUBMITTED, title="Emergency review requested", body=appeal.reason[:240])
+        create_audit_log("emergency.appeal_submitted", actor=request.user, target_user=request.user, metadata={"alert_id": alert.pk, "appeal_id": appeal.pk}, request_meta=request_meta(request))
+        return Response(EmergencyAppealSerializer(appeal, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
+class EmergencyAppealListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        if not can_manage_emergencies(request.user):
+            return Response({"detail": "You do not have permission to view emergency appeals."}, status=status.HTTP_403_FORBIDDEN)
+        appeals = EmergencyAppeal.objects.select_related("alert", "appellant", "appellant__resident_profile", "reviewed_by", "reviewed_by__resident_profile")
+        appeal_status = request.query_params.get("status")
+        if appeal_status and appeal_status != "all":
+            appeals = appeals.filter(status=appeal_status)
+        return Response(EmergencyAppealSerializer(appeals, many=True, context={"request": request}).data)
+
+class EmergencyAppealReviewView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, appeal_id):
+        touch_last_seen(request.user)
+        if not can_manage_emergencies(request.user):
+            return Response({"detail": "You do not have permission to review emergency appeals."}, status=status.HTTP_403_FORBIDDEN)
+        appeal = get_object_or_404(EmergencyAppeal.objects.select_related("alert", "appellant"), pk=appeal_id)
+        if appeal.status != EmergencyAppeal.Status.SUBMITTED:
+            return Response({"detail": "This appeal has already been decided."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = EmergencyAppealReviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        appeal.status = serializer.validated_data["status"]
+        appeal.decision_note = serializer.validated_data.get("decision_note", "")
+        appeal.reviewed_by = request.user
+        appeal.decided_at = timezone.now()
+        appeal.save(update_fields=["status", "decision_note", "reviewed_by", "decided_at"])
+        notif_type = Notification.Type.EMERGENCY_APPEAL_APPROVED if appeal.status == EmergencyAppeal.Status.APPROVED else Notification.Type.EMERGENCY_APPEAL_DENIED
+        create_emergency_notification(alert=appeal.alert, recipient=appeal.appellant, type=notif_type, title=f"Emergency review {appeal.status}", body=appeal.decision_note or f"Your emergency review was {appeal.status}.")
+        create_status_event(appeal.alert, appeal.alert.status, request.user, appeal.decision_note or f"Emergency appeal {appeal.status}.")
+        create_audit_log("emergency.appeal_reviewed", actor=request.user, target_user=appeal.appellant, metadata={"alert_id": appeal.alert_id, "appeal_id": appeal.pk, "status": appeal.status}, request_meta=request_meta(request))
+        return Response(EmergencyAppealSerializer(appeal, context={"request": request}).data)
+
+class EmergencyEscalateOverdueView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        touch_last_seen(request.user)
+        if not can_manage_emergencies(request.user):
+            return Response({"detail": "You do not have permission to escalate emergencies."}, status=status.HTTP_403_FORBIDDEN)
+        serializer = EmergencyEscalateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        cutoff = timezone.now() - timedelta(minutes=serializer.validated_data["minutes"])
+        overdue = EmergencyResponderAssignment.objects.select_related("alert", "responder").filter(
+            status=EmergencyResponderAssignment.Status.ASSIGNED,
+            assigned_at__lte=cutoff,
+            alert__status__in=ACTIVE_STATUSES,
+        )
+        escalations = []
+        for assignment in overdue:
+            alert = assignment.alert
+            backup = find_backup_responder(alert)
+            reason = f"No acknowledgement from {assignment.responder.email} within {serializer.validated_data['minutes']} minutes."
+            if backup:
+                EmergencyResponderAssignment.objects.update_or_create(alert=alert, responder=backup, defaults={"status": EmergencyResponderAssignment.Status.ASSIGNED})
+                alert.status = EmergencyAlert.Status.ROUTED
+                alert.save(update_fields=["status", "updated_at"])
+                create_emergency_notification(alert=alert, recipient=backup, type=Notification.Type.EMERGENCY_ESCALATED, title=f"Escalated {alert.type} emergency", body="You were assigned because the first responder has not acknowledged.")
+            escalation = EmergencyEscalation.objects.create(alert=alert, previous_assignment=assignment, escalated_to=backup, triggered_by=request.user, reason=reason)
+            create_status_event(alert, EmergencyAlert.Status.ROUTED, request.user, f"Escalated: {reason}")
+            create_emergency_notification(alert=alert, recipient=alert.reporter, type=Notification.Type.EMERGENCY_ESCALATED, title="Emergency response escalated", body="Barangay has escalated your emergency to keep response moving.")
+            create_audit_log("emergency.escalated", actor=request.user, target_user=alert.reporter, metadata={"alert_id": alert.pk, "assignment_id": assignment.pk, "backup_id": getattr(backup, "pk", None)}, request_meta=request_meta(request))
+            escalations.append(escalation)
+        return Response(EmergencyEscalationSerializer(escalations, many=True, context={"request": request}).data)
 
 class AssignmentActionMixin:
     target_status = None

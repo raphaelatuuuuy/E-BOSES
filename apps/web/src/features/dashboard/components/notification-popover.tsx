@@ -16,7 +16,6 @@ import {
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { useHorizontalDragScroll } from "@/features/dashboard/hooks/use-horizontal-drag-scroll"
 import {
   useNotifications,
   type NotificationItem,
@@ -237,10 +236,17 @@ function NotificationList({
     })
 
   if (filtered.length === 0) {
+    const emptyContent = (() => {
+      if (filter === "announcements") return { img: "announcements.png", text: "No announcements", sub: "Check back later for new barangay updates." }
+      if (filter === "alerts") return { img: "alerts.png", text: "No alerts", sub: "Stay attentive. No emergencies at the moment." }
+      if (filter === "reports") return { img: "reports.png", text: "No reports", sub: "Your submitted reports progress will appear here." }
+      return { img: "notifications.png", text: "No notifications yet", sub: "Stay tuned for updates from your barangay." }
+    })()
     return (
-      <div className="flex flex-col items-center justify-center gap-2 py-12 text-[#68739c]">
-        <BellIcon aria-hidden="true" className="size-9 opacity-40" />
-        <p className="text-sm font-semibold">No notifications yet</p>
+      <div className="flex flex-col items-center justify-center gap-1 py-12 text-[#68739c]">
+        <img src={`/contents/${emptyContent.img}`} alt="" className="mb-4 h-32 w-auto" aria-hidden="true" />
+        <p className="text-sm font-semibold">{emptyContent.text}</p>
+        <p className="text-xs">{emptyContent.sub}</p>
       </div>
     )
   }
@@ -281,7 +287,6 @@ function DesktopPanel({
   onQueryChange: (value: string) => void
   onClose: () => void
 }) {
-  const filterDragScroll = useHorizontalDragScroll<HTMLDivElement>()
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white">
       <div className="flex shrink-0 items-center justify-between px-7 py-6">
@@ -300,7 +305,7 @@ function DesktopPanel({
         </div>
       </div>
 
-      <div {...filterDragScroll} className="scrollbar-hide flex shrink-0 cursor-grab touch-pan-x gap-5 overflow-x-scroll overscroll-x-contain border-b border-[#dfe7f5] px-7 pb-4 active:cursor-grabbing">
+      <div className="scrollbar-hide flex shrink-0 gap-5 overflow-x-auto border-b border-[#dfe7f5] px-7 pb-4" style={{ scrollbarWidth: 'none' }}>
         {FILTERS.map((f) => (
           <button
             key={f.key}
@@ -375,7 +380,6 @@ function MobileSheet({
   onFilterChange: (f: FilterKey) => void
 }) {
   const [open, setOpen] = React.useState(false)
-  const filterDragScroll = useHorizontalDragScroll<HTMLDivElement>()
 
   // Close on Escape
   React.useEffect(() => {
@@ -416,7 +420,7 @@ function MobileSheet({
                 </button>
               </div>
 
-              <div {...filterDragScroll} className="scrollbar-hide flex shrink-0 cursor-grab touch-pan-x gap-2 overflow-x-scroll overscroll-x-contain border-b border-[#dfe7f5] px-6 pb-4 active:cursor-grabbing">
+              <div className="scrollbar-hide flex shrink-0 gap-2 overflow-x-auto border-b border-[#dfe7f5] px-6 pb-4" style={{ scrollbarWidth: 'none' }}>
                 {FILTERS.map((f) => (
                   <button
                     key={f.key}

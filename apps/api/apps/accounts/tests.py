@@ -3,9 +3,13 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.test import TestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
+from io import BytesIO, StringIO
+
+from PIL import Image, ImageDraw, ImageFilter, PngImagePlugin
 
 # Force DEBUG=True for all tests so DevelopmentOTPProvider works
 DEBUG_ALL = override_settings(DEBUG=True)
@@ -23,8 +27,94 @@ from apps.accounts.services import (
 VALID_PDF_BYTES = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF"
 
 
-def pdf_upload(name="proof.pdf", content=VALID_PDF_BYTES):
-    return SimpleUploadedFile(name, content, content_type="application/pdf")
+def proof_image_upload(name="proof.png", content=b"proof"):
+    stem = name.rsplit(".", 1)[0]
+    return readable_image_upload(f"{stem}.png", label=content.decode("latin-1", errors="ignore"))
+
+
+def normalized_proof_image_upload(name="proof.png", content=b"proof"):
+    from apps.accounts.services import validate_residence_proof_file
+
+    return validate_residence_proof_file(proof_image_upload(name, content))
+
+
+def image_upload(name="proof.png", *, size=(640, 400), color=(128, 128, 128), blur=False):
+    image = Image.new("RGB", size, color)
+    if blur:
+        image = image.filter(ImageFilter.GaussianBlur(radius=12))
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return SimpleUploadedFile(name, output.getvalue(), content_type="image/png")
+
+
+def readable_image(name="proof.png", *, size=(640, 400), blur=False, label="E-BOSES PROOF 12345"):
+    image = Image.new("RGB", size, "white")
+    draw = ImageDraw.Draw(image)
+    seed = sum(label.encode("utf-8", errors="ignore"))
+    for x in range(40, size[0] - 40, 80):
+        for y in range(40, size[1] - 40, 80):
+            fill = "black" if (x + y + seed) % 160 == 0 else "gray"
+            draw.rectangle((x, y, x + 45, y + 45), fill=fill)
+    draw.rectangle((40 + seed % 420, 260, 120 + seed % 420, 340), fill="black")
+    draw.text((60, 20), label, fill="black")
+    return image.filter(ImageFilter.GaussianBlur(radius=8)) if blur else image
+
+
+def image_file(name, image):
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return SimpleUploadedFile(name, output.getvalue(), content_type="image/png")
+
+
+def readable_image_upload(name="proof.png", *, size=(640, 400), blur=False, label="E-BOSES PROOF 12345"):
+    return image_file(name, readable_image(size=size, blur=blur, label=label))
+
+
+def cropped_readable_image_upload(name="crop.png", *, box=(0, 0, 320, 200), label="E-BOSES PROOF 12345"):
+    return image_file(name, readable_image(label=label).crop(box))
+
+
+def image_bytes(image, *, format="JPEG", quality=95, pnginfo=None):
+    output = BytesIO()
+    save_kwargs = {"format": format}
+    if format == "JPEG":
+        save_kwargs["quality"] = quality
+    if pnginfo is not None:
+        save_kwargs["pnginfo"] = pnginfo
+    image.save(output, **save_kwargs)
+    return output.getvalue()
+
+
+def tampered_jpeg_bytes():
+    base = readable_image().convert("RGB")
+    base_bytes = BytesIO()
+    base.save(base_bytes, format="JPEG", quality=50)
+    base_bytes.seek(0)
+    with Image.open(base_bytes) as compressed_base:
+        base = compressed_base.convert("RGB")
+
+    patch = Image.new("RGB", (220, 140), "white")
+    draw = ImageDraw.Draw(patch)
+    for x in range(0, 220, 4):
+        draw.line((x, 0, 219 - x, 139), fill="black", width=1)
+    draw.rectangle((20, 35, 200, 105), fill=(20, 20, 20))
+    draw.text((42, 62), "EDITED NAME", fill="white")
+    patch_bytes = image_bytes(patch, quality=95)
+    with Image.open(BytesIO(patch_bytes)) as compressed_patch:
+        base.paste(compressed_patch.convert("RGB"), (210, 120))
+    return image_bytes(base, quality=95)
+
+
+class ProductionHardeningTests(TestCase):
+    def test_health_endpoint_is_public_and_reports_database(self):
+        response = APIClient().get("/api/health/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["database"], "ok")
+
+    def test_readiness_command_reports_without_strict_failure(self):
+        output = StringIO()
+        call_command("check_production_readiness", stdout=output)
+        self.assertTrue(output.getvalue().strip())
 
 
 @DEBUG_ALL
@@ -35,13 +125,13 @@ class AccountServiceTests(TestCase):
             phone_number="+639191234567",
             password="Str0ng!Pass123",
         )
-        proof_file = pdf_upload("proof.pdf")
+        proof_file = proof_image_upload("proof.png")
         digest = sha256_file(proof_file)
         ResidenceProof.objects.create(
             user=user,
             file=proof_file,
-            original_filename="proof.pdf",
-            mime_type="application/pdf",
+            original_filename="proof.png",
+            mime_type="image/png",
             file_size=proof_file.size,
             sha256_hash=digest,
         )
@@ -55,6 +145,60 @@ class AccountServiceTests(TestCase):
         verify_otp_challenge(sms_challenge, sms_code)
         user.refresh_from_db()
         self.assertEqual(user.status, get_user_model().Status.VERIFIED)
+
+    def test_phash_blocks_file_returns_hashes_for_readable_image(self):
+        from apps.accounts.services import phash_blocks_file
+
+        upload = readable_image_upload("proof.png")
+        content = upload.read()
+
+        blocks = phash_blocks_file(content)
+
+        self.assertTrue(blocks)
+        self.assertLessEqual(len(blocks), 16)
+        self.assertTrue(all(len(block) == 16 for block in blocks))
+
+    def test_phash_blocks_file_returns_empty_for_invalid_image(self):
+        from apps.accounts.services import phash_blocks_file
+
+        self.assertEqual(phash_blocks_file(b"not an image"), [])
+
+    def test_visual_tamper_forensics_allows_clean_readable_photo(self):
+        from apps.accounts.media_forensics import visual_tamper_forensics
+
+        content = image_bytes(readable_image().convert("RGB"), quality=95)
+
+        self.assertIsNone(visual_tamper_forensics(content))
+
+    def test_visual_tamper_forensics_rejects_composited_jpeg(self):
+        from apps.accounts.media_forensics import VISUAL_TAMPER_MESSAGE, visual_tamper_forensics
+
+        self.assertEqual(visual_tamper_forensics(tampered_jpeg_bytes()), VISUAL_TAMPER_MESSAGE)
+
+    def test_visual_tamper_forensics_ignores_flat_image(self):
+        from apps.accounts.media_forensics import visual_tamper_forensics
+
+        content = image_bytes(Image.new("RGB", (640, 400), "gray"), quality=95)
+
+        self.assertIsNone(visual_tamper_forensics(content))
+
+    def test_normalize_uploaded_file_strips_png_metadata(self):
+        from apps.accounts.services import normalize_uploaded_file
+
+        metadata = PngImagePlugin.PngInfo()
+        metadata.add_text("Software", "NeutralCamera")
+        uploaded = SimpleUploadedFile(
+            "proof.png",
+            image_bytes(readable_image().convert("RGB"), format="PNG", pnginfo=metadata),
+            content_type="image/png",
+        )
+
+        normalized = normalize_uploaded_file(uploaded, content=uploaded.read(), detected_mime_type="image/png")
+        normalized_content = normalized.read()
+
+        self.assertNotIn(b"NeutralCamera", normalized_content)
+        with Image.open(BytesIO(normalized_content)) as image:
+            self.assertNotIn("Software", image.info)
 
 
 @DEBUG_ALL
@@ -117,8 +261,8 @@ class AuthAPITests(APITestCase):
         phone_number = "+639231234567"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        proof = pdf_upload("proof.pdf")
-        second_proof = pdf_upload("proof-2.pdf", VALID_PDF_BYTES + b"2")
+        proof = proof_image_upload("proof.png")
+        second_proof = proof_image_upload("proof-2.png", VALID_PDF_BYTES + b"2")
         response = self.client.post(
             "/api/auth/register/",
             {
@@ -150,6 +294,7 @@ class AuthAPITests(APITestCase):
         self.assertEqual(user.otp_challenges.count(), 1)
         self.assertEqual(user.otp_challenges.get().channel, "email")
         self.assertEqual(user.residence_proofs.count(), 2)
+        self.assertTrue(all(proof.phash_blocks for proof in user.residence_proofs.all()))
 
     def test_consumed_phone_otp_cannot_register_multiple_accounts(self):
         phone_number = "+639231234571"
@@ -169,7 +314,7 @@ class AuthAPITests(APITestCase):
                 "date_of_birth": "1998-01-01",
                 "address": "123 Barangay Street",
                 "barangay": "Pending",
-                "proof": SimpleUploadedFile("first-proof.pdf", b"%PDF-1.4\nfirst proof bytes\n%%EOF", content_type="application/pdf"),
+                "proof": proof_image_upload("first-proof.png", b"first proof bytes"),
                 "terms_version": "2026-07-02",
                 "privacy_version": "2026-07-02",
             },
@@ -193,7 +338,7 @@ class AuthAPITests(APITestCase):
                 "date_of_birth": "1999-01-01",
                 "address": "456 Barangay Street",
                 "barangay": "Pending",
-                "proof": pdf_upload("second-proof.pdf", VALID_PDF_BYTES + b"second"),
+                "proof": proof_image_upload("second-proof.png", VALID_PDF_BYTES + b"second"),
                 "terms_version": "2026-07-02",
                 "privacy_version": "2026-07-02",
             },
@@ -205,7 +350,7 @@ class AuthAPITests(APITestCase):
         self.assertFalse(get_user_model().objects.filter(email="second-consumed@example.com").exists())
 
     def test_registration_without_phone_otp_returns_400_not_500(self):
-        proof = pdf_upload("proof.pdf")
+        proof = proof_image_upload("proof.png")
         response = self.client.post(
             "/api/auth/register/",
             {
@@ -236,21 +381,21 @@ class AuthAPITests(APITestCase):
             password="Str0ng!Pass123",
             status=get_user_model().Status.VERIFIED,
         )
-        existing_file = pdf_upload("same.pdf", VALID_PDF_BYTES + b"duplicate")
+        existing_file = normalized_proof_image_upload("same.png", VALID_PDF_BYTES + b"duplicate")
         digest = sha256_file(existing_file)
         ResidenceProof.objects.create(
             user=existing,
             file=existing_file,
-            original_filename="same.pdf",
-            mime_type="application/pdf",
+            original_filename="same.png",
+            mime_type="image/png",
             file_size=existing_file.size,
             sha256_hash=digest,
         )
         phone_number = "+639231234569"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        unique_file = pdf_upload("unique.pdf", VALID_PDF_BYTES + b"unique")
-        duplicate_file = pdf_upload("same.pdf", VALID_PDF_BYTES + b"duplicate")
+        unique_file = proof_image_upload("unique.png", VALID_PDF_BYTES + b"unique")
+        duplicate_file = proof_image_upload("same.png", VALID_PDF_BYTES + b"duplicate")
 
         response = self.client.post(
             "/api/auth/register/",
@@ -280,8 +425,8 @@ class AuthAPITests(APITestCase):
         phone_number = "+639231234570"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        first_file = pdf_upload("first.pdf", VALID_PDF_BYTES + b"same")
-        second_file = pdf_upload("second.pdf", VALID_PDF_BYTES + b"same")
+        first_file = proof_image_upload("first.png", VALID_PDF_BYTES + b"same")
+        second_file = proof_image_upload("second.png", VALID_PDF_BYTES + b"same")
 
         response = self.client.post(
             "/api/auth/register/",
@@ -307,6 +452,16 @@ class AuthAPITests(APITestCase):
         self.assertEqual(response.data["proof"][0], "Duplicate proof upload detected.")
         self.assertFalse(get_user_model().objects.filter(email="same-upload@example.com").exists())
 
+    def test_registration_proof_check_rejects_pdf(self):
+        response = self.client.post(
+            "/api/auth/register/proof/check/",
+            {"proof": SimpleUploadedFile("proof.pdf", VALID_PDF_BYTES, content_type="application/pdf")},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["proof"][0], "Proof files must be JPG, JPEG, or PNG.")
+
     def test_registration_proof_check_rejects_existing_duplicate(self):
         existing = get_user_model().objects.create_user(
             email="existing-proof-check@example.com",
@@ -314,19 +469,19 @@ class AuthAPITests(APITestCase):
             password="Str0ng!Pass123",
             status=get_user_model().Status.VERIFIED,
         )
-        existing_file = pdf_upload("existing.pdf", VALID_PDF_BYTES + b"proof-check")
+        existing_file = normalized_proof_image_upload("existing.png", VALID_PDF_BYTES + b"proof-check")
         ResidenceProof.objects.create(
             user=existing,
             file=existing_file,
-            original_filename="existing.pdf",
-            mime_type="application/pdf",
+            original_filename="existing.png",
+            mime_type="image/png",
             file_size=existing_file.size,
             sha256_hash=sha256_file(existing_file),
         )
 
         response = self.client.post(
             "/api/auth/register/proof/check/",
-            {"proof": pdf_upload("duplicate.pdf", VALID_PDF_BYTES + b"proof-check")},
+            {"proof": proof_image_upload("duplicate.png", VALID_PDF_BYTES + b"proof-check")},
             format="multipart",
         )
 
@@ -338,8 +493,8 @@ class AuthAPITests(APITestCase):
             "/api/auth/register/proof/check/",
             {
                 "proof": [
-                    pdf_upload("first.pdf", VALID_PDF_BYTES + b"same-check"),
-                    pdf_upload("second.pdf", VALID_PDF_BYTES + b"same-check"),
+                    proof_image_upload("first.png", VALID_PDF_BYTES + b"same-check"),
+                    proof_image_upload("second.png", VALID_PDF_BYTES + b"same-check"),
                 ],
             },
             format="multipart",
@@ -347,6 +502,153 @@ class AuthAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data["proof"][0], "Duplicate proof upload detected.")
+
+    def test_registration_proof_check_rejects_tiny_image(self):
+        response = self.client.post(
+            "/api/auth/register/proof/check/",
+            {"proof": image_upload("tiny.png", size=(120, 120))},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["proof"][0], "Proof image must be at least 300×200 pixels.")
+
+    def test_registration_proof_check_rejects_too_dark_image(self):
+        response = self.client.post(
+            "/api/auth/register/proof/check/",
+            {"proof": image_upload("dark.png", color=(5, 5, 5))},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["proof"][0], "Proof image is too dark or too bright.")
+
+    def test_registration_proof_check_rejects_low_contrast_image(self):
+        response = self.client.post(
+            "/api/auth/register/proof/check/",
+            {"proof": image_upload("flat.png")},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["proof"][0], "Proof image has too little contrast.")
+
+    def test_registration_proof_check_rejects_blurry_image(self):
+        response = self.client.post(
+            "/api/auth/register/proof/check/",
+            {"proof": readable_image_upload("blurred.png", blur=True)},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["proof"][0], "Proof image is too blurry. Please upload a clearer photo.")
+
+    def test_registration_proof_check_rejects_visual_tamper(self):
+        from apps.accounts.media_forensics import VISUAL_TAMPER_MESSAGE
+
+        response = self.client.post(
+            "/api/auth/register/proof/check/",
+            {"proof": SimpleUploadedFile("tampered.jpg", tampered_jpeg_bytes(), content_type="image/jpeg")},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["proof"][0], VISUAL_TAMPER_MESSAGE)
+
+    def test_registration_proof_check_rejects_existing_phash_duplicate(self):
+        from apps.accounts.services import phash_file
+
+        existing = get_user_model().objects.create_user(
+            email="existing-phash@example.com",
+            phone_number="+639231234573",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+        existing_file = readable_image_upload("existing.png")
+        existing_content = existing_file.read()
+        existing_file.seek(0)
+        ResidenceProof.objects.create(
+            user=existing,
+            file=existing_file,
+            original_filename="existing.png",
+            mime_type="image/png",
+            file_size=existing_file.size,
+            sha256_hash=sha256_file(existing_file),
+            phash=phash_file(existing_content),
+        )
+
+        response = self.client.post(
+            "/api/auth/register/proof/check/",
+            {"proof": readable_image_upload("similar.png")},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["proof"][0], "Duplicate proof upload detected.")
+
+    def test_registration_proof_check_rejects_existing_block_phash_crop_duplicate(self):
+        from apps.accounts.services import phash_blocks_file, phash_file
+
+        existing = get_user_model().objects.create_user(
+            email="existing-block-phash@example.com",
+            phone_number="+639231234574",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+        existing_file = readable_image_upload("existing-block.png")
+        existing_content = existing_file.read()
+        existing_file.seek(0)
+        ResidenceProof.objects.create(
+            user=existing,
+            file=existing_file,
+            original_filename="existing-block.png",
+            mime_type="image/png",
+            file_size=existing_file.size,
+            sha256_hash=sha256_file(existing_file),
+            phash=phash_file(existing_content),
+            phash_blocks=phash_blocks_file(existing_content),
+        )
+
+        response = self.client.post(
+            "/api/auth/register/proof/check/",
+            {"proof": cropped_readable_image_upload("crop.png")},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["proof"][0], "Duplicate proof upload detected.")
+
+    def test_registration_rejects_block_phash_duplicate_files_in_same_upload(self):
+        phone_number = "+639231234575"
+        _, phone_code = create_phone_otp_challenge(phone_number)
+        verify_phone_otp_challenge(phone_number, phone_code)
+
+        response = self.client.post(
+            "/api/auth/register/",
+            {
+                "email": "same-block-upload@example.com",
+                "phone_number": phone_number,
+                "phone_otp_code": phone_code,
+                "password": "Str0ng!Pass123",
+                "first_name": "Juan",
+                "middle_name": "",
+                "last_name": "Santos",
+                "date_of_birth": "1998-01-01",
+                "address": "123 Barangay Street",
+                "barangay": "Pending",
+                "proof": [
+                    readable_image_upload("full.png"),
+                    cropped_readable_image_upload("crop.png"),
+                ],
+                "terms_version": "2026-07-02",
+                "privacy_version": "2026-07-02",
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["proof"][0], "Duplicate proof upload detected.")
+        self.assertFalse(get_user_model().objects.filter(email="same-block-upload@example.com").exists())
 
     def test_login_returns_tokens(self):
         get_user_model().objects.create_user(
@@ -590,7 +892,7 @@ class AuthHardeningTests(APITestCase):
         phone_number = "+639261234567"
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
-        proof = pdf_upload("proof.pdf")
+        proof = proof_image_upload("proof.png")
 
         response = self.client.post(
             "/api/auth/register/",
@@ -627,7 +929,7 @@ class AuthHardeningTests(APITestCase):
             "date_of_birth": "1998-01-01",
             "address": "123 Barangay Street",
             "barangay": "Pending",
-            "proof": pdf_upload("valid-name.pdf"),
+            "proof": proof_image_upload("valid-name.png"),
             "terms_version": "2026-07-02",
             "privacy_version": "2026-07-02",
         }
@@ -639,7 +941,7 @@ class AuthHardeningTests(APITestCase):
             "email": "invalid-name@example.com",
             "phone_number": "+639261234569",
             "first_name": "Ju@n",
-            "proof": pdf_upload("invalid-name.pdf"),
+            "proof": proof_image_upload("invalid-name.png"),
         }
         invalid_serializer = RegisterSerializer(data=invalid_data)
         self.assertFalse(invalid_serializer.is_valid())

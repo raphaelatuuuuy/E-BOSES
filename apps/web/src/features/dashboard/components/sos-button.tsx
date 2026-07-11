@@ -32,20 +32,21 @@ import { createEmergency, getActiveEmergency, getEmergency, type EmergencyAlert,
 import { EmergencyTrackingSheet } from "@/features/dashboard/components/emergency-tracking-sheet"
 
 const activeEmergencyStatuses = ["submitted", "routed", "acknowledged", "en_route", "nearby", "arrived"] as const
-type SosPlacement = "floating" | "sidebar" | "compact"
+type SosPlacement = "inline" | "sidebar" | "compact"
 type SosStep = "details" | "review"
 
 function normalizeSosPlacement(value: string | null): SosPlacement {
   if (value === "bottom_bar") return "sidebar"
-  if (value === "sidebar" || value === "compact" || value === "floating") return value
-  return "floating"
+  if (value === "floating") return "inline"
+  if (value === "sidebar" || value === "compact" || value === "inline") return value
+  return "inline"
 }
 
 const emergencies = [
-  { label: "Medical", value: "medical", icon: AmbulanceIcon, desc: "Injury, illness, rescue", color: "blue" },
-  { label: "Fire", value: "fire", icon: FlameIcon, desc: "Building, forest, vehicle", color: "orange" },
-  { label: "Crime", value: "crime", icon: ShieldAlertIcon, desc: "Assault, theft, threat", color: "red" },
-  { label: "Disaster", value: "disaster", icon: CloudLightningIcon, desc: "Flood, quake, storm", color: "purple" },
+  { label: "Medical", value: "medical", img: "/contents/medical.png", desc: "Injury, illness, rescue", color: "blue" },
+  { label: "Fire", value: "fire", img: "/contents/fire.png", desc: "Building, forest, vehicle", color: "orange" },
+  { label: "Crime", value: "crime", img: "/contents/crime.png", desc: "Assault, theft, threat", color: "red" },
+  { label: "Disaster", value: "disaster", img: "/contents/disaster.png", desc: "Flood, quake, storm", color: "purple" },
 ] as const
 
 const emergencyColorMap: Record<string, { border: string; bg: string; text: string; iconBg: string }> = {
@@ -285,7 +286,7 @@ export function SOSButton() {
       <div
         className={cn(
           "fixed z-40",
-          placement === "floating" && "bottom-26 right-5 md:bottom-8 md:right-8",
+          placement === "inline" && "bottom-26 right-5 md:bottom-8 md:right-8",
           placement === "sidebar" && "bottom-26 right-5 md:hidden",
           placement === "compact" && "bottom-26 right-5 md:bottom-8 md:right-8",
         )}
@@ -296,9 +297,9 @@ export function SOSButton() {
           disabled={checkingActive}
           className={cn(
             "sos-glow group flex items-center bg-gradient-to-b from-[#ff625a] to-[#f23b35] text-white transition-all hover:-translate-y-0.5 hover:shadow-[0_14px_28px_rgba(248,69,63,0.38)] active:translate-y-0 active:scale-[0.98] disabled:cursor-wait disabled:opacity-80",
-            placement === "floating" && "gap-2 rounded-l-full rounded-br-md rounded-tr-full py-1.5 pl-1.5 pr-3 md:gap-3 md:py-3 md:pl-3 md:pr-5",
-            placement === "sidebar" && "size-16 justify-center rounded-full p-0",
-            placement === "compact" && "size-16 justify-center rounded-full p-0 md:size-20",
+            placement === "inline" && "gap-2 rounded-l-full rounded-br-md rounded-tr-full py-1.5 pl-1.5 pr-3 md:gap-3 md:py-3 md:pl-3 md:pr-5",
+            placement === "sidebar" && "size-14 justify-center rounded-full p-0",
+            placement === "compact" && "size-14 justify-center rounded-full p-0 md:size-20",
           )}
           aria-label="Open SOS quick alert"
         >
@@ -455,7 +456,6 @@ export function SOSButton() {
               <h2 className="text-base font-bold text-[#07145f]">1. What's the emergency?</h2>
               <div className="mt-4 grid grid-cols-2 gap-3">
                 {emergencies.map((e) => {
-                  const Icon = e.icon
                   const selected = emergency === e.value
                   const colors = emergencyColorMap[e.color]
                   return (
@@ -479,7 +479,7 @@ export function SOSButton() {
                       )}
                     >
                       <div className={cn("flex size-12 items-center justify-center rounded-full transition-colors", selected ? colors.iconBg : "bg-[#eef3ff]")}>
-                        <Icon className="size-7" strokeWidth={2} />
+                        <img src={e.img} alt="" className="h-14 w-14 object-contain" />
                       </div>
                       <span className="text-sm font-bold">{e.label}</span>
                       <span className="text-xs leading-5 text-[#43507f]">{e.desc}</span>
@@ -534,11 +534,11 @@ export function SOSButton() {
                 <span className="mt-1 text-sm font-semibold text-[#43507f]">
                   {mediaFiles.length ? `${mediaFiles.length} selected` : "Browse files"}
                 </span>
-                <p className="mt-3 text-xs text-[#8b96b8]">JPG, PNG, PDF up to 2 files</p>
+                <p className="mt-3 text-xs text-[#8b96b8]">JPG or PNG up to 2 files</p>
                 <input
                   id="sos-media"
                   type="file"
-                  accept=".pdf,.png,.jpg,.jpeg,image/png,image/jpeg,application/pdf"
+                  accept=".png,.jpg,.jpeg,image/png,image/jpeg"
                   multiple
                   className="sr-only"
                   onChange={(event) => setMediaFiles(Array.from(event.target.files ?? []).slice(0, 2))}

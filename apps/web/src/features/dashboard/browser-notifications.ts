@@ -12,9 +12,41 @@ export function browserNotificationsSupported() {
   return "Notification" in window && "serviceWorker" in navigator
 }
 
+export interface BrowserNotificationState {
+  supported: boolean
+  permission: NotificationPermission | "unsupported"
+  serverConfigured: boolean
+  subscribed: boolean
+}
+
 export async function registerNotificationWorker() {
   if (!browserNotificationsSupported()) return null
   return navigator.serviceWorker.register("/eboses-sw.js")
+}
+
+async function getPublicKey() {
+  const { public_key } = await apiRequest<{ public_key: string }>("/notifications/browser-push/public-key/")
+  return public_key
+}
+
+export async function getBrowserNotificationState(): Promise<BrowserNotificationState> {
+  if (!browserNotificationsSupported()) {
+    return { supported: false, permission: "unsupported", serverConfigured: false, subscribed: false }
+  }
+  const registration = await registerNotificationWorker()
+  const subscription = await registration?.pushManager.getSubscription()
+  let publicKey = ""
+  try {
+    publicKey = await getPublicKey()
+  } catch {
+    publicKey = ""
+  }
+  return {
+    supported: true,
+    permission: Notification.permission,
+    serverConfigured: Boolean(publicKey),
+    subscribed: Boolean(subscription),
+  }
 }
 
 export async function enableBrowserNotifications() {
@@ -28,18 +60,32 @@ export async function enableBrowserNotifications() {
   const registration = await registerNotificationWorker()
   if (!registration || !("PushManager" in window)) return permission
 
-  const { public_key } = await apiRequest<{ public_key: string }>("/notifications/browser-push/public-key/")
-  if (!public_key) return permission
+  const public_key = await getPublicKey()
+  if (!public_key) {
+    throw new Error("Server push is not configured yet. In-app notifications will still work.")
+  }
 
-  const subscription = await registration.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(public_key),
-  })
+  const subscription = await registration.pushManager.getSubscription()
+    ?? await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(public_key),
+    })
   await apiRequest("/notifications/browser-push/subscriptions/", {
     method: "POST",
     body: JSON.stringify(subscription.toJSON()),
   })
   return permission
+}
+
+export async function disableBrowserNotifications() {
+  const registration = await registerNotificationWorker()
+  const subscription = await registration?.pushManager.getSubscription()
+  if (!subscription) return
+  await apiRequest("/notifications/browser-push/subscriptions/", {
+    method: "DELETE",
+    body: JSON.stringify({ endpoint: subscription.endpoint }),
+  })
+  await subscription.unsubscribe()
 }
 
 export async function showBrowserNotification(item: NotificationItem) {

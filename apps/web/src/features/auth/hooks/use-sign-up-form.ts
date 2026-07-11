@@ -21,6 +21,7 @@ const initialValues: SignUpValues = {
   dateOfBirth: "",
   address: "",
   proofOfResidency: [],
+  proofType: "",
   phoneNumber: "",
   phoneOtpCode: "",
   password: "",
@@ -73,9 +74,12 @@ function firstErrorMessage(value: unknown): string | undefined {
 const backendFieldMap: Record<string, keyof SignUpValues> = {
   address: "address",
   barangay: "address",
+  dateOfBirth: "dateOfBirth",
   date_of_birth: "dateOfBirth",
   email: "email",
+  firstName: "firstName",
   first_name: "firstName",
+  lastName: "lastName",
   last_name: "lastName",
   middle_name: "middleName",
   password: "password",
@@ -83,6 +87,8 @@ const backendFieldMap: Record<string, keyof SignUpValues> = {
   phone_otp_code: "phoneOtpCode",
   privacy_version: "agreeToTerms",
   proof: "proofOfResidency",
+  proofOfResidency: "proofOfResidency",
+  proofType: "proofType",
   terms_version: "agreeToTerms",
 }
 
@@ -118,6 +124,7 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
   }, [values.password])
   const [phoneOtpResendAvailableAt, setPhoneOtpResendAvailableAt] = useState<number | null>(null)
   const [phoneOtpCooldownSeconds, setPhoneOtpCooldownSeconds] = useState(0)
+  const [ocrFields, setOcrFields] = useState<string[]>([])
 
   useEffect(() => {
     if (!phoneOtpResendAvailableAt) {
@@ -155,14 +162,16 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     }
 
     setErrors((currentErrors) => {
-      if (!currentErrors[field]) {
+      const hasError = Boolean(currentErrors[field] || (field !== "proofOfResidency" && currentErrors["proofOfResidency"] && currentErrors[field]))
+      if (!hasError && !currentErrors["proofOfResidency"]) {
         return currentErrors
       }
-
-      return {
-        ...currentErrors,
-        [field]: undefined,
+      const next = { ...currentErrors, [field]: undefined }
+      // Clear proofOfResidency error when user edits any field (OCR feedback should go away)
+      if (["firstName", "lastName", "dateOfBirth", "address", "proofType", "proofOfResidency"].includes(field)) {
+        next["proofOfResidency"] = undefined
       }
+      return next
     })
   }
 
@@ -266,6 +275,7 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     formData.append("barangay", "Pending")
     if (values.gender) formData.append("gender", values.gender)
     if (values.avatar) formData.append("avatar", values.avatar)
+    if (values.proofType) formData.append("proof_type", values.proofType)
     for (const proofFile of values.proofOfResidency) {
       formData.append("proof", proofFile)
     }
@@ -282,13 +292,25 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
         const backendErrors = error.data as Record<string, unknown>
         const nextErrors: SignUpErrors = {}
 
+        const ocrFieldSet = new Set(["firstName", "lastName", "dateOfBirth", "address", "proofType"])
+        const ocrAffected: string[] = []
         for (const [backendField, value] of Object.entries(backendErrors)) {
           const formField = backendFieldMap[backendField]
           const message = firstErrorMessage(value)
           if (formField && message) {
-            nextErrors[formField] = message
+            if (ocrFieldSet.has(formField)) {
+              ocrAffected.push(formField)
+              nextErrors["proofOfResidency"] = message
+              // Set field error for red border, EXCEPT proofType (expiry)
+              if (formField !== "proofType") {
+                nextErrors[formField] = message
+              }
+            } else {
+              nextErrors[formField] = message
+            }
           }
         }
+        setOcrFields(ocrAffected)
 
         const detailMessage = firstErrorMessage(backendErrors.detail)
         if (detailMessage) {
@@ -335,5 +357,6 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     setValues,
     submitError,
     values,
+    ocrFields,
   }
 }

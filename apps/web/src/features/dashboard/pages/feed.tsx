@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react"
+import { Link } from "react-router-dom"
+import { toast } from "sonner"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { Topbar } from "@/features/dashboard/components/topbar"
 import {
@@ -29,6 +31,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/component
 import { useHorizontalDragScroll } from "@/features/dashboard/hooks/use-horizontal-drag-scroll"
 import {
   commentOnConcern,
+  flagConcern,
   listActiveResponders,
   listAnnouncements,
   listFeedConcerns,
@@ -41,6 +44,8 @@ import {
 } from "@/features/dashboard/api"
 
 const filters = ["All", "Announcements", "Infrastructure", "Environment", "Public Safety", "Others"] as const
+
+import { computeDefaultAvatar } from "@/features/dashboard/avatar-utils"
 
 const avatarColors = [
   "bg-primary/10 text-primary",
@@ -109,14 +114,7 @@ function responderRoleLabel(value: string) {
 
 function Avatar({ user, index = 0 }: { user: PublicUser; index?: number }) {
   const online = Boolean(user.last_seen_at)
-  const avatarKey = user.avatar || (user.gender && user.gender !== "prefer_not_to_say" && user.date_of_birth
-    ? (() => {
-        const age = new Date().getFullYear() - new Date(user.date_of_birth!).getFullYear()
-        const bucket = age >= 55 ? "senior" : age >= 30 ? "middleaged" : "young"
-        const icon = user.gender === "male" ? "man" : "woman"
-        return `${bucket}-${icon}`
-      })()
-    : "")
+  const avatarKey = computeDefaultAvatar(user)
   // Use user.id for deterministic color instead of index
   const colorIdx = user.id % avatarColors.length
   return (
@@ -224,6 +222,7 @@ export default function FeedPage() {
   const [reportOpen, setReportOpen] = useState<number | null>(null)
   const [reportReason, setReportReason] = useState<string>("")
   const [reportOther, setReportOther] = useState<string>("")
+  const [flaggingPost, setFlaggingPost] = useState<number | null>(null)
   const [error, setError] = useState("")
 
   async function loadFeed() {
@@ -327,6 +326,26 @@ export default function FeedPage() {
     })
   }
 
+  async function submitFlag(postId: number) {
+    const reason = reportReason === "Others (please specify)" ? reportOther.trim() : reportReason
+    if (!reason) {
+      toast.error("Choose a reason before submitting.")
+      return
+    }
+    setFlaggingPost(postId)
+    try {
+      await flagConcern(postId, { reason, note: reportOther.trim() })
+      toast.success("Post flagged for review")
+      setReportOpen(null)
+      setReportReason("")
+      setReportOther("")
+    } catch (flagError) {
+      toast.error(flagError instanceof Error ? flagError.message : "Could not flag this post.")
+    } finally {
+      setFlaggingPost(null)
+    }
+  }
+
   function scrollFilterRail(direction: -1 | 1) {
     const rail = filterRailRef.current
     const buttons = Array.from(rail?.querySelectorAll<HTMLButtonElement>("[data-filter-option]") ?? [])
@@ -400,9 +419,16 @@ export default function FeedPage() {
                     aria-label="Search validated community concerns"
                   />
                 </div>
-                <button type="button" className="hidden h-12 items-center gap-2 rounded-lg border border-[#cbd8ee] bg-white px-5 text-sm font-bold text-[#07145f] transition-colors hover:border-[#ff6a1a] hover:text-[#ff6a1a] sm:inline-flex">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveFilter("All")
+                    setSearch("")
+                  }}
+                  className="hidden h-12 items-center gap-2 rounded-lg border border-[#cbd8ee] bg-white px-5 text-sm font-bold text-[#07145f] transition-colors hover:border-[#ff6a1a] hover:text-[#ff6a1a] sm:inline-flex"
+                >
                   <SlidersHorizontalIcon className="size-4" />
-                  Filters
+                  Reset
                 </button>
               </div>
             ) : null}
@@ -495,7 +521,7 @@ export default function FeedPage() {
                                 <XIcon className="size-3.5" />
                               </button>
                             </div>
-                            <p className="text-xs text-muted-foreground">Flagging posts will be connected in the moderation module.</p>
+                            <p className="text-xs text-muted-foreground">Barangay moderators will review this report.</p>
                             <div className="flex flex-col gap-1.5">
                               {reportReasons.map((reason) => (
                                 <label key={reason} className="flex items-center gap-2 cursor-pointer text-xs text-foreground">
@@ -505,7 +531,16 @@ export default function FeedPage() {
                               ))}
                             </div>
                             {reportReason === "Others (please specify)" && <Input type="text" value={reportOther} onChange={(e) => setReportOther(e.target.value)} placeholder="Please specify..." className="h-8 text-xs" />}
-                            <Button type="button" variant="destructive" size="sm" className="w-full text-xs" disabled>Submit Report</Button>
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              size="sm"
+                              className="w-full text-xs"
+                              disabled={flaggingPost === post.id}
+                              onClick={() => void submitFlag(post.id)}
+                            >
+                              {flaggingPost === post.id ? "Submitting..." : "Submit Report"}
+                            </Button>
                           </div>
                         </PopoverContent>
                       </Popover>
@@ -540,7 +575,8 @@ export default function FeedPage() {
             })}
 
               {announcements.length === 0 && concerns.length === 0 && !error ? (
-                <div className="rounded-2xl border border-dashed border-[#cbd8ee] bg-white p-8 text-center text-sm font-semibold text-[#68739c]">
+                <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-[#cbd8ee] bg-white p-8 text-center text-sm font-semibold text-[#68739c]">
+                  <img src="/contents/feed.png" alt="" className="mb-4 h-32 w-auto" aria-hidden="true" />
                   Nothing to show yet.
                 </div>
               ) : null}
@@ -550,8 +586,8 @@ export default function FeedPage() {
           <aside className="flex flex-col gap-5 xl:sticky xl:top-6 xl:self-start">
             <div className="rounded-2xl border border-[#dfe7f5] bg-white p-5 shadow-sm">
               <div className="flex items-center gap-3">
-                <TrendingUpIcon className="size-5 text-[#ff6a1a]" />
-                <h3 className="text-lg font-extrabold text-[#07145f]">Trending in Marikina Heights</h3>
+                <img src="/contents/trending.png" alt="" className="size-10" />
+                <h3 className="text-lg font-extrabold text-[#07145f]">Trending in<br/>Marikina Heights</h3>
               </div>
               <div className="mt-4 divide-y divide-[#eef3ff]">
                 {trendingConcerns.map((item, index) => (
@@ -562,12 +598,29 @@ export default function FeedPage() {
                   </div>
                 ))}
                 {concerns.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-[#cbd8ee] bg-white p-4 text-sm font-semibold text-[#68739c]">
-                    No trending concerns yet.
+                  <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-[#cbd8ee] bg-white p-4 text-center">
+                    <img src="/contents/share.png" alt="" className="mb-2 h-12 w-auto" aria-hidden="true" />
+                    <p className="text-sm font-semibold text-[#68739c]">No trending concerns yet.</p>
+                    <p className="mt-1 text-xs text-[#68739c]">Share your concern to start a discussion.</p>
+                    <Link
+                      to="/dashboard/reports"
+                      className="mt-3 inline-flex h-9 items-center rounded-full bg-primary px-5 text-xs font-semibold text-white transition-colors hover:bg-primary/90"
+                    >
+                      Share your concern
+                    </Link>
+                    <div className="h-2" />
                   </div>
                 ) : null}
               </div>
-              <button type="button" className="mt-3 flex w-full items-center justify-between text-sm font-extrabold text-[#2447b3] transition-colors hover:text-[#ff6a1a]">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveFilter("All")
+                  setSearch("")
+                  window.scrollTo({ top: 0, behavior: "smooth" })
+                }}
+                className="mt-3 flex w-full items-center justify-between text-sm font-extrabold text-[#2447b3] transition-colors hover:text-[#ff6a1a]"
+              >
                 View all trending
                 <ChevronRightIcon className="size-4" />
               </button>
@@ -576,10 +629,10 @@ export default function FeedPage() {
             <div className="rounded-2xl border border-[#dfe7f5] bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <UsersIcon className="size-5 text-[#ff6a1a]" />
+                  <img src="/contents/responders.png" alt="" className="size-10" />
                   <h3 className="text-lg font-extrabold text-[#07145f]">Active Responders</h3>
                 </div>
-                <button type="button" className="text-sm font-extrabold text-[#2447b3] hover:text-[#ff6a1a]">View all</button>
+                <button type="button" onClick={() => toast.info(`${activeResponders.length} responders are currently on duty.`)} className="text-sm font-extrabold text-[#2447b3] hover:text-[#ff6a1a]">View all</button>
               </div>
               <div className="mt-4 flex flex-col gap-4">
                 {activeResponders.map((responder, index) => (
@@ -608,7 +661,7 @@ export default function FeedPage() {
               <p className="mt-4 text-sm font-semibold leading-6 text-[#43507f]">
                 Let's keep our community safe, respectful, and helpful to everyone.
               </p>
-              <button type="button" className="mt-4 flex w-full items-center justify-between text-sm font-extrabold text-[#2447b3] transition-colors hover:text-[#ff6a1a]">
+              <button type="button" onClick={() => toast.info("Community posts can be upvoted, discussed, or flagged for official moderation.")} className="mt-4 flex w-full items-center justify-between text-sm font-extrabold text-[#2447b3] transition-colors hover:text-[#ff6a1a]">
                 View guidelines
                 <ChevronRightIcon className="size-4" />
               </button>

@@ -10,6 +10,11 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RenameIndex(
+            model_name='browserpushsubscription',
+            new_name='notificatio_user_id_7a4b0b_idx',
+            old_name='notificatio_user_id_7cb750_idx',
+        ),
         migrations.AlterField(
             model_name='notification',
             name='type',

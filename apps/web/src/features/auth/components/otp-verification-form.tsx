@@ -46,11 +46,6 @@ export function OtpVerificationForm({
   return (
     <div className={cn("flex flex-col", className)} {...props}>
       <form className="flex flex-col gap-4" noValidate onSubmit={handleSubmit}>
-        <div className="flex flex-col items-start gap-0">
-          <h1 className="text-2xl font-bold">{title}</h1>
-          <p className="text-sm text-foreground">{description}</p>
-        </div>
-        <div className="h-1" />
         <Field>
           <div className="flex items-center justify-between gap-3">
             <FieldLabel htmlFor="otp-code">Verification code</FieldLabel>
@@ -83,7 +78,7 @@ export function OtpVerificationForm({
           {errors.code ? <FieldError>{errors.code}</FieldError> : null}
         </Field>
         <Field>
-          <Button type="submit" className="w-full" disabled={isSubmitting}>
+          <Button type="submit" className="h-14 w-full rounded-full text-base" disabled={isSubmitting}>
             {isSubmitting ? <LoaderCircleIcon className="size-4 animate-spin" /> : null}
             {isSubmitting ? "Checking code" : actionLabel}
           </Button>

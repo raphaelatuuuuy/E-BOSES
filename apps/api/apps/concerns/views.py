@@ -29,9 +29,13 @@ from .models import (
     Announcement,
     BarangayEvent,
     Concern,
+    ConcernAppeal,
+    ConcernAssignment,
     ConcernAiAssessment,
+    ConcernClarification,
     ConcernComment,
     ConcernMedia,
+    ConcernOfficialRemark,
     ConcernStatusEvent,
     ConcernVote,
     ContentFlag,
@@ -40,11 +44,21 @@ from .serializers import (
     ActiveResponderSerializer,
     AnnouncementSerializer,
     BarangayEventSerializer,
+    ClarificationReplySerializer,
+    ClarificationRequestSerializer,
+    ConcernAppealCreateSerializer,
+    ConcernAppealReviewSerializer,
+    ConcernAppealSerializer,
+    ConcernAssignSerializer,
+    ConcernAssignmentSerializer,
     ConcernCommentCreateSerializer,
     ConcernCommentSerializer,
     ConcernCreateSerializer,
+    ConcernClarificationSerializer,
     ContentFlagSerializer,
     ConcernMediaSerializer,
+    ConcernOfficialRemarkCreateSerializer,
+    ConcernOfficialRemarkSerializer,
     ConcernSerializer,
     ConcernStatusUpdateSerializer,
     ConcernVoteSerializer,
@@ -135,6 +149,17 @@ def notify_announcement_published(announcement):
         )
         transaction.on_commit(lambda notification=notification: broadcast_notification(notification))
 
+def create_concern_notification(concern, *, recipient, type, title, body):
+    notification = Notification.objects.create(
+        recipient=recipient,
+        concern=concern,
+        type=type,
+        title=title,
+        body=body,
+    )
+    transaction.on_commit(lambda: broadcast_notification(notification))
+    return notification
+
 
 class ConcernListCreateView(APIView):
     permission_classes = [IsAuthenticated]
@@ -142,6 +167,8 @@ class ConcernListCreateView(APIView):
 
     def post(self, request):
         touch_last_seen(request.user)
+        if not user_has_role_permission(request.user, "concerns.create"):
+            return Response({"detail": "Only residents can submit concerns."}, status=status.HTTP_403_FORBIDDEN)
         serializer = ConcernCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         validated_media = []
@@ -178,7 +205,7 @@ class ConcernListCreateView(APIView):
             note="Report submitted.",
             actor=request.user,
         )
-        ConcernAiAssessment.objects.create(concern=concern, status=ConcernAiAssessment.Status.NOT_CONFIGURED)
+        ConcernAiAssessment.objects.create(concern=concern, status=ConcernAiAssessment.Status.PENDING)
         for uploaded_file, validated_file, media_hash, media_phash in validated_media:
             ConcernMedia.objects.create(
                 concern=concern,
@@ -380,6 +407,165 @@ class ContentFlagListView(APIView):
             flags = flags.filter(status=status_filter)
         return Response(ContentFlagSerializer(flags, many=True, context={"request": request}).data)
 
+
+class ConcernAssignView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to assign reports."}, status=status.HTTP_403_FORBIDDEN)
+        concern = get_object_or_404(Concern, pk=pk)
+        serializer = ConcernAssignSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        assignee = None
+        assignee_id = serializer.validated_data.get("assignee_id")
+        if assignee_id:
+            User = get_user_model()
+            assignee = get_object_or_404(User, pk=assignee_id, role__in=[User.Role.BARANGAY_OFFICIAL, User.Role.FIRST_RESPONDER], status=User.Status.VERIFIED)
+        assignment = ConcernAssignment.objects.create(
+            concern=concern,
+            assignee=assignee,
+            assigned_by=request.user,
+            office=serializer.validated_data.get("office", ""),
+            note=serializer.validated_data.get("note", ""),
+        )
+        note = assignment.note or f"Assigned to {assignee.email if assignee else assignment.office}."
+        concern.status = Concern.Status.IN_PROGRESS
+        concern.update_text = note
+        concern.save(update_fields=["status", "update_text", "updated_at"])
+        ConcernStatusEvent.objects.create(concern=concern, status=Concern.Status.IN_PROGRESS, note=note, actor=request.user)
+        create_concern_notification(concern, recipient=concern.reporter, type=Notification.Type.ASSIGNED, title="Your report was assigned", body=note)
+        if assignee:
+            create_concern_notification(concern, recipient=assignee, type=Notification.Type.ASSIGNED, title="Concern report assigned", body=note)
+        create_audit_log("concern.assigned", actor=request.user, target_user=concern.reporter, metadata={"concern_id": concern.pk, "assignment_id": assignment.pk}, request_meta=request_meta(request))
+        return Response(ConcernAssignmentSerializer(assignment, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
+class ConcernClarificationRequestView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to request clarification."}, status=status.HTTP_403_FORBIDDEN)
+        concern = get_object_or_404(Concern, pk=pk)
+        serializer = ClarificationRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        clarification = ConcernClarification.objects.create(concern=concern, requested_by=request.user, request_text=serializer.validated_data["request_text"])
+        concern.status = Concern.Status.UNDER_REVIEW
+        concern.update_text = "Barangay requested clarification."
+        concern.save(update_fields=["status", "update_text", "updated_at"])
+        ConcernStatusEvent.objects.create(concern=concern, status=Concern.Status.UNDER_REVIEW, note=clarification.request_text, actor=request.user)
+        create_concern_notification(concern, recipient=concern.reporter, type=Notification.Type.CLARIFICATION_REQUESTED, title="Clarification requested", body=clarification.request_text)
+        create_audit_log("concern.clarification_requested", actor=request.user, target_user=concern.reporter, metadata={"concern_id": concern.pk, "clarification_id": clarification.pk}, request_meta=request_meta(request))
+        return Response(ConcernClarificationSerializer(clarification, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
+class ConcernClarificationReplyView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk, clarification_id):
+        touch_last_seen(request.user)
+        concern = get_object_or_404(Concern, pk=pk, reporter=request.user)
+        clarification = get_object_or_404(ConcernClarification, pk=clarification_id, concern=concern)
+        if clarification.status != ConcernClarification.Status.OPEN:
+            return Response({"detail": "This clarification is already answered."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = ClarificationReplySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        clarification.response_text = serializer.validated_data["response_text"]
+        clarification.responded_by = request.user
+        clarification.status = ConcernClarification.Status.ANSWERED
+        clarification.responded_at = timezone.now()
+        clarification.save(update_fields=["response_text", "responded_by", "status", "responded_at"])
+        ConcernStatusEvent.objects.create(concern=concern, status=concern.status, note="Resident replied to clarification request.", actor=request.user)
+        if clarification.requested_by:
+            create_concern_notification(concern, recipient=clarification.requested_by, type=Notification.Type.CLARIFICATION_REPLIED, title="Resident replied to clarification", body=clarification.response_text[:240])
+        create_audit_log("concern.clarification_replied", actor=request.user, target_user=concern.reporter, metadata={"concern_id": concern.pk, "clarification_id": clarification.pk}, request_meta=request_meta(request))
+        return Response(ConcernClarificationSerializer(clarification, context={"request": request}).data)
+
+class ConcernAppealCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        concern = get_object_or_404(Concern, pk=pk, reporter=request.user)
+        if concern.status not in {Concern.Status.REJECTED, Concern.Status.RESOLVED}:
+            return Response({"detail": "Only rejected or resolved reports can be appealed."}, status=status.HTTP_400_BAD_REQUEST)
+        if concern.appeals.filter(status=ConcernAppeal.Status.SUBMITTED).exists():
+            return Response({"detail": "This report already has a pending appeal."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = ConcernAppealCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        appeal = ConcernAppeal.objects.create(concern=concern, appellant=request.user, reason=serializer.validated_data["reason"])
+        concern.status = Concern.Status.APPEALED
+        concern.update_text = "Appeal submitted for barangay review."
+        concern.save(update_fields=["status", "update_text", "updated_at"])
+        ConcernStatusEvent.objects.create(concern=concern, status=Concern.Status.APPEALED, note=appeal.reason[:255], actor=request.user)
+        User = get_user_model()
+        for official in User.objects.filter(role=User.Role.BARANGAY_OFFICIAL, status=User.Status.VERIFIED):
+            create_concern_notification(concern, recipient=official, type=Notification.Type.APPEAL_SUBMITTED, title="Report appeal submitted", body=appeal.reason[:240])
+        create_audit_log("concern.appeal_submitted", actor=request.user, target_user=request.user, metadata={"concern_id": concern.pk, "appeal_id": appeal.pk}, request_meta=request_meta(request))
+        return Response(ConcernAppealSerializer(appeal, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
+class ConcernAppealListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to view appeals."}, status=status.HTTP_403_FORBIDDEN)
+        appeals = ConcernAppeal.objects.select_related("concern", "appellant", "appellant__resident_profile", "reviewed_by", "reviewed_by__resident_profile")
+        appeal_status = request.query_params.get("status")
+        if appeal_status and appeal_status != "all":
+            appeals = appeals.filter(status=appeal_status)
+        return Response(ConcernAppealSerializer(appeals, many=True, context={"request": request}).data)
+
+class ConcernAppealReviewView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, appeal_id):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to review appeals."}, status=status.HTTP_403_FORBIDDEN)
+        appeal = get_object_or_404(ConcernAppeal.objects.select_related("concern", "appellant"), pk=appeal_id)
+        if appeal.status != ConcernAppeal.Status.SUBMITTED:
+            return Response({"detail": "This appeal has already been decided."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = ConcernAppealReviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        appeal.status = serializer.validated_data["status"]
+        appeal.decision_note = serializer.validated_data.get("decision_note", "")
+        appeal.reviewed_by = request.user
+        appeal.decided_at = timezone.now()
+        appeal.save(update_fields=["status", "decision_note", "reviewed_by", "decided_at"])
+        concern = appeal.concern
+        next_status = Concern.Status.UNDER_REVIEW if appeal.status == ConcernAppeal.Status.APPROVED else Concern.Status.REJECTED
+        concern.status = next_status
+        concern.update_text = appeal.decision_note or f"Appeal {appeal.status}."
+        concern.save(update_fields=["status", "update_text", "updated_at"])
+        ConcernStatusEvent.objects.create(concern=concern, status=next_status, note=concern.update_text, actor=request.user)
+        notif_type = Notification.Type.APPEAL_APPROVED if appeal.status == ConcernAppeal.Status.APPROVED else Notification.Type.APPEAL_DENIED
+        create_concern_notification(concern, recipient=appeal.appellant, type=notif_type, title=f"Appeal {appeal.status}", body=concern.update_text)
+        create_audit_log("concern.appeal_reviewed", actor=request.user, target_user=appeal.appellant, metadata={"concern_id": concern.pk, "appeal_id": appeal.pk, "status": appeal.status}, request_meta=request_meta(request))
+        return Response(ConcernAppealSerializer(appeal, context={"request": request}).data)
+
+class ConcernOfficialRemarkCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to add remarks."}, status=status.HTTP_403_FORBIDDEN)
+        concern = get_object_or_404(Concern, pk=pk)
+        serializer = ConcernOfficialRemarkCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        remark = ConcernOfficialRemark.objects.create(
+            concern=concern,
+            author=request.user,
+            body=serializer.validated_data["body"],
+            visible_to_resident=serializer.validated_data.get("visible_to_resident", True),
+        )
+        if remark.visible_to_resident:
+            create_concern_notification(concern, recipient=concern.reporter, type=Notification.Type.UNDER_REVIEW, title="Official remark added", body=remark.body[:240])
+        create_audit_log("concern.remark_added", actor=request.user, target_user=concern.reporter, metadata={"concern_id": concern.pk, "remark_id": remark.pk, "visible_to_resident": remark.visible_to_resident}, request_meta=request_meta(request))
+        return Response(ConcernOfficialRemarkSerializer(remark, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 class ConcernStatusUpdateView(APIView):
     permission_classes = [IsAuthenticated]

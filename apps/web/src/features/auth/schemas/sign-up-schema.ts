@@ -2,13 +2,11 @@ import { z } from "zod"
 
 export const MAX_PROOF_OF_RESIDENCY_FILE_SIZE_BYTES = 2 * 1024 * 1024
 const ALLOWED_PROOF_OF_RESIDENCY_EXTENSIONS = new Set([
-  "pdf",
   "png",
   "jpg",
   "jpeg",
 ])
 const ALLOWED_PROOF_OF_RESIDENCY_MIME_TYPES = new Set([
-  "application/pdf",
   "image/png",
   "image/jpeg",
 ])
@@ -25,7 +23,7 @@ export function getProofOfResidencyFileError(file: File) {
     file.type === "" || ALLOWED_PROOF_OF_RESIDENCY_MIME_TYPES.has(file.type)
 
   if (!hasAllowedExtension || !hasAllowedMimeType) {
-    return "Only PDF, PNG, and JPG files are allowed."
+    return "Only PNG and JPG files are allowed."
   }
 
   if (file.size > MAX_PROOF_OF_RESIDENCY_FILE_SIZE_BYTES) {
@@ -111,6 +109,7 @@ export const signUpSchema = z
       .array(proofOfResidencyFileSchema)
       .min(1, "Upload at least one valid government-issued ID or bill.")
       .max(2, "You can upload a maximum of 2 files."),
+    proofType: z.string().min(1, "Select an ID type."),
     phoneNumber: z
       .string()
       .regex(/^\+63\d{10}$/, "Enter a valid Philippine mobile number (e.g. +639821921234)."),

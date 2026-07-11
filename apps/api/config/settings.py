@@ -118,11 +118,12 @@ else:
         DATABASES["default"]["ENGINE"] = "django.contrib.gis.db.backends.postgis"
 
 # Channel layers (Redis)
+REDIS_URL = env("REDIS_URL", default="redis://localhost:6379/0")
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [env("REDIS_URL", default="redis://localhost:6379/0")],
+            "hosts": [REDIS_URL],
         },
     },
 }
@@ -221,3 +222,24 @@ SMS_OTP_PROVIDER = env("SMS_OTP_PROVIDER", default="development" if IS_LOCAL_DEV
 SMS_OTP_WEBHOOK_URL = env("SMS_OTP_WEBHOOK_URL", default="")
 SMS_OTP_WEBHOOK_TOKEN = env("SMS_OTP_WEBHOOK_TOKEN", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@localhost")
+WEB_PUSH_PUBLIC_KEY = env("WEB_PUSH_PUBLIC_KEY", default="")
+WEB_PUSH_PRIVATE_KEY = env("WEB_PUSH_PRIVATE_KEY", default="")
+WEB_PUSH_SUBJECT = env("WEB_PUSH_SUBJECT", default=f"mailto:{DEFAULT_FROM_EMAIL}")
+
+EBOSES_YOLO_MODEL_PATH = env("EBOSES_YOLO_MODEL_PATH", default="")
+EBOSES_NLP_MODEL_PATH = env("EBOSES_NLP_MODEL_PATH", default="")
+
+# PaddleOCR
+PADDLEOCR_TOKEN = env("PADDLEOCR_TOKEN", default="")
+PADDLEOCR_JOB_URL = env("PADDLEOCR_JOB_URL", default="https://paddleocr.aistudio-app.com/api/v2/ocr/jobs")
+PADDLEOCR_MODEL = env("PADDLEOCR_MODEL", default="PP-OCRv6")
+PADDLEOCR_POLL_INTERVAL_SECONDS = env.float("PADDLEOCR_POLL_INTERVAL_SECONDS", default=2.0)
+PADDLEOCR_MAX_POLLS = env.int("PADDLEOCR_MAX_POLLS", default=30)
+PADDLEOCR_CONNECT_TIMEOUT = env.int("PADDLEOCR_CONNECT_TIMEOUT", default=10)
+PADDLEOCR_READ_TIMEOUT = env.int("PADDLEOCR_READ_TIMEOUT", default=30)
+PADDLEOCR_MAX_RETRIES = env.int("PADDLEOCR_MAX_RETRIES", default=3)
+
+if not IS_LOCAL_DEVELOPMENT and DEBUG:
+    from django.core.exceptions import ImproperlyConfigured
+
+    raise ImproperlyConfigured("DEBUG must be false outside local development.")

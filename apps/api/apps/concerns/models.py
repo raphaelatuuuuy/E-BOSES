@@ -171,3 +171,67 @@ class ConcernAiAssessment(models.Model):
     raw_result = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+class ConcernAssignment(models.Model):
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        COMPLETED = "completed", "Completed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="assignments")
+    assignee = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="assigned_concerns")
+    assigned_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="concern_assignments_made")
+    office = models.CharField(max_length=120, blank=True)
+    note = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.ACTIVE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+class ConcernClarification(models.Model):
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        ANSWERED = "answered", "Answered"
+        CLOSED = "closed", "Closed"
+
+    concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="clarifications")
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="concern_clarifications_requested")
+    request_text = models.CharField(max_length=500)
+    response_text = models.TextField(blank=True)
+    responded_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="concern_clarifications_answered")
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.OPEN)
+    created_at = models.DateTimeField(auto_now_add=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+class ConcernAppeal(models.Model):
+    class Status(models.TextChoices):
+        SUBMITTED = "submitted", "Submitted"
+        APPROVED = "approved", "Approved"
+        DENIED = "denied", "Denied"
+
+    concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="appeals")
+    appellant = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="concern_appeals")
+    reason = models.TextField()
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.SUBMITTED)
+    decision_note = models.CharField(max_length=255, blank=True)
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="reviewed_concern_appeals")
+    created_at = models.DateTimeField(auto_now_add=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+class ConcernOfficialRemark(models.Model):
+    concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="official_remarks")
+    author = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="concern_official_remarks")
+    body = models.TextField()
+    visible_to_resident = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]

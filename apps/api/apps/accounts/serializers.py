@@ -65,6 +65,7 @@ class RegisterSerializer(serializers.Serializer):
     avatar = serializers.CharField(max_length=30, allow_blank=True, required=False)
     terms_version = serializers.CharField(max_length=32)
     privacy_version = serializers.CharField(max_length=32)
+    proof_type = serializers.CharField(max_length=32, required=False)
 
     def validate_email(self, value):
         if get_user_model().objects.filter(email=value).exists():
@@ -206,7 +207,28 @@ class UserSummarySerializer(serializers.ModelSerializer):
         profile = self.profile(obj)
         if profile and profile.avatar:
             return profile.avatar
-        # Compute default from gender + age
+        # Role-based avatar map
+        role_prefix_map = {
+            User.Role.BARANGAY_OFFICIAL: "official",
+        }
+        responder_unit_map = {
+            User.ResponderUnit.TANOD: "tanod",
+            User.ResponderUnit.BHW: "bhw",
+            User.ResponderUnit.BDRRMO: "bdrmmo",
+        }
+        prefix = None
+        if obj.role in role_prefix_map:
+            prefix = role_prefix_map[obj.role]
+        elif obj.role == User.Role.FIRST_RESPONDER and obj.responder_unit:
+            prefix = responder_unit_map.get(obj.responder_unit)
+        if prefix:
+            gender = (profile.gender if profile else "") or ""
+            if gender == "male":
+                return f"{prefix}-male"
+            if gender == "female":
+                return f"{prefix}-female"
+            return f"{prefix}-male"  # fallback when gender unknown
+        # Resident default: compute from gender + age
         if profile and profile.gender and profile.gender != "prefer_not_to_say" and profile.date_of_birth:
             from datetime import date
             age = date.today().year - profile.date_of_birth.year

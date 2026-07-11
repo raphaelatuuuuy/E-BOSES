@@ -29,13 +29,6 @@ export function NewPasswordForm({
   return (
     <div className={cn("flex flex-col", className)} {...props}>
       <form className="flex flex-col gap-4" noValidate onSubmit={handleSubmit}>
-        <div className="flex flex-col items-start gap-0">
-          <h1 className="text-2xl font-bold">Create new password</h1>
-          <p className="text-sm text-foreground">
-            Enter your new password below
-          </p>
-        </div>
-        <div className="h-1" />
         <Field>
           <FieldLabel htmlFor="password">New password</FieldLabel>
           <Input
@@ -46,6 +39,7 @@ export function NewPasswordForm({
             aria-invalid={Boolean(errors.password)}
             placeholder="Enter your new password"
             required
+            className="h-14 w-full rounded-[16px] bg-white px-4 text-lg font-semibold placeholder:text-sm placeholder:font-normal focus-visible:border focus-visible:border-ring focus-visible:shadow-[0_0_0_3px_rgba(255,129,51,0.15)] aria-invalid:border aria-invalid:border-destructive aria-invalid:shadow-[0_0_0_3px_rgba(220,38,38,0.15)]"
           />
           {values.password.length > 0 ? (
             <div className="space-y-2">
@@ -84,13 +78,14 @@ export function NewPasswordForm({
             aria-invalid={Boolean(errors.confirmPassword)}
             placeholder="Confirm your new password"
             required
+            className="h-14 w-full rounded-[16px] bg-white px-4 text-lg font-semibold placeholder:text-sm placeholder:font-normal focus-visible:border focus-visible:border-ring focus-visible:shadow-[0_0_0_3px_rgba(255,129,51,0.15)] aria-invalid:border aria-invalid:border-destructive aria-invalid:shadow-[0_0_0_3px_rgba(220,38,38,0.15)]"
           />
           {errors.confirmPassword ? (
             <FieldError>{errors.confirmPassword}</FieldError>
           ) : null}
         </Field>
         <Field>
-          <Button type="submit" className="w-full" disabled={isSubmitting}>
+          <Button type="submit" className="h-14 w-full rounded-full text-base font-semibold" disabled={isSubmitting}>
             {isSubmitting ? <LoaderCircleIcon className="size-4 animate-spin" /> : null}
             {isSubmitting ? "Resetting password" : "Reset password"}
           </Button>

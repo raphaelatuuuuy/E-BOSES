@@ -51,7 +51,8 @@ export function AnnouncementsCard({ announcements }: Props) {
           )
         })}
         {announcements.length === 0 && (
-          <div className="flex items-center justify-center py-8 text-sm text-[#46537d]">
+          <div className="flex flex-col items-center justify-center py-8 text-sm text-[#46537d]">
+            <img src="/contents/announcements.png" alt="" className="mb-4 h-32 w-auto" aria-hidden="true" />
             No announcements yet.
           </div>
         )}

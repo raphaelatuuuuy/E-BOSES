@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { type ReactNode, useState } from "react"
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom"
 import { LoaderCircle } from "lucide-react"
 import { toast } from "sonner"
@@ -13,7 +13,10 @@ import OtpVerificationPage from "@/features/auth/otp-verification"
 import SignInPage from "@/features/auth/sign-in"
 import SignUpPage from "@/features/auth/sign-up"
 import DashboardLayout from "@/features/dashboard/dashboard"
+import AdminPage from "@/features/dashboard/pages/admin"
 import OnboardingPage from "@/features/onboarding/onboarding-page"
+import OfficialOnboardingPage from "@/features/onboarding/official-onboarding-page"
+import ResponderOnboardingPage from "@/features/onboarding/responder-onboarding-page"
 import FeedPage from "@/features/dashboard/pages/feed"
 import EmergenciesPage from "@/features/dashboard/pages/emergencies"
 import HomePage from "@/features/dashboard/pages/home"
@@ -99,6 +102,10 @@ function ProtectedOnboarding() {
     return <Navigate to="/dashboard" replace />
   }
 
+  const isOfficial = user.role === "barangay_official" || user.is_staff || user.is_superuser
+  const isResponder = user.role === "first_responder"
+  if (isResponder) return <ResponderOnboardingPage />
+  if (isOfficial) return <OfficialOnboardingPage />
   return <OnboardingPage />
 }
 
@@ -106,6 +113,22 @@ function DashboardIndex() {
   const { user } = useAuthSession()
   const isStaffRole = user?.role === "barangay_official" || user?.role === "first_responder" || user?.is_staff || user?.is_superuser
   return <Navigate to={isStaffRole ? "/dashboard/emergencies" : "/dashboard/home"} replace />
+}
+
+function ResidentRoute({ children }: { children: ReactNode }) {
+  const { user } = useAuthSession()
+  return user?.role === "resident" ? children : <Navigate to="/dashboard" replace />
+}
+
+function OfficialRoute({ children }: { children: ReactNode }) {
+  const { user } = useAuthSession()
+  return user?.role === "barangay_official" || user?.is_staff || user?.is_superuser ? children : <Navigate to="/dashboard" replace />
+}
+
+function EmergencyOpsRoute({ children }: { children: ReactNode }) {
+  const { user } = useAuthSession()
+  const allowed = user?.role === "barangay_official" || user?.role === "first_responder" || user?.is_staff || user?.is_superuser
+  return allowed ? children : <Navigate to="/dashboard" replace />
 }
 
 function AppRoutes() {
@@ -122,9 +145,10 @@ function AppRoutes() {
       {/* Dashboard routes */}
       <Route path="/dashboard" element={<ProtectedDashboard />}>
         <Route index element={<DashboardIndex />} />
-        <Route path="home" element={<HomePage />} />
-        <Route path="feed" element={<FeedPage />} />
-        <Route path="emergencies" element={<EmergenciesPage />} />
+        <Route path="home" element={<ResidentRoute><HomePage /></ResidentRoute>} />
+        <Route path="feed" element={<ResidentRoute><FeedPage /></ResidentRoute>} />
+        <Route path="emergencies" element={<EmergencyOpsRoute><EmergenciesPage /></EmergencyOpsRoute>} />
+        <Route path="admin" element={<OfficialRoute><AdminPage /></OfficialRoute>} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="reports/:reportId" element={<ReportsPage />} />
         <Route path="profile" element={<ProfilePage />} />
@@ -181,7 +205,7 @@ function AppRoutes() {
       } />
       <Route path="/forgot-password-otp" element={
         <OtpVerificationPage
-          title="Verify your reset request"
+          title="Reset code"
           description="Enter the 6-digit code we sent to your email."
           recipientHint=""
           actionLabel="Continue"

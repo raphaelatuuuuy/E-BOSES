@@ -8,8 +8,8 @@ self.addEventListener("push", (event) => {
   const title = data.title || "E-Boses update"
   const options = {
     body: data.body || "Open E-Boses for details.",
-    icon: "/favicon.ico",
-    badge: "/favicon.ico",
+    icon: "/contents/logo.png",
+    badge: "/contents/logo.png",
     data: { url: data.url || "/dashboard" },
   }
   event.waitUntil(self.registration.showNotification(title, options))
@@ -20,8 +20,8 @@ self.addEventListener("message", (event) => {
   const payload = event.data.payload || {}
   event.waitUntil(self.registration.showNotification(payload.title || "E-Boses update", {
     body: payload.body || "Open E-Boses for details.",
-    icon: "/favicon.ico",
-    badge: "/favicon.ico",
+    icon: "/contents/logo.png",
+    badge: "/contents/logo.png",
     data: { url: payload.url || "/dashboard" },
   }))
 })

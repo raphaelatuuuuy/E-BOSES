@@ -7,8 +7,8 @@ from rest_framework.views import APIView
 
 from apps.accounts.models import AccountRequest
 from apps.accounts.views import touch_last_seen
-from apps.concerns.models import Announcement, BarangayEvent, Concern, ContentFlag
-from apps.emergencies.models import EmergencyAlert, EmergencyResponderAssignment
+from apps.concerns.models import Announcement, BarangayEvent, Concern, ConcernAppeal, ContentFlag
+from apps.emergencies.models import EmergencyAlert, EmergencyAppeal, EmergencyResponderAssignment
 from apps.notifications.models import Notification
 
 CONCERN_ACTIVE = {
@@ -69,7 +69,9 @@ class OfficialDashboardSummaryView(APIView):
             "pending_reviews": Concern.objects.filter(status=Concern.Status.SUBMITTED).count(),
             "active_reports": Concern.objects.filter(status__in=CONCERN_ACTIVE).count(),
             "appealed_reports": Concern.objects.filter(status=Concern.Status.APPEALED).count(),
+            "pending_appeals": ConcernAppeal.objects.filter(status=ConcernAppeal.Status.SUBMITTED).count(),
             "active_emergencies": EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE).count(),
+            "pending_emergency_appeals": EmergencyAppeal.objects.filter(status=EmergencyAppeal.Status.SUBMITTED).count(),
             "responders_on_duty": User.objects.filter(role=User.Role.FIRST_RESPONDER, status=User.Status.VERIFIED, is_on_duty=True).count(),
             "pending_resident_verifications": User.objects.filter(role=User.Role.RESIDENT, status=User.Status.PENDING_VERIFICATION).count(),
             "pending_content_flags": ContentFlag.objects.filter(status=ContentFlag.Status.SUBMITTED).count(),

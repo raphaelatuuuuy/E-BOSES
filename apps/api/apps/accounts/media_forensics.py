@@ -11,8 +11,10 @@ import tempfile
 import os
 from io import BytesIO
 
+import cv2
+import numpy as np
 from django.core.exceptions import ValidationError
-from PIL import Image
+from PIL import Image, ImageChops, ImageStat
 
 # ── Known editing software in EXIF Software tag ──────────────────────────
 EDITING_SOFTWARE = {
@@ -47,6 +49,23 @@ AI_SOFTWARE = {
     "imagen",
     "runway",
 }
+
+MIN_IMAGE_WIDTH = 300
+MIN_IMAGE_HEIGHT = 200
+MIN_BLUR_VARIANCE = 70.0
+MIN_BRIGHTNESS = 40.0
+MAX_BRIGHTNESS = 240.0
+MIN_CONTRAST = 25.0
+ELA_RECOMPRESSION_QUALITY = 90
+ELA_MIN_MEAN = 0.15
+ELA_HIGH_PERCENTILE = 1.0
+ELA_RATIO_THRESHOLD = 0.6
+NOISE_BLOCK_SIZE = 64
+NOISE_MIN_BLOCKS = 12
+NOISE_MIN_MEAN = 1.5
+NOISE_CV_THRESHOLD = 0.85
+NOISE_MIN_TEXTURE_STDDEV = 8.0
+VISUAL_TAMPER_MESSAGE = "Proof image appears digitally manipulated. Please upload an original photo."
 
 
 def _normalize_name(name: str) -> str:
@@ -178,8 +197,116 @@ def png_metadata_forensics(content: bytes) -> str | None:
     return None
 
 
+def check_image_quality(content: bytes) -> None:
+    """Reject proof images too small or unreadable for OCR."""
+    try:
+        with Image.open(BytesIO(content)) as image:
+            width, height = image.size
+            if width < MIN_IMAGE_WIDTH or height < MIN_IMAGE_HEIGHT:
+                raise ValidationError(f"Proof image must be at least {MIN_IMAGE_WIDTH}×{MIN_IMAGE_HEIGHT} pixels.")
+
+            grayscale = image.convert("L")
+            stats = ImageStat.Stat(grayscale)
+            brightness = stats.mean[0]
+            contrast = stats.stddev[0]
+            blur_variance = float(cv2.Laplacian(np.array(grayscale), cv2.CV_64F).var())
+    except ValidationError:
+        raise
+    except Exception:
+        return
+
+    if brightness < MIN_BRIGHTNESS or brightness > MAX_BRIGHTNESS:
+        raise ValidationError("Proof image is too dark or too bright.")
+    if contrast < MIN_CONTRAST:
+        raise ValidationError("Proof image has too little contrast.")
+    if blur_variance < MIN_BLUR_VARIANCE:
+        raise ValidationError("Proof image is too blurry. Please upload a clearer photo.")
+
+
+def ela_metrics(content: bytes) -> dict[str, float] | None:
+    try:
+        with Image.open(BytesIO(content)) as image:
+            original = image.convert("RGB")
+            recompressed_bytes = BytesIO()
+            original.save(recompressed_bytes, format="JPEG", quality=ELA_RECOMPRESSION_QUALITY)
+            recompressed_bytes.seek(0)
+            with Image.open(recompressed_bytes) as recompressed:
+                difference = ImageChops.difference(original, recompressed.convert("RGB"))
+                values = np.array(difference.convert("L"), dtype=np.float32)
+    except Exception:
+        return None
+
+    mean = float(values.mean())
+    if mean <= 0:
+        return {"mean": 0.0, "p95": 0.0, "max_region_to_mean": 0.0}
+
+    height, width = values.shape
+    region_means = []
+    for row in range(4):
+        for col in range(4):
+            top = row * height // 4
+            bottom = (row + 1) * height // 4
+            left = col * width // 4
+            right = (col + 1) * width // 4
+            region = values[top:bottom, left:right]
+            if region.size:
+                region_means.append(float(region.mean()))
+
+    return {
+        "mean": mean,
+        "p95": float(np.percentile(values, 95)),
+        "max_region_to_mean": (max(region_means) / max(mean, 1.0)) if region_means else 0.0,
+    }
+
+
+def noise_inconsistency_metrics(content: bytes) -> dict[str, float] | None:
+    try:
+        with Image.open(BytesIO(content)) as image:
+            gray = np.array(image.convert("L"), dtype=np.uint8)
+    except Exception:
+        return None
+
+    residual = cv2.absdiff(gray, cv2.GaussianBlur(gray, (3, 3), 0))
+    height, width = gray.shape
+    noise_values = []
+    for top in range(0, height - NOISE_BLOCK_SIZE + 1, NOISE_BLOCK_SIZE):
+        for left in range(0, width - NOISE_BLOCK_SIZE + 1, NOISE_BLOCK_SIZE):
+            original_block = gray[top : top + NOISE_BLOCK_SIZE, left : left + NOISE_BLOCK_SIZE]
+            if float(original_block.std()) < NOISE_MIN_TEXTURE_STDDEV:
+                continue
+            noise_block = residual[top : top + NOISE_BLOCK_SIZE, left : left + NOISE_BLOCK_SIZE]
+            noise_values.append(float(noise_block.std()))
+
+    if len(noise_values) < NOISE_MIN_BLOCKS:
+        return None
+
+    values = np.array(noise_values, dtype=np.float32)
+    mean = float(values.mean())
+    if mean <= 0:
+        return {"mean": 0.0, "std": 0.0, "cv": 0.0, "blocks": float(len(noise_values))}
+    std = float(values.std())
+    return {"mean": mean, "std": std, "cv": std / mean, "blocks": float(len(noise_values))}
+
+
+
+def visual_tamper_forensics(content: bytes) -> str | None:
+    ela = ela_metrics(content)
+    noise = noise_inconsistency_metrics(content)
+    if not ela or not noise:
+        return None
+    if (
+        ela["mean"] >= ELA_MIN_MEAN
+        and ela["p95"] >= ELA_HIGH_PERCENTILE
+        and ela["max_region_to_mean"] >= ELA_RATIO_THRESHOLD
+        and noise["cv"] >= NOISE_CV_THRESHOLD
+        and noise["mean"] >= NOISE_MIN_MEAN
+    ):
+        return VISUAL_TAMPER_MESSAGE
+    return None
+
+
 def check_media_authenticity(content: bytes) -> None:
     """Run all forensics checks. Raises ValidationError on detection."""
-    msg = exif_forensics(content) or png_metadata_forensics(content) or c2pa_forensics(content)
+    msg = exif_forensics(content) or png_metadata_forensics(content) or c2pa_forensics(content) or visual_tamper_forensics(content)
     if msg:
         raise ValidationError(msg)

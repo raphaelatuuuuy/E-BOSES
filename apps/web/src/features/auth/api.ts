@@ -51,6 +51,18 @@ export interface ResidentSettings {
   report_updates: boolean
   community_sharing: boolean
   location_confirmation: boolean
+  sos_placement: "sidebar" | "inline" | "compact"
+  updated_at: string
+}
+
+export interface AccountRequest {
+  id: number
+  user?: AuthUser
+  type: "deletion" | "data_export"
+  status: "submitted" | "reviewed" | "completed" | "rejected"
+  note: string
+  staff_note: string
+  created_at: string
   updated_at: string
 }
 
@@ -113,6 +125,59 @@ export function getResidentSettings() {
 
 export function updateResidentSettings(payload: Partial<Omit<ResidentSettings, "updated_at">>) {
   return apiRequest<ResidentSettings>("/auth/settings/", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function listAccountRequests() {
+  return apiRequest<AccountRequest[]>("/auth/account-requests/")
+}
+
+export function createAccountRequest(payload: { type: AccountRequest["type"]; note?: string }) {
+  return apiRequest<AccountRequest>("/auth/account-requests/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function listManagedAccountRequests(status?: string) {
+  const params = new URLSearchParams()
+  if (status && status !== "all") params.set("status", status)
+  const query = params.toString() ? `?${params.toString()}` : ""
+  return apiRequest<AccountRequest[]>(`/auth/account-requests/manage/${query}`)
+}
+
+export function reviewAccountRequest(id: number, payload: { status: "reviewed" | "completed" | "rejected"; staff_note?: string }) {
+  return apiRequest<AccountRequest>(`/auth/account-requests/${id}/review/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function listResidents(search?: string) {
+  const params = new URLSearchParams()
+  if (search?.trim()) params.set("search", search.trim())
+  const query = params.toString() ? `?${params.toString()}` : ""
+  return apiRequest<AuthUser[]>(`/auth/residents/${query}`)
+}
+
+export function updateResidentStatus(id: number, status: UserStatus) {
+  return apiRequest<AuthUser>(`/auth/residents/${id}/status/`, {
+    method: "POST",
+    body: JSON.stringify({ status }),
+  })
+}
+
+export function listResponders(search?: string) {
+  const params = new URLSearchParams()
+  if (search?.trim()) params.set("search", search.trim())
+  const query = params.toString() ? `?${params.toString()}` : ""
+  return apiRequest<AuthUser[]>(`/auth/responders/${query}`)
+}
+
+export function updateResponder(id: number, payload: { status?: UserStatus; responder_unit?: AuthUser["responder_unit"]; is_on_duty?: boolean }) {
+  return apiRequest<AuthUser>(`/auth/responders/${id}/`, {
     method: "PATCH",
     body: JSON.stringify(payload),
   })

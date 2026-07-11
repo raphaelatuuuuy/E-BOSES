@@ -68,8 +68,16 @@ export function ActiveReportsCard({ reports }: Props) {
           )
         })}
         {reports.length === 0 && (
-          <div className="flex min-h-[190px] items-center justify-center text-sm text-[#46537d]">
-            No active reports yet.
+          <div className="flex flex-col items-center justify-center min-h-[190px] text-sm text-[#46537d]">
+            <img src="/contents/create-report.png" alt="" className="mb-4 h-32 w-auto" aria-hidden="true" />
+            <p className="mb-3 text-sm">No active reports yet.</p>
+            <Link
+              to="/dashboard/reports"
+              className="inline-flex h-10 items-center gap-2 rounded-full bg-primary px-6 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary/90"
+            >
+              Create Report
+            </Link>
+            <div className="h-4" />
           </div>
         )}
       </div>

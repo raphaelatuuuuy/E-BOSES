@@ -21,10 +21,19 @@ import { cn } from "@workspace/ui/lib/utils"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { Topbar } from "@/features/dashboard/components/topbar"
-import { listActiveResponders, type PublicUser } from "@/features/dashboard/api"
+import {
+  getOfficialDashboardSummary,
+  getResponderDashboardSummary,
+  listActiveResponders,
+  type OfficialRoleSummary,
+  type PublicUser,
+  type ResponderRoleSummary,
+} from "@/features/dashboard/api"
 import {
   acknowledgeEmergency,
   assignEmergency,
+  assignEmergencyResponders,
+  escalateOverdueEmergencies,
   listAssignedEmergencies,
   listEmergencyQueue,
   markEmergencyArrived,
@@ -307,6 +316,8 @@ function DispatchPanel({
   onChanged: (alert: EmergencyAlert) => void
 }) {
   const [busyId, setBusyId] = useState<number | null>(null)
+  const [busyAction, setBusyAction] = useState("")
+  const [selectedResponderIds, setSelectedResponderIds] = useState<number[]>([])
   const preferred = alert ? preferredUnit[alert.type] : ""
   const sorted = useMemo(() => {
     if (!alert) return responders
@@ -333,6 +344,55 @@ function DispatchPanel({
     }
   }
 
+  async function assignSelected() {
+    if (!alert || selectedResponderIds.length === 0) return
+    setBusyAction("assign-selected")
+    try {
+      const next = await assignEmergencyResponders(alert.id, selectedResponderIds)
+      onChanged(next)
+      toast.success("Selected responders assigned")
+      setSelectedResponderIds([])
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not assign responders.")
+    } finally {
+      setBusyAction("")
+    }
+  }
+
+  async function escalate() {
+    setBusyAction("escalate")
+    try {
+      const result = await escalateOverdueEmergencies(5)
+      toast.success(result.escalated ? `${result.escalated} overdue emergency escalated` : "No overdue responders to escalate")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not escalate emergencies.")
+    } finally {
+      setBusyAction("")
+    }
+  }
+
+  function callResident() {
+    if (!alert?.reporter_phone) {
+      toast.info("Resident phone is not available in this alert record yet.")
+      return
+    }
+    window.location.href = `tel:${alert.reporter_phone}`
+  }
+
+  async function markFalseAlarm() {
+    if (!alert) return
+    setBusyAction("false-alarm")
+    try {
+      const next = await resolveEmergency(alert.id, "Marked as false alarm by official.")
+      onChanged(next)
+      toast.success("Emergency marked as false alarm")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not mark false alarm.")
+    } finally {
+      setBusyAction("")
+    }
+  }
+
   return (
     <aside className="space-y-4">
       <section className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -351,9 +411,19 @@ function DispatchPanel({
           ) : sorted.map((responder) => {
             const km = alert ? distanceKm(alert.latitude, alert.longitude, responder.current_latitude, responder.current_longitude) : null
             const assigned = alert?.current_assignment?.responder?.id === responder.id
+            const selected = selectedResponderIds.includes(responder.id)
             return (
               <div key={responder.id} className={cn("rounded-xl border p-3", assigned ? "border-[#ff6a1a] bg-[#fff7f1]" : "border-slate-200 bg-white")}>
                 <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    onChange={(event) => {
+                      setSelectedResponderIds((current) => event.target.checked ? [...current, responder.id] : current.filter((id) => id !== responder.id))
+                    }}
+                    className="mt-3"
+                    aria-label={`Select ${responderName(responder)}`}
+                  />
                   <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#07145f] text-xs font-black text-white">
                     {responder.initials || responderName(responder).slice(0, 2).toUpperCase()}
                   </div>
@@ -381,15 +451,26 @@ function DispatchPanel({
             )
           })}
         </div>
+        {sorted.length > 0 ? (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={!alert || selectedResponderIds.length === 0 || busyAction === "assign-selected"}
+            onClick={() => void assignSelected()}
+            className="mt-3 w-full"
+          >
+            {busyAction === "assign-selected" ? "Assigning selected" : `Assign selected (${selectedResponderIds.length})`}
+          </Button>
+        ) : null}
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4">
         <p className="text-sm font-black text-[#07145f]">Quick actions</p>
         <div className="mt-3 grid grid-cols-2 gap-2">
-          <ActionButton icon={<PhoneCallIcon className="size-4" />} label="Call resident" />
-          <ActionButton icon={<RadioIcon className="size-4" />} label="Radio team" />
-          <ActionButton icon={<AlertTriangleIcon className="size-4" />} label="Escalate" />
-          <ActionButton icon={<ShieldCheckIcon className="size-4" />} label="False alarm" />
+          <ActionButton icon={<PhoneCallIcon className="size-4" />} label="Call resident" onClick={callResident} />
+          <ActionButton icon={<RadioIcon className="size-4" />} label="Radio team" onClick={() => toast.info("Radio integration is not configured yet.")} />
+          <ActionButton icon={<AlertTriangleIcon className="size-4" />} label={busyAction === "escalate" ? "Escalating" : "Escalate"} onClick={() => void escalate()} />
+          <ActionButton icon={<ShieldCheckIcon className="size-4" />} label={busyAction === "false-alarm" ? "Closing" : "False alarm"} onClick={() => void markFalseAlarm()} />
         </div>
       </section>
 
@@ -406,9 +487,9 @@ function DispatchPanel({
   )
 }
 
-function ActionButton({ icon, label }: { icon: React.ReactNode; label: string }) {
+function ActionButton({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
   return (
-    <button type="button" className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl border border-slate-200 bg-[#f8fafc] px-2 text-center text-xs font-black text-[#07145f]">
+    <button type="button" onClick={onClick} className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl border border-slate-200 bg-[#f8fafc] px-2 text-center text-xs font-black text-[#07145f] transition-colors hover:border-[#ff6a1a] hover:text-[#ff6a1a]">
       <span className="text-[#ff6a1a]">{icon}</span>
       {label}
     </button>
@@ -600,6 +681,7 @@ export default function EmergenciesPage() {
   const [alerts, setAlerts] = useState<EmergencyAlert[]>([])
   const [responders, setResponders] = useState<PublicUser[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [summary, setSummary] = useState<OfficialRoleSummary | ResponderRoleSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const isOfficial = user?.role === "barangay_official" || user?.is_staff || user?.is_superuser
@@ -607,10 +689,14 @@ export default function EmergenciesPage() {
 
   const selected = useMemo(() => alerts.find((alert) => alert.id === selectedId) ?? alerts[0] ?? null, [alerts, selectedId])
   const counts = useMemo(() => ({
-    active: alerts.length,
+    active: isOfficial
+      ? (summary as OfficialRoleSummary | null)?.active_emergencies ?? alerts.length
+      : (summary as ResponderRoleSummary | null)?.assigned_active_emergencies ?? alerts.length,
     unassigned: alerts.filter((alert) => !alert.current_assignment).length,
     enRoute: alerts.filter((alert) => ["acknowledged", "en_route", "nearby"].includes(alert.status)).length,
-  }), [alerts])
+    respondersOnDuty: (summary as OfficialRoleSummary | null)?.responders_on_duty ?? responders.length,
+    awaitingAck: (summary as ResponderRoleSummary | null)?.awaiting_acknowledgement ?? alerts.filter((alert) => alert.current_assignment?.status === "assigned").length,
+  }), [alerts, isOfficial, responders.length, summary])
 
   useEffect(() => {
     let cancelled = false
@@ -619,13 +705,15 @@ export default function EmergenciesPage() {
       setLoading(true)
       setError("")
       try {
-        const [nextAlerts, nextResponders] = await Promise.all([
+        const [nextAlerts, nextResponders, nextSummary] = await Promise.all([
           isOfficial ? listEmergencyQueue() : isResponder ? listAssignedEmergencies() : Promise.resolve([]),
           isOfficial ? listActiveResponders() : Promise.resolve([]),
+          isOfficial ? getOfficialDashboardSummary() : isResponder ? getResponderDashboardSummary() : Promise.resolve(null),
         ])
         if (cancelled) return
         setAlerts(nextAlerts)
         setResponders(nextResponders)
+        setSummary(nextSummary)
         setSelectedId((current) => current ?? nextAlerts[0]?.id ?? null)
       } catch {
         if (!cancelled) setError("Could not load emergency operations.")
@@ -677,7 +765,7 @@ export default function EmergenciesPage() {
             <div className="grid grid-cols-3 gap-2 text-center">
               <SummaryBox label="Active" value={counts.active.toString()} />
               <SummaryBox label={isOfficial ? "Unassigned" : "En route"} value={(isOfficial ? counts.unassigned : counts.enRoute).toString()} />
-              <SummaryBox label="Mode" value={isOfficial ? "Official" : "Responder"} />
+              <SummaryBox label={isOfficial ? "On duty" : "Awaiting ack"} value={(isOfficial ? counts.respondersOnDuty : counts.awaitingAck).toString()} />
             </div>
           </div>
         </div>

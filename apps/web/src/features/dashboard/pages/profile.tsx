@@ -38,9 +38,12 @@ import { Topbar } from "@/features/dashboard/components/topbar"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { getDashboardSummary, type DashboardSummary } from "@/features/dashboard/api"
 import {
+  createAccountRequest,
   getResidentSettings,
+  listAccountRequests,
   updateMe,
   updateResidentSettings,
+  type AccountRequest,
   type ResidentSettings,
 } from "@/features/auth/api"
 import { ApiError } from "@/lib/api"
@@ -54,11 +57,11 @@ type ProfileFormState = {
 }
 
 type ProfileField = keyof ProfileFormState
-type SettingKey = keyof Omit<ResidentSettings, "updated_at">
-type SosPlacement = "floating" | "sidebar" | "compact"
+type SettingKey = "push_alerts" | "report_updates" | "community_sharing" | "location_confirmation"
+type SosPlacement = ResidentSettings["sos_placement"]
 
 const sosOptions: Array<{ id: SosPlacement; title: string; desc: string }> = [
-  { id: "floating", title: "Floating SOS", desc: "Best default. Visible on every page without taking layout space." },
+  { id: "inline", title: "Inline SOS", desc: "Show SOS as contextual access inside help and emergency sections." },
   { id: "sidebar", title: "Sidebar SOS", desc: "Desktop only. Appears inside the sidebar and becomes an icon when collapsed." },
   { id: "compact", title: "Compact round button", desc: "Less visual noise on desktop dashboards." },
 ]
@@ -72,11 +75,12 @@ const sosIdeas = [
 
 function normalizeSosPlacement(value: string | null): SosPlacement {
   if (value === "bottom_bar") return "sidebar"
-  if (value === "sidebar" || value === "compact" || value === "floating") return value
-  return "floating"
+  if (value === "floating") return "inline"
+  if (value === "sidebar" || value === "compact" || value === "inline") return value
+  return "inline"
 }
 
-const avatarChoices = ["young-man", "young-woman", "middleaged-man", "middleaged-woman", "senior-man", "senior-woman"]
+import { computeDefaultAvatar, getAvatarChoices } from "@/features/dashboard/avatar-utils"
 
 function sanitizeName(value: string) {
   return value.replace(/[^A-Za-zÑñ ]/g, "")
@@ -222,7 +226,9 @@ export default function ProfilePage() {
   const [loaded, setLoaded] = useState(false)
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [settings, setSettings] = useState<ResidentSettings | null>(null)
+  const [accountRequests, setAccountRequests] = useState<AccountRequest[]>([])
   const [savingSetting, setSavingSetting] = useState<SettingKey | null>(null)
+  const [savingRequest, setSavingRequest] = useState<AccountRequest["type"] | null>(null)
   const [profileForm, setProfileForm] = useState<ProfileFormState>(() => profileFormFromUser(null))
   const [profileErrors, setProfileErrors] = useState<Partial<Record<ProfileField, string>>>({})
   const [savingProfile, setSavingProfile] = useState(false)
@@ -241,10 +247,13 @@ export default function ProfilePage() {
     async function loadProfile() {
       setLoaded(false)
       try {
-        const [nextSummary, nextSettings] = await Promise.all([getDashboardSummary(), getResidentSettings()])
+        const [nextSummary, nextSettings, nextRequests] = await Promise.all([getDashboardSummary(), getResidentSettings(), listAccountRequests()])
         if (!cancelled) {
           setSummary(nextSummary)
           setSettings(nextSettings)
+          setAccountRequests(nextRequests)
+          setSosPlacement(normalizeSosPlacement(nextSettings.sos_placement))
+          localStorage.setItem("eboses:sos-placement", normalizeSosPlacement(nextSettings.sos_placement))
         }
       } catch {
         if (!cancelled) toast.error("Could not load profile details.")
@@ -262,17 +271,13 @@ export default function ProfilePage() {
   const fullName = user?.full_name || `${user?.firstName ?? ""} ${user?.lastName ?? ""}`.trim() || "Resident"
   const barangay = user?.barangay || "Marikina Heights"
   const memberSince = user?.member_since || (user?.date_joined ? new Intl.DateTimeFormat("en", { month: "short", year: "numeric" }).format(new Date(user.date_joined)) : "Recently")
-  const avatarKey = user?.avatar || (user?.gender && user?.gender !== "prefer_not_to_say" && user?.date_of_birth
-    ? (() => {
-        const age = new Date().getFullYear() - new Date(user.date_of_birth!).getFullYear()
-        const bucket = age >= 55 ? "senior" : age >= 30 ? "middleaged" : "young"
-        const icon = user.gender === "male" ? "man" : "woman"
-        return `${bucket}-${icon}`
-      })()
-    : "")
+  const avatarKey = user ? computeDefaultAvatar(user) : ""
+  const avatarChoices = user ? getAvatarChoices(user.role, user.responder_unit) : []
   const initials = fullName.split(" ").filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?"
 
   const accountStatus = user?.status === "verified" ? "Active" : roleLabel(user?.status)
+  const pendingDeletion = accountRequests.find((request) => request.type === "deletion" && ["submitted", "reviewed"].includes(request.status))
+  const pendingExport = accountRequests.find((request) => request.type === "data_export" && ["submitted", "reviewed"].includes(request.status))
 
   const personalRows = useMemo(() => [
     { icon: UserIcon, label: "Full Name", value: fullName },
@@ -337,11 +342,42 @@ export default function ProfilePage() {
     }
   }
 
-  function handleSosPlacement(value: SosPlacement) {
+  async function handleSosPlacement(value: SosPlacement) {
+    const previous = sosPlacement
     setSosPlacement(value)
     localStorage.setItem("eboses:sos-placement", value)
     window.dispatchEvent(new CustomEvent("eboses:sos-placement-change", { detail: { placement: value } }))
-    toast.success("SOS display preference saved")
+    try {
+      const nextSettings = await updateResidentSettings({ sos_placement: value })
+      setSettings(nextSettings)
+      toast.success("SOS display preference saved")
+    } catch {
+      setSosPlacement(previous)
+      localStorage.setItem("eboses:sos-placement", previous)
+      window.dispatchEvent(new CustomEvent("eboses:sos-placement-change", { detail: { placement: previous } }))
+      toast.error("Could not save SOS preference.")
+    }
+  }
+
+  async function handleAccountRequest(type: AccountRequest["type"]) {
+    const pending = accountRequests.find((request) => request.type === type && ["submitted", "reviewed"].includes(request.status))
+    if (pending) {
+      toast.info("Request already submitted", { description: `Status: ${pending.status.replace("_", " ")}` })
+      return
+    }
+    setSavingRequest(type)
+    try {
+      const created = await createAccountRequest({
+        type,
+        note: type === "deletion" ? "Resident requested account deletion from profile page." : "Resident requested account data export from profile page.",
+      })
+      setAccountRequests((current) => [created, ...current])
+      toast.success(type === "deletion" ? "Deletion request submitted" : "Data export request submitted")
+    } catch {
+      toast.error("Could not submit request. Try again.")
+    } finally {
+      setSavingRequest(null)
+    }
   }
 
   if (!loaded) {
@@ -532,10 +568,28 @@ export default function ProfilePage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => toast.error("Account deletion", { description: "Please contact your barangay administrator to delete your account." })}
+                    onClick={() => void handleAccountRequest("data_export")}
+                    disabled={savingRequest === "data_export"}
+                    className="w-full text-left disabled:opacity-60"
+                  >
+                    <InfoItem
+                      icon={FileTextIcon}
+                      label={pendingExport ? "Data Export Requested" : "Request Data Export"}
+                      value={pendingExport ? `Status: ${pendingExport.status.replace("_", " ")}` : "Ask barangay staff for a copy of your account data"}
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleAccountRequest("deletion")}
+                    disabled={savingRequest === "deletion"}
                     className="w-full text-left"
                   >
-                    <InfoItem icon={Trash2Icon} label="Delete Account" value="Request permanent deletion" danger />
+                    <InfoItem
+                      icon={Trash2Icon}
+                      label={pendingDeletion ? "Deletion Requested" : "Delete Account"}
+                      value={pendingDeletion ? `Status: ${pendingDeletion.status.replace("_", " ")}` : "Request permanent deletion"}
+                      danger
+                    />
                   </button>
                 </div>
               </SectionCard>
@@ -569,7 +623,7 @@ export default function ProfilePage() {
                       <button
                         key={option.id}
                         type="button"
-                        onClick={() => handleSosPlacement(option.id)}
+                        onClick={() => void handleSosPlacement(option.id)}
                         className={cn(
                           "rounded-xl border p-4 text-left transition-colors",
                           sosPlacement === option.id ? "border-red-400 bg-red-50" : "border-[#dfe7f5] bg-white hover:border-red-300",

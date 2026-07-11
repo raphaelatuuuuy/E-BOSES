@@ -13,7 +13,7 @@ import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 import { getAccessToken, websocketUrl } from "@/lib/api"
-import { getEmergency, type EmergencyAlert, type EmergencyStatus } from "@/features/dashboard/emergency-api"
+import { createEmergencyAppeal, getEmergency, type EmergencyAlert, type EmergencyStatus } from "@/features/dashboard/emergency-api"
 
 import type leaflet from "leaflet"
 
@@ -161,6 +161,8 @@ export function EmergencyTrackingSheet({
   onAlertChange?: (alert: EmergencyAlert) => void
 }) {
   const [alert, setAlert] = useState<EmergencyAlert | null>(initialAlert)
+  const [appealReason, setAppealReason] = useState("")
+  const [appealBusy, setAppealBusy] = useState(false)
 
   useEffect(() => {
     setAlert(initialAlert)
@@ -227,6 +229,26 @@ export function EmergencyTrackingSheet({
         { lat: Number(alert.latitude), lng: Number(alert.longitude) },
       )
     : null
+  const pendingAppeal = alert?.appeals?.find((appeal) => appeal.status === "submitted")
+  const canAppeal = Boolean(alert && ["resolved", "cancelled"].includes(alert.status) && !pendingAppeal)
+  const appealHistory = alert?.appeals ?? []
+
+  async function submitAppeal() {
+    if (!alert || !appealReason.trim()) return
+    setAppealBusy(true)
+    try {
+      await createEmergencyAppeal(alert.id, appealReason.trim())
+      const nextAlert = await getEmergency(alert.id)
+      setAlert(nextAlert)
+      onAlertChange?.(nextAlert)
+      setAppealReason("")
+      toast.success("Emergency review request submitted")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not submit review request.")
+    } finally {
+      setAppealBusy(false)
+    }
+  }
 
   if (!open || !alert) return null
 
@@ -353,6 +375,49 @@ export function EmergencyTrackingSheet({
               </div>
             </div>
           </div>
+
+          {appealHistory.length ? (
+            <div className="mt-4 rounded-xl border border-border bg-card p-4">
+              <p className="text-sm font-semibold text-foreground">Post-incident review history</p>
+              <div className="mt-3 space-y-2">
+                {appealHistory.map((appeal) => (
+                  <div
+                    key={appeal.id}
+                    className={cn(
+                      "rounded-lg border p-3 text-xs font-semibold leading-5",
+                      appeal.status === "approved" && "border-emerald-200 bg-emerald-50 text-emerald-800",
+                      appeal.status === "denied" && "border-red-200 bg-red-50 text-red-800",
+                      appeal.status === "submitted" && "border-orange-200 bg-orange-50 text-orange-800",
+                    )}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-black">Review {appeal.status}</span>
+                      <span>{formatTime(appeal.decided_at || appeal.created_at)}</span>
+                    </div>
+                    <p className="mt-2">{appeal.reason}</p>
+                    {appeal.decision_note ? <p className="mt-2 font-bold">Decision: {appeal.decision_note}</p> : null}
+                    {appeal.reviewed_by ? <p className="mt-1">Reviewed by {appeal.reviewed_by.full_name}</p> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {canAppeal ? (
+            <div className="mt-4 rounded-xl border border-border bg-card p-4">
+              <p className="text-sm font-semibold text-foreground">Request post-incident review</p>
+              <p className="mt-1 text-xs text-muted-foreground">Use this only if the emergency was resolved, cancelled, or recorded incorrectly.</p>
+              <textarea
+                value={appealReason}
+                onChange={(event) => setAppealReason(event.target.value)}
+                placeholder="Explain what should be reviewed"
+                className="mt-3 min-h-20 w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#ff6a1a]"
+              />
+              <Button type="button" disabled={appealBusy || !appealReason.trim()} onClick={() => void submitAppeal()} className="mt-3 bg-[#ff6a1a] text-white hover:bg-[#e85f17]">
+                {appealBusy ? "Submitting" : "Submit review request"}
+              </Button>
+            </div>
+          ) : null}
         </div>
 
         <div className="flex items-center justify-end gap-3 border-t border-border px-5 py-4">

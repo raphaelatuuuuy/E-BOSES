@@ -35,8 +35,13 @@ import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
+  assignConcern,
+  createConcernAppeal,
+  createConcernRemark,
   listManagedConcerns,
   listMyConcerns,
+  replyConcernClarification,
+  requestConcernClarification,
   updateConcernStatus,
   type Concern,
   type ConcernCategory,
@@ -51,6 +56,7 @@ import { useAuthSession } from "@/features/auth/auth-session"
 import { usePageTitle } from "@/hooks/use-page-title"
 
 const filters = ["All", "Active", "Resolved", "Rejected", "Appealed"] as const
+const residentReportsPageSize = 6
 
 const activeStatuses: ConcernStatus[] = ["submitted", "under_review", "in_progress"]
 
@@ -144,6 +150,16 @@ function mapSrc(report: Concern) {
   const lng = Number(report.longitude)
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return ""
   return `https://www.openstreetmap.org/export/embed.html?bbox=${lng - 0.006}%2C${lat - 0.006}%2C${lng + 0.006}%2C${lat + 0.006}&layer=mapnik&marker=${lat}%2C${lng}`
+}
+
+function openReportMedia(report: Concern) {
+  if (report.media.length === 0) {
+    toast.info("No evidence files uploaded.")
+    return
+  }
+  for (const media of report.media) {
+    window.open(media.raw_url, "_blank", "noopener,noreferrer")
+  }
 }
 
 function ReportIcon({ report }: { report: Concern }) {
@@ -249,6 +265,152 @@ function OfficialStatusPanel({ report, onUpdated }: { report: Concern; onUpdated
           {busy ? "Updating" : "Update"}
         </Button>
       </div>
+    </div>
+  )
+}
+
+function OfficialWorkflowPanel({ report, onRefresh }: { report: Concern; onRefresh: () => Promise<void> }) {
+  const [office, setOffice] = useState("")
+  const [assignmentNote, setAssignmentNote] = useState("")
+  const [clarificationText, setClarificationText] = useState("")
+  const [remark, setRemark] = useState("")
+  const [visibleToResident, setVisibleToResident] = useState(true)
+  const [busy, setBusy] = useState<string | null>(null)
+
+  async function run(action: string, fn: () => Promise<unknown>) {
+    setBusy(action)
+    try {
+      await fn()
+      await onRefresh()
+      toast.success("Action saved")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not save action.")
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-[#dfe7f5] bg-white p-4">
+      <h3 className="text-sm font-black text-[#07145f]">Report workflow</h3>
+      <div className="mt-4 grid gap-3">
+        <div className="grid gap-2">
+          <input value={office} onChange={(event) => setOffice(event.target.value)} placeholder="Assign to office/team" className="h-10 rounded-lg border border-[#cbd8ee] px-3 text-xs font-semibold text-[#07145f] outline-none focus:border-[#ff6a1a]" />
+          <input value={assignmentNote} onChange={(event) => setAssignmentNote(event.target.value)} placeholder="Assignment note" className="h-10 rounded-lg border border-[#cbd8ee] px-3 text-xs font-semibold text-[#07145f] outline-none focus:border-[#ff6a1a]" />
+          <Button type="button" disabled={busy === "assign" || !office.trim()} onClick={() => run("assign", () => assignConcern(report.id, { office: office.trim(), note: assignmentNote.trim() }))} className="bg-[#ff6a1a] text-white hover:bg-[#e85f17]">
+            {busy === "assign" ? "Assigning" : "Assign report"}
+          </Button>
+        </div>
+        <div className="grid gap-2 border-t border-[#dfe7f5] pt-3">
+          <textarea value={clarificationText} onChange={(event) => setClarificationText(event.target.value)} placeholder="Ask resident for clarification" className="min-h-20 rounded-lg border border-[#cbd8ee] px-3 py-2 text-xs font-semibold text-[#07145f] outline-none focus:border-[#ff6a1a]" />
+          <Button type="button" variant="outline" disabled={busy === "clarification" || !clarificationText.trim()} onClick={() => run("clarification", () => requestConcernClarification(report.id, clarificationText.trim()))}>
+            {busy === "clarification" ? "Sending" : "Request clarification"}
+          </Button>
+        </div>
+        <div className="grid gap-2 border-t border-[#dfe7f5] pt-3">
+          <textarea value={remark} onChange={(event) => setRemark(event.target.value)} placeholder="Official remark" className="min-h-20 rounded-lg border border-[#cbd8ee] px-3 py-2 text-xs font-semibold text-[#07145f] outline-none focus:border-[#ff6a1a]" />
+          <label className="flex items-center gap-2 text-xs font-bold text-[#43507f]">
+            <input type="checkbox" checked={visibleToResident} onChange={(event) => setVisibleToResident(event.target.checked)} />
+            Visible to resident
+          </label>
+          <Button type="button" variant="outline" disabled={busy === "remark" || !remark.trim()} onClick={() => run("remark", () => createConcernRemark(report.id, { body: remark.trim(), visible_to_resident: visibleToResident }))}>
+            {busy === "remark" ? "Saving" : "Add remark"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ResidentFollowUpPanel({ report, onRefresh }: { report: Concern; onRefresh: () => Promise<void> }) {
+  const openClarifications = report.clarifications?.filter((item) => item.status === "open") ?? []
+  const appealHistory = report.appeals ?? []
+  const pendingAppeal = report.appeals?.find((item) => item.status === "submitted")
+  const canAppeal = ["rejected", "resolved"].includes(report.status) && !pendingAppeal
+  const [responses, setResponses] = useState<Record<number, string>>({})
+  const [appealReason, setAppealReason] = useState("")
+  const [busy, setBusy] = useState<string | null>(null)
+
+  if (openClarifications.length === 0 && !canAppeal && appealHistory.length === 0 && !(report.official_remarks?.length)) return null
+
+  async function submitReply(clarificationId: number) {
+    const response = responses[clarificationId]?.trim()
+    if (!response) return
+    setBusy(`clarification-${clarificationId}`)
+    try {
+      await replyConcernClarification(report.id, clarificationId, response)
+      await onRefresh()
+      toast.success("Clarification sent")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not send clarification.")
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function submitAppeal() {
+    if (!appealReason.trim()) return
+    setBusy("appeal")
+    try {
+      await createConcernAppeal(report.id, appealReason.trim())
+      await onRefresh()
+      toast.success("Appeal submitted")
+      setAppealReason("")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not submit appeal.")
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-[#dfe7f5] bg-white p-4">
+      <h3 className="text-sm font-black text-[#07145f]">Follow-up actions</h3>
+      {report.official_remarks?.length ? (
+        <div className="mt-3 space-y-2">
+          {report.official_remarks.map((remark) => (
+            <p key={remark.id} className="rounded-lg bg-[#f8fafc] p-3 text-xs font-semibold leading-5 text-[#43507f]">{remark.body}</p>
+          ))}
+        </div>
+      ) : null}
+      {openClarifications.map((clarification) => (
+        <div key={clarification.id} className="mt-3 grid gap-2 border-t border-[#dfe7f5] pt-3">
+          <p className="text-xs font-bold text-[#07145f]">{clarification.request_text}</p>
+          <textarea value={responses[clarification.id] ?? ""} onChange={(event) => setResponses((current) => ({ ...current, [clarification.id]: event.target.value }))} placeholder="Type your response" className="min-h-20 rounded-lg border border-[#cbd8ee] px-3 py-2 text-xs font-semibold text-[#07145f] outline-none focus:border-[#ff6a1a]" />
+          <Button type="button" disabled={busy === `clarification-${clarification.id}`} onClick={() => void submitReply(clarification.id)} className="bg-[#ff6a1a] text-white hover:bg-[#e85f17]">
+            {busy === `clarification-${clarification.id}` ? "Sending" : "Send clarification"}
+          </Button>
+        </div>
+      ))}
+      {appealHistory.length ? (
+        <div className="mt-3 space-y-2 border-t border-[#dfe7f5] pt-3">
+          <p className="text-xs font-black uppercase text-[#68739c]">Appeal history</p>
+          {appealHistory.map((appeal) => (
+            <div key={appeal.id} className={cn(
+              "rounded-lg border p-3 text-xs font-semibold leading-5",
+              appeal.status === "approved" && "border-emerald-200 bg-emerald-50 text-emerald-800",
+              appeal.status === "denied" && "border-red-200 bg-red-50 text-red-800",
+              appeal.status === "submitted" && "border-orange-200 bg-orange-50 text-orange-800",
+            )}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-black">Appeal {appeal.status.replace("_", " ")}</span>
+                <span>{formatEventTime(appeal.decided_at || appeal.created_at)}</span>
+              </div>
+              <p className="mt-2">{appeal.reason}</p>
+              {appeal.decision_note ? <p className="mt-2 font-bold">Decision: {appeal.decision_note}</p> : null}
+              {appeal.reviewed_by ? <p className="mt-1">Reviewed by {appeal.reviewed_by.full_name}</p> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {canAppeal ? (
+        <div className="mt-3 grid gap-2 border-t border-[#dfe7f5] pt-3">
+          <textarea value={appealReason} onChange={(event) => setAppealReason(event.target.value)} placeholder="Explain why this report should be reviewed again" className="min-h-20 rounded-lg border border-[#cbd8ee] px-3 py-2 text-xs font-semibold text-[#07145f] outline-none focus:border-[#ff6a1a]" />
+          <Button type="button" disabled={busy === "appeal" || !appealReason.trim()} onClick={() => void submitAppeal()} className="bg-[#ff6a1a] text-white hover:bg-[#e85f17]">
+            {busy === "appeal" ? "Submitting" : "Submit appeal"}
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -397,26 +559,30 @@ function ReviewRail({ report }: { report: Concern }) {
   )
 }
 
-function AiAssessmentPanel({ report, onUpdated }: { report: Concern; onUpdated: (report: Concern) => void }) {
-  const confidence = report.validation_status === "rejected" ? 42 : report.media.length ? 84 : 71
+function AiAssessmentPanel({ report, onUpdated, onRefresh }: { report: Concern; onUpdated: (report: Concern) => void; onRefresh: () => Promise<void> }) {
+  const ai = report.ai_assessment
+  const aiStatus = ai?.status ?? "not_configured"
+  const yoloPercent = ai?.yolo_confidence == null ? null : Math.round(ai.yolo_confidence * 100)
+  const nlpPercent = ai?.nlp_confidence == null ? null : Math.round(ai.nlp_confidence * 100)
+  const aiReady = aiStatus === "completed"
   return (
     <aside className="space-y-4">
       <section className="rounded-xl border border-[#dfe7f5] bg-white p-4">
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-sm font-extrabold text-[#07145f]">AI Concern Assessment</h3>
-          <span className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-bold text-[#2447b3]">Assisted review</span>
+          <span className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-bold text-[#2447b3]">{aiStatus.replace(/_/g, " ")}</span>
         </div>
-        <div className="mt-4 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+        <div className={cn("mt-4 flex items-center justify-between rounded-xl border p-4", aiReady ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50")}>
           <div className="flex items-center gap-3">
-            <span className="flex size-10 items-center justify-center rounded-full bg-emerald-600 text-white">
+            <span className={cn("flex size-10 items-center justify-center rounded-full text-white", aiReady ? "bg-emerald-600" : "bg-amber-600")}>
               <ShieldCheckIcon className="size-5" />
             </span>
             <div>
-              <p className="text-sm font-extrabold text-emerald-800">{report.validation_status === "rejected" ? "Needs official review" : "Likely valid concern"}</p>
-              <p className="text-xs font-semibold text-emerald-700">Overall confidence</p>
+              <p className={cn("text-sm font-extrabold", aiReady ? "text-emerald-800" : "text-amber-800")}>{aiReady ? (ai.recommendation || "AI result ready") : "AI assessment unavailable"}</p>
+              <p className={cn("text-xs font-semibold", aiReady ? "text-emerald-700" : "text-amber-700")}>{aiReady ? "Stored model output" : "Model not configured or still pending"}</p>
             </div>
           </div>
-          <p className="text-2xl font-black text-emerald-700">{confidence}%</p>
+          <p className={cn("text-2xl font-black", aiReady ? "text-emerald-700" : "text-amber-700")}>{nlpPercent ?? yoloPercent ?? "--"}{nlpPercent != null || yoloPercent != null ? "%" : ""}</p>
         </div>
       </section>
 
@@ -426,16 +592,16 @@ function AiAssessmentPanel({ report, onUpdated }: { report: Concern; onUpdated: 
         </div>
         <div className="space-y-3 p-4 text-xs font-semibold text-[#43507f]">
           <div className="flex flex-wrap gap-2">
-            {[categoryLabels[report.category], "scene evidence", "location context"].map((tag) => (
+            {(ai?.image_objects?.length ? ai.image_objects.map((tag) => String(tag)) : [categoryLabels[report.category], aiReady ? "no detected objects stored" : "not configured"]).map((tag) => (
               <span key={tag} className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">{tag}</span>
             ))}
           </div>
-          <p>Issue match: detected scene matches {categoryLabels[report.category]}.</p>
+          <p>{aiReady ? `Category match: ${ai.category_match === null ? "not scored" : ai.category_match ? "matched" : "not matched"}.` : "YOLO model is not configured yet. Official review remains required."}</p>
           <div>
-            <div className="mb-1 flex justify-between"><span>Confidence</span><span>82%</span></div>
-            <div className="h-2 rounded-full bg-[#edf1f7]"><div className="h-2 w-[82%] rounded-full bg-emerald-600" /></div>
+            <div className="mb-1 flex justify-between"><span>Confidence</span><span>{yoloPercent == null ? "Pending" : `${yoloPercent}%`}</span></div>
+            <div className="h-2 rounded-full bg-[#edf1f7]"><div className="h-2 rounded-full bg-emerald-600" style={{ width: `${yoloPercent ?? 0}%` }} /></div>
           </div>
-          <p>AI note: visible submitted media and report category appear consistent.</p>
+          <p>AI note: {aiReady ? ai.explanation || "No explanation stored." : "Pending until the AI worker is configured."}</p>
         </div>
       </section>
 
@@ -444,21 +610,24 @@ function AiAssessmentPanel({ report, onUpdated }: { report: Concern; onUpdated: 
           <h3 className="text-sm font-extrabold text-[#07145f]">Description Analysis (NLP)</h3>
         </div>
         <div className="grid gap-3 p-4 text-xs font-semibold text-[#43507f]">
-          {["Valid: high", "Irrelevant: low", "Suspicious: low"].map((line) => (
-            <div key={line} className="flex items-center justify-between">
-              <span>{line}</span>
-              <span className="rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-bold text-emerald-700">Yes</span>
-            </div>
-          ))}
-          <div>
-            <div className="mb-1 flex justify-between"><span>Category match score</span><span>86%</span></div>
-            <div className="h-2 rounded-full bg-[#edf1f7]"><div className="h-2 w-[86%] rounded-full bg-emerald-600" /></div>
+          <div className="flex items-center justify-between">
+            <span>Validity</span>
+            <span className="rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-bold text-emerald-700">{ai?.nlp_validity || "Pending"}</span>
           </div>
-          <p>Text is relevant to category and location context.</p>
+          <div className="flex items-center justify-between">
+            <span>Severity estimate</span>
+            <span className="rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-bold text-emerald-700">{ai?.severity_estimate || "Pending"}</span>
+          </div>
+          <div>
+            <div className="mb-1 flex justify-between"><span>NLP confidence</span><span>{nlpPercent == null ? "Pending" : `${nlpPercent}%`}</span></div>
+            <div className="h-2 rounded-full bg-[#edf1f7]"><div className="h-2 rounded-full bg-emerald-600" style={{ width: `${nlpPercent ?? 0}%` }} /></div>
+          </div>
+          <p>{aiReady ? ai.explanation || "No NLP explanation stored." : "NLP model is not configured yet."}</p>
         </div>
       </section>
 
       <OfficialStatusPanel report={report} onUpdated={onUpdated} />
+      <OfficialWorkflowPanel report={report} onRefresh={onRefresh} />
     </aside>
   )
 }
@@ -472,6 +641,7 @@ function OfficialConcernDashboard({
   setSearch,
   onSelect,
   onUpdated,
+  onRefresh,
   error,
 }: {
   reports: Concern[]
@@ -482,6 +652,7 @@ function OfficialConcernDashboard({
   setSearch: (value: string) => void
   onSelect: (id: number) => void
   onUpdated: (report: Concern) => void
+  onRefresh: () => Promise<void>
   error: string
 }) {
   const filtered = filterOfficialReports(reports, activeFilter, search)
@@ -578,7 +749,7 @@ function OfficialConcernDashboard({
               <div className="rounded-xl border border-[#dfe7f5] bg-white p-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-black text-[#07145f]">Evidence ({current.media.length})</h3>
-                  <button type="button" className="text-xs font-extrabold text-[#2447b3]">View all media</button>
+                  <button type="button" onClick={() => openReportMedia(current)} className="text-xs font-extrabold text-[#2447b3]">View all media</button>
                 </div>
                 <div className="mt-4 grid gap-3 sm:grid-cols-3">
                   {current.media.slice(0, 3).map((media) => media.mime_type.startsWith("image/") ? (
@@ -605,7 +776,7 @@ function OfficialConcernDashboard({
             </section>
           ) : null}
 
-          {current ? <AiAssessmentPanel report={current} onUpdated={onUpdated} /> : null}
+          {current ? <AiAssessmentPanel report={current} onUpdated={onUpdated} onRefresh={onRefresh} /> : null}
         </div>
       </main>
     </div>
@@ -643,6 +814,7 @@ export default function ReportsPage() {
   const [activeFilter, setActiveFilter] = useState<string>("All")
   const [search, setSearch] = useState("")
   const [selectedReport, setSelectedReport] = useState<number | null>(null)
+  const [reportPage, setReportPage] = useState(1)
   const [timelineExpanded, setTimelineExpanded] = useState(true)
   const [reports, setReports] = useState<Concern[]>([])
   const [error, setError] = useState("")
@@ -683,6 +855,10 @@ export default function ReportsPage() {
     }
   }, [routeReportId])
 
+  useEffect(() => {
+    setReportPage(1)
+  }, [activeFilter])
+
   if (!loaded)
     return (
       <div className="flex flex-col">
@@ -711,6 +887,11 @@ export default function ReportsPage() {
     )
 
   const filtered = filterReports(reports, activeFilter)
+  const totalPages = Math.max(1, Math.ceil(filtered.length / residentReportsPageSize))
+  const currentPage = Math.min(reportPage, totalPages)
+  const pagedReports = filtered.slice((currentPage - 1) * residentReportsPageSize, currentPage * residentReportsPageSize)
+  const firstShown = filtered.length === 0 ? 0 : (currentPage - 1) * residentReportsPageSize + 1
+  const lastShown = Math.min(filtered.length, currentPage * residentReportsPageSize)
   const selected =
     reports.find((report) => report.id === selectedReport) ?? filtered[0]
 
@@ -722,6 +903,11 @@ export default function ReportsPage() {
   function updateReport(next: Concern) {
     setReports((current) => current.map((report) => report.id === next.id ? next : report))
     setSelectedReport(next.id)
+  }
+
+  async function copyTrackingId(report: Concern) {
+    await navigator.clipboard?.writeText(report.tracking_id)
+    toast.success("Tracking ID copied")
   }
 
   function scrollFilterRail(direction: -1 | 1) {
@@ -758,6 +944,7 @@ export default function ReportsPage() {
         setSearch={setSearch}
         onSelect={selectReport}
         onUpdated={updateReport}
+        onRefresh={loadReports}
         error={error}
       />
     )
@@ -806,7 +993,7 @@ export default function ReportsPage() {
 
             <Card className="flex flex-col gap-0 overflow-hidden rounded-2xl border-[#dfe7f5] bg-white py-0 shadow-sm">
               <div className="flex flex-col">
-                {filtered.map((report, i) => {
+                {pagedReports.map((report, i) => {
                   const group = statusGroup(report.status)
                   return (
                     <button
@@ -816,7 +1003,7 @@ export default function ReportsPage() {
                       className={cn(
                         "flex w-full items-center gap-4 bg-white px-4 py-4 text-left transition-colors hover:bg-[#fbfcff]",
                         selected?.id === report.id && "border border-[#ff6a1a] bg-[#fff8f3]",
-                        selected?.id !== report.id && i < filtered.length - 1 && "border-b border-[#dfe7f5]",
+                        selected?.id !== report.id && i < pagedReports.length - 1 && "border-b border-[#dfe7f5]",
                       )}
                     >
                       <ReportIcon report={report} />
@@ -842,21 +1029,23 @@ export default function ReportsPage() {
                   )
                 })}
                 {filtered.length === 0 ? (
-                  <div className="p-8 text-center text-sm text-muted-foreground">
-                    No reports match this filter.
+                  <div className="flex flex-col items-center justify-center p-8 text-center text-sm text-muted-foreground">
+                    <img src="/contents/reports.png" alt="" className="mb-4 h-32 w-auto" aria-hidden="true" />
+                    No reports found.
                   </div>
                 ) : null}
               </div>
 
               <div className="flex items-center justify-between border-t border-[#dfe7f5] px-4 py-3">
                 <p className="text-xs font-semibold text-[#68739c]">
-                  Showing {filtered.length} of {reports.length} reports
+                  Showing {firstShown}-{lastShown} of {filtered.length} reports
                 </p>
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
+                    onClick={() => setReportPage((value) => Math.max(1, value - 1))}
                     className="flex size-8 items-center justify-center rounded-md bg-white text-xs text-[#8b96b8] disabled:opacity-40"
-                    disabled
+                    disabled={currentPage <= 1}
                   >
                     <ChevronLeftIcon className="size-3.5" />
                   </button>
@@ -864,12 +1053,13 @@ export default function ReportsPage() {
                     type="button"
                     className="flex size-8 items-center justify-center rounded-md border border-[#ff6a1a] bg-white text-xs font-bold text-[#ff6a1a]"
                   >
-                    1
+                    {currentPage}
                   </button>
                   <button
                     type="button"
+                    onClick={() => setReportPage((value) => Math.min(totalPages, value + 1))}
                     className="flex size-8 items-center justify-center rounded-md bg-white text-xs text-[#2447b3] disabled:opacity-40"
-                    disabled
+                    disabled={currentPage >= totalPages}
                   >
                     <ChevronRightIcon className="size-3.5" />
                   </button>
@@ -886,7 +1076,7 @@ export default function ReportsPage() {
                     <h2 className="truncate text-xl font-extrabold text-[#07145f]">{selected.title}</h2>
                     <div className="mt-1 flex items-center gap-2">
                       <span className="font-mono text-xs font-bold text-[#2447b3]">{selected.tracking_id}</span>
-                      <button type="button" className="text-[#2447b3]" aria-label="Copy tracking ID">
+                      <button type="button" onClick={() => void copyTrackingId(selected)} className="text-[#2447b3]" aria-label="Copy tracking ID">
                         <CopyIcon className="size-3.5" />
                       </button>
                     </div>
@@ -969,7 +1159,7 @@ export default function ReportsPage() {
                         </div>
                       ) : null}
                     </div>
-                    <button type="button" className="mt-3 h-9 w-full rounded-lg border border-[#dfe7f5] text-xs font-extrabold text-[#2447b3]">
+                    <button type="button" onClick={() => openReportMedia(selected)} className="mt-3 h-9 w-full rounded-lg border border-[#dfe7f5] text-xs font-extrabold text-[#2447b3]">
                       View all evidence
                     </button>
                   </div>
@@ -990,13 +1180,17 @@ export default function ReportsPage() {
                     <Timeline report={selected} onStatusClick={(mode) => { setStatusDialogMode(mode); setStatusDialogOpen(true) }} />
                   </div>
                 </div>
+                <div className="border-t border-[#dfe7f5] p-5">
+                  <ResidentFollowUpPanel report={selected} onRefresh={loadReports} />
+                </div>
               </div>
             ) : (
               <Card className="flex h-full min-h-[300px] items-center justify-center">
                 <CardContent>
-                  <p className="text-center text-sm text-muted-foreground">
-                    No reports match this filter.
-                  </p>
+                  <div className="flex flex-col items-center text-center text-sm text-muted-foreground">
+                    <img src="/contents/report_details.png" alt="" className="mb-4 h-32 w-auto" aria-hidden="true" />
+                    No reports found.
+                  </div>
                 </CardContent>
               </Card>
             )}
@@ -1099,6 +1293,8 @@ export default function ReportsPage() {
                     </div>
                   ) : null}
                 </div>
+
+                <ResidentFollowUpPanel report={selected} onRefresh={loadReports} />
               </div>
             </div>
           </div>

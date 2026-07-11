@@ -8,8 +8,12 @@ from .models import (
     Announcement,
     BarangayEvent,
     Concern,
+    ConcernAppeal,
+    ConcernAssignment,
     ConcernAiAssessment,
+    ConcernClarification,
     ConcernComment,
+    ConcernOfficialRemark,
     ContentFlag,
     ConcernMedia,
     ConcernStatusEvent,
@@ -67,6 +71,28 @@ class PublicUserSerializer(serializers.ModelSerializer):
         profile = getattr(obj, "resident_profile", None)
         if profile and profile.avatar:
             return profile.avatar
+        # Role-based avatar for officials and responders
+        role_prefix_map = {
+            User.Role.BARANGAY_OFFICIAL: "official",
+        }
+        responder_unit_map = {
+            User.ResponderUnit.TANOD: "tanod",
+            User.ResponderUnit.BHW: "bhw",
+            User.ResponderUnit.BDRRMO: "bdrmmo",
+        }
+        prefix = None
+        if obj.role in role_prefix_map:
+            prefix = role_prefix_map[obj.role]
+        elif obj.role == User.Role.FIRST_RESPONDER and obj.responder_unit:
+            prefix = responder_unit_map.get(obj.responder_unit)
+        if prefix:
+            gender = (profile.gender if profile else "") or ""
+            if gender == "male":
+                return f"{prefix}-male"
+            if gender == "female":
+                return f"{prefix}-female"
+            return f"{prefix}-male"  # fallback when gender unknown
+        # Resident fallback: compute from gender + age
         if profile and profile.gender and profile.gender != "prefer_not_to_say" and profile.date_of_birth:
             from datetime import date
             age = date.today().year - profile.date_of_birth.year
@@ -169,6 +195,71 @@ class ContentFlagSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "concern", "reporter", "status", "staff_note", "created_at", "updated_at")
 
 
+class ConcernAssignmentSerializer(serializers.ModelSerializer):
+    assignee = PublicUserSerializer(read_only=True)
+    assigned_by = PublicUserSerializer(read_only=True)
+
+    class Meta:
+        model = ConcernAssignment
+        fields = ("id", "assignee", "assigned_by", "office", "note", "status", "created_at", "updated_at")
+
+class ConcernClarificationSerializer(serializers.ModelSerializer):
+    requested_by = PublicUserSerializer(read_only=True)
+    responded_by = PublicUserSerializer(read_only=True)
+
+    class Meta:
+        model = ConcernClarification
+        fields = ("id", "requested_by", "request_text", "response_text", "responded_by", "status", "created_at", "responded_at")
+
+class ConcernAppealSerializer(serializers.ModelSerializer):
+    appellant = PublicUserSerializer(read_only=True)
+    reviewed_by = PublicUserSerializer(read_only=True)
+    concern_id = serializers.IntegerField(read_only=True)
+    concern_title = serializers.CharField(source="concern.title", read_only=True)
+    concern_status = serializers.CharField(source="concern.status", read_only=True)
+    concern_tracking_id = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ConcernAppeal
+        fields = ("id", "concern_id", "concern_title", "concern_status", "concern_tracking_id", "appellant", "reason", "status", "decision_note", "reviewed_by", "created_at", "decided_at")
+
+    def get_concern_tracking_id(self, obj):
+        return f"EB-{obj.concern_id:06d}"
+
+class ConcernOfficialRemarkSerializer(serializers.ModelSerializer):
+    author = PublicUserSerializer(read_only=True)
+
+    class Meta:
+        model = ConcernOfficialRemark
+        fields = ("id", "author", "body", "visible_to_resident", "created_at")
+
+class ConcernAssignSerializer(serializers.Serializer):
+    assignee_id = serializers.IntegerField(required=False, allow_null=True)
+    office = serializers.CharField(max_length=120, allow_blank=True, required=False)
+    note = serializers.CharField(max_length=255, allow_blank=True, required=False)
+
+    def validate(self, attrs):
+        if not attrs.get("assignee_id") and not (attrs.get("office") or "").strip():
+            raise serializers.ValidationError("Choose an assignee or office.")
+        return attrs
+
+class ClarificationRequestSerializer(serializers.Serializer):
+    request_text = serializers.CharField(max_length=500)
+
+class ClarificationReplySerializer(serializers.Serializer):
+    response_text = serializers.CharField(max_length=2000)
+
+class ConcernAppealCreateSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=2000)
+
+class ConcernAppealReviewSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=[ConcernAppeal.Status.APPROVED, ConcernAppeal.Status.DENIED])
+    decision_note = serializers.CharField(max_length=255, allow_blank=True, required=False)
+
+class ConcernOfficialRemarkCreateSerializer(serializers.Serializer):
+    body = serializers.CharField(max_length=2000)
+    visible_to_resident = serializers.BooleanField(required=False, default=True)
+
 class ConcernSerializer(serializers.ModelSerializer):
     tracking_id = serializers.SerializerMethodField()
     validation_status = serializers.SerializerMethodField()
@@ -182,6 +273,10 @@ class ConcernSerializer(serializers.ModelSerializer):
     status_events = ConcernStatusEventSerializer(many=True, read_only=True)
     comments = serializers.SerializerMethodField()
     ai_assessment = ConcernAiAssessmentSerializer(read_only=True)
+    assignments = serializers.SerializerMethodField()
+    clarifications = serializers.SerializerMethodField()
+    appeals = serializers.SerializerMethodField()
+    official_remarks = serializers.SerializerMethodField()
     vote_count = serializers.IntegerField(read_only=True, default=0)
     comment_count = serializers.IntegerField(read_only=True, default=0)
     priority_score = serializers.IntegerField(read_only=True, default=0)
@@ -210,6 +305,10 @@ class ConcernSerializer(serializers.ModelSerializer):
             "status_events",
             "comments",
             "ai_assessment",
+            "assignments",
+            "clarifications",
+            "appeals",
+            "official_remarks",
             "vote_count",
             "comment_count",
             "priority_score",
@@ -262,6 +361,33 @@ class ConcernSerializer(serializers.ModelSerializer):
     def get_comments(self, obj):
         comments = obj.comments.filter(parent__isnull=True).select_related("author", "author__resident_profile")
         return ConcernCommentSerializer(comments, many=True, context=self.context).data
+
+    def get_assignments(self, obj):
+        if self.is_privacy_safe():
+            return []
+        queryset = obj.assignments.select_related("assignee", "assignee__resident_profile", "assigned_by", "assigned_by__resident_profile")
+        return ConcernAssignmentSerializer(queryset, many=True, context=self.context).data
+
+    def get_clarifications(self, obj):
+        if self.is_privacy_safe():
+            return []
+        queryset = obj.clarifications.select_related("requested_by", "requested_by__resident_profile", "responded_by", "responded_by__resident_profile")
+        return ConcernClarificationSerializer(queryset, many=True, context=self.context).data
+
+    def get_appeals(self, obj):
+        if self.is_privacy_safe():
+            return []
+        queryset = obj.appeals.select_related("appellant", "appellant__resident_profile", "reviewed_by", "reviewed_by__resident_profile")
+        return ConcernAppealSerializer(queryset, many=True, context=self.context).data
+
+    def get_official_remarks(self, obj):
+        queryset = obj.official_remarks.select_related("author", "author__resident_profile")
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        is_official = bool(user and (user.is_staff or user.is_superuser or user.role == User.Role.BARANGAY_OFFICIAL))
+        if self.is_privacy_safe() or not is_official:
+            queryset = queryset.filter(visible_to_resident=True)
+        return ConcernOfficialRemarkSerializer(queryset, many=True, context=self.context).data
 
 
 class ConcernCreateSerializer(serializers.Serializer):

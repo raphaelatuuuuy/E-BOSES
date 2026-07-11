@@ -106,3 +106,32 @@ class WitnessNotification(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["alert", "resident"], name="unique_witness_notification_per_alert"),
         ]
+
+class EmergencyAppeal(models.Model):
+    class Status(models.TextChoices):
+        SUBMITTED = "submitted", "Submitted"
+        APPROVED = "approved", "Approved"
+        DENIED = "denied", "Denied"
+
+    alert = models.ForeignKey(EmergencyAlert, on_delete=models.CASCADE, related_name="appeals")
+    appellant = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="emergency_appeals")
+    reason = models.TextField()
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.SUBMITTED)
+    decision_note = models.CharField(max_length=255, blank=True)
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="reviewed_emergency_appeals")
+    created_at = models.DateTimeField(auto_now_add=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+class EmergencyEscalation(models.Model):
+    alert = models.ForeignKey(EmergencyAlert, on_delete=models.CASCADE, related_name="escalations")
+    previous_assignment = models.ForeignKey(EmergencyResponderAssignment, null=True, blank=True, on_delete=models.SET_NULL, related_name="escalations")
+    escalated_to = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="emergency_escalations_received")
+    triggered_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="emergency_escalations_triggered")
+    reason = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]

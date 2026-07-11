@@ -9,7 +9,7 @@ from io import BytesIO
 from pathlib import Path
 
 import imagehash
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, ImageStat, UnidentifiedImageError
 
 import httpx
 
@@ -23,7 +23,8 @@ from django.db import transaction
 from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.utils import timezone
 
-from .media_forensics import check_media_authenticity
+from .media_forensics import check_image_quality, check_media_authenticity
+from .ocr import ocr_bytes, validate_barangay_id_ocr
 from .models import (
     AuditLog,
     ConsentRecord,
@@ -38,8 +39,8 @@ from .models import (
 PASSWORD_RESET_SALT = "accounts.password-reset"
 PASSWORD_RESET_MAX_AGE_SECONDS = 15 * 60
 
-ALLOWED_PROOF_MIME_TYPES = {"application/pdf", "image/jpeg", "image/png"}
-ALLOWED_PROOF_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
+ALLOWED_PROOF_MIME_TYPES = {"image/jpeg", "image/png"}
+ALLOWED_PROOF_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 MAX_PROOF_FILE_SIZE = 2 * 1024 * 1024
 MAX_IMAGE_WIDTH = 4000
 MAX_IMAGE_HEIGHT = 4000
@@ -141,12 +142,10 @@ RESIDENCE_PROOF_UPLOAD_PROFILE = UploadValidationProfile(
 CONCERN_MEDIA_UPLOAD_PROFILE = RESIDENCE_PROOF_UPLOAD_PROFILE
 EMERGENCY_MEDIA_UPLOAD_PROFILE = RESIDENCE_PROOF_UPLOAD_PROFILE
 _SIGNATURE_MIME_TYPES = {
-    b"%PDF-": "application/pdf",
     b"\xff\xd8\xff": "image/jpeg",
     b"\x89PNG\r\n\x1a\n": "image/png",
 }
 _EXTENSION_MIME_TYPES = {
-    ".pdf": "application/pdf",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
@@ -207,19 +206,11 @@ def _as_uploaded_file(original, *, content, content_type, extension=None):
 
 
 def normalize_uploaded_file(uploaded_file, *, content, detected_mime_type):
-    if detected_mime_type == "application/pdf":
-        if b"%%EOF" not in content[-2048:]:
-            raise ValidationError("PDF uploads must be well-formed documents.")
-        return _as_uploaded_file(
-            uploaded_file,
-            content=content,
-            content_type=detected_mime_type,
-            extension=".pdf",
-        )
     try:
         with Image.open(BytesIO(content)) as image:
             image.verify()
         with Image.open(BytesIO(content)) as image:
+            image = ImageOps.exif_transpose(image)
             width, height = image.size
             if width > MAX_IMAGE_WIDTH or height > MAX_IMAGE_HEIGHT:
                 raise ValidationError(f"Images must be {MAX_IMAGE_WIDTH}×{MAX_IMAGE_HEIGHT} pixels or smaller.")
@@ -228,7 +219,8 @@ def normalize_uploaded_file(uploaded_file, *, content, detected_mime_type):
                 image.convert("RGB").save(output, format="JPEG", quality=90, optimize=True)
                 extension = ".jpg"
             else:
-                image.save(output, format="PNG", optimize=True)
+                clean = image.convert("RGBA") if image.mode in ("RGBA", "LA") else image.convert("RGB")
+                clean.save(output, format="PNG", optimize=True)
                 extension = ".png"
     except (UnidentifiedImageError, OSError) as exc:
         raise ValidationError("Image uploads must be valid JPG or PNG files.") from exc
@@ -245,7 +237,7 @@ def validate_uploaded_media_file(uploaded_file, *, profile=RESIDENCE_PROOF_UPLOA
         raise ValidationError(f"{profile.label} files must be {profile.max_size // (1024 * 1024)}MB or smaller.")
     extension = _extension(uploaded_file)
     if extension not in profile.allowed_extensions:
-        raise ValidationError(f"{profile.label} files must be PDF, JPG, JPEG, or PNG.")
+        raise ValidationError(f"{profile.label} files must be JPG, JPEG, or PNG.")
     content = _read_upload(uploaded_file)
     detected_mime_type = detect_file_signature(content)
     expected_mime_type = _EXTENSION_MIME_TYPES.get(extension)
@@ -253,12 +245,12 @@ def validate_uploaded_media_file(uploaded_file, *, profile=RESIDENCE_PROOF_UPLOA
         getattr(uploaded_file, "content_type", "") or mimetypes.guess_type(uploaded_file.name)[0] or ""
     ).lower()
     if detected_mime_type not in profile.allowed_mime_types:
-        raise ValidationError(f"{profile.label} files must be valid PDF, JPG, JPEG, or PNG files.")
+        raise ValidationError(f"{profile.label} files must be valid JPG, JPEG, or PNG files.")
     if detected_mime_type != expected_mime_type or (claimed_mime_type and claimed_mime_type != detected_mime_type):
         raise ValidationError("Uploaded file content does not match its extension or MIME type.")
-    # Forensics: block AI-generated and edited media
-    if detected_mime_type != "application/pdf":
-        check_media_authenticity(content)
+    # Forensics: block AI-generated, edited, and unreadable media
+    check_media_authenticity(content)
+    check_image_quality(content)
     normalized_file = normalize_uploaded_file(uploaded_file, content=content, detected_mime_type=detected_mime_type)
     scan_uploaded_file(normalized_file, content=_read_upload(normalized_file), detected_mime_type=detected_mime_type)
     return normalized_file
@@ -393,6 +385,88 @@ def phash_file(content: bytes) -> str:
         return ""
 
 
+PHASH_DUPLICATE_THRESHOLD = 10
+PHASH_BLOCK_DUPLICATE_THRESHOLD = 4
+PHASH_BLOCK_MIN_SIZE = 96
+PHASH_BLOCK_MIN_STDDEV = 8
+
+
+def is_similar_phash(left: str, right: str, *, threshold=PHASH_DUPLICATE_THRESHOLD) -> bool:
+    if not left or not right:
+        return False
+    try:
+        return imagehash.hex_to_hash(left) - imagehash.hex_to_hash(right) <= threshold
+    except ValueError:
+        return False
+
+
+def _phash_regions(width: int, height: int):
+    yield (0, 0, width, height)
+
+    for ratio in (0.8, 0.6):
+        crop_width = int(width * ratio)
+        crop_height = int(height * ratio)
+        left = (width - crop_width) // 2
+        top = (height - crop_height) // 2
+        yield (left, top, left + crop_width, top + crop_height)
+
+    for grid in (2, 3):
+        tile_width = width // grid
+        tile_height = height // grid
+        for row in range(grid):
+            for col in range(grid):
+                left = col * tile_width
+                top = row * tile_height
+                right = width if col == grid - 1 else left + tile_width
+                bottom = height if row == grid - 1 else top + tile_height
+                yield (left, top, right, bottom)
+
+
+def phash_blocks_file(content: bytes) -> list[str]:
+    try:
+        with Image.open(BytesIO(content)) as image:
+            image = image.convert("RGB")
+            hashes = []
+            for box in _phash_regions(*image.size):
+                crop = image.crop(box)
+                width, height = crop.size
+                if width < PHASH_BLOCK_MIN_SIZE or height < PHASH_BLOCK_MIN_SIZE:
+                    continue
+                if ImageStat.Stat(crop.convert("L")).stddev[0] < PHASH_BLOCK_MIN_STDDEV:
+                    continue
+                hashes.append(str(imagehash.phash(crop)))
+            return list(dict.fromkeys(hashes))
+    except (UnidentifiedImageError, OSError, ValueError):
+        return []
+
+
+def has_similar_phash_block(phash: str, blocks: list[str]) -> bool:
+    if not phash or not blocks:
+        return False
+    return any(
+        is_similar_phash(phash, block, threshold=PHASH_BLOCK_DUPLICATE_THRESHOLD)
+        for block in blocks
+    )
+
+
+def duplicate_phash_exists(phash: str) -> bool:
+    if not phash:
+        return False
+    return any(
+        is_similar_phash(phash, existing)
+        for existing in ResidenceProof.objects.exclude(phash="").values_list("phash", flat=True)
+    )
+
+
+def duplicate_phash_blocks_exists(phash: str) -> bool:
+    if not phash:
+        return False
+    return any(
+        has_similar_phash_block(phash, existing_blocks)
+        for existing_blocks in ResidenceProof.objects.exclude(phash_blocks=[]).values_list("phash_blocks", flat=True)
+    )
+
+
 def registration_proof_files(validated_data):
     return validated_data.get("proof_files") or [validated_data["proof"]]
 
@@ -405,6 +479,33 @@ def validate_residence_proof_uploads(proof_files):
     duplicate_in_upload = len(set(proof_hashes)) != len(proof_hashes)
     duplicate_existing = ResidenceProof.objects.filter(sha256_hash__in=proof_hashes).exists()
     if duplicate_in_upload or duplicate_existing:
+        raise DuplicateProofError("Duplicate proof upload detected.")
+
+    proof_phashes = []
+    proof_phash_blocks = []
+    for proof_file in validated_files:
+        content = _read_upload(proof_file)
+        phash = phash_file(content)
+        if phash:
+            proof_phashes.append(phash)
+        blocks = phash_blocks_file(content)
+        if blocks:
+            proof_phash_blocks.append(blocks)
+
+    duplicate_phash_in_upload = any(
+        is_similar_phash(left, right)
+        for index, left in enumerate(proof_phashes)
+        for right in proof_phashes[index + 1:]
+    )
+    duplicate_phash_existing = any(duplicate_phash_exists(phash) for phash in proof_phashes)
+    duplicate_block_in_upload = any(
+        has_similar_phash_block(phash, blocks)
+        for index, phash in enumerate(proof_phashes)
+        for block_index, blocks in enumerate(proof_phash_blocks)
+        if index != block_index
+    )
+    duplicate_block_existing = any(duplicate_phash_blocks_exists(phash) for phash in proof_phashes)
+    if duplicate_phash_in_upload or duplicate_phash_existing or duplicate_block_in_upload or duplicate_block_existing:
         raise DuplicateProofError("Duplicate proof upload detected.")
     return validated_files
 
@@ -434,6 +535,7 @@ def create_registration_profile(user, validated_data):
                 file_size=proof_file.size,
                 sha256_hash=sha256_file(proof_file),
                 phash=phash_file(raw_content),
+                phash_blocks=phash_blocks_file(raw_content),
             )
         )
     ConsentRecord.objects.create(
@@ -480,6 +582,24 @@ def register_resident(validated_data, request_meta=None):
     )
     proof_files = validate_residence_proof_uploads(registration_proof_files(validated_data))
     validated_data["proof_files"] = proof_files
+
+    # OCR validation for barangay ID
+    if validated_data.get("proof_type") == "barangay_id":
+        for proof_file in proof_files:
+            raw_content = _read_upload(proof_file)
+            ocr_results = ocr_bytes(raw_content)
+            user_data = {
+                "first_name": validated_data["first_name"],
+                "last_name": validated_data["last_name"],
+                "address": validated_data["address"],
+                "date_of_birth": str(validated_data["date_of_birth"]),
+            }
+            passed, reason, failed_field, details = validate_barangay_id_ocr(ocr_results, user_data)
+            logger.info("OCR validation for %s: passed=%s, reason=%s, field=%s, details=%s",
+                         validated_data.get("email", "?"), passed, reason, failed_field, details)
+            if not passed:
+                err = {failed_field: [reason]} if failed_field else {"proofOfResidency": [reason]}
+                raise ValidationError(err)
 
     user = get_user_model().objects.create_user(
         email=validated_data["email"],

@@ -30,16 +30,9 @@ export function LoginForm({
 
   return (
     <div className={cn("flex flex-col", className)} {...props}>
-      <form className="flex flex-col gap-4" noValidate onSubmit={handleSubmit}>
-        <div className="flex flex-col gap-3 pt-4 md:pt-8">
-          <h1 className="text-2xl font-bold">Welcome back</h1>
-          <p className="text-sm text-foreground">
-            Report concerns, get alerts, and stay connected to your barangay
-          </p>
-        </div>
-        <div className="h-1" />
+      <form className="flex flex-col gap-5" noValidate onSubmit={handleSubmit}>
         <Field>
-          <FieldLabel htmlFor="email">Email</FieldLabel>
+          <FieldLabel htmlFor="email" className="text-sm font-medium">Email</FieldLabel>
           <Input
             id="email"
             type="email"
@@ -48,6 +41,7 @@ export function LoginForm({
             aria-invalid={Boolean(errors.email)}
             placeholder="Enter your email"
             required
+            className="h-14 w-full rounded-[16px] bg-white px-4 text-lg font-semibold placeholder:text-sm placeholder:font-normal focus-visible:border focus-visible:border-ring focus-visible:shadow-[0_0_0_3px_rgba(255,129,51,0.15)] aria-invalid:border aria-invalid:border-destructive aria-invalid:shadow-[0_0_0_3px_rgba(220,38,38,0.15)]"
           />
           {errors.email && errors.email !== SILENT_SIGN_IN_ERROR ? (
             <FieldError>{errors.email}</FieldError>
@@ -55,7 +49,7 @@ export function LoginForm({
         </Field>
         <Field>
           <div className="flex items-center">
-            <FieldLabel htmlFor="password">Password</FieldLabel>
+            <FieldLabel htmlFor="password" className="text-sm font-medium">Password</FieldLabel>
             <button
               type="button"
               onClick={onForgotPassword}
@@ -74,18 +68,19 @@ export function LoginForm({
             }
             aria-invalid={Boolean(errors.password)}
             required
+            className="h-14 w-full rounded-[16px] bg-white px-4 text-lg font-semibold placeholder:text-sm placeholder:font-normal focus-visible:border focus-visible:border-ring focus-visible:shadow-[0_0_0_3px_rgba(255,129,51,0.15)] aria-invalid:border aria-invalid:border-destructive aria-invalid:shadow-[0_0_0_3px_rgba(220,38,38,0.15)]"
           />
           {errors.password ? (
             <FieldError>{errors.password}</FieldError>
           ) : null}
         </Field>
         <Field>
-          <Button type="submit" className="w-full" disabled={isSubmitting}>
-            {isSubmitting ? <LoaderCircleIcon className="size-4 animate-spin" /> : null}
+          <Button type="submit" className="h-14 w-full rounded-full text-base font-semibold" disabled={isSubmitting}>
+            {isSubmitting ? <LoaderCircleIcon className="size-5 animate-spin" /> : null}
             {isSubmitting ? "Signing in" : "Sign in"}
           </Button>
         </Field>
-        <p className="mt-4 text-sm text-foreground text-center">
+        <p className="text-sm text-foreground text-center">
           Don&apos;t have an account?{" "}
           <button
             type="button"

@@ -6,6 +6,7 @@ import {
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   PhoneIcon,
+  ShieldCheckIcon,
   UsersIcon,
 } from "lucide-react"
 import { useEffect, useState } from "react"
@@ -27,18 +28,26 @@ const topNavItems: NavItem[] = [
   { label: "Reports", path: "/dashboard/reports", icon: BarChart3Icon },
 ]
 
-const staffNavItems: NavItem[] = [
+const officialNavItems: NavItem[] = [
+  { label: "Reports", path: "/dashboard/reports", icon: BarChart3Icon },
+  { label: "Emergency Ops", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
+  { label: "Admin", path: "/dashboard/admin", icon: ShieldCheckIcon },
+  { label: "Profile", path: "/dashboard/profile", icon: UsersIcon },
+]
+
+const responderNavItems: NavItem[] = [
   { label: "Emergency Ops", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
   { label: "Profile", path: "/dashboard/profile", icon: UsersIcon },
 ]
 
 const bottomNavItems: NavItem[] = []
-type SosPlacement = "floating" | "sidebar" | "compact"
+type SosPlacement = "inline" | "sidebar" | "compact"
 
 function normalizeSosPlacement(value: string | null): SosPlacement {
   if (value === "bottom_bar") return "sidebar"
-  if (value === "sidebar" || value === "compact" || value === "floating") return value
-  return "floating"
+  if (value === "floating") return "inline"
+  if (value === "sidebar" || value === "compact" || value === "inline") return value
+  return "inline"
 }
 
 function SidebarSosButton({ isOpen }: { isOpen: boolean }) {
@@ -69,7 +78,7 @@ function SidebarSosButton({ isOpen }: { isOpen: boolean }) {
         {isOpen && <span>SOS</span>}
       </button>
       {!isOpen && (
-        <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white opacity-0 shadow-lg transition-opacity group-hover/sos:opacity-100">
+        <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-red-600 px-3.5 text-xs font-bold text-white opacity-0 shadow-lg transition-opacity group-hover/sos:opacity-100">
           Send SOS
         </span>
       )}
@@ -81,8 +90,9 @@ export function Sidebar() {
   const { isOpen, toggle } = useSidebar()
   const location = useLocation()
   const { user } = useAuthSession()
-  const isStaffRole = user?.role === "barangay_official" || user?.role === "first_responder" || user?.is_staff || user?.is_superuser
-  const navItems = isStaffRole ? staffNavItems : topNavItems
+  const isOfficialRole = user?.role === "barangay_official" || user?.is_staff || user?.is_superuser
+  const isResponderRole = user?.role === "first_responder"
+  const navItems = isOfficialRole ? officialNavItems : isResponderRole ? responderNavItems : topNavItems
 
   function isActive(path: string) {
     return location.pathname === path
@@ -125,18 +135,26 @@ export function Sidebar() {
                   to={item.path}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "flex items-center rounded-md px-3 py-2 text-sm font-medium motion-safe:transition-colors",
+                    "flex items-center rounded-md px-3 text-sm font-medium motion-safe:transition-colors",
                     active
                       ? "text-primary"
                       : "text-background/65 hover:text-primary",
                     isOpen ? "gap-3" : "justify-center px-0",
                   )}
                 >
-                  <Icon className="size-5 shrink-0" />
+                  {item.label === "Home" ? (
+                    <img src="/contents/home.png" alt="" className="size-10 shrink-0 rounded-full object-cover" />
+                  ) : item.label === "Feed" ? (
+                    <img src="/contents/feed.png" alt="" className="size-10 shrink-0 rounded-full object-cover" />
+                  ) : item.label === "Reports" ? (
+                    <img src="/contents/reports.png" alt="" className="size-10 shrink-0 rounded-full object-cover" />
+                  ) : (
+                    <Icon className="size-10 shrink-0" />
+                  )}
                   {isOpen && <span>{item.label}</span>}
                 </Link>
                 {!isOpen && (
-                  <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-foreground px-3 py-1.5 text-xs font-medium text-background opacity-0 shadow-lg transition-opacity group-hover/nav:opacity-100">
+                  <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-foreground px-3.5 text-xs font-medium text-background opacity-0 shadow-lg transition-opacity group-hover/nav:opacity-100">
                     {item.label}
                   </span>
                 )}
@@ -161,18 +179,18 @@ export function Sidebar() {
                   to={item.path}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "flex items-center rounded-md px-3 py-2 text-sm font-medium motion-safe:transition-colors",
+                    "flex items-center rounded-md px-3 text-sm font-medium motion-safe:transition-colors",
                     active
                       ? "text-primary"
                       : "text-background/65 hover:text-primary",
                     isOpen ? "gap-3" : "justify-center px-0",
                   )}
                 >
-                  <Icon className="size-5 shrink-0" />
+                  <Icon className="size-10 shrink-0" />
                   {isOpen && <span>{item.label}</span>}
                 </Link>
                 {!isOpen && (
-                  <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-foreground px-3 py-1.5 text-xs font-medium text-background opacity-0 shadow-lg transition-opacity group-hover/btm:opacity-100">
+                  <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-foreground px-3.5 text-xs font-medium text-background opacity-0 shadow-lg transition-opacity group-hover/btm:opacity-100">
                     {item.label}
                   </span>
                 )}
@@ -198,7 +216,7 @@ export function Sidebar() {
               {isOpen && <span>Collapse</span>}
             </button>
             {!isOpen && (
-              <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-foreground px-3 py-1.5 text-xs font-medium text-background opacity-0 shadow-lg transition-opacity group-hover/toggle:opacity-100">
+              <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-foreground px-3.5 text-xs font-medium text-background opacity-0 shadow-lg transition-opacity group-hover/toggle:opacity-100">
                 Collapse
               </span>
             )}

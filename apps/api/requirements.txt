@@ -28,3 +28,5 @@ httpx>=0.28
 
 # Forensics / Media authenticity
 c2pa-python
+imagehash>=4.3
+opencv-python-headless>=4.13

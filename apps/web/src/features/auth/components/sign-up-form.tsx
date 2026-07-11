@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { CheckIcon, FileImageIcon, FileTextIcon, InfoIcon, LoaderCircleIcon, XIcon } from "lucide-react"
+import { CheckIcon, FileImageIcon, InfoIcon, LoaderCircleIcon, XIcon } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Calendar } from "@workspace/ui/components/calendar"
@@ -15,7 +15,6 @@ import {
 import { Input } from "@workspace/ui/components/input"
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogFooter,
   DialogHeader,
@@ -69,6 +68,7 @@ export function SignUpForm({
     setFieldError,
     submitError,
     values,
+    ocrFields,
   } =
     useSignUpForm({ onSuccess })
 
@@ -81,6 +81,7 @@ export function SignUpForm({
     [lastAllowedBirthDate],
   )
   const [isCheckingProof, setIsCheckingProof] = React.useState(false)
+  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null)
   const termsBodyRef = React.useRef<HTMLDivElement>(null)
   const privacyBodyRef = React.useRef<HTMLDivElement>(null)
 
@@ -244,7 +245,7 @@ export function SignUpForm({
 
   function getAttachmentTypeLabel(file: File) {
     const extension = file.name.split(".").pop()?.toUpperCase()
-    return extension === "PDF" ? "PDF document" : `${extension ?? "Image"} image`
+    return `${extension ?? "Image"} image`
   }
 
   function formatSelectedDate(date: Date) {
@@ -258,18 +259,15 @@ export function SignUpForm({
     return value.replace(/[^A-Za-zÑñ ]/g, "")
   }
 
+const INPUT_CLASS = "h-14 w-full rounded-[16px] bg-white px-4 text-lg font-semibold placeholder:text-sm placeholder:font-normal focus-visible:border focus-visible:border-ring focus-visible:shadow-[0_0_0_3px_rgba(255,129,51,0.15)] aria-invalid:border aria-invalid:border-destructive aria-invalid:shadow-[0_0_0_3px_rgba(220,38,38,0.15)]"
+
+const INPUT_SELECT_CLASS = "flex h-14 w-full rounded-[16px] border border-border bg-white px-4 py-1 text-lg shadow-xs transition-colors aria-invalid:border aria-invalid:border-destructive aria-invalid:shadow-[0_0_0_3px_rgba(220,38,38,0.15)] focus-visible:border-ring focus-visible:shadow-[0_0_0_3px_rgba(255,129,51,0.15)] appearance-none"
+
+  const detailsFilled = Boolean(values.email && values.firstName && values.lastName && values.address && values.dateOfBirth && values.password && values.confirmPassword)
+
   return (
     <div className={cn("flex flex-col", className)} {...props}>
-      <form className="flex flex-col gap-4" noValidate onSubmit={handleSubmit}>
-        <div className="mt-4 flex flex-col items-start gap-0">
-          <h1 className="text-2xl font-bold">Create an account</h1>
-          <p className="text-sm text-muted-foreground">
-            Fill in the details below to get started
-          </p>
-        </div>
-
-        <div className="h-1" />
-
+      <form className="flex flex-col gap-5" noValidate onSubmit={handleSubmit}>
         <Field>
           <FieldLabel htmlFor="email">Email</FieldLabel>
           <Input
@@ -280,11 +278,12 @@ export function SignUpForm({
             aria-invalid={Boolean(errors.email)}
             placeholder="juan@example.com"
             required
+            className={INPUT_CLASS}
           />
           {errors.email ? <FieldError>{errors.email}</FieldError> : null}
         </Field>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field>
             <FieldLabel htmlFor="firstName">First name</FieldLabel>
             <Input
@@ -295,8 +294,9 @@ export function SignUpForm({
               aria-invalid={Boolean(errors.firstName)}
               placeholder="Juan"
               required
+              className={INPUT_CLASS}
             />
-            {errors.firstName ? <FieldError>{errors.firstName}</FieldError> : null}
+            {errors.firstName && !ocrFields.includes("firstName") ? <FieldError>{errors.firstName}</FieldError> : null}
           </Field>
           <Field>
             <FieldLabel htmlFor="middleName">Middle name</FieldLabel>
@@ -307,6 +307,7 @@ export function SignUpForm({
               onChange={(e) => handleChange("middleName", sanitizeName(e.target.value))}
               aria-invalid={Boolean(errors.middleName)}
               placeholder="Dela Cruz"
+              className={INPUT_CLASS}
             />
           </Field>
         </div>
@@ -321,8 +322,9 @@ export function SignUpForm({
             aria-invalid={Boolean(errors.lastName)}
             placeholder="Santos"
             required
+            className={INPUT_CLASS}
           />
-          {errors.lastName ? <FieldError>{errors.lastName}</FieldError> : null}
+          {errors.lastName && !ocrFields.includes("lastName") ? <FieldError>{errors.lastName}</FieldError> : null}
         </Field>
 
         {/* Gender - Dropdown */}
@@ -342,8 +344,8 @@ export function SignUpForm({
                 handleChange("avatar", `${type}-${base}`)
               }
             }}
-            className={`flex h-9 w-full rounded-md border border-input bg-white px-2 py-1 text-sm shadow-xs transition-colors aria-invalid:border-destructive aria-invalid:shadow-[0_0_0_3px_rgba(220,38,38,0.15)] ${
-              values.gender ? "text-foreground" : "text-muted-foreground"
+            className={`${INPUT_SELECT_CLASS} ${
+              values.gender ? "text-sm text-foreground font-semibold" : "text-sm text-muted-foreground font-normal"
             }`}
             aria-invalid={Boolean(errors.gender)}
           >
@@ -362,10 +364,10 @@ export function SignUpForm({
               <PopoverTrigger className="w-full">
                 <span
                   className={cn(
-                    "border-input bg-white flex h-9 w-full items-center rounded-md border px-3 py-1 text-sm shadow-xs",
-                    selectedDate ? "text-foreground" : "text-muted-foreground",
+                    "flex h-14 w-full items-center rounded-[16px] border border-border bg-white px-4 text-lg font-semibold shadow-xs",
+                    selectedDate ? "text-sm text-foreground" : "text-sm text-muted-foreground font-normal",
                     errors.dateOfBirth
-                      ? "border-destructive shadow-[0_0_0_3px_rgba(220,38,38,0.15)]"
+                      ? "border border-destructive shadow-[0_0_0_3px_rgba(220,38,38,0.15)]"
                       : "focus-visible:border-ring focus-visible:shadow-[0_0_0_3px_rgba(255,129,51,0.15)]",
                   )}
                   aria-invalid={Boolean(errors.dateOfBirth)}
@@ -394,7 +396,7 @@ export function SignUpForm({
               </PopoverContent>
             </Popover>
           </div>
-          {errors.dateOfBirth ? <FieldError>{errors.dateOfBirth}</FieldError> : null}
+          {errors.dateOfBirth && !ocrFields.includes("dateOfBirth") ? <FieldError>{errors.dateOfBirth}</FieldError> : null}
         </Field>
 
         <Field>
@@ -407,13 +409,14 @@ export function SignUpForm({
             aria-invalid={Boolean(errors.address)}
             placeholder="123 Barangay Street"
             required
+            className={INPUT_CLASS}
           />
-          {errors.address ? <FieldError>{errors.address}</FieldError> : null}
+          {errors.address && !ocrFields.includes("address") ? <FieldError>{errors.address}</FieldError> : null}
         </Field>
 
         <Field>
           <div className="flex items-center gap-1.5">
-            <FieldLabel htmlFor="proofOfResidency">Proof of residency</FieldLabel>
+            <FieldLabel htmlFor="proofType">Proof of residency</FieldLabel>
             <HoverCard>
               <HoverCardTrigger
                 className="flex size-4 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
@@ -424,6 +427,10 @@ export function SignUpForm({
               <HoverCardContent>
                 <p className="mb-2 text-xs font-medium text-foreground">Make sure the following are clearly visible:</p>
                 <ul className="space-y-1 text-xs text-muted-foreground">
+                  <li className="flex items-start gap-1.5">
+                    <span className="mt-1 size-1 shrink-0 rounded-full bg-muted-foreground" />
+                    Upload 1-2 government-issued IDs or bills (PNG or JPG). Max 2 MB each.
+                  </li>
                   <li className="flex items-start gap-1.5">
                     <span className="mt-1 size-1 shrink-0 rounded-full bg-muted-foreground" />
                     Name (must match the name entered above)
@@ -440,42 +447,50 @@ export function SignUpForm({
               </HoverCardContent>
             </HoverCard>
           </div>
-          <label
-            htmlFor="proofOfResidency"
-            className={cn(
-              "flex h-auto cursor-pointer items-center gap-2 rounded-md border border-input bg-white px-3 py-2 text-sm text-muted-foreground shadow-xs",
-              errors.proofOfResidency &&
-                "border-destructive shadow-[0_0_0_3px_rgba(220,38,38,0.15)]",
-            )}
-          >
-            <Input
-              id="proofOfResidency"
-              type="file"
-              accept=".pdf,.png,.jpg,.jpeg"
-              multiple
-              onChange={handleFileUpload}
-              className="sr-only"
-              aria-invalid={Boolean(errors.proofOfResidency)}
-            />
-            {values.proofOfResidency.length > 0
-              ? isCheckingProof
-                ? "Checking files..."
-                : `${values.proofOfResidency.length} / 2 files selected`
-              : "Upload files (max. 2)"}
-          </label>
+
+          <div className="flex gap-2">
+            <select
+              id="proofType"
+              value={values.proofType}
+              disabled={false}
+              onChange={(e) => handleChange("proofType", e.target.value)}
+              className={`${INPUT_SELECT_CLASS} min-w-0 flex-1 disabled:cursor-not-allowed disabled:opacity-50 ${
+                values.proofType ? "text-sm text-foreground font-semibold" : "text-sm text-muted-foreground font-normal"
+              }`}
+              aria-invalid={Boolean(errors.proofType || errors.proofOfResidency)}
+            >
+              <option value="" disabled>Select an ID</option>
+              <option value="barangay_id">Barangay ID</option>
+            </select>
+            <Button
+              type="button"
+              className="h-14 shrink-0 rounded-[16px] bg-[#ff8133] px-6 text-base font-semibold text-white hover:bg-[#e6732e] disabled:opacity-50"
+              disabled={!values.proofType || values.proofOfResidency.length >= 2}
+              onClick={() => document.getElementById("proofOfResidencyInput")?.click()}
+            >
+              {isCheckingProof ? "Checking files..." : "Upload files"}
+            </Button>
+          </div>
+          <Input
+            id="proofOfResidencyInput"
+            type="file"
+            accept=".png,.jpg,.jpeg,image/png,image/jpeg"
+            multiple
+            onChange={handleFileUpload}
+            className="sr-only"
+            aria-invalid={Boolean(errors.proofOfResidency)}
+          />
+
           {values.proofOfResidency.length > 0 && (
             <div className="grid w-full gap-2">
               {values.proofOfResidency.map((file, i) => (
                 <div
                   key={`${file.name}-${file.lastModified}-${i}`}
-                  className="flex w-full items-start gap-3 overflow-hidden rounded-lg border border-border bg-white p-3 shadow-xs"
+                  className={cn("flex w-full cursor-pointer items-start gap-3 overflow-hidden rounded-lg border bg-white p-3 shadow-xs transition-colors hover:bg-muted/30", errors.proofOfResidency ? "border-destructive shadow-[0_0_0_3px_rgba(220,38,38,0.15)]" : "border-border")}
+                  onClick={() => { setPreviewUrl(URL.createObjectURL(file)) }}
                 >
-                  <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40 text-muted-foreground">
-                    {file.type === "application/pdf" ? (
-                      <FileTextIcon className="size-4" />
-                    ) : (
-                      <FileImageIcon className="size-4" />
-                    )}
+                  <div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted/40 text-muted-foreground">
+                    <FileImageIcon className="size-4" />
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-foreground">
@@ -489,7 +504,7 @@ export function SignUpForm({
                   </div>
                   <button
                     type="button"
-                    onClick={() => removeAttachment(i)}
+                    onClick={(e) => { e.stopPropagation(); removeAttachment(i) }}
                     className="my-auto flex size-8 shrink-0 items-center justify-center rounded-lg bg-white text-muted-foreground transition-colors hover:text-foreground"
                     aria-label={`Remove ${file.name}`}
                   >
@@ -503,11 +518,15 @@ export function SignUpForm({
             <FieldDescription>Checking proof upload...</FieldDescription>
           ) : errors.proofOfResidency ? (
             <FieldError>{errors.proofOfResidency}</FieldError>
-          ) : (
-            <FieldDescription>
-              Upload 1-2 government-issued IDs or bills (PDF, PNG, or JPG). Max 2 MB each.
-            </FieldDescription>
-          )}
+          ) : null}
+
+          <Dialog open={Boolean(previewUrl)} onOpenChange={(open) => { if (!open) { URL.revokeObjectURL(previewUrl ?? ""); setPreviewUrl(null) } }}>
+            <DialogContent className="p-4 sm:max-w-[600px]">
+              {previewUrl && (
+                <img src={previewUrl} alt="Proof of residency preview" className="max-h-[70vh] w-full rounded-lg object-contain" />
+              )}
+            </DialogContent>
+          </Dialog>
         </Field>
 
         <Field>
@@ -526,12 +545,13 @@ export function SignUpForm({
               aria-invalid={Boolean(errors.phoneNumber)}
               placeholder="(+63) 982 928 9283"
               required
+              className={`${INPUT_CLASS} min-w-0 flex-1`}
             />
             <Button
               type="button"
-              className="shrink-0"
+              className="h-14 shrink-0 rounded-[16px] px-6 text-base font-semibold"
               onClick={handleSendPhoneOtp}
-              disabled={isSendingPhoneOtp || phoneOtpVerified || phoneOtpCooldownSeconds > 0}
+              disabled={isSendingPhoneOtp || phoneOtpVerified || phoneOtpCooldownSeconds > 0 || !/^\+63\d{10}$/.test(values.phoneNumber)}
             >
               {isSendingPhoneOtp ? (
                 <LoaderCircleIcon className="size-4 animate-spin" />
@@ -562,10 +582,11 @@ export function SignUpForm({
                 onChange={(e) => handleChange("phoneOtpCode", e.target.value.replace(/\D/g, "").slice(0, 6))}
                 aria-invalid={Boolean(errors.phoneOtpCode)}
                 placeholder="6-digit code"
+                className={INPUT_CLASS}
               />
               <Button
                 type="button"
-                className="shrink-0"
+                className="h-14 shrink-0 rounded-[16px] px-6 text-base font-semibold"
                 onClick={handleVerifyPhoneOtp}
                 disabled={isVerifyingPhoneOtp}
               >
@@ -591,6 +612,7 @@ export function SignUpForm({
             onChange={(e) => handleChange("password", e.target.value)}
             aria-invalid={Boolean(errors.password)}
             required
+            className={INPUT_CLASS}
           />
           {values.password.length > 0 ? (
             <div className="space-y-2">
@@ -627,12 +649,13 @@ export function SignUpForm({
             onChange={(e) => handleChange("confirmPassword", e.target.value)}
             aria-invalid={Boolean(errors.confirmPassword)}
             required
+            className={INPUT_CLASS}
           />
           {errors.confirmPassword ? <FieldError>{errors.confirmPassword}</FieldError> : null}
         </Field>
 
         <Field>
-          <Button type="submit" className="w-full" disabled={isSubmitting || isCheckingProof}>
+          <Button type="submit" className="h-14 w-full rounded-full text-base font-semibold">
             {isSubmitting ? <LoaderCircleIcon className="size-4 animate-spin" /> : null}
             {isSubmitting ? "Creating account" : "Sign up"}
           </Button>
@@ -647,7 +670,7 @@ export function SignUpForm({
                 openTermsDialog()
               }
             }}
-            className="mt-0.5"
+            className="mt-0.5 aria-invalid:border"
             aria-invalid={Boolean(errors.agreeToTerms)}
           />
           <span className={cn("text-muted-foreground", errors.agreeToTerms && "text-destructive")}>
@@ -683,6 +706,7 @@ export function SignUpForm({
 
                     <h3 className="font-semibold text-foreground">6. Limitation of Liability</h3>
                     <p>E-Boses is provided as a tool to assist barangay governance and emergency coordination. The barangay does not guarantee immediate response to every report or alert. AI-generated severity scores and assessments are advisory in nature and subject to review by barangay officials. The platform is accessible via standard web browsers and requires internet connectivity; performance may vary depending on network conditions.</p>
+                    <img src="/contents/footer-auth.png" alt="" className="mt-6 w-full h-auto" aria-hidden="true" />
                     <span ref={termsSentinelRef} />
                   </div>
                 </DialogBody>
@@ -722,6 +746,7 @@ export function SignUpForm({
 
                     <h3 className="font-semibold text-foreground">8. Data Retention</h3>
                     <p>Records are retained for a period consistent with standard barangay record-management practice. After the retention period, records are disposed of in accordance with applicable regulations.</p>
+                    <img src="/contents/footer-auth.png" alt="" className="mt-6 w-full h-auto" aria-hidden="true" />
                     <span ref={privacySentinelRef} />
                   </div>
                 </DialogBody>

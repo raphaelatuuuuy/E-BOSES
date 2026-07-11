@@ -129,6 +129,8 @@ class RegisterView(APIView):
         except OTPVerificationError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except (DuplicateProofError, ValidationError) as exc:
+            if hasattr(exc, "error_dict"):
+                return Response(exc.error_dict, status=status.HTTP_400_BAD_REQUEST)
             message = exc.message if hasattr(exc, "message") else str(exc)
             return Response({"proof": [message]}, status=status.HTTP_400_BAD_REQUEST)
         return token_response(user, status.HTTP_201_CREATED)

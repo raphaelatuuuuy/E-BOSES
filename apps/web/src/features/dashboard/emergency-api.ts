@@ -30,6 +30,29 @@ export interface EmergencyAssignment {
   last_location: EmergencyLocationPing | null
 }
 
+export interface EmergencyAppeal {
+  id: number
+  alert_id?: number
+  alert_type?: EmergencyType
+  alert_status?: EmergencyStatus
+  appellant: PublicUser
+  reason: string
+  status: "submitted" | "approved" | "denied"
+  decision_note: string
+  reviewed_by: PublicUser | null
+  created_at: string
+  decided_at: string | null
+}
+
+export interface EmergencyEscalation {
+  id: number
+  previous_assignment: number
+  escalated_to: PublicUser | null
+  triggered_by: PublicUser | null
+  reason: string
+  created_at: string
+}
+
 export interface EmergencyStatusEvent {
   id: number
   status: EmergencyStatus
@@ -40,6 +63,7 @@ export interface EmergencyStatusEvent {
 
 export interface EmergencyAlert {
   id: number
+  reporter_phone: string
   type: EmergencyType
   note: string
   status: EmergencyStatus
@@ -50,6 +74,8 @@ export interface EmergencyAlert {
   current_assignment: EmergencyAssignment | null
   assignments: EmergencyAssignment[]
   status_events: EmergencyStatusEvent[]
+  appeals: EmergencyAppeal[]
+  escalations: EmergencyEscalation[]
   created_at: string
   updated_at: string
   resolved_at: string | null
@@ -107,6 +133,41 @@ export function assignEmergency(id: number, responderId: number) {
   return apiRequest<EmergencyAlert>(`/emergencies/${id}/assign/`, {
     method: "POST",
     body: JSON.stringify({ responder_id: responderId }),
+  })
+}
+
+export function assignEmergencyResponders(id: number, responderIds: number[]) {
+  return apiRequest<EmergencyAlert>(`/emergencies/${id}/assign/`, {
+    method: "POST",
+    body: JSON.stringify({ responder_ids: responderIds }),
+  })
+}
+
+export function createEmergencyAppeal(id: number, reason: string) {
+  return apiRequest<EmergencyAppeal>(`/emergencies/${id}/appeals/`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  })
+}
+
+export function listEmergencyAppeals(status?: string) {
+  const params = new URLSearchParams()
+  if (status && status !== "all") params.set("status", status)
+  const query = params.toString() ? `?${params.toString()}` : ""
+  return apiRequest<EmergencyAppeal[]>(`/emergencies/appeals/${query}`)
+}
+
+export function reviewEmergencyAppeal(appealId: number, payload: { status: "approved" | "denied"; decision_note?: string }) {
+  return apiRequest<EmergencyAppeal>(`/emergencies/appeals/${appealId}/review/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function escalateOverdueEmergencies(minutes = 5) {
+  return apiRequest<{ escalated: number }>("/emergencies/escalate-overdue/", {
+    method: "POST",
+    body: JSON.stringify({ minutes }),
   })
 }
 

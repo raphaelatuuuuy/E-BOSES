@@ -136,7 +136,7 @@ export default function AccountOtpVerificationPage({
         {error ? <FieldError>{error}</FieldError> : null}
         <Button
           type="button"
-          className="w-full"
+          className="h-14 w-full rounded-full text-base"
           disabled={isVerifying}
           onClick={handleVerify}
         >
@@ -148,25 +148,19 @@ export default function AccountOtpVerificationPage({
   }
 
   return (
-    <main className="grid min-h-svh w-full lg:h-svh lg:grid-cols-[40fr_60fr] lg:overflow-hidden">
-      <section className="relative flex flex-col overflow-y-auto p-6 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden md:p-10 lg:min-h-0">
-        <button
-          type="button"
-          onClick={onBack}
-          className="flex items-center gap-1.5 self-start text-sm text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ChevronLeft className="size-4" /> Back
-        </button>
-        <div className="flex flex-1 items-center justify-center">
-          <div className="w-full max-w-lg">
+    <main className="grid min-h-svh w-full lg:h-svh lg:grid-cols-2 lg:overflow-hidden">
+      <AuthSidePanel />
+      <section className="relative flex flex-1 flex-col justify-center overflow-y-auto p-6 md:p-10">
+        <div className="mx-auto flex w-full max-w-md flex-col items-center">
+          <div className="mb-6 lg:hidden">
+            <img src="/contents/logo.png" alt="E-Boses" className="mx-auto h-16 w-auto" />
+          </div>
+          <h1 className="text-balance text-center text-4xl font-heading font-bold">Verify your account</h1>
+          <p className="mt-1 text-center text-sm text-muted-foreground">
+            Enter the 6-digit code sent to your email address.
+          </p>
+          <div className="mt-8 w-full">
             <div className="flex flex-col gap-4">
-              <div className="flex flex-col items-start gap-0">
-                <h1 className="text-2xl font-bold">Verify your account</h1>
-                <p className="text-sm text-foreground">
-                  Enter the 6-digit code sent to your email address.
-                </p>
-              </div>
-              <div className="h-1" />
               {renderCodeField()}
               {submitError ? (
                 <div aria-live="polite" aria-atomic="true">
@@ -176,11 +170,7 @@ export default function AccountOtpVerificationPage({
             </div>
           </div>
         </div>
-        <div className="flex justify-center mt-auto -mx-6 -mb-6 md:-mx-10 md:-mb-10">
-          <img src="/contents/footer-auth.png" alt="" className="w-full h-auto" aria-hidden="true" />
-        </div>
       </section>
-      <AuthSidePanel />
     </main>
   )
 }

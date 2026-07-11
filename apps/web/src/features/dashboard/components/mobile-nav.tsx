@@ -5,12 +5,14 @@ import {
   BarChart3Icon,
   HomeIcon,
   PlusIcon,
+  ShieldCheckIcon,
   UsersIcon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { computeDefaultAvatar } from "@/features/dashboard/avatar-utils"
 
 type NavItem = {
   label: string
@@ -26,17 +28,18 @@ export function MobileNav() {
   const { user } = useAuthSession()
 
   const initials = user ? `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}` : "?"
-  const avatarKey = user?.avatar || (user?.gender && user?.gender !== "prefer_not_to_say" && user?.date_of_birth
-    ? (() => {
-        const age = new Date().getFullYear() - new Date(user.date_of_birth!).getFullYear()
-        const bucket = age >= 55 ? "senior" : age >= 30 ? "middleaged" : "young"
-        const icon = user.gender === "male" ? "man" : "woman"
-        return `${bucket}-${icon}`
-      })()
-    : "")
+  const avatarKey = user ? computeDefaultAvatar(user) : ""
 
-  const isStaffRole = user?.role === "barangay_official" || user?.role === "first_responder" || user?.is_staff || user?.is_superuser
-  const navItems: NavItem[] = isStaffRole
+  const isOfficialRole = user?.role === "barangay_official" || user?.is_staff || user?.is_superuser
+  const isResponderRole = user?.role === "first_responder"
+  const navItems: NavItem[] = isOfficialRole
+    ? [
+        { label: "Reports", path: "/dashboard/reports", icon: BarChart3Icon },
+        { label: "Emergency", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
+        { label: "Admin", path: "/dashboard/admin", icon: ShieldCheckIcon },
+        { label: "Profile", path: "/dashboard/profile", isAvatar: true },
+      ]
+    : isResponderRole
     ? [
         { label: "Emergency", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
         { label: "Profile", path: "/dashboard/profile", isAvatar: true },
@@ -85,7 +88,7 @@ export function MobileNav() {
                     active ? "text-primary" : "text-muted-foreground",
                   )}
                 >
-                  <span className="flex size-9 items-center justify-center overflow-hidden rounded-full text-sm font-bold text-muted-foreground">
+                  <span className="flex size-10 items-center justify-center overflow-hidden rounded-full text-sm font-bold text-muted-foreground">
                     {avatarKey ? <img src={`/contents/${avatarKey}.png`} alt="" className="h-full w-full object-cover" /> : initials}
                   </span>
                   <span className="text-[10px] font-medium">{item.label}</span>
@@ -103,7 +106,15 @@ export function MobileNav() {
                   active ? "text-primary" : "text-muted-foreground",
                 )}
               >
-                <Icon className="size-6" />
+                {item.label === "Home" ? (
+                  <img src="/contents/home.png" alt="" className="size-10 rounded-full object-cover" />
+                ) : item.label === "Feed" ? (
+                  <img src="/contents/feed.png" alt="" className="size-10 rounded-full object-cover" />
+                ) : item.label === "Reports" ? (
+                  <img src="/contents/reports.png" alt="" className="size-10 rounded-full object-cover" />
+                ) : (
+                  <Icon className="size-6" />
+                )}
                 <span className="text-xs font-medium">{item.label}</span>
               </Link>
             )

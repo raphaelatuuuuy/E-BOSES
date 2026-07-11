@@ -1,9 +1,11 @@
 import asyncio
+from datetime import timedelta
 from io import BytesIO
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
+from django.utils import timezone
 from PIL import Image
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -11,7 +13,7 @@ from rest_framework.test import APITestCase
 from apps.accounts.models import ResidentProfile
 from apps.notifications.models import Notification
 
-from .models import EmergencyAlert, EmergencyLocationPing, EmergencyMedia, EmergencyResponderAssignment, EmergencyStatusEvent
+from .models import EmergencyAlert, EmergencyAppeal, EmergencyEscalation, EmergencyLocationPing, EmergencyMedia, EmergencyResponderAssignment, EmergencyStatusEvent
 
 
 TEST_CHANNEL_LAYERS = {
@@ -86,6 +88,32 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(active_response.data["status"], EmergencyAlert.Status.SUBMITTED)
         self.assertEqual(alert.status_events.count(), 1)
         self.assertEqual(alert.status_events.get().status, EmergencyAlert.Status.SUBMITTED)
+
+    def test_non_resident_roles_cannot_create_emergency(self):
+        User = get_user_model()
+        for role in [User.Role.BARANGAY_OFFICIAL, User.Role.FIRST_RESPONDER]:
+            user = User.objects.create_user(
+                email=f"{role}-cannot-create-emergency@example.com",
+                phone_number=f"+63936{len(role):07d}",
+                password="pass",
+                role=role,
+                status=User.Status.VERIFIED,
+            )
+            self.client.force_authenticate(user)
+            response = self.client.post(
+                "/api/emergencies/",
+                {
+                    "type": EmergencyAlert.Type.MEDICAL,
+                    "latitude": "14.6500000",
+                    "longitude": "121.1100000",
+                    "address": "Covered court",
+                },
+                format="json",
+            )
+
+            self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.assertFalse(EmergencyAlert.objects.filter(address="Covered court").exists())
 
     def test_emergency_location_outside_barangay_boundary_is_rejected(self):
         response = self.client.post(
@@ -313,6 +341,93 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["id"], alert.pk)
+
+    def test_official_can_assign_multiple_responders(self):
+        User = get_user_model()
+        second = User.objects.create_user(
+            email="emergency-second-responder@example.com",
+            phone_number="+639360000013",
+            password="pass",
+            role=User.Role.FIRST_RESPONDER,
+            status=User.Status.VERIFIED,
+        )
+        alert = self.create_alert()
+        self.client.force_authenticate(self.official)
+
+        response = self.client.post(
+            f"/api/emergencies/{alert.pk}/assign/",
+            {"responder_ids": [self.responder.pk, second.pk]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(alert.assignments.count(), 2)
+        self.assertTrue(Notification.objects.filter(recipient=self.responder, type=Notification.Type.EMERGENCY_ROUTED).exists())
+        self.assertTrue(Notification.objects.filter(recipient=second, type=Notification.Type.EMERGENCY_ROUTED).exists())
+
+    def test_official_can_escalate_unacknowledged_assignment_to_backup(self):
+        User = get_user_model()
+        alert = self.create_alert()
+        backup = User.objects.create_user(
+            email="emergency-backup@example.com",
+            phone_number="+639360000014",
+            password="pass",
+            role=User.Role.FIRST_RESPONDER,
+            status=User.Status.VERIFIED,
+            responder_unit=User.ResponderUnit.BHW,
+            is_on_duty=True,
+            current_latitude="14.6510000",
+            current_longitude="121.1110000",
+        )
+        assignment = EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
+        assignment.assigned_at = timezone.now() - timedelta(minutes=10)
+        assignment.save(update_fields=["assigned_at"])
+        alert.status = EmergencyAlert.Status.ROUTED
+        alert.save(update_fields=["status", "updated_at"])
+        self.client.force_authenticate(self.official)
+
+        response = self.client.post("/api/emergencies/escalate-overdue/", {"minutes": 5}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(EmergencyEscalation.objects.filter(alert=alert, escalated_to=backup).count(), 1)
+        self.assertTrue(alert.assignments.filter(responder=backup).exists())
+        self.assertTrue(Notification.objects.filter(recipient=backup, type=Notification.Type.EMERGENCY_ESCALATED).exists())
+        self.assertTrue(Notification.objects.filter(recipient=self.resident, type=Notification.Type.EMERGENCY_ESCALATED).exists())
+
+    def test_resident_can_appeal_closed_emergency_and_official_reviews(self):
+        alert = self.create_alert()
+        alert.status = EmergencyAlert.Status.RESOLVED
+        alert.resolved_at = timezone.now()
+        alert.save(update_fields=["status", "resolved_at", "updated_at"])
+        self.client.force_authenticate(self.resident)
+
+        appeal_response = self.client.post(
+            f"/api/emergencies/{alert.pk}/appeals/",
+            {"reason": "Response record needs correction."},
+            format="json",
+        )
+
+        self.assertEqual(appeal_response.status_code, status.HTTP_201_CREATED)
+        appeal = EmergencyAppeal.objects.get(alert=alert)
+        self.assertEqual(appeal.status, EmergencyAppeal.Status.SUBMITTED)
+        self.assertTrue(Notification.objects.filter(recipient=self.official, type=Notification.Type.EMERGENCY_APPEAL_SUBMITTED).exists())
+
+        self.client.force_authenticate(self.official)
+        list_response = self.client.get("/api/emergencies/appeals/?status=submitted")
+        review_response = self.client.post(
+            f"/api/emergencies/appeals/{appeal.pk}/review/",
+            {"status": EmergencyAppeal.Status.APPROVED, "decision_note": "Correction noted."},
+            format="json",
+        )
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(list_response.data[0]["id"], appeal.pk)
+        self.assertEqual(review_response.status_code, status.HTTP_200_OK)
+        appeal.refresh_from_db()
+        alert.refresh_from_db()
+        self.assertEqual(appeal.status, EmergencyAppeal.Status.APPROVED)
+        self.assertEqual(alert.status, EmergencyAlert.Status.RESOLVED)
+        self.assertTrue(Notification.objects.filter(recipient=self.resident, type=Notification.Type.EMERGENCY_APPEAL_APPROVED).exists())
 
     def test_responder_ping_outside_barangay_boundary_is_rejected(self):
         alert = self.create_alert()
