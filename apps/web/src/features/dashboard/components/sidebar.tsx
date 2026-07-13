@@ -6,6 +6,7 @@ import {
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   PhoneIcon,
+  Settings2Icon,
   ShieldCheckIcon,
   UsersIcon,
 } from "lucide-react"
@@ -31,6 +32,7 @@ const topNavItems: NavItem[] = [
 const officialNavItems: NavItem[] = [
   { label: "Reports", path: "/dashboard/reports", icon: BarChart3Icon },
   { label: "Emergency Ops", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
+  { label: "ID & Proof Templates", path: "/dashboard/ocr-templates", icon: Settings2Icon },
   { label: "Admin", path: "/dashboard/admin", icon: ShieldCheckIcon },
   { label: "Profile", path: "/dashboard/profile", icon: UsersIcon },
 ]

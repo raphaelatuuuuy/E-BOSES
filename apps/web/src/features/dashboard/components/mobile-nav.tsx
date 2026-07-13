@@ -5,6 +5,7 @@ import {
   BarChart3Icon,
   HomeIcon,
   PlusIcon,
+  Settings2Icon,
   ShieldCheckIcon,
   UsersIcon,
 } from "lucide-react"
@@ -36,6 +37,7 @@ export function MobileNav() {
     ? [
         { label: "Reports", path: "/dashboard/reports", icon: BarChart3Icon },
         { label: "Emergency", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
+        { label: "IDs", path: "/dashboard/ocr-templates", icon: Settings2Icon },
         { label: "Admin", path: "/dashboard/admin", icon: ShieldCheckIcon },
         { label: "Profile", path: "/dashboard/profile", isAvatar: true },
       ]

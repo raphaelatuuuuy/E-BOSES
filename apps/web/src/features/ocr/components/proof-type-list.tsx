@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Pencil, Plus, Trash2 } from "lucide-react"
+import { Info, Pencil, Plus, Trash2 } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -49,6 +49,9 @@ export function ProofTypeList(props: {
     pendingRemoveKey ||
     "this proof type"
 
+  // Zero types with enabled !== false → none are live on resident sign-up.
+  const noLiveTypes = !documents.some((doc) => doc.enabled !== false)
+
   return (
     <div className="mx-auto w-full max-w-[1200px] space-y-6 p-4 md:p-7">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -71,6 +74,19 @@ export function ProofTypeList(props: {
           Add proof type
         </Button>
       </header>
+
+      {noLiveTypes ? (
+        <div
+          role="status"
+          className="flex gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold leading-6 text-[#145be7]"
+        >
+          <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+          <p>
+            No proof types are live on sign-up yet. Turn on{" "}
+            <strong className="font-black">Available on sign-up</strong> when a type is ready.
+          </p>
+        </div>
+      ) : null}
 
       {documents.length === 0 ? (
         <Card className={cn(PROOF_THEME.card, "gap-4 py-10")}>
