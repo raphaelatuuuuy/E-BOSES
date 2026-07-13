@@ -491,6 +491,20 @@ export function useOcrTemplateState() {
       }),
     }
     setConfiguration(next)
+    // Hidden proofs: draft-only to avoid thrashing publish. Live proofs: publish so sign-up updates.
+    const target = next.document_types.find((doc) => doc.key === targetKey)
+    if (target?.enabled === false) {
+      setSaving(true)
+      try {
+        const saved = await saveOcrDraft(next)
+        setConfiguration(saved)
+      } catch (reason) {
+        toast.error(reason instanceof Error ? reason.message : "Could not save proof details.")
+      } finally {
+        setSaving(false)
+      }
+      return
+    }
     await saveAndPublish(next, {
       title: "Proof details updated",
       description: "Name and description now show on resident sign-up.",
