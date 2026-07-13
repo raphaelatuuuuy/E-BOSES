@@ -11,17 +11,13 @@ import {
   ArrowLeft,
   CheckCircle2,
   CloudUpload,
-  FileCheck2,
   FileText,
   GripVertical,
   IdCard,
-  ImageIcon,
-  Layers3,
   LoaderCircle,
   Pencil,
   Plus,
   Search,
-  Sparkles,
   Trash2,
   ZoomIn,
   ZoomOut,
@@ -31,7 +27,6 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Switch } from "@workspace/ui/components/switch"
@@ -59,8 +54,10 @@ import {
   type OcrTestResult,
   type ProofSide,
 } from "@/features/ocr/api"
+import { ProofSetupWizard } from "@/features/ocr/components/proof-setup-wizard"
 import { ProofTypeList } from "@/features/ocr/components/proof-type-list"
 import { PROOF_THEME } from "@/features/ocr/components/proof-theme"
+import type { WizardStepId } from "@/features/ocr/hooks/use-ocr-template-state"
 
 /** System design tokens — aligned with Concern Classification / Admin. */
 const T = {
@@ -340,6 +337,7 @@ function ensureDocumentFieldRegions(doc: OcrDocumentType): OcrDocumentType {
 export default function OcrTemplateBuilderPage() {
   usePageTitle("ID & Proof Templates")
   const [view, setView] = useState<"list" | "wizard">("list")
+  const [step, setStep] = useState<WizardStepId>(1)
   const [configuration, setConfiguration] = useState<OcrConfiguration | null>(null)
   const [selectedDocKey, setSelectedDocKey] = useState("")
   const [selectedFieldKey, setSelectedFieldKey] = useState("")
@@ -355,7 +353,6 @@ export default function OcrTemplateBuilderPage() {
   const [testPreviewUrl, setTestPreviewUrl] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<OcrTestResult | null>(null)
   const [testRunning, setTestRunning] = useState(false)
-  const [drawerOpen, setDrawerOpen] = useState(true)
   const [dragOver, setDragOver] = useState(false)
   const [regionDrag, setRegionDrag] = useState<RegionDragState>(null)
   const sampleInputRef = useRef<HTMLInputElement>(null)
@@ -1138,14 +1135,12 @@ export default function OcrTemplateBuilderPage() {
     const target = file ?? testFile
     if (!target || !selectedDocument) {
       toast.error("Choose a photo to try first.")
-      setDrawerOpen(true)
       return
     }
     setTestFile(target)
     if (testPreviewUrl) URL.revokeObjectURL(testPreviewUrl)
     setTestPreviewUrl(URL.createObjectURL(target))
     setTestRunning(true)
-    setDrawerOpen(true)
     try {
       // Save draft first so drawn boxes are applied by the OCR worker.
       if (configuration) {
@@ -1390,6 +1385,7 @@ export default function OcrTemplateBuilderPage() {
             const doc = configuration.document_types.find((item) => item.key === docKey)
             setSelectedFieldKey(doc?.fields[0]?.key ?? "")
             setTestResult(null)
+            setStep(1)
             setView("wizard")
           }}
           onRemove={(docKey) => {
@@ -1413,7 +1409,10 @@ export default function OcrTemplateBuilderPage() {
             type="button"
             variant="outline"
             className="font-bold"
-            onClick={() => setView("list")}
+            onClick={() => {
+              setStep(1)
+              setView("list")
+            }}
           >
             <ArrowLeft className="size-4" />
             Back to all proof types
@@ -1427,88 +1426,29 @@ export default function OcrTemplateBuilderPage() {
   const templateMatch = testResult?.template_match
   const overallConfidence = testResult?.overall_confidence ?? testResult?.confidence ?? null
   const selectedDetected = selectedField ? extractedByKey.get(selectedField.key) : null
-  const activeTypeCount = configuration.document_types.filter((doc) => doc.enabled !== false).length
-  const fieldCount = selectedDocument.fields.length
-  const sampleCount = Object.values(samplePreviewBySide).filter(Boolean).length
+
+  function backToList() {
+    setStep(1)
+    setView("list")
+  }
 
   return (
-    <div className={cn("flex min-h-full flex-col", T.bg)}>
+    <div className={cn("flex min-h-full flex-col", PROOF_THEME.bg)}>
       <Topbar />
-      <main className="mx-auto w-full max-w-[1700px] space-y-5 p-4 md:p-7">
-        {/* Header */}
-        <header className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div className="min-w-0">
-            <button
-              type="button"
-              onClick={() => setView("list")}
-              className={cn(
-                "mb-3 inline-flex items-center gap-1.5 text-sm font-bold transition hover:text-[#145be7]",
-                T.muted,
-              )}
-            >
-              <ArrowLeft className="size-4" />
-              All proof types
-            </button>
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-black text-[#145be7]">
-                <IdCard className="size-3.5" />
-                Resident verification
-              </span>
-              <Badge
-                className={cn(
-                  "font-bold ring-1 hover:bg-inherit",
-                  configuration.status === "draft"
-                    ? "bg-amber-50 text-amber-800 ring-amber-200"
-                    : "bg-emerald-50 text-emerald-800 ring-emerald-200",
-                )}
-              >
-                {configuration.status === "draft" ? "Working draft" : configuration.status}
-              </Badge>
-            </div>
-            <h1 className={cn("text-2xl font-black md:text-3xl", T.title)}>
-              {selectedDocument.template_name?.trim() ||
-                selectedDocument.name?.trim() ||
-                "Edit proof type"}
-            </h1>
-            <p className={cn("mt-2 max-w-2xl text-sm font-semibold leading-6", T.body)}>
-              Mark where information appears on the photo, set rules, try a sample, and turn on
-              availability when ready.
-            </p>
-            {saving ? (
-              <p className={cn("mt-2 inline-flex items-center gap-2 text-xs font-bold", T.muted)}>
-                <LoaderCircle className="size-3.5 animate-spin text-[#145be7]" />
-                Updating sign-up…
-              </p>
-            ) : null}
-          </div>
-        </header>
-
-        {/* Snapshot metrics */}
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {(
-            [
-              [Layers3, "Proof types", configuration.document_types.length, `${activeTypeCount} shown on sign-up`, "text-[#145be7] bg-blue-50"],
-              [FileCheck2, "Information fields", fieldCount, "Areas the system will read", "text-violet-700 bg-violet-50"],
-              [ImageIcon, "Sample photos", sampleCount, sampleCount ? "Ready to mark areas" : "Upload a clear sample", "text-emerald-700 bg-emerald-50"],
-              [Sparkles, "Last updated", configuration.updated_at ? new Date(configuration.updated_at).toLocaleDateString() : "—", configuration.updated_by || "Not published yet", "text-orange-700 bg-orange-50"],
-            ] as const
-          ).map(([Icon, label, value, help, color]) => (
-            <section key={label} className={cn(T.card, "p-4")}>
-              <div className="flex items-center gap-3">
-                <span className={cn("flex size-11 items-center justify-center rounded-full", color)}>
-                  <Icon className="size-5" />
-                </span>
-                <div>
-                  <p className={cn("text-xs font-bold", T.muted)}>{label}</p>
-                  <p className={cn("text-2xl font-black", T.title)}>{value}</p>
-                </div>
-              </div>
-              <p className={cn("mt-3 text-[11px] font-semibold", T.muted)}>{help}</p>
-            </section>
-          ))}
-        </div>
-
-        {/* Proof type setup */}
+      <ProofSetupWizard
+        document={selectedDocument}
+        step={step}
+        saving={saving}
+        onStepChange={setStep}
+        onBackToList={backToList}
+        onDone={backToList}
+        availableEnabled={selectedDocument.enabled !== false}
+        onToggleAvailable={(enabled) => {
+          void setProofAvailableOnSignup(selectedDocument.key, enabled)
+        }}
+      >
+        {/* Step 1 — Proof details (meta settings) */}
+        {step === 1 ? (
         <section className={cn(T.card, "p-5")}>
           <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
             <div>
@@ -1753,10 +1693,11 @@ export default function OcrTemplateBuilderPage() {
             </div>
           </div>
         </section>
+        ) : null}
 
-        {/* Main workspace: 3 steps */}
-        <section className="grid gap-5 xl:grid-cols-[minmax(16rem,0.9fr)_minmax(0,1.45fr)_minmax(16rem,0.95fr)]">
-          {/* Step 1 — Information list */}
+        {/* Step 2 — Mark areas (fields list + canvas) */}
+        {step === 2 ? (
+        <section className="grid gap-5 xl:grid-cols-[minmax(16rem,0.9fr)_minmax(0,1.45fr)]">
           <Panel
             step={1}
             title="Information to read"
@@ -2089,10 +2030,55 @@ export default function OcrTemplateBuilderPage() {
               Changes go live when you upload a sample, try a photo, or toggle availability.
             </p>
           </Panel>
+        </section>
+        ) : null}
 
-          {/* Step 3 — Rules */}
+        {/* Step 3 — Field rules */}
+        {step === 3 ? (
+        <section className="grid gap-5 xl:grid-cols-[minmax(16rem,0.9fr)_minmax(0,1.2fr)]">
           <Panel
-            step={3}
+            step={1}
+            title="Information to read"
+            description="Select an item to configure its rules."
+            className="min-h-[28rem]"
+          >
+            <div className="flex flex-1 flex-col gap-2 overflow-y-auto">
+              {fields.map((field, index) => {
+                const color = FIELD_COLORS[index % FIELD_COLORS.length]
+                const selected = selectedField?.key === field.key
+                return (
+                  <button
+                    key={field.key}
+                    type="button"
+                    className={cn(
+                      "flex items-center gap-2 rounded-xl border px-2.5 py-2.5 text-left transition-colors",
+                      selected
+                        ? "border-[#145be7] bg-blue-50/80 shadow-sm"
+                        : "border-[#dfe7f5] bg-[#f8fafc] hover:bg-white",
+                    )}
+                    onClick={() => selectField(field.key)}
+                  >
+                    <span
+                      className="flex size-6 shrink-0 items-center justify-center rounded-md text-[11px] font-bold text-white"
+                      style={{ backgroundColor: color }}
+                    >
+                      {index + 1}
+                    </span>
+                    <span className={cn("min-w-0 flex-1 truncate text-sm font-black", T.title)}>
+                      {field.label}
+                    </span>
+                  </button>
+                )
+              })}
+              {fields.length === 0 ? (
+                <p className={cn("rounded-xl border border-dashed border-[#cbd8ee] px-3 py-10 text-center text-sm font-semibold", T.muted)}>
+                  No information listed yet. Add items on the Mark areas step first.
+                </p>
+              ) : null}
+            </div>
+          </Panel>
+          <Panel
+            step={2}
             title="Rules for this field"
             description="Decide what must match, and how strictly the system should check."
             className="min-h-[28rem]"
@@ -2351,14 +2337,12 @@ export default function OcrTemplateBuilderPage() {
             )}
           </Panel>
         </section>
+        ) : null}
 
-        {/* Try a sample */}
+        {/* Step 4 — Try a sample */}
+        {step === 4 ? (
         <section className={T.card}>
-          <button
-            type="button"
-            className="flex w-full items-center justify-between px-4 py-4 text-left md:px-5"
-            onClick={() => setDrawerOpen((open) => !open)}
-          >
+          <div className="flex w-full items-center justify-between px-4 py-4 text-left md:px-5">
             <span className="flex items-center gap-3">
               <span className="flex size-10 items-center justify-center rounded-full bg-blue-50 text-[#145be7]">
                 <FileText className="size-5" />
@@ -2370,10 +2354,8 @@ export default function OcrTemplateBuilderPage() {
                 </span>
               </span>
             </span>
-            <span className={cn("text-xs font-bold", T.muted)}>{drawerOpen ? "Hide" : "Show"}</span>
-          </button>
+          </div>
 
-          {drawerOpen ? (
             <div className="border-t border-[#dfe7f5] p-4 md:p-5">
               <div className="grid gap-5 lg:grid-cols-[minmax(14rem,0.9fr)_minmax(0,1.2fr)_minmax(14rem,0.85fr)]">
                 <div>
@@ -2527,9 +2509,9 @@ export default function OcrTemplateBuilderPage() {
                 </Button>
               </div>
             </div>
-          ) : null}
         </section>
-      </main>
+        ) : null}
+      </ProofSetupWizard>
     </div>
   )
 }
