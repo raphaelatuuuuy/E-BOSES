@@ -360,11 +360,15 @@ export function useOcrTemplateState() {
               toast.error("Saved, but not showing on sign-up yet", {
                 description: "Turn Available on, then try again.",
               })
+              // Publish already succeeded; skip success toast when sign-up verify fails.
+              return result
             }
             if (options.expectAbsent && present) {
               toast.error("Still on sign-up", {
                 description: "Try removing it once more.",
               })
+              // Publish already succeeded; skip success toast when sign-up verify fails.
+              return result
             }
           }
 
