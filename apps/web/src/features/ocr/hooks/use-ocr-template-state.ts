@@ -403,8 +403,9 @@ export function useOcrTemplateState() {
                       ...base,
                       ...pending,
                       id: base.id ?? pending.id,
-                      fields: pending.fields?.length ? pending.fields : base.fields,
-                      rules: pending.rules?.length ? pending.rules : base.rules,
+                      // Always honor pending fields/rules (including empty arrays).
+                      fields: pending.fields,
+                      rules: pending.rules,
                     }
                   })
                   .filter((doc) => pendingKeys.has(doc.key)),
@@ -436,6 +437,7 @@ export function useOcrTemplateState() {
         ),
       }
       // Preserve local field regions / unsaved edits when keys match.
+      // Also append local-only document types that are not yet on the server.
       if (configuration) {
         const localByKey = new Map(configuration.document_types.map((doc) => [doc.key, doc]))
         next.document_types = next.document_types.map((doc) => {
@@ -445,9 +447,16 @@ export function useOcrTemplateState() {
             ...local,
             id: doc.id,
             enabled: doc.key === docKey ? enabled : doc.enabled,
-            name: local.name || doc.name,
-            template_name: local.template_name || doc.template_name,
-            description: local.description ?? doc.description,
+            // Prefer local name fields even when empty string (do not use ||).
+            name: local.name !== undefined && local.name !== null ? local.name : doc.name,
+            template_name:
+              local.template_name !== undefined && local.template_name !== null
+                ? local.template_name
+                : doc.template_name,
+            description:
+              local.description !== undefined && local.description !== null
+                ? local.description
+                : doc.description,
             required_sides: local.required_sides?.length ? local.required_sides : doc.required_sides,
             min_files: local.min_files ?? doc.min_files,
             max_files: local.max_files ?? doc.max_files,
@@ -455,6 +464,15 @@ export function useOcrTemplateState() {
             rules: local.rules?.length ? local.rules : doc.rules,
           }
         })
+        const latestKeys = new Set(next.document_types.map((doc) => doc.key))
+        for (const local of configuration.document_types) {
+          if (!latestKeys.has(local.key)) {
+            next.document_types.push({
+              ...local,
+              enabled: local.key === docKey ? enabled : local.enabled,
+            })
+          }
+        }
       }
       setConfiguration(next)
       setSelectedDocKey(docKey)
@@ -470,6 +488,32 @@ export function useOcrTemplateState() {
       )
     } catch (reason) {
       toast.error(reason instanceof Error ? reason.message : "Could not update availability.")
+    }
+  }
+
+  /** Persist draft (always) and publish when any proof type is live, then leave wizard safely. */
+  async function persistWizardExit(): Promise<void> {
+    if (!configuration) return
+    setSaving(true)
+    try {
+      const saved = await saveOcrDraft(configuration)
+      setConfiguration(saved)
+
+      const anyEnabled = saved.document_types.some((doc) => doc.enabled !== false)
+      const selectedFromSaved = selectedDocument
+        ? saved.document_types.find((doc) => doc.key === selectedDocument.key)
+        : undefined
+      const selectedEnabled =
+        (selectedFromSaved?.enabled ?? selectedDocument?.enabled) !== false &&
+        Boolean(selectedDocument)
+      if (anyEnabled || selectedEnabled) {
+        // Soft toast — avoid noisy publish messaging on routine exit.
+        await saveAndPublish(saved, { title: "Changes saved" })
+      }
+    } catch (reason) {
+      toast.error(reason instanceof Error ? reason.message : "Could not save changes.")
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -993,16 +1037,17 @@ export function useOcrTemplateState() {
     if (selectedFieldKey === key) setSelectedFieldKey(nextFields[0]?.key ?? "")
   }
 
-  function addDocumentType() {
+  async function addDocumentType() {
     if (!configuration) return
     const next = createDocumentType(
       configuration.document_types.length,
       configuration.document_types.map((doc) => doc.key),
     )
-    updateConfiguration((current) => ({
-      ...current,
-      document_types: [...current.document_types, next],
-    }))
+    const optimistic: OcrConfiguration = {
+      ...configuration,
+      document_types: [...configuration.document_types, next],
+    }
+    setConfiguration(optimistic)
     setSelectedDocKey(next.key)
     setSelectedFieldKey(next.fields[0]?.key ?? "")
     setTestResult(null)
@@ -1011,6 +1056,20 @@ export function useOcrTemplateState() {
       description:
         "It starts hidden. Add a description, mark the areas to read, then turn on “Available on sign-up”.",
     })
+    try {
+      // Persist immediately so the new type exists on the server (samples/publish can find it).
+      const saved = await saveOcrDraft(optimistic)
+      setConfiguration(saved)
+      const savedDoc =
+        saved.document_types.find((doc) => doc.key === next.key) ??
+        saved.document_types[saved.document_types.length - 1]
+      if (savedDoc) {
+        setSelectedDocKey(savedDoc.key)
+        setSelectedFieldKey(savedDoc.fields[0]?.key ?? "")
+      }
+    } catch (reason) {
+      toast.error(reason instanceof Error ? reason.message : "Could not save the new proof type.")
+    }
   }
 
   async function removeDocumentType(docKey: string): Promise<boolean> {
@@ -1025,6 +1084,18 @@ export function useOcrTemplateState() {
       working = await getOcrDraft()
     } catch {
       /* use local configuration */
+    }
+
+    // Merge local-only document types (not yet on server) before filtering the removed key.
+    if (configuration) {
+      const workingKeys = new Set(working.document_types.map((doc) => doc.key))
+      const localOnly = configuration.document_types.filter((doc) => !workingKeys.has(doc.key))
+      if (localOnly.length > 0) {
+        working = {
+          ...working,
+          document_types: [...working.document_types, ...localOnly],
+        }
+      }
     }
 
     const target = working.document_types.find((doc) => doc.key === docKey) ??
@@ -1091,7 +1162,8 @@ export function useOcrTemplateState() {
     }))
   }
 
-  const canvasSource = testPreviewUrl || samplePreviewUrl
+  // Mark-areas canvas must show the sample template, never the try-sample test photo.
+  const canvasSource = samplePreviewUrl
   const templateMatch = testResult?.template_match
   const overallConfidence = testResult?.overall_confidence ?? testResult?.confidence ?? null
   const selectedDetected = selectedField ? extractedByKey.get(selectedField.key) : null
@@ -1127,6 +1199,7 @@ export function useOcrTemplateState() {
     reload,
     load,
     saveAndPublish,
+    persistWizardExit,
     setProofAvailableOnSignup,
     saveProofNameAndDescription,
     addDocumentType,

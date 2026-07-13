@@ -40,6 +40,7 @@ export default function OcrTemplateBuilderPage() {
     updateFieldHints,
     saveProofNameAndDescription,
     setProofAvailableOnSignup,
+    persistWizardExit,
     addDocumentType,
     removeDocumentType,
     changeCaptureMode,
@@ -76,7 +77,8 @@ export default function OcrTemplateBuilderPage() {
     selectedDetected,
   } = useOcrTemplateState()
 
-  function backToList() {
+  async function backToList() {
+    await persistWizardExit()
     setStep(1)
     setView("list")
   }
@@ -117,7 +119,7 @@ export default function OcrTemplateBuilderPage() {
           documents={configuration.document_types}
           saving={saving}
           onAdd={() => {
-            addDocumentType()
+            void addDocumentType()
             setStep(1)
             setView("wizard")
           }}
@@ -166,8 +168,12 @@ export default function OcrTemplateBuilderPage() {
         step={step}
         saving={saving}
         onStepChange={setStep}
-        onBackToList={backToList}
-        onDone={backToList}
+        onBackToList={() => {
+          void backToList()
+        }}
+        onDone={() => {
+          void backToList()
+        }}
         availableEnabled={selectedDocument.enabled !== false}
         onToggleAvailable={(enabled) => {
           void setProofAvailableOnSignup(selectedDocument.key, enabled)
