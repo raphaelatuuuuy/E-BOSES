@@ -4,11 +4,10 @@ import { Button } from "@workspace/ui/components/button"
 import {
   Field,
   FieldError,
-  FieldLabel,
 } from "@workspace/ui/components/field"
-import { Input } from "@workspace/ui/components/input"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { FloatingLabelInput } from "@/features/auth/components/floating-label-input"
 import { useForgotPasswordForm } from "@/features/auth/hooks/use-forgot-password-form"
 
 interface ForgotPasswordFormProps extends React.ComponentProps<"div"> {
@@ -27,38 +26,37 @@ export function ForgotPasswordForm({
 
   return (
     <div className={cn("flex flex-col", className)} {...props}>
-      <form className="flex flex-col gap-4" noValidate onSubmit={handleSubmit}>
+      <form className="flex w-full flex-col gap-2" noValidate onSubmit={handleSubmit}>
         <Field>
-          <FieldLabel htmlFor="email">Email</FieldLabel>
-          <Input
+          <FloatingLabelInput
             id="email"
             type="email"
+            label="Email address"
             value={values.email}
             onChange={(event) => handleChange("email", event.target.value)}
             aria-invalid={Boolean(errors.email)}
-            placeholder="Enter your email"
             required
-            className="h-14 w-full rounded-[16px] bg-white px-4 text-lg font-semibold placeholder:text-sm placeholder:font-normal focus-visible:border focus-visible:border-ring focus-visible:shadow-[0_0_0_3px_rgba(255,129,51,0.15)] aria-invalid:border aria-invalid:border-destructive aria-invalid:shadow-[0_0_0_3px_rgba(220,38,38,0.15)]"
           />
           {errors.email ? <FieldError>{errors.email}</FieldError> : null}
         </Field>
-        <Field>
-          <Button type="submit" className="h-14 w-full rounded-full text-base font-semibold" disabled={isSubmitting}>
-            {isSubmitting ? <LoaderCircleIcon className="size-4 animate-spin" /> : null}
-            {isSubmitting ? "Sending code" : "Send code"}
-          </Button>
-        </Field>
+        <Button type="submit" className="mt-2 h-12 w-full rounded-full text-base font-semibold shadow-none" disabled={isSubmitting}>
+          {isSubmitting ? (
+            <LoaderCircleIcon className="size-5 animate-spin" aria-hidden="true" />
+          ) : (
+            "Send reset email"
+          )}
+        </Button>
         {submitError ? (
           <FieldError className="justify-center text-center">
             {submitError}
           </FieldError>
         ) : null}
-        <p className="mt-4 text-sm text-foreground text-center">
+        <p className="mt-4 text-center text-sm text-muted-foreground">
           Remember your password?{" "}
           <button
             type="button"
             onClick={onBack}
-            className="font-medium underline underline-offset-2"
+            className="font-semibold text-foreground underline underline-offset-2 decoration-1 transition-all hover:text-primary hover:decoration-2"
           >
             Sign in
           </button>

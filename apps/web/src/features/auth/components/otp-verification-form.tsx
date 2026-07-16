@@ -27,7 +27,7 @@ interface OtpVerificationFormProps extends React.ComponentProps<"div"> {
 }
 
 const errorSlotClassName =
-  "border-destructive shadow-[0_0_0_3px_rgba(220,38,38,0.15)] data-[active=true]:border-destructive data-[active=true]:shadow-[0_0_0_3px_rgba(220,38,38,0.15)]"
+  "border-destructive border-[3px] data-[active=true]:border-destructive data-[active=true]:border-[3px]"
 
 export function OtpVerificationForm({
   className,
@@ -42,10 +42,11 @@ export function OtpVerificationForm({
   ...props
 }: OtpVerificationFormProps) {
   const { errors, handleChange, handleSubmit, isSubmitting, submitError, values } = useOtpForm({ onSuccess })
+  const codeComplete = values.code.replace(/\D/g, "").length === 6
 
   return (
     <div className={cn("flex flex-col", className)} {...props}>
-      <form className="flex flex-col gap-4" noValidate onSubmit={handleSubmit}>
+      <form className="flex flex-col gap-3" noValidate onSubmit={handleSubmit}>
         <Field>
           <div className="flex items-center justify-between gap-3">
             <FieldLabel htmlFor="otp-code">Verification code</FieldLabel>
@@ -53,7 +54,7 @@ export function OtpVerificationForm({
               type="button"
               onClick={onResend}
               disabled={resendDisabled}
-              className="shrink-0 text-sm font-medium text-foreground underline underline-offset-2 disabled:cursor-not-allowed disabled:no-underline disabled:opacity-60"
+              className="shrink-0 text-sm font-semibold text-foreground underline underline-offset-2 decoration-1 transition-all hover:text-primary hover:decoration-2 disabled:cursor-not-allowed disabled:no-underline disabled:opacity-60"
             >
               {resendLabel}
             </button>
@@ -78,9 +79,16 @@ export function OtpVerificationForm({
           {errors.code ? <FieldError>{errors.code}</FieldError> : null}
         </Field>
         <Field>
-          <Button type="submit" className="h-14 w-full rounded-full text-base" disabled={isSubmitting}>
-            {isSubmitting ? <LoaderCircleIcon className="size-4 animate-spin" /> : null}
-            {isSubmitting ? "Checking code" : actionLabel}
+          <Button
+            type="submit"
+            className="h-12 w-full rounded-full text-base font-semibold shadow-none disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={isSubmitting || !codeComplete}
+          >
+            {isSubmitting ? (
+              <LoaderCircleIcon className="size-5 animate-spin" aria-hidden="true" />
+            ) : (
+              actionLabel
+            )}
           </Button>
         </Field>
         {submitError ? (
@@ -94,7 +102,7 @@ export function OtpVerificationForm({
             <button
               type="button"
               onClick={onBack}
-              className="font-medium underline underline-offset-2"
+              className="font-semibold text-foreground underline underline-offset-2 decoration-1 transition-all hover:text-primary hover:decoration-2"
             >
               Go back
             </button>

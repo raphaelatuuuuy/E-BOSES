@@ -10,14 +10,25 @@ import {
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 
-import type { OcrTestField, OcrTestResult } from "@/features/ocr/api"
+import type { OcrDocumentType, OcrTestField, OcrTestResult, ProofSide } from "@/features/ocr/api"
 import { PROOF_THEME } from "@/features/ocr/components/proof-theme"
-import { FIELD_COLORS } from "@/features/ocr/lib/create-document-defaults"
+import {
+  fieldDisplayColor,
+  fieldDisplayNumber,
+  isAutoFieldKey,
+  slugifyFieldKey,
+} from "@/features/ocr/lib/create-document-defaults"
 
 function asPercent(value: number | null | undefined) {
   if (value == null || Number.isNaN(Number(value))) return "—"
   const numeric = Number(value)
   return `${Math.round(numeric <= 1 ? numeric * 100 : numeric)}%`
+}
+
+function sideLabel(side: ProofSide) {
+  if (side === "front") return "Front"
+  if (side === "back") return "Back"
+  return "Sample"
 }
 
 export function TrySampleStep(props: {
@@ -27,8 +38,12 @@ export function TrySampleStep(props: {
   testPreviewUrl: string | null
   testResult: OcrTestResult | null
   extractedList: OcrTestField[]
+  documentFields?: OcrDocumentType["fields"]
+  canvasSides: ProofSide[]
+  samplePreviewBySide: Partial<Record<ProofSide, string>>
   onPickFile: (file: File) => void
-  onRunAgain: () => void
+  onRunTest: () => void
+  onRunTestFromSample: (side: ProofSide) => void
 }) {
   const {
     testRunning,
@@ -36,8 +51,12 @@ export function TrySampleStep(props: {
     testPreviewUrl,
     testResult,
     extractedList,
+    documentFields = [],
+    canvasSides,
+    samplePreviewBySide,
     onPickFile,
-    onRunAgain,
+    onRunTest,
+    onRunTestFromSample,
   } = props
 
   const testInputRef = useRef<HTMLInputElement>(null)
@@ -45,6 +64,26 @@ export function TrySampleStep(props: {
 
   const templateMatch = testResult?.template_match
   const overallConfidence = testResult?.overall_confidence ?? testResult?.confidence ?? null
+  const testedSide = testResult?.test_side
+
+  const templateSamples = canvasSides
+    .map((side) => {
+      const url =
+        samplePreviewBySide[side] ??
+        (side === "front" ? samplePreviewBySide.single : undefined) ??
+        (side === "single" ? samplePreviewBySide.front : undefined)
+      return url ? { side, url } : null
+    })
+    .filter((item): item is { side: ProofSide; url: string } => Boolean(item))
+
+  const hasTestSource = Boolean(testFile) || templateSamples.length > 0
+  const runLabel = testRunning
+    ? "Reading…"
+    : testResult
+      ? "Try again"
+      : testFile
+        ? "Run test"
+        : "Test sample"
 
   return (
     <section className={PROOF_THEME.card}>
@@ -58,17 +97,71 @@ export function TrySampleStep(props: {
               Try with a sample photo
             </span>
             <span className={cn("mt-0.5 block text-xs font-semibold", PROOF_THEME.body)}>
-              Upload a real or sample ID photo to see what the system reads before you publish.
+              Test the sample you already uploaded, or drop in another photo to check reading
+              quality before you publish.
             </span>
           </span>
         </span>
       </div>
 
       <div className="border-t border-[#dfe7f5] p-4 md:p-5">
+        {templateSamples.length > 0 ? (
+          <div className="mb-5 rounded-2xl border border-[#dfe7f5] bg-[#f8fafc] p-3 md:p-4">
+            <p className={cn("mb-2 text-xs font-black", PROOF_THEME.title)}>
+              Template sample from Mark areas
+            </p>
+            <p className={cn("mb-3 text-[11px] font-semibold", PROOF_THEME.muted)}>
+              Use the photo you marked boxes on — no need to re-upload.
+            </p>
+            <div
+              className={cn(
+                "grid gap-2",
+                templateSamples.length > 1 ? "sm:grid-cols-2" : "grid-cols-1",
+              )}
+            >
+              {templateSamples.map(({ side, url }) => (
+                <div
+                  key={side}
+                  className="flex items-center gap-3 rounded-xl border border-[#dfe7f5] bg-white p-2.5"
+                >
+                  <img
+                    src={url}
+                    alt={`${sideLabel(side)} sample`}
+                    className="h-16 w-20 shrink-0 rounded-lg border border-[#e8eef8] object-contain"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className={cn("text-xs font-black", PROOF_THEME.title)}>
+                      {sideLabel(side)}
+                    </p>
+                    <p className={cn("text-[11px] font-semibold", PROOF_THEME.muted)}>
+                      Ready to test
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className={cn("shrink-0 font-bold text-white", PROOF_THEME.primaryBg)}
+                    disabled={testRunning}
+                    onClick={() => onRunTestFromSample(side)}
+                  >
+                    <Play className="size-3.5" />
+                    {testRunning ? "Reading…" : "Test"}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs font-semibold text-amber-900">
+            No template sample yet. Go back to Mark areas and upload the front
+            {canvasSides.includes("back") ? " (and back if required)" : ""} photo first.
+          </div>
+        )}
+
         <div className="grid gap-5 lg:grid-cols-[minmax(14rem,0.9fr)_minmax(0,1.2fr)_minmax(14rem,0.85fr)]">
           <div>
             <p className={cn("mb-2 text-xs font-black", PROOF_THEME.title)}>
-              Upload a photo to test
+              Or upload a different photo
             </p>
             <input
               ref={testInputRef}
@@ -131,7 +224,7 @@ export function TrySampleStep(props: {
                     PROOF_THEME.muted,
                   )}
                 >
-                  <span className="truncate">{testFile?.name}</span>
+                  <span className="truncate">{testFile?.name ?? "Selected photo"}</span>
                   {testFile ? <span>{Math.round(testFile.size / 1024)} kB</span> : null}
                 </div>
               </div>
@@ -139,7 +232,14 @@ export function TrySampleStep(props: {
           </div>
 
           <div>
-            <p className={cn("mb-2 text-xs font-black", PROOF_THEME.title)}>What was found</p>
+            <p className={cn("mb-2 text-xs font-black", PROOF_THEME.title)}>
+              What was found
+              {testedSide === "front" || testedSide === "back" ? (
+                <span className={cn("ml-2 text-[11px] font-semibold", PROOF_THEME.muted)}>
+                  ({sideLabel(testedSide as ProofSide)} fields only)
+                </span>
+              ) : null}
+            </p>
             <div className="overflow-hidden rounded-xl border border-[#dfe7f5]">
               <table className="w-full text-left text-sm">
                 <thead className={cn("bg-[#f2f6ff] text-xs font-bold", PROOF_THEME.muted)}>
@@ -159,21 +259,31 @@ export function TrySampleStep(props: {
                           PROOF_THEME.muted,
                         )}
                       >
-                        Run a test to see what the system reads from your boxes.
+                        {hasTestSource
+                          ? "Press Test or Run test to see what the system reads."
+                          : "Upload a sample in Mark areas, or choose a photo here."}
                       </td>
                     </tr>
                   ) : (
-                    extractedList.map((field, index) => (
+                    extractedList.map((field) => {
+                      const def = documentFields.find((item) => item.key === field.key)
+                      const displayNumber = def
+                        ? fieldDisplayNumber(def, documentFields)
+                        : 0
+                      const color = def
+                        ? fieldDisplayColor(def, documentFields)
+                        : "#2563eb"
+                      return (
                       <tr key={field.key} className="border-t border-[#dfe7f5]">
                         <td className="px-3 py-2.5">
                           <span className="inline-flex items-center gap-2 font-semibold">
                             <span
                               className="flex size-5 items-center justify-center rounded text-[10px] font-bold text-white"
                               style={{
-                                backgroundColor: FIELD_COLORS[index % FIELD_COLORS.length],
+                                backgroundColor: color,
                               }}
                             >
-                              {index + 1}
+                              {displayNumber || "·"}
                             </span>
                             {field.label}
                           </span>
@@ -185,7 +295,8 @@ export function TrySampleStep(props: {
                           {asPercent(field.confidence)}
                         </td>
                       </tr>
-                    ))
+                      )
+                    })
                   )}
                 </tbody>
               </table>
@@ -199,8 +310,21 @@ export function TrySampleStep(props: {
               </summary>
               <pre className="mt-3 max-h-56 overflow-auto rounded-xl border border-[#1e293b] bg-[#0b1220] p-3 text-[11px] leading-5 text-emerald-300">
                 {JSON.stringify(
-                  testResult?.extraction_json ||
-                    Object.fromEntries(extractedList.map((item) => [item.key, item.value])),
+                  Object.fromEntries(
+                    extractedList
+                      .filter((item) => !String(item.key || "").startsWith("__"))
+                      .map((item) => {
+                        const def = documentFields.find((f) => f.key === item.key)
+                        const label = item.label || def?.label || item.key
+                        // Never show timestamped machine ids — always a clean slug.
+                        const rawKey = def?.key || item.key
+                        const cleanKey =
+                          rawKey && !isAutoFieldKey(rawKey)
+                            ? rawKey
+                            : slugifyFieldKey(label, [])
+                        return [cleanKey, item.value || ""]
+                      }),
+                  ),
                   null,
                   2,
                 )}
@@ -220,7 +344,11 @@ export function TrySampleStep(props: {
                 <XCircle className="size-4" /> Needs a closer look
               </span>
             ) : (
-              <span className={PROOF_THEME.muted}>Run a test to check this proof type.</span>
+              <span className={PROOF_THEME.muted}>
+                {hasTestSource
+                  ? "Ready — run a test to check this proof type."
+                  : "Upload a sample first, then run a test."}
+              </span>
             )}
             <span className={PROOF_THEME.muted}>
               Overall reading quality{" "}
@@ -229,11 +357,18 @@ export function TrySampleStep(props: {
           </div>
           <Button
             className={cn("font-bold text-white", PROOF_THEME.primaryBg)}
-            disabled={testRunning || !testFile}
-            onClick={onRunAgain}
+            disabled={testRunning || !hasTestSource}
+            onClick={() => {
+              if (testFile) {
+                onRunTest()
+                return
+              }
+              const first = templateSamples[0]
+              if (first) onRunTestFromSample(first.side)
+            }}
           >
             <Play className="size-4" />
-            {testRunning ? "Reading…" : "Try again"}
+            {runLabel}
           </Button>
         </div>
       </div>

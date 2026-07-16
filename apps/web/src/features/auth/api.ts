@@ -73,15 +73,67 @@ export function registerResident(formData: FormData) {
   }, { auth: false })
 }
 
+export interface EmailAvailabilityResult {
+  available: boolean
+  email: string
+  message: string
+}
+
+export function checkEmailAvailability(payload: { email: string }) {
+  return apiRequest<EmailAvailabilityResult>(
+    "/auth/register/email/check/",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    { auth: false },
+  )
+}
+
 export function checkRegistrationProof(formData: FormData) {
-  return apiRequest<void>("/auth/register/proof/check/", {
-    method: "POST",
-    body: formData,
-  }, { auth: false })
+  return apiRequest<void>(
+    "/auth/register/proof/check/",
+    {
+      method: "POST",
+      body: formData,
+    },
+    { auth: false, timeoutMs: 90_000 },
+  )
+}
+
+export interface ResidenceProofDetectResult {
+  detected: boolean
+  document_type?: { code: string; name: string } | null
+  match_score?: number | null
+  confidence?: number | null
+  extracted_fields?: Record<string, { value?: string; label?: string; confidence?: number | null; raw_value?: string }>
+  template_match?: { passed?: boolean; score?: number; checks?: Array<{ label?: string; passed?: boolean; detail?: string }> } | null
+  field_checks?: Array<{ field?: string; label?: string; passed?: boolean; rule?: string; detail?: string }>
+  deskew?: { deskewed?: boolean; score?: number; reason?: string } | null
+  reasons?: string[]
+  message?: string
+}
+
+export function detectRegistrationProof(formData: FormData) {
+  return apiRequest<ResidenceProofDetectResult>(
+    "/auth/register/proof/detect/",
+    {
+      method: "POST",
+      body: formData,
+    },
+    // OCR can be slow on first load / large photos
+    { auth: false, timeoutMs: 120_000 },
+  )
+}
+
+export interface PhoneOtpRequestResult {
+  detail?: string
+  /** Present only in local/development when SMS is printed to the API console. */
+  debug_code?: string
 }
 
 export function requestRegistrationPhoneOtp(payload: { phone_number: string }) {
-  return apiRequest<void>("/auth/register/phone-otp/request/", {
+  return apiRequest<PhoneOtpRequestResult | void>("/auth/register/phone-otp/request/", {
     method: "POST",
     body: JSON.stringify(payload),
   }, { auth: false })
@@ -89,6 +141,22 @@ export function requestRegistrationPhoneOtp(payload: { phone_number: string }) {
 
 export function verifyRegistrationPhoneOtp(payload: { phone_number: string; code: string }) {
   return apiRequest<void>("/auth/register/phone-otp/verify/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }, { auth: false })
+}
+
+export type EmailOtpRequestResult = PhoneOtpRequestResult
+
+export function requestRegistrationEmailOtp(payload: { email: string }) {
+  return apiRequest<EmailOtpRequestResult | void>("/auth/register/email-otp/request/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }, { auth: false })
+}
+
+export function verifyRegistrationEmailOtp(payload: { email: string; code: string }) {
+  return apiRequest<void>("/auth/register/email-otp/verify/", {
     method: "POST",
     body: JSON.stringify(payload),
   }, { auth: false })

@@ -9,7 +9,7 @@ from .services import (
     ALLOWED_PROOF_EXTENSIONS,
     ALLOWED_PROOF_MIME_TYPES,
     MAX_PROOF_FILE_SIZE,
-    validate_residence_proof_file,
+    validate_residence_proof_file_light,
 )
 
 NAME_PATTERN = re.compile(r"^[A-Za-zÑñ ]+$")
@@ -41,8 +41,13 @@ def phone_number_exists(value):
     return get_user_model().objects.filter(phone_number__in=phone_number_variants(value)).exists()
 
 
+class EmailAvailabilitySerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+
 class RegisterSerializer(serializers.Serializer):
     email = serializers.EmailField()
+    email_otp_code = serializers.RegexField(regex=r"^\d{6}$", write_only=True)
     phone_number = serializers.RegexField(regex=r"^\+63\d{10}$")
     phone_otp_code = serializers.RegexField(regex=r"^\d{6}$", write_only=True)
     password = serializers.CharField(min_length=8, max_length=128, write_only=True)
@@ -51,10 +56,11 @@ class RegisterSerializer(serializers.Serializer):
     last_name = serializers.CharField(max_length=50)
     date_of_birth = serializers.DateField()
     address = serializers.CharField(max_length=200)
-    barangay = serializers.CharField(max_length=120, required=False, default="Pending")
+    barangay = serializers.CharField(max_length=120, required=False, default="Marikina Heights")
     proof = serializers.FileField(
         allow_empty_file=False,
-        validators=[validate_residence_proof_file],
+        # Light check only — C2PA/authenticity already ran at /register/proof/check/
+        validators=[validate_residence_proof_file_light],
         help_text=(
             "Residence proof upload. Allowed MIME types: "
             f"{', '.join(sorted(ALLOWED_PROOF_MIME_TYPES))}; allowed extensions: "
@@ -68,9 +74,10 @@ class RegisterSerializer(serializers.Serializer):
     proof_type = serializers.CharField(max_length=32, required=False)
 
     def validate_email(self, value):
-        if get_user_model().objects.filter(email=value).exists():
+        email = value.strip().lower()
+        if get_user_model().objects.filter(email__iexact=email).exists():
             raise serializers.ValidationError("An account with this email already exists.")
-        return value
+        return email
 
     def validate_phone_number(self, value):
         if phone_number_exists(value):
@@ -101,7 +108,7 @@ class RegisterSerializer(serializers.Serializer):
         return value
 
     def validate_proof(self, value):
-        return validate_residence_proof_file(value)
+        return validate_residence_proof_file_light(value)
 
 
 class LoginSerializer(serializers.Serializer):
@@ -343,6 +350,24 @@ class PhoneOTPRequestSerializer(serializers.Serializer):
 class PhoneOTPVerifySerializer(serializers.Serializer):
     phone_number = serializers.RegexField(regex=r"^\+63\d{10}$")
     code = serializers.RegexField(regex=r"^\d{6}$")
+
+
+class EmailOTPRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        email = value.strip().lower()
+        if get_user_model().objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError("An account with this email already exists.")
+        return email
+
+
+class EmailOTPVerifySerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    code = serializers.RegexField(regex=r"^\d{6}$")
+
+    def validate_email(self, value):
+        return value.strip().lower()
 
 
 class AdminCreateUserSerializer(serializers.Serializer):

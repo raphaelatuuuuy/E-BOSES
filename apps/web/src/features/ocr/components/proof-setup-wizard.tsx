@@ -17,8 +17,30 @@ const STEPS = [
 ]
 
 function documentHasSample(doc: OcrDocumentType): boolean {
-  if (doc.samples?.some((s) => Boolean(s.url))) return true
-  return Boolean(doc.sample_url)
+  const sides = doc.required_sides?.length ? doc.required_sides : ["single"]
+  const required =
+    sides.includes("front") && sides.includes("back")
+      ? (["front", "back"] as const)
+      : sides.includes("back")
+        ? (["back"] as const)
+        : sides.includes("front")
+          ? (["front"] as const)
+          : (["single"] as const)
+  const listed = doc.samples ?? []
+  return required.every((side) => {
+    if (listed.some((sample) => sample.side === side && Boolean(sample.url))) return true
+    if (
+      (side === "front" || side === "single") &&
+      (doc.sample_url ||
+        listed.some(
+          (sample) =>
+            (sample.side === "front" || sample.side === "single") && Boolean(sample.url),
+        ))
+    ) {
+      return true
+    }
+    return false
+  })
 }
 
 export function ProofSetupWizard(props: {
@@ -31,6 +53,10 @@ export function ProofSetupWizard(props: {
   children: ReactNode
   availableEnabled: boolean
   onToggleAvailable: (enabled: boolean) => void
+  /** Return false to block leaving Mark areas without required samples. */
+  onValidateBeforeNext?: (fromStep: WizardStepId) => boolean
+  /** Missing required sample sides (front / back) for footer messaging. */
+  missingSampleSides?: string[]
 }) {
   const {
     document,
@@ -42,11 +68,13 @@ export function ProofSetupWizard(props: {
     children,
     availableEnabled,
     onToggleAvailable,
+    onValidateBeforeNext,
+    missingSampleSides = [],
   } = props
 
   const displayName =
     document.template_name?.trim() || document.name?.trim() || "Untitled proof type"
-  const showSampleTip = step === 2 && !documentHasSample(document)
+  const showSampleTip = step === 2 && (!documentHasSample(document) || missingSampleSides.length > 0)
 
   function goBack() {
     if (step <= 1) return
@@ -55,6 +83,7 @@ export function ProofSetupWizard(props: {
 
   function goNext() {
     if (step >= 4) return
+    if (onValidateBeforeNext && !onValidateBeforeNext(step)) return
     onStepChange((step + 1) as WizardStepId)
   }
 
@@ -207,7 +236,9 @@ export function ProofSetupWizard(props: {
 
           {showSampleTip ? (
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
-              Tip: upload a clear sample photo so you can mark areas.
+              {missingSampleSides.length > 0
+                ? `Upload required sample photo${missingSampleSides.length > 1 ? "s" : ""}: ${missingSampleSides.join(" and ")}.`
+                : "Tip: upload a clear sample photo so you can mark areas."}
             </p>
           ) : null}
         </div>

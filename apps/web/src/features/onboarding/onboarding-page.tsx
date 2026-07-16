@@ -1,6 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useState } from "react"
-import { useNavigate } from "react-router-dom"
 import { ChevronLeft } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -15,15 +14,12 @@ const steps = [
 
 export default function OnboardingPage() {
   const [step, setStep] = useState(0)
-  const [submitting, setSubmitting] = useState(false)
   const [isMobile] = useState(() => window.innerWidth < 768)
-  const navigate = useNavigate()
   const current = steps[step]
   const imgSrc = (isMobile && current.imgMb) ? current.imgMb : current.img
   const isLast = step === steps.length - 1
 
   async function finishOnboard() {
-    setSubmitting(true)
     try {
       await completeOnboard()
     } catch { /* ignore */ }

@@ -99,11 +99,17 @@ def send_browser_push(notification, payload: dict | None = None) -> None:
             continue
 
 
+def broadcast_live_map_event(message_type: str, payload: dict) -> None:
+    _broadcast("official_live_map", "live_map.update", {"type": message_type, "payload": payload})
+
+
 def broadcast_emergency_update(alert) -> None:
     from apps.emergencies.serializers import EmergencyAlertSerializer
+    from apps.live_map import emergency_payload, route_for_assignment
 
     payload = EmergencyAlertSerializer(alert).data
     _broadcast(f"emergency_{alert.pk}", "emergency.update", payload)
+    broadcast_live_map_event("emergency.updated", {"emergency": emergency_payload(alert), "route": route_for_assignment(alert)})
 
 
 @transaction.atomic

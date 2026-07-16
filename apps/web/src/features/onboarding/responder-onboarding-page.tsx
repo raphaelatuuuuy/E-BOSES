@@ -13,14 +13,12 @@ const steps = [
 
 export default function ResponderOnboardingPage() {
   const [step, setStep] = useState(0)
-  const [submitting, setSubmitting] = useState(false)
   const [isMobile] = useState(() => window.innerWidth < 768)
   const current = steps[step]
   const imgSrc = (isMobile && current.imgMb) ? current.imgMb : current.img
   const isLast = step === steps.length - 1
 
   async function finishOnboard() {
-    setSubmitting(true)
     try {
       await completeOnboard()
     } catch { /* ignore */ }

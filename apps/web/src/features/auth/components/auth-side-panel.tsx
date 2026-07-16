@@ -13,9 +13,12 @@ export function AuthSidePanel() {
 
   return (
     <section className="relative hidden flex-col overflow-hidden lg:flex lg:h-full lg:min-h-screen">
-      <div className="absolute left-6 top-6 z-10">
-        <img src="/contents/logo.png" alt="E-Boses" className="h-12 w-auto" />
+      {/* Brand — top left of carousel (desktop / laptop) */}
+      <div className="absolute left-0 top-0 z-10 flex items-center gap-2 px-8 py-6 md:px-10">
+        <img src="/contents/logo.png" alt="E-Boses" className="h-9 w-auto md:h-10" />
+        <span className="font-heading text-xl font-bold text-[#ff8133] md:text-2xl">Boses</span>
       </div>
+
       {/* Image area */}
       <div className="relative flex-1 overflow-hidden">
         <div
@@ -29,7 +32,7 @@ export function AuthSidePanel() {
       {/* Text area */}
       <div className="flex flex-col items-center gap-3 p-8 text-center md:p-10">
         <h2
-          className={`font-heading text-balance text-3xl leading-tight text-foreground transition-all duration-700 md:text-4xl ${
+          className={`font-heading text-balance text-3xl leading-tight text-foreground transition-all duration-700 md:text-4xl font-medium ${
             animate ? "opacity-100" : "opacity-0"
           }`}
         >

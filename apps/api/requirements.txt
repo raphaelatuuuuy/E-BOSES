@@ -25,8 +25,13 @@ python-dateutil>=2.9
 
 # Async
 httpx>=0.28
+requests>=2.31,<3
+celery[redis]>=5.4,<6
 
 # Forensics / Media authenticity
-c2pa-python
-imagehash>=4.3
-opencv-python-headless>=4.13
+c2pa-python>=0.5.0
+imagehash>=4.3,<5
+opencv-python-headless>=4.8,<5
+
+# Concern classification (downloads are pinned during setup/deployment)
+ultralytics>=8.4,<9

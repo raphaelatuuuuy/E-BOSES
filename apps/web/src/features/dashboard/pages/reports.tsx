@@ -10,26 +10,19 @@ import {
   ChevronUpIcon,
   ClockIcon,
   CopyIcon,
-  FileTextIcon,
-  GripHorizontalIcon,
-  ImageIcon,
   LeafIcon,
   MapPinIcon,
   SearchIcon,
   Share2Icon,
   ShieldCheckIcon,
   TrafficConeIcon,
-  Trash2Icon,
   WrenchIcon,
 } from "lucide-react"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
 } from "@workspace/ui/components/card"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
@@ -169,43 +162,6 @@ function ReportIcon({ report }: { report: Concern }) {
     <span className={cn("flex size-12 shrink-0 items-center justify-center rounded-full", style.bg, style.text)}>
       <Icon className="size-6" strokeWidth={2} />
     </span>
-  )
-}
-
-function ReportMedia({ report }: { report: Concern }) {
-  const media = report.media[0]
-
-  if (!media) {
-    return (
-      <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-border bg-muted/50">
-        <div className="flex flex-col items-center gap-1 text-muted-foreground">
-          <ImageIcon className="size-5" />
-          <span className="text-xs">Photo evidence</span>
-        </div>
-      </div>
-    )
-  }
-
-  if (media.mime_type.startsWith("image/")) {
-    return (
-      <img
-        src={media.preview_url}
-        alt={media.original_filename}
-        className="h-24 w-full rounded-lg border border-border object-cover"
-      />
-    )
-  }
-
-  return (
-    <a
-      href={media.raw_url}
-      target="_blank"
-      rel="noreferrer"
-      className="flex h-24 items-center justify-center gap-2 rounded-lg border border-border bg-muted/50 px-3 text-xs text-muted-foreground hover:text-primary"
-    >
-      <FileTextIcon className="size-5" />
-      <span className="truncate">{media.original_filename}</span>
-    </a>
   )
 }
 
@@ -578,7 +534,7 @@ function AiAssessmentPanel({ report, onUpdated, onRefresh }: { report: Concern; 
               <ShieldCheckIcon className="size-5" />
             </span>
             <div>
-              <p className={cn("text-sm font-extrabold", aiReady ? "text-emerald-800" : "text-amber-800")}>{aiReady ? (ai.recommendation || "AI result ready") : "AI assessment unavailable"}</p>
+              <p className={cn("text-sm font-extrabold", aiReady ? "text-emerald-800" : "text-amber-800")}>{aiReady ? (ai?.recommendation || "AI result ready") : "AI assessment unavailable"}</p>
               <p className={cn("text-xs font-semibold", aiReady ? "text-emerald-700" : "text-amber-700")}>{aiReady ? "Stored model output" : "Model not configured or still pending"}</p>
             </div>
           </div>
@@ -596,12 +552,12 @@ function AiAssessmentPanel({ report, onUpdated, onRefresh }: { report: Concern; 
               <span key={tag} className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">{tag}</span>
             ))}
           </div>
-          <p>{aiReady ? `Category match: ${ai.category_match === null ? "not scored" : ai.category_match ? "matched" : "not matched"}.` : "YOLO model is not configured yet. Official review remains required."}</p>
+          <p>{aiReady ? `Category match: ${ai?.category_match == null ? "not scored" : ai.category_match ? "matched" : "not matched"}.` : "YOLO model is not configured yet. Official review remains required."}</p>
           <div>
             <div className="mb-1 flex justify-between"><span>Confidence</span><span>{yoloPercent == null ? "Pending" : `${yoloPercent}%`}</span></div>
             <div className="h-2 rounded-full bg-[#edf1f7]"><div className="h-2 rounded-full bg-emerald-600" style={{ width: `${yoloPercent ?? 0}%` }} /></div>
           </div>
-          <p>AI note: {aiReady ? ai.explanation || "No explanation stored." : "Pending until the AI worker is configured."}</p>
+          <p>AI note: {aiReady ? ai?.explanation || "No explanation stored." : "Pending until the AI worker is configured."}</p>
         </div>
       </section>
 
@@ -622,7 +578,7 @@ function AiAssessmentPanel({ report, onUpdated, onRefresh }: { report: Concern; 
             <div className="mb-1 flex justify-between"><span>NLP confidence</span><span>{nlpPercent == null ? "Pending" : `${nlpPercent}%`}</span></div>
             <div className="h-2 rounded-full bg-[#edf1f7]"><div className="h-2 rounded-full bg-emerald-600" style={{ width: `${nlpPercent ?? 0}%` }} /></div>
           </div>
-          <p>{aiReady ? ai.explanation || "No NLP explanation stored." : "NLP model is not configured yet."}</p>
+          <p>{aiReady ? ai?.explanation || "No NLP explanation stored." : "NLP model is not configured yet."}</p>
         </div>
       </section>
 
@@ -908,29 +864,6 @@ export default function ReportsPage() {
   async function copyTrackingId(report: Concern) {
     await navigator.clipboard?.writeText(report.tracking_id)
     toast.success("Tracking ID copied")
-  }
-
-  function scrollFilterRail(direction: -1 | 1) {
-    const rail = filterRailRef.current
-    const buttons = Array.from(
-      rail?.querySelectorAll<HTMLButtonElement>("[data-filter-option]") ?? [],
-    )
-
-    if (!rail || buttons.length === 0) return
-
-    const currentIndex = buttons.findIndex(
-      (button) => button.offsetLeft + button.offsetWidth > rail.scrollLeft + 4,
-    )
-    const fallbackIndex = direction > 0 ? 0 : buttons.length - 1
-    const targetIndex = Math.min(
-      buttons.length - 1,
-      Math.max(0, (currentIndex === -1 ? fallbackIndex : currentIndex) + direction * 2),
-    )
-
-    rail.scrollTo({
-      left: buttons[targetIndex].offsetLeft - buttons[0].offsetLeft,
-      behavior: "smooth",
-    })
   }
 
   if (isOfficial) {

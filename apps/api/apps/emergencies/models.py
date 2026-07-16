@@ -4,6 +4,31 @@ from django.db import models
 from apps.accounts.storage import PrivateMediaStorage
 
 
+class MapGeometry(models.Model):
+    class Kind(models.TextChoices):
+        BOUNDARY = "boundary", "Boundary"
+        STREET = "street", "Street"
+
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    name = models.CharField(max_length=160, db_index=True)
+    osm_type = models.CharField(max_length=1)
+    osm_id = models.PositiveBigIntegerField()
+    street_type = models.CharField(max_length=40, blank=True)
+    geometry = models.JSONField(default=dict)
+    is_active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["kind", "name", "osm_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["kind", "osm_type", "osm_id"], name="unique_map_geometry_osm"),
+        ]
+        indexes = [models.Index(fields=["kind", "is_active", "name"], name="emerg_map_geom_kind_active")]
+
+    def __str__(self):
+        return f"{self.name} ({self.osm_type}{self.osm_id})"
+
+
 class EmergencyAlert(models.Model):
     class Type(models.TextChoices):
         MEDICAL = "medical", "Medical"

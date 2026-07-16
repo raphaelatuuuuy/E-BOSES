@@ -55,3 +55,8 @@ docs/
 .impeccable/
 apps/api/private_media/raw/residence-proofs/2026/07
 apps/api/private_media/raw/concern-media/2026/07
+
+# Local machine-learning checkpoints
+apps/api/model_weights/*.pt
+apps/api/model_weights/*.onnx
+apps/api/private_media/raw/

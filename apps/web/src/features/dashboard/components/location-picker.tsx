@@ -1,9 +1,7 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
-import { LocateFixedIcon, MapIcon, MapPinIcon, SearchIcon } from "lucide-react"
-
-import { cn } from "@workspace/ui/lib/utils"
+import { useEffect, useRef } from "react"
+import { MapIcon, MapPinIcon } from "lucide-react"
 
 import type leaflet from "leaflet"
 
@@ -13,9 +11,7 @@ interface LocationPickerProps {
   onAddressChange: (val: string) => void
 }
 
-let searchTimeout: ReturnType<typeof setTimeout> | null = null
-
-export default function LocationPicker({ onPin, address, onAddressChange }: LocationPickerProps) {
+export default function LocationPicker({ onPin, address }: LocationPickerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
   const markerRef = useRef<leaflet.Marker | null>(null)
@@ -23,8 +19,6 @@ export default function LocationPicker({ onPin, address, onAddressChange }: Loca
   const initRef = useRef(false)
   const onPinRef = useRef(onPin)
   onPinRef.current = onPin
-  const [locating, setLocating] = useState(false)
-  const [searchResults, setSearchResults] = useState<{ lat: number; lon: number; display: string }[]>([])
 
   // Init map once
   useEffect(() => {
@@ -94,64 +88,6 @@ export default function LocationPicker({ onPin, address, onAddressChange }: Loca
       mapRef.current = null
     }
   }, [])
-
-  function handleSearch(value: string) {
-    onAddressChange(value)
-    if (searchTimeout) clearTimeout(searchTimeout)
-    if (!value.trim()) { setSearchResults([]); return }
-
-    searchTimeout = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(value)}&limit=5&countrycodes=PH`,
-          { headers: { "User-Agent": "eBosesApp/1.0" } },
-        )
-        const data = await res.json()
-        setSearchResults(
-          data.map((r: { lat: string; lon: string; display_name: string }) => ({
-            lat: Number(r.lat),
-            lon: Number(r.lon),
-            display: r.display_name,
-          })),
-        )
-      } catch { /* silent */ }
-    }, 400)
-  }
-
-  function dropPin(lat: number, lng: number) {
-    const L = LRef.current
-    const map = mapRef.current
-    if (!L || !map) return
-    if (markerRef.current) map.removeLayer(markerRef.current)
-    const marker = L.marker([lat, lng], { draggable: true })
-    marker.on("dragend", () => {
-      onPinRef.current(marker.getLatLng().lat, marker.getLatLng().lng)
-    })
-    marker.addTo(map)
-    markerRef.current = marker
-    onPinRef.current(lat, lng)
-  }
-
-  function goToResult(lat: number, lon: number) {
-    mapRef.current?.setView([lat, lon], 17)
-    dropPin(lat, lon)
-    setSearchResults([])
-  }
-
-  function handleLocate() {
-    if (!navigator.geolocation) return
-    setLocating(true)
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude, longitude } = pos.coords
-        mapRef.current?.setView([latitude, longitude], 17)
-        dropPin(latitude, longitude)
-        setLocating(false)
-      },
-      () => setLocating(false),
-      { enableHighAccuracy: true, timeout: 10000 },
-    )
-  }
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">

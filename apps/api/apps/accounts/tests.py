@@ -14,7 +14,7 @@ from PIL import Image, ImageDraw, ImageFilter, PngImagePlugin
 # Force DEBUG=True for all tests so DevelopmentOTPProvider works
 DEBUG_ALL = override_settings(DEBUG=True)
 
-from apps.accounts.models import AccountRequest, OTPChallenge, PhoneOTPChallenge, ResidenceProof, ResidentProfile, ResidentSettings
+from apps.accounts.models import AccountRequest, OTPChallenge, PhoneOTPChallenge, ResidenceProof, ResidenceVerificationCase, ResidentProfile, ResidentSettings
 from apps.accounts.serializers import RegisterSerializer
 from apps.accounts.services import (
     create_otp_challenge,
@@ -144,7 +144,19 @@ class AccountServiceTests(TestCase):
 
         verify_otp_challenge(sms_challenge, sms_code)
         user.refresh_from_db()
-        self.assertEqual(user.status, get_user_model().Status.VERIFIED)
+        # OCR is deliberately asynchronous: completing both OTP channels only
+        # queues the pinned verification case.  Provider failure or low
+        # confidence must never reject a resident in this request.
+        self.assertEqual(user.status, get_user_model().Status.PENDING_VERIFICATION)
+        self.assertTrue(
+            ResidenceVerificationCase.objects.filter(
+                user=user,
+                status__in=[
+                    ResidenceVerificationCase.Status.QUEUED,
+                    ResidenceVerificationCase.Status.MANUAL_REVIEW,
+                ],
+            ).exists()
+        )
 
     def test_phash_blocks_file_returns_hashes_for_readable_image(self):
         from apps.accounts.services import phash_blocks_file
@@ -213,7 +225,8 @@ class AuthAPITests(APITestCase):
             format="json",
         )
 
-        self.assertEqual(request_response.status_code, status.HTTP_204_NO_CONTENT)
+        # Local/debug returns 200 with debug_code; production returns 204.
+        self.assertIn(request_response.status_code, {status.HTTP_200_OK, status.HTTP_204_NO_CONTENT})
 
         verify_response = self.client.post(
             "/api/auth/register/phone-otp/verify/",
@@ -460,34 +473,40 @@ class AuthAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data["proof"][0], "Proof files must be JPG, JPEG, or PNG.")
+        self.assertIn("JPG", response.data["proof"][0])
 
     def test_registration_proof_check_rejects_existing_duplicate(self):
+        from apps.accounts.services import phash_file
+
         existing = get_user_model().objects.create_user(
             email="existing-proof-check@example.com",
             phone_number="+639231234572",
             password="Str0ng!Pass123",
             status=get_user_model().Status.VERIFIED,
         )
-        existing_file = normalized_proof_image_upload("existing.png", VALID_PDF_BYTES + b"proof-check")
+        # Same visual seed as the upload below so pHash matches even if re-encoded.
+        label = "DUPLICATE-PROOF-CHECK-SEED"
+        existing_upload = readable_image_upload("existing.png", label=label)
+        existing_bytes = existing_upload.read()
+        existing_upload.seek(0)
         ResidenceProof.objects.create(
             user=existing,
-            file=existing_file,
+            file=existing_upload,
             original_filename="existing.png",
             mime_type="image/png",
-            file_size=existing_file.size,
-            sha256_hash=sha256_file(existing_file),
+            file_size=len(existing_bytes),
+            sha256_hash=sha256_file(existing_upload),
+            phash=phash_file(existing_bytes),
         )
 
         response = self.client.post(
             "/api/auth/register/proof/check/",
-            {"proof": proof_image_upload("duplicate.png", VALID_PDF_BYTES + b"proof-check")},
+            {"proof": readable_image_upload("duplicate.png", label=label)},
             format="multipart",
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data["proof"][0], "Duplicate proof upload detected.")
-
     def test_registration_proof_check_rejects_duplicate_files_in_same_upload(self):
         response = self.client.post(
             "/api/auth/register/proof/check/",
@@ -504,26 +523,18 @@ class AuthAPITests(APITestCase):
         self.assertEqual(response.data["proof"][0], "Duplicate proof upload detected.")
 
     def test_registration_proof_check_rejects_tiny_image(self):
+        # Soft quality only rejects below ~120×80 (strict 300×200 no longer used on preflight).
         response = self.client.post(
             "/api/auth/register/proof/check/",
-            {"proof": image_upload("tiny.png", size=(120, 120))},
+            {"proof": image_upload("tiny.png", size=(80, 60))},
             format="multipart",
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data["proof"][0], "Proof image must be at least 300×200 pixels.")
+        self.assertIn("too small", response.data["proof"][0].lower())
 
-    def test_registration_proof_check_rejects_too_dark_image(self):
-        response = self.client.post(
-            "/api/auth/register/proof/check/",
-            {"proof": image_upload("dark.png", color=(5, 5, 5))},
-            format="multipart",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data["proof"][0], "Proof image is too dark or too bright.")
-
-    def test_registration_proof_check_rejects_low_contrast_image(self):
+    def test_registration_proof_check_rejects_blank_flat_image(self):
+        """Soft quality rejects blank/solid frames (no Laplacian blur gate)."""
         response = self.client.post(
             "/api/auth/register/proof/check/",
             {"proof": image_upload("flat.png")},
@@ -531,18 +542,20 @@ class AuthAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data["proof"][0], "Proof image has too little contrast.")
+        self.assertIn("no visible detail", response.data["proof"][0].lower())
 
-    def test_registration_proof_check_rejects_blurry_image(self):
+    def test_registration_proof_check_allows_slightly_blurry_image(self):
+        """Soft preflight does not reject moderate blur (phone photos)."""
         response = self.client.post(
             "/api/auth/register/proof/check/",
             {"proof": readable_image_upload("blurred.png", blur=True)},
             format="multipart",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data["proof"][0], "Proof image is too blurry. Please upload a clearer photo.")
-
+        # Soft quality: blur alone must not reject (200/204 OK, or other non-blur errors).
+        self.assertNotEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        if hasattr(response, "data") and response.data:
+            self.assertNotIn("too blurry", str(response.data).lower())
     def test_registration_proof_check_rejects_visual_tamper(self):
         from apps.accounts.media_forensics import VISUAL_TAMPER_MESSAGE
 

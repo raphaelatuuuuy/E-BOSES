@@ -86,25 +86,6 @@ export function ProofDetailsStep(props: {
               placeholder="e.g. Barangay ID, Utility bill"
             />
           </label>
-          <label className="block">
-            <FieldLabel hint="Shown under the name when residents choose their document">
-              Description for sign-up
-            </FieldLabel>
-            <textarea
-              value={document.description || ""}
-              onChange={(event) =>
-                onChange({ description: event.target.value.slice(0, 255) })
-              }
-              onBlur={() => onBlurSave?.()}
-              rows={2}
-              maxLength={255}
-              className="min-h-[4.5rem] w-full resize-y rounded-lg border border-[#cbd8ee] bg-white px-3 py-2 text-sm font-semibold text-[#07145f] outline-none placeholder:text-[#8b96b8] focus:border-[#145be7] focus-visible:ring-[3px] focus-visible:ring-[#145be7]/20"
-              placeholder="e.g. Barangay-issued resident identification card."
-            />
-            <span className={cn("mt-1 block text-[11px] font-semibold", PROOF_THEME.muted)}>
-              {(document.description || "").length}/255 · Example on sign-up: “Choose your document”
-            </span>
-          </label>
         </div>
 
         <div className="lg:col-span-5">
@@ -112,10 +93,8 @@ export function ProofDetailsStep(props: {
             <p className={cn("text-[11px] font-black uppercase tracking-wide", PROOF_THEME.muted)}>
               Sign-up preview
             </p>
-            <p className={cn("mt-2 text-sm font-black", PROOF_THEME.title)}>Choose your document</p>
-            <p className={cn("mt-0.5 text-xs font-semibold", PROOF_THEME.body)}>
-              Select the ID or bill you will capture or upload. We will verify it against the
-              approved Barangay templates.
+            <p className={cn("mt-2 text-sm font-black", PROOF_THEME.title)}>
+              {nameValue.trim() || "Proof type name"}
             </p>
             <div
               className={cn(

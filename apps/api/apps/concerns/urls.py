@@ -22,8 +22,20 @@ from .views import (
     ManagedConcernListView,
     MyConcernListView,
 )
+from .classification_api import (
+    OfficialClassificationImageTestView,
+    OfficialClassificationResetView,
+    OfficialClassificationStatsView,
+    OfficialClassificationTextTestView,
+    OfficialClassificationView,
+)
 
 urlpatterns = [
+    path("classification/", OfficialClassificationView.as_view(), name="classification-configuration"),
+    path("classification/stats/", OfficialClassificationStatsView.as_view(), name="classification-stats"),
+    path("classification/reset/", OfficialClassificationResetView.as_view(), name="classification-reset"),
+    path("classification/test-text/", OfficialClassificationTextTestView.as_view(), name="classification-test-text"),
+    path("classification/test-image/", OfficialClassificationImageTestView.as_view(), name="classification-test-image"),
     path("", ConcernListCreateView.as_view(), name="concern-create"),
     path("mine/", MyConcernListView.as_view(), name="concern-mine"),
     path("manage/", ManagedConcernListView.as_view(), name="concern-manage"),

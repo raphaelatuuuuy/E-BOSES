@@ -5,7 +5,6 @@ import { usePageTitle } from "@/hooks/use-page-title"
 import { Topbar } from "@/features/dashboard/components/topbar"
 import {
   ArrowUpIcon,
-  ChevronLeftIcon,
   ChevronRightIcon,
   FlagIcon,
   LeafIcon,
@@ -16,9 +15,7 @@ import {
   ShieldCheckIcon,
   SlidersHorizontalIcon,
   TrafficConeIcon,
-  TrendingUpIcon,
-  Trash2Icon,
-  UsersIcon,
+  MegaphoneIcon,
   WrenchIcon,
   XIcon,
 } from "lucide-react"
@@ -112,7 +109,7 @@ function responderRoleLabel(value: string) {
   return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
-function Avatar({ user, index = 0 }: { user: PublicUser; index?: number }) {
+function Avatar({ user }: { user: PublicUser }) {
   const online = Boolean(user.last_seen_at)
   const avatarKey = computeDefaultAvatar(user)
   // Use user.id for deterministic color instead of index
@@ -346,16 +343,6 @@ export default function FeedPage() {
     }
   }
 
-  function scrollFilterRail(direction: -1 | 1) {
-    const rail = filterRailRef.current
-    const buttons = Array.from(rail?.querySelectorAll<HTMLButtonElement>("[data-filter-option]") ?? [])
-    if (!rail || buttons.length === 0) return
-    const currentIndex = buttons.findIndex((button) => button.offsetLeft + button.offsetWidth > rail.scrollLeft + 4)
-    const fallbackIndex = direction > 0 ? 0 : buttons.length - 1
-    const targetIndex = Math.min(buttons.length - 1, Math.max(0, (currentIndex === -1 ? fallbackIndex : currentIndex) + direction * 2))
-    rail.scrollTo({ left: buttons[targetIndex].offsetLeft - buttons[0].offsetLeft, behavior: "smooth" })
-  }
-
   const trendingConcerns = [...concerns]
     .sort((a, b) => b.vote_count - a.vote_count || b.priority_score - a.priority_score)
     .slice(0, 5)
@@ -460,7 +447,7 @@ export default function FeedPage() {
                 </article>
               ))}
 
-              {concerns.map((post, index) => {
+              {concerns.map((post) => {
                 const isExpanded = expandedComments.has(post.id)
                 const style = categoryStyles[post.category]
                 const CategoryIcon = style.icon
@@ -635,9 +622,9 @@ export default function FeedPage() {
                 <button type="button" onClick={() => toast.info(`${activeResponders.length} responders are currently on duty.`)} className="text-sm font-extrabold text-[#2447b3] hover:text-[#ff6a1a]">View all</button>
               </div>
               <div className="mt-4 flex flex-col gap-4">
-                {activeResponders.map((responder, index) => (
+                {activeResponders.map((responder) => (
                   <div key={responder.id} className="flex items-center gap-3">
-                    <Avatar user={responder} index={index} />
+                    <Avatar user={responder} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-extrabold text-[#07145f]">{responder.full_name}</p>
                       <p className="text-xs font-semibold text-[#68739c]">{responderRoleLabel(responder.role)}</p>

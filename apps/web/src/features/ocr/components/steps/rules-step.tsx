@@ -7,7 +7,11 @@ import { cn } from "@workspace/ui/lib/utils"
 import type { OcrDocumentType, OcrFieldDefinition, OcrFieldHints, OcrTestField } from "@/features/ocr/api"
 import { PROOF_THEME, proofSelectClass } from "@/features/ocr/components/proof-theme"
 import type { ProfileMatchKey } from "@/features/ocr/hooks/use-ocr-template-state"
-import { FIELD_COLORS, hintsOf } from "@/features/ocr/lib/create-document-defaults"
+import {
+  fieldDisplayColor,
+  fieldDisplayNumber,
+  hintsOf,
+} from "@/features/ocr/lib/create-document-defaults"
 
 function asPercent(value: number | null | undefined) {
   if (value == null || Number.isNaN(Number(value))) return "—"
@@ -111,6 +115,7 @@ export function RulesStep(props: {
   selectedFieldIndex: number
   onSelectField: (key: string) => void
   onUpdateField: (fieldKey: string, updater: (f: OcrFieldDefinition) => OcrFieldDefinition) => void
+  onRenameField?: (fieldKey: string, label: string) => void
   onUpdateHints: (fieldKey: string, patch: Partial<OcrFieldHints>) => void
   onSetValidationRules: (
     fieldKey: string,
@@ -132,6 +137,7 @@ export function RulesStep(props: {
     selectedFieldIndex,
     onSelectField,
     onUpdateField,
+    onRenameField,
     onUpdateHints,
     onSetValidationRules,
     fieldMatchProfiles,
@@ -148,8 +154,9 @@ export function RulesStep(props: {
         className="min-h-[28rem]"
       >
         <div className="flex flex-1 flex-col gap-2 overflow-y-auto">
-          {fields.map((field, index) => {
-            const color = FIELD_COLORS[index % FIELD_COLORS.length]
+          {fields.map((field) => {
+            const color = fieldDisplayColor(field, fields)
+            const displayNumber = fieldDisplayNumber(field, fields)
             const selected = selectedField?.key === field.key
             return (
               <button
@@ -167,7 +174,7 @@ export function RulesStep(props: {
                   className="flex size-6 shrink-0 items-center justify-center rounded-md text-[11px] font-bold text-white"
                   style={{ backgroundColor: color }}
                 >
-                  {index + 1}
+                  {displayNumber}
                 </span>
                 <span className={cn("min-w-0 flex-1 truncate text-sm font-black", PROOF_THEME.title)}>
                   {field.label}
@@ -204,10 +211,10 @@ export function RulesStep(props: {
               <span
                 className="flex size-6 items-center justify-center rounded-full text-[11px] font-bold text-white"
                 style={{
-                  backgroundColor: FIELD_COLORS[selectedFieldIndex % FIELD_COLORS.length],
+                  backgroundColor: fieldDisplayColor(selectedField, fields),
                 }}
               >
-                {selectedFieldIndex + 1}
+                {fieldDisplayNumber(selectedField, fields)}
               </span>
               <p className={cn("text-sm font-black", PROOF_THEME.title)}>
                 Editing: <span className="text-[#145be7]">{selectedField.label}</span>
@@ -220,30 +227,22 @@ export function RulesStep(props: {
               </FieldLabel>
               <Input
                 value={selectedField.label}
-                onChange={(event) =>
-                  onUpdateField(selectedField.key, (field) => ({
-                    ...field,
-                    label: event.target.value,
-                  }))
-                }
+                onChange={(event) => {
+                  const next = event.target.value
+                  if (onRenameField) {
+                    onRenameField(selectedField.key, next)
+                  } else {
+                    onUpdateField(selectedField.key, (field) => ({
+                      ...field,
+                      label: next,
+                    }))
+                  }
+                }}
                 className="h-10 font-semibold"
               />
             </label>
 
             <div className="grid grid-cols-1 gap-2">
-              <ToggleRow
-                label="Must appear on the proof"
-                hint="The box must find a value before the check can pass"
-                checked={selectedField.required}
-                onCheckedChange={(required) => {
-                  onUpdateField(selectedField.key, (field) => ({ ...field, required }))
-                  onSetValidationRules(selectedField.key, {
-                    required,
-                    matchProfiles: fieldMatchProfiles(selectedField.key),
-                    notExpired: fieldHasNotExpired(selectedField.key),
-                  })
-                }}
-              />
               <ToggleRow
                 label="Covers more than one line"
                 hint="Turn on for long addresses or multi-line text"
@@ -254,13 +253,48 @@ export function RulesStep(props: {
               />
             </div>
 
+            <div className="rounded-xl border border-amber-100 bg-amber-50/80 px-3 py-2.5 text-[11px] font-semibold leading-relaxed text-amber-950">
+              <p className="font-black text-amber-900">Resident feedback for this field</p>
+              <p className="mt-1.5">
+                If this field is <strong>missing</strong> on the ID or does not{" "}
+                <strong>match</strong> the form, residents see:{" "}
+                <strong className="text-rose-700">“ID mismatched.”</strong>
+              </p>
+              <ul className="mt-1.5 list-disc space-y-1 pl-4">
+                <li>
+                  Turn on <em>Must appear on the proof</em> so empty OCR is treated as mismatched.
+                </li>
+                <li>
+                  Under <em>Compare with resident’s form</em>, tick form fields to compare (e.g.
+                  Full name → First + Last name). Wrong text also returns “ID mismatched.”
+                </li>
+                <li>
+                  For expiry dates, use <em>Must not be expired</em>.
+                </li>
+              </ul>
+            </div>
+
+            <ToggleRow
+              label="Must appear on the proof"
+              hint='If OCR finds nothing in the marked box, feedback is “ID mismatched.”'
+              checked={selectedField.required}
+              onCheckedChange={(required) => {
+                onUpdateField(selectedField.key, (field) => ({ ...field, required }))
+                onSetValidationRules(selectedField.key, {
+                  required,
+                  matchProfiles: fieldMatchProfiles(selectedField.key),
+                  notExpired: fieldHasNotExpired(selectedField.key),
+                })
+              }}
+            />
+
             <div>
               <p className={cn("mb-1 text-xs font-black", PROOF_THEME.title)}>
-                Compare with resident’s form
+                Compare with resident’s form (mismatch checks)
               </p>
               <p className={cn("mb-2 text-[11px] font-semibold leading-4", PROOF_THEME.muted)}>
-                Check when the resident finishes registration. Extracted text must match the form
-                fields you pick.
+                Tick the registration fields this OCR value must match. Example: a “Full name” box
+                often matches First name + Last name; “Address” matches Address.
               </p>
               <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
                 {(
@@ -309,7 +343,7 @@ export function RulesStep(props: {
 
             <ToggleRow
               label="Must not be expired"
-              hint="Use for expiry or valid-until dates only"
+              hint="Use only on an expiry / valid-until date field to reject expired IDs"
               checked={fieldHasNotExpired(selectedField.key)}
               onCheckedChange={(notExpired) =>
                 onSetValidationRules(selectedField.key, {

@@ -1,5 +1,6 @@
 import { type FormEvent, useMemo, useState } from "react"
 
+import { getPasswordStrength } from "@/features/auth/lib/password-requirements"
 import {
   type NewPasswordErrors,
   type NewPasswordValues,
@@ -90,22 +91,10 @@ export function useNewPasswordForm(options: UseNewPasswordFormOptions = {}) {
     }
   }
 
-  const passwordStrength = useMemo(() => {
-    const checks = [
-      values.password.length >= 8,
-      /[A-Z]/.test(values.password),
-      /[a-z]/.test(values.password),
-      /[0-9]/.test(values.password),
-      /[^A-Za-z0-9]/.test(values.password),
-    ]
-    const passed = checks.filter(Boolean).length
-    return {
-      score: passed,
-      max: checks.length,
-      percent: (passed / checks.length) * 100,
-      checks,
-    }
-  }, [values.password])
+  const passwordStrength = useMemo(
+    () => getPasswordStrength(values.password),
+    [values.password],
+  )
 
   return {
     errors,

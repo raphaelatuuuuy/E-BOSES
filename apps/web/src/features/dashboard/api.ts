@@ -421,3 +421,116 @@ export function deleteManagedBarangayEvent(id: number) {
 export function listActiveResponders() {
   return apiRequest<PublicUser[]>("/responders/active/")
 }
+
+export interface LiveMapGeometry {
+  type: string
+  coordinates: unknown
+}
+
+export interface LiveMapStreet {
+  id: string
+  name: string
+  type: string
+  osm_ids?: string[]
+  geometries?: LiveMapGeometry[]
+}
+
+export interface LiveMapPerson {
+  id: number
+  full_name: string
+  role: "resident" | "barangay_official" | "first_responder"
+  barangay: string
+  address: string
+  responder_unit: PublicUser["responder_unit"]
+  is_on_duty: boolean
+  latitude: string | null
+  longitude: string | null
+  location_updated_at: string | null
+}
+
+export interface LiveMapConcern {
+  id: number
+  tracking_id: string
+  title: string
+  description: string
+  category: ConcernCategory
+  status: ConcernStatus
+  address: string
+  barangay: string
+  latitude: string | null
+  longitude: string | null
+  reporter: LiveMapPerson
+  created_at: string
+  updated_at: string
+  priority: "high" | "normal"
+}
+
+export interface LiveMapEmergency {
+  id: number
+  type: string
+  note: string
+  status: string
+  address: string
+  barangay: string
+  latitude: string
+  longitude: string
+  reporter: LiveMapPerson
+  current_assignment: {
+    id: number
+    responder: LiveMapPerson
+    status: string
+    last_location: { latitude: string; longitude: string; accuracy: number | null; created_at: string | null } | null
+  } | null
+  created_at: string
+  updated_at: string
+  resolved_at: string | null
+}
+
+export interface LiveMapRoute {
+  alert_id: number
+  assignment_id: number
+  responder_id: number
+  status: "ok" | "unavailable"
+  distance_meters: number | null
+  eta_seconds: number | null
+  geometry: { type: "LineString"; coordinates: [number, number][] } | null
+}
+
+export interface LiveMapSnapshot {
+  map: {
+    provider: "OpenStreetMap"
+    center: { latitude: number; longitude: number; zoom: number }
+    boundary: { osm_relation_id: number; name: string; geometry?: LiveMapGeometry | null }
+    streets: { streets: LiveMapStreet[]; groups: Record<string, LiveMapStreet[]> }
+  }
+  people: LiveMapPerson[]
+  concerns: LiveMapConcern[]
+  emergencies: LiveMapEmergency[]
+  routes: LiveMapRoute[]
+  summary: {
+    active_alerts: number
+    concerns: number
+    emergencies: number
+    residents: number
+    responders: number
+    officials: number
+  }
+  generated_at: string
+}
+
+export type LiveMapUpdate =
+  | { type: "location.updated"; payload: { person: LiveMapPerson } }
+  | { type: "concern.created" | "concern.updated"; payload: { concern: LiveMapConcern } }
+  | { type: "emergency.created" | "emergency.updated"; payload: { emergency: LiveMapEmergency; route: LiveMapRoute | null } }
+  | { type: "route.updated"; payload: { route: LiveMapRoute } }
+
+export function getOfficialLiveMap() {
+  return apiRequest<LiveMapSnapshot>("/dashboard/official/live-map/")
+}
+
+export function sendLocationPing(payload: { latitude: number; longitude: number; accuracy?: number | null; source?: "active_session" | "pwa_background" | "manual" | "incident" }) {
+  return apiRequest<{ person: LiveMapPerson; source: string }>("/locations/ping/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}

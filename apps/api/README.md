@@ -21,11 +21,38 @@ pip install -r requirements.txt
 # Run migrations
 python manage.py migrate
 
-# Start the dev server
+# Start the dev server (localhost only)
 python manage.py runserver
+
+# LAN access (phones / other devices on the same Wi‑Fi)
+python manage.py runserver 0.0.0.0:8000
+
+# In a production deployment, run a separate OCR worker and scheduler.
+celery -A config worker -l INFO -Q eboses --concurrency=2
+celery -A config beat -l INFO
 ```
 
-The API starts at `http://localhost:8000`.
+The API starts at `http://localhost:8000`. For phones, use `0.0.0.0:8000` and set root `.env` `VITE_API_BASE_URL` / `FRONTEND_URL` to your PC’s LAN IP (see root README).
+
+## Residence-proof OCR operations
+
+The migration creates a published default policy and an editable draft. Run
+`python manage.py migrate` before starting the API or worker. Officials edit
+the draft at `/api/auth/ocr/config/draft/` and activate it explicitly through
+the publish endpoint. Signup only validates the selected document type and
+queues OCR after both OTP channels are complete; it never waits for PaddleOCR.
+
+OCR worker requirements:
+
+- Set `PADDLEOCR_TOKEN` and an HTTPS `PADDLEOCR_JOB_URL`.
+- Run the worker on the dedicated `eboses` queue with bounded concurrency;
+  PaddleOCR calls are CPU/network heavy and must not share the web process.
+- Run Celery Beat so the five-minute health canary and outage-only recovery
+  sweep execute. Recovery is capped at 20 cases per sweep and cannot overwrite
+  an official decision.
+- Use `python manage.py check_production_readiness --strict` before release.
+  Missing Paddle credentials, Redis/Celery settings, secure cookies, or a
+  public/private media-root overlap are blockers.
 
 ## App Structure
 

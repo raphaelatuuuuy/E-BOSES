@@ -42,3 +42,8 @@ self.addEventListener("notificationclick", (event) => {
     await clients.openWindow(url)
   })())
 })
+
+self.addEventListener("periodicsync", (event) => {
+  if (event.tag !== "eboses-location-ping") return
+  // ponytail: browsers do not expose reliable background GPS to service workers; active tabs send real pings.
+})

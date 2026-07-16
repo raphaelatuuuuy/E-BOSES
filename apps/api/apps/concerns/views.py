@@ -32,6 +32,7 @@ from .models import (
     ConcernAppeal,
     ConcernAssignment,
     ConcernAiAssessment,
+    ConcernClassificationConfiguration,
     ConcernClarification,
     ConcernComment,
     ConcernMedia,
@@ -171,6 +172,13 @@ class ConcernListCreateView(APIView):
             return Response({"detail": "Only residents can submit concerns."}, status=status.HTTP_403_FORBIDDEN)
         serializer = ConcernCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        configuration = ConcernClassificationConfiguration.current()
+        enabled_categories = configuration.enabled_categories or list(Concern.Category.values)
+        if serializer.validated_data["category"] not in enabled_categories:
+            return Response(
+                {"category": ["This concern category is temporarily unavailable. Choose another category."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         validated_media = []
         media_hashes = set()
         for uploaded_file in request.FILES.getlist("media"):
@@ -217,6 +225,9 @@ class ConcernListCreateView(APIView):
                 phash=media_phash,
             )
         decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
+        from apps.live_map import concern_payload
+        from apps.notifications.services import broadcast_live_map_event
+        transaction.on_commit(lambda: broadcast_live_map_event("concern.created", {"concern": concern_payload(decorated)}))
         return Response(ConcernSerializer(decorated, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
@@ -600,6 +611,9 @@ class ConcernStatusUpdateView(APIView):
             request_meta=request_meta(request),
         )
         decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
+        from apps.live_map import concern_payload
+        from apps.notifications.services import broadcast_live_map_event
+        transaction.on_commit(lambda: broadcast_live_map_event("concern.updated", {"concern": concern_payload(decorated)}))
         return Response(ConcernSerializer(decorated, context={"request": request}).data)
 
 

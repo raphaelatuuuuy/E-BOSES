@@ -196,6 +196,29 @@ class PhoneOTPChallenge(models.Model):
         return timezone.now() >= self.expires_at
 
 
+class EmailOTPChallenge(models.Model):
+    """Pre-registration email OTP (mirrors PhoneOTPChallenge — no user yet)."""
+
+    email = models.EmailField(db_index=True)
+    destination_hash = models.CharField(max_length=128)
+    code_hash = models.CharField(max_length=256)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    max_attempts = models.PositiveSmallIntegerField(default=5)
+    expires_at = models.DateTimeField()
+    verified_at = models.DateTimeField(null=True, blank=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["email", "verified_at", "consumed_at"], name="accounts_em_email_otp_idx"),
+        ]
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+
 class OCRConfigurationVersion(models.Model):
     """Immutable-after-publish OCR policy snapshot for residence verification."""
 
@@ -287,6 +310,25 @@ class OCRDocumentType(models.Model):
     provider_names = models.JSONField(default=list, blank=True)
     aliases = models.JSONField(default=list, blank=True)
     display_order = models.PositiveSmallIntegerField(default=0)
+    # Template Builder metadata (OCR Template Builder UI)
+    template_name = models.CharField(max_length=160, blank=True)
+    template_version = models.CharField(max_length=32, default="v1.0")
+    expected_title = models.CharField(max_length=160, blank=True)
+    min_ocr_confidence = models.DecimalField(
+        max_digits=4,
+        decimal_places=3,
+        default=0.900,
+        validators=[MinValueValidator(0), MaxValueValidator(1)],
+    )
+    accept_rotated = models.BooleanField(default=True)
+    accept_scanned_pdf = models.BooleanField(default=True)
+    sample_file = models.FileField(
+        storage=PrivateMediaStorage(),
+        upload_to="raw/ocr-samples/%Y/%m/",
+        blank=True,
+    )
+    sample_original_filename = models.CharField(max_length=255, blank=True)
+    template_settings = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -298,6 +340,10 @@ class OCRDocumentType(models.Model):
                 name="accounts_ocr_doc_config_code_uniq",
             ),
             models.CheckConstraint(condition=models.Q(max_files__gte=1), name="accounts_ocr_doc_max_files_gte_1"),
+            models.CheckConstraint(
+                condition=models.Q(min_ocr_confidence__gte=0, min_ocr_confidence__lte=1),
+                name="accounts_ocr_doc_min_conf_range",
+            ),
         ]
         indexes = [
             models.Index(fields=["configuration", "enabled", "display_order"], name="acct_ocr_doc_cfg_enabled"),
@@ -305,6 +351,10 @@ class OCRDocumentType(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.configuration})"
+
+    @property
+    def display_template_name(self) -> str:
+        return (self.template_name or self.name or self.code).strip()
 
 
 class OCRFieldDefinition(models.Model):
@@ -539,6 +589,7 @@ class ResidenceVerificationCase(models.Model):
         MISSING_REQUIRED_FIELD = "missing_required_field", "Missing required field"
         DOCUMENT_TYPE_MISMATCH = "document_type_mismatch", "Document type mismatch"
         RULE_MISMATCH = "rule_mismatch", "Validation rule mismatch"
+        RESUBMISSION_REQUIRED = "resubmission_required", "Request a new submission"
         OFFICIAL_REQUESTED = "official_requested", "Official requested review"
         LEGACY_PENDING = "legacy_pending", "Legacy pending verification"
 

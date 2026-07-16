@@ -29,6 +29,9 @@ from .serializers import (
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     PasswordResetVerifySerializer,
+    EmailAvailabilitySerializer,
+    EmailOTPRequestSerializer,
+    EmailOTPVerifySerializer,
     PhoneOTPRequestSerializer,
     PhoneOTPVerifySerializer,
     RegisterSerializer,
@@ -48,11 +51,13 @@ from .services import (
     OTPVerificationError,
     create_audit_log,
     create_otp_challenge,
+    create_email_otp_challenge,
     create_phone_otp_challenge,
     create_password_reset_token,
     read_password_reset_token,
     register_resident,
     validate_residence_proof_uploads,
+    verify_email_otp_challenge,
     verify_phone_otp_challenge,
     verify_otp_challenge,
 )
@@ -124,6 +129,7 @@ class RegisterView(APIView):
         serializer.is_valid(raise_exception=True)
         validated_data = dict(serializer.validated_data)
         validated_data["proof_files"] = request.FILES.getlist("proof") or [validated_data["proof"]]
+        validated_data["proof_sides"] = request.data.getlist("proof_side")
         try:
             user = register_resident(validated_data, request_meta(request))
         except OTPVerificationError as exc:
@@ -136,19 +142,90 @@ class RegisterView(APIView):
         return token_response(user, status.HTTP_201_CREATED)
 
 
+class EmailAvailabilityView(APIView):
+    """Public check used on sign-up account step before continuing."""
+
+    permission_classes = [AllowAny]
+    throttle_scope = "auth"
+
+    def post(self, request):
+        serializer = EmailAvailabilitySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data["email"].strip().lower()
+        exists = get_user_model().objects.filter(email__iexact=email).exists()
+        if exists:
+            return Response(
+                {
+                    "available": False,
+                    "email": email,
+                    "message": "An account with this email already exists.",
+                },
+                status=status.HTTP_200_OK,
+            )
+        return Response(
+            {"available": True, "email": email, "message": ""},
+            status=status.HTTP_200_OK,
+        )
+
+
+class CommunityPreviewView(APIView):
+    """Public stats for the sign-up “verified peek” (neighbor count, etc.)."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_scope = "auth"
+
+    def get(self, request):
+        User = get_user_model()
+        # Simple count: every registered account with role=resident.
+        neighbors = User.objects.filter(role=User.Role.RESIDENT).count()
+        return Response(
+            {
+                "barangay": "Marikina Heights",
+                "neighbors": neighbors,
+            }
+        )
+
+
 class PhoneOTPRequestView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []
     throttle_scope = "otp"
 
     def post(self, request):
+        from django.conf import settings as django_settings
+
+        from .services import OTPDeliveryError
+
         serializer = PhoneOTPRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        create_phone_otp_challenge(serializer.validated_data["phone_number"])
+        phone_number = serializer.validated_data["phone_number"]
+        try:
+            _challenge, code = create_phone_otp_challenge(phone_number)
+        except OTPDeliveryError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception:
+            logger = __import__("logging").getLogger(__name__)
+            logger.exception("Phone OTP request failed for %s", phone_number)
+            return Response(
+                {"detail": "We could not send the SMS code. Please try again in a moment."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        # Local dev: return the code so you can finish sign-up without a real SMS gateway.
+        if getattr(django_settings, "IS_LOCAL_DEVELOPMENT", False) or django_settings.DEBUG:
+            return Response(
+                {
+                    "detail": "Code sent (development mode — check the API console).",
+                    "debug_code": code,
+                },
+                status=status.HTTP_200_OK,
+            )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class PhoneOTPVerifyView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []
     throttle_scope = "otp"
 
     def post(self, request):
@@ -157,6 +234,61 @@ class PhoneOTPVerifyView(APIView):
         try:
             verify_phone_otp_challenge(
                 serializer.validated_data["phone_number"],
+                serializer.validated_data["code"],
+            )
+        except OTPVerificationError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class EmailOTPRequestView(APIView):
+    """Send email OTP right after the sign-up email/password step (no account yet)."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_scope = "otp"
+
+    def post(self, request):
+        from django.conf import settings as django_settings
+
+        from .services import OTPDeliveryError
+
+        serializer = EmailOTPRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data["email"]
+        try:
+            _challenge, code = create_email_otp_challenge(email)
+        except OTPDeliveryError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception:
+            logger = __import__("logging").getLogger(__name__)
+            logger.exception("Email OTP request failed for %s", email)
+            return Response(
+                {"detail": "We could not send the email code. Please try again in a moment."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        if getattr(django_settings, "IS_LOCAL_DEVELOPMENT", False) or django_settings.DEBUG:
+            return Response(
+                {
+                    "detail": "Code sent (development mode — check the API console).",
+                    "debug_code": code,
+                },
+                status=status.HTTP_200_OK,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class EmailOTPVerifyView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_scope = "otp"
+
+    def post(self, request):
+        serializer = EmailOTPVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            verify_email_otp_challenge(
+                serializer.validated_data["email"],
                 serializer.validated_data["code"],
             )
         except OTPVerificationError as exc:
@@ -182,11 +314,148 @@ class ResidenceProofCheckView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            validate_residence_proof_uploads(proof_files)
+            # Per-file media_forensics (Layers 1–5) on ORIGINAL bytes + duplicates.
+            # Multi-side completeness is NOT enforced here so front can be checked
+            # before back is uploaded; final registration enforces full set.
+            from .services import validate_residence_proof_uploads_preflight
+
+            validate_residence_proof_uploads_preflight(proof_files)
+
+            proof_type = (request.data.get("proof_type") or "").strip()
+            if proof_type:
+                from .ocr_runtime import document_type_for_registration
+
+                # Validate type exists / enabled only — not side completeness
+                document_type_for_registration(proof_type)
         except (DuplicateProofError, ValidationError) as exc:
+            if hasattr(exc, "message_dict"):
+                return Response(exc.message_dict, status=status.HTTP_400_BAD_REQUEST)
             message = exc.message if hasattr(exc, "message") else str(exc)
             return Response({"proof": [message]}, status=status.HTTP_400_BAD_REQUEST)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ResidenceProofDetectView(APIView):
+    """Auto-detect document type from an uploaded/captured proof at sign-up."""
+
+    permission_classes = [AllowAny]
+    parser_classes = [MultiPartParser, FormParser]
+    throttle_scope = "auth"
+
+    def post(self, request):
+        proof_files = request.FILES.getlist("proof")
+        if not proof_files:
+            proof = request.FILES.get("file") or request.FILES.get("proof")
+            proof_files = [proof] if proof else []
+        if not proof_files:
+            return Response(
+                {
+                    "detected": False,
+                    "message": "Upload or capture a document photo.",
+                    "reasons": ["No file provided."],
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(proof_files) > 2:
+            return Response(
+                {
+                    "detected": False,
+                    "message": "You can upload a maximum of 2 files.",
+                    "reasons": ["Too many files."],
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            from .services import validate_residence_proof_uploads_for_detect
+
+            proof_files = validate_residence_proof_uploads_for_detect(proof_files)
+        except (DuplicateProofError, ValidationError) as exc:
+            if hasattr(exc, "message_dict"):
+                detail = exc.message_dict
+                message = next(iter(detail.values())) if detail else str(exc)
+                if isinstance(message, list):
+                    message = message[0] if message else "Invalid proof file."
+                return Response(
+                    {"detected": False, "message": str(message), "reasons": [str(message)], "detail": detail},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            message = getattr(exc, "message", None) or str(exc)
+            return Response(
+                {"detected": False, "message": message, "reasons": [message]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from .ocr_runtime import detect_residence_proof
+
+        raw_side = str(request.data.get("proof_side") or request.data.get("side") or "").strip().lower()
+        detect_side = raw_side if raw_side in {"front", "back", "single"} else None
+        # Multi-file detect: treat as ordered front then back when sides not provided.
+        if detect_side is None and len(proof_files) == 1:
+            detect_side = None
+
+        try:
+            # When two files are uploaded, run side-aware extract on each and merge.
+            if len(proof_files) >= 2:
+                front_result = detect_residence_proof(
+                    proof_files[0],
+                    hint_type=(request.data.get("proof_type") or "").strip() or None,
+                    side="front",
+                )
+                back_result = detect_residence_proof(
+                    proof_files[1],
+                    hint_type=(request.data.get("proof_type") or "").strip() or None,
+                    side="back",
+                )
+                from .ocr_engine import merge_extracted_fields
+
+                merged_fields = merge_extracted_fields(
+                    front_result.get("extracted_fields") or {},
+                    back_result.get("extracted_fields") or {},
+                )
+                # Prefer front type detection; require both sides to look readable.
+                result = dict(front_result)
+                result["extracted_fields"] = merged_fields
+                confidences = [
+                    float((item or {}).get("confidence") or 0)
+                    for item in merged_fields.values()
+                    if isinstance(item, dict) and (item.get("value") or "").strip()
+                ]
+                if confidences:
+                    from statistics import fmean
+
+                    result["confidence"] = round(fmean(confidences), 4)
+                if not front_result.get("detected") or not back_result.get("detected"):
+                    result["detected"] = False
+                    reasons = []
+                    if not front_result.get("detected"):
+                        reasons.append(front_result.get("message") or "Front side could not be verified.")
+                    if not back_result.get("detected"):
+                        reasons.append(back_result.get("message") or "Back side could not be verified.")
+                    result["reasons"] = reasons
+                    result["message"] = reasons[0] if reasons else result.get("message")
+                else:
+                    result["detected"] = True
+                    result["message"] = front_result.get("message") or "Document verified."
+            else:
+                result = detect_residence_proof(
+                    proof_files[0],
+                    hint_type=(request.data.get("proof_type") or "").strip() or None,
+                    side=detect_side,
+                )
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception("Residence proof detect failed")
+            return Response(
+                {
+                    "detected": False,
+                    "message": "We could not analyze this photo right now. Check that the API is running, then try again with a clearer JPG/PNG.",
+                    "reasons": ["OCR analysis failed unexpectedly."],
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        status_code = status.HTTP_200_OK if result.get("detected") else status.HTTP_422_UNPROCESSABLE_ENTITY
+        return Response(result, status=status_code)
 
 
 class LoginView(APIView):
@@ -475,6 +744,16 @@ class OTPVerifyView(APIView):
         except OTPVerificationError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         request.user.refresh_from_db()
+        # Finish registration OCR in-request when still pending so clients go
+        # straight to onboarding instead of a permanent "queued" pending page.
+        if request.user.status == request.user.Status.PENDING_VERIFICATION:
+            try:
+                from .ocr_runtime import process_stuck_user_case
+
+                process_stuck_user_case(request.user)
+                request.user.refresh_from_db()
+            except Exception:
+                pass
         return Response(UserSummarySerializer(request.user).data)
 
 

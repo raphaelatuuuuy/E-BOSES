@@ -8,7 +8,7 @@ from datetime import timedelta
 import os
 from pathlib import Path
 import sys
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import environ
 
@@ -22,14 +22,9 @@ environ.Env.read_env(BASE_DIR.parent.parent / ".env")
 ENVIRONMENT = env("DJANGO_ENV", default="local")
 IS_LOCAL_DEVELOPMENT = ENVIRONMENT == "local"
 
-if IS_LOCAL_DEVELOPMENT:
-    SECRET_KEY = env("DJANGO_SECRET_KEY", default="local-development-only-secret-key")
-    DEBUG = env.bool("DEBUG", default=False)
-    ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
-else:
-    SECRET_KEY = env("DJANGO_SECRET_KEY")
-    DEBUG = env.bool("DEBUG")
-    ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
+SECRET_KEY = env("DJANGO_SECRET_KEY", default="local-development-only-secret-key")
+DEBUG = env.bool("DEBUG", default=False)
+ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["*"])
 
 # Application definition
 ENABLE_GIS = env.bool("ENABLE_GIS", default=False)
@@ -128,6 +123,47 @@ CHANNEL_LAYERS = {
     },
 }
 
+# Celery uses the same private Redis service as Channels.  OCR work is kept
+# on its own queue so CPU-heavy provider calls cannot starve web sockets.
+def _celery_redis_url(value):
+    """Make hosted rediss URLs explicit about certificate verification.
+
+    redis-py rejects a ``rediss://`` URL without ``ssl_cert_reqs`` at import
+    time.  Keeping this normalization here means existing deployments only
+    need the URL in .env and local ``delay()`` calls fail gracefully when the
+    broker is unavailable.
+    """
+    if not value or not value.lower().startswith("rediss://"):
+        return value
+    parsed = urlsplit(value)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.setdefault("ssl_cert_reqs", "CERT_REQUIRED")
+    return urlunsplit(parsed._replace(query=urlencode(query)))
+
+
+CELERY_BROKER_URL = _celery_redis_url(env("CELERY_BROKER_URL", default=REDIS_URL))
+CELERY_RESULT_BACKEND = _celery_redis_url(env("CELERY_RESULT_BACKEND", default=REDIS_URL))
+CELERY_TASK_DEFAULT_QUEUE = env("CELERY_TASK_DEFAULT_QUEUE", default="eboses")
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_ALWAYS_EAGER = env.bool("CELERY_TASK_ALWAYS_EAGER", default=False)
+CELERY_TASK_TIME_LIMIT = env.int("CELERY_TASK_TIME_LIMIT", default=180)
+CELERY_TASK_SOFT_TIME_LIMIT = env.int("CELERY_TASK_SOFT_TIME_LIMIT", default=120)
+CELERY_BEAT_SCHEDULE = {
+    "ocr-health-canary": {
+        "task": "apps.accounts.ocr_tasks.ocr_health_canary_task",
+        "schedule": 300.0,
+        "options": {"queue": "eboses"},
+    },
+    "ocr-recovery": {
+        "task": "apps.accounts.ocr_tasks.recover_ocr_cases_task",
+        "schedule": 300.0,
+        "options": {"queue": "eboses"},
+    },
+}
+
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -178,6 +214,7 @@ REST_FRAMEWORK = {
         "auth": "20/minute",
         "login": "5/minute",
         "password_reset": "5/minute",
+        "location_ping": "60/minute",
     },
 }
 
@@ -194,15 +231,12 @@ frontend_url = env("FRONTEND_URL", default="http://localhost:5173") if IS_LOCAL_
 frontend_parts = urlsplit(frontend_url)
 frontend_origin = f"{frontend_parts.scheme}://{frontend_parts.netloc}" if frontend_parts.scheme and frontend_parts.netloc else frontend_url
 
-CORS_ALLOWED_ORIGINS = (
-    [frontend_origin, "http://localhost:5173", "http://127.0.0.1:5173"]
-    if IS_LOCAL_DEVELOPMENT
-    else [frontend_origin]
-)
+CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 
 # Deployment security
-SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=True)
+# Local/LAN demos use plain HTTP — secure cookies must stay off in development.
+SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=not IS_LOCAL_DEVELOPMENT)
 REFRESH_COOKIE_SECURE = env.bool("REFRESH_COOKIE_SECURE", default=not IS_LOCAL_DEVELOPMENT)
 CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=not IS_LOCAL_DEVELOPMENT)
 SESSION_COOKIE_HTTPONLY = True
@@ -213,10 +247,21 @@ SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=not IS_LOCAL_DEVEL
 SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=0 if IS_LOCAL_DEVELOPMENT else 31536000)
 SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=not IS_LOCAL_DEVELOPMENT)
 SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=not IS_LOCAL_DEVELOPMENT)
-CSRF_TRUSTED_ORIGINS = env.list(
-    "CSRF_TRUSTED_ORIGINS",
-    default=[frontend_origin, "http://localhost:5173", "http://127.0.0.1:5173"] if IS_LOCAL_DEVELOPMENT else [],
-)
+_default_csrf_trusted = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://localhost:5173",
+    "https://127.0.0.1:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+if frontend_origin and frontend_origin not in _default_csrf_trusted:
+    _default_csrf_trusted.append(frontend_origin)
+CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=_default_csrf_trusted)
+# Always trust the configured frontend origin (LAN IP demos set FRONTEND_URL).
+if frontend_origin and frontend_origin not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS = [*CSRF_TRUSTED_ORIGINS, frontend_origin]
+
 EMAIL_OTP_PROVIDER = env("EMAIL_OTP_PROVIDER", default="development" if IS_LOCAL_DEVELOPMENT else "django_email")
 SMS_OTP_PROVIDER = env("SMS_OTP_PROVIDER", default="development" if IS_LOCAL_DEVELOPMENT else "disabled")
 SMS_OTP_WEBHOOK_URL = env("SMS_OTP_WEBHOOK_URL", default="")
@@ -226,8 +271,13 @@ WEB_PUSH_PUBLIC_KEY = env("WEB_PUSH_PUBLIC_KEY", default="")
 WEB_PUSH_PRIVATE_KEY = env("WEB_PUSH_PRIVATE_KEY", default="")
 WEB_PUSH_SUBJECT = env("WEB_PUSH_SUBJECT", default=f"mailto:{DEFAULT_FROM_EMAIL}")
 
-EBOSES_YOLO_MODEL_PATH = env("EBOSES_YOLO_MODEL_PATH", default="")
-EBOSES_NLP_MODEL_PATH = env("EBOSES_NLP_MODEL_PATH", default="")
+_yolo_model_path = env(
+    "EBOSES_YOLO_MODEL_PATH",
+    default=str(BASE_DIR / "model_weights" / "yolov8m.pt"),
+)
+EBOSES_YOLO_MODEL_PATH = str((BASE_DIR.parent.parent / _yolo_model_path).resolve()) if _yolo_model_path and not Path(_yolo_model_path).is_absolute() else _yolo_model_path
+_nlp_model_path = env("EBOSES_NLP_MODEL_PATH", default="")
+EBOSES_NLP_MODEL_PATH = str((BASE_DIR.parent.parent / _nlp_model_path).resolve()) if _nlp_model_path and not Path(_nlp_model_path).is_absolute() else _nlp_model_path
 
 # PaddleOCR
 PADDLEOCR_TOKEN = env("PADDLEOCR_TOKEN", default="")
@@ -238,6 +288,8 @@ PADDLEOCR_MAX_POLLS = env.int("PADDLEOCR_MAX_POLLS", default=30)
 PADDLEOCR_CONNECT_TIMEOUT = env.int("PADDLEOCR_CONNECT_TIMEOUT", default=10)
 PADDLEOCR_READ_TIMEOUT = env.int("PADDLEOCR_READ_TIMEOUT", default=30)
 PADDLEOCR_MAX_RETRIES = env.int("PADDLEOCR_MAX_RETRIES", default=3)
+OSM_ROUTE_URL = env("OSM_ROUTE_URL", default="https://router.project-osrm.org/route/v1/driving")
+OSM_ROUTE_TIMEOUT_SECONDS = env.int("OSM_ROUTE_TIMEOUT_SECONDS", default=4)
 
 if not IS_LOCAL_DEVELOPMENT and DEBUG:
     from django.core.exceptions import ImproperlyConfigured

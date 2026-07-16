@@ -14,11 +14,15 @@ interface AuthSessionContextValue {
 
 const AuthSessionContext = React.createContext<AuthSessionContextValue | null>(null)
 
-export function getStatusPath(status: UserStatus) {
+export function getStatusPath(status: UserStatus, options?: { isOnboarded?: boolean }) {
   if (status === "pending_otp") return "/sign-up-otp"
   if (status === "pending_profile") return "/sign-up"
-  if (status === "pending_verification") return "/account-pending"
   if (status === "rejected" || status === "suspended") return "/sign-in"
+  // After email OTP, backend may still be finishing OCR as pending_verification.
+  // Skip the old account-pending screen and continue into onboarding/dashboard.
+  const canEnterApp = status === "verified" || status === "pending_verification"
+  if (canEnterApp && options?.isOnboarded === false) return "/onboarding"
+  if (canEnterApp) return "/dashboard"
   return "/dashboard"
 }
 

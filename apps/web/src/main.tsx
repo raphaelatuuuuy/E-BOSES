@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client"
 import { BrowserRouter } from "react-router-dom"
 
 import "@workspace/ui/globals.css"
+import "boxicons/css/boxicons.min.css"
 
 import { Toaster } from "@workspace/ui/components/sonner"
 
@@ -18,7 +19,10 @@ createRoot(rootElement).render(
   <BrowserRouter>
     <ThemeProvider defaultTheme="light">
       <App />
+      {/* Default app toasts (top-right on desktop) */}
       <Toaster />
+      {/* Centered toasts — use toast(..., { toasterId: "center" }) */}
+      <Toaster id="center" position="top-center" />
     </ThemeProvider>
   </BrowserRouter>,
 )

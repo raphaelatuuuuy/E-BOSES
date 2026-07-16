@@ -31,6 +31,10 @@ class Command(BaseCommand):
 
         if not getattr(settings, "REDIS_URL", ""):
             failures.append("REDIS_URL is required for Channels/WebSocket.")
+        if not getattr(settings, "CELERY_BROKER_URL", ""):
+            failures.append("CELERY_BROKER_URL is required for asynchronous OCR.")
+        if not getattr(settings, "CELERY_RESULT_BACKEND", ""):
+            warnings.append("CELERY_RESULT_BACKEND is empty; task result inspection is disabled.")
         if not settings.SESSION_COOKIE_SECURE or not settings.CSRF_COOKIE_SECURE:
             failures.append("Secure cookies must be enabled.")
         if not settings.SECURE_SSL_REDIRECT:
@@ -44,6 +48,13 @@ class Command(BaseCommand):
             warnings.append("Browser push VAPID keys are missing.")
         if not getattr(settings, "EBOSES_YOLO_MODEL_PATH", "") or not getattr(settings, "EBOSES_NLP_MODEL_PATH", ""):
             warnings.append("AI model paths are missing; AI assessments will stay not_configured.")
+
+        paddle_token = getattr(settings, "PADDLEOCR_TOKEN", "")
+        paddle_url = getattr(settings, "PADDLEOCR_JOB_URL", "")
+        if not paddle_token:
+            failures.append("PADDLEOCR_TOKEN is required for automatic document verification.")
+        if not paddle_url or not paddle_url.startswith("https://"):
+            failures.append("PADDLEOCR_JOB_URL must be an HTTPS PaddleOCR endpoint.")
 
         media_root = Path(settings.MEDIA_ROOT).resolve()
         private_media_root = Path(settings.PRIVATE_MEDIA_ROOT).resolve()

@@ -35,8 +35,12 @@ import {
   createField,
   defaultRegionForIndex,
   ensureDocumentFieldRegions,
+  fieldCanvasSide,
   hintsOf,
+  isAutoFieldKey,
   isValidRegion,
+  slugifyFieldKey,
+  withFieldSide,
   type FieldRegion,
 } from "@/features/ocr/lib/create-document-defaults"
 
@@ -133,9 +137,20 @@ export function useOcrTemplateState() {
   const extractedList: OcrTestField[] = useMemo(() => {
     const list = normalizeExtractedFields(testResult?.extracted_fields)
     if (!selectedDocument?.fields?.length) return list
+    const testSide = testResult?.test_side
+    // When a side-scoped test ran, only show fields for that side (and only
+    // values returned for them — do not invent empty front fields on a back test).
+    const scoped =
+      testSide === "front" || testSide === "back"
+        ? list.filter((item) => {
+            const def = selectedDocument.fields.find((f) => f.key === item.key)
+            if (!def) return true
+            return fieldCanvasSide(def) === testSide
+          })
+        : list
     const order = new Map(selectedDocument.fields.map((field, index) => [field.key, index]))
-    return [...list].sort((a, b) => (order.get(a.key) ?? 999) - (order.get(b.key) ?? 999))
-  }, [selectedDocument?.fields, testResult?.extracted_fields])
+    return [...scoped].sort((a, b) => (order.get(a.key) ?? 999) - (order.get(b.key) ?? 999))
+  }, [selectedDocument?.fields, testResult?.extracted_fields, testResult?.test_side])
 
   const extractedByKey = useMemo(() => {
     const map = new Map<string, OcrTestField>()
@@ -643,10 +658,20 @@ export function useOcrTemplateState() {
     })
   }
 
-  function updateField(fieldKey: string, updater: (field: OcrFieldDefinition) => OcrFieldDefinition) {
+  function updateField(fieldKey: string, updater: (f: OcrFieldDefinition) => OcrFieldDefinition) {
     updateSelectedDocument((doc) => ({
       ...doc,
-      fields: doc.fields.map((field) => (field.key === fieldKey ? updater(field) : field)),
+      fields: doc.fields.map((field) => {
+        if (field.key !== fieldKey) return field
+        const next = updater(field)
+        // Keep sides[] aligned whenever hints.side is present.
+        const side = fieldCanvasSide(next)
+        return {
+          ...next,
+          sides: [side],
+          extraction_hints: { ...hintsOf(next), side },
+        }
+      }),
     }))
   }
 
@@ -698,6 +723,8 @@ export function useOcrTemplateState() {
     const otherRules = (selectedDocument.rules ?? []).filter((rule) => rule.field_key !== fieldKey)
     const built: OcrRuleDefinition[] = []
     let order = 0
+    // Resident-facing copy: missing OCR value and form mismatch both say "ID mismatched."
+    const mismatchMessage = "ID mismatched."
     if (next.required) {
       built.push({
         key: `${fieldKey}_required`,
@@ -709,6 +736,7 @@ export function useOcrTemplateState() {
         threshold: null,
         enabled: true,
         on_failure: "manual_review",
+        message: mismatchMessage,
         order: order++,
       })
     }
@@ -723,6 +751,7 @@ export function useOcrTemplateState() {
         threshold: profile === "address" ? 0.8 : 0.85,
         enabled: true,
         on_failure: "manual_review",
+        message: mismatchMessage,
         order: order++,
       })
     }
@@ -939,13 +968,147 @@ export function useOcrTemplateState() {
     }
   }
 
-  async function runTest(file?: File | null) {
+  function missingRequiredSampleSides(doc?: OcrDocumentType | null): ProofSide[] {
+    const target = doc ?? selectedDocument
+    if (!target) return ["single"]
+    const sides = target.required_sides?.length
+      ? target.required_sides
+      : (["single"] as ProofSide[])
+    const required: ProofSide[] =
+      sides.includes("front") && sides.includes("back")
+        ? ["front", "back"]
+        : sides.includes("front")
+          ? ["front"]
+          : sides.includes("back")
+            ? ["back"]
+            : ["single"]
+
+    return required.filter((side) => {
+      if (samplePreviewBySide[side]) return false
+      // Treat single/front as interchangeable for front-only templates.
+      if (side === "front" && (samplePreviewBySide.single || samplePreviewBySide.front)) {
+        return false
+      }
+      if (side === "single" && (samplePreviewBySide.single || samplePreviewBySide.front)) {
+        return false
+      }
+      const listed = (target.samples ?? []).some(
+        (sample) => sample.side === side && Boolean(sample.url),
+      )
+      if (listed) return false
+      if (
+        (side === "front" || side === "single") &&
+        (target.sample_url ||
+          (target.samples ?? []).some(
+            (sample) =>
+              (sample.side === "front" || sample.side === "single") && Boolean(sample.url),
+          ))
+      ) {
+        return false
+      }
+      return true
+    })
+  }
+
+  function validateRequiredSamples(doc?: OcrDocumentType | null): boolean {
+    const missing = missingRequiredSampleSides(doc)
+    if (missing.length === 0) return true
+    const labels = missing.map((side) => sideLabel(side)).join(" and ")
+    toast.error(`Upload the ${labels} sample photo first.`, {
+      description:
+        missing.length > 1
+          ? "This proof needs both sides before you continue."
+          : "Add a clear sample so you can mark areas and test reading.",
+    })
+    return false
+  }
+
+  async function setTestPhoto(file: File | null | undefined) {
+    if (!file) return
+    setTestFile(file)
+    setTestPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return URL.createObjectURL(file)
+    })
+    setTestResult(null)
+  }
+
+  async function runTestFromSample(side?: ProofSide) {
+    if (!selectedDocument) {
+      toast.error("Select a proof type first.")
+      return
+    }
+    const targetSide =
+      side ??
+      samplePreviewSide ??
+      (canvasSides.includes("front") ? "front" : (canvasSides[0] ?? "single"))
+
+    const samples = selectedDocument.samples ?? []
+    const match =
+      samples.find((sample) => sample.side === targetSide && sample.url) ??
+      (targetSide === "front"
+        ? samples.find((sample) => sample.side === "single" && sample.url)
+        : undefined) ??
+      (targetSide === "single"
+        ? samples.find((sample) => sample.side === "front" && sample.url)
+        : undefined) ??
+      (selectedDocument.sample_url
+        ? {
+            side: targetSide,
+            url: selectedDocument.sample_url,
+            filename: selectedDocument.sample_original_filename || "sample.jpg",
+          }
+        : undefined)
+
+    try {
+      let blob: Blob | null = null
+      let filename = `${sideLabel(targetSide).toLowerCase()}-sample.jpg`
+
+      if (match?.url) {
+        blob = await fetchTemplateSampleBlob(match.url)
+        filename = match.filename || filename
+      } else {
+        const previewUrl =
+          samplePreviewBySide[targetSide] ??
+          (targetSide === "front" ? samplePreviewBySide.single : undefined) ??
+          (targetSide === "single" ? samplePreviewBySide.front : undefined)
+        if (previewUrl) {
+          const response = await fetch(previewUrl)
+          if (!response.ok) throw new Error("Could not load the sample photo.")
+          blob = await response.blob()
+        }
+      }
+
+      if (!blob) {
+        toast.error(`Upload the ${sideLabel(targetSide)} sample in Mark areas first.`)
+        return
+      }
+
+      const type = blob.type || "image/jpeg"
+      const file = new File([blob], filename, { type })
+      // Always pass the side so OCR only reads front fields on front photos, etc.
+      await runTest(file, targetSide === "single" ? "single" : targetSide)
+    } catch (reason) {
+      toast.error(reason instanceof Error ? reason.message : "Could not load the sample photo.")
+    }
+  }
+
+  async function runTest(file?: File | null, side?: ProofSide | null) {
     const target = file ?? testFile
     if (!target || !selectedDocument) {
-      toast.error("Choose a photo to try first.")
+      toast.error("Choose a photo to try first, or test the sample you uploaded.")
       setDrawerOpen(true)
       return
     }
+    const testSide =
+      side ??
+      (samplePreviewSide === "back"
+        ? "back"
+        : samplePreviewSide === "front"
+          ? "front"
+          : canvasSides.includes("back")
+            ? null
+            : "single")
     setTestFile(target)
     if (testPreviewUrl) URL.revokeObjectURL(testPreviewUrl)
     setTestPreviewUrl(URL.createObjectURL(target))
@@ -956,7 +1119,8 @@ export function useOcrTemplateState() {
         const saved = await saveOcrDraft(configuration)
         setConfiguration(saved)
       }
-      let result = await runOcrTest(target, selectedDocument.key)
+      let result = await runOcrTest(target, selectedDocument.key, testSide)
+      result = { ...result, test_side: testSide ?? result.test_side ?? null }
       setTestResult(result)
       if (result.status === "queued" || result.status === "processing") {
         for (let attempt = 0; attempt < 15; attempt += 1) {
@@ -968,6 +1132,8 @@ export function useOcrTemplateState() {
             extracted_fields: normalizeExtractedFields(latest.extracted_fields),
             confidence: latest.confidence ?? latest.overall_confidence ?? null,
             overall_confidence: latest.overall_confidence ?? latest.confidence ?? null,
+            // Keep side scope so UI only shows front or back fields for this run.
+            test_side: result.test_side ?? testSide ?? null,
           }
           setTestResult(normalized)
           result = normalized
@@ -1008,10 +1174,16 @@ export function useOcrTemplateState() {
           }),
         }))
       }
+      const sideNote =
+        testSide === "front"
+          ? " (front fields only)"
+          : testSide === "back"
+            ? " (back fields only)"
+            : ""
       toast.success(
         result.status === "passed"
-          ? "Test passed — the photo was read successfully"
-          : "Test finished — review what was found under each box",
+          ? `Test passed — the photo was read successfully${sideNote}`
+          : `Test finished — review what was found under each box${sideNote}`,
       )
     } catch (reason) {
       toast.error(reason instanceof Error ? reason.message : "Could not read the photo.")
@@ -1022,11 +1194,62 @@ export function useOcrTemplateState() {
 
   function addField() {
     if (!selectedDocument) return
-    const next = createField(selectedDocument.fields.length)
-    const region = defaultRegions(selectedDocument.fields.length + 1)[selectedDocument.fields.length]
-    next.extraction_hints = { ...hintsOf(next), region }
+    const sideForField: "front" | "back" =
+      samplePreviewSide === "back" ? "back" : "front"
+    const sideFields = selectedDocument.fields.filter(
+      (f) => fieldCanvasSide(f) === sideForField,
+    )
+    const existingKeys = selectedDocument.fields.map((f) => f.key)
+    const next = withFieldSide(
+      createField(selectedDocument.fields.length, sideForField, existingKeys, "New information"),
+      sideForField,
+    )
+    next.extraction_hints = {
+      ...hintsOf(next),
+      side: sideForField,
+      region: defaultRegionForIndex(sideFields.length, sideFields.length + 1),
+    }
+    next.sides = [sideForField]
     updateSelectedDocument((doc) => ({ ...doc, fields: [...doc.fields, next] }))
     setSelectedFieldKey(next.key)
+  }
+
+  /**
+   * Rename a field label and, when the key is still auto-generated, refresh it
+   * to a readable slug (e.g. "Digital Number" → digital_number). Rules stay linked.
+   */
+  function renameField(fieldKey: string, label: string) {
+    if (!selectedDocument) return
+    const nextLabel = label.trim()
+    if (!nextLabel) return
+    const target = selectedDocument.fields.find((f) => f.key === fieldKey)
+    if (!target) return
+
+    const shouldReslug = isAutoFieldKey(target.key) || target.label === "New information"
+    const nextKey = shouldReslug
+      ? slugifyFieldKey(
+          nextLabel,
+          selectedDocument.fields.map((f) => f.key),
+          { excludeKey: fieldKey },
+        )
+      : target.key
+
+    updateSelectedDocument((doc) => ({
+      ...doc,
+      fields: doc.fields.map((field) =>
+        field.key === fieldKey
+          ? {
+              ...field,
+              key: nextKey,
+              label: nextLabel,
+            }
+          : field,
+      ),
+      rules: (doc.rules ?? []).map((rule) =>
+        rule.field_key === fieldKey ? { ...rule, field_key: nextKey } : rule,
+      ),
+    }))
+    if (selectedFieldKey === fieldKey) setSelectedFieldKey(nextKey)
   }
 
   function removeField(key: string) {
@@ -1144,22 +1367,85 @@ export function useOcrTemplateState() {
 
   function moveField(key: string, direction: -1 | 1) {
     if (!selectedDocument) return
-    const sorted = [...selectedDocument.fields].sort((a, b) => a.order - b.order)
-    const index = sorted.findIndex((field) => field.key === key)
+    const target = selectedDocument.fields.find((f) => f.key === key)
+    if (!target) return
+    const side = fieldCanvasSide(target)
+    // Reorder only within the same side so Front/Back lists stay independent
+    const sameSide = selectedDocument.fields
+      .filter((f) => fieldCanvasSide(f) === side)
+      .sort((a, b) => a.order - b.order)
+    const index = sameSide.findIndex((field) => field.key === key)
     const swap = index + direction
-    if (index < 0 || swap < 0 || swap >= sorted.length) return
-    const a = sorted[index]
-    const b = sorted[swap]
-    const orderA = a.order
-    sorted[index] = { ...a, order: b.order }
-    sorted[swap] = { ...b, order: orderA }
+    if (index < 0 || swap < 0 || swap >= sameSide.length) return
+    const nextSide = [...sameSide]
+    const [item] = nextSide.splice(index, 1)
+    nextSide.splice(swap, 0, item)
+    const orderMap = new Map(nextSide.map((f, i) => [f.key, i]))
+    // Keep other-side fields' relative orders; renumber this side
+    const other = selectedDocument.fields
+      .filter((f) => fieldCanvasSide(f) !== side)
+      .sort((a, b) => a.order - b.order)
+    const merged =
+      side === "front" ? [...nextSide, ...other] : [...other, ...nextSide]
     updateSelectedDocument((doc) => ({
       ...doc,
-      fields: doc.fields.map((field) => {
-        const updated = sorted.find((item) => item.key === field.key)
-        return updated ?? field
-      }),
+      fields: merged.map((field, i) => ({
+        ...field,
+        order: orderMap.has(field.key) ? orderMap.get(field.key)! : i + 100,
+      })),
     }))
+  }
+
+  /**
+   * Drag-and-drop reorder, including moving a field between Front and Back lists.
+   * `targetSide` is the list the row was dropped on; `toIndex` is the insert index in that list.
+   */
+  function reorderField(
+    key: string,
+    toIndex: number,
+    targetSide?: "front" | "back",
+  ) {
+    if (!selectedDocument) return
+    const target = selectedDocument.fields.find((f) => f.key === key)
+    if (!target) return
+    const fromSide = fieldCanvasSide(target)
+    const side = targetSide ?? fromSide
+
+    const destination = selectedDocument.fields
+      .filter((f) => fieldCanvasSide(f) === side && f.key !== key)
+      .sort((a, b) => a.order - b.order)
+
+    const moved = withFieldSide(target, side)
+    const insertAt = Math.max(0, Math.min(toIndex, destination.length))
+    const nextDest = [...destination]
+    nextDest.splice(insertAt, 0, moved)
+
+    const otherSide: "front" | "back" = side === "front" ? "back" : "front"
+    const other = selectedDocument.fields
+      .filter((f) => fieldCanvasSide(f) === otherSide && f.key !== key)
+      .sort((a, b) => a.order - b.order)
+
+    const frontList = side === "front" ? nextDest : other
+    const backList = side === "back" ? nextDest : other
+
+    updateSelectedDocument((doc) => ({
+      ...doc,
+      fields: [
+        ...frontList.map((field, index) => ({
+          ...withFieldSide(field, "front"),
+          order: index,
+        })),
+        ...backList.map((field, index) => ({
+          ...withFieldSide(field, "back"),
+          order: index,
+        })),
+      ],
+    }))
+
+    if (side !== fromSide) {
+      setSamplePreviewSide(side)
+      setSelectedFieldKey(key)
+    }
   }
 
   // Mark-areas canvas must show the sample template, never the try-sample test photo.
@@ -1219,7 +1505,9 @@ export function useOcrTemplateState() {
     // fields
     addField,
     removeField,
+    renameField,
     moveField,
+    reorderField,
     selectField,
     setFieldRegion,
 
@@ -1261,6 +1549,10 @@ export function useOcrTemplateState() {
     setDrawerOpen,
     testInputRef: testInputRef as RefObject<HTMLInputElement>,
     runTest,
+    runTestFromSample,
+    setTestPhoto,
+    missingRequiredSampleSides,
+    validateRequiredSamples,
     extractedList,
     extractedByKey,
     templateMatch,

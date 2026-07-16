@@ -1,4 +1,6 @@
-const DEFAULT_API_BASE_URL = "http://localhost:8000/api"
+// Same-origin `/api` goes through the Vite dev proxy (see vite.config.ts),
+// so HTTPS LAN demos avoid mixed-content blocks to plain HTTP Django.
+const DEFAULT_API_BASE_URL = "/api"
 const CSRF_COOKIE_NAME = "csrftoken"
 
 let accessToken: string | null = null
@@ -22,12 +24,27 @@ export interface SessionResponse {
 }
 
 export function apiBaseUrl() {
-  return (import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/$/, "")
+  const raw = (import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL).trim()
+  // Empty / relative values stay same-origin (Vite HTTPS proxy in dev).
+  if (!raw || raw === "/" || raw === "/api") return "/api"
+  return raw.replace(/\/$/, "")
+}
+
+/** Origin used for media/WebSocket URLs (empty string = current page origin). */
+export function apiOrigin() {
+  const base = apiBaseUrl()
+  if (base.startsWith("/")) return ""
+  return base.replace(/\/api$/, "")
 }
 
 export function websocketUrl(path: string) {
-  const base = apiBaseUrl().replace(/\/api$/, "")
-  const wsBase = base.replace(/^https:/, "wss:").replace(/^http:/, "ws:")
+  const origin = apiOrigin()
+  if (!origin) {
+    // Same-origin WebSocket — wss:// when the page is HTTPS.
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+    return `${protocol}//${window.location.host}${path.startsWith("/") ? path : `/${path}`}`
+  }
+  const wsBase = origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:")
   return `${wsBase}${path.startsWith("/") ? path : `/${path}`}`
 }
 
@@ -103,6 +120,29 @@ function errorMessage(data: unknown, fallback: string) {
   return fallback
 }
 
+function isNetworkFetchError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const msg = (error.message || "").toLowerCase()
+  return (
+    error.name === "TypeError" ||
+    msg.includes("failed to fetch") ||
+    msg.includes("networkerror") ||
+    msg.includes("network request failed") ||
+    msg.includes("load failed") ||
+    msg.includes("fetch failed")
+  )
+}
+
+export function networkErrorMessage(error?: unknown): string {
+  void error
+  const base = apiBaseUrl()
+  return (
+    `Cannot reach the API (${base}). ` +
+    `Make sure the backend is running (usually on port 8000) and the Vite proxy can reach it, then refresh. ` +
+    `For phones on Wi‑Fi, open the HTTPS Vite URL (not :8000) so location APIs work in a secure context.`
+  )
+}
+
 async function request<T>(path: string, init: RequestInit, options: ApiRequestOptions) {
   const headers = new Headers(init.headers)
   const isFormData = init.body instanceof FormData
@@ -127,7 +167,39 @@ async function request<T>(path: string, init: RequestInit, options: ApiRequestOp
     }
   }
 
-  const response = await fetch(`${apiBaseUrl()}${path}`, { ...init, headers, credentials: "include" })
+  const timeoutMs = options.timeoutMs
+  const controller = timeoutMs ? new AbortController() : null
+  const timeoutId =
+    controller && timeoutMs
+      ? window.setTimeout(() => controller.abort(), timeoutMs)
+      : null
+
+  let response: Response
+  try {
+    response = await fetch(`${apiBaseUrl()}${path}`, {
+      ...init,
+      headers,
+      credentials: "include",
+      signal: controller?.signal ?? init.signal,
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiError(
+        "The server took too long to respond (OCR can be slow). Keep the API running and try again with a clearer, smaller photo.",
+        0,
+        { message: "Request timed out." },
+      )
+    }
+    if (isNetworkFetchError(error)) {
+      throw new ApiError(networkErrorMessage(error), 0, {
+        message: networkErrorMessage(error),
+        reasons: ["Network error — API unreachable."],
+      })
+    }
+    throw error
+  } finally {
+    if (timeoutId != null) window.clearTimeout(timeoutId)
+  }
 
   if (response.status === 204) {
     return undefined as T
@@ -147,6 +219,8 @@ interface ApiRequestOptions {
   auth?: boolean
   csrf?: boolean
   refreshOnUnauthorized?: boolean
+  /** Optional request timeout in milliseconds (AbortController). */
+  timeoutMs?: number
 }
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}, options: ApiRequestOptions = {}) {

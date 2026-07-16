@@ -1,7 +1,6 @@
 import { cn } from "@workspace/ui/lib/utils"
 import { ChevronRight, FileQuestionIcon, LeafIcon, SearchIcon, ShieldCheckIcon, TrafficConeIcon } from "lucide-react"
 import { Link } from "react-router-dom"
-import { Badge } from "@workspace/ui/components/badge"
 import type { Concern } from "@/features/dashboard/api"
 
 const categoryIcon: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -51,7 +50,7 @@ export function ActiveReportsCard({ reports }: Props) {
               className="-mx-5 flex min-h-16 items-center gap-4 border-b border-border px-5 py-3 transition-colors last:border-b-0 hover:bg-gray-50"
             >
               <div className={cn("flex size-11 shrink-0 items-center justify-center rounded-full", color.bg)}>
-                <Icon className={cn("size-5", color.text)} strokeWidth={2} />
+                <Icon className={cn("size-5", color.text)} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">

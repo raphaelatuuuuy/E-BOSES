@@ -4,17 +4,23 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host",
     "build": "tsc -b && vite build",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview --host"
   },
   "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/material": "^9.2.0",
+    "@mui/x-date-pickers": "^9.9.0",
     "@react-three/fiber": "^9.6.1",
     "@shadergradient/react": "^2.4.20",
     "@workspace/ui": "*",
+    "boxicons": "^2.1.4",
+    "dayjs": "^1.11.21",
     "lucide-react": "^0.561.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
@@ -29,6 +35,7 @@
     "@types/node": "^24",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
     "@vitejs/plugin-react": "^6",
     "eslint": "^10",
     "eslint-plugin-react-hooks": "^7.1.1",

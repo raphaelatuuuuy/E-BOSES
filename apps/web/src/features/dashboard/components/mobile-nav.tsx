@@ -3,24 +3,33 @@ import { Link, useLocation } from "react-router-dom"
 import {
   AlertTriangleIcon,
   BarChart3Icon,
+  FileCheck2Icon,
   HomeIcon,
-  PlusIcon,
+  MapPinnedIcon,
+  SearchIcon,
   Settings2Icon,
   ShieldCheckIcon,
-  UsersIcon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
+import {
+  BoxAlertsIcon,
+  BoxHomeAlt2Icon,
+  BoxReportIcon,
+} from "@/features/dashboard/components/resident-nav-icons"
 import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { computeDefaultAvatar } from "@/features/dashboard/avatar-utils"
 
 type NavItem = {
   label: string
   path: string | null
   icon?: typeof HomeIcon
+  /** Resident SVG icon (regular ↔ solid) */
+  NavIcon?: React.ComponentType<{ solid?: boolean; className?: string }>
   isCenter?: boolean
   isAvatar?: boolean
+  /** Solid always (e.g. Report FAB) */
+  solidAlways?: boolean
 }
 
 export function MobileNav() {
@@ -28,52 +37,78 @@ export function MobileNav() {
   const [createOpen, setCreateOpen] = useState(false)
   const { user } = useAuthSession()
 
-  const initials = user ? `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}` : "?"
-  const avatarKey = user ? computeDefaultAvatar(user) : ""
+  const letter = (user?.firstName?.[0] || user?.lastName?.[0] || "?").toUpperCase()
 
-  const isOfficialRole = user?.role === "barangay_official" || user?.is_staff || user?.is_superuser
+  const isOfficialRole =
+    user?.role === "barangay_official" || user?.is_staff || user?.is_superuser
   const isResponderRole = user?.role === "first_responder"
+
   const navItems: NavItem[] = isOfficialRole
     ? [
-        { label: "Reports", path: "/dashboard/reports", icon: BarChart3Icon },
+        { label: "Map", path: "/dashboard/alerts-map", icon: MapPinnedIcon },
+        { label: "Concerns", path: "/dashboard/reports", icon: BarChart3Icon },
         { label: "Emergency", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
+        { label: "Queue", path: "/dashboard/verification-queue", icon: FileCheck2Icon },
         { label: "IDs", path: "/dashboard/ocr-templates", icon: Settings2Icon },
         { label: "Admin", path: "/dashboard/admin", icon: ShieldCheckIcon },
         { label: "Profile", path: "/dashboard/profile", isAvatar: true },
       ]
     : isResponderRole
-    ? [
-        { label: "Emergency", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
-        { label: "Profile", path: "/dashboard/profile", isAvatar: true },
-      ]
-    : [
-        { label: "Home", path: "/dashboard/home", icon: HomeIcon },
-        { label: "Feed", path: "/dashboard/feed", icon: UsersIcon },
-        { label: "Create", path: null, icon: PlusIcon, isCenter: true },
-        { label: "Reports", path: "/dashboard/reports", icon: BarChart3Icon },
-        { label: "Profile", path: "/dashboard/profile", isAvatar: true },
-      ]
+      ? [
+          { label: "Emergency", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
+          { label: "Profile", path: "/dashboard/profile", isAvatar: true },
+        ]
+      : [
+          { label: "Home", path: "/dashboard/home", NavIcon: BoxHomeAlt2Icon },
+          { label: "Report", path: "/dashboard/reports", NavIcon: BoxReportIcon },
+          { label: "Report", path: null, isCenter: true, solidAlways: true },
+          { label: "Alerts", path: "/dashboard/feed", NavIcon: BoxAlertsIcon },
+          { label: "Profile", path: "/dashboard/profile", isAvatar: true },
+        ]
+
+  const isResident = !isOfficialRole && !isResponderRole
 
   return (
     <>
-      <nav className="fixed bottom-0 left-0 right-0 z-30 shadow-lg md:hidden">
-        <div className="mx-3 mb-3 mt-1 flex items-end justify-around rounded-[2rem] border border-border/60 bg-white px-3 pb-3 pt-2 shadow-sm">
+      <nav className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 md:hidden">
+        <div
+          className={cn(
+            "pointer-events-auto mx-auto mb-[max(0.5rem,env(safe-area-inset-bottom))] flex items-end justify-around",
+            isResident
+              ? "mx-3 max-w-md rounded-[1.75rem] border-[1.5px] border-[#d0d0d0] bg-white/95 px-2 pb-2.5 pt-2 shadow-[0_8px_30px_rgba(15,23,42,0.12)] backdrop-blur"
+              : "mx-3 rounded-[2rem] border border-border/60 bg-white px-3 pb-3 pt-2 shadow-sm",
+          )}
+        >
           {navItems.map((item) => {
-            const active = item.path ? location.pathname === item.path : false
+            const active = item.path
+              ? location.pathname === item.path ||
+                (item.path === "/dashboard/home" && location.pathname === "/dashboard")
+              : false
 
             if (item.isCenter) {
-              const Icon = item.icon!
               return (
                 <button
                   key="create"
                   type="button"
                   onClick={() => setCreateOpen(true)}
-                  className="-mt-5 flex flex-col items-center gap-0.5"
+                  className="group -mt-6 flex flex-col items-center gap-1"
                 >
-                  <div className="flex size-12 items-center justify-center rounded-full bg-primary shadow-lg shadow-primary/30">
-                    <Icon className="size-6 text-primary-foreground" />
+                  <div
+                    className={cn(
+                      "flex items-center justify-center rounded-full text-white shadow-lg",
+                      isResident
+                        ? "size-12 bg-[#ff6a1a] shadow-orange-600/25"
+                        : "size-12 bg-primary shadow-primary/30",
+                    )}
+                  >
+                    <i className="bx bxs-edit text-[20px] leading-none text-white" aria-hidden />
                   </div>
-                  <span className="text-xs font-semibold text-primary">
+                  <span
+                    className={cn(
+                      "text-[12px] font-light leading-none",
+                      isResident ? "text-[#ff6a1a]" : "text-primary",
+                    )}
+                  >
                     {item.label}
                   </span>
                 </button>
@@ -86,45 +121,80 @@ export function MobileNav() {
                   key={item.path}
                   to={item.path!}
                   className={cn(
-                    "flex flex-col items-center gap-0.5 px-2 py-1 transition-colors",
-                    active ? "text-primary" : "text-muted-foreground",
+                    "group flex min-w-[3.25rem] flex-col items-center gap-1 px-1 py-1 transition-colors",
+                    active ? "text-neutral-900" : "text-neutral-500",
                   )}
                 >
-                  <span className="flex size-10 items-center justify-center overflow-hidden rounded-full text-sm font-bold text-muted-foreground">
-                    {avatarKey ? <img src={`/contents/${avatarKey}.png`} alt="" className="h-full w-full object-cover" /> : initials}
+                  <span
+                    className={cn(
+                      "flex size-8 items-center justify-center overflow-hidden rounded-full bg-[#c5d0e6] text-[15px] font-semibold text-[#2c3a5a] ring-2",
+                      active ? "ring-[#ff6a1a]/40" : "ring-transparent",
+                    )}
+                  >
+                    {letter}
                   </span>
-                  <span className="text-[10px] font-medium">{item.label}</span>
+                  <span className="text-[12px] font-light leading-none">{item.label}</span>
                 </Link>
               )
             }
 
-            const Icon = item.icon!
+            if (isResident && item.NavIcon) {
+              const NavIcon = item.NavIcon
+              return (
+                <Link
+                  key={item.path}
+                  to={item.path!}
+                  className={cn(
+                    "group flex min-w-[3.25rem] flex-col items-center gap-1 px-1 py-1 transition-colors",
+                    active ? "text-[#ff6a1a]" : "text-neutral-500",
+                  )}
+                >
+                  <NavIcon
+                    solid={active}
+                    className={active ? "text-[#ff6a1a]" : "text-neutral-500"}
+                  />
+                  <span
+                    className={cn(
+                      "text-[12px] font-light leading-none",
+                      active && "font-normal text-[#ff6a1a]",
+                    )}
+                  >
+                    {item.label}
+                  </span>
+                </Link>
+              )
+            }
+
+            const Icon = item.icon ?? SearchIcon
             return (
               <Link
                 key={item.path}
                 to={item.path!}
                 className={cn(
-                  "flex flex-col items-center gap-0.5 px-2 py-1 transition-colors",
-                  active ? "text-primary" : "text-muted-foreground",
+                  "flex min-w-[3.25rem] flex-col items-center gap-1 px-1 py-1 transition-colors",
+                  active ? "text-neutral-900" : "text-neutral-500",
                 )}
               >
-                {item.label === "Home" ? (
+                {item.label === "Dashboard" || item.label === "Home" ? (
                   <img src="/contents/home.png" alt="" className="size-10 rounded-full object-cover" />
                 ) : item.label === "Feed" ? (
                   <img src="/contents/feed.png" alt="" className="size-10 rounded-full object-cover" />
-                ) : item.label === "Reports" ? (
-                  <img src="/contents/reports.png" alt="" className="size-10 rounded-full object-cover" />
+                ) : item.label === "Reports" || item.label === "Concerns" ? (
+                  <img
+                    src="/contents/reports.png"
+                    alt=""
+                    className="size-10 rounded-full object-cover"
+                  />
                 ) : (
                   <Icon className="size-6" />
                 )}
-                <span className="text-xs font-medium">{item.label}</span>
+                <span className="text-[12px] font-light leading-none">{item.label}</span>
               </Link>
             )
           })}
         </div>
       </nav>
 
-      {/* Create Report dialog (controlled by nav button) */}
       <CreateReportDialog open={createOpen} onOpenChange={setCreateOpen} />
     </>
   )

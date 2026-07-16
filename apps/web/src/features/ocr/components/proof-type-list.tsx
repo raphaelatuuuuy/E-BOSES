@@ -6,7 +6,6 @@ import { Button } from "@workspace/ui/components/button"
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@workspace/ui/components/card"
@@ -116,9 +115,9 @@ export function ProofTypeList(props: {
             const status = deriveProofStatus(doc)
             const displayName =
               doc.template_name?.trim() || doc.name?.trim() || "Untitled proof"
-            const description =
-              doc.description?.trim() || "No sign-up description yet."
             const available = doc.enabled !== false
+            const sides = doc.required_sides ?? []
+            const needsBoth = sides.includes("front") && sides.includes("back")
 
             return (
               <Card
@@ -134,11 +133,12 @@ export function ProofTypeList(props: {
                     </CardTitle>
                     <StatusBadge status={status} />
                   </div>
-                  <CardDescription
-                    className={cn("line-clamp-2 text-xs font-semibold leading-5", PROOF_THEME.body)}
-                  >
-                    {description}
-                  </CardDescription>
+                  <p className={cn("text-xs font-semibold", PROOF_THEME.muted)}>
+                    {needsBoth ? "Front & back required" : "Front only"}
+                    {doc.fields?.length
+                      ? ` · ${doc.fields.length} field${doc.fields.length === 1 ? "" : "s"}`
+                      : ""}
+                  </p>
                 </CardHeader>
                 <CardContent className="space-y-4 px-5 pb-5">
                   <label className="flex items-center justify-between gap-3 rounded-xl border border-[#dfe7f5] bg-[#f8fafc] px-3 py-2.5">

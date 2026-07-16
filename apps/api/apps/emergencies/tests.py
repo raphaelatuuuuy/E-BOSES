@@ -3,6 +3,7 @@ from datetime import timedelta
 from io import BytesIO
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.utils import timezone
@@ -13,7 +14,7 @@ from rest_framework.test import APITestCase
 from apps.accounts.models import ResidentProfile
 from apps.notifications.models import Notification
 
-from .models import EmergencyAlert, EmergencyAppeal, EmergencyEscalation, EmergencyLocationPing, EmergencyMedia, EmergencyResponderAssignment, EmergencyStatusEvent
+from .models import EmergencyAlert, EmergencyAppeal, EmergencyEscalation, EmergencyLocationPing, EmergencyMedia, EmergencyResponderAssignment, EmergencyStatusEvent, MapGeometry
 
 
 TEST_CHANNEL_LAYERS = {
@@ -31,7 +32,7 @@ def png_upload(name="emergency.png", content=None):
     return SimpleUploadedFile(name, content or png_bytes(), content_type="image/png")
 
 
-@override_settings(CHANNEL_LAYERS=TEST_CHANNEL_LAYERS)
+@override_settings(CHANNEL_LAYERS=TEST_CHANNEL_LAYERS, OSM_ROUTE_URL="")
 class EmergencyAPITests(APITestCase):
     def setUp(self):
         User = get_user_model()
@@ -514,3 +515,94 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(message["type"], "emergency.update")
         self.assertEqual(message["payload"]["id"], alert.pk)
+
+    def test_official_live_map_snapshot_is_official_only(self):
+        alert = self.create_alert()
+        self.responder.is_on_duty = True
+        self.responder.current_latitude = "14.6510000"
+        self.responder.current_longitude = "121.1110000"
+        self.responder.save(update_fields=["is_on_duty", "current_latitude", "current_longitude", "updated_at"])
+        EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
+
+        self.client.force_authenticate(self.resident)
+        denied = self.client.get("/api/dashboard/official/live-map/")
+        self.client.force_authenticate(self.official)
+        allowed = self.client.get("/api/dashboard/official/live-map/")
+
+        self.assertEqual(denied.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(allowed.status_code, status.HTTP_200_OK)
+        self.assertEqual(allowed.data["map"]["provider"], "OpenStreetMap")
+        self.assertTrue(any(item["id"] == alert.pk for item in allowed.data["emergencies"]))
+        self.assertTrue(any(item["id"] == self.responder.pk for item in allowed.data["people"]))
+
+    def test_official_live_map_snapshot_serves_cached_geometry(self):
+        cache.delete("live-map-static-geometry:v2")
+        MapGeometry.objects.all().delete()
+        MapGeometry.objects.create(
+            kind=MapGeometry.Kind.BOUNDARY,
+            name="Marikina Heights",
+            osm_type="R",
+            osm_id=371327,
+            geometry={"type": "Polygon", "coordinates": [[[121.1, 14.6], [121.2, 14.6], [121.2, 14.7], [121.1, 14.6]]]},
+        )
+        MapGeometry.objects.create(
+            kind=MapGeometry.Kind.STREET,
+            name="Santa Elena Street",
+            osm_type="W",
+            osm_id=73964486,
+            street_type="residential",
+            geometry={"type": "LineString", "coordinates": [[121.11, 14.65], [121.12, 14.66]]},
+        )
+        MapGeometry.objects.create(
+            kind=MapGeometry.Kind.STREET,
+            name="Narra Street",
+            osm_type="W",
+            osm_id=4357042,
+            street_type="residential",
+            geometry={"type": "LineString", "coordinates": [[121.10, 14.64], [121.11, 14.65]]},
+        )
+        self.client.force_authenticate(self.official)
+
+        response = self.client.get("/api/dashboard/official/live-map/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["map"]["boundary"]["geometry"]["type"], "Polygon")
+        streets = {item["name"]: item for item in response.data["map"]["streets"]["streets"]}
+        self.assertIn("Santa Elena Street", streets)
+        self.assertIn("Narra Street", streets)
+        self.assertEqual(streets["Santa Elena Street"]["osm_ids"], ["W73964486"])
+        self.assertEqual(streets["Santa Elena Street"]["geometries"][0]["type"], "LineString")
+
+    def test_location_ping_updates_current_user_and_broadcasts_live_map(self):
+        from asgiref.sync import async_to_sync
+        from channels.layers import get_channel_layer
+
+        channel_layer = get_channel_layer()
+        channel_name = async_to_sync(channel_layer.new_channel)("test.live-map")
+        async_to_sync(channel_layer.group_add)("official_live_map", channel_name)
+        self.client.force_authenticate(self.resident)
+
+        response = self.client.post(
+            "/api/locations/ping/",
+            {"latitude": "14.6510000", "longitude": "121.1110000", "accuracy": 8, "source": "active_session"},
+            format="json",
+        )
+        message = async_to_sync(asyncio.wait_for)(channel_layer.receive(channel_name), timeout=1)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.resident.refresh_from_db()
+        self.assertEqual(str(self.resident.current_latitude), "14.6510000")
+        self.assertEqual(message["type"], "live_map.update")
+        self.assertEqual(message["payload"]["type"], "location.updated")
+        self.assertEqual(message["payload"]["payload"]["person"]["id"], self.resident.pk)
+
+    def test_location_ping_rejects_out_of_bounds_coordinates(self):
+        self.client.force_authenticate(self.resident)
+
+        response = self.client.post(
+            "/api/locations/ping/",
+            {"latitude": "14.9000000", "longitude": "121.5000000"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

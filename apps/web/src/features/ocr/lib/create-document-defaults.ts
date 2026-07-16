@@ -4,6 +4,7 @@ import type {
   OcrFieldHints,
   OcrFieldRegion,
 } from "@/features/ocr/api"
+import { resolveFieldSide } from "@/features/ocr/api"
 
 export type FieldRegion = OcrFieldRegion
 
@@ -18,14 +19,65 @@ export const FIELD_COLORS = [
   "#4f46e5",
 ]
 
-export function createField(order: number): OcrFieldDefinition {
+/** True when key looks system-generated (not a human slug). */
+export function isAutoFieldKey(key: string): boolean {
+  const k = String(key || "")
+  return (
+    /^field_\d+/i.test(k) ||
+    /^new_information(_\d+)?$/i.test(k) ||
+    // full_name_1783913944508 / address_1783913944508 (ms timestamps)
+    /_\d{10,}$/.test(k) ||
+    // field_1783965850537_2
+    /^field_\d+_\d+$/i.test(k)
+  )
+}
+
+/**
+ * Build a stable machine key from a display label: "Digital Number" → "digital_number".
+ * Keeps keys unique against `existingKeys` (excluding the field being renamed).
+ */
+export function slugifyFieldKey(
+  label: string,
+  existingKeys: string[] = [],
+  opts?: { excludeKey?: string },
+): string {
+  const base =
+    String(label || "")
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .replace(/_+/g, "_")
+      .slice(0, 48) || "field"
+
+  const reserved = new Set(
+    existingKeys.filter((key) => key && key !== opts?.excludeKey).map((key) => key.toLowerCase()),
+  )
+  if (!reserved.has(base)) return base
+  for (let n = 2; n < 200; n += 1) {
+    const candidate = `${base}_${n}`
+    if (!reserved.has(candidate)) return candidate
+  }
+  return `${base}_${Date.now()}`
+}
+
+export function createField(
+  order: number,
+  side: "front" | "back" | "single" = "front",
+  existingKeys: string[] = [],
+  label = "New information",
+): OcrFieldDefinition {
+  const canvasSide = side === "single" ? "front" : side
+  const key = slugifyFieldKey(label, existingKeys)
   return {
-    key: `field_${Date.now()}_${order}`,
-    label: "New information",
+    key,
+    label,
     data_type: "text",
     enabled: true,
     required: true,
     aliases: [],
+    sides: [canvasSide],
     order,
     min_confidence: 0.9,
     normalization: "none",
@@ -38,6 +90,61 @@ export function createField(order: number): OcrFieldDefinition {
       labels: [],
       regex_pattern: "",
       region: null,
+      side: canvasSide,
+    },
+  }
+}
+
+/** Side this field is marked on (defaults to front for older templates). */
+export function fieldCanvasSide(
+  field: OcrFieldDefinition,
+): "front" | "back" {
+  return resolveFieldSide(field)
+}
+
+/**
+ * Stable display order: Front fields first (by order), then Back fields.
+ * Numbers and colors stay consistent across Mark areas, canvas, Rules, and Try sample.
+ */
+export function sortedFieldsForDisplay(fields: OcrFieldDefinition[]): OcrFieldDefinition[] {
+  return [...fields].sort((a, b) => {
+    const sideA = fieldCanvasSide(a) === "back" ? 1 : 0
+    const sideB = fieldCanvasSide(b) === "back" ? 1 : 0
+    if (sideA !== sideB) return sideA - sideB
+    return (a.order ?? 0) - (b.order ?? 0)
+  })
+}
+
+/** 1-based display number for a field (same everywhere in the builder). */
+export function fieldDisplayNumber(
+  field: OcrFieldDefinition,
+  allFields: OcrFieldDefinition[],
+): number {
+  const sorted = sortedFieldsForDisplay(allFields)
+  const index = sorted.findIndex((item) => item.key === field.key)
+  return index >= 0 ? index + 1 : 0
+}
+
+/** Color for a field based on its stable display number. */
+export function fieldDisplayColor(
+  field: OcrFieldDefinition,
+  allFields: OcrFieldDefinition[],
+): string {
+  const n = fieldDisplayNumber(field, allFields)
+  return FIELD_COLORS[Math.max(0, n - 1) % FIELD_COLORS.length]
+}
+
+/** Assign a field to front or back and keep model.sides in sync. */
+export function withFieldSide(
+  field: OcrFieldDefinition,
+  side: "front" | "back",
+): OcrFieldDefinition {
+  return {
+    ...field,
+    sides: [side],
+    extraction_hints: {
+      ...hintsOf(field),
+      side,
     },
   }
 }
@@ -48,22 +155,22 @@ export function createDocumentType(order: number, existingKeys: string[] = []): 
     key = `custom_document_${Date.now()}_${Math.floor(Math.random() * 1000)}`
   }
   const name = "New proof type"
-  const fields = [
-    createField(0),
-    { ...createField(1), key: `address_${Date.now()}`, label: "Address" },
-  ]
-  fields[0] = { ...fields[0], label: "Full name", key: `full_name_${Date.now()}` }
+  const fullName = createField(0, "front", [], "Full name")
+  const address = createField(1, "front", [fullName.key], "Address")
+  const fields = [fullName, address]
   fields.forEach((field, index) => {
+    field.sides = ["front"]
     field.extraction_hints = {
       ...hintsOf(field),
       region: defaultRegionForIndex(index, fields.length),
+      side: "front",
     }
     field.order = index
   })
   return {
     key,
     name,
-    description: "Short note shown under the name on resident sign-up.",
+    description: "",
     enabled: false,
     order,
     required_sides: ["single"],
@@ -94,15 +201,15 @@ export function hintsOf(field: OcrFieldDefinition): OcrFieldHints {
 }
 
 export function defaultRegionForIndex(index: number, total: number): FieldRegion {
-  // Stack fields on the left content area of a typical barangay ID (photo on right).
-  const col = index % 2
-  const row = Math.floor(index / 2)
-  const rows = Math.max(1, Math.ceil(total / 2))
-  const h = Math.min(0.1, 0.72 / rows)
+  // Stack fields vertically on the left content area — no overlap between boxes.
+  const n = Math.max(1, total)
+  const h = Math.min(0.09, 0.55 / n)
+  const gap = 0.018
+  const y = Math.min(0.88 - h, 0.12 + index * (h + gap))
   return {
-    x: col === 0 ? 0.04 : 0.38,
-    y: 0.18 + row * (h + 0.02),
-    w: 0.32,
+    x: 0.06,
+    y,
+    w: 0.48,
     h,
   }
 }
@@ -128,26 +235,80 @@ export function isValidRegion(region: unknown): region is FieldRegion {
   )
 }
 
-export function ensureDocumentFieldRegions(doc: OcrDocumentType): OcrDocumentType {
-  const sorted = [...doc.fields].sort((a, b) => a.order - b.order)
+/**
+ * Rewrite ugly auto keys (field_178… / full_name_178…) to clean slugs from labels.
+ * Keeps rules linked via key map. Safe to run on every draft load.
+ */
+export function ensureReadableFieldKeys(doc: OcrDocumentType): OcrDocumentType {
+  const used: string[] = []
+  const keyMap = new Map<string, string>()
   let changed = false
-  const withRegions = sorted.map((field, index) => {
-    const region = hintsOf(field).region
-    if (isValidRegion(region)) {
+
+  const fields = doc.fields.map((field) => {
+    if (!isAutoFieldKey(field.key)) {
+      used.push(field.key)
       return field
     }
+    const nextKey = slugifyFieldKey(field.label || field.key, used, {
+      excludeKey: field.key,
+    })
+    used.push(nextKey)
+    if (nextKey !== field.key) {
+      changed = true
+      keyMap.set(field.key, nextKey)
+      return { ...field, key: nextKey }
+    }
+    return field
+  })
+
+  if (!changed) return doc
+
+  const rules = (doc.rules ?? []).map((rule) => {
+    const mapped = keyMap.get(rule.field_key)
+    return mapped ? { ...rule, field_key: mapped } : rule
+  })
+
+  return { ...doc, fields, rules }
+}
+
+export function ensureDocumentFieldRegions(doc: OcrDocumentType): OcrDocumentType {
+  // Clean machine keys first so renames stick for the rest of the session / save.
+  const withKeys = ensureReadableFieldKeys(doc)
+  const sorted = [...withKeys.fields].sort((a, b) => a.order - b.order)
+  let changed = withKeys !== doc
+  const sideCounts: Record<"front" | "back", number> = { front: 0, back: 0 }
+  const withRegions = sorted.map((field) => {
+    const hints = hintsOf(field)
+    const side = fieldCanvasSide(field)
+    const sideIndex = sideCounts[side]
+    sideCounts[side] += 1
+    let next = field
+    // Normalize side onto both extraction_hints and sides[] so reloads stay correct.
+    if (hints.side !== side || !(field.sides ?? []).includes(side)) {
+      changed = true
+      next = withFieldSide(next, side)
+    }
+    const region = hintsOf(next).region
+    if (isValidRegion(region)) {
+      return next
+    }
     changed = true
+    // Count how many will exist on this side for spacing
+    const sideTotal = sorted.filter((f) => fieldCanvasSide(f) === side).length
     return {
-      ...field,
+      ...withFieldSide(next, side),
       extraction_hints: {
-        ...hintsOf(field),
-        region: defaultRegionForIndex(index, sorted.length),
+        ...hintsOf(next),
+        side,
+        region: defaultRegionForIndex(sideIndex, sideTotal),
       },
     }
   })
-  if (!changed) return doc
+  if (!changed) return withKeys
   return {
-    ...doc,
-    fields: doc.fields.map((field) => withRegions.find((item) => item.key === field.key) ?? field),
+    ...withKeys,
+    fields: withKeys.fields.map(
+      (field) => withRegions.find((item) => item.key === field.key) ?? field,
+    ),
   }
 }

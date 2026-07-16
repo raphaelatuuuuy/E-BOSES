@@ -1,7 +1,38 @@
 @import url("https://fonts.googleapis.com/css2?family=Epilogue:wght@500;600;700;800&display=swap");
-@import url("https://fonts.googleapis.com/css2?family=Mulish:wght@400;500;600;700;800&display=swap");
 @import url("https://fonts.googleapis.com/css2?family=Clash+Display:wght@500;600;700&display=swap");
 @import "tailwindcss";
+
+@font-face {
+  font-family: "BubbleBoom";
+  src: url("/fonts/bubble-boom-regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Saans";
+  src: url("/fonts/saans/Saans-TRIAL-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Saans";
+  src: url("/fonts/saans/Saans-TRIAL-Medium.otf") format("opentype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Saans";
+  src: url("/fonts/saans/Saans-TRIAL-SemiBold.otf") format("opentype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
 
 @source "../../../../apps/**/*.{ts,tsx}";
 @source "../../../../components/**/*.{ts,tsx}";
@@ -80,11 +111,11 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
   --font-sans:
-    "Mulish", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+    "Saans", "Mulish", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-heading:
-    "Epilogue", "Clash Display", -apple-system, BlinkMacSystemFont,
-    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    "Saans", "Epilogue", "Clash Display", -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --animate-fade-slide-up: fadeSlideUp 0.5s ease-out both;
   --animate-sos-drop: sosDrop 0.6s ease-out both;
   --animate-sos-ping: sosPing 2s cubic-bezier(0, 0, 0.2, 1) infinite;
@@ -95,8 +126,8 @@
 }
 
 @keyframes gradientShift {
-  0%, 100% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
+  0% { background-position: 0% 50%; }
+  100% { background-position: 100% 50%; }
 }
 
 @keyframes blink {
@@ -157,6 +188,15 @@
   body {
     @apply bg-background text-foreground font-sans;
   }
+
+  /* Hide browser's native password reveal so our custom eye icon is the only one */
+  input[type="password"]::-ms-reveal,
+  input[type="password"]::-ms-clear {
+    display: none;
+  }
+  input[type="password"]::-webkit-textfield-decoration-container {
+    display: none;
+  }
 }
 
 /* Reduced motion */
@@ -178,11 +218,31 @@
   display: none;
 }
 
-/* Sonner toast — centered on mobile, top right on desktop */
+/* Sonner toast layout — respect data-x-position from sonner */
 [data-sonner-toaster] {
   --toast-width: 356px;
 }
 
+/* Centered toasts (position="top-center" / "bottom-center") */
+[data-sonner-toaster][data-x-position="center"] {
+  left: 50% !important;
+  right: auto !important;
+  transform: translateX(-50%) !important;
+  width: min(var(--toast-width), calc(100vw - 2rem)) !important;
+  max-width: calc(100vw - 2rem) !important;
+  align-items: center !important;
+}
+
+[data-sonner-toaster][data-x-position="center"] [data-sonner-toast],
+[data-sonner-toaster][data-x-position="center"] [data-styled] {
+  left: 0 !important;
+  right: 0 !important;
+  width: 100% !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+
+/* Mobile: center every toaster so toasts stay on-screen */
 @media (max-width: 767px) {
   [data-sonner-toaster] {
     left: 50% !important;
@@ -190,20 +250,19 @@
     transform: translateX(-50%) !important;
     top: 1rem !important;
     bottom: auto !important;
-    width: calc(100% - 2rem) !important;
-    max-width: var(--toast-width) !important;
-    align-items: center;
+    width: min(var(--toast-width), calc(100vw - 2rem)) !important;
+    max-width: calc(100vw - 2rem) !important;
+    align-items: center !important;
   }
-  [data-sonner-toaster] [data-styled] {
-    width: 100% !important;
-  }
+  [data-sonner-toaster] [data-styled],
   [data-sonner-toaster] [data-sonner-toast] {
     width: 100% !important;
   }
 }
 
+/* Desktop: top-right only for right-aligned toasters (default) */
 @media (min-width: 768px) {
-  [data-sonner-toaster] {
+  [data-sonner-toaster][data-x-position="right"] {
     top: 1.5rem !important;
     bottom: auto !important;
     left: auto !important;
@@ -211,10 +270,59 @@
     transform: none !important;
     width: auto !important;
   }
+
+  [data-sonner-toaster][data-x-position="center"] {
+    top: 1.5rem !important;
+    bottom: auto !important;
+  }
 }
 
 /* Green checkmark */
 [data-sonner-toaster] [data-type="success"] [data-icon] svg {
   color: #16a34a;
   stroke: #16a34a;
+}
+
+/*
+ * Close X inside the toast flex row (right side), vertically aligned with title text.
+ * Static + order/margin so it matches align-items: center on the toast.
+ */
+[data-sonner-toast][data-styled="true"] [data-close-button],
+[data-sonner-toast] [data-close-button] {
+  position: static !important;
+  left: auto !important;
+  right: auto !important;
+  top: auto !important;
+  transform: none !important;
+  order: 20 !important;
+  margin-left: auto !important;
+  margin-right: 0 !important;
+  flex-shrink: 0 !important;
+  align-self: center !important;
+  border: none !important;
+  background: transparent !important;
+  color: #000 !important;
+  box-shadow: none !important;
+  width: 1.5rem !important;
+  height: 1.5rem !important;
+  border-radius: 9999px !important;
+}
+
+[data-sonner-toast][data-styled="true"] [data-close-button]:hover,
+[data-sonner-toast] [data-close-button]:hover {
+  background: hsl(0 0% 96%) !important;
+}
+
+[data-sonner-toast][data-styled="true"] [data-close-button] svg,
+[data-sonner-toast] [data-close-button] svg {
+  color: #000 !important;
+  stroke: #000 !important;
+  width: 0.875rem !important;
+  height: 0.875rem !important;
+}
+
+/* Keep title/content from colliding with the close control */
+[data-sonner-toast][data-styled="true"] [data-content] {
+  min-width: 0 !important;
+  flex: 1 1 auto !important;
 }

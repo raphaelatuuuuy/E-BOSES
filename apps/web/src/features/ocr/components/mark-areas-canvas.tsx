@@ -11,7 +11,9 @@ import type { OcrFieldDefinition, ProofSide } from "@/features/ocr/api"
 import { PROOF_THEME } from "@/features/ocr/components/proof-theme"
 import {
   defaultRegionForIndex,
-  FIELD_COLORS,
+  fieldCanvasSide,
+  fieldDisplayColor,
+  fieldDisplayNumber,
   hintsOf,
   type FieldRegion,
 } from "@/features/ocr/lib/create-document-defaults"
@@ -66,7 +68,11 @@ export function MarkAreasCanvas(props: {
   const canvasFrameRef = useRef<HTMLDivElement>(null)
   const [regionDrag, setRegionDrag] = useState<RegionDragState>(null)
 
-  const sorted = [...fields].sort((a, b) => a.order - b.order)
+  // Only draw fields for this sample side so front/back boxes never overlap.
+  const sideKey = sampleSide === "back" ? "back" : "front"
+  const sorted = [...fields]
+    .filter((field) => fieldCanvasSide(field) === sideKey)
+    .sort((a, b) => a.order - b.order)
 
   function pointerToRelative(clientX: number, clientY: number) {
     const frame = canvasFrameRef.current
@@ -168,7 +174,8 @@ export function MarkAreasCanvas(props: {
             {sorted.map((field, index) => {
               const region =
                 hintsOf(field).region ?? defaultRegionForIndex(index, sorted.length)
-              const color = FIELD_COLORS[index % FIELD_COLORS.length]
+              const displayNumber = fieldDisplayNumber(field, fields)
+              const color = fieldDisplayColor(field, fields)
               const selected = selectedFieldKey === field.key
               const crowded = sorted.some((other, otherIndex) => {
                 if (other.key === field.key) return false
@@ -223,7 +230,7 @@ export function MarkAreasCanvas(props: {
                       opacity: selected ? 1 : crowded ? 0.7 : 0.95,
                     }}
                   >
-                    {index + 1} {field.label}
+                    {displayNumber} {field.label}
                   </span>
                   {selected ? (
                     <span

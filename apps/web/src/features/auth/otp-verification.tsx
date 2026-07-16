@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
-import { ChevronLeft } from "lucide-react"
 import { toast } from "sonner"
 
+import { AuthPageLogo } from "@/features/auth/components/auth-page-logo"
 import { AuthSidePanel } from "@/features/auth/components/auth-side-panel"
 import { OtpVerificationForm } from "@/features/auth/components/otp-verification-form"
 import { usePageTitle } from "@/hooks/use-page-title"
@@ -89,26 +89,28 @@ export default function OtpVerificationPage({
     : description
 
   return (
-    <main className="grid min-h-svh w-full lg:h-svh lg:grid-cols-2 lg:overflow-hidden">
+    <main className="grid min-h-svh w-full bg-white lg:h-svh lg:grid-cols-2 lg:overflow-hidden">
       <AuthSidePanel />
-      <section className="relative flex flex-1 flex-col justify-center overflow-y-auto p-6 md:p-10">
-        <div className="mx-auto flex w-full max-w-md flex-col items-center">
-          <div className="mb-6 lg:hidden">
-            <img src="/contents/logo.png" alt="E-Boses" className="mx-auto h-16 w-auto" />
-          </div>
-          <h1 className="text-balance text-center text-4xl font-heading font-bold">{title}</h1>
-          <p className="mt-1 text-center text-sm text-muted-foreground">{composedDescription}</p>
-          <div className="mt-8 w-full">
-            <OtpVerificationForm
-              title={title}
-              description={composedDescription}
-              actionLabel={actionLabel}
-              onBack={onBack}
-              onResend={handleResend}
-              resendDisabled={resendDisabled}
-              resendLabel={resendLabel}
-              onSuccess={onSuccess}
-            />
+      <section className="relative flex min-h-svh flex-col overflow-y-auto lg:h-full lg:min-h-0">
+        <AuthPageLogo />
+        <div className="flex flex-1 flex-col justify-center px-6 py-8 md:px-12 lg:px-16">
+          <div className="mx-auto w-full max-w-[400px]">
+            <h1 className="text-center text-[1.5rem] font-medium leading-tight tracking-tight text-[#0f172a] md:text-[1.75rem]">
+              {title}
+            </h1>
+            <p className="mt-2 text-center text-sm text-muted-foreground">{composedDescription}</p>
+            <div className="mt-7">
+              <OtpVerificationForm
+                title={title}
+                description={composedDescription}
+                actionLabel={actionLabel}
+                onBack={onBack}
+                onResend={handleResend}
+                resendDisabled={resendDisabled}
+                resendLabel={resendLabel}
+                onSuccess={onSuccess}
+              />
+            </div>
           </div>
         </div>
       </section>

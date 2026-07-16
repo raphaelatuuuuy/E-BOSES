@@ -1,10 +1,32 @@
-import type { OcrDocumentType } from "@/features/ocr/api"
+import type { OcrDocumentType, ProofSide } from "@/features/ocr/api"
 
 export type ProofListStatus = "live" | "hidden" | "needs_setup"
 
-function hasSample(doc: OcrDocumentType): boolean {
-  if (doc.samples?.some((s) => Boolean(s.url))) return true
-  return Boolean(doc.sample_url)
+function requiredSampleSides(doc: OcrDocumentType): ProofSide[] {
+  const sides = doc.required_sides?.length ? doc.required_sides : (["single"] as ProofSide[])
+  if (sides.includes("front") && sides.includes("back")) return ["front", "back"]
+  if (sides.includes("front")) return ["front"]
+  if (sides.includes("back")) return ["back"]
+  return ["single"]
+}
+
+function hasRequiredSamples(doc: OcrDocumentType): boolean {
+  const required = requiredSampleSides(doc)
+  const listed = doc.samples ?? []
+  return required.every((side) => {
+    if (listed.some((sample) => sample.side === side && Boolean(sample.url))) return true
+    if (
+      (side === "front" || side === "single") &&
+      (doc.sample_url ||
+        listed.some(
+          (sample) =>
+            (sample.side === "front" || sample.side === "single") && Boolean(sample.url),
+        ))
+    ) {
+      return true
+    }
+    return false
+  })
 }
 
 function hasAnyRegion(doc: OcrDocumentType): boolean {
@@ -17,7 +39,7 @@ function hasAnyRegion(doc: OcrDocumentType): boolean {
 /** Status for home cards. Live = enabled; Needs setup if enabled-looking but missing sample/boxes. */
 export function deriveProofStatus(doc: OcrDocumentType): ProofListStatus {
   if (doc.enabled === false) return "hidden"
-  if (!hasSample(doc) || !hasAnyRegion(doc) || !doc.name?.trim()) return "needs_setup"
+  if (!hasRequiredSamples(doc) || !hasAnyRegion(doc) || !doc.name?.trim()) return "needs_setup"
   return "live"
 }
 

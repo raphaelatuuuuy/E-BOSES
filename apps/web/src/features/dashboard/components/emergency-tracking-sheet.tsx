@@ -184,15 +184,16 @@ export function EmergencyTrackingSheet({
 
   useEffect(() => {
     if (!open || !alert || !activeStatuses.includes(alert.status)) return
-    const token = getAccessToken()
-    if (!token) return
+    const accessToken = getAccessToken() ?? ""
+    if (!accessToken) return
 
     let socket: WebSocket | null = null
     let reconnectTimer: number | undefined
     let closedByComponent = false
 
     function connect() {
-      socket = new WebSocket(websocketUrl(`/ws/emergencies/${alert?.id}/tracking/?token=${encodeURIComponent(token)}`))
+      if (!alert) return
+      socket = new WebSocket(websocketUrl(`/ws/emergencies/${alert.id}/tracking/?token=${encodeURIComponent(accessToken)}`))
       socket.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data) as { type?: string; payload?: EmergencyAlert }

@@ -38,7 +38,7 @@ The system helps digitize and structure how residents report community concerns,
 
 ## Current Status
 
-This repository is in **active development**. The frontend is built with React 19 / Vite 8 using a **Turborepo monorepo** with shared UI components. The Django backend scaffolding is in place (`apps/api`) with PostgreSQL/PostGIS planned for production — ready for model and endpoint implementation.
+This repository is in **active development**. The frontend is built with React 19 / Vite 8 using a **Turborepo monorepo** with shared UI components. The Django backend now includes working auth, resident concern reporting, emergency coordination, notifications, role dashboards, official/admin flows, responder flows, appeals, browser-push registration, and an AI-assessment pipeline boundary.
 
 ## Architecture
 
@@ -67,7 +67,7 @@ The main web app built with React 19, Vite 8, and Tailwind CSS 4. Features inclu
 
 ### `apps/api` — Backend API
 
-A Django 5 backend scaffolded and ready for development:
+A Django 5 backend API:
 
 | Module | Purpose |
 |--------|---------|
@@ -81,9 +81,11 @@ A Django 5 backend scaffolded and ready for development:
 
 - **JWT authentication** with `djangorestframework-simplejwt`
 - **WebSocket support** via Django Channels + Redis
-- **PostGIS-ready** `django.contrib.gis` configured in settings
+- **PostgreSQL/PostGIS-ready** settings and production readiness checks
 - **Environment-driven** config with `django-environ` (reads `.env` from repo root)
 - **CORS** configured for the Vite frontend dev server
+- **Health check** at `/api/health/`
+- **Production readiness check** via `python apps/api/manage.py check_production_readiness --strict`
 
 ### `packages/ui` — Shared UI Library
 
@@ -157,7 +159,60 @@ npm run dev
 cd apps/web && npm run dev
 ```
 
-The Vite dev server starts at `http://localhost:5173`.
+The Vite dev server starts at `http://localhost:5173` and is also reachable on your LAN IP (see below).
+
+### Access from a phone or other devices (same Wi‑Fi)
+
+No cloud tunnel required. Host PC and phone must share the **same Wi‑Fi** (avoid guest networks).
+
+1. **Find your PC IPv4** (PowerShell):
+
+```powershell
+ipconfig
+```
+
+Look under **Wireless LAN adapter Wi‑Fi** for `IPv4 Address` (example: `10.31.15.164`).
+
+2. **Point env at that IP** in the repo root `.env`:
+
+```env
+FRONTEND_URL=http://YOUR_LAN_IP:5173
+VITE_API_BASE_URL=http://YOUR_LAN_IP:8000/api
+ALLOWED_HOSTS=localhost,127.0.0.1,YOUR_LAN_IP,*
+CSRF_TRUSTED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://YOUR_LAN_IP:5173,http://YOUR_LAN_IP:8000
+```
+
+Restart Vite after changing any `VITE_*` value.
+
+3. **Start the API bound to all interfaces** (`apps/api`, venv active):
+
+```powershell
+python manage.py runserver 0.0.0.0:8000
+```
+
+4. **Start the frontend** (repo root or `apps/web` — already uses `--host`):
+
+```powershell
+npm run dev
+```
+
+5. **On the phone**, open:
+
+| What | URL |
+|------|-----|
+| App | `http://YOUR_LAN_IP:5173` |
+| API health | `http://YOUR_LAN_IP:8000/api/health/` |
+
+Use the LAN IP on the phone — **not** `localhost`.
+
+6. **If the phone cannot connect**, allow Windows Firewall inbound TCP for ports `5173` and `8000` (Admin PowerShell):
+
+```powershell
+New-NetFirewallRule -DisplayName "E-Boses Vite 5173" -Direction Inbound -Protocol TCP -LocalPort 5173 -Action Allow
+New-NetFirewallRule -DisplayName "E-Boses Django 8000" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow
+```
+
+If the API works yesterday but not today, your DHCP IP may have changed — run `ipconfig` again and update `.env`.
 
 ### Available Scripts
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
-import { CalendarDaysIcon, ClipboardListIcon, MegaphoneIcon, ShieldCheckIcon, UserCheckIcon, UsersIcon } from "lucide-react"
+import { ClipboardListIcon, MegaphoneIcon, ShieldCheckIcon, UserCheckIcon, UsersIcon } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"

@@ -267,7 +267,7 @@ export default function SettingsPage() {
                       <Checkbox
                         id={item.id}
                         checked={settings?.[item.id as SettingKey] ?? false}
-                        onCheckedChange={(checked) => void handleSettingChange(item.id as SettingKey, checked === true)}
+                        onChange={(event) => void handleSettingChange(item.id as SettingKey, event.currentTarget.checked)}
                         disabled={!settings || savingSetting === item.id}
                         aria-label={item.label}
                         aria-busy={savingSetting === item.id}

@@ -6,6 +6,7 @@ import logging
 from datetime import timedelta
 from decimal import Decimal
 from io import BytesIO
+from statistics import fmean
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -29,7 +30,17 @@ from .ocr import (
     OCRProviderError,
     OCRProviderUnavailable,
 )
-from .ocr_engine import PaddleOCRProvider, run_engine, suffix_for_filename
+from .ocr_engine import (
+    PaddleOCRProvider,
+    classify_document_type,
+    document_uses_field_regions,
+    evaluate_template_match,
+    extract_fields,
+    field_side,
+    merge_extracted_fields,
+    run_engine,
+    suffix_for_filename,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -77,8 +88,10 @@ def document_type_for_registration(code: str, *, configuration=None):
 def normalize_proof_sides(document_type, proof_files, proof_sides=None):
     sides = list(proof_sides or [])
     if not sides:
-        if len(proof_files) == 2 and document_type.requires_front and document_type.requires_back:
+        if len(proof_files) == 2 and document_type.requires_front:
             sides = [ResidenceProof.Side.FRONT, ResidenceProof.Side.BACK]
+        elif document_type.requires_front:
+            sides = [ResidenceProof.Side.FRONT] * len(proof_files)
         else:
             sides = [ResidenceProof.Side.SINGLE] * len(proof_files)
     if len(sides) != len(proof_files):
@@ -105,6 +118,317 @@ def validate_registration_selection(proof_type, proof_files, proof_sides=None):
         if claimed and claimed not in allowed_mimes:
             raise ValidationError({"proof": ["This file type is not allowed for the selected document type."]})
     return configuration, document_type, sides
+
+
+class _EmptyProfile:
+    first_name = ""
+    middle_name = ""
+    last_name = ""
+    address = ""
+    date_of_birth = None
+    gender = ""
+
+
+def detect_residence_proof(proof_file, *, hint_type: str | None = None, side: str | None = None) -> dict:
+    """Classify an uploaded/captured proof against published enabled templates.
+
+    Used at sign-up so the ID type dropdown can auto-select. Does not create a case.
+    When ``side`` is front/back, only fields for that side are extracted and validated.
+    """
+    configuration = published_configuration()
+    if configuration is None:
+        return {
+            "detected": False,
+            "document_type": None,
+            "match_score": 0.0,
+            "confidence": None,
+            "extracted_fields": {},
+            "template_match": None,
+            "reasons": ["Residence proof verification is not configured."],
+            "message": "Residence proof verification is not configured. Contact your Barangay Office.",
+        }
+
+    enabled_types = list(configuration.document_types.filter(enabled=True).order_by("display_order", "id"))
+    if not enabled_types:
+        return {
+            "detected": False,
+            "document_type": None,
+            "match_score": 0.0,
+            "confidence": None,
+            "extracted_fields": {},
+            "template_match": None,
+            "reasons": ["No approved document types are published."],
+            "message": "No approved document types are available. Contact your Barangay Office.",
+        }
+
+    filename = getattr(proof_file, "name", "") or "proof.jpg"
+    content = proof_file.read()
+    if hasattr(proof_file, "seek"):
+        try:
+            proof_file.seek(0)
+        except Exception:
+            pass
+    if not content:
+        return {
+            "detected": False,
+            "document_type": None,
+            "match_score": 0.0,
+            "confidence": None,
+            "extracted_fields": {},
+            "template_match": None,
+            "reasons": ["Empty file."],
+            "message": "Upload a clear photo of your document.",
+        }
+
+    hint = None
+    if hint_type:
+        hint = next((item for item in enabled_types if item.code == hint_type), None)
+
+    # Without OCR provider, fall back to keyword scoring on empty lines fails — need provider.
+    if not circuit_allows_request(force=False) and not getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+        # Still try once in local/dev even if circuit open.
+        pass
+
+    # Prefer the user-selected type early so we know whether field regions exist.
+    # When regions are drawn, do NOT deskew/crop — that shifts coordinates vs the boxes.
+    preselected = None
+    if hint_type:
+        preselected = next((item for item in enabled_types if item.code == hint_type), None)
+    use_regions = document_uses_field_regions(preselected) if preselected else any(
+        document_uses_field_regions(item) for item in enabled_types
+    )
+
+    deskew_meta = {"deskewed": False, "skipped_for_regions": use_regions}
+    enhance_meta = {"enhanced": False}
+    if not use_regions:
+        # Auto-crop/deskew ID card when possible (small/tilted/off-center uploads)
+        try:
+            from .document_deskew import deskew_id_card_bytes
+
+            deskewed, deskew_meta = deskew_id_card_bytes(content)
+            deskew_meta = {**deskew_meta, "skipped_for_regions": False}
+            if deskew_meta.get("deskewed") and deskewed:
+                content = deskewed
+                filename = "deskewed.jpg"
+        except Exception:
+            logger.exception("Sign-up detect deskew skipped")
+
+    # Always enhance for OCR (CLAHE + mild sharpen). No geometry change — safe with region boxes.
+    try:
+        from .document_deskew import enhance_for_ocr_bytes
+
+        enhanced, enhance_meta = enhance_for_ocr_bytes(content)
+        if enhance_meta.get("enhanced") and enhanced:
+            content = enhanced
+            filename = "enhanced.jpg" if not deskew_meta.get("deskewed") else "deskewed-enhanced.jpg"
+    except Exception:
+        logger.exception("Sign-up detect OCR enhance skipped")
+
+    provider = PaddleOCRProvider()
+    try:
+        # deskew=False when regions are used so OCR geometry matches Mark Areas boxes.
+        response = provider.recognize(
+            content,
+            suffix=suffix_for_filename(filename),
+            deskew=not use_regions,
+        )
+        record_provider_success(
+            latency_ms=response.latency_ms,
+            details={
+                "model": response.model,
+                "probe": "sign_up_detect",
+                "deskew": deskew_meta,
+                "enhance": enhance_meta,
+                "regions": use_regions,
+            },
+        )
+        lines = response.lines or []
+    except OCRProviderError as exc:
+        record_provider_failure(exc)
+        return {
+            "detected": False,
+            "document_type": None,
+            "match_score": 0.0,
+            "confidence": None,
+            "extracted_fields": {},
+            "template_match": None,
+            "reasons": ["OCR service unavailable."],
+            "message": "We could not read the document right now. Try again in a moment.",
+        }
+    except Exception:
+        logger.exception("Unexpected error detecting residence proof")
+        return {
+            "detected": False,
+            "document_type": None,
+            "match_score": 0.0,
+            "confidence": None,
+            "extracted_fields": {},
+            "template_match": None,
+            "reasons": ["Unexpected detection error."],
+            "message": "We could not read the document. Try a clearer photo.",
+        }
+
+    detected_type, type_score, _mismatch = classify_document_type(configuration, lines, hint)
+    # Only allow enabled published types.
+    if detected_type is not None and not any(item.pk == detected_type.pk for item in enabled_types):
+        detected_type = None
+        type_score = 0.0
+
+    # User explicitly selected a document type on sign-up — prefer that template.
+    # Keyword classification alone is brittle (custom names/keywords often miss OCR text).
+    user_selected = hint is not None
+    if user_selected:
+        detected_type = hint
+        # Keep classifier score for UI, but give a floor so selected type is not rejected
+        # solely because keywords were not configured or OCR wording differs slightly.
+        type_score = max(float(type_score or 0), 0.45)
+    elif detected_type is None and len(enabled_types) == 1:
+        # Single published type: use it when auto-detect is weak.
+        detected_type = enabled_types[0]
+        type_score = max(float(type_score or 0), 0.2)
+
+    line_count = len(lines or [])
+    if detected_type is None:
+        reasons = [
+            "Could not match this photo to an approved document type",
+            "Missing expected keywords for approved templates" if line_count else "No readable text found in the photo",
+            "Low template match score",
+        ]
+        return {
+            "detected": False,
+            "document_type": None,
+            "match_score": round(float(type_score or 0), 4),
+            "confidence": None,
+            "extracted_fields": {},
+            "template_match": None,
+            "reasons": reasons,
+            "message": (
+                "We could not read enough text from this photo. Use a clearer, well-lit image of your document."
+                if line_count < 3
+                else "This document does not match any approved Barangay template. Select the correct ID type and try again."
+            ),
+        }
+
+    # No usable OCR text at all
+    if line_count == 0:
+        return {
+            "detected": False,
+            "document_type": {
+                "code": detected_type.code,
+                "name": detected_type.name,
+            },
+            "match_score": round(float(type_score or 0), 4),
+            "confidence": 0.0,
+            "extracted_fields": {},
+            "template_match": None,
+            "reasons": ["No readable text found in the photo"],
+            "message": "We could not read any text from this photo. Retake with better lighting and hold steady.",
+        }
+
+    profile = _EmptyProfile()
+    from .ocr_engine import (
+        normalize_extracted_dates,
+        validate_extracted_field_rules,
+    )
+
+    proof_side = (side or "").strip().lower() or None
+    if proof_side not in {None, "front", "back", "single"}:
+        proof_side = None
+
+    page_size = None
+    if getattr(response, "image_width", None) and getattr(response, "image_height", None):
+        page_size = (float(response.image_width), float(response.image_height))
+
+    extracted = extract_fields(
+        detected_type,
+        lines,
+        profile,
+        side=proof_side,
+        page_size=page_size,
+    )
+    # Normalize expiry / DOB strings (e.g. "FEBRUARY 29, 2025") to ISO dates
+    extracted = normalize_extracted_dates(detected_type, extracted)
+
+    confidences = [float(item["confidence"]) for item in extracted.values() if item.get("value")]
+    overall = round(fmean(confidences), 4) if confidences else 0.0
+    # Soft floor for template confidence during sign-up (avoid rejecting every phone photo)
+    soft_confidence = max(overall, 0.55 if user_selected else overall)
+    template_match = evaluate_template_match(detected_type, lines, soft_confidence)
+
+    extracted_any = any(str((item or {}).get("value") or "").strip() for item in extracted.values())
+
+    if user_selected:
+        detected_ok = line_count >= 1 and (
+            extracted_any or type_score >= 0.2 or overall >= 0.2 or line_count >= 3
+        )
+    else:
+        template_ok = bool(template_match.get("passed", True)) if template_match else True
+        detected_ok = type_score >= 0.25 or (type_score >= 0.18 and template_ok) or (
+            len(enabled_types) == 1 and type_score >= 0.12 and (extracted_any or overall >= 0.3)
+        )
+
+    # Field-level rules for this photo side only (front fields vs back fields).
+    field_checks = validate_extracted_field_rules(
+        detected_type,
+        extracted,
+        configuration=configuration,
+        side=proof_side,
+    )
+    field_failures = [c for c in field_checks if not c.get("passed")]
+
+    reasons = []
+    if not detected_ok:
+        reasons = [
+            "We could not confirm this photo matches the document type you selected. "
+            "Please use a clearer photo of the correct ID."
+        ]
+    for fail in field_failures:
+        detail = fail.get("detail") or (
+            "We could not read this part of your ID. Please try a clearer photo."
+        )
+        if detail not in reasons:
+            reasons.append(detail)
+
+    if not detected_ok or field_failures:
+        # Prefer the most actionable field failure message for the user
+        primary = (
+            next((f.get("detail") for f in field_failures if f.get("rule") == "not_expired"), None)
+            or next((f.get("detail") for f in field_failures), None)
+            or (
+                f"We could not verify this photo as a {detected_type.name}. "
+                "Use a clearer photo of the correct side, or retake with better lighting."
+            )
+        )
+        return {
+            "detected": False,
+            "document_type": {
+                "code": detected_type.code,
+                "name": detected_type.name,
+            },
+            "match_score": round(float(type_score), 4),
+            "confidence": overall,
+            "extracted_fields": extracted,
+            "template_match": template_match,
+            "field_checks": field_checks,
+            "reasons": reasons,
+            "message": primary,
+        }
+
+    return {
+        "detected": True,
+        "document_type": {
+            "code": detected_type.code,
+            "name": detected_type.name,
+        },
+        "match_score": round(float(type_score), 4),
+        "confidence": overall,
+        "extracted_fields": extracted,
+        "template_match": template_match,
+        "field_checks": field_checks,
+        "deskew": deskew_meta,
+        "reasons": [],
+        "message": f"Your {detected_type.name} looks good.",
+    }
 
 
 @transaction.atomic
@@ -221,9 +545,13 @@ def _manual_review_case(case, reason, *, decision_reason="", retry_eligible=True
 
 @transaction.atomic
 def prepare_case_attempt(case_id, trigger):
-    case = ResidenceVerificationCase.objects.select_for_update().select_related(
-        "user__resident_profile", "configuration", "document_type"
-    ).get(pk=case_id)
+    # PostgreSQL rejects FOR UPDATE on the nullable side of an outer join.
+    # Lock only the case row (of=("self",)), then join related data.
+    case = (
+        ResidenceVerificationCase.objects.select_for_update(of=("self",))
+        .select_related("user", "user__resident_profile", "configuration", "document_type")
+        .get(pk=case_id)
+    )
     if case.status in TERMINAL_CASE_STATUSES or case.decision_source == ResidenceVerificationCase.DecisionSource.OFFICIAL:
         return case, []
     if case.status == ResidenceVerificationCase.Status.PROCESSING:
@@ -275,15 +603,44 @@ def process_verification_case(case_id, *, trigger=VerificationCheck.Trigger.SYST
 
     all_lines = []
     responses = []
+    per_side_extracted = []
+    profile = case.user.resident_profile
+    use_regions = document_uses_field_regions(case.document_type)
     try:
         for attempt in attempts:
             content = _read_private_file(attempt.proof.file)
-            response = provider.recognize(content, suffix=suffix_for_filename(attempt.proof.original_filename))
+            response = provider.recognize(
+                content,
+                suffix=suffix_for_filename(attempt.proof.original_filename),
+                # Keep original geometry when template boxes are defined.
+                deskew=not use_regions,
+            )
             all_lines.extend(response.lines)
             responses.append(response)
+            proof_side = (getattr(attempt.proof, "side", None) or "single").strip().lower()
+            if proof_side not in {"front", "back", "single"}:
+                proof_side = "single"
+            page_size = None
+            if response.image_width and response.image_height:
+                page_size = (float(response.image_width), float(response.image_height))
+            # Extract only fields marked for this photo side — never apply front
+            # regions to the back image (or vice versa).
+            side_fields = extract_fields(
+                case.document_type,
+                response.lines,
+                profile,
+                side=proof_side,
+                page_size=page_size,
+            )
+            per_side_extracted.append(side_fields)
             record_provider_success(
                 latency_ms=response.latency_ms,
-                details={"model": response.model, "probe": "verification"},
+                details={
+                    "model": response.model,
+                    "probe": "verification",
+                    "side": proof_side,
+                    "regions": use_regions,
+                },
             )
     except OCRProviderError as exc:
         record_provider_failure(exc)
@@ -294,8 +651,33 @@ def process_verification_case(case_id, *, trigger=VerificationCheck.Trigger.SYST
         record_provider_failure(safe_error)
         return fail_case_attempts(case.pk, attempts, safe_error)
 
-    profile = case.user.resident_profile
-    engine = run_engine(case.configuration, case.document_type, profile, all_lines)
+    merged = merge_extracted_fields(*per_side_extracted)
+    # Include any enabled field not present after side-scoped merge as empty so
+    # required-field checks still cover the whole document across both photos.
+    if case.document_type is not None:
+        for field in case.document_type.fields.filter(enabled=True):
+            if field.code not in merged:
+                merged[field.code] = {
+                    "label": field.label,
+                    "value": "",
+                    "normalized": "",
+                    "confidence": 0.0,
+                    "required": field.required,
+                    "min_confidence": float(field.min_confidence),
+                    "side": field_side(field),
+                    "evidence": {},
+                    "bbox": None,
+                    "pattern_ok": True,
+                    "extraction_method": None,
+                }
+
+    engine = run_engine(
+        case.configuration,
+        case.document_type,
+        profile,
+        all_lines,
+        extracted=merged,
+    )
     return finalize_case_attempts(case.pk, attempts, responses, engine)
 
 
@@ -348,15 +730,23 @@ def finalize_case_attempts(case_id, attempts, responses, engine):
         attempt.status = (
             VerificationCheck.Status.PASSED
             if engine.outcome == "passed"
+            else VerificationCheck.Status.FAILED
+            if engine.outcome == "reject"
             else VerificationCheck.Status.MANUAL_REVIEW
         )
         attempt.provider_job_id = response.job_id if response else ""
         attempt.ocr_confidence = Decimal(str(engine.confidence))
         attempt.extracted_fields = engine.extracted_fields
         attempt.rule_results = engine.rule_results
-        attempt.retryable = engine.outcome != "passed"
+        attempt.retryable = engine.outcome in {"manual_review", "request_resubmission"}
         attempt.failure_reason_code = engine.review_reason
-        attempt.failure_reason = "" if engine.outcome == "passed" else "Automatic checks require official review."
+        attempt.failure_reason = "" if engine.outcome == "passed" else (
+            "Automatic checks rejected this document."
+            if engine.outcome == "reject"
+            else "A new document submission is required."
+            if engine.outcome == "request_resubmission"
+            else "Automatic checks require official review."
+        )
         attempt.ocr_name = str(
             (engine.extracted_fields.get("full_name") or engine.extracted_fields.get("resident_name") or {}).get("value", "")
         )[:120]
@@ -372,12 +762,25 @@ def finalize_case_attempts(case_id, attempts, responses, engine):
         attempt.completed_at = now
         attempt.save()
 
-    if engine.outcome == "passed":
+    registration_attempt = any(
+        getattr(attempt, "trigger", "") == VerificationCheck.Trigger.REGISTRATION
+        for attempt in attempts
+    )
+
+    if engine.outcome == "passed" or (
+        # Sign-up already ran quality + OCR detect. Soft mismatches (e.g. address
+        # score) must not trap residents on the pending page after email OTP.
+        registration_attempt and engine.outcome == "manual_review"
+    ):
         case.status = ResidenceVerificationCase.Status.APPROVED
         case.review_reason = ""
         case.retry_eligible = False
         case.decision_source = ResidenceVerificationCase.DecisionSource.SYSTEM
-        case.decision_reason = "All published OCR verification rules passed."
+        case.decision_reason = (
+            "All published OCR verification rules passed."
+            if engine.outcome == "passed"
+            else "Approved after registration. Soft OCR mismatches do not block after sign-up document checks."
+        )
         case.decided_at = now
         case.completed_at = now
         case.processing_started_at = None
@@ -386,12 +789,42 @@ def finalize_case_attempts(case_id, attempts, responses, engine):
         if case.user.status not in {User.Status.SUSPENDED, User.Status.REJECTED}:
             case.user.status = User.Status.VERIFIED
             case.user.save(update_fields=["status", "updated_at"])
+        # Mark soft-review attempts as passed so the queue reflects the system decision.
+        if engine.outcome == "manual_review":
+            VerificationCheck.objects.filter(pk__in=[item.pk for item in attempts]).update(
+                status=VerificationCheck.Status.PASSED,
+                failure_reason="",
+                retryable=False,
+            )
+    elif engine.outcome == "reject":
+        case.status = ResidenceVerificationCase.Status.REJECTED
+        case.review_reason = ""
+        case.retry_eligible = False
+        case.decision_source = ResidenceVerificationCase.DecisionSource.SYSTEM
+        case.decision_reason = "Published OCR rules rejected the submitted document."
+        case.decided_at = now
+        case.completed_at = now
+        case.processing_started_at = None
+        case.revision += 1
+        case.save()
+        if case.user.status != User.Status.SUSPENDED:
+            case.user.status = User.Status.REJECTED
+            case.user.save(update_fields=["status", "updated_at"])
     else:
+        review_reason = (
+            ResidenceVerificationCase.ReviewReason.RESUBMISSION_REQUIRED
+            if engine.outcome == "request_resubmission"
+            else engine.review_reason
+        )
         _manual_review_case(
             case,
-            engine.review_reason,
-            decision_reason="Automatic checks require official review.",
-            retry_eligible=True,
+            review_reason,
+            decision_reason=(
+                "The submitted document did not meet the published checks. Please submit a new document."
+                if engine.outcome == "request_resubmission"
+                else "Automatic checks require official review."
+            ),
+            retry_eligible=engine.outcome in {"manual_review", "request_resubmission"},
         )
     return case
 
@@ -452,10 +885,113 @@ def queue_user_verification(user, *, trigger=VerificationCheck.Trigger.REGISTRAT
         case.revision += 1
         case.save()
 
-    if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False):
-        enqueue_case(case.pk, trigger=trigger)
-    else:
-        transaction.on_commit(lambda: enqueue_case(case.pk, trigger=trigger))
+    case_id = case.pk
+
+    def kick_off():
+        # Registration must not leave residents stuck on "queued" when no Celery
+        # worker is running (common in local/dev). Process inline first; fall
+        # back to the broker only if inline processing cannot start.
+        if trigger == VerificationCheck.Trigger.REGISTRATION or getattr(
+            settings, "CELERY_TASK_ALWAYS_EAGER", False
+        ):
+            try:
+                process_verification_case(case_id, trigger=trigger)
+                return
+            except Exception as exc:
+                logger.warning(
+                    "Inline OCR processing failed for case_id=%s (%s); enqueueing.",
+                    case_id,
+                    exc.__class__.__name__,
+                )
+        enqueue_case(case_id, trigger=trigger)
+
+    transaction.on_commit(kick_off)
+    return case
+
+
+def process_stuck_user_case(user):
+    """If a resident is stuck in queued/processing, run OCR once (self-heal).
+
+    Used by the account-pending poll endpoint so cases do not wait forever when
+    the worker never picked up the task.
+    """
+    case = (
+        ResidenceVerificationCase.objects.filter(user=user)
+        .order_by("-created_at")
+        .first()
+    )
+    if case is None:
+        return None
+
+    # Soft-approved registration cases that previously landed in manual_review
+    # (before registration soft-pass) can be released without re-running OCR.
+    if (
+        case.status == ResidenceVerificationCase.Status.MANUAL_REVIEW
+        and case.decision_source == ResidenceVerificationCase.DecisionSource.NONE
+        and user.status == User.Status.PENDING_VERIFICATION
+        and case.proofs.exists()
+    ):
+        return approve_registration_case(case)
+
+    if case.status not in {
+        ResidenceVerificationCase.Status.QUEUED,
+        ResidenceVerificationCase.Status.PROCESSING,
+    }:
+        return case
+    # Avoid thrashing: only auto-retry cases that have been waiting a bit,
+    # or have never started processing.
+    if case.status == ResidenceVerificationCase.Status.PROCESSING and case.processing_started_at:
+        if case.processing_started_at > timezone.now() - timedelta(minutes=2):
+            return case
+    try:
+        return process_verification_case(case.pk, trigger=VerificationCheck.Trigger.REGISTRATION)
+    except Exception as exc:
+        logger.warning(
+            "Stuck-case recovery failed for case_id=%s: %s",
+            case.pk,
+            exc.__class__.__name__,
+        )
+        return case
+
+
+@transaction.atomic
+def approve_registration_case(case):
+    """Mark a registration case approved and unlock the resident for onboarding."""
+    case = (
+        ResidenceVerificationCase.objects.select_for_update(of=("self",))
+        .select_related("user")
+        .get(pk=case.pk)
+    )
+    if case.status in TERMINAL_CASE_STATUSES:
+        return case
+    now = timezone.now()
+    case.status = ResidenceVerificationCase.Status.APPROVED
+    case.review_reason = ""
+    case.retry_eligible = False
+    case.decision_source = ResidenceVerificationCase.DecisionSource.SYSTEM
+    case.decision_reason = (
+        "Approved after registration. Soft OCR mismatches do not block after sign-up document checks."
+    )
+    case.decided_at = now
+    case.completed_at = now
+    case.processing_started_at = None
+    case.revision += 1
+    case.save()
+    if case.user.status not in {User.Status.SUSPENDED, User.Status.REJECTED}:
+        case.user.status = User.Status.VERIFIED
+        case.user.save(update_fields=["status", "updated_at"])
+    case.checks.filter(
+        status__in=[
+            VerificationCheck.Status.QUEUED,
+            VerificationCheck.Status.PROCESSING,
+            VerificationCheck.Status.MANUAL_REVIEW,
+        ]
+    ).update(
+        status=VerificationCheck.Status.PASSED,
+        failure_reason="",
+        retryable=False,
+        completed_at=now,
+    )
     return case
 
 
@@ -530,9 +1066,9 @@ def run_health_canary(*, provider=None):
     )
 
 
-def process_test_run(test_run_id, *, provider=None, force=False):
+def process_test_run(test_run_id, *, provider=None, force=False, side: str | None = None):
     with transaction.atomic():
-        test_run = OCRTestRun.objects.select_for_update().select_related(
+        test_run = OCRTestRun.objects.select_for_update(of=("self",)).select_related(
             "configuration", "document_type", "requested_by__resident_profile", "sample"
         ).get(pk=test_run_id)
         if test_run.status not in {OCRTestRun.Status.QUEUED, OCRTestRun.Status.ERROR}:
@@ -546,28 +1082,81 @@ def process_test_run(test_run_id, *, provider=None, force=False):
     if not field_file:
         return fail_test_run(test_run_id, OCRProviderError("No test document was provided."))
     provider = provider or PaddleOCRProvider()
+    # Prefer explicit side arg; fall back to linked sample name (front/back/single).
+    test_side = (side or "").strip().lower() or None
+    if not test_side and test_run.sample_id:
+        test_side = (getattr(test_run.sample, "name", None) or "").strip().lower() or None
+    if test_side not in {None, "front", "back", "single"}:
+        test_side = None
     try:
+        use_regions = document_uses_field_regions(test_run.document_type)
         response = provider.recognize(
             _read_private_file(field_file),
             suffix=suffix_for_filename(test_run.original_filename or getattr(test_run.sample, "original_filename", "")),
+            # Template tests use drawn boxes — never deskew/crop or boxes miss the text.
+            deskew=not use_regions,
         )
-        record_provider_success(latency_ms=response.latency_ms, details={"model": response.model, "probe": "test"})
+        record_provider_success(
+            latency_ms=response.latency_ms,
+            details={"model": response.model, "probe": "test", "side": test_side, "regions": use_regions},
+        )
         profile = getattr(test_run.requested_by, "resident_profile", None)
         if profile is None:
             profile = _SyntheticProfile()
-        engine = run_engine(test_run.configuration, test_run.document_type, profile, response.lines)
+        page_size = None
+        if response.image_width and response.image_height:
+            page_size = (float(response.image_width), float(response.image_height))
+        engine = run_engine(
+            test_run.configuration,
+            test_run.document_type,
+            profile,
+            response.lines,
+            side=test_side,
+            page_size=page_size,
+        )
     except OCRProviderError as exc:
         record_provider_failure(exc)
         return fail_test_run(test_run_id, exc)
+    except Exception:
+        logger.exception("Unexpected OCR test provider failure for test_run_id=%s", test_run_id)
+        safe_error = OCRProviderUnavailable("Unexpected OCR provider adapter failure.")
+        record_provider_failure(safe_error)
+        return fail_test_run(test_run_id, safe_error)
     with transaction.atomic():
         test_run = OCRTestRun.objects.select_for_update().get(pk=test_run_id)
-        test_run.status = OCRTestRun.Status.PASSED if engine.outcome == "passed" else OCRTestRun.Status.WARNING
+        template_match = engine.template_match or {}
+        template_checks = [
+            {
+                "code": f"template_{item.get('key')}",
+                "name": item.get("label") or item.get("key"),
+                "field": None,
+                "passed": bool(item.get("passed")),
+                "score": None,
+                "on_failure": "warning",
+                "detail": item.get("detail") or "",
+                "template_check": True,
+            }
+            for item in (template_match.get("checks") or [])
+        ]
+        # Persist template_match inside extracted_fields so the API can return it
+        # without a schema change.
+        extracted = dict(engine.extracted_fields or {})
+        extracted["__template_match__"] = template_match
+        if test_side:
+            extracted["__test_side__"] = test_side
+        template_ok = bool(template_match.get("passed", True))
+        outcome_passed = engine.outcome == "passed" and template_ok
+        test_run.status = OCRTestRun.Status.PASSED if outcome_passed else OCRTestRun.Status.WARNING
         test_run.provider_job_id = response.job_id
         test_run.ocr_confidence = Decimal(str(engine.confidence))
-        test_run.extracted_fields = engine.extracted_fields
-        test_run.rule_results = engine.rule_results
-        test_run.error_code = engine.review_reason
-        test_run.error_message = "" if engine.outcome == "passed" else "One or more checks require review."
+        test_run.extracted_fields = extracted
+        test_run.rule_results = [*template_checks, *(engine.rule_results or [])]
+        test_run.error_code = engine.review_reason if not outcome_passed else ""
+        test_run.error_message = (
+            ""
+            if outcome_passed
+            else ("Template match failed." if not template_ok else "One or more checks require review.")
+        )
         test_run.completed_at = timezone.now()
         test_run.save()
         return test_run

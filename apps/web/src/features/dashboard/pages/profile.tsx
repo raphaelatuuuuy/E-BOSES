@@ -108,11 +108,6 @@ function collectApiFieldErrors(error: unknown): Partial<Record<ProfileField, str
   return errors
 }
 
-function formatDate(value?: string | null) {
-  if (!value) return "Not available"
-  return new Intl.DateTimeFormat("en", { month: "long", day: "numeric", year: "numeric" }).format(new Date(value))
-}
-
 function formatDateTime(value?: string | null) {
   if (!value) return "Not available"
   return new Intl.DateTimeFormat("en", {

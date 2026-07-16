@@ -4,7 +4,6 @@ import * as React from "react"
 import { createPortal } from "react-dom"
 import {
   AlertTriangleIcon,
-  BellIcon,
   Building2Icon,
   CheckCircleIcon,
   ChevronRightIcon,
@@ -15,6 +14,7 @@ import {
   XIcon,
 } from "lucide-react"
 
+import { BoxBellIcon } from "@/components/box-bell-icon"
 import { cn } from "@workspace/ui/lib/utils"
 import {
   useNotifications,
@@ -267,7 +267,6 @@ function NotificationList({
 function DesktopPanel({
   loading,
   notifications,
-  unreadCount,
   onMarkAllRead,
   onMarkRead,
   filter,
@@ -464,10 +463,10 @@ function MobileSheet({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="relative flex size-10 items-center justify-center rounded-full text-muted-foreground transition-colors duration-150 hover:bg-primary/10 hover:text-primary md:hidden"
+        className="group relative flex size-10 items-center justify-center rounded-full text-[#07145f] transition-colors duration-150 hover:bg-[#07145f]/8 md:hidden"
         aria-label="Open notifications"
       >
-        <BellIcon aria-hidden="true" className="size-5" />
+        <BoxBellIcon sizeClass="size-5" />
         {unreadCount > 0 && (
           <span className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-white">
             {unreadCount > 9 ? "9+" : unreadCount}
@@ -540,10 +539,10 @@ export function NotificationPopover() {
       <button
         type="button"
         onClick={() => setDesktopOpen(true)}
-        className="relative hidden size-10 items-center justify-center rounded-full text-muted-foreground transition-colors duration-150 hover:bg-primary/10 hover:text-primary md:flex"
+        className="group relative hidden size-10 items-center justify-center rounded-full text-[#07145f] transition-colors duration-150 hover:bg-[#07145f]/8 md:flex"
         aria-label="Open notifications"
       >
-        <BellIcon aria-hidden="true" className="size-6" />
+        <BoxBellIcon sizeClass="size-6" />
         {unreadCount > 0 && (
           <span className="absolute -right-1 -top-1 flex size-5 items-center justify-center rounded-full bg-[#ff6a1a] text-[11px] font-extrabold text-white">
             {unreadCount > 9 ? "9+" : unreadCount}

@@ -46,7 +46,7 @@ function ActionContents({
   return (
     <>
       <div className={`flex size-10 shrink-0 items-center justify-center rounded-full ${emergency ? "bg-red-50" : "bg-[#eef3ff]"}`}>
-        <Icon className={`size-5 ${emergency ? "text-red-500" : "text-[#2447b3]"}`} strokeWidth={2} />
+        <Icon className={`size-5 ${emergency ? "text-red-500" : "text-[#2447b3]"}`} />
       </div>
       <div className="min-w-0 flex-1">
         <p className={`text-xs font-bold md:text-sm ${emergency ? "text-red-600" : "text-[#07145f]"}`}>{label}</p>

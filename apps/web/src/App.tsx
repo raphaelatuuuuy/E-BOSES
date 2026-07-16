@@ -4,7 +4,6 @@ import { LoaderCircle } from "lucide-react"
 import { toast } from "sonner"
 
 import AccountOtpVerificationPage from "@/features/auth/account-otp-verification"
-import AccountPendingPage from "@/features/auth/account-pending"
 import { confirmPasswordReset, verifyPasswordReset } from "@/features/auth/api"
 import { AuthSessionProvider, getStatusPath, useAuthSession } from "@/features/auth/auth-session"
 import ForgotPasswordPage from "@/features/auth/forgot-password"
@@ -14,6 +13,7 @@ import SignInPage from "@/features/auth/sign-in"
 import SignUpPage from "@/features/auth/sign-up"
 import DashboardLayout from "@/features/dashboard/dashboard"
 import AdminPage from "@/features/dashboard/pages/admin"
+import AlertsMapPage from "@/features/dashboard/pages/alerts-map"
 import OnboardingPage from "@/features/onboarding/onboarding-page"
 import OfficialOnboardingPage from "@/features/onboarding/official-onboarding-page"
 import ResponderOnboardingPage from "@/features/onboarding/responder-onboarding-page"
@@ -23,6 +23,10 @@ import HomePage from "@/features/dashboard/pages/home"
 import ProfilePage from "@/features/dashboard/pages/profile"
 import ReportsPage from "@/features/dashboard/pages/reports"
 import SettingsPage from "@/features/dashboard/pages/settings"
+import OcrConfigurationPage from "@/features/ocr/ocr-configuration-page"
+import OcrTemplateBuilderPage from "@/features/ocr/ocr-template-builder-page"
+import VerificationQueuePage from "@/features/ocr/verification-queue-page"
+import ConcernClassificationPage from "@/features/classification/concern-classification-page"
 import LandingPage from "@/features/landing/landing-page"
 import { getAccessToken } from "@/lib/api"
 
@@ -41,7 +45,8 @@ function ProtectedDashboard() {
     return <Navigate to="/sign-in" replace />
   }
 
-  if (user.status !== "verified") {
+  const canEnterApp = user.status === "verified" || user.status === "pending_verification"
+  if (!canEnterApp) {
     return <Navigate to={getStatusPath(user.status)} replace />
   }
 
@@ -50,33 +55,6 @@ function ProtectedDashboard() {
   }
 
   return <DashboardLayout />
-}
-
-function ProtectedPending() {
-  const { loading, user } = useAuthSession()
-
-  if (loading && !user) {
-    return (
-      <div className="flex min-h-svh items-center justify-center">
-        <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
-      </div>
-    )
-  }
-
-  if (!user) {
-    return <Navigate to="/sign-in" replace />
-  }
-
-  if (user.status === "verified") {
-    return <Navigate to="/dashboard" replace />
-  }
-
-  // Redirect non-pending-verification users to their appropriate path
-  if (user.status !== "pending_verification") {
-    return <Navigate to={getStatusPath(user.status)} replace />
-  }
-
-  return <AccountPendingPage />
 }
 
 function ProtectedOnboarding() {
@@ -94,7 +72,8 @@ function ProtectedOnboarding() {
     return <Navigate to="/sign-in" replace />
   }
 
-  if (user.status !== "verified") {
+  const canEnterApp = user.status === "verified" || user.status === "pending_verification"
+  if (!canEnterApp) {
     return <Navigate to={getStatusPath(user.status)} replace />
   }
 
@@ -111,8 +90,9 @@ function ProtectedOnboarding() {
 
 function DashboardIndex() {
   const { user } = useAuthSession()
-  const isStaffRole = user?.role === "barangay_official" || user?.role === "first_responder" || user?.is_staff || user?.is_superuser
-  return <Navigate to={isStaffRole ? "/dashboard/emergencies" : "/dashboard/home"} replace />
+  const isOfficial = user?.role === "barangay_official" || user?.is_staff || user?.is_superuser
+  const isResponder = user?.role === "first_responder"
+  return <Navigate to={isOfficial ? "/dashboard/alerts-map" : isResponder ? "/dashboard/emergencies" : "/dashboard/home"} replace />
 }
 
 function ResidentRoute({ children }: { children: ReactNode }) {
@@ -148,18 +128,23 @@ function AppRoutes() {
         <Route path="home" element={<ResidentRoute><HomePage /></ResidentRoute>} />
         <Route path="feed" element={<ResidentRoute><FeedPage /></ResidentRoute>} />
         <Route path="emergencies" element={<EmergencyOpsRoute><EmergenciesPage /></EmergencyOpsRoute>} />
+        <Route path="alerts-map" element={<OfficialRoute><AlertsMapPage /></OfficialRoute>} />
         <Route path="admin" element={<OfficialRoute><AdminPage /></OfficialRoute>} />
+        <Route path="verification-queue" element={<OfficialRoute><VerificationQueuePage /></OfficialRoute>} />
+        <Route path="ocr-templates" element={<OfficialRoute><OcrTemplateBuilderPage /></OfficialRoute>} />
+        <Route path="ocr-configuration" element={<OfficialRoute><OcrConfigurationPage /></OfficialRoute>} />
+        <Route path="concern-classification" element={<OfficialRoute><ConcernClassificationPage /></OfficialRoute>} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="reports/:reportId" element={<ReportsPage />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
 
-      {/* Account pending page */}
-      <Route path="/account-pending" element={<ProtectedPending />} />
-
       {/* Onboarding */}
       <Route path="/onboarding" element={<ProtectedOnboarding />} />
+
+      {/* Legacy account-pending URL → continue into app flow */}
+      <Route path="/account-pending" element={<Navigate to="/onboarding" replace />} />
 
       {/* Auth routes */}
       <Route path="/sign-in" element={
@@ -169,7 +154,7 @@ function AppRoutes() {
           onSignUp={() => navigate("/sign-up")}
           onSuccess={(user, access) => {
             setAuthenticatedUser(user, access)
-            navigate(getStatusPath(user.status))
+            navigate(getStatusPath(user.status, { isOnboarded: user.is_onboarded }))
           }}
         />
       } />
@@ -179,7 +164,7 @@ function AppRoutes() {
           onSignIn={() => navigate("/sign-in")}
           onSuccess={(user, access) => {
             setAuthenticatedUser(user, access)
-            navigate(getStatusPath(user.status))
+            navigate(getStatusPath(user.status, { isOnboarded: user.is_onboarded }))
           }}
         />
       } />
@@ -189,7 +174,7 @@ function AppRoutes() {
           onSuccess={(user) => {
             const access = getAccessToken()
             if (access) setAuthenticatedUser(user, access)
-            navigate(getStatusPath(user.status))
+            navigate(getStatusPath(user.status, { isOnboarded: user.is_onboarded }))
           }}
         />
       } />
@@ -205,9 +190,9 @@ function AppRoutes() {
       } />
       <Route path="/forgot-password-otp" element={
         <OtpVerificationPage
-          title="Reset code"
-          description="Enter the 6-digit code we sent to your email."
-          recipientHint=""
+          title="Reset password code sent"
+          description="If you have an account, we've sent a reset password link to"
+          recipientHint={window.sessionStorage.getItem("eboses-reset-identifier") ?? "your email"}
           actionLabel="Continue"
           resendStorageKey="eboses-forgot-password-otp-resend-expiry"
           onBack={() => navigate("/forgot-password")}

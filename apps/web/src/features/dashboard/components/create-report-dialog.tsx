@@ -2,7 +2,6 @@ import { lazy, Suspense, useState, type DragEvent, type ReactNode } from "react"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import {
-  AlertTriangleIcon,
   ArrowLeftIcon,
   ArrowRightIcon,
   CheckIcon,
@@ -10,15 +9,12 @@ import {
   FileTextIcon,
   ImageIcon,
   InfoIcon,
-  LeafIcon,
   LightbulbIcon,
   LocateFixedIcon,
   LockIcon,
   MapPinIcon,
   PlusIcon,
   SearchIcon,
-  ShieldCheckIcon,
-  TrafficConeIcon,
   TrashIcon,
   XIcon,
 } from "lucide-react"
@@ -219,20 +215,25 @@ export function CreateReportDialog({
     ? `https://www.openstreetmap.org/export/embed.html?bbox=${locationPin.lng - 0.01}%2C${locationPin.lat - 0.01}%2C${locationPin.lng + 0.01}%2C${locationPin.lat + 0.01}&layer=mapnik&marker=${locationPin.lat}%2C${locationPin.lng}`
     : ""
 
+  // Controlled usage (open + onOpenChange) opens from parent UI only — no stray default button.
+  const isControlled = controlledOpen !== undefined
+
   return (
     <>
-      {trigger ? (
-        trigger(() => setOpen(true))
-      ) : (
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:text-primary"
-        >
-          <PlusIcon className="size-5" />
-          Create Report
-        </button>
-      )}
+      {trigger
+        ? trigger(() => setOpen(true))
+        : !isControlled
+          ? (
+            <button
+              type="button"
+              onClick={() => setOpen(true)}
+              className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:text-primary"
+            >
+              <PlusIcon className="size-5" />
+              Create Report
+            </button>
+          )
+          : null}
 
       <Dialog open={open} onClose={() => { setStep("details"); setOpen(false) }} maxW="max-w-6xl">
         <DialogBody className="space-y-7 bg-white px-5 py-5 md:px-7 md:py-6">
@@ -412,7 +413,7 @@ export function CreateReportDialog({
                   {mediaFiles.length > 0 ? (
                     <div className="mt-3 grid gap-2">
                       {mediaFiles.map((file, index) => {
-                        const isImage = ALLOWED_IMAGE_TYPES.includes(file.type)
+                        const isImage = ALLOWED_TYPES.includes(file.type)
                         const url = URL.createObjectURL(file)
                         return (
                           <div key={`${file.name}-${index}`} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs text-[#43507f]">
@@ -526,7 +527,7 @@ export function CreateReportDialog({
                   <h2 className="text-base font-bold text-[#07145f]">2. Uploaded photos or documents</h2>
                   <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
                     {mediaFiles.map((file, index) => {
-                      const isImage = ALLOWED_IMAGE_TYPES.includes(file.type)
+                      const isImage = ALLOWED_TYPES.includes(file.type)
                       const url = URL.createObjectURL(file)
                       return (
                         <button

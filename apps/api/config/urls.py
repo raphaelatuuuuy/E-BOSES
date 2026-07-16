@@ -15,6 +15,7 @@ from apps.concerns.views import (
     BarangayEventTodayView,
 )
 from apps.dashboard_views import OfficialDashboardSummaryView, ResidentDashboardSummaryView, ResponderDashboardSummaryView
+from apps.live_map import LocationPingView, OfficialLiveMapView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -32,5 +33,7 @@ urlpatterns = [
     path("api/notifications/", include("apps.notifications.urls")),
     path("api/dashboard/resident/summary/", ResidentDashboardSummaryView.as_view(), name="dashboard-resident-summary"),
     path("api/dashboard/official/summary/", OfficialDashboardSummaryView.as_view(), name="dashboard-official-summary"),
+    path("api/dashboard/official/live-map/", OfficialLiveMapView.as_view(), name="dashboard-official-live-map"),
     path("api/dashboard/responder/summary/", ResponderDashboardSummaryView.as_view(), name="dashboard-responder-summary"),
+    path("api/locations/ping/", LocationPingView.as_view(), name="location-ping"),
 ]

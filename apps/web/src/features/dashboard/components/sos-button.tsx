@@ -2,21 +2,16 @@ import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import {
   AlertTriangleIcon,
-  AmbulanceIcon,
   ArrowLeftIcon,
   CheckIcon,
-  FlameIcon,
   InfoIcon,
   LightbulbIcon,
-  ShieldAlertIcon,
-  CloudLightningIcon,
   CloudUploadIcon,
   Loader2Icon,
   LocateFixedIcon,
   MapPinIcon,
   PhoneIcon,
   SearchIcon,
-  XIcon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"

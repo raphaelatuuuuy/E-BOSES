@@ -76,3 +76,29 @@ class EmergencyTrackingConsumer(AuthenticatedJsonConsumer):
 
     async def emergency_update(self, event):
         await self.send_json({"type": "emergency.update", "payload": event["payload"]})
+
+
+@database_sync_to_async
+def user_can_view_live_map(user) -> bool:
+    from apps.live_map import is_official
+
+    return is_official(user)
+
+
+class OfficialLiveMapConsumer(AuthenticatedJsonConsumer):
+    async def connect(self):
+        if not await self.authenticate():
+            return
+        if not await user_can_view_live_map(self.user):
+            await self.close(code=4403)
+            return
+        self.group_name = "official_live_map"
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, code):
+        if getattr(self, "group_name", None):
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def live_map_update(self, event):
+        await self.send_json(event["payload"])

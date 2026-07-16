@@ -51,7 +51,9 @@ export default function OcrTemplateBuilderPage() {
     setFieldValidationRules,
     addField,
     removeField,
+    renameField,
     moveField,
+    reorderField,
     selectField,
     setFieldRegion,
     samplePreviewSide,
@@ -72,10 +74,19 @@ export default function OcrTemplateBuilderPage() {
     setTestResult,
     testRunning,
     runTest,
+    runTestFromSample,
+    setTestPhoto,
+    validateRequiredSamples,
+    missingRequiredSampleSides,
     extractedList,
     extractedByKey,
     selectedDetected,
   } = useOcrTemplateState()
+
+  const missingSamples = missingRequiredSampleSides(selectedDocument)
+  const missingSampleLabels = missingSamples.map((side) =>
+    side === "front" ? "Front" : side === "back" ? "Back" : "Sample",
+  )
 
   async function backToList() {
     await persistWizardExit()
@@ -176,7 +187,13 @@ export default function OcrTemplateBuilderPage() {
         }}
         availableEnabled={selectedDocument.enabled !== false}
         onToggleAvailable={(enabled) => {
+          if (enabled && !validateRequiredSamples(selectedDocument)) return
           void setProofAvailableOnSignup(selectedDocument.key, enabled)
+        }}
+        missingSampleSides={missingSampleLabels}
+        onValidateBeforeNext={(fromStep) => {
+          if (fromStep === 2) return validateRequiredSamples(selectedDocument)
+          return true
         }}
       >
         {step === 1 ? (
@@ -208,6 +225,9 @@ export default function OcrTemplateBuilderPage() {
             onAddField={addField}
             onRemoveField={removeField}
             onMoveField={moveField}
+            onReorderField={reorderField}
+            onUpdateField={updateField}
+            onRenameField={renameField}
             onUploadSample={(file, side) => {
               void handleSampleUpload(file, side)
             }}
@@ -233,6 +253,7 @@ export default function OcrTemplateBuilderPage() {
             selectedFieldIndex={selectedFieldIndex}
             onSelectField={selectField}
             onUpdateField={updateField}
+            onRenameField={renameField}
             onUpdateHints={updateFieldHints}
             onSetValidationRules={setFieldValidationRules}
             fieldMatchProfiles={fieldMatchProfiles}
@@ -249,11 +270,17 @@ export default function OcrTemplateBuilderPage() {
             testPreviewUrl={testPreviewUrl}
             testResult={testResult}
             extractedList={extractedList}
+            documentFields={selectedDocument.fields}
+            canvasSides={canvasSides}
+            samplePreviewBySide={samplePreviewBySide}
             onPickFile={(file) => {
-              void runTest(file)
+              void setTestPhoto(file)
             }}
-            onRunAgain={() => {
+            onRunTest={() => {
               void runTest(testFile)
+            }}
+            onRunTestFromSample={(side) => {
+              void runTestFromSample(side)
             }}
           />
         ) : null}

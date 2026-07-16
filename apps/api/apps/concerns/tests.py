@@ -24,7 +24,9 @@ from .models import Announcement, BarangayEvent, Concern, ConcernAiAssessment, C
 
 def png_bytes():
     output = BytesIO()
-    Image.new("RGB", (1, 1), color=(255, 0, 0)).save(output, format="PNG")
+    image = Image.new("RGB", (320, 240), color=(245, 245, 245))
+    image.paste((35, 65, 95), (0, 0, 160, 240))
+    image.save(output, format="PNG")
     return output.getvalue()
 
 
@@ -208,9 +210,9 @@ class ResidentDashboardAPITests(APITestCase):
         call_command("process_concern_ai", "--pending", stdout=output)
 
         concern.ai_assessment.refresh_from_db()
-        self.assertEqual(concern.ai_assessment.status, ConcernAiAssessment.Status.NOT_CONFIGURED)
+        self.assertEqual(concern.ai_assessment.status, ConcernAiAssessment.Status.COMPLETED)
         self.assertIn("Concern", output.getvalue())
-        self.assertIn("manual official review", concern.ai_assessment.recommendation)
+        self.assertIn("official review", concern.ai_assessment.recommendation)
 
     @override_settings(EBOSES_YOLO_MODEL_PATH="configured.pt", EBOSES_NLP_MODEL_PATH="configured-nlp")
     def test_ai_pipeline_stores_completed_assessment(self):

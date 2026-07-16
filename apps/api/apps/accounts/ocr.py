@@ -46,6 +46,9 @@ class OCRResponse:
     job_id: str
     latency_ms: int
     model: str
+    # Pixel size of the image that was OCR'd (for accurate relative bboxes).
+    image_width: int | None = None
+    image_height: int | None = None
 
 
 def _request_error(exc: Exception) -> OCRProviderError:
@@ -246,15 +249,55 @@ def ocr_bytes(image_bytes: bytes) -> list[dict]:
             pass
 
 
-def ocr_bytes_with_metadata(image_bytes: bytes, *, suffix=".png") -> OCRResponse:
-    """Submit in-memory bytes without ever exposing a public document URL."""
+def ocr_bytes_with_metadata(image_bytes: bytes, *, suffix=".png", deskew: bool = True) -> OCRResponse:
+    """Submit in-memory bytes without ever exposing a public document URL.
 
-    safe_suffix = suffix if suffix in {".png", ".jpg", ".jpeg", ".pdf"} else ".bin"
+    When ``deskew`` is True, attempts ID-card auto-crop/deskew so small or tilted
+    cards OCR better. Disable deskew when template field regions were drawn on
+    the original image — cropping would shift coordinates and pick wrong text.
+    """
+    payload = image_bytes
+    out_suffix = suffix if suffix in {".png", ".jpg", ".jpeg", ".pdf"} else ".bin"
+    # PDF bytes must not go through image deskew
+    if deskew and out_suffix != ".pdf":
+        try:
+            from .document_deskew import deskew_id_card_bytes
+
+            deskewed, meta = deskew_id_card_bytes(image_bytes)
+            if meta.get("deskewed") and deskewed:
+                payload = deskewed
+                out_suffix = ".jpg"
+        except Exception:
+            payload = image_bytes
+
+    image_width = None
+    image_height = None
+    if out_suffix != ".pdf":
+        try:
+            from io import BytesIO
+
+            from PIL import Image
+
+            with Image.open(BytesIO(payload)) as image:
+                image_width, image_height = image.size
+        except Exception:
+            image_width = None
+            image_height = None
+
+    safe_suffix = out_suffix if out_suffix in {".png", ".jpg", ".jpeg", ".pdf"} else ".bin"
     with tempfile.NamedTemporaryFile(suffix=safe_suffix, delete=False) as tmp:
-        tmp.write(image_bytes)
+        tmp.write(payload)
         tmp_path = tmp.name
     try:
-        return ocr_file_with_metadata(tmp_path)
+        response = ocr_file_with_metadata(tmp_path)
+        return OCRResponse(
+            lines=response.lines,
+            job_id=response.job_id,
+            latency_ms=response.latency_ms,
+            model=response.model,
+            image_width=image_width,
+            image_height=image_height,
+        )
     finally:
         try:
             os.unlink(tmp_path)
@@ -397,7 +440,7 @@ def validate_barangay_id_ocr(ocr_results: list[dict], user_data: dict) -> tuple[
             vu_date = dt_date(valid_until[0], valid_until[1], clamped_day)
             if vu_date < today:
                 details["dates"]["status"] = "expired"
-                return False, "This ID has already expired.", "proofType", details
+                return False, "This has already expired. Please use a valid one.", "proofType", details
 
     details["dates"]["status"] = "passed"
     return True, "Proof validated successfully.", "", details

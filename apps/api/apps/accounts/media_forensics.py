@@ -1,20 +1,32 @@
 """
-EXIF and C2PA media authenticity checks for E-Boses.
+Media forensics for E-Boses residence proof uploads.
 
-Raises ValidationError if uploaded media is AI-generated, edited with
-photo manipulation software, or contains tampered provenance data.
+Primary entry: POST /auth/register/proof/check/ (ID upload time only).
+
+  Layer 1: EXIF forensics          — editor / AI software tags
+  Layer 2: PNG metadata forensics  — tEXt/iTXt/zTXt AI/editor markers
+  Layer 3: C2PA forensics          — provenance / trainedAlgorithmicMedia
+  Layer 4: Visual tamper forensics — ELA + noise inconsistency
+  Layer 5: Image quality (soft on /proof/check) — size + blank-frame only
+           (strict Laplacian blur/brightness remains available but is not used
+            for residence-proof preflight in any environment)
+
+Final /auth/register/ and OCR detect re-check file type/size only (no C2PA re-run).
 """
 
 import json as jsonlib
+import logging
+import os
 import struct
 import tempfile
-import os
 from io import BytesIO
 
 import cv2
 import numpy as np
 from django.core.exceptions import ValidationError
 from PIL import Image, ImageChops, ImageStat
+
+logger = logging.getLogger(__name__)
 
 # ── Known editing software in EXIF Software tag ──────────────────────────
 EDITING_SOFTWARE = {
@@ -52,7 +64,8 @@ AI_SOFTWARE = {
 
 MIN_IMAGE_WIDTH = 300
 MIN_IMAGE_HEIGHT = 200
-MIN_BLUR_VARIANCE = 70.0
+# Lowered for phone photos (was 70). Soft preflight still skips Laplacian blur.
+MIN_BLUR_VARIANCE = 40.0
 MIN_BRIGHTNESS = 40.0
 MAX_BRIGHTNESS = 240.0
 MIN_CONTRAST = 25.0
@@ -66,14 +79,27 @@ NOISE_MIN_MEAN = 1.5
 NOISE_CV_THRESHOLD = 0.85
 NOISE_MIN_TEXTURE_STDDEV = 8.0
 VISUAL_TAMPER_MESSAGE = "Proof image appears digitally manipulated. Please upload an original photo."
+C2PA_INCONCLUSIVE_MESSAGE = (
+    "Could not verify media authenticity (C2PA). Reinstall forensics dependencies or try another photo."
+)
 
 
 def _normalize_name(name: str) -> str:
     return name.strip().lower()
 
 
+def _suffix_for_content(content: bytes) -> str:
+    if content.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if len(content) >= 12 and content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return ".webp"
+    return ".bin"
+
+
 def exif_forensics(content: bytes) -> str | None:
-    """Check EXIF for editing/AI software. Returns error message or None."""
+    """Layer 1: Check EXIF for editing/AI software. Returns error message or None."""
     try:
         img = Image.open(BytesIO(content))
         exif_data = img._getexif()
@@ -133,21 +159,56 @@ def _recursive_search(obj, *, _depth=0) -> str | None:
 
 
 def c2pa_forensics(content: bytes) -> str | None:
-    """Check C2PA provenance for AI/editing assertions. Returns error message or None."""
+    """Layer 3: Check C2PA provenance for AI/editing assertions.
+
+    Returns error message if AI/editing is indicated.
+    Returns None if no C2PA present or library not installed (logged).
+    Raises ValidationError only for hard policy failures already returned as strings.
+    """
     try:
         import c2pa
     except ImportError:
+        logger.warning("c2pa-python is not installed; Layer 3 C2PA checks are skipped")
         return None
 
+    suffix = _suffix_for_content(content)
     tmp_path = None
     try:
-        # c2pa-python Reader requires a file path, not bytes
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(content)
             tmp_path = tmp.name
+        # Keep file until reader is fully consumed
         reader = c2pa.Reader(tmp_path)
-    except Exception:
-        return None  # No C2PA manifest or parse error
+        try:
+            if not reader.is_embedded():
+                return None
+            manifest = reader.get_active_manifest()
+            if not manifest:
+                return None
+            try:
+                manifest_json = jsonlib.loads(reader.json())
+            except Exception:
+                logger.exception("C2PA manifest JSON parse failed")
+                return None
+            return _recursive_search(manifest_json)
+        finally:
+            # Prefer context/close if available
+            close = getattr(reader, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+    except Exception as exc:
+        # Most phone photos have no C2PA/JUMBF at all — that is normal and not a failure.
+        # Only log unexpected errors at warning; "manifest not found" is expected noise.
+        name = type(exc).__name__
+        msg = str(exc)
+        if "ManifestNotFound" in name or "no JUMBF" in msg or "ManifestNotFound" in msg:
+            logger.debug("C2PA not present on image (%s)", name)
+        else:
+            logger.warning("C2PA read failed (%s): %s", name, exc)
+        return None
     finally:
         if tmp_path and os.path.exists(tmp_path):
             try:
@@ -155,19 +216,9 @@ def c2pa_forensics(content: bytes) -> str | None:
             except Exception:
                 pass
 
-    if not reader.is_embedded():
-        return None
-
-    manifest = reader.get_active_manifest()
-    if not manifest:
-        return None
-
-    manifest_json = jsonlib.loads(reader.json())
-    return _recursive_search(manifest_json)
-
 
 def png_metadata_forensics(content: bytes) -> str | None:
-    """Check PNG text chunks for editing/AI software. Catches Canva, Procreate, etc."""
+    """Layer 2: Check PNG text chunks for editing/AI software. Catches Canva, Procreate, etc."""
     if not content.startswith(b"\x89PNG\r\n\x1a\n"):
         return None
 
@@ -186,24 +237,34 @@ def png_metadata_forensics(content: bytes) -> str | None:
                 keyword = chunk_data[:null_idx].decode("latin-1", errors="replace").strip().lower()
                 for kw in AI_SOFTWARE | EDITING_SOFTWARE:
                     if kw in keyword:
-                        return "AI-generated media is not allowed." if kw in AI_SOFTWARE else "Edited or manipulated media is not allowed."
+                        return (
+                            "AI-generated media is not allowed."
+                            if kw in AI_SOFTWARE
+                            else "Edited or manipulated media is not allowed."
+                        )
                 if null_idx + 1 < len(chunk_data):
                     value = chunk_data[null_idx + 1 :].decode("latin-1", errors="replace").strip().lower()
                     for kw in AI_SOFTWARE | EDITING_SOFTWARE:
                         if kw in value:
-                            return "AI-generated media is not allowed." if kw in AI_SOFTWARE else "Edited or manipulated media is not allowed."
+                            return (
+                                "AI-generated media is not allowed."
+                                if kw in AI_SOFTWARE
+                                else "Edited or manipulated media is not allowed."
+                            )
     except Exception:
         pass
     return None
 
 
 def check_image_quality(content: bytes) -> None:
-    """Reject proof images too small or unreadable for OCR."""
+    """Layer 5: Reject proof images too small or unreadable for OCR (strict quality)."""
     try:
         with Image.open(BytesIO(content)) as image:
             width, height = image.size
             if width < MIN_IMAGE_WIDTH or height < MIN_IMAGE_HEIGHT:
-                raise ValidationError(f"Proof image must be at least {MIN_IMAGE_WIDTH}×{MIN_IMAGE_HEIGHT} pixels.")
+                raise ValidationError(
+                    f"Proof image must be at least {MIN_IMAGE_WIDTH}×{MIN_IMAGE_HEIGHT} pixels."
+                )
 
             grayscale = image.convert("L")
             stats = ImageStat.Stat(grayscale)
@@ -221,6 +282,29 @@ def check_image_quality(content: bytes) -> None:
         raise ValidationError("Proof image has too little contrast.")
     if blur_variance < MIN_BLUR_VARIANCE:
         raise ValidationError("Proof image is too blurry. Please upload a clearer photo.")
+
+
+def check_image_quality_soft(content: bytes) -> None:
+    """Lenient quality gate — only reject unusable files."""
+    try:
+        with Image.open(BytesIO(content)) as image:
+            width, height = image.size
+            if width < 120 or height < 80:
+                raise ValidationError(
+                    "Proof image is too small. Use a clearer, larger photo of your ID."
+                )
+            grayscale = image.convert("L")
+            stats = ImageStat.Stat(grayscale)
+            contrast = stats.stddev[0]
+    except ValidationError:
+        raise
+    except Exception:
+        # If we cannot inspect the image, let OCR attempt it.
+        return
+
+    # Only reject pure blank / solid-color frames
+    if contrast < 5.0:
+        raise ValidationError("Proof image has no visible detail. Upload a photo of your document.")
 
 
 def ela_metrics(content: bytes) -> dict[str, float] | None:
@@ -288,8 +372,8 @@ def noise_inconsistency_metrics(content: bytes) -> dict[str, float] | None:
     return {"mean": mean, "std": std, "cv": std / mean, "blocks": float(len(noise_values))}
 
 
-
 def visual_tamper_forensics(content: bytes) -> str | None:
+    """Layer 4: ELA + noise inconsistency — flags composite / manipulated photos."""
     ela = ela_metrics(content)
     noise = noise_inconsistency_metrics(content)
     if not ela or not noise:
@@ -306,7 +390,13 @@ def visual_tamper_forensics(content: bytes) -> str | None:
 
 
 def check_media_authenticity(content: bytes) -> None:
-    """Run all forensics checks. Raises ValidationError on detection."""
-    msg = exif_forensics(content) or png_metadata_forensics(content) or c2pa_forensics(content) or visual_tamper_forensics(content)
+    """Run forensics Layers 1–4 in order. Raises ValidationError on detection."""
+    # Layer 1 → Layer 2 → Layer 3 → Layer 4
+    msg = (
+        exif_forensics(content)
+        or png_metadata_forensics(content)
+        or c2pa_forensics(content)
+        or visual_tamper_forensics(content)
+    )
     if msg:
         raise ValidationError(msg)

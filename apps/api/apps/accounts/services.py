@@ -23,12 +23,13 @@ from django.db import transaction
 from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.utils import timezone
 
-from .media_forensics import check_image_quality, check_media_authenticity
+from .media_forensics import check_image_quality, check_image_quality_soft, check_media_authenticity
 from .ocr import ocr_bytes, validate_barangay_id_ocr
 from .models import (
     AuditLog,
     ConsentRecord,
     OTPChallenge,
+    EmailOTPChallenge,
     PhoneOTPChallenge,
     ResidenceProof,
     ResidentProfile,
@@ -39,11 +40,14 @@ from .models import (
 PASSWORD_RESET_SALT = "accounts.password-reset"
 PASSWORD_RESET_MAX_AGE_SECONDS = 15 * 60
 
-ALLOWED_PROOF_MIME_TYPES = {"image/jpeg", "image/png"}
-ALLOWED_PROOF_EXTENSIONS = {".jpg", ".jpeg", ".png"}
-MAX_PROOF_FILE_SIZE = 2 * 1024 * 1024
+ALLOWED_PROOF_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
+ALLOWED_PROOF_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+# Phone gallery photos are often larger than 2MB; client compresses when possible.
+MAX_PROOF_FILE_SIZE = 10 * 1024 * 1024
 MAX_IMAGE_WIDTH = 4000
 MAX_IMAGE_HEIGHT = 4000
+# Reject decompress bombs before full-res NumPy forensics
+MAX_DECODE_PIXELS = 25_000_000
 logger = logging.getLogger(__name__)
 
 MARIKINA_HEIGHTS_BOUNDS = {
@@ -65,8 +69,9 @@ class BaseOTPProvider:
 
 class DevelopmentOTPProvider(BaseOTPProvider):
     def deliver(self, destination, code, purpose):
-        if not settings.DEBUG:
-            raise ImproperlyConfigured("Development OTP provider is only allowed when DEBUG=True.")
+        # Allow in local development even when DEBUG is temporarily false.
+        if not (settings.DEBUG or getattr(settings, "IS_LOCAL_DEVELOPMENT", False)):
+            raise ImproperlyConfigured("Development OTP provider is only allowed in local development.")
         print(f"Development OTP for {destination} ({purpose}): {code}", flush=True)
         logger.info("Development OTP for %s (%s): %s", destination, purpose, code)
 
@@ -149,6 +154,7 @@ _EXTENSION_MIME_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
+    ".webp": "image/webp",
 }
 
 
@@ -163,6 +169,8 @@ def _read_upload(uploaded_file):
 
 
 def detect_file_signature(content):
+    if len(content) >= 12 and content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return "image/webp"
     for signature, mime_type in _SIGNATURE_MIME_TYPES.items():
         if content.startswith(signature):
             return mime_type
@@ -205,39 +213,105 @@ def _as_uploaded_file(original, *, content, content_type, extension=None):
     return normalized
 
 
-def normalize_uploaded_file(uploaded_file, *, content, detected_mime_type):
+def normalize_uploaded_file(uploaded_file, *, content, detected_mime_type, deskew=True):
+    """Validate and normalize proof images for storage/OCR.
+
+    Handles:
+    - EXIF orientation (phone photos)
+    - Downscale if larger than MAX_IMAGE_WIDTH/HEIGHT (too big in pixels)
+    - Optional auto card detect + perspective warp (deskew=True for resident proofs)
+    - Re-encode to clean JPEG
+
+    Template builder samples should pass deskew=False so official sample photos
+    are not warped (which can introduce a slight slant on back-side images).
+    """
     try:
         with Image.open(BytesIO(content)) as image:
             image.verify()
         with Image.open(BytesIO(content)) as image:
             image = ImageOps.exif_transpose(image)
             width, height = image.size
+            # Downscale oversized photos instead of rejecting (gallery often exceeds limits)
             if width > MAX_IMAGE_WIDTH or height > MAX_IMAGE_HEIGHT:
-                raise ValidationError(f"Images must be {MAX_IMAGE_WIDTH}×{MAX_IMAGE_HEIGHT} pixels or smaller.")
+                image.thumbnail((MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT), Image.Resampling.LANCZOS)
+                width, height = image.size
             output = BytesIO()
-            if detected_mime_type == "image/jpeg":
-                image.convert("RGB").save(output, format="JPEG", quality=90, optimize=True)
-                extension = ".jpg"
+            # Always prefer JPEG for OCR proofs after normalize (smaller, consistent)
+            if detected_mime_type == "image/png" and image.mode in ("RGBA", "LA", "P"):
+                clean = image.convert("RGBA") if image.mode in ("RGBA", "LA") else image.convert("P")
+                if clean.mode == "P":
+                    clean = clean.convert("RGBA")
+                background = Image.new("RGB", clean.size, (255, 255, 255))
+                if clean.mode == "RGBA":
+                    background.paste(clean, mask=clean.split()[-1])
+                else:
+                    background.paste(clean)
+                background.save(output, format="JPEG", quality=90, optimize=True)
             else:
-                clean = image.convert("RGBA") if image.mode in ("RGBA", "LA") else image.convert("RGB")
-                clean.save(output, format="PNG", optimize=True)
-                extension = ".png"
+                image.convert("RGB").save(output, format="JPEG", quality=90, optimize=True)
+            jpeg_bytes = output.getvalue()
     except (UnidentifiedImageError, OSError) as exc:
         raise ValidationError("Image uploads must be valid JPG or PNG files.") from exc
+
+    # Auto-crop / deskew only for resident proof photos (not template samples)
+    if deskew:
+        try:
+            from .document_deskew import deskew_id_card_bytes
+
+            deskewed, deskew_meta = deskew_id_card_bytes(jpeg_bytes)
+            if deskew_meta.get("deskewed"):
+                jpeg_bytes = deskewed
+                logger.info("Proof image auto-deskewed: %s", deskew_meta)
+        except Exception:
+            logger.exception("Proof deskew skipped due to error")
+
     return _as_uploaded_file(
         uploaded_file,
-        content=output.getvalue(),
-        content_type=detected_mime_type,
-        extension=extension,
+        content=jpeg_bytes,
+        content_type="image/jpeg",
+        extension=".jpg",
     )
 
 
-def validate_uploaded_media_file(uploaded_file, *, profile=RESIDENCE_PROOF_UPLOAD_PROFILE):
+def _assert_pixel_budget(content: bytes) -> None:
+    """Reject decompress bombs before full-res forensics / normalize."""
+    try:
+        with Image.open(BytesIO(content)) as image:
+            width, height = image.size
+    except Exception:
+        return
+    if width * height > MAX_DECODE_PIXELS:
+        raise ValidationError(
+            f"Image resolution is too high ({width}×{height}). Use a smaller photo."
+        )
+
+
+def validate_uploaded_media_file(
+    uploaded_file,
+    *,
+    profile=RESIDENCE_PROOF_UPLOAD_PROFILE,
+    strict=True,
+    authenticity=None,
+    quality=None,
+    deskew=True,
+    normalize=True,
+):
+    """
+    authenticity: run media_forensics Layers 1–4 (default True when strict else False)
+    quality: "strict" | "soft" | "none" (default "strict" when strict else "soft")
+    """
+    if authenticity is None:
+        authenticity = bool(strict)
+    if quality is None:
+        quality = "strict" if strict else "soft"
+
     if uploaded_file.size > profile.max_size:
-        raise ValidationError(f"{profile.label} files must be {profile.max_size // (1024 * 1024)}MB or smaller.")
+        raise ValidationError(
+            f"{profile.label} files must be {profile.max_size // (1024 * 1024)}MB or smaller."
+        )
     extension = _extension(uploaded_file)
     if extension not in profile.allowed_extensions:
-        raise ValidationError(f"{profile.label} files must be JPG, JPEG, or PNG.")
+        raise ValidationError(f"{profile.label} files must be JPG, JPEG, PNG, or WebP.")
     content = _read_upload(uploaded_file)
     detected_mime_type = detect_file_signature(content)
     expected_mime_type = _EXTENSION_MIME_TYPES.get(extension)
@@ -245,27 +319,164 @@ def validate_uploaded_media_file(uploaded_file, *, profile=RESIDENCE_PROOF_UPLOA
         getattr(uploaded_file, "content_type", "") or mimetypes.guess_type(uploaded_file.name)[0] or ""
     ).lower()
     if detected_mime_type not in profile.allowed_mime_types:
-        raise ValidationError(f"{profile.label} files must be valid JPG, JPEG, or PNG files.")
-    if detected_mime_type != expected_mime_type or (claimed_mime_type and claimed_mime_type != detected_mime_type):
+        raise ValidationError(f"{profile.label} files must be valid JPG, JPEG, PNG, or WebP files.")
+    # Allow empty claimed MIME (common for gallery picks); only reject hard mismatches.
+    if expected_mime_type and detected_mime_type != expected_mime_type:
         raise ValidationError("Uploaded file content does not match its extension or MIME type.")
-    # Forensics: block AI-generated, edited, and unreadable media
-    check_media_authenticity(content)
-    check_image_quality(content)
-    normalized_file = normalize_uploaded_file(uploaded_file, content=content, detected_mime_type=detected_mime_type)
-    scan_uploaded_file(normalized_file, content=_read_upload(normalized_file), detected_mime_type=detected_mime_type)
+    if claimed_mime_type and claimed_mime_type not in profile.allowed_mime_types and claimed_mime_type != detected_mime_type:
+        # Some browsers send application/octet-stream for gallery files — allow if signature is valid.
+        if claimed_mime_type not in {"application/octet-stream", "binary/octet-stream", ""}:
+            if claimed_mime_type != detected_mime_type:
+                raise ValidationError("Uploaded file content does not match its extension or MIME type.")
+
+    _assert_pixel_budget(content)
+
+    # Layers 1–4 authenticity (optional, independent of quality mode)
+    if authenticity:
+        check_media_authenticity(content)
+
+    if quality == "strict":
+        check_image_quality(content)
+    elif quality == "soft":
+        check_image_quality_soft(content)
+
+    if not normalize:
+        scan_uploaded_file(uploaded_file, content=content, detected_mime_type=detected_mime_type)
+        return uploaded_file
+
+    normalized_file = normalize_uploaded_file(
+        uploaded_file,
+        content=content,
+        detected_mime_type=detected_mime_type,
+        deskew=deskew,
+    )
+    scan_uploaded_file(
+        normalized_file,
+        content=_read_upload(normalized_file),
+        detected_mime_type="image/jpeg",
+    )
     return normalized_file
 
 
-def validate_residence_proof_file(uploaded_file):
-    return validate_uploaded_media_file(uploaded_file, profile=RESIDENCE_PROOF_UPLOAD_PROFILE)
+def validate_residence_proof_file(uploaded_file, *, strict=True, deskew=True, authenticity=None, quality=None, normalize=True):
+    return validate_uploaded_media_file(
+        uploaded_file,
+        profile=RESIDENCE_PROOF_UPLOAD_PROFILE,
+        strict=strict,
+        authenticity=authenticity,
+        quality=quality,
+        deskew=deskew,
+        normalize=normalize,
+    )
+
+
+def validate_residence_proof_file_preflight(uploaded_file):
+    """Per-file preflight for /proof/check (ID upload): authenticity + soft quality.
+
+    Layers 1–4 (C2PA / EXIF / tamper) stay on; Layer 5 uses soft quality for all
+    environments (local and production) so phone photos are not over-rejected.
+    Does not enforce multi-side completeness (front+back). Completeness is final registration.
+    """
+    return validate_residence_proof_file(
+        uploaded_file,
+        strict=True,
+        authenticity=True,
+        quality="soft",
+        deskew=False,
+        normalize=False,
+    )
+
+
+def validate_residence_proof_file_light(uploaded_file):
+    """Type/size/signature only — no C2PA/authenticity (already done at ID upload)."""
+    return validate_residence_proof_file(
+        uploaded_file,
+        strict=False,
+        authenticity=False,
+        quality="none",
+        deskew=False,
+        normalize=False,
+    )
+
+
+def validate_residence_proof_uploads_preflight(proof_files):
+    """Preflight all files with forensics; optional SHA-256 / pHash duplicate rejection."""
+    if not proof_files:
+        raise ValidationError({"proof": ["Upload at least one valid government-issued ID or bill."]})
+    if len(proof_files) > 2:
+        raise ValidationError({"proof": ["You can upload a maximum of 2 files."]})
+    for proof_file in proof_files:
+        validate_residence_proof_file_preflight(proof_file)
+
+    proof_hashes = [sha256_file(proof_file) for proof_file in proof_files]
+    if len(set(proof_hashes)) != len(proof_hashes):
+        raise DuplicateProofError("Duplicate proof upload detected.")
+    if ResidenceProof.objects.filter(sha256_hash__in=proof_hashes).exists():
+        raise DuplicateProofError("Duplicate proof upload detected.")
+
+    proof_phashes = []
+    proof_phash_blocks = []
+    for proof_file in proof_files:
+        content = _read_upload(proof_file)
+        phash = phash_file(content)
+        if phash:
+            proof_phashes.append(phash)
+        blocks = phash_blocks_file(content)
+        if blocks:
+            proof_phash_blocks.append(blocks)
+    if any(
+        is_similar_phash(left, right)
+        for index, left in enumerate(proof_phashes)
+        for right in proof_phashes[index + 1 :]
+    ):
+        raise DuplicateProofError("Duplicate proof upload detected.")
+    if any(duplicate_phash_exists(phash) for phash in proof_phashes):
+        raise DuplicateProofError("Duplicate proof upload detected.")
+    if any(
+        has_similar_phash_block(phash, blocks)
+        for index, phash in enumerate(proof_phashes)
+        for block_index, blocks in enumerate(proof_phash_blocks)
+        if index != block_index
+    ):
+        raise DuplicateProofError("Duplicate proof upload detected.")
+    if any(duplicate_phash_blocks_exists(phash) for phash in proof_phashes):
+        raise DuplicateProofError("Duplicate proof upload detected.")
+    return proof_files
+
+
+def validate_residence_proof_uploads_for_detect(proof_files):
+    """Detect/OCR path: soft quality only. Authenticity (incl. C2PA) already ran at upload."""
+    return [
+        validate_residence_proof_file(
+            proof_file,
+            authenticity=False,
+            quality="soft",
+            deskew=False,
+            normalize=True,
+            strict=False,
+        )
+        for proof_file in proof_files
+    ]
 
 
 def validate_concern_media_file(uploaded_file):
-    return validate_uploaded_media_file(uploaded_file, profile=CONCERN_MEDIA_UPLOAD_PROFILE)
+    return validate_uploaded_media_file(
+        uploaded_file,
+        profile=CONCERN_MEDIA_UPLOAD_PROFILE,
+        authenticity=True,
+        quality="soft",
+        deskew=False,
+    )
 
 
 def validate_emergency_media_file(uploaded_file):
-    return validate_uploaded_media_file(uploaded_file, profile=EMERGENCY_MEDIA_UPLOAD_PROFILE)
+    return validate_uploaded_media_file(
+        uploaded_file,
+        profile=EMERGENCY_MEDIA_UPLOAD_PROFILE,
+        authenticity=True,
+        quality="soft",
+        deskew=False,
+    )
 
 def validate_location_pair(latitude, longitude, *, required=False):
     if latitude is None or longitude is None:
@@ -332,8 +543,94 @@ def create_phone_otp_challenge(phone_number):
         code_hash=make_password(code),
         expires_at=timezone.now() + timedelta(minutes=10),
     )
-    deliver_otp(OTPChallenge.Channel.SMS, phone_number, code, OTPChallenge.Purpose.REGISTRATION)
+    try:
+        deliver_otp(OTPChallenge.Channel.SMS, phone_number, code, OTPChallenge.Purpose.REGISTRATION)
+    except ImproperlyConfigured as exc:
+        # Local / misconfigured SMS: still keep the challenge so sign-up can proceed.
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) or settings.DEBUG:
+            print(f"SMS OTP delivery skipped ({exc}). Code for {phone_number}: {code}", flush=True)
+            logger.warning("SMS OTP delivery skipped for %s: %s (code=%s)", phone_number, exc, code)
+        else:
+            challenge.delete()
+            raise OTPDeliveryError(
+                "SMS verification is not available right now. Please try again later or contact the barangay office."
+            ) from exc
+    except Exception as exc:
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) or settings.DEBUG:
+            print(f"SMS OTP delivery failed ({exc}). Code for {phone_number}: {code}", flush=True)
+            logger.exception("SMS OTP delivery failed for %s (code=%s)", phone_number, code)
+        else:
+            challenge.delete()
+            raise OTPDeliveryError(
+                "We could not send the SMS code. Check your number and try again in a moment."
+            ) from exc
     return challenge, code
+
+
+def normalize_registration_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def create_email_otp_challenge(email):
+    """Send a 6-digit code before the account exists (right after email/password)."""
+    email = normalize_registration_email(email)
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    challenge = EmailOTPChallenge.objects.create(
+        email=email,
+        destination_hash=hash_destination(email),
+        code_hash=make_password(code),
+        expires_at=timezone.now() + timedelta(minutes=10),
+    )
+    try:
+        deliver_otp(OTPChallenge.Channel.EMAIL, email, code, OTPChallenge.Purpose.REGISTRATION)
+    except ImproperlyConfigured as exc:
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) or settings.DEBUG:
+            print(f"Email OTP delivery skipped ({exc}). Code for {email}: {code}", flush=True)
+            logger.warning("Email OTP delivery skipped for %s: %s (code=%s)", email, exc, code)
+        else:
+            challenge.delete()
+            raise OTPDeliveryError(
+                "Email verification is not available right now. Please try again later."
+            ) from exc
+    except Exception as exc:
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) or settings.DEBUG:
+            print(f"Email OTP delivery failed ({exc}). Code for {email}: {code}", flush=True)
+            logger.exception("Email OTP delivery failed for %s (code=%s)", email, code)
+        else:
+            challenge.delete()
+            raise OTPDeliveryError(
+                "We could not send the email code. Check your address and try again in a moment."
+            ) from exc
+    return challenge, code
+
+
+def verify_email_otp_challenge(email, code, allow_verified=False):
+    email = normalize_registration_email(email)
+    try:
+        challenge = EmailOTPChallenge.objects.filter(email=email).latest("created_at")
+    except EmailOTPChallenge.DoesNotExist as exc:
+        raise OTPVerificationError("No active email OTP challenge.") from exc
+
+    if challenge.consumed_at:
+        raise OTPVerificationError("This OTP has already been used.")
+    # Already verified earlier in signup (email step) — accept even if the 10-min
+    # window has passed, so finishing the multi-step form still works.
+    if challenge.verified_at:
+        if allow_verified:
+            return challenge
+        raise OTPVerificationError("This OTP has already been used.")
+    if challenge.is_expired:
+        raise OTPVerificationError("This OTP has expired.")
+    if challenge.attempts >= challenge.max_attempts:
+        raise OTPVerificationError("Too many OTP attempts.")
+    if not check_password(code, challenge.code_hash):
+        challenge.attempts += 1
+        challenge.save(update_fields=["attempts"])
+        raise OTPVerificationError("Invalid OTP code.")
+
+    challenge.verified_at = timezone.now()
+    challenge.save(update_fields=["verified_at"])
+    return challenge
 
 
 def verify_phone_otp_challenge(phone_number, code, allow_verified=False):
@@ -346,20 +643,20 @@ def verify_phone_otp_challenge(phone_number, code, allow_verified=False):
 
     if challenge.consumed_at:
         raise OTPVerificationError("This OTP has already been used.")
+    # Already verified earlier in signup (phone step) — accept on final register
+    # even if the original OTP window has elapsed.
+    if challenge.verified_at:
+        if allow_verified:
+            return challenge
+        raise OTPVerificationError("This OTP has already been used.")
     if challenge.is_expired:
         raise OTPVerificationError("This OTP has expired.")
     if challenge.attempts >= challenge.max_attempts:
         raise OTPVerificationError("Too many OTP attempts.")
     if not check_password(code, challenge.code_hash):
-        if challenge.verified_at:
-            raise OTPVerificationError("This OTP has already been used.")
         challenge.attempts += 1
         challenge.save(update_fields=["attempts"])
         raise OTPVerificationError("Invalid OTP code.")
-    if challenge.verified_at:
-        if allow_verified:
-            return challenge
-        raise OTPVerificationError("This OTP has already been used.")
 
     challenge.verified_at = timezone.now()
     challenge.save(update_fields=["verified_at"])
@@ -472,8 +769,17 @@ def registration_proof_files(validated_data):
 
 
 def validate_residence_proof_uploads(proof_files):
+    """Final register: file contract + duplicates + normalize. No C2PA (ran at ID upload)."""
     validated_files = [
-        validate_residence_proof_file(proof_file) for proof_file in proof_files
+        validate_residence_proof_file(
+            proof_file,
+            authenticity=False,
+            quality="none",
+            deskew=False,
+            normalize=True,
+            strict=False,
+        )
+        for proof_file in proof_files
     ]
     proof_hashes = [sha256_file(proof_file) for proof_file in validated_files]
     duplicate_in_upload = len(set(proof_hashes)) != len(proof_hashes)
@@ -512,6 +818,8 @@ def validate_residence_proof_uploads(proof_files):
 
 def create_registration_profile(user, validated_data):
     proof_files = registration_proof_files(validated_data)
+    document_type = validated_data.get("_ocr_document_type")
+    proof_sides = validated_data.get("_proof_sides") or [ResidenceProof.Side.SINGLE] * len(proof_files)
     profile = ResidentProfile.objects.create(
         user=user,
         first_name=validated_data["first_name"],
@@ -519,16 +827,18 @@ def create_registration_profile(user, validated_data):
         last_name=validated_data["last_name"],
         date_of_birth=validated_data["date_of_birth"],
         address=validated_data["address"],
-        barangay=validated_data.get("barangay") or "Pending",
+        barangay=validated_data.get("barangay") or "Marikina Heights",
         gender=validated_data.get("gender", ""),
         avatar=validated_data.get("avatar", ""),
     )
     proofs = []
-    for proof_file in proof_files:
+    for proof_file, side in zip(proof_files, proof_sides):
         raw_content = proof_file.read(); proof_file.seek(0)
         proofs.append(
             ResidenceProof.objects.create(
                 user=user,
+                document_type=document_type,
+                side=side,
                 file=proof_file,
                 original_filename=proof_file.name,
                 mime_type=getattr(proof_file, "content_type", "") or "",
@@ -537,6 +847,19 @@ def create_registration_profile(user, validated_data):
                 phash=phash_file(raw_content),
                 phash_blocks=phash_blocks_file(raw_content),
             )
+        )
+    if document_type is not None:
+        # Keep case creation in the same transaction as the resident and proof
+        # rows.  The case remains awaiting_email until the second OTP is
+        # verified, after which the worker queues OCR without blocking signup.
+        from .ocr_runtime import create_registration_case
+
+        create_registration_case(
+            user,
+            proofs,
+            configuration=validated_data.get("_ocr_configuration"),
+            document_type=document_type,
+            sides=proof_sides,
         )
     ConsentRecord.objects.create(
         user=user,
@@ -549,32 +872,29 @@ def create_registration_profile(user, validated_data):
 
 
 def run_system_verification(user):
-    proof = user.residence_proofs.latest("uploaded_at")
-    duplicate_exists = ResidenceProof.objects.filter(sha256_hash=proof.sha256_hash).exclude(user=user).exists()
-    check = VerificationCheck.objects.create(
-        user=user,
-        proof=proof,
-        duplicate_match_found=duplicate_exists,
-        metadata={"adapter": "sha256_duplicate_checker_v1"},
-    )
-    now = timezone.now()
-    if duplicate_exists:
-        check.status = VerificationCheck.Status.FAILED
-        check.failure_reason = "Duplicate proof upload detected."
-        user.status = User.Status.REJECTED
-        user.save(update_fields=["status", "updated_at"])
-    else:
-        check.status = VerificationCheck.Status.PASSED
-        user.status = User.Status.VERIFIED
-        user.save(update_fields=["status", "updated_at"])
-    check.completed_at = now
-    check.save(update_fields=["status", "failure_reason", "completed_at"])
-    return check
+    """Backward-compatible entry point for callers that used the old sync check.
+
+    Verification is now an asynchronous, configuration-pinned workflow.  The
+    function intentionally only queues a case; provider errors become manual
+    review and can never reject a resident from the request thread.
+    """
+    from .ocr_runtime import queue_user_verification
+
+    return queue_user_verification(user, trigger=VerificationCheck.Trigger.SYSTEM)
 
 
 @transaction.atomic
 def register_resident(validated_data, request_meta=None):
     validated_data["request_meta"] = request_meta or {}
+    email = normalize_registration_email(validated_data["email"])
+    validated_data["email"] = email
+
+    # Email OTP is verified during sign-up (right after email/password), before profile steps.
+    email_challenge = verify_email_otp_challenge(
+        email,
+        validated_data["email_otp_code"],
+        allow_verified=True,
+    )
     phone_challenge = verify_phone_otp_challenge(
         validated_data["phone_number"],
         validated_data["phone_otp_code"],
@@ -582,36 +902,41 @@ def register_resident(validated_data, request_meta=None):
     )
     proof_files = validate_residence_proof_uploads(registration_proof_files(validated_data))
     validated_data["proof_files"] = proof_files
+    # Select and validate the published policy before creating the account.
+    # This only validates the upload contract; OCR itself is always queued
+    # after both OTPs are verified and never runs in the signup request.
+    from .ocr_runtime import validate_registration_selection, queue_user_verification
 
-    # OCR validation for barangay ID
-    if validated_data.get("proof_type") == "barangay_id":
-        for proof_file in proof_files:
-            raw_content = _read_upload(proof_file)
-            ocr_results = ocr_bytes(raw_content)
-            user_data = {
-                "first_name": validated_data["first_name"],
-                "last_name": validated_data["last_name"],
-                "address": validated_data["address"],
-                "date_of_birth": str(validated_data["date_of_birth"]),
-            }
-            passed, reason, failed_field, details = validate_barangay_id_ocr(ocr_results, user_data)
-            logger.info("OCR validation for %s: passed=%s, reason=%s, field=%s, details=%s",
-                         validated_data.get("email", "?"), passed, reason, failed_field, details)
-            if not passed:
-                err = {failed_field: [reason]} if failed_field else {"proofOfResidency": [reason]}
-                raise ValidationError(err)
+    # Older clients did not send a type.  Keep their one/two-image contract
+    # working with the broad government-ID default; new clients always send
+    # an explicit catalog code and receive that type's stricter side rules.
+    proof_type = validated_data.get("proof_type") or "government_id_with_address"
+    configuration, document_type, proof_sides = validate_registration_selection(
+        proof_type,
+        proof_files,
+        validated_data.get("proof_sides"),
+    )
+    validated_data["proof_type"] = proof_type
+    validated_data["_ocr_configuration"] = configuration
+    validated_data["_ocr_document_type"] = document_type
+    validated_data["_proof_sides"] = proof_sides
 
-    user = get_user_model().objects.create_user(
-        email=validated_data["email"],
+    User = get_user_model()
+    user = User.objects.create_user(
+        email=email,
         phone_number=validated_data["phone_number"],
         password=validated_data["password"],
+        email_verified_at=email_challenge.verified_at,
         phone_verified_at=phone_challenge.verified_at,
+        status=User.Status.PENDING_VERIFICATION,
     )
     create_registration_profile(user, validated_data)
-    create_otp_challenge(user, OTPChallenge.Channel.EMAIL, OTPChallenge.Purpose.REGISTRATION, user.email)
+    email_challenge.consumed_at = timezone.now()
+    email_challenge.save(update_fields=["consumed_at"])
     phone_challenge.consumed_at = timezone.now()
     phone_challenge.save(update_fields=["consumed_at"])
     create_audit_log("auth.registered", actor=user, target_user=user, request_meta=request_meta)
+    queue_user_verification(user, trigger=VerificationCheck.Trigger.REGISTRATION)
     return user
 
 
@@ -639,7 +964,9 @@ def verify_otp_challenge(challenge, code):
             user.status = User.Status.PENDING_VERIFICATION
         user.save(update_fields=["email_verified_at", "phone_verified_at", "status", "updated_at"])
         if user.status == User.Status.PENDING_VERIFICATION:
-            run_system_verification(user)
+            from .ocr_runtime import queue_user_verification
+
+            queue_user_verification(user, trigger=VerificationCheck.Trigger.REGISTRATION)
     return challenge
 
 

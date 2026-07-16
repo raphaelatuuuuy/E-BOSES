@@ -87,8 +87,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }, [])
 
   React.useEffect(() => {
-    const token = getAccessToken()
-    if (!token) return
+    const accessToken = getAccessToken() ?? ""
+    if (!accessToken) return
 
     let socket: WebSocket | null = null
     let connectTimer: number | undefined
@@ -99,7 +99,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     const maxReconnectAttempts = 2
 
     function connect() {
-      socket = new WebSocket(websocketUrl(`/ws/notifications/?token=${encodeURIComponent(token)}`))
+      socket = new WebSocket(websocketUrl(`/ws/notifications/?token=${encodeURIComponent(accessToken)}`))
       socket.onopen = () => {
         opened = true
         reconnectAttempts = 0
@@ -108,13 +108,14 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         try {
           const message = JSON.parse(event.data) as { type?: string; payload?: NotificationItem }
           if (message.type !== "notification.created" || !message.payload) return
+          const payload = message.payload
           setNotifications((prev) => {
-            if (prev.some((item) => item.id === message.payload?.id)) return prev
-            return [message.payload, ...prev].slice(0, 20)
+            if (prev.some((item) => item.id === payload.id)) return prev
+            return [payload, ...prev].slice(0, 20)
           })
-          if (!message.payload.is_read) {
+          if (!payload.is_read) {
             setUnreadCount((prev) => prev + 1)
-            void showBrowserNotification(message.payload)
+            void showBrowserNotification(payload)
           }
         } catch {
           // Ignore malformed realtime events; polling remains the fallback.

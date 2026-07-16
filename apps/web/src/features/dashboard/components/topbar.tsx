@@ -1,30 +1,17 @@
-import { SearchIcon, XIcon, CircleUserIcon, LogOutIcon } from "lucide-react"
+import { SearchIcon, XIcon } from "lucide-react"
 import { useState } from "react"
-import { Link, useNavigate } from "react-router-dom"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { Input } from "@workspace/ui/components/input"
-import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/components/popover"
 import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
 import { NotificationPopover } from "@/features/dashboard/components/notification-popover"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { computeDefaultAvatar } from "@/features/dashboard/avatar-utils"
 
 export function Topbar() {
   const [searchOpen, setSearchOpen] = useState(false)
-  const navigate = useNavigate()
-  const { user, signOut } = useAuthSession()
+  const { user } = useAuthSession()
 
-  const initials = user ? `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}` : "?"
-  const avatarKey = user ? computeDefaultAvatar(user) : ""
-  const displayName = user ? `${(user.firstName ?? "").split(/\s+/)[0]} ${user.lastName ?? ""}`.trim() : "User"
-  const displayRole = user?.role?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()) ?? "Resident"
   const isStaffRole = user?.role === "barangay_official" || user?.role === "first_responder" || user?.is_staff || user?.is_superuser
-
-  function handleSignOut() {
-    signOut()
-    navigate("/")
-  }
 
   return (
     <>
@@ -69,47 +56,6 @@ export function Topbar() {
 
           <NotificationPopover />
 
-          <div className="relative">
-            <Popover>
-            <PopoverTrigger className="hidden sm:flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-sm font-bold text-muted-foreground transition-colors hover:bg-muted/80">
-              {avatarKey ? <img src={`/contents/${avatarKey}.png`} alt="" className="h-full w-full scale-125 object-cover" /> : initials}
-            </PopoverTrigger>
-            <PopoverContent className="right-0 left-auto min-w-48 sm:w-auto max-sm:w-[calc(100vw-2rem)] max-sm:mx-2">
-              <div className="p-3">
-                <div className="flex items-center gap-3 border-b border-border/50 pb-3">
-                  <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-sm font-bold text-muted-foreground">
-                    {avatarKey ? <img src={`/contents/${avatarKey}.png`} alt="" className="h-full w-full scale-125 object-cover" /> : initials}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-foreground">
-                      {displayName}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {displayRole}
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-2 space-y-1">
-                  <Link
-                    to="/dashboard/profile"
-                    className="flex items-center gap-3 rounded-md px-2 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  >
-                    <CircleUserIcon className="size-4 shrink-0" />
-                    <span>Profile</span>
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={handleSignOut}
-                    className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  >
-                    <LogOutIcon className="size-4 shrink-0" />
-                    <span>Sign out</span>
-                  </button>
-                </div>
-              </div>
-            </PopoverContent>
-            </Popover>
-          </div>
         </div>
       </header>
 

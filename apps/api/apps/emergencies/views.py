@@ -321,6 +321,9 @@ class EmergencyCreateView(APIView):
             metadata={"alert_id": alert.pk, "type": alert.type},
             request_meta=request_meta(request),
         )
+        from apps.live_map import emergency_payload, route_for_assignment
+        from apps.notifications.services import broadcast_live_map_event
+        transaction.on_commit(lambda: broadcast_live_map_event("emergency.created", {"emergency": emergency_payload(alert), "route": route_for_assignment(alert)}))
         return Response(serialize_alert(alert, request), status=status.HTTP_201_CREATED)
 
 
@@ -400,6 +403,9 @@ class EmergencyDutyView(APIView):
             request.user.location_updated_at = timezone.now()
             update_fields.extend(["current_latitude", "current_longitude", "location_updated_at"])
         request.user.save(update_fields=update_fields)
+        from apps.live_map import person_payload
+        from apps.notifications.services import broadcast_live_map_event
+        broadcast_live_map_event("location.updated", {"person": person_payload(request.user)})
         return Response({
             "is_on_duty": request.user.is_on_duty,
             "responder_unit": request.user.responder_unit,

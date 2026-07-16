@@ -74,11 +74,11 @@ function DialogTrigger({
   )
 }
 
-function DialogOverlay() {
+function DialogOverlay({ className }: { className?: string }) {
   const { setOpen } = useDialog()
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/40"
+      className={cn("fixed inset-0 z-50 bg-black/40", className)}
       onClick={() => setOpen(false)}
     />
   )
@@ -87,15 +87,16 @@ function DialogOverlay() {
 function DialogContent({
   className,
   children,
+  overlayClassName,
   ...props
-}: React.ComponentProps<"div">) {
+}: React.ComponentProps<"div"> & { overlayClassName?: string }) {
   const { open } = useDialog()
 
   if (!open) return null
 
   return (
     <>
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <div
         className={cn(
           "fixed bottom-0 left-0 right-0 top-auto z-50 flex max-h-[85vh] w-full flex-col rounded-t-2xl border border-border/50 bg-background shadow-2xl",
@@ -132,10 +133,10 @@ function DialogHeader({
       <button
         type="button"
         onClick={() => setOpen(false)}
-        className="ml-4 flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:size-8"
+        className="ml-4 flex size-7 shrink-0 items-center justify-center rounded-lg text-black transition-colors hover:bg-muted hover:text-black sm:size-8"
         aria-label="Close"
       >
-        <XIcon className="size-4" />
+        <XIcon className="size-4 text-black" />
       </button>
     </div>
   )
