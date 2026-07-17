@@ -1,5 +1,5 @@
 import * as React from "react"
-import { apiRequest, getAccessToken, websocketUrl } from "@/lib/api"
+import { apiRequest, websocketTicket, websocketUrl } from "@/lib/api"
 import type { Concern } from "@/features/dashboard/api"
 import { registerNotificationWorker, showBrowserNotification } from "@/features/dashboard/browser-notifications"
 
@@ -11,9 +11,11 @@ export interface NotificationItem {
   is_read: boolean
   created_at: string
   concern_id: number | null
+  concern_public_id: string | null
   concern_title: string | null
   concern_status: string | null
   emergency_id: number | null
+  emergency_public_id: string | null
   emergency_status: string | null
 }
 
@@ -21,6 +23,7 @@ interface NotificationContextValue {
   notifications: NotificationItem[]
   unreadCount: number
   loading: boolean
+  connectionState: "connecting" | "live" | "degraded"
   markAsRead: (id: number) => Promise<void>
   markAllAsRead: () => Promise<void>
   refresh: () => Promise<void>
@@ -38,6 +41,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const [notifications, setNotifications] = React.useState<NotificationItem[]>([])
   const [unreadCount, setUnreadCount] = React.useState(0)
   const [loading, setLoading] = React.useState(true)
+  const [connectionState, setConnectionState] = React.useState<"connecting" | "live" | "degraded">("connecting")
+  const socketLiveRef = React.useRef(false)
 
   async function fetchAll() {
     try {
@@ -71,7 +76,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   React.useEffect(() => {
     void fetchAll()
     void registerNotificationWorker()
-    const interval = setInterval(fetchAll, 30_000)
+    const interval = setInterval(() => {
+      if (!socketLiveRef.current) void fetchAll()
+    }, 30_000)
     function handleWorkerClick(event: MessageEvent) {
       if (event.data?.type === "eboses.notification-click" && typeof event.data.url === "string") {
         window.location.assign(event.data.url)
@@ -87,21 +94,28 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }, [])
 
   React.useEffect(() => {
-    const accessToken = getAccessToken() ?? ""
-    if (!accessToken) return
-
     let socket: WebSocket | null = null
     let connectTimer: number | undefined
     let reconnectTimer: number | undefined
     let closedByComponent = false
-    let opened = false
     let reconnectAttempts = 0
-    const maxReconnectAttempts = 2
 
-    function connect() {
-      socket = new WebSocket(websocketUrl(`/ws/notifications/?token=${encodeURIComponent(accessToken)}`))
+    async function connect() {
+      setConnectionState("connecting")
+      try {
+        const ticket = await websocketTicket()
+        if (closedByComponent) return
+        socket = new WebSocket(websocketUrl(`/ws/notifications/?ticket=${encodeURIComponent(ticket)}`))
+      } catch {
+        socketLiveRef.current = false
+        setConnectionState("degraded")
+        reconnectAttempts += 1
+        reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** reconnectAttempts))
+        return
+      }
       socket.onopen = () => {
-        opened = true
+        socketLiveRef.current = true
+        setConnectionState("live")
         reconnectAttempts = 0
       }
       socket.onmessage = (event) => {
@@ -117,25 +131,37 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
             setUnreadCount((prev) => prev + 1)
             void showBrowserNotification(payload)
           }
+          if (payload.concern_id) {
+            window.dispatchEvent(
+              new CustomEvent("eboses:concern-updated", { detail: { concernId: payload.concern_id } }),
+            )
+          }
+          if (payload.emergency_id) {
+            window.dispatchEvent(
+              new CustomEvent("eboses:emergency-updated", { detail: { emergencyId: payload.emergency_id } }),
+            )
+          }
         } catch {
           // Ignore malformed realtime events; polling remains the fallback.
         }
       }
       socket.onclose = () => {
+        socketLiveRef.current = false
+        setConnectionState("degraded")
         void fetchAll()
         if (closedByComponent) return
-        if (!opened || reconnectAttempts >= maxReconnectAttempts) return
         reconnectAttempts += 1
-        reconnectTimer = window.setTimeout(connect, 5000)
+        reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** reconnectAttempts))
       }
       socket.onerror = () => {
         socket?.close()
       }
     }
 
-    connectTimer = window.setTimeout(connect, 0)
+    connectTimer = window.setTimeout(() => void connect(), 0)
     return () => {
       closedByComponent = true
+      socketLiveRef.current = false
       if (connectTimer) window.clearTimeout(connectTimer)
       if (reconnectTimer) window.clearTimeout(reconnectTimer)
       if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
@@ -150,6 +176,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         notifications,
         unreadCount,
         loading,
+        connectionState,
         markAsRead,
         markAllAsRead,
         refresh: fetchAll,

@@ -162,6 +162,12 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 300.0,
         "options": {"queue": "eboses"},
     },
+    "emergency-assignment-escalation": {
+        "task": "apps.emergencies.tasks.escalate_overdue_emergencies_task",
+        "schedule": 60.0,
+        "args": (5,),
+        "options": {"queue": "eboses"},
+    },
 }
 
 # Password validation
@@ -231,8 +237,21 @@ frontend_url = env("FRONTEND_URL", default="http://localhost:5173") if IS_LOCAL_
 frontend_parts = urlsplit(frontend_url)
 frontend_origin = f"{frontend_parts.scheme}://{frontend_parts.netloc}" if frontend_parts.scheme and frontend_parts.netloc else frontend_url
 
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
+_default_cors_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://localhost:5173",
+    "https://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "https://localhost:5174",
+    "https://127.0.0.1:5174",
+]
+if frontend_origin and frontend_origin not in _default_cors_origins:
+    _default_cors_origins.append(frontend_origin)
+CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=_default_cors_origins)
 
 # Deployment security
 # Local/LAN demos use plain HTTP — secure cookies must stay off in development.
@@ -252,6 +271,10 @@ _default_csrf_trusted = [
     "http://127.0.0.1:5173",
     "https://localhost:5173",
     "https://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "https://localhost:5174",
+    "https://127.0.0.1:5174",
     "http://localhost:8000",
     "http://127.0.0.1:8000",
 ]

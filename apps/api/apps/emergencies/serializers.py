@@ -4,6 +4,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 
 from apps.accounts.services import validate_emergency_media_file, validate_location_pair
 from apps.concerns.serializers import PublicUserSerializer
+from apps.concerns.services import validate_barangay_location
 
 from .models import (
     EmergencyAlert,
@@ -27,24 +28,48 @@ class EmergencyMediaUploadSerializer(serializers.Serializer):
 
 
 class EmergencyCreateSerializer(serializers.Serializer):
+    client_request_id = serializers.UUIDField(required=False)
     type = serializers.ChoiceField(choices=EmergencyAlert.Type.choices)
     note = serializers.CharField(allow_blank=True, required=False)
     latitude = serializers.DecimalField(max_digits=10, decimal_places=7)
     longitude = serializers.DecimalField(max_digits=10, decimal_places=7)
     address = serializers.CharField(max_length=255, allow_blank=True, required=False)
+    location_source = serializers.ChoiceField(choices=("gps", "manual_pin"), default="gps")
+    location_accuracy = serializers.FloatField(required=False, allow_null=True)
 
     def validate(self, attrs):
         try:
-            validate_location_pair(attrs.get("latitude"), attrs.get("longitude"), required=True)
+            validate_barangay_location(attrs.get("latitude"), attrs.get("longitude"))
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc) from exc
         return attrs
 
 
 class EmergencyMediaSerializer(serializers.ModelSerializer):
+    preview_url = serializers.SerializerMethodField()
+    raw_url = serializers.SerializerMethodField()
+
     class Meta:
         model = EmergencyMedia
-        fields = ("id", "original_filename", "mime_type", "file_size", "uploaded_at")
+        fields = (
+            "id",
+            "original_filename",
+            "mime_type",
+            "file_size",
+            "preview_url",
+            "raw_url",
+            "uploaded_at",
+        )
+
+    def get_preview_url(self, obj):
+        path = f"/api/emergencies/media/{obj.pk}/preview/"
+        request = self.context.get("request")
+        return request.build_absolute_uri(path) if request else path
+
+    def get_raw_url(self, obj):
+        path = f"/api/emergencies/media/{obj.pk}/raw/"
+        request = self.context.get("request")
+        return request.build_absolute_uri(path) if request else path
 
 
 class EmergencyStatusEventSerializer(serializers.ModelSerializer):
@@ -78,6 +103,8 @@ class EmergencyResponderAssignmentSerializer(serializers.ModelSerializer):
         )
 
     def get_last_location(self, obj):
+        if obj.alert.status in {EmergencyAlert.Status.RESOLVED, EmergencyAlert.Status.CANCELLED}:
+            return None
         ping = obj.location_pings.order_by("-created_at", "-id").first()
         return EmergencyLocationPingSerializer(ping).data if ping else None
 
@@ -115,6 +142,7 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
         model = EmergencyAlert
         fields = (
             "id",
+            "public_id",
             "reporter",
             "reporter_phone",
             "type",
@@ -123,7 +151,11 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
             "barangay",
             "latitude",
             "longitude",
+            "location_source",
+            "location_accuracy",
             "address",
+            "media_warnings",
+            "status_version",
             "media",
             "assignments",
             "current_assignment",
@@ -132,6 +164,7 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
             "escalations",
             "created_at",
             "updated_at",
+            "routed_at",
             "resolved_at",
         )
 

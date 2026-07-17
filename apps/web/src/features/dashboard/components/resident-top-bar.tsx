@@ -6,14 +6,14 @@ import { useResidentSearch } from "@/features/dashboard/components/resident-sear
 import { RotatingSearchField } from "@/features/dashboard/components/rotating-search-field"
 
 /** Layout tokens — MUST match home body grid */
-export const RESIDENT_FEED_MAX = 520
+export const RESIDENT_FEED_MAX = 680
 /** Preferred (max) sidebar width at full size */
-export const RESIDENT_SIDEBAR_W = 300
+export const RESIDENT_SIDEBAR_W = 360
 /** Floor when zooming / narrow CSS viewport — still readable for nav + Report */
-export const RESIDENT_SIDEBAR_MIN = 200
-export const RESIDENT_RAIL_W = 260
-export const RESIDENT_SEARCH_MAX = 380
-export const RESIDENT_CONTENT_GAP = 16
+export const RESIDENT_SIDEBAR_MIN = 320
+export const RESIDENT_RAIL_W = 288
+export const RESIDENT_SEARCH_MAX = 480
+export const RESIDENT_CONTENT_GAP = 24
 export const RESIDENT_CONTENT_MAX = RESIDENT_FEED_MAX + RESIDENT_CONTENT_GAP + RESIDENT_RAIL_W
 /** Soft shell min at preferred sizes (not forced — see dashboard zoom min) */
 export const RESIDENT_LAYOUT_MIN = RESIDENT_SIDEBAR_W + RESIDENT_CONTENT_MAX
@@ -105,8 +105,8 @@ export function ResidentLogoBar() {
         to="/dashboard/home"
         className="flex min-w-0 items-center gap-2 rounded-lg px-2.5 no-underline"
       >
-        <img src="/contents/logo.png" alt="" className="size-8 shrink-0 object-contain" />
-        <span className="truncate text-[20px] font-bold leading-none tracking-tight text-[#ff6a1a]">
+        <img src="/contents/logo.png" alt="" className="size-9 shrink-0 object-contain" />
+        <span className="truncate text-[26px] font-bold leading-none tracking-tight text-[#ff6a1a]">
           E-Boses
         </span>
       </Link>

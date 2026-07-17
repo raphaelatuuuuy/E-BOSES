@@ -17,14 +17,22 @@ DEBUG_ALL = override_settings(DEBUG=True)
 from apps.accounts.models import AccountRequest, OTPChallenge, PhoneOTPChallenge, ResidenceProof, ResidenceVerificationCase, ResidentProfile, ResidentSettings
 from apps.accounts.serializers import RegisterSerializer
 from apps.accounts.services import (
+    create_email_otp_challenge,
     create_otp_challenge,
     create_phone_otp_challenge,
     sha256_file,
+    verify_email_otp_challenge,
     verify_otp_challenge,
     verify_phone_otp_challenge,
 )
 
 VALID_PDF_BYTES = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF"
+
+
+def preverified_email_code(email):
+    _, code = create_email_otp_challenge(email)
+    verify_email_otp_challenge(email, code)
+    return code
 
 
 def proof_image_upload(name="proof.png", content=b"proof"):
@@ -272,6 +280,8 @@ class AuthAPITests(APITestCase):
 
     def test_full_registration_accepts_preverified_phone_code(self):
         phone_number = "+639231234567"
+        email = "resident@example.com"
+        email_code = preverified_email_code(email)
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
         proof = proof_image_upload("proof.png")
@@ -279,7 +289,8 @@ class AuthAPITests(APITestCase):
         response = self.client.post(
             "/api/auth/register/",
             {
-                "email": "resident@example.com",
+                "email": email,
+                "email_otp_code": email_code,
                 "phone_number": phone_number,
                 "phone_otp_code": phone_code,
                 "password": "Str0ng!Pass123",
@@ -301,23 +312,26 @@ class AuthAPITests(APITestCase):
         self.assertNotIn("refresh", response.data)
         self.assertIn("eboses_refresh_token", response.cookies)
         self.assertTrue(response.cookies["eboses_refresh_token"]["httponly"])
-        user = get_user_model().objects.get(email="resident@example.com")
-        self.assertEqual(user.status, get_user_model().Status.PENDING_OTP)
+        user = get_user_model().objects.get(email=email)
+        self.assertEqual(user.status, get_user_model().Status.PENDING_VERIFICATION)
+        self.assertIsNotNone(user.email_verified_at)
         self.assertIsNotNone(user.phone_verified_at)
-        self.assertEqual(user.otp_challenges.count(), 1)
-        self.assertEqual(user.otp_challenges.get().channel, "email")
+        self.assertEqual(user.otp_challenges.count(), 0)
         self.assertEqual(user.residence_proofs.count(), 2)
         self.assertTrue(all(proof.phash_blocks for proof in user.residence_proofs.all()))
 
     def test_consumed_phone_otp_cannot_register_multiple_accounts(self):
         phone_number = "+639231234571"
+        first_email = "first-consumed@example.com"
+        email_code = preverified_email_code(first_email)
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
 
         first_response = self.client.post(
             "/api/auth/register/",
             {
-                "email": "first-consumed@example.com",
+                "email": first_email,
+                "email_otp_code": email_code,
                 "phone_number": phone_number,
                 "phone_otp_code": phone_code,
                 "password": "Str0ng!Pass123",
@@ -342,6 +356,7 @@ class AuthAPITests(APITestCase):
             "/api/auth/register/",
             {
                 "email": "second-consumed@example.com",
+                "email_otp_code": "123456",
                 "phone_number": phone_number,
                 "phone_otp_code": phone_code,
                 "password": "Str0ng!Pass123",
@@ -363,11 +378,14 @@ class AuthAPITests(APITestCase):
         self.assertFalse(get_user_model().objects.filter(email="second-consumed@example.com").exists())
 
     def test_registration_without_phone_otp_returns_400_not_500(self):
+        email = "missing-phone-otp@example.com"
+        email_code = preverified_email_code(email)
         proof = proof_image_upload("proof.png")
         response = self.client.post(
             "/api/auth/register/",
             {
-                "email": "missing-phone-otp@example.com",
+                "email": email,
+                "email_otp_code": email_code,
                 "phone_number": "+639231234568",
                 "phone_otp_code": "123456",
                 "password": "Str0ng!Pass123",
@@ -405,6 +423,8 @@ class AuthAPITests(APITestCase):
             sha256_hash=digest,
         )
         phone_number = "+639231234569"
+        email = "duplicate-proof@example.com"
+        email_code = preverified_email_code(email)
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
         unique_file = proof_image_upload("unique.png", VALID_PDF_BYTES + b"unique")
@@ -413,7 +433,8 @@ class AuthAPITests(APITestCase):
         response = self.client.post(
             "/api/auth/register/",
             {
-                "email": "duplicate-proof@example.com",
+                "email": email,
+                "email_otp_code": email_code,
                 "phone_number": phone_number,
                 "phone_otp_code": phone_code,
                 "password": "Str0ng!Pass123",
@@ -436,6 +457,8 @@ class AuthAPITests(APITestCase):
 
     def test_registration_rejects_duplicate_files_in_same_upload(self):
         phone_number = "+639231234570"
+        email = "same-upload@example.com"
+        email_code = preverified_email_code(email)
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
         first_file = proof_image_upload("first.png", VALID_PDF_BYTES + b"same")
@@ -444,7 +467,8 @@ class AuthAPITests(APITestCase):
         response = self.client.post(
             "/api/auth/register/",
             {
-                "email": "same-upload@example.com",
+                "email": email,
+                "email_otp_code": email_code,
                 "phone_number": phone_number,
                 "phone_otp_code": phone_code,
                 "password": "Str0ng!Pass123",
@@ -633,13 +657,16 @@ class AuthAPITests(APITestCase):
 
     def test_registration_rejects_block_phash_duplicate_files_in_same_upload(self):
         phone_number = "+639231234575"
+        email = "same-block-upload@example.com"
+        email_code = preverified_email_code(email)
         _, phone_code = create_phone_otp_challenge(phone_number)
         verify_phone_otp_challenge(phone_number, phone_code)
 
         response = self.client.post(
             "/api/auth/register/",
             {
-                "email": "same-block-upload@example.com",
+                "email": email,
+                "email_otp_code": email_code,
                 "phone_number": phone_number,
                 "phone_otp_code": phone_code,
                 "password": "Str0ng!Pass123",
@@ -933,6 +960,7 @@ class AuthHardeningTests(APITestCase):
     def test_registration_name_validation_allows_enye_and_rejects_special_characters(self):
         valid_data = {
             "email": "valid-name@example.com",
+            "email_otp_code": "123456",
             "phone_number": "+639261234568",
             "phone_otp_code": "123456",
             "password": "Str0ng!Pass123",
@@ -1022,12 +1050,14 @@ class AuthHardeningTests(APITestCase):
             phone_number="+639301234567",
             password="Str0ng!Pass123",
             role=get_user_model().Role.RESIDENT,
+            status=get_user_model().Status.VERIFIED,
         )
         official = get_user_model().objects.create_user(
             email="official-perms@example.com",
             phone_number="+639311234567",
             password="Str0ng!Pass123",
             role=get_user_model().Role.BARANGAY_OFFICIAL,
+            status=get_user_model().Status.VERIFIED,
         )
 
         self.assertTrue(user_has_role_permission(resident, "concerns.create"))
@@ -1064,7 +1094,7 @@ class AccountSecurityTests(APITestCase):
         self.assertEqual(unknown_response.data["identifier"][0], "No account found with that email.")
 
     def test_phone_otp_request_is_throttled(self):
-        """Production rate is 5/min — 6th request is throttled."""
+        """The configured 5/min rate throttles the sixth development request."""
         responses = [
             self.client.post(
                 "/api/auth/register/phone-otp/request/",
@@ -1075,7 +1105,7 @@ class AccountSecurityTests(APITestCase):
         ]
 
         for i in range(5):
-            self.assertEqual(responses[i].status_code, status.HTTP_204_NO_CONTENT, f"request {i} should succeed")
+            self.assertEqual(responses[i].status_code, status.HTTP_200_OK, f"request {i} should succeed")
         self.assertEqual(responses[5].status_code, status.HTTP_429_TOO_MANY_REQUESTS)
 
     def test_backend_password_policy_requires_frontend_character_classes(self):

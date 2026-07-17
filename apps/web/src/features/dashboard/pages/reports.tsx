@@ -43,6 +43,10 @@ import {
   type ConcernValidationStatus,
 } from "@/features/dashboard/api"
 import { Topbar } from "@/features/dashboard/components/topbar"
+import {
+  AuthenticatedMediaImage,
+  openAuthenticatedMedia,
+} from "@/features/dashboard/components/authenticated-media"
 import { ReportStatusDialog, statusModeFromReport, type StatusDialogMode } from "@/features/dashboard/components/report-status-dialog"
 import { useHorizontalDragScroll } from "@/features/dashboard/hooks/use-horizontal-drag-scroll"
 import { useAuthSession } from "@/features/auth/auth-session"
@@ -51,7 +55,7 @@ import { usePageTitle } from "@/hooks/use-page-title"
 const filters = ["All", "Active", "Resolved", "Rejected", "Appealed"] as const
 const residentReportsPageSize = 6
 
-const activeStatuses: ConcernStatus[] = ["submitted", "under_review", "in_progress"]
+const activeStatuses: ConcernStatus[] = ["submitted", "under_review", "assigned", "in_progress"]
 
 const statusColors: Record<string, string> = {
   Active: "bg-blue-100 text-blue-700 border-blue-200",
@@ -70,17 +74,15 @@ const timelineDotColors: Record<string, string> = {
 }
 
 const validationLabels: Record<ConcernValidationStatus, string> = {
-  pending_review: "Pending validation",
+  pending: "Pending validation",
   accepted: "Validated",
   rejected: "Rejected",
-  resolved: "Resolved",
 }
 
 const validationColors: Record<ConcernValidationStatus, string> = {
-  pending_review: "border-amber-200 bg-amber-50 text-amber-700",
+  pending: "border-amber-200 bg-amber-50 text-amber-700",
   accepted: "border-blue-200 bg-blue-50 text-blue-700",
   rejected: "border-red-200 bg-red-50 text-red-700",
-  resolved: "border-green-200 bg-green-50 text-green-700",
 }
 
 const categoryLabels: Record<ConcernCategory, string> = {
@@ -145,13 +147,17 @@ function mapSrc(report: Concern) {
   return `https://www.openstreetmap.org/export/embed.html?bbox=${lng - 0.006}%2C${lat - 0.006}%2C${lng + 0.006}%2C${lat + 0.006}&layer=mapnik&marker=${lat}%2C${lng}`
 }
 
-function openReportMedia(report: Concern) {
+async function openReportMedia(report: Concern) {
   if (report.media.length === 0) {
     toast.info("No evidence files uploaded.")
     return
   }
-  for (const media of report.media) {
-    window.open(media.raw_url, "_blank", "noopener,noreferrer")
+  try {
+    for (const media of report.media) {
+      await openAuthenticatedMedia(media.raw_url, media.original_filename)
+    }
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : "Could not open report evidence.")
   }
 }
 
@@ -606,7 +612,7 @@ function OfficialConcernDashboard({
   setActiveFilter: (filter: string) => void
   search: string
   setSearch: (value: string) => void
-  onSelect: (id: number) => void
+  onSelect: (report: Concern) => void
   onUpdated: (report: Concern) => void
   onRefresh: () => Promise<void>
   error: string
@@ -632,7 +638,7 @@ function OfficialConcernDashboard({
             />
           </label>
           <span className="w-fit rounded-xl border border-[#dfe7f5] bg-white px-4 py-3 text-sm font-extrabold text-[#07145f]">
-            {validationLabels.pending_review}
+            {validationLabels.pending}
           </span>
         </div>
 
@@ -655,7 +661,7 @@ function OfficialConcernDashboard({
             </div>
             <div className="mt-4 space-y-3">
               {filtered.map((report) => (
-                <OfficialQueueCard key={report.id} report={report} active={current?.id === report.id} onClick={() => onSelect(report.id)} />
+                <OfficialQueueCard key={report.id} report={report} active={current?.id === report.id} onClick={() => onSelect(report)} />
               ))}
               {filtered.length === 0 ? <p className="rounded-xl bg-[#f8fafc] p-6 text-center text-sm font-semibold text-[#68739c]">No concerns match this queue.</p> : null}
             </div>
@@ -692,7 +698,7 @@ function OfficialConcernDashboard({
               <div className="grid gap-4 xl:grid-cols-2">
                 <InfoCard title="Resident Details">
                   <p className="text-sm font-black text-[#07145f]">{current.reporter.full_name}</p>
-                  <p className="mt-2 text-xs font-semibold text-[#43507f]">{current.reporter.email || "No email shown"}</p>
+                  <p className="mt-2 text-xs font-semibold text-[#43507f]">Contact details are restricted to account management.</p>
                   <p className="mt-2 text-xs font-semibold text-[#43507f]">{current.address || current.barangay}</p>
                   <span className="mt-3 inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">Verified Resident</span>
                 </InfoCard>
@@ -764,19 +770,18 @@ export default function ReportsPage() {
   const { user } = useAuthSession()
   const filterRailRef = useRef<HTMLDivElement>(null)
   const filterDragScroll = useHorizontalDragScroll<HTMLDivElement>()
-  const sheetTabsDragScroll = useHorizontalDragScroll<HTMLDivElement>()
   const hasLoadedRef = useRef(false)
   const [loaded, setLoaded] = useState(false)
   const [activeFilter, setActiveFilter] = useState<string>("All")
   const [search, setSearch] = useState("")
-  const [selectedReport, setSelectedReport] = useState<number | null>(null)
+  const [selectedReport, setSelectedReport] = useState<string | null>(null)
   const [reportPage, setReportPage] = useState(1)
   const [timelineExpanded, setTimelineExpanded] = useState(true)
   const [reports, setReports] = useState<Concern[]>([])
   const [error, setError] = useState("")
   const [statusDialogOpen, setStatusDialogOpen] = useState(false)
   const [statusDialogMode, setStatusDialogMode] = useState<StatusDialogMode>("assigned")
-  const routeReportId = reportId ? Number(reportId) : null
+  const routeReportId = reportId ?? null
   const isOfficial = user?.role === "barangay_official" || user?.is_staff || user?.is_superuser
 
   async function loadReports() {
@@ -799,12 +804,18 @@ export default function ReportsPage() {
     function refresh() {
       void loadReports()
     }
+    const interval = window.setInterval(refresh, 30000)
     window.addEventListener("eboses:report-created", refresh)
-    return () => window.removeEventListener("eboses:report-created", refresh)
+    window.addEventListener("eboses:concern-updated", refresh)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener("eboses:report-created", refresh)
+      window.removeEventListener("eboses:concern-updated", refresh)
+    }
   }, [isOfficial])
 
   useEffect(() => {
-    if (routeReportId && Number.isFinite(routeReportId)) {
+    if (routeReportId) {
       setSelectedReport(routeReportId)
     } else if (!routeReportId) {
       setSelectedReport(null)
@@ -849,16 +860,18 @@ export default function ReportsPage() {
   const firstShown = filtered.length === 0 ? 0 : (currentPage - 1) * residentReportsPageSize + 1
   const lastShown = Math.min(filtered.length, currentPage * residentReportsPageSize)
   const selected =
-    reports.find((report) => report.id === selectedReport) ?? filtered[0]
+    reports.find(
+      (report) => report.public_id === selectedReport || String(report.id) === selectedReport,
+    ) ?? filtered[0]
 
-  function selectReport(reportId: number) {
-    setSelectedReport(reportId)
-    navigate(`/dashboard/reports/${reportId}`)
+  function selectReport(report: Concern) {
+    setSelectedReport(report.public_id)
+    navigate(`/dashboard/reports/${report.public_id}`)
   }
 
   function updateReport(next: Concern) {
     setReports((current) => current.map((report) => report.id === next.id ? next : report))
-    setSelectedReport(next.id)
+    setSelectedReport(next.public_id)
   }
 
   async function copyTrackingId(report: Concern) {
@@ -870,7 +883,9 @@ export default function ReportsPage() {
     return (
       <OfficialConcernDashboard
         reports={reports}
-        selected={reports.find((report) => report.id === selectedReport)}
+        selected={reports.find(
+          (report) => report.public_id === selectedReport || String(report.id) === selectedReport,
+        )}
         activeFilter={activeFilter}
         setActiveFilter={setActiveFilter}
         search={search}
@@ -888,19 +903,19 @@ export default function ReportsPage() {
       <Topbar />
 
       <div className="flex-1 bg-[#f7f8fc] p-4 md:p-8 xl:p-10">
-        <div className="grid items-center gap-5 md:grid-cols-[minmax(0,0.72fr)_minmax(320px,1fr)]">
+        <div className="flex items-center justify-between gap-6">
           <div>
             <p className="text-sm font-bold text-[#2447b3]">Marikina Heights</p>
-            <h1 className="mt-2 font-heading text-3xl font-extrabold leading-tight text-[#07145f] md:text-4xl">
+            <h1 className="mt-1 font-heading text-2xl font-extrabold leading-tight text-[#07145f] md:text-3xl">
               {isOfficial ? "Report Management" : "My Reports"}
             </h1>
-            <p className="mt-3 max-w-sm text-sm font-semibold leading-6 text-[#43507f]">
+            <p className="mt-2 max-w-xl text-sm font-semibold leading-6 text-[#43507f]">
               {isOfficial
                 ? "Review resident reports, validate details, and update status with accountable notes."
                 : "Track the status and updates of the reports you've submitted to the barangay."}
             </p>
           </div>
-          <img src="/contents/reports-header.png" alt="" className="mx-auto h-40 w-full object-contain md:h-52" />
+          <img src="/contents/reports-header.png" alt="" className="hidden h-24 w-40 shrink-0 object-contain lg:block" />
         </div>
 
         <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(420px,0.9fr)_minmax(560px,1fr)]">
@@ -912,7 +927,7 @@ export default function ReportsPage() {
                   {filters.map((filter) => (
                     <Button key={filter} data-filter-option type="button" size="sm" variant="outline" aria-pressed={activeFilter === filter} onClick={() => setActiveFilter(filter)}
                       className={cn(
-                        "h-9 shrink-0 rounded-full border-[#cbd8ee] px-7 text-xs font-extrabold whitespace-nowrap lg:w-full lg:min-w-0 lg:shrink",
+                        "h-9 shrink-0 rounded-md border-[#cbd8ee] px-5 text-xs font-extrabold whitespace-nowrap lg:w-full lg:min-w-0 lg:shrink",
                         activeFilter === filter ? "border-[#ff6a1a] bg-[#ff6a1a] text-white hover:bg-[#ff6a1a]" : "bg-white text-[#07145f] hover:border-[#ff6a1a] hover:text-[#ff6a1a]",
                       )}>
                       {filter}
@@ -924,7 +939,7 @@ export default function ReportsPage() {
 
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
-            <Card className="flex flex-col gap-0 overflow-hidden rounded-2xl border-[#dfe7f5] bg-white py-0 shadow-sm">
+            <Card className="flex flex-col gap-0 overflow-hidden rounded-lg border-[#dfe7f5] bg-white py-0 shadow-none">
               <div className="flex flex-col">
                 {pagedReports.map((report, i) => {
                   const group = statusGroup(report.status)
@@ -932,7 +947,7 @@ export default function ReportsPage() {
                     <button
                       key={report.id}
                       type="button"
-                      onClick={() => selectReport(report.id)}
+                      onClick={() => selectReport(report)}
                       className={cn(
                         "flex w-full items-center gap-4 bg-white px-4 py-4 text-left transition-colors hover:bg-[#fbfcff]",
                         selected?.id === report.id && "border border-[#ff6a1a] bg-[#fff8f3]",
@@ -953,7 +968,7 @@ export default function ReportsPage() {
                       </div>
                       <div className="hidden text-right sm:block">
                         <p className="text-xs font-semibold text-[#43507f]">{formatDate(report.created_at)}</p>
-                        <span className={cn("mt-2 inline-flex rounded-full border px-3 py-1 text-xs font-bold", statusColors[group])}>
+                        <span className={cn("mt-2 inline-flex rounded-md border px-3 py-1 text-xs font-bold", statusColors[group])}>
                           {group}
                         </span>
                       </div>
@@ -1003,7 +1018,7 @@ export default function ReportsPage() {
 
           <aside className="hidden min-w-0 flex-col xl:sticky xl:top-6 xl:flex xl:self-start">
             {selected ? (
-              <div className="overflow-hidden rounded-2xl border border-[#dfe7f5] bg-white shadow-sm">
+              <div className="overflow-hidden rounded-lg border border-[#dfe7f5] bg-white">
                 <div className="flex items-start justify-between gap-4 px-5 pb-4 pt-5">
                   <div className="min-w-0">
                     <h2 className="truncate text-xl font-extrabold text-[#07145f]">{selected.title}</h2>
@@ -1016,10 +1031,10 @@ export default function ReportsPage() {
                   </div>
                   <div className="shrink-0 text-right">
                     <div className="flex justify-end gap-2">
-                      <span className={cn("rounded-full border px-3 py-1 text-xs font-bold", statusColors[statusGroup(selected.status)])}>
+                      <span className={cn("rounded-md border px-3 py-1 text-xs font-bold", statusColors[statusGroup(selected.status)])}>
                         {statusGroup(selected.status)}
                       </span>
-                      <span className={cn("rounded-full border px-3 py-1 text-xs font-bold", validationColors[selected.validation_status])}>
+                      <span className={cn("rounded-md border px-3 py-1 text-xs font-bold", validationColors[selected.validation_status])}>
                         {validationLabels[selected.validation_status]}
                       </span>
                     </div>
@@ -1027,19 +1042,11 @@ export default function ReportsPage() {
                   </div>
                 </div>
 
-                <div className="flex border-b border-[#dfe7f5] px-5">
-                  {["Overview", `Updates (${selected.status_events.length})`, "Notes (0)"].map((tab, index) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      className={cn(
-                        "border-b-2 px-4 py-3 text-xs font-extrabold",
-                        index === 0 ? "border-[#ff6a1a] text-[#ff6a1a]" : "border-transparent text-[#43507f]",
-                      )}
-                    >
-                      {tab}
-                    </button>
-                  ))}
+                <div className="border-y border-[#dfe7f5] bg-[#f8fbff] px-5 py-3">
+                  <p className="text-xs font-extrabold text-[#07145f]">Automated validation</p>
+                  <p className="mt-1 text-xs font-semibold leading-5 text-[#43507f]">
+                    {selected.validation_summary || validationLabels[selected.validation_status]}
+                  </p>
                 </div>
 
                 {isOfficial ? (
@@ -1084,7 +1091,7 @@ export default function ReportsPage() {
                     <p className="mt-2 text-xs font-semibold text-[#43507f]">{selected.media.length} file{selected.media.length === 1 ? "" : "s"}</p>
                     <div className="mt-3 grid grid-cols-2 gap-2">
                       {selected.media.filter((media) => media.mime_type?.startsWith("image/")).slice(0, 2).map((media) => (
-                        <img key={media.id} src={media.preview_url} alt={media.original_filename} className="h-24 w-full rounded-lg object-cover" />
+                        <AuthenticatedMediaImage key={media.id} src={media.preview_url} alt={media.original_filename} className="h-24 w-full rounded-lg object-cover" />
                       ))}
                       {selected.media.length === 0 ? (
                         <div className="col-span-2 flex h-24 items-center justify-center rounded-lg border border-dashed border-[#dfe7f5] text-xs font-semibold text-[#68739c]">
@@ -1132,38 +1139,43 @@ export default function ReportsPage() {
       </div>
 
       {selectedReport && selected ? (
-        <div className="fixed inset-0 z-[200] md:hidden" onClick={() => navigate("/dashboard/reports")}>
-          <div className="absolute inset-0 bg-black/55" />
-          <div
-            className="absolute bottom-0 left-0 right-0 flex h-[82dvh] min-h-0 flex-col rounded-t-[32px] bg-white shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex shrink-0 justify-center pb-2 pt-4">
-              <span className="h-2 w-24 rounded-full bg-[#d8deee]" />
+        <div className="fixed inset-0 z-[200] flex min-h-0 flex-col bg-white md:hidden">
+          <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[#dfe7f5] bg-white px-3">
+            <button
+              type="button"
+              onClick={() => navigate("/dashboard/reports")}
+              className="flex size-11 items-center justify-center rounded-md text-[#07145f] hover:bg-[#eef3ff]"
+              aria-label="Back to reports"
+            >
+              <ChevronLeftIcon className="size-5" />
+            </button>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-extrabold text-[#07145f]">Report details</p>
+              <p className="truncate font-mono text-[11px] font-bold text-[#2447b3]">{selected.tracking_id}</p>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-8">
+          </header>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-24 pt-4">
               <div className="mb-4 flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <p className="text-base font-extrabold text-[#07145f]">{selected.title}</p>
                   <p className="mt-1 font-mono text-xs font-bold text-[#2447b3]">{selected.tracking_id}</p>
                 </div>
-                <span className={cn("shrink-0 rounded-full border px-3 py-1 text-xs font-bold", statusColors[statusGroup(selected.status)])}>
+                <span className={cn("shrink-0 rounded-md border px-3 py-1 text-xs font-bold", statusColors[statusGroup(selected.status)])}>
                   {statusGroup(selected.status)}
                 </span>
               </div>
 
-              <div {...sheetTabsDragScroll} className="scrollbar-hide flex cursor-grab touch-pan-x gap-3 overflow-x-scroll overscroll-x-contain border-b border-[#dfe7f5] pb-3 active:cursor-grabbing">
-                {["Overview", `Updates (${selected.status_events.length})`, "Notes (0)"].map((tab, index) => (
-                  <button key={tab} type="button" className={cn("shrink-0 border-b-2 px-1 pb-2 text-xs font-extrabold", index === 0 ? "border-[#ff6a1a] text-[#ff6a1a]" : "border-transparent text-[#43507f]")}>
-                    {tab}
-                  </button>
-                ))}
+              <div className="rounded-lg border border-[#dfe7f5] bg-[#f8fbff] p-3">
+                <p className="text-xs font-extrabold text-[#07145f]">Automated validation</p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-[#43507f]">
+                  {selected.validation_summary || validationLabels[selected.validation_status]}
+                </p>
               </div>
 
               <div className="mt-4 space-y-4">
                 {isOfficial ? <OfficialStatusPanel report={selected} onUpdated={updateReport} /> : null}
 
-                <div className="rounded-xl border border-[#dfe7f5] p-3">
+                <div className="rounded-lg border border-[#dfe7f5] p-3">
                   <p className="text-xs font-extrabold text-[#07145f]">Category</p>
                   <div className="mt-3 flex items-center gap-3">
                     <ReportIcon report={selected} />
@@ -1174,7 +1186,7 @@ export default function ReportsPage() {
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-[#dfe7f5] p-3">
+                <div className="rounded-lg border border-[#dfe7f5] p-3">
                   <p className="text-xs font-extrabold text-[#07145f]">Location</p>
                   <p className="mt-2 flex items-start gap-2 text-xs font-semibold leading-5 text-[#43507f]">
                     <MapPinIcon className="mt-0.5 size-4 shrink-0 text-[#2447b3]" />
@@ -1185,11 +1197,11 @@ export default function ReportsPage() {
                   ) : null}
                 </div>
 
-                <div className="rounded-xl border border-[#dfe7f5] p-3">
+                <div className="rounded-lg border border-[#dfe7f5] p-3">
                   <p className="text-xs font-extrabold text-[#07145f]">Evidence</p>
                   <div className="mt-3 grid grid-cols-2 gap-2">
                     {selected.media.filter((media) => media.mime_type?.startsWith("image/")).slice(0, 2).map((media) => (
-                      <img key={media.id} src={media.preview_url} alt={media.original_filename} className="h-28 w-full rounded-lg object-cover" />
+                        <AuthenticatedMediaImage key={media.id} src={media.preview_url} alt={media.original_filename} className="h-28 w-full rounded-lg object-cover" />
                     ))}
                     {selected.media.length === 0 ? (
                       <div className="col-span-2 flex h-20 items-center justify-center rounded-lg border border-dashed border-[#dfe7f5] text-xs font-semibold text-[#68739c]">
@@ -1199,7 +1211,7 @@ export default function ReportsPage() {
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-[#dfe7f5] p-3">
+                <div className="rounded-lg border border-[#dfe7f5] p-3">
                   <p className="text-xs font-extrabold text-[#07145f]">Summary</p>
                   <p className="mt-2 text-xs font-semibold leading-5 text-[#43507f]">{selected.description}</p>
                   <div className="mt-3 flex flex-wrap gap-3 text-xs font-semibold text-[#68739c]">
@@ -1211,7 +1223,7 @@ export default function ReportsPage() {
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-[#dfe7f5] p-3">
+                <div className="rounded-lg border border-[#dfe7f5] p-3">
                   <button
                     type="button"
                     onClick={() => setTimelineExpanded(!timelineExpanded)}
@@ -1231,7 +1243,6 @@ export default function ReportsPage() {
               </div>
             </div>
           </div>
-        </div>
       ) : null}
 
       {selected ? (
@@ -1240,7 +1251,7 @@ export default function ReportsPage() {
           onOpenChange={setStatusDialogOpen}
           report={selected}
           mode={statusDialogMode}
-          onTrack={() => selectReport(selected.id)}
+          onTrack={() => selectReport(selected)}
         />
       ) : null}
     </div>

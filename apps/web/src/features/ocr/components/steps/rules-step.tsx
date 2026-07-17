@@ -134,7 +134,6 @@ export function RulesStep(props: {
   const {
     fields,
     selectedField,
-    selectedFieldIndex,
     onSelectField,
     onUpdateField,
     onRenameField,

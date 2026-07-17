@@ -24,6 +24,7 @@ import {
   getOfficialDashboardSummary,
   getResponderDashboardSummary,
   listActiveResponders,
+  type ActiveResponder,
   type OfficialRoleSummary,
   type PublicUser,
   type ResponderRoleSummary,
@@ -115,7 +116,7 @@ function distanceKm(aLat?: string | number | null, aLng?: string | number | null
 }
 
 function responderName(user?: PublicUser | null) {
-  return user?.full_name || user?.email || "Responder"
+  return user?.full_name || "Responder"
 }
 
 function hasAutoRoute(alert: EmergencyAlert) {
@@ -311,7 +312,7 @@ function DispatchPanel({
   onChanged,
 }: {
   alert: EmergencyAlert | null
-  responders: PublicUser[]
+  responders: ActiveResponder[]
   onChanged: (alert: EmergencyAlert) => void
 }) {
   const [busyId, setBusyId] = useState<number | null>(null)
@@ -329,7 +330,7 @@ function DispatchPanel({
     })
   }, [alert, preferred, responders])
 
-  async function assign(responder: PublicUser) {
+  async function assign(responder: ActiveResponder) {
     if (!alert) return
     setBusyId(responder.id)
     try {
@@ -678,7 +679,7 @@ export default function EmergenciesPage() {
   usePageTitle("Emergency Ops")
   const { user } = useAuthSession()
   const [alerts, setAlerts] = useState<EmergencyAlert[]>([])
-  const [responders, setResponders] = useState<PublicUser[]>([])
+  const [responders, setResponders] = useState<ActiveResponder[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [summary, setSummary] = useState<OfficialRoleSummary | ResponderRoleSummary | null>(null)
   const [loading, setLoading] = useState(true)

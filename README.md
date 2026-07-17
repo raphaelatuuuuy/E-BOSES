@@ -179,7 +179,7 @@ Look under **Wireless LAN adapter Wi‑Fi** for `IPv4 Address` (example: `10.31.
 FRONTEND_URL=http://YOUR_LAN_IP:5173
 VITE_API_BASE_URL=http://YOUR_LAN_IP:8000/api
 ALLOWED_HOSTS=localhost,127.0.0.1,YOUR_LAN_IP,*
-CSRF_TRUSTED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://YOUR_LAN_IP:5173,http://YOUR_LAN_IP:8000
+CSRF_TRUSTED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://YOUR_LAN_IP:5173,http://YOUR_LAN_IP:8000
 ```
 
 Restart Vite after changing any `VITE_*` value.

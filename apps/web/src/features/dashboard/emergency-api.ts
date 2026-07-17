@@ -20,6 +20,16 @@ export interface EmergencyLocationPing {
   created_at: string
 }
 
+export interface EmergencyMedia {
+  id: number
+  original_filename: string
+  mime_type: string
+  file_size: number
+  preview_url: string
+  raw_url: string
+  uploaded_at: string
+}
+
 export interface EmergencyAssignment {
   id: number
   responder: PublicUser
@@ -63,6 +73,7 @@ export interface EmergencyStatusEvent {
 
 export interface EmergencyAlert {
   id: number
+  public_id: string
   reporter_phone: string
   type: EmergencyType
   note: string
@@ -70,7 +81,12 @@ export interface EmergencyAlert {
   barangay: string
   latitude: string
   longitude: string
+  location_source: "gps" | "manual_pin"
+  location_accuracy: number | null
   address: string
+  media_warnings: string[]
+  media: EmergencyMedia[]
+  status_version: number
   current_assignment: EmergencyAssignment | null
   assignments: EmergencyAssignment[]
   status_events: EmergencyStatusEvent[]
@@ -78,6 +94,7 @@ export interface EmergencyAlert {
   escalations: EmergencyEscalation[]
   created_at: string
   updated_at: string
+  routed_at: string | null
   resolved_at: string | null
 }
 
@@ -90,6 +107,10 @@ export function createEmergency(formData: FormData) {
 
 export function getActiveEmergency() {
   return apiRequest<EmergencyAlert | undefined>("/emergencies/mine/active/")
+}
+
+export function listMyEmergencies() {
+  return apiRequest<EmergencyAlert[]>("/emergencies/mine/")
 }
 
 export function listEmergencyQueue() {

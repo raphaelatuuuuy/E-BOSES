@@ -23,8 +23,8 @@ export type StatusDialogMode = "submitted" | "assigned" | "rejected" | "resolved
 
 const STATUS_STEPS: Array<{ key: ConcernStatus; label: string }> = [
   { key: "submitted", label: "Submitted" },
-  { key: "under_review", label: "In Review" },
-  { key: "in_progress", label: "Assigned" },
+  { key: "assigned", label: "Assigned" },
+  { key: "in_progress", label: "In progress" },
   { key: "resolved", label: "Resolved" },
 ]
 
@@ -36,7 +36,7 @@ const MODE_CONFIG: Record<StatusDialogMode, {
   subtitle: string
 }> = {
   submitted: {
-    statusLabel: "In Review",
+    statusLabel: "Submitted",
     statusColor: "bg-orange-100 text-orange-700 border-orange-200",
     image: "/contents/report-received.png",
     title: "Report was received",
@@ -66,7 +66,7 @@ const MODE_CONFIG: Record<StatusDialogMode, {
 }
 
 export function statusModeFromReport(report: Concern | { status: ConcernStatus }): StatusDialogMode {
-  if (report.status === "in_progress") return "assigned"
+  if (report.status === "assigned" || report.status === "in_progress") return "assigned"
   if (report.status === "rejected") return "rejected"
   if (report.status === "resolved") return "resolved"
   return "submitted"
@@ -93,20 +93,30 @@ function findEvent(report: Concern, status: ConcernStatus): ConcernStatusEvent |
 }
 
 function latestEvent(report: Concern, mode: StatusDialogMode): ConcernStatusEvent | undefined {
-  const status: ConcernStatus = mode === "assigned" ? "in_progress" : mode === "submitted" ? report.status : mode
+  const status: ConcernStatus = mode === "assigned"
+    ? (report.status === "assigned" ? "assigned" : "in_progress")
+    : mode === "submitted"
+      ? report.status
+      : mode
   return [...report.status_events].reverse().find((event) => event.status === status) ?? report.status_events.at(-1)
 }
 
 function pickActor(report: Concern, mode: StatusDialogMode): { actor: PublicUser; time: string } | null {
-  const status = mode === "assigned" ? "in_progress" : mode === "rejected" ? "rejected" : mode === "resolved" ? "resolved" : null
+  const status = mode === "assigned"
+    ? (report.status === "assigned" ? "assigned" : "in_progress")
+    : mode === "rejected"
+      ? "rejected"
+      : mode === "resolved"
+        ? "resolved"
+        : null
   if (!status) return null
   const event = findEvent(report, status)
   return event?.actor ? { actor: event.actor, time: event.created_at } : null
 }
 
 function activeIndex(report: Concern, mode: StatusDialogMode) {
-  if (mode === "rejected") return 1
-  if (mode === "submitted") return 1
+  if (mode === "rejected") return 0
+  if (mode === "submitted") return 0
   return Math.max(0, STATUS_STEPS.findIndex((step) => step.key === report.status))
 }
 
@@ -145,7 +155,7 @@ function StatusLine({ report, mode }: { report: Concern; mode: StatusDialogMode 
         const done = index < currentIdx || (mode === "resolved" && index === currentIdx)
         const current = index === currentIdx && !done
         const rejectedCurrent = mode === "rejected" && current
-        const date = stepEvent(report, step.key) ?? (mode === "submitted" && step.key === "under_review" ? report.created_at : null)
+        const date = stepEvent(report, step.key)
 
         return (
           <div key={step.key} className="relative z-10 flex flex-col items-center text-center">
@@ -213,10 +223,16 @@ export function ReportStatusDialog({
   const [copied, setCopied] = useState(false)
   const resolvedMode = mode ?? statusModeFromReport(report)
   const config = MODE_CONFIG[resolvedMode]
+  const isInProgress = resolvedMode === "assigned" && report.status === "in_progress"
+  const statusTitle = isInProgress ? "Report is in progress" : config.title
+  const statusSubtitle = isInProgress
+    ? "The assigned barangay team is currently working on your report."
+    : config.subtitle
+  const statusLabel = isInProgress ? "In progress" : config.statusLabel
   const actor = pickActor(report, resolvedMode)
   const actions = extractActions(report)
   const event = latestEvent(report, resolvedMode)
-  const detailText = cleanDetailText(report, event, config.subtitle)
+  const detailText = cleanDetailText(report, event, statusSubtitle)
   const showDetail = resolvedMode !== "submitted"
 
   function handleCopy() {
@@ -258,8 +274,8 @@ export function ReportStatusDialog({
           </div>
 
           <div className="min-w-0">
-            <h3 className="text-lg font-extrabold leading-tight text-[#07145f]">{config.title}</h3>
-            <p className="mt-2 max-w-[34rem] text-xs font-semibold leading-5 text-[#07145f]">{config.subtitle}</p>
+            <h3 className="text-lg font-extrabold leading-tight text-[#07145f]">{statusTitle}</h3>
+            <p className="mt-2 max-w-[34rem] text-xs font-semibold leading-5 text-[#07145f]">{statusSubtitle}</p>
 
             <div className="mt-4 border-t border-[#dfe7f5] pt-4">
               <div className="flex flex-wrap items-end justify-between gap-3">
@@ -278,7 +294,7 @@ export function ReportStatusDialog({
                   </div>
                 </div>
                 <Badge className={cn("rounded-md border px-3 py-1.5 text-xs font-bold", config.statusColor)}>
-                  {config.statusLabel}
+                  {statusLabel}
                 </Badge>
               </div>
             </div>

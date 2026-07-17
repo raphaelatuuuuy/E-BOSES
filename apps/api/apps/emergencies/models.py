@@ -1,7 +1,9 @@
+import uuid
+
 from django.conf import settings
 from django.db import models
 
-from apps.accounts.storage import PrivateMediaStorage
+from apps.accounts.storage import PrivateMediaStorage, PublicMediaStorage
 
 
 class MapGeometry(models.Model):
@@ -47,6 +49,8 @@ class EmergencyAlert(models.Model):
         RESOLVED = "resolved", "Resolved"
         CANCELLED = "cancelled", "Cancelled"
 
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
     reporter = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="emergency_alerts")
     type = models.CharField(max_length=32, choices=Type.choices)
     note = models.TextField(blank=True)
@@ -54,18 +58,35 @@ class EmergencyAlert(models.Model):
     barangay = models.CharField(max_length=120, default="Marikina Heights")
     latitude = models.DecimalField(max_digits=10, decimal_places=7)
     longitude = models.DecimalField(max_digits=10, decimal_places=7)
+    location_source = models.CharField(max_length=32, default="gps")
+    location_accuracy = models.FloatField(null=True, blank=True)
     address = models.CharField(max_length=255, blank=True)
+    media_warnings = models.JSONField(default=list, blank=True)
+    status_version = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    routed_at = models.DateTimeField(null=True, blank=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["reporter", "client_request_id"],
+                condition=models.Q(client_request_id__isnull=False),
+                name="unique_emergency_client_request",
+            ),
+        ]
 
 
 class EmergencyMedia(models.Model):
     alert = models.ForeignKey(EmergencyAlert, on_delete=models.CASCADE, related_name="media")
     file = models.FileField(storage=PrivateMediaStorage(), upload_to="raw/emergency-media/%Y/%m/")
+    preview_file = models.FileField(
+        storage=PublicMediaStorage(),
+        upload_to="previews/emergency-media/%Y/%m/",
+        blank=True,
+    )
     original_filename = models.CharField(max_length=255)
     mime_type = models.CharField(max_length=120, blank=True)
     file_size = models.PositiveIntegerField(default=0)
@@ -81,6 +102,7 @@ class EmergencyResponderAssignment(models.Model):
         EN_ROUTE = "en_route", "En Route"
         ARRIVED = "arrived", "Arrived"
         RESOLVED = "resolved", "Resolved"
+        ESCALATED = "escalated", "Escalated"
         CANCELLED = "cancelled", "Cancelled"
 
     alert = models.ForeignKey(EmergencyAlert, on_delete=models.CASCADE, related_name="assignments")

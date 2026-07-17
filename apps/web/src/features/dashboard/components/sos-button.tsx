@@ -22,7 +22,7 @@ import {
   DialogFooter,
 } from "@/features/dashboard/components/dialog"
 
-const LocationPicker = lazy(() => import("@/features/dashboard/components/location-picker"))
+const LocationPickerModal = lazy(() => import("@/features/dashboard/components/location-picker"))
 import { createEmergency, getActiveEmergency, getEmergency, type EmergencyAlert, type EmergencyType } from "@/features/dashboard/emergency-api"
 import { EmergencyTrackingSheet } from "@/features/dashboard/components/emergency-tracking-sheet"
 
@@ -58,16 +58,23 @@ export function SOSButton() {
   const [emergency, setEmergency] = useState<EmergencyType | "">("")
   const [note, setNote] = useState("")
   const [address, setAddress] = useState("")
-  const [location, setLocation] = useState<{ lat: number; lng: number; accuracy?: number | null } | null>(null)
+  const [location, setLocation] = useState<{
+    lat: number
+    lng: number
+    accuracy?: number | null
+    source: "gps" | "manual"
+  } | null>(null)
   const [mediaFiles, setMediaFiles] = useState<File[]>([])
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
   const [locating, setLocating] = useState(false)
+  const [locationOpen, setLocationOpen] = useState(false)
   const [checkingActive, setCheckingActive] = useState(false)
   const [pendingDispatch, setPendingDispatch] = useState(false)
   const [dispatchCountdown, setDispatchCountdown] = useState(5)
   const [trackingOpen, setTrackingOpen] = useState(false)
   const [trackingAlert, setTrackingAlert] = useState<EmergencyAlert | null>(null)
+  const clientRequestIdRef = useRef(crypto.randomUUID())
 
   useEffect(() => {
     async function loadActive() {
@@ -122,6 +129,7 @@ export function SOSButton() {
   }, [])
 
   function resetForm() {
+    clientRequestIdRef.current = crypto.randomUUID()
     setStep("details")
     setEmergency("")
     setNote("")
@@ -169,7 +177,7 @@ export function SOSButton() {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude, accuracy } = pos.coords
-        setLocation({ lat: latitude, lng: longitude, accuracy })
+        setLocation({ lat: latitude, lng: longitude, accuracy, source: "gps" })
         setAddress((current) => current || `Lat: ${latitude.toFixed(5)}, Lng: ${longitude.toFixed(5)}`)
         setFieldErrors((current) => ({ ...current, location: "" }))
         setLocating(false)
@@ -190,15 +198,30 @@ export function SOSButton() {
     return Object.keys(errors).length === 0
   }
 
+  function handleMediaSelection(files: File[]) {
+    const selected = files.slice(0, 2)
+    const invalid = selected.find((file) => !["image/jpeg", "image/png"].includes(file.type) || file.size > 2 * 1024 * 1024)
+    if (invalid) {
+      setMediaFiles([])
+      setFieldErrors((current) => ({ ...current, media: `${invalid.name}: use a JPG or PNG file up to 2 MB.` }))
+      return
+    }
+    setMediaFiles(selected)
+    setFieldErrors((current) => ({ ...current, media: "" }))
+  }
+
   async function submitEmergency() {
     if (!location || !emergency) return
     setSubmitting(true)
     try {
       const formData = new FormData()
+      formData.append("client_request_id", clientRequestIdRef.current)
       formData.append("type", emergency)
       formData.append("note", note)
       formData.append("latitude", location.lat.toFixed(7))
       formData.append("longitude", location.lng.toFixed(7))
+      formData.append("location_source", location.source)
+      if (location.accuracy != null) formData.append("location_accuracy", String(location.accuracy))
       formData.append("address", address)
       for (const file of mediaFiles) {
         formData.append("media", file)
@@ -209,6 +232,7 @@ export function SOSButton() {
       setOpen(false)
       resetForm()
       toast.success("Emergency alert sent")
+      if (alert.media_warnings.length) toast.warning(alert.media_warnings[0])
     } catch (error) {
       try {
         const active = await getActiveEmergency()
@@ -223,7 +247,7 @@ export function SOSButton() {
       } catch {
         // Keep the original submission error below.
       }
-      toast.error("Could not send emergency alert. Try again.")
+      toast.error(error instanceof Error ? error.message : "Could not send emergency alert. Try again.")
     } finally {
       setSubmitting(false)
       setPendingDispatch(false)
@@ -281,9 +305,9 @@ export function SOSButton() {
       <div
         className={cn(
           "fixed z-40",
-          placement === "inline" && "bottom-26 right-5 md:bottom-8 md:right-8",
-          placement === "sidebar" && "bottom-26 right-5 md:hidden",
-          placement === "compact" && "bottom-26 right-5 md:bottom-8 md:right-8",
+          placement === "inline" && "bottom-26 right-5 lg:bottom-8 lg:right-8",
+          placement === "sidebar" && "bottom-26 right-5 lg:hidden",
+          placement === "compact" && "bottom-26 right-5 lg:bottom-8 lg:right-8",
         )}
       >
         <button
@@ -529,17 +553,18 @@ export function SOSButton() {
                 <span className="mt-1 text-sm font-semibold text-[#43507f]">
                   {mediaFiles.length ? `${mediaFiles.length} selected` : "Browse files"}
                 </span>
-                <p className="mt-3 text-xs text-[#8b96b8]">JPG or PNG up to 2 files</p>
+                <p className="mt-3 text-xs text-[#8b96b8]">JPG or PNG, up to 2 MB each</p>
                 <input
                   id="sos-media"
                   type="file"
                   accept=".png,.jpg,.jpeg,image/png,image/jpeg"
                   multiple
                   className="sr-only"
-                  onChange={(event) => setMediaFiles(Array.from(event.target.files ?? []).slice(0, 2))}
+                  onChange={(event) => handleMediaSelection(Array.from(event.target.files ?? []))}
                   disabled={pendingDispatch || submitting}
                 />
               </label>
+              {fieldErrors.media ? <p className="mt-2 text-xs font-semibold text-red-700" role="alert">{fieldErrors.media}</p> : null}
             </div>
 
             <div>
@@ -566,26 +591,31 @@ export function SOSButton() {
                   {locating ? "..." : "Locate me"}
                 </button>
               </div>
-              <div className={cn("mt-4 overflow-hidden rounded-xl border border-border", fieldErrors.location && "ring-1 ring-destructive")}>
-                <Suspense fallback={<div className="flex min-h-[300px] items-center justify-center rounded-xl text-sm text-[#68739c]">Loading map...</div>}>
-                  <LocationPicker
-                    address={address}
-                    onAddressChange={(value) => {
-                      setAddress(value)
-                      if (fieldErrors.location) setFieldErrors((prev) => ({ ...prev, location: "" }))
-                    }}
-                    onPin={(lat, lng) => {
-                      setLocation({ lat, lng })
-                      setAddress(`Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)}`)
-                      if (fieldErrors.location) setFieldErrors((prev) => ({ ...prev, location: "" }))
-                    }}
-                  />
-                </Suspense>
-              </div>
+              <button
+                type="button"
+                onClick={() => setLocationOpen(true)}
+                disabled={pendingDispatch || submitting}
+                className={cn(
+                  "mt-4 flex w-full items-center gap-3 rounded-xl border bg-white px-4 py-3 text-left transition-colors hover:border-[#ff6a1a]/50",
+                  fieldErrors.location ? "border-destructive" : "border-slate-200",
+                )}
+              >
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#fff1ea] text-[#ff6a1a]">
+                  <MapPinIcon className="size-5" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-bold text-[#07145f]">
+                    {location ? "Pinned location" : "Open map to pin location"}
+                  </span>
+                  <span className="mt-0.5 block truncate text-xs font-medium text-[#68739c]">
+                    {address || "Move the map, then tap Use this location"}
+                  </span>
+                </span>
+              </button>
               {fieldErrors.location ? <p className="mt-2 text-xs text-destructive">{fieldErrors.location}</p> : null}
               <div className="mt-4 flex items-center justify-start gap-1.5 text-xs text-[#68739c] md:justify-center">
                 <InfoIcon className="size-3.5 shrink-0 text-[#2447b3]" />
-                <span>You can adjust the pin or click on the map to refine the exact location.</span>
+                <span>Open the map, move the pin, and confirm with Use this location.</span>
               </div>
             </div>
           </section>
@@ -622,6 +652,26 @@ export function SOSButton() {
           </div>
         </DialogFooter>
       </Dialog>
+
+      <Suspense fallback={null}>
+        <LocationPickerModal
+          open={locationOpen}
+          onClose={() => setLocationOpen(false)}
+          initialLat={location?.lat}
+          initialLng={location?.lng}
+          initialAddress={address}
+          onConfirm={(payload) => {
+            setLocation({
+              lat: payload.lat,
+              lng: payload.lng,
+              accuracy: null,
+              source: payload.source === "gps" ? "gps" : "manual",
+            })
+            setAddress(payload.address)
+            setFieldErrors((prev) => ({ ...prev, location: "" }))
+          }}
+        />
+      </Suspense>
 
       <EmergencyTrackingSheet
         open={trackingOpen}

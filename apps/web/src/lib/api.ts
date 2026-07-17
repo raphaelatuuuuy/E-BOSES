@@ -48,6 +48,14 @@ export function websocketUrl(path: string) {
   return `${wsBase}${path.startsWith("/") ? path : `/${path}`}`
 }
 
+export async function websocketTicket() {
+  const response = await apiRequest<{ ticket: string; expires_in: number }>("/notifications/realtime-ticket/", {
+    method: "POST",
+    body: JSON.stringify({}),
+  })
+  return response.ticket
+}
+
 function csrfToken() {
   return document.cookie
     .split(";")
@@ -112,9 +120,19 @@ function errorMessage(data: unknown, fallback: string) {
     if (typeof detail === "string") {
       return detail
     }
-    const firstError = Object.values(data).flat().find((value) => typeof value === "string")
-    if (typeof firstError === "string") {
-      return firstError
+    if (Array.isArray(detail) && detail.length > 0) {
+      const first = detail[0]
+      if (typeof first === "string") return first
+    }
+    for (const value of Object.values(data as Record<string, unknown>)) {
+      if (typeof value === "string" && value.trim()) return value
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (typeof item === "string" && item.trim()) return item
+          // DRF ValidationError list-repr sometimes nests oddly
+          if (Array.isArray(item) && typeof item[0] === "string") return item[0]
+        }
+      }
     }
   }
   return fallback

@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from apps.accounts.models import User
-from apps.accounts.services import validate_concern_media_file, validate_location_pair
+from apps.accounts.services import validate_concern_media_file
 
 from .models import (
     Announcement,
@@ -18,6 +18,7 @@ from .models import (
     ConcernMedia,
     ConcernStatusEvent,
 )
+from .services import validate_barangay_location
 
 
 class ConcernMediaUploadSerializer(serializers.Serializer):
@@ -34,8 +35,9 @@ class PublicUserSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
     initials = serializers.SerializerMethodField()
     avatar = serializers.SerializerMethodField()
-    gender = serializers.SerializerMethodField()
-    date_of_birth = serializers.SerializerMethodField()
+    # Street line only (first segment of residence address) for feed identity
+    street = serializers.SerializerMethodField()
+    barangay = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -46,20 +48,19 @@ class PublicUserSerializer(serializers.ModelSerializer):
             "role",
             "last_seen_at",
             "avatar",
-            "gender",
-            "date_of_birth",
             "responder_unit",
             "is_on_duty",
-            "current_latitude",
-            "current_longitude",
-            "location_updated_at",
+            "street",
+            "barangay",
         )
 
     def get_full_name(self, obj):
         profile = getattr(obj, "resident_profile", None)
         if profile:
-            return f"{profile.first_name} {profile.last_name}".strip()
-        return obj.email.split("@")[0]
+            first_name = profile.first_name.strip()
+            last_initial = profile.last_name.strip()[:1]
+            return f"{first_name} {last_initial}.".strip() if last_initial else first_name
+        return "E-Boses user"
 
     def get_initials(self, obj):
         profile = getattr(obj, "resident_profile", None)
@@ -67,11 +68,31 @@ class PublicUserSerializer(serializers.ModelSerializer):
             return f"{profile.first_name[:1]}{profile.last_name[:1]}".upper() or "?"
         return obj.email[:2].upper()
 
+    def get_street(self, obj):
+        profile = getattr(obj, "resident_profile", None)
+        if not profile or not (profile.address or "").strip():
+            return ""
+        # Prefer street line: "123 Champaca St, Marikina Heights, ..." → first segment
+        street = profile.address.split(",")[0].strip()
+        # Never surface placeholder defaults as a street label
+        if street.lower() in {"pending", "n/a", "none", "null"}:
+            return ""
+        return street
+
+    def get_barangay(self, obj):
+        profile = getattr(obj, "resident_profile", None)
+        if not profile:
+            return ""
+        value = (profile.barangay or "").strip()
+        # Model default is "Pending" until verification fills a real barangay
+        if not value or value.lower() == "pending":
+            return "Marikina Heights"
+        return value
+
     def get_avatar(self, obj):
         profile = getattr(obj, "resident_profile", None)
         if profile and profile.avatar:
             return profile.avatar
-        # Role-based avatar for officials and responders
         role_prefix_map = {
             User.Role.BARANGAY_OFFICIAL: "official",
         }
@@ -86,28 +107,8 @@ class PublicUserSerializer(serializers.ModelSerializer):
         elif obj.role == User.Role.FIRST_RESPONDER and obj.responder_unit:
             prefix = responder_unit_map.get(obj.responder_unit)
         if prefix:
-            gender = (profile.gender if profile else "") or ""
-            if gender == "male":
-                return f"{prefix}-male"
-            if gender == "female":
-                return f"{prefix}-female"
-            return f"{prefix}-male"  # fallback when gender unknown
-        # Resident fallback: compute from gender + age
-        if profile and profile.gender and profile.gender != "prefer_not_to_say" and profile.date_of_birth:
-            from datetime import date
-            age = date.today().year - profile.date_of_birth.year
-            bucket = "senior" if age >= 55 else "middleaged" if age >= 30 else "young"
-            icon = "man" if profile.gender == "male" else "woman"
-            return f"{bucket}-{icon}"
+            return prefix
         return ""
-
-    def get_gender(self, obj):
-        profile = getattr(obj, "resident_profile", None)
-        return profile.gender if profile else ""
-
-    def get_date_of_birth(self, obj):
-        profile = getattr(obj, "resident_profile", None)
-        return profile.date_of_birth if profile else None
 
 
 class ConcernMediaSerializer(serializers.ModelSerializer):
@@ -123,6 +124,8 @@ class ConcernMediaSerializer(serializers.ModelSerializer):
             "file_size",
             "preview_url",
             "raw_url",
+            "validation_status",
+            "validation_detail",
             "uploaded_at",
         )
 
@@ -224,7 +227,7 @@ class ConcernAppealSerializer(serializers.ModelSerializer):
         fields = ("id", "concern_id", "concern_title", "concern_status", "concern_tracking_id", "appellant", "reason", "status", "decision_note", "reviewed_by", "created_at", "decided_at")
 
     def get_concern_tracking_id(self, obj):
-        return f"EB-{obj.concern_id:06d}"
+        return obj.concern.tracking_id
 
 class ConcernOfficialRemarkSerializer(serializers.ModelSerializer):
     author = PublicUserSerializer(read_only=True)
@@ -262,7 +265,6 @@ class ConcernOfficialRemarkCreateSerializer(serializers.Serializer):
 
 class ConcernSerializer(serializers.ModelSerializer):
     tracking_id = serializers.SerializerMethodField()
-    validation_status = serializers.SerializerMethodField()
     address = serializers.SerializerMethodField()
     latitude = serializers.SerializerMethodField()
     longitude = serializers.SerializerMethodField()
@@ -286,8 +288,12 @@ class ConcernSerializer(serializers.ModelSerializer):
         model = Concern
         fields = (
             "id",
+            "public_id",
             "tracking_id",
             "validation_status",
+            "validation_summary",
+            "rejection_code",
+            "status_version",
             "reporter",
             "title",
             "description",
@@ -321,17 +327,7 @@ class ConcernSerializer(serializers.ModelSerializer):
         return bool(self.context.get("privacy_safe"))
 
     def get_tracking_id(self, obj):
-        year = obj.created_at.year if obj.created_at else 0
-        return f"RPT-{year}-{obj.pk:06d}"
-
-    def get_validation_status(self, obj):
-        if obj.status == Concern.Status.REJECTED:
-            return "rejected"
-        if obj.status == Concern.Status.SUBMITTED:
-            return "pending_review"
-        if obj.status == Concern.Status.RESOLVED:
-            return "resolved"
-        return "accepted"
+        return obj.tracking_id
 
     def get_address(self, obj):
         if self.is_privacy_safe():
@@ -391,19 +387,20 @@ class ConcernSerializer(serializers.ModelSerializer):
 
 
 class ConcernCreateSerializer(serializers.Serializer):
+    client_request_id = serializers.UUIDField(required=False)
     title = serializers.CharField(max_length=160)
-    description = serializers.CharField(allow_blank=True, required=False)
+    description = serializers.CharField(min_length=20, max_length=4000)
     category = serializers.ChoiceField(choices=Concern.Category.choices)
-    visibility = serializers.ChoiceField(choices=Concern.Visibility.choices)
-    address = serializers.CharField(max_length=255, allow_blank=True, required=False)
-    latitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
-    longitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
-    location_source = serializers.CharField(max_length=32, allow_blank=True, required=False)
+    visibility = serializers.ChoiceField(choices=Concern.Visibility.choices, default=Concern.Visibility.COMMUNITY)
+    address = serializers.CharField(max_length=255)
+    latitude = serializers.DecimalField(max_digits=10, decimal_places=7)
+    longitude = serializers.DecimalField(max_digits=10, decimal_places=7)
+    location_source = serializers.ChoiceField(choices=("gps", "manual_pin"))
     location_accuracy = serializers.FloatField(required=False, allow_null=True)
 
     def validate(self, attrs):
         try:
-            validate_location_pair(attrs.get("latitude"), attrs.get("longitude"))
+            validate_barangay_location(attrs.get("latitude"), attrs.get("longitude"))
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc) from exc
         return attrs
@@ -421,6 +418,7 @@ class ConcernCommentCreateSerializer(serializers.Serializer):
 class ConcernStatusUpdateSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=Concern.Status.choices)
     note = serializers.CharField(max_length=255, allow_blank=True, required=False)
+    status_version = serializers.IntegerField(min_value=0, required=False)
 
     def validate_status(self, value):
         if value == Concern.Status.SUBMITTED:
@@ -480,4 +478,16 @@ class BarangayEventSerializer(serializers.ModelSerializer):
 
 class ActiveResponderSerializer(PublicUserSerializer):
     class Meta(PublicUserSerializer.Meta):
-        fields = PublicUserSerializer.Meta.fields + ("email",)
+        fields = PublicUserSerializer.Meta.fields + (
+            "current_latitude",
+            "current_longitude",
+            "location_updated_at",
+        )
+
+    def get_fields(self):
+        fields = super().get_fields()
+        if not self.context.get("include_location", False):
+            fields.pop("current_latitude", None)
+            fields.pop("current_longitude", None)
+            fields.pop("location_updated_at", None)
+        return fields

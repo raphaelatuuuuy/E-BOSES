@@ -1,5 +1,6 @@
 from io import BytesIO
 from io import StringIO
+import uuid
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -37,14 +38,15 @@ def png_upload(name="evidence.png", content=None):
 class PrivateMediaAccessTests(APITestCase):
     def setUp(self):
         User = get_user_model()
-        self.owner = User.objects.create_user(email="owner@example.com", phone_number="+639100000001", password="pass")
-        self.other = User.objects.create_user(email="other@example.com", phone_number="+639100000002", password="pass")
+        self.owner = User.objects.create_user(email="owner@example.com", phone_number="+639100000001", password="pass", status=User.Status.VERIFIED)
+        self.other = User.objects.create_user(email="other@example.com", phone_number="+639100000002", password="pass", status=User.Status.VERIFIED)
         self.staff = User.objects.create_user(
             email="staff@example.com",
             phone_number="+639100000003",
             password="pass",
             role=User.Role.BARANGAY_OFFICIAL,
             is_staff=True,
+            status=User.Status.VERIFIED,
         )
         proof_file = SimpleUploadedFile("proof.pdf", b"raw proof bytes", content_type="application/pdf")
         self.proof = ResidenceProof.objects.create(
@@ -55,8 +57,12 @@ class PrivateMediaAccessTests(APITestCase):
             file_size=proof_file.size,
             sha256_hash=sha256_file(proof_file),
         )
-        self.concern = Concern.objects.create(reporter=self.owner, title="Broken streetlight")
-        media_file = SimpleUploadedFile("evidence.jpg", b"raw evidence bytes", content_type="image/jpeg")
+        self.concern = Concern.objects.create(
+            reporter=self.owner,
+            title="Broken streetlight",
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        media_file = png_upload("evidence.png")
         self.media = ConcernMedia.objects.create(
             concern=self.concern,
             file=media_file,
@@ -76,14 +82,15 @@ class PrivateMediaAccessTests(APITestCase):
         response = self.client.get(f"/api/auth/media/residence-proofs/{self.proof.pk}/preview/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn(b"E-BOSES SAFE PREVIEW", b"".join(response.streaming_content))
+        self.assertEqual(response["Content-Type"], "image/jpeg")
+        self.assertTrue(b"".join(response.streaming_content).startswith(b"\xff\xd8"))
 
     def test_staff_can_access_raw_concern_media_and_access_is_audited(self):
         self.client.force_authenticate(self.staff)
         response = self.client.get(f"/api/concerns/media/{self.media.pk}/raw/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(b"".join(response.streaming_content), b"raw evidence bytes")
+        self.assertEqual(b"".join(response.streaming_content), png_bytes())
         self.assertTrue(
             AuditLog.objects.filter(
                 action="media.raw_accessed",
@@ -99,7 +106,9 @@ class PrivateMediaAccessTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response["Content-Type"], "image/jpeg")
-        self.assertEqual(b"".join(response.streaming_content), b"raw evidence bytes")
+        preview = b"".join(response.streaming_content)
+        self.assertTrue(preview.startswith(b"\xff\xd8"))
+        self.assertNotEqual(preview, png_bytes())
 
     def test_public_cannot_access_private_concern_media_preview(self):
         self.concern.visibility = Concern.Visibility.PRIVATE
@@ -110,14 +119,17 @@ class PrivateMediaAccessTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_non_image_preview_does_not_leak_uploaded_filename(self):
+        self.media.file = SimpleUploadedFile("secret-evidence.pdf", b"not image data", content_type="application/pdf")
         self.media.mime_type = "application/pdf"
-        self.media.save(update_fields=["mime_type"])
+        self.media.save(update_fields=["file", "mime_type"])
 
         response = self.client.get(f"/api/concerns/media/{self.media.pk}/preview/")
         body = b"".join(response.streaming_content)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertNotIn(b"evidence.jpg", body)
+        self.assertEqual(response["Content-Type"], "image/jpeg")
+        self.assertTrue(body.startswith(b"\xff\xd8"))
+        self.assertNotIn(b"secret-evidence.pdf", body)
         self.assertNotIn(str(self.media.file.name).encode("utf-8"), body)
 
 
@@ -143,24 +155,25 @@ class ResidentDashboardAPITests(APITestCase):
             "/api/concerns/",
             {
                 "title": "Broken streetlight",
-                "description": "Madilim sa kanto.",
+                "description": "Madilim sa kanto at delikado para sa mga dumadaan.",
                 "category": "infrastructure",
                 "visibility": "community",
                 "address": "Bayan-Bayanan St.",
-                "latitude": "14.6500000",
-                "longitude": "121.1100000",
+                "latitude": "14.6515000",
+                "longitude": "121.1207000",
                 "location_source": "manual_pin",
                 "location_accuracy": 12.5,
+                "media": png_upload("streetlight.png"),
             },
-            format="json",
+            format="multipart",
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         concern = Concern.objects.get(pk=response.data["id"])
         self.assertEqual(concern.reporter, self.resident)
         self.assertEqual(concern.status, Concern.Status.SUBMITTED)
-        self.assertEqual(str(concern.latitude), "14.6500000")
-        self.assertEqual(str(concern.longitude), "121.1100000")
+        self.assertEqual(str(concern.latitude), "14.6515000")
+        self.assertEqual(str(concern.longitude), "121.1207000")
         self.assertEqual(concern.location_source, "manual_pin")
         self.assertEqual(concern.location_accuracy, 12.5)
         self.assertEqual(concern.status_events.count(), 1)
@@ -168,7 +181,65 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(concern.ai_assessment.status, ConcernAiAssessment.Status.PENDING)
         self.assertEqual(response.data["ai_assessment"]["status"], ConcernAiAssessment.Status.PENDING)
         self.assertRegex(response.data["tracking_id"], r"^RPT-\d{4}-\d{6}$")
-        self.assertEqual(response.data["validation_status"], "pending_review")
+        self.assertEqual(response.data["validation_status"], "accepted")
+
+    def test_unverified_account_cannot_access_resident_dashboard_apis(self):
+        pending = get_user_model().objects.create_user(
+            email="pending-dashboard@example.com",
+            phone_number="+639100000109",
+            password="pass",
+            status=get_user_model().Status.PENDING_VERIFICATION,
+        )
+        self.client.force_authenticate(pending)
+
+        response = self.client.get("/api/concerns/summary/")
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_report_creation_is_idempotent_and_uuid_detail_is_stable(self):
+        client_request_id = uuid.uuid4()
+
+        def payload():
+            return {
+                "client_request_id": str(client_request_id),
+                "title": "Idempotent drainage report",
+                "description": "Standing water is blocking the pedestrian lane after rain.",
+                "category": "infrastructure",
+                "visibility": "community",
+                "address": "Marikina Heights",
+                "latitude": "14.6515000",
+                "longitude": "121.1207000",
+                "location_source": "manual_pin",
+                "media": png_upload("drainage.png"),
+            }
+
+        first = self.client.post("/api/concerns/", payload(), format="multipart")
+        second = self.client.post("/api/concerns/", payload(), format="multipart")
+
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(first.data["public_id"], second.data["public_id"])
+        self.assertEqual(Concern.objects.filter(reporter=self.resident, client_request_id=client_request_id).count(), 1)
+
+        detail = self.client.get(f"/api/concerns/{first.data['public_id']}/")
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail.data["tracking_id"], first.data["tracking_id"])
+
+    def test_feed_reporter_does_not_expose_private_identity_or_location_fields(self):
+        concern = Concern.objects.create(
+            reporter=self.other,
+            title="Privacy-safe community report",
+            description="A community report that should use a privacy-safe public actor.",
+            visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+
+        response = self.client.get("/api/concerns/feed/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        reporter = next(item["reporter"] for item in response.data if item["id"] == concern.pk)
+        for private_field in ("email", "phone_number", "date_of_birth", "gender", "current_latitude", "current_longitude"):
+            self.assertNotIn(private_field, reporter)
 
     def test_non_resident_roles_cannot_create_report(self):
         User = get_user_model()
@@ -263,6 +334,9 @@ class ResidentDashboardAPITests(APITestCase):
                 "category": "infrastructure",
                 "visibility": "community",
                 "address": "Bayan-Bayanan St.",
+                "latitude": "14.6515000",
+                "longitude": "121.1207000",
+                "location_source": "manual_pin",
                 "media": [
                     png_upload("first.png"),
                     png_upload("second.png"),
@@ -284,6 +358,9 @@ class ResidentDashboardAPITests(APITestCase):
                 "category": "infrastructure",
                 "visibility": "community",
                 "address": "Bayan-Bayanan St.",
+                "latitude": "14.6515000",
+                "longitude": "121.1207000",
+                "location_source": "manual_pin",
                 "media": png_upload("hash.png"),
             },
             format="multipart",
@@ -324,6 +401,7 @@ class ResidentDashboardAPITests(APITestCase):
             title="Public concern",
             visibility=Concern.Visibility.COMMUNITY,
             status=Concern.Status.UNDER_REVIEW,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
         )
 
         feed_response = self.client.get("/api/concerns/feed/")
@@ -340,6 +418,7 @@ class ResidentDashboardAPITests(APITestCase):
             title="Pending community concern",
             status=Concern.Status.SUBMITTED,
             visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.PENDING,
             address="Exact House 123",
             latitude="14.6500000",
             longitude="121.1100000",
@@ -352,6 +431,7 @@ class ResidentDashboardAPITests(APITestCase):
             title="Validated community concern",
             status=Concern.Status.UNDER_REVIEW,
             visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
             address="Exact House 456",
             latitude="14.6600000",
             longitude="121.1200000",
@@ -378,6 +458,7 @@ class ResidentDashboardAPITests(APITestCase):
             description="Water is building up after rain.",
             status=Concern.Status.UNDER_REVIEW,
             visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
         )
         Concern.objects.create(
             reporter=self.other,
@@ -385,6 +466,7 @@ class ResidentDashboardAPITests(APITestCase):
             description="Lamp post is dark.",
             status=Concern.Status.UNDER_REVIEW,
             visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
         )
 
         response = self.client.get("/api/concerns/feed/?search=drainage")
@@ -398,12 +480,14 @@ class ResidentDashboardAPITests(APITestCase):
             title="Quiet concern",
             status=Concern.Status.UNDER_REVIEW,
             visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
         )
         supported = Concern.objects.create(
             reporter=self.other,
             title="Supported concern",
             status=Concern.Status.UNDER_REVIEW,
             visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
         )
         ConcernVote.objects.create(concern=supported, user=self.resident, value=1)
         ConcernComment.objects.create(concern=supported, author=self.resident, body="I saw this too.")
@@ -419,6 +503,7 @@ class ResidentDashboardAPITests(APITestCase):
             reporter=self.other,
             title="Community concern",
             visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
         )
 
         first_response = self.client.post(f"/api/concerns/{concern.pk}/vote/", {"value": 1}, format="json")
@@ -434,6 +519,7 @@ class ResidentDashboardAPITests(APITestCase):
             reporter=self.other,
             title="Community concern",
             visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
         )
 
         comment_response = self.client.post(
@@ -468,6 +554,9 @@ class ResidentDashboardAPITests(APITestCase):
             status=User.Status.VERIFIED,
             last_seen_at=timezone.now(),
             is_on_duty=True,
+            current_latitude="14.6516000",
+            current_longitude="121.1208000",
+            location_updated_at=timezone.now(),
         )
         User.objects.create_user(
             email="stale-responder@example.com",
@@ -488,6 +577,18 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual([item["title"] for item in announcements.data], ["Published"])
         self.assertEqual([item["title"] for item in events.data], ["Clinic"])
         self.assertEqual([item["id"] for item in responders.data], [responder.pk])
+        self.assertNotIn("current_latitude", responders.data[0])
+        official = User.objects.create_user(
+            email="responder-location-official@example.com",
+            phone_number="+639100000116",
+            password="pass",
+            role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
+        )
+        self.client.force_authenticate(official)
+        official_response = self.client.get("/api/responders/active/")
+        self.assertEqual(official_response.data[0]["current_latitude"], "14.6516000")
+        self.assertEqual(official_response.data[0]["current_longitude"], "121.1208000")
 
     def test_barangay_official_can_update_report_status_and_timeline(self):
         User = get_user_model()
@@ -502,28 +603,65 @@ class ResidentDashboardAPITests(APITestCase):
             reporter=self.resident,
             title="Needs status update",
             status=Concern.Status.SUBMITTED,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
             update_text="Submitted for barangay review.",
+        )
+        self.client.force_authenticate(official)
+
+        assigned_response = self.client.post(
+            f"/api/concerns/{concern.pk}/status/",
+            {
+                "status": Concern.Status.ASSIGNED,
+                "note": "Assigned to maintenance team.",
+            },
+            format="json",
+        )
+        response = self.client.post(
+            f"/api/concerns/{concern.pk}/status/",
+            {
+                "status": Concern.Status.IN_PROGRESS,
+                "note": "Maintenance work has started.",
+                "status_version": assigned_response.data["status_version"],
+            },
+            format="json",
+        )
+
+        self.assertEqual(assigned_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["validation_status"], "accepted")
+        concern.refresh_from_db()
+        self.assertEqual(concern.status, Concern.Status.IN_PROGRESS)
+        self.assertEqual(concern.update_text, "Maintenance work has started.")
+        event = concern.status_events.latest("id")
+        self.assertEqual(event.status, Concern.Status.IN_PROGRESS)
+        self.assertEqual(event.note, "Maintenance work has started.")
+        self.assertEqual(event.actor, official)
+
+    def test_pending_validation_cannot_move_to_operational_status(self):
+        User = get_user_model()
+        official = User.objects.create_user(
+            email="official-pending-status@example.com",
+            phone_number="+639100000115",
+            password="pass",
+            role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
+        )
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Still validating",
+            validation_status=Concern.ValidationStatus.PENDING,
         )
         self.client.force_authenticate(official)
 
         response = self.client.post(
             f"/api/concerns/{concern.pk}/status/",
-            {
-                "status": Concern.Status.IN_PROGRESS,
-                "note": "Assigned to maintenance team.",
-            },
+            {"status": Concern.Status.ASSIGNED, "note": "Assign now."},
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["validation_status"], "accepted")
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
         concern.refresh_from_db()
-        self.assertEqual(concern.status, Concern.Status.IN_PROGRESS)
-        self.assertEqual(concern.update_text, "Assigned to maintenance team.")
-        event = concern.status_events.latest("id")
-        self.assertEqual(event.status, Concern.Status.IN_PROGRESS)
-        self.assertEqual(event.note, "Assigned to maintenance team.")
-        self.assertEqual(event.actor, official)
+        self.assertEqual(concern.status, Concern.Status.SUBMITTED)
 
     def test_barangay_official_can_view_report_management_queue(self):
         User = get_user_model()
@@ -623,6 +761,7 @@ class PhaseOneFoundationAPITests(APITestCase):
             title="Public concern",
             visibility=Concern.Visibility.COMMUNITY,
             status=Concern.Status.UNDER_REVIEW,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
         )
         self.client.force_authenticate(self.resident)
 
@@ -707,7 +846,12 @@ class PhaseOneFoundationAPITests(APITestCase):
         )
 
     def test_official_can_assign_request_clarification_and_add_remark(self):
-        concern = Concern.objects.create(reporter=self.resident, title="Needs workflow", status=Concern.Status.SUBMITTED)
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Needs workflow",
+            status=Concern.Status.SUBMITTED,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
         self.client.force_authenticate(self.official)
 
         assign_response = self.client.post(
@@ -758,6 +902,8 @@ class PhaseOneFoundationAPITests(APITestCase):
         )
 
         self.assertEqual(appeal_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(appeal_response.data["concern_tracking_id"], concern.tracking_id)
+        self.assertRegex(appeal_response.data["concern_tracking_id"], r"^RPT-\d{4}-\d{6}$")
         concern.refresh_from_db()
         self.assertEqual(concern.status, Concern.Status.APPEALED)
         appeal = ConcernAppeal.objects.get(concern=concern)
@@ -778,5 +924,5 @@ class PhaseOneFoundationAPITests(APITestCase):
         concern.refresh_from_db()
         appeal.refresh_from_db()
         self.assertEqual(appeal.status, ConcernAppeal.Status.APPROVED)
-        self.assertEqual(concern.status, Concern.Status.UNDER_REVIEW)
+        self.assertEqual(concern.status, Concern.Status.SUBMITTED)
         self.assertTrue(Notification.objects.filter(recipient=self.resident, type=Notification.Type.APPEAL_APPROVED).exists())

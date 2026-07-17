@@ -9,14 +9,17 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.media_services import log_raw_media_access
-from apps.accounts.permissions import user_has_role_permission
+from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated, user_has_role_permission
 from apps.accounts.services import (
     create_audit_log,
+    has_similar_phash_block,
+    is_similar_phash,
+    phash_blocks_file,
     phash_file,
     sha256_file,
     validate_concern_media_file,
@@ -63,6 +66,7 @@ from .serializers import (
     ConcernSerializer,
     ConcernStatusUpdateSerializer,
     ConcernVoteSerializer,
+    PublicUserSerializer,
 )
 from .services import ensure_concern_media_preview, user_can_access_concern_media_raw
 
@@ -70,27 +74,57 @@ from .services import ensure_concern_media_preview, user_can_access_concern_medi
 ACTIVE_STATUSES = {
     Concern.Status.SUBMITTED,
     Concern.Status.UNDER_REVIEW,
+    Concern.Status.ASSIGNED,
     Concern.Status.IN_PROGRESS,
     Concern.Status.APPEALED,
 }
 
 FEED_VISIBLE_STATUSES = {
+    Concern.Status.SUBMITTED,
     Concern.Status.UNDER_REVIEW,
+    Concern.Status.ASSIGNED,
     Concern.Status.IN_PROGRESS,
     Concern.Status.RESOLVED,
     Concern.Status.APPEALED,
 }
 
+LEGAL_STATUS_TRANSITIONS = {
+    Concern.Status.SUBMITTED: {Concern.Status.ASSIGNED, Concern.Status.REJECTED},
+    Concern.Status.UNDER_REVIEW: {Concern.Status.SUBMITTED, Concern.Status.ASSIGNED, Concern.Status.REJECTED},
+    Concern.Status.ASSIGNED: {Concern.Status.IN_PROGRESS, Concern.Status.REJECTED},
+    Concern.Status.IN_PROGRESS: {Concern.Status.RESOLVED, Concern.Status.REJECTED},
+    Concern.Status.RESOLVED: {Concern.Status.APPEALED},
+    Concern.Status.REJECTED: {Concern.Status.APPEALED},
+    Concern.Status.APPEALED: {Concern.Status.SUBMITTED, Concern.Status.REJECTED},
+}
+
+
+def media_looks_duplicate(phash, blocks, candidates):
+    for candidate_phash, candidate_blocks in candidates:
+        if is_similar_phash(phash, candidate_phash):
+            return True
+        if has_similar_phash_block(phash, candidate_blocks):
+            return True
+        if has_similar_phash_block(candidate_phash, blocks):
+            return True
+    return False
+
 
 def can_access_concern(user, concern):
     if not user or not user.is_authenticated:
-        return concern.visibility == Concern.Visibility.COMMUNITY
+        return (
+            concern.visibility == Concern.Visibility.COMMUNITY
+            and concern.validation_status == Concern.ValidationStatus.ACCEPTED
+        )
     return (
         user.is_superuser
         or user.is_staff
         or user.role == user.Role.BARANGAY_OFFICIAL
         or user.pk == concern.reporter_id
-        or concern.visibility == Concern.Visibility.COMMUNITY
+        or (
+            concern.visibility == Concern.Visibility.COMMUNITY
+            and concern.validation_status == Concern.ValidationStatus.ACCEPTED
+        )
     )
 
 
@@ -140,7 +174,7 @@ def notify_announcement_published(announcement):
     recipients = User.objects.filter(
         role=User.Role.RESIDENT,
         status=User.Status.VERIFIED,
-    ).exclude(resident_settings__push_alerts=False)
+    )
     for recipient in recipients:
         notification = Notification.objects.create(
             recipient=recipient,
@@ -162,16 +196,90 @@ def create_concern_notification(concern, *, recipient, type, title, body):
     return notification
 
 
+class ConcernMediaCheckView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        media_files = request.FILES.getlist("media")
+        if not media_files:
+            return Response({"media": ["Choose a photo to check."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        existing_phashes = list(
+            ConcernMedia.objects.exclude(phash="").values_list("phash", "phash_blocks")
+        )
+        current_phashes = []
+        current_hashes = set()
+        checked = []
+        for uploaded_file in media_files:
+            try:
+                validated_file = validate_concern_media_file(uploaded_file)
+            except ValidationError as exc:
+                # Return clean user-facing messages only (no filename / list repr)
+                messages = []
+                if hasattr(exc, "messages") and exc.messages:
+                    messages = [str(m) for m in exc.messages]
+                elif getattr(exc, "message_dict", None):
+                    for value in exc.message_dict.values():
+                        if isinstance(value, (list, tuple)):
+                            messages.extend(str(v) for v in value)
+                        else:
+                            messages.append(str(value))
+                else:
+                    messages = [str(exc)]
+                cleaned = []
+                for msg in messages:
+                    text = str(msg).strip()
+                    # Strip accidental list-repr wrappers: "['...']"
+                    if text.startswith("[") and text.endswith("]"):
+                        text = text[1:-1].strip().strip("'\"")
+                    if text:
+                        cleaned.append(text)
+                return Response(
+                    {"media": cleaned or ["This photo could not be validated."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            media_hash = sha256_file(validated_file)
+            raw_content = validated_file.read()
+            validated_file.seek(0)
+            media_phash = phash_file(raw_content)
+            media_phash_blocks = phash_blocks_file(raw_content)
+            if media_hash in current_hashes or ConcernMedia.objects.filter(sha256_hash=media_hash).exists():
+                return Response(
+                    {"media": ["Duplicate media upload detected."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if media_looks_duplicate(media_phash, media_phash_blocks, [*existing_phashes, *current_phashes]):
+                return Response(
+                    {"media": ["This image appears to have been uploaded before."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            current_hashes.add(media_hash)
+            current_phashes.append((media_phash, media_phash_blocks))
+            checked.append({"name": uploaded_file.name, "status": "accepted"})
+        return Response({"files": checked})
+
+
 class ConcernListCreateView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
+    @transaction.atomic
     def post(self, request):
         touch_last_seen(request.user)
         if not user_has_role_permission(request.user, "concerns.create"):
             return Response({"detail": "Only residents can submit concerns."}, status=status.HTTP_403_FORBIDDEN)
         serializer = ConcernCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        client_request_id = serializer.validated_data.get("client_request_id")
+        if client_request_id:
+            existing = Concern.objects.filter(
+                reporter=request.user,
+                client_request_id=client_request_id,
+            ).first()
+            if existing:
+                decorated = decorate_concerns(Concern.objects.filter(pk=existing.pk), request.user)[0]
+                return Response(ConcernSerializer(decorated, context={"request": request}).data)
         configuration = ConcernClassificationConfiguration.current()
         enabled_categories = configuration.enabled_categories or list(Concern.Category.values)
         if serializer.validated_data["category"] not in enabled_categories:
@@ -181,19 +289,45 @@ class ConcernListCreateView(APIView):
             )
         validated_media = []
         media_hashes = set()
-        for uploaded_file in request.FILES.getlist("media"):
+        media_files = request.FILES.getlist("media")
+        if not media_files:
+            return Response(
+                {"media": ["Add at least one clear photo as evidence."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        existing_phashes = list(
+            ConcernMedia.objects.exclude(phash="").values_list("phash", "phash_blocks")
+        )
+        current_phashes = []
+        for uploaded_file in media_files:
             try:
                 validated_file = validate_concern_media_file(uploaded_file)
             except ValidationError as exc:
-                return Response({"media": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+                messages = []
+                if hasattr(exc, "messages") and exc.messages:
+                    messages = [str(m) for m in exc.messages]
+                else:
+                    text = str(exc).strip()
+                    if text.startswith("[") and text.endswith("]"):
+                        text = text[1:-1].strip().strip("'\"")
+                    messages = [text] if text else ["This photo could not be validated."]
+                return Response({"media": messages}, status=status.HTTP_400_BAD_REQUEST)
             media_hash = sha256_file(validated_file)
             raw_content = validated_file.read(); validated_file.seek(0)
             media_phash = phash_file(raw_content)
+            media_phash_blocks = phash_blocks_file(raw_content)
             if media_hash in media_hashes or ConcernMedia.objects.filter(sha256_hash=media_hash).exists():
-                return Response({"media": [f"{uploaded_file.name}: duplicate media upload detected."]}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"media": ["Duplicate media upload detected."]}, status=status.HTTP_400_BAD_REQUEST)
+            if media_looks_duplicate(media_phash, media_phash_blocks, [*existing_phashes, *current_phashes]):
+                return Response(
+                    {"media": ["This image appears to have been uploaded before."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             media_hashes.add(media_hash)
-            validated_media.append((uploaded_file, validated_file, media_hash, media_phash))
+            current_phashes.append((media_phash, media_phash_blocks))
+            validated_media.append((uploaded_file, validated_file, media_hash, media_phash, media_phash_blocks))
         concern = Concern.objects.create(
+            client_request_id=client_request_id,
             reporter=request.user,
             title=serializer.validated_data["title"],
             description=serializer.validated_data.get("description", ""),
@@ -205,8 +339,12 @@ class ConcernListCreateView(APIView):
             location_source=serializer.validated_data.get("location_source", ""),
             location_accuracy=serializer.validated_data.get("location_accuracy"),
             barangay=getattr(getattr(request.user, "resident_profile", None), "barangay", "") or "Marikina Heights",
-            update_text="Submitted for barangay review.",
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+            validation_summary="Required report checks passed. Advanced analysis is pending.",
+            update_text="Report submitted and accepted for routing.",
         )
+        concern.tracking_number = f"RPT-{concern.created_at.year}-{concern.pk:06d}"
+        concern.save(update_fields=["tracking_number"])
         ConcernStatusEvent.objects.create(
             concern=concern,
             status=Concern.Status.SUBMITTED,
@@ -214,7 +352,7 @@ class ConcernListCreateView(APIView):
             actor=request.user,
         )
         ConcernAiAssessment.objects.create(concern=concern, status=ConcernAiAssessment.Status.PENDING)
-        for uploaded_file, validated_file, media_hash, media_phash in validated_media:
+        for uploaded_file, validated_file, media_hash, media_phash, media_phash_blocks in validated_media:
             ConcernMedia.objects.create(
                 concern=concern,
                 file=validated_file,
@@ -223,6 +361,7 @@ class ConcernListCreateView(APIView):
                 file_size=validated_file.size,
                 sha256_hash=media_hash,
                 phash=media_phash,
+                phash_blocks=media_phash_blocks,
             )
         decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
         from apps.live_map import concern_payload
@@ -294,6 +433,18 @@ class ConcernDetailView(APIView):
         return Response(ConcernSerializer(decorated, context={"request": request}).data)
 
 
+class ConcernPublicDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, public_id):
+        touch_last_seen(request.user)
+        concern = get_object_or_404(Concern, public_id=public_id)
+        if not can_access_concern(request.user, concern):
+            return Response({"detail": "You do not have permission to view this report."}, status=status.HTTP_403_FORBIDDEN)
+        decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
+        return Response(ConcernSerializer(decorated, context={"request": request}).data)
+
+
 class ConcernFeedView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -301,6 +452,7 @@ class ConcernFeedView(APIView):
         touch_last_seen(request.user)
         queryset = Concern.objects.filter(
             visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
             status__in=FEED_VISIBLE_STATUSES,
         )
         category = request.query_params.get("category")
@@ -330,7 +482,12 @@ class ConcernVoteView(APIView):
 
     def post(self, request, pk):
         touch_last_seen(request.user)
-        concern = get_object_or_404(Concern, pk=pk, visibility=Concern.Visibility.COMMUNITY)
+        concern = get_object_or_404(
+            Concern,
+            pk=pk,
+            visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
         serializer = ConcernVoteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         value = serializer.validated_data["value"]
@@ -354,7 +511,12 @@ class ConcernCommentCreateView(APIView):
 
     def post(self, request, pk):
         touch_last_seen(request.user)
-        concern = get_object_or_404(Concern, pk=pk, visibility=Concern.Visibility.COMMUNITY)
+        concern = get_object_or_404(
+            Concern,
+            pk=pk,
+            visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
         serializer = ConcernCommentCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         parent = None
@@ -427,6 +589,16 @@ class ConcernAssignView(APIView):
         if not can_update_concern_status(request.user):
             return Response({"detail": "You do not have permission to assign reports."}, status=status.HTTP_403_FORBIDDEN)
         concern = get_object_or_404(Concern, pk=pk)
+        if concern.validation_status != Concern.ValidationStatus.ACCEPTED:
+            return Response(
+                {"validation_status": ["This report must pass validation before it can be assigned."]},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if concern.status not in {Concern.Status.SUBMITTED, Concern.Status.UNDER_REVIEW}:
+            return Response(
+                {"status": ["Only submitted reports can be assigned."]},
+                status=status.HTTP_409_CONFLICT,
+            )
         serializer = ConcernAssignSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         assignee = None
@@ -441,12 +613,13 @@ class ConcernAssignView(APIView):
             office=serializer.validated_data.get("office", ""),
             note=serializer.validated_data.get("note", ""),
         )
-        note = assignment.note or f"Assigned to {assignee.email if assignee else assignment.office}."
-        concern.status = Concern.Status.IN_PROGRESS
+        assignee_name = PublicUserSerializer(assignee).data["full_name"] if assignee else assignment.office
+        note = assignment.note or f"Assigned to {assignee_name or 'the barangay response team'}."
+        concern.status = Concern.Status.ASSIGNED
         concern.update_text = note
-        concern.save(update_fields=["status", "update_text", "updated_at"])
-        ConcernStatusEvent.objects.create(concern=concern, status=Concern.Status.IN_PROGRESS, note=note, actor=request.user)
-        create_concern_notification(concern, recipient=concern.reporter, type=Notification.Type.ASSIGNED, title="Your report was assigned", body=note)
+        concern.status_version += 1
+        concern.save(update_fields=["status", "update_text", "status_version", "updated_at"])
+        ConcernStatusEvent.objects.create(concern=concern, status=Concern.Status.ASSIGNED, note=note, actor=request.user)
         if assignee:
             create_concern_notification(concern, recipient=assignee, type=Notification.Type.ASSIGNED, title="Concern report assigned", body=note)
         create_audit_log("concern.assigned", actor=request.user, target_user=concern.reporter, metadata={"concern_id": concern.pk, "assignment_id": assignment.pk}, request_meta=request_meta(request))
@@ -463,10 +636,9 @@ class ConcernClarificationRequestView(APIView):
         serializer = ClarificationRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         clarification = ConcernClarification.objects.create(concern=concern, requested_by=request.user, request_text=serializer.validated_data["request_text"])
-        concern.status = Concern.Status.UNDER_REVIEW
         concern.update_text = "Barangay requested clarification."
-        concern.save(update_fields=["status", "update_text", "updated_at"])
-        ConcernStatusEvent.objects.create(concern=concern, status=Concern.Status.UNDER_REVIEW, note=clarification.request_text, actor=request.user)
+        concern.save(update_fields=["update_text", "updated_at"])
+        ConcernStatusEvent.objects.create(concern=concern, status=concern.status, note=clarification.request_text, actor=request.user)
         create_concern_notification(concern, recipient=concern.reporter, type=Notification.Type.CLARIFICATION_REQUESTED, title="Clarification requested", body=clarification.request_text)
         create_audit_log("concern.clarification_requested", actor=request.user, target_user=concern.reporter, metadata={"concern_id": concern.pk, "clarification_id": clarification.pk}, request_meta=request_meta(request))
         return Response(ConcernClarificationSerializer(clarification, context={"request": request}).data, status=status.HTTP_201_CREATED)
@@ -547,7 +719,7 @@ class ConcernAppealReviewView(APIView):
         appeal.decided_at = timezone.now()
         appeal.save(update_fields=["status", "decision_note", "reviewed_by", "decided_at"])
         concern = appeal.concern
-        next_status = Concern.Status.UNDER_REVIEW if appeal.status == ConcernAppeal.Status.APPROVED else Concern.Status.REJECTED
+        next_status = Concern.Status.SUBMITTED if appeal.status == ConcernAppeal.Status.APPROVED else Concern.Status.REJECTED
         concern.status = next_status
         concern.update_text = appeal.decision_note or f"Appeal {appeal.status}."
         concern.save(update_fields=["status", "update_text", "updated_at"])
@@ -587,16 +759,34 @@ class ConcernStatusUpdateView(APIView):
             return Response({"detail": "You do not have permission to update report status."}, status=status.HTTP_403_FORBIDDEN)
 
         concern = get_object_or_404(Concern, pk=pk)
+        if concern.validation_status != Concern.ValidationStatus.ACCEPTED:
+            return Response(
+                {"validation_status": ["This report must pass validation before its operational status can change."]},
+                status=status.HTTP_409_CONFLICT,
+            )
         serializer = ConcernStatusUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         next_status = serializer.validated_data["status"]
+        expected_version = serializer.validated_data.get("status_version")
+        if expected_version is not None and expected_version != concern.status_version:
+            return Response(
+                {"status_version": ["This report was updated elsewhere. Refresh and try again."]},
+                status=status.HTTP_409_CONFLICT,
+            )
+        allowed = LEGAL_STATUS_TRANSITIONS.get(concern.status, set())
+        if next_status not in allowed:
+            return Response(
+                {"status": [f"A report cannot move from {concern.status} to {next_status}."]},
+                status=status.HTTP_409_CONFLICT,
+            )
         note = serializer.validated_data.get("note", "").strip()
         if not note:
             note = f"Report status updated to {next_status.replace('_', ' ')}."
 
         concern.status = next_status
         concern.update_text = note
-        concern.save(update_fields=["status", "update_text", "updated_at"])
+        concern.status_version += 1
+        concern.save(update_fields=["status", "update_text", "status_version", "updated_at"])
         ConcernStatusEvent.objects.create(
             concern=concern,
             status=next_status,
@@ -770,8 +960,19 @@ class ActiveResponderListView(APIView):
             role__in=[User.Role.FIRST_RESPONDER, User.Role.BARANGAY_OFFICIAL],
             status=User.Status.VERIFIED,
             is_on_duty=True,
+            last_seen_at__gte=timezone.now() - timedelta(minutes=5),
         ).select_related("resident_profile")
-        return Response(ActiveResponderSerializer(responders, many=True).data)
+        resident_profile = getattr(request.user, "resident_profile", None)
+        resident_barangay = getattr(resident_profile, "barangay", "").strip()
+        if resident_barangay:
+            responders = responders.filter(resident_profile__barangay__iexact=resident_barangay)
+        return Response(
+            ActiveResponderSerializer(
+                responders,
+                many=True,
+                context={"include_location": can_update_concern_status(request.user)},
+            ).data
+        )
 
 
 class ConcernMediaRawView(APIView):
@@ -797,9 +998,11 @@ class ConcernMediaPreviewView(APIView):
 
     def get(self, request, pk):
         media = get_object_or_404(ConcernMedia.objects.select_related("concern__reporter"), pk=pk)
-        if media.concern.visibility == media.concern.Visibility.PRIVATE and not user_can_access_concern_media_raw(request.user, media):
+        is_publicly_displayable = (
+            media.concern.visibility == media.concern.Visibility.COMMUNITY
+            and media.concern.validation_status == media.concern.ValidationStatus.ACCEPTED
+        )
+        if not is_publicly_displayable and not user_can_access_concern_media_raw(request.user, media):
             return Response({"detail": "You do not have permission to access this media."}, status=status.HTTP_403_FORBIDDEN)
-        if media.concern.visibility == media.concern.Visibility.COMMUNITY and media.mime_type.startswith("image/"):
-            return FileResponse(media.file.open("rb"), content_type=media.mime_type)
         preview = ensure_concern_media_preview(media)
-        return FileResponse(preview.open("rb"), content_type="text/plain")
+        return FileResponse(preview.open("rb"), content_type="image/jpeg")

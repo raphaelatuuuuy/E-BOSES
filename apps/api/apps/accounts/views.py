@@ -866,4 +866,4 @@ class ResidenceProofPreviewMediaView(APIView):
     def get(self, request, pk):
         proof = get_object_or_404(ResidenceProof, pk=pk)
         preview = ensure_residence_proof_preview(proof)
-        return FileResponse(preview.open("rb"), content_type="text/plain")
+        return FileResponse(preview.open("rb"), content_type="image/jpeg")

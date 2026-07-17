@@ -23,6 +23,8 @@ import HomePage from "@/features/dashboard/pages/home"
 import ProfilePage from "@/features/dashboard/pages/profile"
 import ReportsPage from "@/features/dashboard/pages/reports"
 import SettingsPage from "@/features/dashboard/pages/settings"
+import NotificationsPage from "@/features/dashboard/pages/notifications"
+import EmergencyHistoryPage from "@/features/dashboard/pages/emergency-history"
 import OcrConfigurationPage from "@/features/ocr/ocr-configuration-page"
 import OcrTemplateBuilderPage from "@/features/ocr/ocr-template-builder-page"
 import VerificationQueuePage from "@/features/ocr/verification-queue-page"
@@ -45,7 +47,7 @@ function ProtectedDashboard() {
     return <Navigate to="/sign-in" replace />
   }
 
-  const canEnterApp = user.status === "verified" || user.status === "pending_verification"
+  const canEnterApp = user.status === "verified"
   if (!canEnterApp) {
     return <Navigate to={getStatusPath(user.status)} replace />
   }
@@ -72,7 +74,7 @@ function ProtectedOnboarding() {
     return <Navigate to="/sign-in" replace />
   }
 
-  const canEnterApp = user.status === "verified" || user.status === "pending_verification"
+  const canEnterApp = user.status === "verified"
   if (!canEnterApp) {
     return <Navigate to={getStatusPath(user.status)} replace />
   }
@@ -134,10 +136,12 @@ function AppRoutes() {
         <Route path="ocr-templates" element={<OfficialRoute><OcrTemplateBuilderPage /></OfficialRoute>} />
         <Route path="ocr-configuration" element={<OfficialRoute><OcrConfigurationPage /></OfficialRoute>} />
         <Route path="concern-classification" element={<OfficialRoute><ConcernClassificationPage /></OfficialRoute>} />
-        <Route path="reports" element={<ReportsPage />} />
-        <Route path="reports/:reportId" element={<ReportsPage />} />
-        <Route path="profile" element={<ProfilePage />} />
-        <Route path="settings" element={<SettingsPage />} />
+        <Route path="reports" element={<ResidentRoute><ReportsPage /></ResidentRoute>} />
+        <Route path="reports/:reportId" element={<ResidentRoute><ReportsPage /></ResidentRoute>} />
+        <Route path="notifications" element={<ResidentRoute><NotificationsPage /></ResidentRoute>} />
+        <Route path="emergency-history" element={<ResidentRoute><EmergencyHistoryPage /></ResidentRoute>} />
+        <Route path="profile" element={<ResidentRoute><ProfilePage /></ResidentRoute>} />
+        <Route path="settings" element={<ResidentRoute><SettingsPage /></ResidentRoute>} />
       </Route>
 
       {/* Onboarding */}

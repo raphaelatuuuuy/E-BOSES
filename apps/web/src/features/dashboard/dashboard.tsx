@@ -85,13 +85,12 @@ function DashboardContent() {
           Single shell: top chrome + body share one width.
           Main column owns search + avatar so they share the feed|rail grid with home.
         */}
-        <div className="min-h-svh overflow-x-auto bg-white">
+        <div className="min-h-svh overflow-x-hidden bg-white">
           <div
             className="mx-auto min-h-svh w-full bg-white"
             style={{
               maxWidth: RESIDENT_SHELL_MAX,
-              // Don't lock full preferred layout min — let sidebar shrink on zoom
-              minWidth: isDesktop ? RESIDENT_DESKTOP_MIN_PX : 0,
+              minWidth: 0,
             }}
           >
             {isDesktop ? (
@@ -99,7 +98,7 @@ function DashboardContent() {
                 className="grid min-h-svh"
                 style={{
                   // Shrinks with CSS viewport (zoom-in) between MIN and preferred W
-                  gridTemplateColumns: `minmax(${RESIDENT_SIDEBAR_MIN}px, min(${RESIDENT_SIDEBAR_W}px, 24vw)) minmax(0, 1fr)`,
+                  gridTemplateColumns: `minmax(${RESIDENT_SIDEBAR_MIN}px, min(${RESIDENT_SIDEBAR_W}px, 36vw)) minmax(0, 1fr)`,
                 }}
               >
                 {/* LEFT: logo + nav */}
@@ -139,7 +138,7 @@ function DashboardContent() {
               onOpenChange={setStatusDialogOpen}
               report={statusDialogReport}
               mode={statusDialogMode}
-              onTrack={() => navigate(`/dashboard/reports/${statusDialogReport.id}`)}
+              onTrack={() => navigate(`/dashboard/reports/${statusDialogReport.public_id}`)}
             />
           ) : null}
         </div>

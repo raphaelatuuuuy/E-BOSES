@@ -1,3 +1,5 @@
+import uuid
+
 from django.conf import settings
 from django.db import models
 
@@ -18,16 +20,33 @@ class Concern(models.Model):
     class Status(models.TextChoices):
         SUBMITTED = "submitted", "Submitted"
         UNDER_REVIEW = "under_review", "Under Review"
+        ASSIGNED = "assigned", "Assigned"
         IN_PROGRESS = "in_progress", "In Progress"
         RESOLVED = "resolved", "Resolved"
         REJECTED = "rejected", "Rejected"
         APPEALED = "appealed", "Appealed"
 
+    class ValidationStatus(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACCEPTED = "accepted", "Accepted"
+        REJECTED = "rejected", "Rejected"
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+    tracking_number = models.CharField(max_length=32, null=True, blank=True, unique=True)
     reporter = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="concerns")
     title = models.CharField(max_length=160)
     description = models.TextField(blank=True)
     category = models.CharField(max_length=32, choices=Category.choices, default=Category.OTHERS)
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.SUBMITTED)
+    validation_status = models.CharField(
+        max_length=16,
+        choices=ValidationStatus.choices,
+        default=ValidationStatus.PENDING,
+    )
+    validation_summary = models.CharField(max_length=255, blank=True)
+    rejection_code = models.CharField(max_length=48, blank=True)
+    status_version = models.PositiveIntegerField(default=0)
     address = models.CharField(max_length=255, blank=True)
     latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
     longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
@@ -41,6 +60,20 @@ class Concern(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["reporter", "client_request_id"],
+                condition=models.Q(client_request_id__isnull=False),
+                name="unique_concern_client_request",
+            ),
+        ]
+
+    @property
+    def tracking_id(self):
+        if self.tracking_number:
+            return self.tracking_number
+        year = self.created_at.year if self.created_at else 0
+        return f"RPT-{year}-{self.pk:06d}"
 
 
 class ConcernMedia(models.Model):
@@ -52,6 +85,9 @@ class ConcernMedia(models.Model):
     file_size = models.PositiveIntegerField(default=0)
     sha256_hash = models.CharField(max_length=64, blank=True, db_index=True)
     phash = models.CharField(max_length=16, blank=True, db_index=True)
+    phash_blocks = models.JSONField(default=list, blank=True)
+    validation_status = models.CharField(max_length=16, default="accepted")
+    validation_detail = models.CharField(max_length=255, blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
 

@@ -54,8 +54,8 @@ export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerCl
       <div
         ref={contentRef}
         className={cn(
-          "z-10 flex w-full flex-col overflow-hidden bg-background shadow-2xl",
-          "fixed inset-0 md:relative md:max-h-[90vh] md:rounded-2xl md:border md:border-border/50",
+          "z-10 flex w-full flex-col overflow-hidden bg-background",
+          "fixed inset-0 md:relative md:max-h-[90vh] md:rounded-2xl md:border md:border-border md:shadow-2xl",
           "motion-safe:md:animate-in motion-safe:md:fade-in motion-safe:md:zoom-in-95 motion-safe:md:duration-200 motion-safe:md:ease-out",
           maxW,
         )}

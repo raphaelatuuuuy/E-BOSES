@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useNavigate } from "react-router-dom"
 import { createPortal } from "react-dom"
 import {
   AlertTriangleIcon,
@@ -54,15 +55,6 @@ function timeAgo(value: string) {
   if (hours < 24) return `${hours}h ago`
   const days = Math.floor(hours / 24)
   return `${days}d ago`
-}
-
-function notificationToMode(
-  type: string,
-): "submitted" | "assigned" | "rejected" | "resolved" {
-  if (type === "assigned") return "assigned"
-  if (type === "rejected") return "rejected"
-  if (type === "resolved") return "resolved"
-  return "submitted"
 }
 
 function reportStatusHeadline(item: NotificationItem) {
@@ -160,6 +152,7 @@ function NotificationRow({
   item: NotificationItem
   onMarkRead: (id: number) => void
 }) {
+  const navigate = useNavigate()
   const meta = notificationMeta(item)
   const Icon = meta.icon
   return (
@@ -168,19 +161,11 @@ function NotificationRow({
       onClick={() => {
         if (!item.is_read) onMarkRead(item.id)
         if (item.emergency_id) {
-          window.dispatchEvent(
-            new CustomEvent("eboses:open-emergency-tracking", {
-              detail: { emergencyId: item.emergency_id },
-            }),
-          )
+          navigate(`/dashboard/emergency-history?alert=${item.emergency_public_id || item.emergency_id}`)
           return
         }
         if (!item.concern_id) return
-        window.dispatchEvent(
-          new CustomEvent("eboses:open-status-dialog", {
-            detail: { concernId: item.concern_id, mode: notificationToMode(item.type) },
-          }),
-        )
+        navigate(`/dashboard/reports/${item.concern_public_id || item.concern_id}`)
       }}
       className={cn(
         "relative flex min-h-[86px] w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors hover:border-[#cbd8ee] md:min-h-[90px]",
@@ -463,7 +448,7 @@ function MobileSheet({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="group relative flex size-10 items-center justify-center rounded-full text-[#07145f] transition-colors duration-150 hover:bg-[#07145f]/8 md:hidden"
+        className="relative flex size-10 items-center justify-center rounded-full text-[#07145f] md:hidden"
         aria-label="Open notifications"
       >
         <BoxBellIcon sizeClass="size-5" />
@@ -539,7 +524,7 @@ export function NotificationPopover() {
       <button
         type="button"
         onClick={() => setDesktopOpen(true)}
-        className="group relative hidden size-10 items-center justify-center rounded-full text-[#07145f] transition-colors duration-150 hover:bg-[#07145f]/8 md:flex"
+        className="relative hidden size-10 items-center justify-center rounded-full text-[#07145f] md:flex"
         aria-label="Open notifications"
       >
         <BoxBellIcon sizeClass="size-6" />

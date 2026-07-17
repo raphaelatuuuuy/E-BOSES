@@ -5,6 +5,7 @@ import { usePageTitle } from "@/hooks/use-page-title"
 import { Topbar } from "@/features/dashboard/components/topbar"
 import {
   ArrowUpIcon,
+  ChevronLeftIcon,
   ChevronRightIcon,
   FlagIcon,
   LeafIcon,
@@ -25,7 +26,6 @@ import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/components/popover"
-import { useHorizontalDragScroll } from "@/features/dashboard/hooks/use-horizontal-drag-scroll"
 import {
   commentOnConcern,
   flagConcern,
@@ -68,20 +68,6 @@ const filterCategoryMap: Record<string, ConcernCategory | "all"> = {
   Environment: "environment",
   "Public Safety": "public_safety",
   Others: "others",
-}
-
-const validationLabels: Record<Concern["validation_status"], string> = {
-  pending_review: "Pending",
-  accepted: "Validated",
-  rejected: "Rejected",
-  resolved: "Resolved",
-}
-
-const validationColors: Record<Concern["validation_status"], string> = {
-  pending_review: "border-amber-200 bg-amber-50 text-amber-700",
-  accepted: "border-blue-200 bg-blue-50 text-blue-700",
-  rejected: "border-red-200 bg-red-50 text-red-700",
-  resolved: "border-green-200 bg-green-50 text-green-700",
 }
 
 const categoryStyles: Record<ConcernCategory, { icon: typeof WrenchIcon; bg: string; text: string; label: string }> = {
@@ -203,8 +189,6 @@ function CommentItem({
 
 export default function FeedPage() {
   usePageTitle("Feed")
-  const filterRailRef = useRef<HTMLDivElement>(null)
-  const filterDragScroll = useHorizontalDragScroll<HTMLDivElement>()
   const hasLoadedRef = useRef(false)
   const [loaded, setLoaded] = useState(false)
   const [activeFilter, setActiveFilter] = useState<string>("All")
@@ -221,6 +205,35 @@ export default function FeedPage() {
   const [reportOther, setReportOther] = useState<string>("")
   const [flaggingPost, setFlaggingPost] = useState<number | null>(null)
   const [error, setError] = useState("")
+  const [filterPageSize, setFilterPageSize] = useState(() => {
+    if (typeof window === "undefined") return filters.length
+    if (window.innerWidth >= 1024) return filters.length
+    return window.innerWidth >= 640 ? 2 : 1
+  })
+  const [filterStart, setFilterStart] = useState(0)
+
+  function moveFilterRail(direction: -1 | 1) {
+    setFilterStart((current) =>
+      Math.min(
+        filters.length - filterPageSize,
+        Math.max(0, current + direction * filterPageSize),
+      ),
+    )
+  }
+
+  useEffect(() => {
+    function syncFilterPageSize() {
+      if (window.innerWidth >= 1024) setFilterPageSize(filters.length)
+      else setFilterPageSize(window.innerWidth >= 640 ? 2 : 1)
+    }
+
+    window.addEventListener("resize", syncFilterPageSize)
+    return () => window.removeEventListener("resize", syncFilterPageSize)
+  }, [])
+
+  useEffect(() => {
+    setFilterStart((current) => Math.min(current, Math.max(0, filters.length - filterPageSize)))
+  }, [filterPageSize])
 
   async function loadFeed() {
     if (!hasLoadedRef.current) {
@@ -248,8 +261,14 @@ export default function FeedPage() {
   useEffect(() => {
     void loadFeed()
     function refresh() { void loadFeed() }
+    const interval = window.setInterval(refresh, 30000)
     window.addEventListener("eboses:report-created", refresh)
-    return () => window.removeEventListener("eboses:report-created", refresh)
+    window.addEventListener("eboses:concern-updated", refresh)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener("eboses:report-created", refresh)
+      window.removeEventListener("eboses:concern-updated", refresh)
+    }
   }, [activeFilter, search])
 
   if (!loaded)
@@ -368,10 +387,21 @@ export default function FeedPage() {
             </div>
 
             <div className="mt-7">
-              <div className="relative w-full min-w-0">
-                <div ref={filterRailRef} {...filterDragScroll} className="scrollbar-hide min-w-0 cursor-grab touch-pan-x overflow-x-scroll overscroll-x-contain active:cursor-grabbing lg:overflow-visible">
-                  <div className="flex min-w-max flex-nowrap gap-3 lg:grid lg:min-w-0 lg:grid-cols-6">
-                    {filters.map((f) => (
+              <div className="flex w-full min-w-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => moveFilterRail(-1)}
+                  disabled={filterStart === 0}
+                  className="flex size-10 shrink-0 items-center justify-center rounded-md bg-white text-[#07145f] transition-colors hover:text-[#ff6a1a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ff6a1a]/30 disabled:cursor-default disabled:opacity-35 lg:hidden"
+                  aria-label="Show previous filters"
+                >
+                  <ChevronLeftIcon className="size-5" />
+                </button>
+                <div
+                  className="grid min-w-0 flex-1 gap-3"
+                  style={{ gridTemplateColumns: `repeat(${filterPageSize}, minmax(0, 1fr))` }}
+                >
+                    {filters.slice(filterStart, filterStart + filterPageSize).map((f) => (
                       <button
                         key={f}
                         data-filter-option
@@ -379,7 +409,7 @@ export default function FeedPage() {
                         aria-pressed={activeFilter === f}
                         onClick={() => setActiveFilter(f)}
                         className={cn(
-                          "h-10 shrink-0 rounded-full border px-6 text-sm font-bold transition-colors whitespace-nowrap lg:w-full lg:min-w-0 lg:shrink",
+                          "h-10 min-w-0 rounded-full border px-3 text-sm font-bold transition-colors whitespace-nowrap sm:px-6",
                           activeFilter === f
                             ? "border-[#ff6a1a] bg-[#ff6a1a] text-white"
                             : "border-[#cbd8ee] bg-white text-[#07145f] hover:border-[#ff6a1a] hover:text-[#ff6a1a]",
@@ -388,8 +418,16 @@ export default function FeedPage() {
                         {f}
                       </button>
                     ))}
-                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => moveFilterRail(1)}
+                  disabled={filterStart + filterPageSize >= filters.length}
+                  className="flex size-10 shrink-0 items-center justify-center rounded-md bg-white text-[#07145f] transition-colors hover:text-[#ff6a1a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ff6a1a]/30 disabled:cursor-default disabled:opacity-35 lg:hidden"
+                  aria-label="Show next filters"
+                >
+                  <ChevronRightIcon className="size-5" />
+                </button>
               </div>
             </div>
 
@@ -462,9 +500,6 @@ export default function FeedPage() {
                         <div className="flex flex-wrap items-center gap-2">
                           <Badge className={cn("border-0 text-[10px] font-extrabold uppercase hover:bg-transparent", style.bg, style.text)}>
                             {categoryLabel(post.category)}
-                          </Badge>
-                          <Badge variant="outline" className={cn("text-[10px] font-bold", validationColors[post.validation_status])}>
-                            {validationLabels[post.validation_status]}
                           </Badge>
                         </div>
                         <h2 className="mt-1 truncate text-lg font-extrabold text-[#07145f]">{post.title}</h2>

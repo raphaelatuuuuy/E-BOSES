@@ -91,7 +91,11 @@ export async function disableBrowserNotifications() {
 export async function showBrowserNotification(item: NotificationItem) {
   if (!browserNotificationsSupported() || Notification.permission !== "granted") return
   const registration = await registerNotificationWorker()
-  const url = item.emergency_id ? "/dashboard/emergencies" : item.concern_id ? `/dashboard/reports/${item.concern_id}` : "/dashboard"
+  const url = item.emergency_id
+    ? `/dashboard/emergency-history?alert=${item.emergency_public_id || item.emergency_id}`
+    : item.concern_id
+      ? `/dashboard/reports/${item.concern_public_id || item.concern_id}`
+      : "/dashboard/home"
   registration?.active?.postMessage({
     type: "eboses.show-notification",
     payload: {

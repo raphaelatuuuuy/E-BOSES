@@ -144,8 +144,18 @@ RESIDENCE_PROOF_UPLOAD_PROFILE = UploadValidationProfile(
     allowed_extensions=frozenset(ALLOWED_PROOF_EXTENSIONS),
     max_size=MAX_PROOF_FILE_SIZE,
 )
-CONCERN_MEDIA_UPLOAD_PROFILE = RESIDENCE_PROOF_UPLOAD_PROFILE
-EMERGENCY_MEDIA_UPLOAD_PROFILE = RESIDENCE_PROOF_UPLOAD_PROFILE
+CONCERN_MEDIA_UPLOAD_PROFILE = UploadValidationProfile(
+    label="Report attachment",
+    allowed_mime_types=frozenset(ALLOWED_PROOF_MIME_TYPES),
+    allowed_extensions=frozenset(ALLOWED_PROOF_EXTENSIONS),
+    max_size=MAX_PROOF_FILE_SIZE,
+)
+EMERGENCY_MEDIA_UPLOAD_PROFILE = UploadValidationProfile(
+    label="Emergency attachment",
+    allowed_mime_types=frozenset(ALLOWED_PROOF_MIME_TYPES),
+    allowed_extensions=frozenset(ALLOWED_PROOF_EXTENSIONS),
+    max_size=MAX_PROOF_FILE_SIZE,
+)
 _SIGNATURE_MIME_TYPES = {
     b"\xff\xd8\xff": "image/jpeg",
     b"\x89PNG\r\n\x1a\n": "image/png",

@@ -34,6 +34,8 @@ def user_has_role_permission(user, permission):
         return False
     if user.is_superuser:
         return True
+    if not user.is_active or user.status != User.Status.VERIFIED:
+        return False
     return permission in ROLE_PERMISSIONS.get(user.role, set())
 
 
@@ -43,6 +45,21 @@ class HasRolePermission(BasePermission):
     def has_permission(self, request, view):
         required = getattr(view, "required_permission", self.required_permission)
         return bool(required and user_has_role_permission(request.user, required))
+
+
+class IsVerifiedAccount(BasePermission):
+    """Require an active verified account for operational application APIs."""
+
+    message = "Your account must be verified before you can use this feature."
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(
+            user
+            and user.is_authenticated
+            and user.is_active
+            and (user.is_superuser or user.status == User.Status.VERIFIED)
+        )
 
 
 class IsStaffOrSuperuser(BasePermission):

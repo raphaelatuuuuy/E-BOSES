@@ -1,31 +1,41 @@
 from django.conf import settings
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated
+
 from .models import BrowserPushSubscription, Notification
 from .serializers import BrowserPushSubscriptionSerializer, NotificationSerializer
+from .tickets import issue_websocket_ticket
 
 
-def notification_alerts_enabled(user):
-    settings_obj = getattr(user, "resident_settings", None)
-    return settings_obj is None or settings_obj.push_alerts
+class RealtimeTicketView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response({"ticket": issue_websocket_ticket(request.user), "expires_in": 60})
 
 
 class NotificationListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        if not notification_alerts_enabled(request.user):
-            return Response([])
-
         unread_only = request.query_params.get("unread_only", "").lower() in ("true", "1")
         qs = Notification.objects.filter(recipient=request.user)
         if unread_only:
             qs = qs.filter(is_read=False)
-        page = int(request.query_params.get("page", 1))
-        page_size = int(request.query_params.get("page_size", 20))
+        notification_type = request.query_params.get("type", "").strip()
+        if notification_type:
+            qs = qs.filter(type=notification_type)
+        try:
+            page = max(1, int(request.query_params.get("page", 1)))
+            page_size = min(100, max(1, int(request.query_params.get("page_size", 20))))
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Page and page size must be whole numbers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         start = (page - 1) * page_size
         end = start + page_size
         qs = qs.order_by("-created_at")[start:end]
@@ -36,9 +46,6 @@ class NotificationUnreadCountView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        if not notification_alerts_enabled(request.user):
-            return Response({"count": 0})
-
         count = Notification.objects.filter(recipient=request.user, is_read=False).count()
         return Response({"count": count})
 
@@ -83,3 +90,4 @@ class BrowserPushSubscriptionView(APIView):
             return Response({"endpoint": ["This field is required."]}, status=status.HTTP_400_BAD_REQUEST)
         BrowserPushSubscription.objects.filter(user=request.user, endpoint=endpoint).update(is_active=False)
         return Response(status=status.HTTP_204_NO_CONTENT)
+from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated

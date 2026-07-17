@@ -57,12 +57,18 @@ def broadcast_notification(notification) -> None:
 
 def notification_url(notification) -> str:
     if notification.emergency_id:
+        if notification.recipient.role == notification.recipient.Role.RESIDENT:
+            return f"/dashboard/emergency-history?alert={notification.emergency.public_id}"
         return "/dashboard/emergencies"
     if notification.concern_id:
-        return f"/dashboard/reports/{notification.concern_id}"
+        return f"/dashboard/reports/{notification.concern.public_id}"
     return "/dashboard"
 
 def send_browser_push(notification, payload: dict | None = None) -> None:
+    if not _push_alerts_enabled(notification.recipient):
+        return
+    if notification.concern_id and not _report_updates_enabled(notification.concern):
+        return
     public_key = getattr(settings, "WEB_PUSH_PUBLIC_KEY", "")
     private_key = getattr(settings, "WEB_PUSH_PRIVATE_KEY", "")
     if not public_key or not private_key:
@@ -117,9 +123,6 @@ def create_notification(*, concern: Concern, type: str) -> object | None:
     """Create a notification for the report's reporter."""
     from .models import Notification
 
-    if not _report_updates_enabled(concern):
-        return None
-
     notification = Notification.objects.create(
         recipient=concern.reporter,
         concern=concern,
@@ -137,9 +140,6 @@ def create_emergency_notification(*, alert, type: str, recipient=None, title: st
     from .models import Notification
 
     recipient = recipient or alert.reporter
-    if not _push_alerts_enabled(recipient):
-        return None
-
     notification = Notification.objects.create(
         recipient=recipient,
         emergency=alert,
@@ -159,6 +159,7 @@ def notify_emergency_status(alert, *, type: str, body: str = "") -> None:
         "routed": Notification.Type.EMERGENCY_ROUTED,
         "acknowledged": Notification.Type.EMERGENCY_ACKNOWLEDGED,
         "en_route": Notification.Type.EMERGENCY_EN_ROUTE,
+        "nearby": Notification.Type.EMERGENCY_NEARBY,
         "arrived": Notification.Type.EMERGENCY_ARRIVED,
         "resolved": Notification.Type.EMERGENCY_RESOLVED,
         "cancelled": Notification.Type.EMERGENCY_CANCELLED,
@@ -176,7 +177,8 @@ def notify_status_change(concern: Concern) -> None:
     type_map = {
         Concern.Status.SUBMITTED: Notification.Type.SUBMITTED,
         Concern.Status.UNDER_REVIEW: Notification.Type.UNDER_REVIEW,
-        Concern.Status.IN_PROGRESS: Notification.Type.ASSIGNED,
+        Concern.Status.ASSIGNED: Notification.Type.ASSIGNED,
+        Concern.Status.IN_PROGRESS: Notification.Type.IN_PROGRESS,
         Concern.Status.RESOLVED: Notification.Type.RESOLVED,
         Concern.Status.REJECTED: Notification.Type.REJECTED,
     }

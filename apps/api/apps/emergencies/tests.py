@@ -7,11 +7,11 @@ from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.utils import timezone
-from PIL import Image
+from PIL import Image, ImageDraw
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from apps.accounts.models import ResidentProfile
+from apps.accounts.models import AuditLog, ResidentProfile
 from apps.notifications.models import Notification
 
 from .models import EmergencyAlert, EmergencyAppeal, EmergencyEscalation, EmergencyLocationPing, EmergencyMedia, EmergencyResponderAssignment, EmergencyStatusEvent, MapGeometry
@@ -25,7 +25,11 @@ TEST_CHANNEL_LAYERS = {
 
 def png_bytes():
     output = BytesIO()
-    Image.new("RGB", (1, 1), color=(255, 0, 0)).save(output, format="PNG")
+    image = Image.new("RGB", (640, 480), color=(240, 244, 248))
+    drawing = ImageDraw.Draw(image)
+    drawing.rectangle((70, 70, 570, 410), fill=(190, 210, 230), outline=(20, 55, 90), width=8)
+    drawing.line((100, 350, 280, 170, 440, 300, 540, 130), fill=(190, 45, 45), width=16)
+    image.save(output, format="PNG")
     return output.getvalue()
 
 def png_upload(name="emergency.png", content=None):
@@ -70,8 +74,8 @@ class EmergencyAPITests(APITestCase):
             {
                 "type": EmergencyAlert.Type.MEDICAL,
                 "note": "Chest pain near the covered court.",
-                "latitude": "14.6500000",
-                "longitude": "121.1100000",
+                "latitude": "14.6515000",
+                "longitude": "121.1207000",
                 "address": "Covered court",
             },
             format="json",
@@ -87,8 +91,7 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(active_response.status_code, status.HTTP_200_OK)
         self.assertEqual(active_response.data["id"], alert.pk)
         self.assertEqual(active_response.data["status"], EmergencyAlert.Status.SUBMITTED)
-        self.assertEqual(alert.status_events.count(), 1)
-        self.assertEqual(alert.status_events.get().status, EmergencyAlert.Status.SUBMITTED)
+        self.assertTrue(alert.status_events.filter(status=EmergencyAlert.Status.SUBMITTED).exists())
 
     def test_non_resident_roles_cannot_create_emergency(self):
         User = get_user_model()
@@ -105,8 +108,8 @@ class EmergencyAPITests(APITestCase):
                 "/api/emergencies/",
                 {
                     "type": EmergencyAlert.Type.MEDICAL,
-                    "latitude": "14.6500000",
-                    "longitude": "121.1100000",
+                    "latitude": "14.6515000",
+                    "longitude": "121.1207000",
                     "address": "Covered court",
                 },
                 format="json",
@@ -132,30 +135,31 @@ class EmergencyAPITests(APITestCase):
         self.assertIn("Location must be inside Barangay Marikina Heights", str(response.data))
         self.assertFalse(EmergencyAlert.objects.filter(address="Outside boundary").exists())
 
-    def test_duplicate_emergency_media_is_rejected_without_creating_alert(self):
+    def test_duplicate_optional_media_is_skipped_without_blocking_alert(self):
         response = self.client.post(
             "/api/emergencies/",
             {
                 "type": EmergencyAlert.Type.MEDICAL,
-                "latitude": "14.6500000",
-                "longitude": "121.1100000",
+                "latitude": "14.6515000",
+                "longitude": "121.1207000",
                 "address": "Covered court",
                 "media": [png_upload("first.png"), png_upload("second.png")],
             },
             format="multipart",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("duplicate media upload detected", response.data["media"][0])
-        self.assertFalse(EmergencyAlert.objects.filter(address="Covered court").exists())
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        alert = EmergencyAlert.objects.get(pk=response.data["id"])
+        self.assertEqual(alert.media.count(), 1)
+        self.assertIn("second.png: duplicate attachment was skipped.", alert.media_warnings)
 
     def test_emergency_media_hash_is_stored(self):
         response = self.client.post(
             "/api/emergencies/",
             {
                 "type": EmergencyAlert.Type.MEDICAL,
-                "latitude": "14.6500000",
-                "longitude": "121.1100000",
+                "latitude": "14.6515000",
+                "longitude": "121.1207000",
                 "address": "Covered court",
                 "media": png_upload("hash.png"),
             },
@@ -165,6 +169,55 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         media = EmergencyAlert.objects.get(pk=response.data["id"]).media.get()
         self.assertEqual(len(media.sha256_hash), 64)
+
+    def test_emergency_media_preview_is_authorized_and_raw_access_is_audited(self):
+        response = self.client.post(
+            "/api/emergencies/",
+            {
+                "type": EmergencyAlert.Type.MEDICAL,
+                "latitude": "14.6515000",
+                "longitude": "121.1207000",
+                "address": "Covered court",
+                "media": png_upload("authorized.png"),
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        media = EmergencyAlert.objects.get(pk=response.data["id"]).media.get()
+
+        preview = self.client.get(f"/api/emergencies/media/{media.pk}/preview/")
+        raw = self.client.get(f"/api/emergencies/media/{media.pk}/raw/")
+        self.client.force_authenticate(self.other)
+        forbidden = self.client.get(f"/api/emergencies/media/{media.pk}/preview/")
+
+        self.assertEqual(preview.status_code, status.HTTP_200_OK)
+        self.assertEqual(preview["Content-Type"], "image/jpeg")
+        self.assertTrue(b"".join(preview.streaming_content).startswith(b"\xff\xd8"))
+        self.assertEqual(raw.status_code, status.HTTP_200_OK)
+        self.assertEqual(forbidden.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="media.raw_accessed",
+                actor=self.resident,
+                metadata__media_type="emergency_media",
+                metadata__object_id=media.pk,
+            ).exists()
+        )
+
+    def test_resident_emergency_history_only_returns_own_alerts(self):
+        alert = self.create_alert()
+        EmergencyAlert.objects.create(
+            reporter=self.other,
+            type=EmergencyAlert.Type.FIRE,
+            latitude="14.6516000",
+            longitude="121.1208000",
+            address="Other resident alert",
+        )
+
+        response = self.client.get("/api/emergencies/mine/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in response.data], [alert.pk])
 
     def test_emergency_create_records_resident_notification(self):
         alert = self.create_alert()
@@ -180,6 +233,9 @@ class EmergencyAPITests(APITestCase):
             phone_number="+639360000009",
             password="pass",
             status=get_user_model().Status.VERIFIED,
+            current_latitude="14.6516000",
+            current_longitude="121.1208000",
+            location_updated_at=timezone.now(),
         )
         ResidentProfile.objects.create(
             user=self.resident,
@@ -210,8 +266,8 @@ class EmergencyAPITests(APITestCase):
             "/api/emergencies/",
             {
                 "type": EmergencyAlert.Type.FIRE,
-                "latitude": "14.6500000",
-                "longitude": "121.1100000",
+                "latitude": "14.6515000",
+                "longitude": "121.1207000",
                 "address": "Second alert",
             },
             format="json",
@@ -247,7 +303,7 @@ class EmergencyAPITests(APITestCase):
         ack_response = self.client.post(f"/api/emergencies/{alert.pk}/acknowledge/", {}, format="json")
         ping_response = self.client.post(
             f"/api/emergencies/{alert.pk}/location-pings/",
-            {"latitude": "14.6510000", "longitude": "121.1110000", "accuracy": 8.2},
+            {"latitude": "14.6516000", "longitude": "121.1208000", "accuracy": 8.2},
             format="json",
         )
 
@@ -277,8 +333,9 @@ class EmergencyAPITests(APITestCase):
             status=User.Status.VERIFIED,
             responder_unit=User.ResponderUnit.BHW,
             is_on_duty=True,
-            current_latitude="14.6600000",
-            current_longitude="121.1200000",
+            current_latitude="14.6560000",
+            current_longitude="121.1250000",
+            location_updated_at=timezone.now(),
         )
         bhw_near = User.objects.create_user(
             email="bhw-near@example.com",
@@ -288,9 +345,19 @@ class EmergencyAPITests(APITestCase):
             status=User.Status.VERIFIED,
             responder_unit=User.ResponderUnit.BHW,
             is_on_duty=True,
-            current_latitude="14.6510000",
-            current_longitude="121.1110000",
+            current_latitude="14.6516000",
+            current_longitude="121.1208000",
+            location_updated_at=timezone.now(),
         )
+        for responder, first_name in ((bhw_far, "Far"), (bhw_near, "Near")):
+            ResidentProfile.objects.create(
+                user=responder,
+                first_name=first_name,
+                last_name="Responder",
+                date_of_birth="1990-01-01",
+                address="Marikina Heights",
+                barangay="Marikina Heights",
+            )
         User.objects.create_user(
             email="tanod-near@example.com",
             phone_number="+639360000012",
@@ -299,8 +366,9 @@ class EmergencyAPITests(APITestCase):
             status=User.Status.VERIFIED,
             responder_unit=User.ResponderUnit.TANOD,
             is_on_duty=True,
-            current_latitude="14.6501000",
-            current_longitude="121.1101000",
+            current_latitude="14.6515500",
+            current_longitude="121.1207500",
+            location_updated_at=timezone.now(),
         )
 
         alert = self.create_alert()
@@ -320,8 +388,8 @@ class EmergencyAPITests(APITestCase):
             {
                 "is_on_duty": True,
                 "responder_unit": get_user_model().ResponderUnit.TANOD,
-                "latitude": "14.6510000",
-                "longitude": "121.1110000",
+                "latitude": "14.6516000",
+                "longitude": "121.1208000",
             },
             format="json",
         )
@@ -377,8 +445,17 @@ class EmergencyAPITests(APITestCase):
             status=User.Status.VERIFIED,
             responder_unit=User.ResponderUnit.BHW,
             is_on_duty=True,
-            current_latitude="14.6510000",
-            current_longitude="121.1110000",
+            current_latitude="14.6516000",
+            current_longitude="121.1208000",
+            location_updated_at=timezone.now(),
+        )
+        ResidentProfile.objects.create(
+            user=backup,
+            first_name="Backup",
+            last_name="Responder",
+            date_of_birth="1990-01-01",
+            address="Marikina Heights",
+            barangay="Marikina Heights",
         )
         assignment = EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
         assignment.assigned_at = timezone.now() - timedelta(minutes=10)
@@ -388,9 +465,14 @@ class EmergencyAPITests(APITestCase):
         self.client.force_authenticate(self.official)
 
         response = self.client.post("/api/emergencies/escalate-overdue/", {"minutes": 5}, format="json")
+        repeated_response = self.client.post("/api/emergencies/escalate-overdue/", {"minutes": 5}, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(repeated_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(repeated_response.data, [])
         self.assertEqual(EmergencyEscalation.objects.filter(alert=alert, escalated_to=backup).count(), 1)
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ESCALATED)
         self.assertTrue(alert.assignments.filter(responder=backup).exists())
         self.assertTrue(Notification.objects.filter(recipient=backup, type=Notification.Type.EMERGENCY_ESCALATED).exists())
         self.assertTrue(Notification.objects.filter(recipient=self.resident, type=Notification.Type.EMERGENCY_ESCALATED).exists())
@@ -451,7 +533,7 @@ class EmergencyAPITests(APITestCase):
 
         response = self.client.post(
             f"/api/emergencies/{alert.pk}/location-pings/",
-            {"latitude": "14.6510000", "longitude": "121.1110000"},
+            {"latitude": "14.6516000", "longitude": "121.1208000"},
             format="json",
         )
 
@@ -460,8 +542,11 @@ class EmergencyAPITests(APITestCase):
     def test_arrival_and_resolve_close_emergency(self):
         alert = self.create_alert()
         EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
+        alert.status = EmergencyAlert.Status.ROUTED
+        alert.save(update_fields=["status", "updated_at"])
         self.client.force_authenticate(self.responder)
 
+        acknowledge_response = self.client.post(f"/api/emergencies/{alert.pk}/acknowledge/", {}, format="json")
         arrived_response = self.client.post(f"/api/emergencies/{alert.pk}/arrived/", {}, format="json")
         resolve_response = self.client.post(
             f"/api/emergencies/{alert.pk}/resolve/",
@@ -469,6 +554,7 @@ class EmergencyAPITests(APITestCase):
             format="json",
         )
 
+        self.assertEqual(acknowledge_response.status_code, status.HTTP_200_OK)
         self.assertEqual(arrived_response.status_code, status.HTTP_200_OK)
         self.assertEqual(resolve_response.status_code, status.HTTP_200_OK)
         alert.refresh_from_db()
@@ -507,7 +593,7 @@ class EmergencyAPITests(APITestCase):
 
         response = self.client.post(
             f"/api/emergencies/{alert.pk}/location-pings/",
-            {"latitude": "14.6510000", "longitude": "121.1110000"},
+            {"latitude": "14.6516000", "longitude": "121.1208000"},
             format="json",
         )
         message = async_to_sync(asyncio.wait_for)(channel_layer.receive(channel_name), timeout=1)
@@ -519,9 +605,10 @@ class EmergencyAPITests(APITestCase):
     def test_official_live_map_snapshot_is_official_only(self):
         alert = self.create_alert()
         self.responder.is_on_duty = True
-        self.responder.current_latitude = "14.6510000"
-        self.responder.current_longitude = "121.1110000"
-        self.responder.save(update_fields=["is_on_duty", "current_latitude", "current_longitude", "updated_at"])
+        self.responder.current_latitude = "14.6516000"
+        self.responder.current_longitude = "121.1208000"
+        self.responder.location_updated_at = timezone.now()
+        self.responder.save(update_fields=["is_on_duty", "current_latitude", "current_longitude", "location_updated_at", "updated_at"])
         EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
 
         self.client.force_authenticate(self.resident)
@@ -584,14 +671,14 @@ class EmergencyAPITests(APITestCase):
 
         response = self.client.post(
             "/api/locations/ping/",
-            {"latitude": "14.6510000", "longitude": "121.1110000", "accuracy": 8, "source": "active_session"},
+            {"latitude": "14.6516000", "longitude": "121.1208000", "accuracy": 8, "source": "active_session"},
             format="json",
         )
         message = async_to_sync(asyncio.wait_for)(channel_layer.receive(channel_name), timeout=1)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.resident.refresh_from_db()
-        self.assertEqual(str(self.resident.current_latitude), "14.6510000")
+        self.assertEqual(str(self.resident.current_latitude), "14.6516000")
         self.assertEqual(message["type"], "live_map.update")
         self.assertEqual(message["payload"]["type"], "location.updated")
         self.assertEqual(message["payload"]["payload"]["person"]["id"], self.resident.pk)

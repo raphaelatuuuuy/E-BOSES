@@ -35,7 +35,7 @@ import {
 import { resolveEmergency } from "@/features/dashboard/emergency-api"
 import { Topbar } from "@/features/dashboard/components/topbar"
 import { usePageTitle } from "@/hooks/use-page-title"
-import { getAccessToken, websocketUrl } from "@/lib/api"
+import { websocketTicket, websocketUrl } from "@/lib/api"
 
 import type leaflet from "leaflet"
 
@@ -54,7 +54,7 @@ const defaultLayers: Record<LayerKey, boolean> = {
   routes: true,
 }
 
-const activeConcernStatuses = new Set(["submitted", "under_review", "in_progress", "appealed"])
+const activeConcernStatuses = new Set(["submitted", "under_review", "assigned", "in_progress", "appealed"])
 const activeEmergencyStatuses = new Set(["submitted", "routed", "acknowledged", "en_route", "nearby", "arrived"])
 
 function validCoord(lat?: string | null, lng?: string | null) {
@@ -480,15 +480,25 @@ export default function AlertsMapPage() {
   }, [])
 
   useEffect(() => {
-    const accessToken = getAccessToken() ?? ""
-    if (!accessToken) return
     let socket: WebSocket | null = null
     let reconnectTimer: number | undefined
     let closed = false
 
-    function connect() {
+    async function connect() {
       setSocketState("Connecting")
-      socket = new WebSocket(websocketUrl(`/ws/dashboard/live-map/?token=${encodeURIComponent(accessToken)}`))
+      try {
+        const ticket = await websocketTicket()
+        if (closed) return
+        socket = new WebSocket(
+          websocketUrl(`/ws/dashboard/live-map/?ticket=${encodeURIComponent(ticket)}`),
+        )
+      } catch {
+        if (!closed) {
+          setSocketState("Reconnecting")
+          reconnectTimer = window.setTimeout(() => void connect(), 5000)
+        }
+        return
+      }
       socket.onopen = () => setSocketState("Live")
       socket.onmessage = (event) => {
         try {
@@ -501,13 +511,13 @@ export default function AlertsMapPage() {
       socket.onclose = () => {
         if (!closed) {
           setSocketState("Reconnecting")
-          reconnectTimer = window.setTimeout(connect, 5000)
+          reconnectTimer = window.setTimeout(() => void connect(), 5000)
         }
       }
       socket.onerror = () => socket?.close()
     }
 
-    connect()
+    void connect()
     return () => {
       closed = true
       if (reconnectTimer) window.clearTimeout(reconnectTimer)

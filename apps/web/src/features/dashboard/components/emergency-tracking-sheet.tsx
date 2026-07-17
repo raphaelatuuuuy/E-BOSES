@@ -12,8 +12,12 @@ import { toast } from "sonner"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
-import { getAccessToken, websocketUrl } from "@/lib/api"
-import { createEmergencyAppeal, getEmergency, type EmergencyAlert, type EmergencyStatus } from "@/features/dashboard/emergency-api"
+import { websocketTicket, websocketUrl } from "@/lib/api"
+import { cancelEmergency, createEmergencyAppeal, getEmergency, type EmergencyAlert, type EmergencyStatus } from "@/features/dashboard/emergency-api"
+import {
+  AuthenticatedMediaImage,
+  openAuthenticatedMedia,
+} from "@/features/dashboard/components/authenticated-media"
 
 import type leaflet from "leaflet"
 
@@ -69,34 +73,26 @@ function formatEta(meters: number) {
   return `ETA ${minutes} min`
 }
 
-function activeStepIndex(status: EmergencyStatus) {
-  if (status === "submitted") return 0
-  if (status === "routed" || status === "acknowledged") return 1
-  if (status === "en_route" || status === "nearby") return 2
-  return 3
-}
-
 function EmergencyTrackingMap({ alert }: { alert: EmergencyAlert }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
+  const leafletRef = useRef<typeof leaflet | null>(null)
+  const responderMarkerRef = useRef<leaflet.Marker | null>(null)
+  const routeRef = useRef<leaflet.Polyline | null>(null)
+  const accuracyRef = useRef<leaflet.Circle | null>(null)
+  const [mapReady, setMapReady] = useState(0)
   const lastLocation = alert.current_assignment?.last_location
 
   useEffect(() => {
     let cancelled = false
-    let map: leaflet.Map | null = null
 
     async function init() {
       const L = await import("leaflet")
       await import("leaflet/dist/leaflet.css")
       if (cancelled || !containerRef.current) return
-
       const resident: leaflet.LatLngTuple = [Number(alert.latitude), Number(alert.longitude)]
-      const responder: leaflet.LatLngTuple | null = lastLocation
-        ? [Number(lastLocation.latitude), Number(lastLocation.longitude)]
-        : null
-
-      mapRef.current?.remove()
-      map = L.map(containerRef.current, {
+      leafletRef.current = L
+      const map = L.map(containerRef.current, {
         center: resident,
         zoom: 16,
         zoomControl: false,
@@ -115,36 +111,53 @@ function EmergencyTrackingMap({ alert }: { alert: EmergencyAlert }) {
         iconAnchor: [14, 14],
       })
       L.marker(resident, { icon: residentIcon }).addTo(map)
-
-      if (responder) {
-        const responderIcon = L.divIcon({
-          className: "",
-          html: `<div style="width:28px;height:28px;border-radius:999px;background:#2447b3;border:4px solid white;box-shadow:0 10px 22px rgba(36,71,179,.35),0 0 0 10px rgba(36,71,179,.14)"></div>`,
-          iconSize: [28, 28],
-          iconAnchor: [14, 14],
-        })
-        L.polyline([responder, resident], {
-          color: "#ef4444",
-          dashArray: "8 8",
-          opacity: 0.9,
-          weight: 4,
-        }).addTo(map)
-        L.marker(responder, { icon: responderIcon }).addTo(map)
-        map.fitBounds(L.latLngBounds([resident, responder]), { padding: [40, 40], maxZoom: 17 })
-      } else {
-        map.setView(resident, 16)
-      }
-
+      setMapReady((value) => value + 1)
       requestAnimationFrame(() => map?.invalidateSize())
     }
 
     void init()
     return () => {
       cancelled = true
-      map?.remove()
-      if (mapRef.current === map) mapRef.current = null
+      mapRef.current?.remove()
+      mapRef.current = null
+      leafletRef.current = null
+      responderMarkerRef.current = null
+      routeRef.current = null
+      accuracyRef.current = null
     }
-  }, [alert.id, alert.latitude, alert.longitude, lastLocation?.latitude, lastLocation?.longitude])
+  }, [alert.id, alert.latitude, alert.longitude])
+
+  useEffect(() => {
+    const map = mapRef.current
+    const L = leafletRef.current
+    if (!map || !L || !lastLocation) return
+    const resident: leaflet.LatLngTuple = [Number(alert.latitude), Number(alert.longitude)]
+    const responder: leaflet.LatLngTuple = [Number(lastLocation.latitude), Number(lastLocation.longitude)]
+    const responderIcon = L.divIcon({
+      className: "",
+      html: `<div style="width:28px;height:28px;border-radius:999px;background:#2447b3;border:4px solid white;box-shadow:0 4px 8px rgba(36,71,179,.32),0 0 0 8px rgba(36,71,179,.12)"></div>`,
+      iconSize: [28, 28],
+      iconAnchor: [14, 14],
+    })
+    if (responderMarkerRef.current) responderMarkerRef.current.setLatLng(responder)
+    else responderMarkerRef.current = L.marker(responder, { icon: responderIcon }).addTo(map)
+    if (routeRef.current) routeRef.current.setLatLngs([responder, resident])
+    else routeRef.current = L.polyline([responder, resident], { color: "#ff8133", opacity: 0.9, weight: 4 }).addTo(map)
+    const accuracy = Math.max(0, lastLocation.accuracy ?? 0)
+    if (accuracyRef.current) {
+      accuracyRef.current.setLatLng(responder)
+      accuracyRef.current.setRadius(accuracy)
+    } else if (accuracy > 0) {
+      accuracyRef.current = L.circle(responder, {
+        radius: accuracy,
+        color: "#2447b3",
+        fillColor: "#2447b3",
+        fillOpacity: 0.08,
+        weight: 1,
+      }).addTo(map)
+    }
+    map.fitBounds(L.latLngBounds([resident, responder]), { padding: [44, 44], maxZoom: 17 })
+  }, [alert.latitude, alert.longitude, lastLocation?.latitude, lastLocation?.longitude, lastLocation?.accuracy, mapReady])
 
   return <div ref={containerRef} className="h-full w-full bg-[#dbeafe]" />
 }
@@ -163,13 +176,15 @@ export function EmergencyTrackingSheet({
   const [alert, setAlert] = useState<EmergencyAlert | null>(initialAlert)
   const [appealReason, setAppealReason] = useState("")
   const [appealBusy, setAppealBusy] = useState(false)
+  const [cancelBusy, setCancelBusy] = useState(false)
+  const [connectionState, setConnectionState] = useState<"connecting" | "live" | "degraded">("connecting")
 
   useEffect(() => {
     setAlert(initialAlert)
   }, [initialAlert])
 
   useEffect(() => {
-    if (!open || !alert || !activeStatuses.includes(alert.status)) return
+    if (!open || !alert || !activeStatuses.includes(alert.status) || connectionState !== "degraded") return
     const interval = window.setInterval(async () => {
       try {
         const nextAlert = await getEmergency(alert.id)
@@ -180,20 +195,32 @@ export function EmergencyTrackingSheet({
       }
     }, 5000)
     return () => window.clearInterval(interval)
-  }, [open, alert?.id, alert?.status])
+  }, [open, alert?.id, alert?.status, connectionState, onAlertChange])
 
   useEffect(() => {
     if (!open || !alert || !activeStatuses.includes(alert.status)) return
-    const accessToken = getAccessToken() ?? ""
-    if (!accessToken) return
-
     let socket: WebSocket | null = null
     let reconnectTimer: number | undefined
     let closedByComponent = false
+    let reconnectAttempts = 0
 
-    function connect() {
+    async function connect() {
       if (!alert) return
-      socket = new WebSocket(websocketUrl(`/ws/emergencies/${alert.id}/tracking/?token=${encodeURIComponent(accessToken)}`))
+      setConnectionState("connecting")
+      try {
+        const ticket = await websocketTicket()
+        if (closedByComponent) return
+        socket = new WebSocket(websocketUrl(`/ws/emergencies/${alert.id}/tracking/?ticket=${encodeURIComponent(ticket)}`))
+      } catch {
+        setConnectionState("degraded")
+        reconnectAttempts += 1
+        reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** reconnectAttempts))
+        return
+      }
+      socket.onopen = () => {
+        reconnectAttempts = 0
+        setConnectionState("live")
+      }
       socket.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data) as { type?: string; payload?: EmergencyAlert }
@@ -205,8 +232,10 @@ export function EmergencyTrackingSheet({
         }
       }
       socket.onclose = () => {
+        setConnectionState("degraded")
         if (!closedByComponent) {
-          reconnectTimer = window.setTimeout(connect, 5000)
+          reconnectAttempts += 1
+          reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** reconnectAttempts))
         }
       }
       socket.onerror = () => {
@@ -214,7 +243,7 @@ export function EmergencyTrackingSheet({
       }
     }
 
-    connect()
+    void connect()
     return () => {
       closedByComponent = true
       if (reconnectTimer) window.clearTimeout(reconnectTimer)
@@ -231,8 +260,10 @@ export function EmergencyTrackingSheet({
       )
     : null
   const pendingAppeal = alert?.appeals?.find((appeal) => appeal.status === "submitted")
+  const locationIsStale = Boolean(lastLocation && Date.now() - new Date(lastLocation.created_at).getTime() > 20_000)
   const canAppeal = Boolean(alert && ["resolved", "cancelled"].includes(alert.status) && !pendingAppeal)
   const appealHistory = alert?.appeals ?? []
+  const canCancel = Boolean(alert && ["submitted", "routed"].includes(alert.status))
 
   async function submitAppeal() {
     if (!alert || !appealReason.trim()) return
@@ -251,11 +282,26 @@ export function EmergencyTrackingSheet({
     }
   }
 
+  async function cancelActiveEmergency() {
+    if (!alert || !canCancel) return
+    setCancelBusy(true)
+    try {
+      const nextAlert = await cancelEmergency(alert.id)
+      setAlert(nextAlert)
+      onAlertChange?.(nextAlert)
+      toast.success("Emergency alert cancelled")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not cancel the emergency alert.")
+    } finally {
+      setCancelBusy(false)
+    }
+  }
+
   if (!open || !alert) return null
 
   return (
     <div className="fixed inset-0 z-[260] flex items-end justify-center bg-black/40 p-0 md:items-center md:p-6">
-      <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-2xl border border-border bg-background shadow-2xl md:rounded-2xl">
+      <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-lg border border-border bg-background md:rounded-lg">
         <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
           <div>
             <div className="flex items-center gap-2">
@@ -279,22 +325,25 @@ export function EmergencyTrackingSheet({
         </div>
 
         <div className="overflow-y-auto p-5">
-          <div className="overflow-hidden rounded-xl border border-border">
+          <div className="overflow-hidden rounded-lg border border-border">
             <div className="relative h-64 bg-muted">
               <EmergencyTrackingMap alert={alert} />
               <div className="absolute left-3 top-3 flex flex-col gap-2">
                 <Badge className="bg-red-600 text-white">Your location</Badge>
                 {lastLocation ? <Badge className="bg-[#2447b3] text-white">Responder GPS {formatTime(lastLocation.created_at)}</Badge> : null}
+                <Badge className={connectionState === "live" ? "bg-emerald-700 text-white" : "bg-amber-600 text-white"}>
+                  {connectionState === "live" ? "Live updates" : connectionState === "connecting" ? "Connecting" : "Polling fallback"}
+                </Badge>
               </div>
-              <div className="absolute bottom-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white/95 px-3 py-2 text-xs font-semibold text-[#07145f] shadow-sm">
-                <span>{lastLocation ? "Responder path fallback" : "Waiting for responder GPS ping"}</span>
+              <div className="absolute bottom-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white/95 px-3 py-2 text-xs font-semibold text-[#020c4e] shadow-sm">
+                <span>{locationIsStale ? "Responder GPS is temporarily stale" : lastLocation ? `GPS accuracy ${Math.round(lastLocation.accuracy ?? 0)} m` : "Waiting for responder GPS ping"}</span>
                 {distance !== null ? <span className="text-red-600">{formatDistance(distance)} · {formatEta(distance)}</span> : null}
               </div>
             </div>
           </div>
 
           <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <div className="rounded-xl border border-border bg-card p-4">
+            <div className="rounded-lg border border-border bg-card p-4">
               <div className="flex items-start gap-3">
                 <div className="flex size-9 items-center justify-center rounded-full bg-primary/10 text-primary">
                   <NavigationIcon className="size-4" />
@@ -308,7 +357,7 @@ export function EmergencyTrackingSheet({
               </div>
             </div>
 
-            <div className="rounded-xl border border-border bg-card p-4">
+            <div className="rounded-lg border border-border bg-card p-4">
               <div className="flex items-start gap-3">
                 <div className="flex size-9 items-center justify-center rounded-full bg-blue-100 text-blue-700">
                   <ShieldCheckIcon className="size-4" />
@@ -323,51 +372,30 @@ export function EmergencyTrackingSheet({
             </div>
           </div>
 
-          <div className="rounded-xl border border-border bg-card p-4">
+          <div className="mt-4 rounded-lg border border-border bg-card p-4">
             <p className="text-sm font-semibold text-foreground">Status timeline</p>
-            {(function EmergencyStatusLine() {
-              const steps = [
-                { key: "submitted" as const, label: "Submitted" },
-                { key: "routed" as const, label: "Routed" },
-                { key: "en_route" as const, label: "En route" },
-                { key: "arrived" as const, label: "Arrived" },
-              ]
-              const currentIdx = activeStepIndex(alert.status)
-
-              return (
-                <div className="relative mt-4 grid grid-cols-4 gap-2">
-                  <div className="absolute left-[10%] right-[10%] top-[13px] h-0.5 bg-[#dfe7f5]" />
-                  <div className="absolute left-[10%] right-[10%] top-[13px] h-0.5">
-                    <div
-                      className="h-full bg-[#07145f]"
-                      style={{ width: `${(Math.min(currentIdx, 3) / 3) * 100}%` }}
-                    />
+            <ol className="mt-4 space-y-3">
+              {alert.status_events.map((event, index) => (
+                <li key={event.id} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-start gap-2">
+                  <span className={cn(
+                    "flex size-7 items-center justify-center rounded-full border text-[11px] font-extrabold",
+                    index === alert.status_events.length - 1
+                      ? "border-[#ff6a1a] bg-[#ff6a1a] text-white"
+                      : "border-[#07145f] bg-[#07145f] text-white",
+                  )}>
+                    <CheckIcon className="size-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-extrabold text-[#07145f]">{statusLabels[event.status]}</p>
+                    <p className="mt-0.5 text-xs leading-5 text-muted-foreground">{event.note}</p>
                   </div>
-                  {steps.map((step, index) => {
-                    const done = index < currentIdx
-                    const current = index === currentIdx
-                    return (
-                      <div key={step.key} className="relative z-10 flex flex-col items-center text-center">
-                        <div
-                          className={cn(
-                            "flex size-7 items-center justify-center rounded-full border text-[11px] font-extrabold",
-                            done && "border-[#07145f] bg-[#07145f] text-white",
-                            current && "border-[#ff6a1a] bg-[#ff6a1a] text-white",
-                            !done && !current && "border-[#cbd8ee] bg-white text-[#68739c]",
-                          )}
-                        >
-                          {done ? <CheckIcon className="size-4" /> : index + 1}
-                        </div>
-                        <p className="mt-2 text-[11px] font-extrabold text-[#07145f]">{step.label}</p>
-                      </div>
-                    )
-                  })}
-                </div>
-              )
-            })()}
+                  <time className="text-[11px] text-muted-foreground">{formatTime(event.created_at)}</time>
+                </li>
+              ))}
+            </ol>
           </div>
 
-          <div className="mt-4 rounded-xl border border-border bg-card p-4">
+          <div className="mt-4 rounded-lg border border-border bg-card p-4">
             <div className="flex items-start gap-3">
               <MapPinIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
               <div className="min-w-0">
@@ -376,6 +404,35 @@ export function EmergencyTrackingSheet({
               </div>
             </div>
           </div>
+
+          {alert.media.length > 0 ? (
+            <div className="mt-4 rounded-lg border border-border bg-card p-4">
+              <p className="text-sm font-semibold text-foreground">Emergency evidence</p>
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {alert.media.map((media) => (
+                  <button
+                    key={media.id}
+                    type="button"
+                    className="overflow-hidden rounded-lg border border-border text-left"
+                    onClick={() => {
+                      void openAuthenticatedMedia(media.raw_url, media.original_filename).catch((error) => {
+                        toast.error(error instanceof Error ? error.message : "Could not open emergency evidence.")
+                      })
+                    }}
+                  >
+                    <AuthenticatedMediaImage
+                      src={media.preview_url}
+                      alt={media.original_filename}
+                      className="h-24 w-full object-cover"
+                    />
+                    <span className="block truncate px-2 py-2 text-[11px] font-semibold text-foreground">
+                      {media.original_filename}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           {appealHistory.length ? (
             <div className="mt-4 rounded-xl border border-border bg-card p-4">
@@ -421,7 +478,12 @@ export function EmergencyTrackingSheet({
           ) : null}
         </div>
 
-        <div className="flex items-center justify-end gap-3 border-t border-border px-5 py-4">
+        <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-4">
+          {canCancel ? (
+            <Button type="button" variant="outline" disabled={cancelBusy} onClick={() => void cancelActiveEmergency()} className="border-red-200 text-red-700 hover:bg-red-50">
+              {cancelBusy ? "Cancelling" : "Cancel alert"}
+            </Button>
+          ) : <span />}
           <Button type="button" onClick={() => onOpenChange(false)}>
             Keep tracking
           </Button>

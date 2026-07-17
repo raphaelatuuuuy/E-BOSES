@@ -60,3 +60,5 @@ apps/api/private_media/raw/concern-media/2026/07
 apps/api/model_weights/*.pt
 apps/api/model_weights/*.onnx
 apps/api/private_media/raw/
+New_UI_Reference/
+id/

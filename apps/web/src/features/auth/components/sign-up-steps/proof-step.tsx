@@ -309,7 +309,7 @@ export function ProofStep({
             requiredSides.length > 1 ? side : null,
           )
           // Highlight only the side that failed OCR, not every row.
-          setSideErrors((prev) => {
+          setSideErrors(() => {
             const next = requiredSides.map(() => null as string | null)
             next[i] = message
             return next

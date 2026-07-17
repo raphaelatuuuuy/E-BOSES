@@ -1,17 +1,20 @@
 from datetime import timedelta
+from math import asin, cos, radians, sin, sqrt
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.permissions import user_has_role_permission
+from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated, user_has_role_permission
+from apps.accounts.media_services import log_raw_media_access
 from apps.accounts.services import (
     create_audit_log,
     phash_file,
@@ -45,6 +48,7 @@ from .serializers import (
     EmergencyLocationPingCreateSerializer,
     EmergencyNoteSerializer,
 )
+from .media_services import ensure_emergency_media_preview, user_can_access_emergency_media
 
 
 ACTIVE_STATUSES = {
@@ -110,9 +114,22 @@ def create_status_event(alert, status_value, actor=None, note=""):
 def location_distance_score(alert, responder):
     if responder.current_latitude is None or responder.current_longitude is None:
         return None
-    lat_delta = float(alert.latitude) - float(responder.current_latitude)
-    lng_delta = float(alert.longitude) - float(responder.current_longitude)
-    return (lat_delta * lat_delta) + (lng_delta * lng_delta)
+    return distance_meters(
+        alert.latitude,
+        alert.longitude,
+        responder.current_latitude,
+        responder.current_longitude,
+    )
+
+
+def distance_meters(latitude_a, longitude_a, latitude_b, longitude_b):
+    earth_radius = 6_371_000
+    lat_a = radians(float(latitude_a))
+    lat_b = radians(float(latitude_b))
+    delta_lat = lat_b - lat_a
+    delta_lng = radians(float(longitude_b) - float(longitude_a))
+    value = sin(delta_lat / 2) ** 2 + cos(lat_a) * cos(lat_b) * sin(delta_lng / 2) ** 2
+    return 2 * earth_radius * asin(sqrt(value))
 
 def preferred_units_for(alert_type):
     return UNIT_BY_EMERGENCY_TYPE.get(alert_type, set())
@@ -129,26 +146,34 @@ def responder_unit_label(unit):
 
 def find_auto_responder(alert):
     User = get_user_model()
+    preferred_units = preferred_units_for(alert.type)
+    if not preferred_units:
+        return None
+    fresh_after = timezone.now() - timedelta(minutes=2)
     responders = list(
         User.objects
         .filter(
             role=User.Role.FIRST_RESPONDER,
             status=User.Status.VERIFIED,
             is_on_duty=True,
+            responder_unit__in=preferred_units,
+            resident_profile__barangay=alert.barangay,
             current_latitude__isnull=False,
             current_longitude__isnull=False,
+            location_updated_at__gte=fresh_after,
         )
         .select_related("resident_profile")
     )
     if not responders:
         return None
-    preferred_units = preferred_units_for(alert.type)
-    preferred = [responder for responder in responders if responder.responder_unit in preferred_units]
-    candidates = preferred or responders
-    return min(candidates, key=lambda responder: location_distance_score(alert, responder) or float("inf"))
+    return min(responders, key=lambda responder: location_distance_score(alert, responder) or float("inf"))
 
 def find_backup_responder(alert):
     User = get_user_model()
+    preferred_units = preferred_units_for(alert.type)
+    if not preferred_units:
+        return None
+    fresh_after = timezone.now() - timedelta(minutes=2)
     assigned_ids = alert.assignments.values_list("responder_id", flat=True)
     responders = list(
         User.objects
@@ -156,22 +181,133 @@ def find_backup_responder(alert):
             role=User.Role.FIRST_RESPONDER,
             status=User.Status.VERIFIED,
             is_on_duty=True,
+            responder_unit__in=preferred_units,
+            resident_profile__barangay=alert.barangay,
             current_latitude__isnull=False,
             current_longitude__isnull=False,
+            location_updated_at__gte=fresh_after,
         )
         .exclude(pk__in=assigned_ids)
         .select_related("resident_profile")
     )
     if not responders:
         return None
-    preferred_units = preferred_units_for(alert.type)
-    preferred = [responder for responder in responders if responder.responder_unit in preferred_units]
-    candidates = preferred or responders
-    return min(candidates, key=lambda responder: location_distance_score(alert, responder) or float("inf"))
+    return min(responders, key=lambda responder: location_distance_score(alert, responder) or float("inf"))
+
+
+def escalate_overdue_assignments(*, minutes, triggered_by=None, audit_request_meta=None):
+    cutoff = timezone.now() - timedelta(minutes=minutes)
+    assignment_ids = list(
+        EmergencyResponderAssignment.objects.filter(
+            status=EmergencyResponderAssignment.Status.ASSIGNED,
+            assigned_at__lte=cutoff,
+            alert__status__in=ACTIVE_STATUSES,
+            escalations__isnull=True,
+        ).values_list("pk", flat=True)
+    )
+    escalations = []
+    for assignment_id in assignment_ids:
+        with transaction.atomic():
+            assignment = (
+                EmergencyResponderAssignment.objects
+                .select_for_update()
+                .select_related("alert", "alert__reporter", "responder")
+                .get(pk=assignment_id)
+            )
+            if assignment.status != EmergencyResponderAssignment.Status.ASSIGNED or assignment.escalations.exists():
+                continue
+            alert = assignment.alert
+            backup = find_backup_responder(alert)
+            reason = f"No responder acknowledgement within {minutes} minutes."
+            if backup:
+                EmergencyResponderAssignment.objects.update_or_create(
+                    alert=alert,
+                    responder=backup,
+                    defaults={"status": EmergencyResponderAssignment.Status.ASSIGNED},
+                )
+                assignment.status = EmergencyResponderAssignment.Status.ESCALATED
+                assignment.save(update_fields=["status"])
+                alert.status = EmergencyAlert.Status.ROUTED
+                alert.status_version += 1
+                alert.save(update_fields=["status", "status_version", "updated_at"])
+                create_emergency_notification(
+                    alert=alert,
+                    recipient=backup,
+                    type=Notification.Type.EMERGENCY_ESCALATED,
+                    title=f"Escalated {alert.type} emergency",
+                    body="You were assigned because the first responder did not acknowledge.",
+                )
+            escalation = EmergencyEscalation.objects.create(
+                alert=alert,
+                previous_assignment=assignment,
+                escalated_to=backup,
+                triggered_by=triggered_by,
+                reason=reason,
+            )
+            create_status_event(alert, EmergencyAlert.Status.ROUTED, triggered_by, f"Escalated: {reason}")
+            create_emergency_notification(
+                alert=alert,
+                recipient=alert.reporter,
+                type=Notification.Type.EMERGENCY_ESCALATED,
+                title="Emergency response escalated",
+                body="Barangay has escalated your emergency to keep response moving.",
+            )
+            create_audit_log(
+                "emergency.escalated",
+                actor=triggered_by,
+                target_user=alert.reporter,
+                metadata={
+                    "alert_id": alert.pk,
+                    "assignment_id": assignment.pk,
+                    "backup_id": getattr(backup, "pk", None),
+                    "automatic": triggered_by is None,
+                },
+                request_meta=audit_request_meta or {},
+            )
+            escalations.append(escalation)
+    return escalations
+
+
+def notify_officials_no_responder(alert):
+    User = get_user_model()
+    officials = User.objects.filter(
+        role=User.Role.BARANGAY_OFFICIAL,
+        status=User.Status.VERIFIED,
+        resident_profile__barangay=alert.barangay,
+    )
+    for official in officials:
+        create_emergency_notification(
+            alert=alert,
+            recipient=official,
+            type=Notification.Type.EMERGENCY_ESCALATED,
+            title="Emergency needs manual dispatch",
+            body=f"No fresh on-duty {alert.type} responder was available in {alert.barangay}.",
+        )
+
+
+def privacy_safe_user_name(user):
+    profile = getattr(user, "resident_profile", None)
+    if not profile:
+        return "assigned responder"
+    first_name = profile.first_name.strip()
+    last_initial = profile.last_name.strip()[:1]
+    return f"{first_name} {last_initial}.".strip() if last_initial else first_name
+
 
 def auto_route_alert(alert, request):
     responder = find_auto_responder(alert)
     if not responder:
+        EmergencyEscalation.objects.create(
+            alert=alert,
+            reason="No fresh same-barangay responder from the required unit was available.",
+        )
+        create_status_event(
+            alert,
+            alert.status,
+            None,
+            "Awaiting manual dispatch from the barangay emergency desk.",
+        )
+        notify_officials_no_responder(alert)
         return None
     EmergencyResponderAssignment.objects.update_or_create(
         alert=alert,
@@ -179,9 +315,16 @@ def auto_route_alert(alert, request):
         defaults={"status": EmergencyResponderAssignment.Status.ASSIGNED},
     )
     alert.status = EmergencyAlert.Status.ROUTED
-    alert.save(update_fields=["status", "updated_at"])
+    alert.routed_at = timezone.now()
+    alert.status_version += 1
+    alert.save(update_fields=["status", "routed_at", "status_version", "updated_at"])
     unit_label = responder_unit_label(responder.responder_unit)
-    create_status_event(alert, EmergencyAlert.Status.ROUTED, None, f"Auto-routed to {unit_label} {responder.email}.")
+    create_status_event(
+        alert,
+        EmergencyAlert.Status.ROUTED,
+        None,
+        f"Auto-routed to {unit_label} {privacy_safe_user_name(responder)}.",
+    )
     notify_emergency_status(alert, type=EmergencyAlert.Status.ROUTED, body=f"A {unit_label} responder has been assigned to your emergency.")
     create_emergency_notification(
         alert=alert,
@@ -204,16 +347,33 @@ def create_witness_notifications(alert):
     if not reporter_profile or not reporter_profile.barangay:
         return
     User = get_user_model()
+    fresh_after = timezone.now() - timedelta(minutes=5)
+    radius_meters = int(getattr(settings, "EMERGENCY_WITNESS_RADIUS_METERS", 250))
     witnesses = (
         User.objects
-        .filter(status=User.Status.VERIFIED, role=User.Role.RESIDENT, resident_profile__barangay=reporter_profile.barangay)
+        .filter(
+            status=User.Status.VERIFIED,
+            role=User.Role.RESIDENT,
+            resident_profile__barangay=reporter_profile.barangay,
+            current_latitude__isnull=False,
+            current_longitude__isnull=False,
+            location_updated_at__gte=fresh_after,
+        )
         .exclude(pk=alert.reporter_id)
     )
     for witness in witnesses:
+        distance = distance_meters(
+            alert.latitude,
+            alert.longitude,
+            witness.current_latitude,
+            witness.current_longitude,
+        )
+        if distance > radius_meters:
+            continue
         WitnessNotification.objects.get_or_create(
             alert=alert,
             resident=witness,
-            defaults={"distance_meters": 0},
+            defaults={"distance_meters": round(distance)},
         )
         create_emergency_notification(
             alert=alert,
@@ -249,6 +409,46 @@ def serialize_alert(alert, request):
     return EmergencyAlertSerializer(alert, context={"request": request}).data
 
 
+class EmergencyMediaPreviewView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        media = get_object_or_404(
+            EmergencyMedia.objects.select_related("alert", "alert__reporter"),
+            pk=pk,
+        )
+        if not user_can_access_emergency_media(request.user, media):
+            return Response(
+                {"detail": "You do not have permission to access this emergency media."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        preview = ensure_emergency_media_preview(media)
+        return FileResponse(preview.open("rb"), content_type="image/jpeg")
+
+
+class EmergencyMediaRawView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        media = get_object_or_404(
+            EmergencyMedia.objects.select_related("alert", "alert__reporter"),
+            pk=pk,
+        )
+        if not user_can_access_emergency_media(request.user, media):
+            return Response(
+                {"detail": "You do not have permission to access this emergency media."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        log_raw_media_access(
+            actor=request.user,
+            target_user=media.alert.reporter,
+            media_type="emergency_media",
+            object_id=media.pk,
+            request_meta=request_meta(request),
+        )
+        return FileResponse(media.file.open("rb"), content_type=media.mime_type or "application/octet-stream")
+
+
 class EmergencyCreateView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
@@ -258,6 +458,16 @@ class EmergencyCreateView(APIView):
         touch_last_seen(request.user)
         if not user_has_role_permission(request.user, "emergencies.create"):
             return Response({"detail": "Only residents can send emergency alerts."}, status=status.HTTP_403_FORBIDDEN)
+        serializer = EmergencyCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        client_request_id = serializer.validated_data.get("client_request_id")
+        if client_request_id:
+            existing = EmergencyAlert.objects.filter(
+                reporter=request.user,
+                client_request_id=client_request_id,
+            ).first()
+            if existing:
+                return Response(serialize_alert(existing, request))
         active_alert = (
             EmergencyAlert.objects
             .filter(reporter=request.user, status__in=ACTIVE_STATUSES)
@@ -272,32 +482,36 @@ class EmergencyCreateView(APIView):
                 },
                 status=status.HTTP_409_CONFLICT,
             )
-
-        serializer = EmergencyCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
         media_files = []
         media_hashes = set()
+        media_warnings = []
         for uploaded_file in request.FILES.getlist("media"):
             try:
                 validated_file = validate_emergency_media_file(uploaded_file)
             except ValidationError as exc:
-                return Response({"media": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+                media_warnings.append(f"{uploaded_file.name}: attachment was skipped ({exc}).")
+                continue
             media_hash = sha256_file(validated_file)
             raw_content = validated_file.read(); validated_file.seek(0)
             media_phash = phash_file(raw_content)
             if media_hash in media_hashes or EmergencyMedia.objects.filter(sha256_hash=media_hash).exists():
-                return Response({"media": [f"{uploaded_file.name}: duplicate media upload detected."]}, status=status.HTTP_400_BAD_REQUEST)
+                media_warnings.append(f"{uploaded_file.name}: duplicate attachment was skipped.")
+                continue
             media_hashes.add(media_hash)
             media_files.append((uploaded_file, validated_file, media_hash, media_phash))
 
         profile = getattr(request.user, "resident_profile", None)
         alert = EmergencyAlert.objects.create(
+            client_request_id=client_request_id,
             reporter=request.user,
             type=serializer.validated_data["type"],
             note=serializer.validated_data.get("note", ""),
             latitude=serializer.validated_data["latitude"],
             longitude=serializer.validated_data["longitude"],
+            location_source=serializer.validated_data.get("location_source", "gps"),
+            location_accuracy=serializer.validated_data.get("location_accuracy"),
             address=serializer.validated_data.get("address", ""),
+            media_warnings=media_warnings,
             barangay=getattr(profile, "barangay", "") or "Marikina Heights",
         )
         create_status_event(alert, EmergencyAlert.Status.SUBMITTED, request.user, "Emergency alert submitted.")
@@ -341,6 +555,15 @@ class MyActiveEmergencyView(APIView):
         if not alert:
             return Response(status=status.HTTP_204_NO_CONTENT)
         return Response(serialize_alert(alert, request))
+
+
+class MyEmergencyHistoryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        alerts = EmergencyAlert.objects.filter(reporter=request.user).order_by("-created_at")
+        return Response([serialize_alert(alert, request) for alert in alerts])
 
 
 class EmergencyQueueView(APIView):
@@ -550,27 +773,11 @@ class EmergencyEscalateOverdueView(APIView):
             return Response({"detail": "You do not have permission to escalate emergencies."}, status=status.HTTP_403_FORBIDDEN)
         serializer = EmergencyEscalateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        cutoff = timezone.now() - timedelta(minutes=serializer.validated_data["minutes"])
-        overdue = EmergencyResponderAssignment.objects.select_related("alert", "responder").filter(
-            status=EmergencyResponderAssignment.Status.ASSIGNED,
-            assigned_at__lte=cutoff,
-            alert__status__in=ACTIVE_STATUSES,
+        escalations = escalate_overdue_assignments(
+            minutes=serializer.validated_data["minutes"],
+            triggered_by=request.user,
+            audit_request_meta=request_meta(request),
         )
-        escalations = []
-        for assignment in overdue:
-            alert = assignment.alert
-            backup = find_backup_responder(alert)
-            reason = f"No acknowledgement from {assignment.responder.email} within {serializer.validated_data['minutes']} minutes."
-            if backup:
-                EmergencyResponderAssignment.objects.update_or_create(alert=alert, responder=backup, defaults={"status": EmergencyResponderAssignment.Status.ASSIGNED})
-                alert.status = EmergencyAlert.Status.ROUTED
-                alert.save(update_fields=["status", "updated_at"])
-                create_emergency_notification(alert=alert, recipient=backup, type=Notification.Type.EMERGENCY_ESCALATED, title=f"Escalated {alert.type} emergency", body="You were assigned because the first responder has not acknowledged.")
-            escalation = EmergencyEscalation.objects.create(alert=alert, previous_assignment=assignment, escalated_to=backup, triggered_by=request.user, reason=reason)
-            create_status_event(alert, EmergencyAlert.Status.ROUTED, request.user, f"Escalated: {reason}")
-            create_emergency_notification(alert=alert, recipient=alert.reporter, type=Notification.Type.EMERGENCY_ESCALATED, title="Emergency response escalated", body="Barangay has escalated your emergency to keep response moving.")
-            create_audit_log("emergency.escalated", actor=request.user, target_user=alert.reporter, metadata={"alert_id": alert.pk, "assignment_id": assignment.pk, "backup_id": getattr(backup, "pk", None)}, request_meta=request_meta(request))
-            escalations.append(escalation)
         return Response(EmergencyEscalationSerializer(escalations, many=True, context={"request": request}).data)
 
 class AssignmentActionMixin:
@@ -578,15 +785,25 @@ class AssignmentActionMixin:
     assignment_status = None
     timestamp_field = None
     default_note = ""
+    allowed_statuses = set()
 
     def post(self, request, pk):
         touch_last_seen(request.user)
         alert = get_object_or_404(EmergencyAlert, pk=pk)
-        assignment = alert.assignments.filter(responder=request.user).first()
+        if self.allowed_statuses and alert.status not in self.allowed_statuses:
+            return Response(
+                {"status": [f"This emergency cannot move from {alert.status} to {self.target_status}."]},
+                status=status.HTTP_409_CONFLICT,
+            )
+        assignment = alert.assignments.filter(responder=request.user).exclude(
+            status=EmergencyResponderAssignment.Status.ESCALATED,
+        ).first()
         if not assignment and not can_manage_emergencies(request.user):
             return Response({"detail": "You are not assigned to this emergency."}, status=status.HTTP_403_FORBIDDEN)
         if not assignment:
-            assignment = alert.assignments.order_by("-assigned_at", "-id").first()
+            assignment = alert.assignments.exclude(
+                status=EmergencyResponderAssignment.Status.ESCALATED,
+            ).order_by("-assigned_at", "-id").first()
         if not assignment:
             return Response({"detail": "No responder has been assigned yet."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -602,11 +819,12 @@ class AssignmentActionMixin:
             assignment.save(update_fields=["status"])
 
         alert.status = self.target_status
+        alert.status_version += 1
         if self.target_status == EmergencyAlert.Status.RESOLVED:
             alert.resolved_at = timezone.now()
-            alert.save(update_fields=["status", "resolved_at", "updated_at"])
+            alert.save(update_fields=["status", "status_version", "resolved_at", "updated_at"])
         else:
-            alert.save(update_fields=["status", "updated_at"])
+            alert.save(update_fields=["status", "status_version", "updated_at"])
         create_status_event(alert, self.target_status, request.user, note)
         notify_emergency_status(alert, type=self.target_status, body=note)
         return Response(serialize_alert(alert, request))
@@ -618,6 +836,7 @@ class EmergencyAcknowledgeView(AssignmentActionMixin, APIView):
     assignment_status = EmergencyResponderAssignment.Status.ACKNOWLEDGED
     timestamp_field = "acknowledged_at"
     default_note = "Responder acknowledged the emergency."
+    allowed_statuses = {EmergencyAlert.Status.ROUTED}
 
 
 class EmergencyArrivedView(AssignmentActionMixin, APIView):
@@ -626,6 +845,11 @@ class EmergencyArrivedView(AssignmentActionMixin, APIView):
     assignment_status = EmergencyResponderAssignment.Status.ARRIVED
     timestamp_field = "arrived_at"
     default_note = "Responder arrived at the location."
+    allowed_statuses = {
+        EmergencyAlert.Status.ACKNOWLEDGED,
+        EmergencyAlert.Status.EN_ROUTE,
+        EmergencyAlert.Status.NEARBY,
+    }
 
 
 class EmergencyResolveView(AssignmentActionMixin, APIView):
@@ -633,6 +857,7 @@ class EmergencyResolveView(AssignmentActionMixin, APIView):
     target_status = EmergencyAlert.Status.RESOLVED
     assignment_status = EmergencyResponderAssignment.Status.RESOLVED
     default_note = "Emergency resolved."
+    allowed_statuses = {EmergencyAlert.Status.ARRIVED}
 
 
 class EmergencyLocationPingView(APIView):
@@ -641,7 +866,9 @@ class EmergencyLocationPingView(APIView):
     def post(self, request, pk):
         touch_last_seen(request.user)
         alert = get_object_or_404(EmergencyAlert, pk=pk)
-        assignment = alert.assignments.filter(responder=request.user).first()
+        assignment = alert.assignments.filter(responder=request.user).exclude(
+            status=EmergencyResponderAssignment.Status.ESCALATED,
+        ).first()
         if not assignment:
             return Response({"detail": "You are not assigned to this emergency."}, status=status.HTTP_403_FORBIDDEN)
         if alert.status not in ACTIVE_STATUSES:
@@ -657,11 +884,26 @@ class EmergencyLocationPingView(APIView):
         )
         if alert.status in {EmergencyAlert.Status.ACKNOWLEDGED, EmergencyAlert.Status.ROUTED}:
             alert.status = EmergencyAlert.Status.EN_ROUTE
-            alert.save(update_fields=["status", "updated_at"])
+            alert.status_version += 1
+            alert.save(update_fields=["status", "status_version", "updated_at"])
             assignment.status = EmergencyResponderAssignment.Status.EN_ROUTE
             assignment.save(update_fields=["status"])
             create_status_event(alert, EmergencyAlert.Status.EN_ROUTE, request.user, "Responder is on the way.")
             notify_emergency_status(alert, type=EmergencyAlert.Status.EN_ROUTE, body="Responder is on the way.")
         else:
-            broadcast_emergency_update(alert)
+            nearby_distance = int(getattr(settings, "EMERGENCY_NEARBY_DISTANCE_METERS", 100))
+            distance = distance_meters(
+                alert.latitude,
+                alert.longitude,
+                serializer.validated_data["latitude"],
+                serializer.validated_data["longitude"],
+            )
+            if alert.status == EmergencyAlert.Status.EN_ROUTE and distance <= nearby_distance:
+                alert.status = EmergencyAlert.Status.NEARBY
+                alert.status_version += 1
+                alert.save(update_fields=["status", "status_version", "updated_at"])
+                create_status_event(alert, EmergencyAlert.Status.NEARBY, request.user, "Responder is near your location.")
+                notify_emergency_status(alert, type=EmergencyAlert.Status.NEARBY, body="Responder is near your location.")
+            else:
+                broadcast_emergency_update(alert)
         return Response(serialize_alert(alert, request), status=status.HTTP_201_CREATED)

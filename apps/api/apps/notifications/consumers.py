@@ -3,18 +3,17 @@ from urllib.parse import parse_qs
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.contrib.auth import get_user_model
-from rest_framework_simplejwt.tokens import AccessToken
+
+from .tickets import consume_websocket_ticket
 
 
 @database_sync_to_async
-def get_user_from_token(token: str):
-    try:
-        access_token = AccessToken(token)
-        user_id = access_token["user_id"]
-    except Exception:
+def get_user_from_ticket(ticket: str):
+    user_id = consume_websocket_ticket(ticket)
+    if not user_id:
         return None
     User = get_user_model()
-    return User.objects.filter(pk=user_id).first()
+    return User.objects.filter(pk=user_id, is_active=True, status=User.Status.VERIFIED).first()
 
 
 @database_sync_to_async
@@ -31,11 +30,11 @@ class AuthenticatedJsonConsumer(AsyncJsonWebsocketConsumer):
 
     async def authenticate(self) -> bool:
         query_string = self.scope.get("query_string", b"").decode()
-        token = parse_qs(query_string).get("token", [""])[0]
-        if not token:
+        ticket = parse_qs(query_string).get("ticket", [""])[0]
+        if not ticket:
             await self.close(code=4401)
             return False
-        self.user = await get_user_from_token(token)
+        self.user = await get_user_from_ticket(ticket)
         if not self.user or not self.user.is_authenticated:
             await self.close(code=4401)
             return False

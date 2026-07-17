@@ -13,9 +13,9 @@ import {
 
 import { cn } from "@workspace/ui/lib/utils"
 import {
-  BoxAlertsIcon,
-  BoxHomeAlt2Icon,
-  BoxReportIcon,
+  SolarCommunityIcon,
+  SolarHomeIcon,
+  SolarReportsIcon,
 } from "@/features/dashboard/components/resident-nav-icons"
 import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
 import { useAuthSession } from "@/features/auth/auth-session"
@@ -59,10 +59,10 @@ export function MobileNav() {
           { label: "Profile", path: "/dashboard/profile", isAvatar: true },
         ]
       : [
-          { label: "Home", path: "/dashboard/home", NavIcon: BoxHomeAlt2Icon },
-          { label: "Report", path: "/dashboard/reports", NavIcon: BoxReportIcon },
+          { label: "Home", path: "/dashboard/home", NavIcon: SolarHomeIcon },
+          { label: "Community", path: "/dashboard/feed", NavIcon: SolarCommunityIcon },
           { label: "Report", path: null, isCenter: true, solidAlways: true },
-          { label: "Alerts", path: "/dashboard/feed", NavIcon: BoxAlertsIcon },
+          { label: "Reports", path: "/dashboard/reports", NavIcon: SolarReportsIcon },
           { label: "Profile", path: "/dashboard/profile", isAvatar: true },
         ]
 
@@ -70,12 +70,12 @@ export function MobileNav() {
 
   return (
     <>
-      <nav className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 md:hidden">
+      <nav className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 lg:hidden">
         <div
           className={cn(
-            "pointer-events-auto mx-auto mb-[max(0.5rem,env(safe-area-inset-bottom))] flex items-end justify-around",
+            "pointer-events-auto mx-auto flex min-h-[68px] items-end justify-around pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2",
             isResident
-              ? "mx-3 max-w-md rounded-[1.75rem] border-[1.5px] border-[#d0d0d0] bg-white/95 px-2 pb-2.5 pt-2 shadow-[0_8px_30px_rgba(15,23,42,0.12)] backdrop-blur"
+              ? "w-full border-t border-[#dfe3eb] bg-white px-2"
               : "mx-3 rounded-[2rem] border border-border/60 bg-white px-3 pb-3 pt-2 shadow-sm",
           )}
         >
@@ -91,13 +91,13 @@ export function MobileNav() {
                   key="create"
                   type="button"
                   onClick={() => setCreateOpen(true)}
-                  className="group -mt-6 flex flex-col items-center gap-1"
+                  className="group -mt-5 flex min-w-[3.25rem] flex-col items-center gap-1"
                 >
                   <div
                     className={cn(
-                      "flex items-center justify-center rounded-full text-white shadow-lg",
+                      "flex items-center justify-center rounded-full text-white shadow-sm",
                       isResident
-                        ? "size-12 bg-[#ff6a1a] shadow-orange-600/25"
+                        ? "size-12 bg-[#ff8133]"
                         : "size-12 bg-primary shadow-primary/30",
                     )}
                   >
@@ -151,7 +151,10 @@ export function MobileNav() {
                 >
                   <NavIcon
                     solid={active}
-                    className={active ? "text-[#ff6a1a]" : "text-neutral-500"}
+                    className={cn(
+                      "size-8",
+                      active ? "text-[#ff6a1a]" : "text-neutral-500",
+                    )}
                   />
                   <span
                     className={cn(

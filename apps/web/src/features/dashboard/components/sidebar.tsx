@@ -25,11 +25,10 @@ interface NavItem {
   icon: React.ElementType
 }
 
-/** Resident nav — text only (icons removed) */
 const residentNavItems: { label: string; path: string }[] = [
   { label: "Home", path: "/dashboard/home" },
-  { label: "Report", path: "/dashboard/reports" },
-  { label: "Alerts", path: "/dashboard/feed" },
+  { label: "My Reports", path: "/dashboard/reports" },
+  { label: "Emergency History", path: "/dashboard/emergency-history" },
 ]
 
 const officialNavItems: NavItem[] = [
@@ -129,14 +128,14 @@ function ResidentSidebar() {
                     to={item.path}
                     aria-current={active ? "page" : undefined}
                     className={cn(
-                      "group flex h-11 items-center rounded-lg px-2.5 text-[15px] font-light transition-[background-color,color,font-weight] duration-150",
-                      "hover:font-medium focus-visible:font-medium active:font-medium",
+                      "group flex h-11 items-center rounded-lg px-2.5 text-[16px] font-light transition-[colors,font-weight] duration-150",
+                      "hover:font-semibold focus-visible:font-semibold active:font-semibold",
                       active
-                        ? "bg-neutral-100 font-medium text-[#07145f]"
-                        : "text-neutral-700 hover:bg-neutral-50 hover:text-[#07145f] focus-visible:text-[#07145f]",
+                        ? "font-semibold text-[#07145f]"
+                        : "text-neutral-700 hover:text-[#07145f] focus-visible:text-[#07145f]",
                     )}
                   >
-                    <span className="leading-none">{item.label}</span>
+                    <span className="text-[16px] leading-none">{item.label}</span>
                   </Link>
                 </li>
               )
@@ -148,7 +147,7 @@ function ResidentSidebar() {
             <button
               type="button"
               onClick={() => setCreateOpen(true)}
-              className="flex h-11 w-full items-center justify-center rounded-full bg-[#ff6a1a] text-[15px] font-semibold tracking-wide text-white transition-colors hover:bg-[#e85f12] active:scale-[0.99]"
+              className="flex h-11 w-full items-center justify-center rounded-[9999px] bg-[#ff8133] text-[16px] font-semibold text-white transition-colors hover:bg-[#ea6f24] active:scale-[0.99]"
             >
               Report
             </button>
@@ -158,7 +157,12 @@ function ResidentSidebar() {
         <div className="mt-auto px-3 pb-5 pt-2">
           <Link
             to="/dashboard/settings"
-            className="flex h-10 items-center rounded-lg px-2.5 text-[15px] font-semibold text-neutral-600 transition-colors hover:bg-neutral-50 hover:text-[#07145f] focus-visible:text-[#07145f]"
+            className={cn(
+              "group flex h-10 items-center rounded-lg px-2.5 text-[16px] font-medium transition-colors",
+              isActive("/dashboard/settings")
+                ? "font-semibold text-[#07145f]"
+                : "text-neutral-600 hover:text-[#07145f] focus-visible:text-[#07145f]",
+            )}
           >
             Settings
           </Link>

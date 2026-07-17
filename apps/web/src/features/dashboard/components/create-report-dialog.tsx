@@ -1,85 +1,129 @@
-import { lazy, Suspense, useState, type DragEvent, type ReactNode } from "react"
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import {
-  ArrowLeftIcon,
-  ArrowRightIcon,
-  CheckIcon,
-  CloudUploadIcon,
-  FileTextIcon,
+  CircleEllipsisIcon,
+  GlobeIcon,
   ImageIcon,
-  InfoIcon,
-  LightbulbIcon,
-  LocateFixedIcon,
+  LayoutGridIcon,
+  LeafIcon,
   LockIcon,
   MapPinIcon,
+  PencilIcon,
   PlusIcon,
-  SearchIcon,
-  TrashIcon,
+  ShieldCheckIcon,
+  TrafficConeIcon,
   XIcon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
-import { createConcern, type Concern, type ConcernCategory } from "@/features/dashboard/api"
-import { Dialog, DialogBody, DialogFooter } from "@/features/dashboard/components/dialog"
+import { useAuthSession } from "@/features/auth/auth-session"
+import {
+  checkConcernMedia,
+  createConcern,
+  type Concern,
+  type ConcernCategory,
+  type ConcernVisibility,
+} from "@/features/dashboard/api"
+import { Dialog, DialogBody } from "@/features/dashboard/components/dialog"
 import { ReportStatusDialog, statusModeFromReport } from "@/features/dashboard/components/report-status-dialog"
 import { ApiError } from "@/lib/api"
 
-const LocationPicker = lazy(() => import("@/features/dashboard/components/location-picker"))
+const LocationPickerModal = lazy(() => import("@/features/dashboard/components/location-picker"))
 
 const concernConfig = [
-  { label: "Infrastructure", img: "/contents/infrastructure.png", desc: "Roads, utilities, buildings", value: "infrastructure", color: "amber" },
-  { label: "Environment", img: "/contents/environment.png", desc: "Pollution, waste, nature", value: "environment", color: "green" },
-  { label: "Public Safety", img: "/contents/public-safety.png", desc: "Stray animals,<br/>weapon, suspicious item", value: "public_safety", color: "blue" },
-  { label: "Others", img: "/contents/others.png", desc: "Any other concern", value: "others", color: "slate" },
+  {
+    label: "Infrastructure",
+    value: "infrastructure" as ConcernCategory,
+    desc: "Roads, utilities, buildings",
+    icon: TrafficConeIcon,
+  },
+  {
+    label: "Environment",
+    value: "environment" as ConcernCategory,
+    desc: "Pollution, waste, nature",
+    icon: LeafIcon,
+  },
+  {
+    label: "Public Safety",
+    value: "public_safety" as ConcernCategory,
+    desc: "Safety risks, suspicious activity",
+    icon: ShieldCheckIcon,
+  },
+  {
+    label: "Others",
+    value: "others" as ConcernCategory,
+    desc: "Any other concern",
+    icon: CircleEllipsisIcon,
+  },
 ] as const
 
 const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/jpg"]
 const ACCEPT_STRING = ".png,.jpg,.jpeg," + ALLOWED_TYPES.join(",")
-const MAX_FILE_SIZE = 10 * 1024 * 1024
+const MAX_FILE_SIZE = 2 * 1024 * 1024
 const MAX_FILES = 5
-const titleMax = 80
 const descriptionMax = 1500
+const DRAFT_DB = "eboses-resident-drafts"
+const DRAFT_STORE = "report-drafts"
+const DRAFT_KEY = "current-report"
 
-const concernCategoryMap: Record<string, ConcernCategory> = {
-  Infrastructure: "infrastructure",
-  Environment: "environment",
-  "Public Safety": "public_safety",
-  Others: "others",
+interface ReportDraft {
+  concern: string
+  title: string
+  description: string
+  address: string
+  visibility: ConcernVisibility
+  locationPin: {
+    lat: number
+    lng: number
+    accuracy?: number | null
+    source?: "gps" | "manual_pin"
+  } | null
 }
 
-function Stepper({ active }: { active: number }) {
-  const steps = ["Details", "Review", "Submit"]
-  return (
-    <div className="hidden items-start justify-center gap-3 md:flex">
-      {steps.map((step, index) => (
-        <div key={step} className="flex items-start gap-3">
-          <div className="flex flex-col items-center gap-2">
-            <div
-              className={cn(
-                "flex size-7 items-center justify-center rounded-full text-xs font-bold",
-                index < active && "bg-[#07145f] text-white",
-                index === active && "bg-[#ff6a1a] text-white",
-                index > active && "border border-[#cbd8ee] bg-white text-[#68739c]",
-              )}
-            >
-              {index < active ? <CheckIcon className="size-4" /> : index + 1}
-            </div>
-            <span className={cn("text-xs font-bold", index <= active ? "text-[#07145f]" : "text-[#68739c]")}>
-              {step}
-            </span>
-          </div>
-          {index < steps.length - 1 ? <div className={cn("mt-3 h-px w-20", index < active ? "bg-[#07145f]" : "bg-slate-200")} /> : null}
-        </div>
-      ))}
-    </div>
-  )
+function openDraftDatabase() {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(DRAFT_DB, 1)
+    request.onupgradeneeded = () => request.result.createObjectStore(DRAFT_STORE)
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
 }
 
-function formatFileSize(size: number) {
-  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`
-  return `${(size / 1024 / 1024).toFixed(1)} MB`
+async function readDraft() {
+  const database = await openDraftDatabase()
+  return new Promise<ReportDraft | undefined>((resolve, reject) => {
+    const request = database.transaction(DRAFT_STORE).objectStore(DRAFT_STORE).get(DRAFT_KEY)
+    request.onsuccess = () => resolve(request.result as ReportDraft | undefined)
+    request.onerror = () => reject(request.error)
+  }).finally(() => database.close())
+}
+
+async function writeDraft(draft: ReportDraft) {
+  const database = await openDraftDatabase()
+  await new Promise<void>((resolve, reject) => {
+    const request = database
+      .transaction(DRAFT_STORE, "readwrite")
+      .objectStore(DRAFT_STORE)
+      .put(draft, DRAFT_KEY)
+    request.onsuccess = () => resolve()
+    request.onerror = () => reject(request.error)
+  })
+  database.close()
+}
+
+async function deleteDraft() {
+  const database = await openDraftDatabase()
+  await new Promise<void>((resolve, reject) => {
+    const request = database
+      .transaction(DRAFT_STORE, "readwrite")
+      .objectStore(DRAFT_STORE)
+      .delete(DRAFT_KEY)
+    request.onsuccess = () => resolve()
+    request.onerror = () => reject(request.error)
+  })
+  database.close()
 }
 
 export function CreateReportDialog({
@@ -92,104 +136,218 @@ export function CreateReportDialog({
   trigger?: (open: () => void) => ReactNode
 } = {}) {
   const navigate = useNavigate()
+  const { user } = useAuthSession()
   const [internalOpen, setInternalOpen] = useState(false)
   const open = controlledOpen ?? internalOpen
   const setOpen = (value: boolean) => {
     setInternalOpen(value)
     onOpenChange?.(value)
   }
+
   const [concern, setConcern] = useState("")
-  const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
+  const [visibility, setVisibility] = useState<ConcernVisibility>("community")
+  const [visibilityMenuOpen, setVisibilityMenuOpen] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [locationOpen, setLocationOpen] = useState(false)
   const [address, setAddress] = useState("")
-  const [locationPin, setLocationPin] = useState<{ lat: number; lng: number; accuracy?: number | null } | null>(null)
+  const [addressPrimary, setAddressPrimary] = useState("")
+  const [addressSecondary, setAddressSecondary] = useState("")
+  const [locationPin, setLocationPin] = useState<{
+    lat: number
+    lng: number
+    accuracy?: number | null
+    source?: "gps" | "manual_pin"
+  } | null>(null)
   const [mediaFiles, setMediaFiles] = useState<File[]>([])
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [step, setStep] = useState<"details" | "review">("details")
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [isLocating, setIsLocating] = useState(false)
+  const [isCheckingMedia, setIsCheckingMedia] = useState(false)
   const [submittedReport, setSubmittedReport] = useState<Concern | null>(null)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const [draftRestored, setDraftRestored] = useState(false)
+  const clientRequestIdRef = useRef(crypto.randomUUID())
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const previewUrls = useMemo(
+    () => mediaFiles.map((file) => URL.createObjectURL(file)),
+    [mediaFiles],
+  )
 
-  function handleLocate() {
-    if (!navigator.geolocation) return
-    setIsLocating(true)
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude, longitude } = pos.coords
-        setLocationPin({ lat: latitude, lng: longitude })
-        setAddress(`Lat: ${latitude.toFixed(4)}, Lng: ${longitude.toFixed(4)}`)
-        setIsLocating(false)
-      },
-      () => setIsLocating(false),
-      { enableHighAccuracy: true, timeout: 10000 },
-    )
-  }
+  const displayName = user
+    ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "Resident"
+    : "Resident"
+  const letter = (
+    user?.firstName?.[0] ||
+    user?.lastName?.[0] ||
+    displayName[0] ||
+    "?"
+  ).toUpperCase()
+  const rawStreet = (user?.address || "").split(",")[0]?.trim() || ""
+  const userStreet =
+    !rawStreet || rawStreet.toLowerCase() === "pending" ? "" : rawStreet
+
+  useEffect(() => () => previewUrls.forEach((url) => URL.revokeObjectURL(url)), [previewUrls])
+
+  useEffect(() => {
+    if (!open || draftRestored) return
+    void readDraft()
+      .then((draft) => {
+        if (!draft) return
+        setConcern(draft.concern)
+        setDescription(draft.description)
+        setAddress(draft.address)
+        // Best-effort split for older drafts (single string)
+        const parts = draft.address.split(",").map((p) => p.trim())
+        setAddressPrimary(parts[0] || draft.address)
+        setAddressSecondary(parts.slice(1).join(", "))
+        setVisibility(draft.visibility)
+        setLocationPin(draft.locationPin)
+      })
+      .finally(() => setDraftRestored(true))
+  }, [open, draftRestored])
+
+  useEffect(() => {
+    if (!open || !draftRestored || (!concern && !description && !address && !locationPin)) return
+    const timeout = window.setTimeout(() => {
+      void writeDraft({
+        concern,
+        title: description.trim().slice(0, 80),
+        description,
+        address,
+        visibility,
+        locationPin,
+      })
+    }, 500)
+    return () => window.clearTimeout(timeout)
+  }, [open, draftRestored, concern, description, address, visibility, locationPin])
 
   function resetForm() {
     setConcern("")
-    setTitle("")
     setDescription("")
+    setVisibility("community")
     setAddress("")
+    setAddressPrimary("")
+    setAddressSecondary("")
     setLocationPin(null)
     setMediaFiles([])
     setPreviewUrl(null)
-    setStep("details")
     setFieldErrors({})
+    setMoreOpen(false)
+    setLocationOpen(false)
+    setVisibilityMenuOpen(false)
+    clientRequestIdRef.current = crypto.randomUUID()
+    setDraftRestored(false)
   }
 
   function validate() {
     const errors: Record<string, string> = {}
-    if (!concern) errors.concern = "Select a concern type."
-    if (!title.trim()) errors.title = "Enter a subject for your report."
+    if (!concern) errors.concern = "Choose a category."
     if (!description.trim()) errors.description = "Describe what happened."
-    if (description.trim().length < 20) errors.description = "Please provide at least 20 characters for context."
-    if (!address.trim()) errors.address = "Enter or pin a location."
+    if (description.trim().length < 20)
+      errors.description = "Please provide at least 20 characters for context."
+    if (!locationPin || !address.trim()) errors.address = "Pin a location for this report."
+    if (!mediaFiles.length) errors.media = "Add at least one clear photo as evidence."
     setFieldErrors(errors)
     return Object.keys(errors).length === 0
   }
 
-  function addFiles(files: File[]) {
+  /** Normalize media-check / API errors to clean user-facing text only */
+  function cleanMediaErrorMessage(raw: string): string {
+    let text = raw.trim()
+    // "filename.png: ['AI-generated media is not allowed.']"
+    const afterColon = text.includes(":") ? text.slice(text.lastIndexOf(":") + 1).trim() : text
+    text = afterColon || text
+    // "['message']" or '["message"]'
+    if (
+      (text.startsWith("[") && text.endsWith("]")) ||
+      (text.startsWith("('") && text.endsWith("')"))
+    ) {
+      text = text.replace(/^[\[(]+|[)\]]+$/g, "").trim()
+    }
+    text = text.replace(/^['"]+|['"]+$/g, "").trim()
+    return text || "This photo could not be validated."
+  }
+
+  function mediaErrorFromUnknown(error: unknown): string {
+    if (error instanceof ApiError && error.data && typeof error.data === "object") {
+      const data = error.data as Record<string, unknown>
+      const media = data.media
+      if (Array.isArray(media) && media.length > 0) {
+        return media
+          .map((item) => cleanMediaErrorMessage(String(item)))
+          .filter(Boolean)
+          .join(" ")
+      }
+      const detail = data.detail
+      if (typeof detail === "string") return cleanMediaErrorMessage(detail)
+    }
+    if (error instanceof Error && error.message) {
+      return cleanMediaErrorMessage(error.message)
+    }
+    return "This photo could not be validated."
+  }
+
+  async function addFiles(files: File[]) {
     const errors: string[] = []
     const valid: File[] = []
+    setIsCheckingMedia(true)
     for (const file of files) {
       if (!ALLOWED_TYPES.includes(file.type)) {
-        errors.push(`${file.name}: unsupported format.`)
+        errors.push("Unsupported format. Use JPG or PNG.")
         continue
       }
       if (file.size > MAX_FILE_SIZE) {
-        errors.push(`${file.name}: too large.`)
+        errors.push("File must be 2 MB or smaller.")
         continue
       }
-      valid.push(file)
+      if (
+        mediaFiles.some(
+          (existing) =>
+            existing.name === file.name &&
+            existing.size === file.size &&
+            existing.lastModified === file.lastModified,
+        )
+      ) {
+        errors.push("This file is already selected.")
+        continue
+      }
+      try {
+        const checkData = new FormData()
+        checkData.append("media", file)
+        await checkConcernMedia(checkData)
+        valid.push(file)
+      } catch (error) {
+        errors.push(mediaErrorFromUnknown(error))
+      }
     }
     setMediaFiles((prev) => [...prev, ...valid].slice(0, MAX_FILES))
-    if (errors.length) toast.error(errors[0])
-  }
-
-  function handleDrop(event: DragEvent<HTMLLabelElement>) {
-    event.preventDefault()
-    addFiles(Array.from(event.dataTransfer.files ?? []))
-  }
-
-  function goToReview() {
-    if (!validate()) return
-    setStep("review")
+    const unique = [...new Set(errors.filter(Boolean))]
+    setFieldErrors((current) => ({
+      ...current,
+      // Newline-separated so the UI can list every media check message
+      media: unique.length ? unique.join("\n") : "",
+    }))
+    setIsCheckingMedia(false)
   }
 
   async function handleSubmit() {
     if (!validate()) return
 
+    const title = description.trim().slice(0, 80)
     const formData = new FormData()
-    formData.append("title", title.trim())
+    formData.append("client_request_id", clientRequestIdRef.current)
+    formData.append("title", title)
     formData.append("description", description.trim())
-    formData.append("category", concernCategoryMap[concern] ?? "others")
-    formData.append("visibility", "community")
+    formData.append(
+      "category",
+      concernConfig.find((c) => c.label === concern)?.value ?? "others",
+    )
+    formData.append("visibility", visibility)
     formData.append("address", address.trim())
     if (locationPin) {
       formData.append("latitude", locationPin.lat.toFixed(7))
       formData.append("longitude", locationPin.lng.toFixed(7))
-      formData.append("location_source", "manual_pin")
+      formData.append("location_source", locationPin.source ?? "manual_pin")
       if (locationPin.accuracy !== undefined && locationPin.accuracy !== null) {
         formData.append("location_accuracy", String(locationPin.accuracy))
       }
@@ -199,24 +357,32 @@ export function CreateReportDialog({
     setIsSubmitting(true)
     try {
       const report = await createConcern(formData)
+      await deleteDraft()
       setSubmittedReport(report)
       setOpen(false)
       window.dispatchEvent(new Event("eboses:report-created"))
     } catch (submitError) {
-      toast.error(submitError instanceof ApiError ? submitError.message : "Could not submit report. Try again.")
+      if (submitError instanceof ApiError && submitError.data && typeof submitError.data === "object") {
+        const nextErrors: Record<string, string> = {}
+        for (const [key, value] of Object.entries(submitError.data)) {
+          const first = Array.isArray(value) ? value[0] : value
+          if (typeof first === "string") nextErrors[key] = first
+        }
+        setFieldErrors(nextErrors)
+      }
+      toast.error(
+        submitError instanceof ApiError
+          ? submitError.message
+          : "Could not submit report. Try again.",
+      )
     } finally {
       setIsSubmitting(false)
     }
   }
 
   const selectedConcern = concernConfig.find((item) => item.label === concern)
-  const selectedConcernImg = selectedConcern?.img ?? "/contents/others.png"
-  const reviewMapUrl = locationPin
-    ? `https://www.openstreetmap.org/export/embed.html?bbox=${locationPin.lng - 0.01}%2C${locationPin.lat - 0.01}%2C${locationPin.lng + 0.01}%2C${locationPin.lat + 0.01}&layer=mapnik&marker=${locationPin.lat}%2C${locationPin.lng}`
-    : ""
-
-  // Controlled usage (open + onOpenChange) opens from parent UI only — no stray default button.
   const isControlled = controlledOpen !== undefined
+  const hasMedia = mediaFiles.length > 0
 
   return (
     <>
@@ -224,74 +390,319 @@ export function CreateReportDialog({
         ? trigger(() => setOpen(true))
         : !isControlled
           ? (
-            <button
-              type="button"
-              onClick={() => setOpen(true)}
-              className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:text-primary"
-            >
-              <PlusIcon className="size-5" />
-              Create Report
-            </button>
-          )
+              <button
+                type="button"
+                onClick={() => setOpen(true)}
+                className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+              >
+                <PlusIcon className="size-5" />
+                Create Report
+              </button>
+            )
           : null}
 
-      <Dialog open={open} onClose={() => { setStep("details"); setOpen(false) }} maxW="max-w-6xl">
-        <DialogBody className="space-y-7 bg-white px-5 py-5 md:px-7 md:py-6">
-            <div className="flex items-start justify-between gap-6">
-              <div>
+      <Dialog
+        open={open}
+        onClose={() => {
+          setOpen(false)
+          setMoreOpen(false)
+          setLocationOpen(false)
+        }}
+        maxW={moreOpen ? "max-w-[820px]" : "max-w-[520px]"}
+      >
+        <DialogBody className="!space-y-0 !overflow-hidden !p-0 bg-white">
+          <div className="flex min-h-[min(500px,88vh)] flex-col pt-4 md:flex-row md:pt-5">
+            {/* Main composer */}
+            <div className="flex min-w-0 flex-1 flex-col">
+              {/* Header: Close · Anyone · Post */}
+              <div className="flex shrink-0 items-center gap-2.5 px-5">
                 <button
                   type="button"
-                  onClick={() => {
-                    if (step === "review") {
-                      setStep("details")
-                      return
-                    }
-                    setOpen(false)
-                  }}
-                  className="inline-flex items-center gap-2 text-sm font-semibold text-[#2447b3] transition-colors hover:text-[#07145f]"
+                  onClick={() => setOpen(false)}
+                  className="flex size-12 shrink-0 items-center justify-center rounded-full text-neutral-600 transition-colors hover:bg-neutral-100"
+                  aria-label="Close"
                 >
-                  <ArrowLeftIcon className="size-4" />
-                  Back
+                  <XIcon className="size-6" strokeWidth={2} />
                 </button>
-                <h1 className="mt-5 font-heading text-3xl font-bold text-[#07145f]">
-                  {step === "review" ? "Create Report — Review" : "Create Report"}
-                </h1>
-                <p className="mt-2 text-sm font-medium text-[#324270]">
-                  {step === "review"
-                    ? "Please review your report details before submitting."
-                    : "Help us address issues in your barangay. Your report makes our community better."}
-                </p>
+
+                <div className="relative ml-auto flex shrink-0 items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setVisibilityMenuOpen((v) => !v)}
+                    className="inline-flex h-11 items-center gap-2 rounded-full border border-neutral-200 bg-neutral-100/80 px-4 text-[15px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-100"
+                  >
+                    {visibility === "community" ? (
+                      <GlobeIcon className="size-4" />
+                    ) : (
+                      <LockIcon className="size-4" />
+                    )}
+                    {visibility === "community" ? "Anyone" : "Private"}
+                    <span className="text-[11px] text-neutral-400">▾</span>
+                  </button>
+                  {visibilityMenuOpen ? (
+                    <div className="absolute right-0 top-full z-20 mt-1.5 w-52 overflow-hidden rounded-xl border border-neutral-200 bg-white py-1 shadow-lg">
+                      {(
+                        [
+                          ["community", "Anyone", "Visible in the community feed"],
+                          ["private", "Private", "Only you and officials"],
+                        ] as const
+                      ).map(([value, label, helper]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => {
+                            setVisibility(value)
+                            setVisibilityMenuOpen(false)
+                          }}
+                          className={cn(
+                            "flex w-full flex-col px-3.5 py-2.5 text-left hover:bg-neutral-50",
+                            visibility === value && "bg-neutral-50",
+                          )}
+                        >
+                          <span className="text-[13px] font-semibold text-neutral-900">{label}</span>
+                          <span className="text-[11px] text-neutral-500">{helper}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    disabled={isSubmitting || isCheckingMedia}
+                    onClick={() => void handleSubmit()}
+                    className="inline-flex h-11 items-center justify-center rounded-full bg-[#ff6a1a] px-6 text-[15px] font-semibold text-white transition-colors hover:bg-[#e85f12] disabled:opacity-60"
+                  >
+                    {isSubmitting ? "Posting…" : "Post"}
+                  </button>
+                </div>
               </div>
-              <div className="hidden flex-col items-end gap-3 md:flex">
-                <img src="/contents/report-footer.png" alt="" className="h-32 w-auto shrink-0 object-contain lg:h-44" />
+
+              {/* Identity — below Close / Anyone / Post, left-aligned under close */}
+              <div className="flex items-center gap-3 px-5 pt-4">
+                <span className="inline-flex size-12 shrink-0 items-center justify-center rounded-full bg-[#c5d0e6] text-[18px] font-semibold text-[#2c3a5a]">
+                  {letter}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[16px] font-semibold leading-tight text-neutral-900">
+                    {displayName}
+                  </p>
+                  {userStreet ? (
+                    <p className="truncate text-[13px] leading-tight text-neutral-500">{userStreet}</p>
+                  ) : null}
+                </div>
+                {selectedConcern ? (
+                  <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 py-1 text-[12px] font-semibold text-neutral-700">
+                    <selectedConcern.icon className="size-3.5" strokeWidth={1.75} />
+                    {selectedConcern.label}
+                  </span>
+                ) : null}
               </div>
-            </div>
-            <div className="flex justify-center">
-              <Stepper active={step === "review" ? 1 : 0} />
+
+              {/* Body — compact description (no huge empty flex gap inside the field) */}
+              <div className="flex min-h-0 flex-1 flex-col px-5 pt-4">
+                <textarea
+                  value={description}
+                  maxLength={descriptionMax}
+                  rows={3}
+                  onChange={(e) => {
+                    setDescription(e.target.value)
+                    if (fieldErrors.description)
+                      setFieldErrors((prev) => ({ ...prev, description: "" }))
+                    // Auto-grow with content (cap so footer stays visible)
+                    const el = e.currentTarget
+                    el.style.height = "auto"
+                    el.style.height = `${Math.min(el.scrollHeight, 220)}px`
+                  }}
+                  onInput={(e) => {
+                    const el = e.currentTarget
+                    el.style.height = "auto"
+                    el.style.height = `${Math.min(el.scrollHeight, 220)}px`
+                  }}
+                  ref={(el) => {
+                    if (!el) return
+                    el.style.height = "auto"
+                    el.style.height = `${Math.min(Math.max(el.scrollHeight, 72), 220)}px`
+                  }}
+                  placeholder={
+                    hasMedia || locationPin
+                      ? "Add a caption (optional)"
+                      : "What's happening in your barangay?"
+                  }
+                  className="max-h-[220px] min-h-[72px] w-full shrink-0 resize-none overflow-y-auto border-0 bg-transparent text-[17px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400"
+                />
+
+                {/* Media — above footer */}
+                {hasMedia ? (
+                  <div className="mt-3 flex shrink-0 flex-wrap gap-2.5">
+                    {mediaFiles.map((file, index) => {
+                      const url = previewUrls[index]
+                      return (
+                        <div
+                          key={`${file.name}-${index}`}
+                          className="relative h-[168px] w-[168px] overflow-hidden rounded-2xl bg-neutral-100 shadow-sm ring-1 ring-black/5 sm:h-[180px] sm:w-[180px]"
+                        >
+                          <button
+                            type="button"
+                            className="block h-full w-full"
+                            onClick={() => setPreviewUrl(url)}
+                          >
+                            <img src={url} alt="" className="h-full w-full object-cover" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setMediaFiles((prev) => prev.filter((_, i) => i !== index))
+                            }
+                            className="absolute right-2 top-2 flex size-8 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-[2px] transition-colors hover:bg-black/75"
+                            aria-label="Remove photo"
+                          >
+                            <XIcon className="size-4" strokeWidth={2.25} />
+                          </button>
+                          {index === 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => fileInputRef.current?.click()}
+                              className="absolute bottom-2.5 left-2.5 inline-flex items-center gap-1.5 rounded-full bg-black/70 px-3 py-1.5 text-[13px] font-semibold text-white backdrop-blur-[2px]"
+                            >
+                              <PencilIcon className="size-3.5" />
+                              Modify
+                            </button>
+                          ) : null}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : null}
+
+                {/* Location row — above footer */}
+                {locationPin && address ? (
+                  <div className="mt-3 flex shrink-0 items-center gap-3 rounded-full border border-neutral-200 bg-white px-3.5 py-2.5 shadow-sm">
+                    <button
+                      type="button"
+                      onClick={() => setLocationOpen(true)}
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                    >
+                      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-700">
+                        <MapPinIcon className="size-4" strokeWidth={2} />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-[14px] font-semibold leading-tight text-neutral-900">
+                          {addressPrimary || address}
+                        </span>
+                        {addressSecondary ? (
+                          <span className="mt-0.5 block truncate text-[12px] leading-tight text-neutral-500">
+                            {addressSecondary}
+                          </span>
+                        ) : null}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLocationPin(null)
+                        setAddress("")
+                        setAddressPrimary("")
+                        setAddressSecondary("")
+                      }}
+                      className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700"
+                      aria-label="Remove location"
+                    >
+                      <XIcon className="size-4" />
+                    </button>
+                  </div>
+                ) : null}
+
+                {/* Empty space stays outside the description field */}
+                <div className="min-h-0 flex-1" aria-hidden />
+
+                {/* All feedback errors above photo / location / Category toolbar */}
+                {(() => {
+                  const messages = [
+                    fieldErrors.description,
+                    fieldErrors.concern,
+                    // Media may contain multiple newline-separated check messages
+                    ...(fieldErrors.media
+                      ? fieldErrors.media.split("\n").map((m) => m.trim()).filter(Boolean)
+                      : []),
+                    fieldErrors.address,
+                  ].filter((msg): msg is string => Boolean(msg && msg.trim()))
+                  if (messages.length === 0) return null
+                  return (
+                    <ul
+                      className="mt-2 shrink-0 list-none space-y-1 text-xs font-medium text-destructive"
+                      role="alert"
+                    >
+                      {messages.map((msg) => (
+                        <li key={msg}>{msg}</li>
+                      ))}
+                    </ul>
+                  )
+                })()}
+              </div>
+
+              {/* Footer actions */}
+              <div className="flex shrink-0 items-center gap-0.5 px-3 pb-3 pt-2 sm:px-4">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={ACCEPT_STRING}
+                  multiple
+                  className="sr-only"
+                  onChange={(e) => {
+                    void addFiles(Array.from(e.target.files ?? []))
+                    e.target.value = ""
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isCheckingMedia || mediaFiles.length >= MAX_FILES}
+                  className="flex size-11 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 disabled:opacity-50"
+                  aria-label="Add photo"
+                >
+                  <ImageIcon className="size-5" strokeWidth={1.75} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLocationOpen(true)}
+                  className={cn(
+                    "flex size-11 items-center justify-center rounded-full transition-colors hover:bg-neutral-100",
+                    locationPin ? "text-[#ff6a1a]" : "text-neutral-500 hover:text-neutral-800",
+                  )}
+                  aria-label="Add location"
+                >
+                  <MapPinIcon className="size-5" strokeWidth={1.75} />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setMoreOpen((v) => !v)}
+                  className="ml-auto inline-flex h-10 items-center gap-1.5 rounded-full px-4 text-[13px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-100"
+                >
+                  <LayoutGridIcon className="size-4" strokeWidth={1.75} />
+                  Category
+                </button>
+              </div>
             </div>
 
-          {step === "details" ? (
-          <div className="grid gap-7 xl:grid-cols-[minmax(360px,0.95fr)_minmax(460px,1.15fr)]">
-            <section className="space-y-7">
-              <div>
-                <h2 className="text-base font-bold text-[#07145f]">1. What's the concern?</h2>
-                <div className="mt-4 grid grid-cols-2 gap-3">
+            {/* Category panel */}
+            {moreOpen ? (
+              <aside className="flex w-full shrink-0 flex-col border-t border-neutral-100 bg-white md:w-[260px] md:border-l md:border-t-0">
+                <div className="flex items-center justify-between px-4 pb-1 pt-4">
+                  <h3 className="text-[15px] font-semibold text-neutral-900">Category</h3>
+                  <button
+                    type="button"
+                    onClick={() => setMoreOpen(false)}
+                    className="flex size-8 items-center justify-center rounded-full text-neutral-500 hover:bg-neutral-100 md:hidden"
+                    aria-label="Close categories"
+                  >
+                    <XIcon className="size-4" />
+                  </button>
+                </div>
+                <div className="flex flex-col gap-0.5 px-2 pb-4 pt-1">
                   {concernConfig.map((item) => {
+                    const Icon = item.icon
                     const selected = concern === item.label
-                    const colorMap: Record<string, string> = {
-                      amber: "border-amber-400 bg-amber-50 text-amber-600",
-                      green: "border-green-400 bg-green-50 text-green-600",
-                      red: "border-red-400 bg-red-50 text-red-600",
-                      blue: "border-blue-400 bg-blue-50 text-blue-600",
-                      slate: "border-slate-400 bg-slate-100 text-slate-600",
-                    }
-                    const iconBgMap: Record<string, string> = {
-                      amber: "bg-amber-100",
-                      green: "bg-green-100",
-                      red: "bg-red-100",
-                      blue: "bg-blue-100",
-                      slate: "bg-slate-200",
-                    }
                     return (
                       <button
                         key={item.label}
@@ -299,341 +710,51 @@ export function CreateReportDialog({
                         onClick={() => {
                           setConcern(item.label)
                           setFieldErrors((prev) => ({ ...prev, concern: "" }))
+                          setMoreOpen(false)
                         }}
                         className={cn(
-                          "flex min-h-[130px] flex-col items-center justify-center gap-3 rounded-xl border bg-white p-4 text-center transition-colors",
-                          selected && colorMap[item.color],
-                          fieldErrors.concern && "border-destructive text-destructive",
-                          !selected && !fieldErrors.concern && "border-slate-200 text-[#07145f] hover:border-[#ff6a1a]/60",
+                          "flex items-center gap-3 rounded-xl px-3 py-3 text-left text-neutral-800 transition-colors",
+                          selected ? "bg-neutral-100" : "bg-transparent hover:bg-neutral-100",
                         )}
                       >
-                        <span className={cn("flex size-12 items-center justify-center rounded-full", selected ? iconBgMap[item.color] : "bg-[#eef3ff]")}>
-                          <img src={item.img} alt="" className="h-14 w-14 object-contain" />
+                        <Icon className="size-5 shrink-0 text-neutral-600" strokeWidth={1.75} />
+                        <span className="min-w-0">
+                          <span className="block text-[14px] font-semibold">{item.label}</span>
+                          <span className="mt-0.5 block text-[12px] text-neutral-500">
+                            {item.desc}
+                          </span>
                         </span>
-                        <span className="text-sm font-bold">{item.label}</span>
-                        <span className="text-xs leading-5 text-[#43507f]" dangerouslySetInnerHTML={{ __html: item.desc }} />
                       </button>
                     )
                   })}
                 </div>
-                {fieldErrors.concern ? <p className="mt-2 text-xs text-destructive">{fieldErrors.concern}</p> : null}
-              </div>
-
-              <div>
-                <h2 className="text-base font-bold text-[#07145f]">2. Report details</h2>
-                <label className="mt-4 block text-sm font-bold text-[#07145f]">Subject</label>
-                <div className="relative mt-2">
-                  <input
-                    value={title}
-                    maxLength={titleMax}
-                    onChange={(event) => {
-                      setTitle(event.target.value)
-                      if (fieldErrors.title) setFieldErrors((prev) => ({ ...prev, title: "" }))
-                    }}
-                    placeholder="Brief summary of the issue"
-                    className={cn(
-                      "h-11 w-full rounded-lg border bg-white px-4 pr-14 text-sm outline-none transition-colors placeholder:text-[#8b96b8] focus:border-[#ff6a1a] focus:ring-2 focus:ring-[#ff6a1a]/15",
-                      fieldErrors.title ? "border-destructive" : "border-slate-200",
-                    )}
-                  />
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-[#68739c]">
-                    {title.length}/{titleMax}
-                  </span>
-                </div>
-                {fieldErrors.title ? <p className="mt-2 text-xs text-destructive">{fieldErrors.title}</p> : null}
-
-                <label className="mt-5 block text-sm font-bold text-[#07145f]">Description</label>
-                <div className="relative mt-2">
-                  <textarea
-                    value={description}
-                    maxLength={descriptionMax}
-                    onChange={(event) => {
-                      setDescription(event.target.value)
-                      if (fieldErrors.description) setFieldErrors((prev) => ({ ...prev, description: "" }))
-                    }}
-                    placeholder="Describe the issue in detail. Include what happened, when, and any other relevant information."
-                    className={cn(
-                      "min-h-[118px] w-full resize-none rounded-lg border bg-white px-4 py-3 pb-8 text-sm outline-none transition-colors placeholder:text-[#8b96b8] focus:border-[#ff6a1a] focus:ring-2 focus:ring-[#ff6a1a]/15",
-                      fieldErrors.description ? "border-destructive" : "border-slate-200",
-                    )}
-                  />
-                  <span className="absolute bottom-3 right-4 text-xs text-[#68739c]">
-                    {description.length}/{descriptionMax}
-                  </span>
-                </div>
-                {fieldErrors.description ? <p className="mt-2 text-xs text-destructive">{fieldErrors.description}</p> : null}
-                <p className="mt-3 flex items-center justify-center gap-1.5 text-xs font-medium text-[#68739c]">
-                  <LightbulbIcon className="size-3.5 text-[#2447b3]" />
-                  Tip: Provide as much detail as you can to help us resolve the issue faster.
-                </p>
-              </div>
-
-            </section>
-
-            <section className="space-y-6">
-              <div>
-                <div>
-                  <h2 className="flex items-center gap-2 text-base font-bold text-[#07145f]">
-                  3. Add photos or documents
-                    <div className="relative group">
-                      <InfoIcon className="size-4 text-[#68739c] cursor-help" />
-                      <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 hidden group-hover:block w-56 rounded-lg bg-[#07145f] p-3 text-xs leading-5 text-white shadow-lg z-10">
-                        <p className="font-bold mb-1">File tips</p>
-                        <ul className="list-disc space-y-1 pl-4">
-                          <li>Clear photos help us understand the issue.</li>
-                          <li>Include documents if available.</li>
-                          <li>Avoid personal or sensitive information.</li>
-                        </ul>
-                      </div>
-                    </div>
-                  </h2>
-                  <label
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={handleDrop}
-                    className="mt-4 flex min-h-[168px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-[#9eb7e6] bg-white p-5 text-center transition-colors hover:border-[#ff6a1a] hover:bg-[#fff8f3]"
-                  >
-                    <input
-                      type="file"
-                      accept={ACCEPT_STRING}
-                      multiple
-                      className="sr-only"
-                      onChange={(event) => {
-                        addFiles(Array.from(event.target.files ?? []))
-                        event.target.value = ""
-                      }}
-                    />
-                    <CloudUploadIcon className="size-11 text-[#07145f]" strokeWidth={2} />
-                    <p className="mt-3 text-sm font-semibold text-[#43507f]">Drag and drop files here</p>
-                    <p className="mt-1 text-xs text-[#8b96b8]">or</p>
-                    <span className="text-sm font-semibold text-[#43507f]">
-                      Browse files
-                    </span>
-                    <p className="mt-3 text-xs text-[#8b96b8]">JPG or PNG up to 10MB each (max 5 files)</p>
-                  </label>
-                  {mediaFiles.length > 0 ? (
-                    <div className="mt-3 grid gap-2">
-                      {mediaFiles.map((file, index) => {
-                        const isImage = ALLOWED_TYPES.includes(file.type)
-                        const url = URL.createObjectURL(file)
-                        return (
-                          <div key={`${file.name}-${index}`} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs text-[#43507f]">
-                            <button
-                              type="button"
-                              onClick={() => { if (isImage) setPreviewUrl(url) }}
-                              className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                            >
-                              {isImage ? <ImageIcon className="size-4 shrink-0" /> : <FileTextIcon className="size-4 shrink-0" />}
-                              <span className="truncate">{file.name}</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setMediaFiles((prev) => prev.filter((_, i) => i !== index))}
-                              className="text-[#68739c] hover:text-destructive"
-                            >
-                              <TrashIcon className="size-4" />
-                            </button>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  ) : null}
-                </div>
-
-              </div>
-              <div>
-                <h2 className="text-base font-bold text-[#07145f]">4. Where did this happen?</h2>
-                <div className="mt-4 flex items-center gap-2">
-                  <div className="relative flex-1">
-                    <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-[#68739c] pointer-events-none" />
-                    <input
-                      type="text"
-                      value={address}
-                      onChange={(e) => setAddress(e.target.value)}
-                      placeholder="Search location"
-                      className="h-11 w-full rounded-lg border border-slate-200 bg-white pl-9 pr-4 text-sm outline-none transition-colors placeholder:text-[#8b96b8] focus:border-[#ff6a1a] focus:ring-2 focus:ring-[#ff6a1a]/15"
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleLocate}
-                    disabled={isLocating}
-                    className="flex h-11 shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-[#43507f] transition-colors hover:bg-[#fff8f3] hover:border-[#ff6a1a] hover:text-[#ff6a1a] disabled:opacity-60"
-                  >
-                    <LocateFixedIcon className="size-4" />
-                    {isLocating ? "…" : "Locate me"}
-                  </button>
-                </div>
-                <div className={cn("mt-4 overflow-hidden rounded-xl border border-border", fieldErrors.address && "ring-1 ring-destructive")}>
-                    <Suspense fallback={<div className="flex min-h-[300px] items-center justify-center rounded-xl text-sm text-[#68739c]">Loading map...</div>}>
-                      <LocationPicker
-                        address={address}
-                        onAddressChange={(value) => {
-                          setAddress(value)
-                          if (fieldErrors.address) setFieldErrors((prev) => ({ ...prev, address: "" }))
-                        }}
-                        onPin={(lat, lng) => {
-                          setLocationPin({ lat, lng })
-                          setAddress(`Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)}`)
-                          setFieldErrors((prev) => ({ ...prev, address: "" }))
-                        }}
-                      />
-                    </Suspense>
-                </div>
-                {fieldErrors.address ? <p className="mt-2 text-xs text-destructive">{fieldErrors.address}</p> : null}
-                <div className="mt-4 flex items-center justify-start gap-1.5 text-xs text-[#68739c] md:justify-center">
-                  <InfoIcon className="size-3.5 shrink-0 text-[#2447b3]" />
-                  <span>You can adjust the pin or click on the map to refine the exact location.</span>
-                </div>
-              </div>
-            </section>
+              </aside>
+            ) : null}
           </div>
-          ) : (
-            <div className="grid gap-7 xl:grid-cols-[minmax(360px,0.95fr)_minmax(460px,1.15fr)]">
-              <section className="space-y-6">
-                <div>
-                  <h2 className="text-base font-bold text-[#07145f]">1. Your concern</h2>
-                  <div className="mt-4 overflow-hidden rounded-xl border border-[#dfe7f5] bg-white">
-                    <div className="flex items-start gap-4 border-b border-[#dfe7f5] px-4 py-4">
-                      <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-[#fff1ea] text-[#ff6a1a]">
-                        <img src={selectedConcernImg} alt="" className="h-14 w-14 object-contain" />
-                      </span>
-                      <div>
-                        <p className="text-[11px] font-bold text-[#68739c]">Category</p>
-                        <p className="text-sm font-extrabold text-[#07145f]">{concern || "Not selected"}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-start gap-4 border-b border-[#dfe7f5] px-4 py-4">
-                      <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-[#eef3ff] text-[#2447b3]">
-                        <FileTextIcon className="size-5" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-[11px] font-bold text-[#68739c]">Subject</p>
-                        <p className="break-words text-sm font-extrabold text-[#07145f]">{title.trim()}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-start gap-4 px-4 py-4">
-                      <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-[#eef3ff] text-[#2447b3]">
-                        <InfoIcon className="size-5" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-[11px] font-bold text-[#68739c]">Description</p>
-                        <p className="break-words text-sm font-semibold leading-6 text-[#43507f]">{description.trim()}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <h2 className="text-base font-bold text-[#07145f]">2. Uploaded photos or documents</h2>
-                  <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    {mediaFiles.map((file, index) => {
-                      const isImage = ALLOWED_TYPES.includes(file.type)
-                      const url = URL.createObjectURL(file)
-                      return (
-                        <button
-                          key={`${file.name}-${index}`}
-                          type="button"
-                          onClick={() => { if (isImage) setPreviewUrl(url) }}
-                          className={cn(
-                            "flex h-24 flex-col items-center justify-center overflow-hidden rounded-xl border border-[#dfe7f5] bg-white text-center text-xs font-semibold text-[#43507f]",
-                            !isImage && "bg-[#fff8f3]",
-                          )}
-                        >
-                          {isImage ? (
-                            <img src={url} alt={file.name} className="h-full w-full object-cover" />
-                          ) : (
-                            <>
-                              <FileTextIcon className="size-7 text-[#ff5003]" />
-                              <span className="mt-2 max-w-[90%] truncate">{file.name}</span>
-                              <span className="text-[11px] text-[#68739c]">{formatFileSize(file.size)}</span>
-                            </>
-                          )}
-                        </button>
-                      )
-                    })}
-                    {mediaFiles.length === 0 ? (
-                      <div className="col-span-full flex h-24 items-center justify-center rounded-xl border border-dashed border-[#dfe7f5] text-sm font-semibold text-[#68739c]">
-                        No files uploaded
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              </section>
-
-              <section className="space-y-5">
-                <div>
-                  <h2 className="text-base font-bold text-[#07145f]">3. Location</h2>
-                  <div className="mt-4 overflow-hidden rounded-xl border border-[#dfe7f5]">
-                    {reviewMapUrl ? (
-                      <iframe title="Review report location" src={reviewMapUrl} className="h-36 w-full border-0 md:h-40" />
-                    ) : (
-                      <div className="flex h-36 items-center justify-center bg-[#eef3ff] text-sm font-semibold text-[#68739c]">
-                        Map pin not selected
-                      </div>
-                    )}
-                  </div>
-                  <div className="mt-3 flex items-center gap-3 rounded-xl border border-[#dfe7f5] px-4 py-3">
-                    <MapPinIcon className="size-5 shrink-0 text-[#2447b3]" />
-                    <div className="min-w-0">
-                      <p className="text-[11px] font-bold text-[#68739c]">Selected address</p>
-                      <p className="truncate text-sm font-extrabold text-[#07145f]">{address.trim()}</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-[#dfe7f5] bg-[#f8fbff] p-4">
-                  <div className="flex items-start gap-3">
-                    <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white text-[#2447b3]">
-                      <LockIcon className="size-5" />
-                    </span>
-                    <div>
-                      <p className="text-sm font-extrabold text-[#07145f]">Privacy & verification reminders</p>
-                      <ul className="mt-3 space-y-2 text-xs font-semibold text-[#43507f]">
-                        <li className="flex gap-2"><CheckIcon className="size-3.5 shrink-0 text-[#ff6a1a]" /> Your personal information will remain confidential.</li>
-                        <li className="flex gap-2"><CheckIcon className="size-3.5 shrink-0 text-[#ff6a1a]" /> Reports are verified by our Barangay team.</li>
-                        <li className="flex gap-2"><CheckIcon className="size-3.5 shrink-0 text-[#ff6a1a]" /> Providing accurate details helps us take faster action.</li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <div className="rounded-xl border border-[#dfe7f5] bg-[#f8fbff] px-4 py-3 text-xs font-semibold text-[#2447b3] xl:col-span-2">
-                <InfoIcon className="mr-2 inline size-4 align-text-bottom" />
-                After submission, you'll receive a tracking number so you can monitor updates in My Reports.
-              </div>
-            </div>
-          )}
-
         </DialogBody>
-
-        <DialogFooter className="bg-white">
-          <div className="flex w-full flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-            <button
-              type="button"
-              onClick={() => {
-                if (step === "review") {
-                  setStep("details")
-                  return
-                }
-                setOpen(false)
-              }}
-              className="rounded-lg px-8 py-2.5 text-sm font-semibold text-[#2447b3] transition-colors hover:bg-[#eef3ff]"
-            >
-              {step === "review" ? "Back" : "Cancel"}
-            </button>
-            <button
-              type="button"
-              onClick={step === "review" ? handleSubmit : goToReview}
-              disabled={isSubmitting}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#ff6a1a] px-8 py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#e85f17] disabled:opacity-60"
-            >
-              {isSubmitting ? "Submitting" : step === "review" ? "Submit Report" : "Next: Review"}
-              <ArrowRightIcon className="size-4" />
-            </button>
-          </div>
-        </DialogFooter>
       </Dialog>
+
+      <Suspense fallback={null}>
+        <LocationPickerModal
+          open={locationOpen}
+          onClose={() => setLocationOpen(false)}
+          initialLat={locationPin?.lat}
+          initialLng={locationPin?.lng}
+          initialAddress={address}
+          onConfirm={(payload) => {
+            setLocationPin({
+              lat: payload.lat,
+              lng: payload.lng,
+              accuracy: null,
+              source: payload.source,
+            })
+            setAddress(payload.address)
+            setAddressPrimary(payload.addressPrimary)
+            setAddressSecondary(payload.addressSecondary)
+            setFieldErrors((prev) => ({ ...prev, address: "" }))
+          }}
+        />
+      </Suspense>
 
       {submittedReport ? (
         <ReportStatusDialog
@@ -648,7 +769,7 @@ export function CreateReportDialog({
           report={submittedReport}
           mode={statusModeFromReport(submittedReport)}
           onTrack={() => {
-            const reportId = submittedReport.id
+            const reportId = submittedReport.public_id
             resetForm()
             setSubmittedReport(null)
             setOpen(false)
@@ -658,15 +779,24 @@ export function CreateReportDialog({
       ) : null}
 
       {previewUrl ? (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/80 p-4" onClick={() => setPreviewUrl(null)}>
+        <div
+          className="fixed inset-0 z-[300] flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setPreviewUrl(null)}
+        >
           <button
             type="button"
             onClick={() => setPreviewUrl(null)}
-            className="absolute right-4 top-4 flex size-8 items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
+            className="absolute right-4 top-4 flex size-10 items-center justify-center rounded-full bg-white/10 text-white"
+            aria-label="Close preview"
           >
             <XIcon className="size-5" />
           </button>
-          <img src={previewUrl} alt="Preview" className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain" onClick={(event) => event.stopPropagation()} />
+          <img
+            src={previewUrl}
+            alt=""
+            className="max-h-[90vh] max-w-full rounded-lg object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       ) : null}
     </>

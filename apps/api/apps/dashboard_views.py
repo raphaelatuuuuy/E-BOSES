@@ -1,11 +1,11 @@
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import AccountRequest
+from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated
 from apps.accounts.views import touch_last_seen
 from apps.concerns.models import Announcement, BarangayEvent, Concern, ConcernAppeal, ContentFlag
 from apps.emergencies.models import EmergencyAlert, EmergencyAppeal, EmergencyResponderAssignment
@@ -14,6 +14,7 @@ from apps.notifications.models import Notification
 CONCERN_ACTIVE = {
     Concern.Status.SUBMITTED,
     Concern.Status.UNDER_REVIEW,
+    Concern.Status.ASSIGNED,
     Concern.Status.IN_PROGRESS,
     Concern.Status.APPEALED,
 }

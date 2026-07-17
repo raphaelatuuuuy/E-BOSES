@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react"
-import { BellRingIcon } from "lucide-react"
+import {
+  BellRingIcon,
+  DownloadIcon,
+  Loader2Icon,
+  LogOutIcon,
+  MapPinIcon,
+  Trash2Icon,
+} from "lucide-react"
+import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 
 import { Button } from "@workspace/ui/components/button"
@@ -21,7 +29,15 @@ import {
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { Topbar } from "@/features/dashboard/components/topbar"
-import { getResidentSettings, updateResidentSettings, type ResidentSettings } from "@/features/auth/api"
+import { useAuthSession } from "@/features/auth/auth-session"
+import {
+  createAccountRequest,
+  getResidentSettings,
+  listAccountRequests,
+  updateResidentSettings,
+  type AccountRequest,
+  type ResidentSettings,
+} from "@/features/auth/api"
 import {
   disableBrowserNotifications,
   enableBrowserNotifications,
@@ -84,6 +100,8 @@ function SettingsSkeleton() {
 
 export default function SettingsPage() {
   usePageTitle("Settings")
+  const navigate = useNavigate()
+  const { signOut } = useAuthSession()
   const [loaded, setLoaded] = useState(false)
   const [settings, setSettings] = useState<ResidentSettings | null>(null)
   const [savingSetting, setSavingSetting] = useState<SettingKey | null>(null)
@@ -94,14 +112,23 @@ export default function SettingsPage() {
     subscribed: false,
   })
   const [browserBusy, setBrowserBusy] = useState(false)
+  const [accountRequests, setAccountRequests] = useState<AccountRequest[]>([])
+  const [savingRequest, setSavingRequest] = useState<AccountRequest["type"] | null>(null)
+  const [savingSosPlacement, setSavingSosPlacement] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     async function loadSettings() {
       setLoaded(false)
       try {
-        const nextSettings = await getResidentSettings()
-        if (!cancelled) setSettings(nextSettings)
+        const [nextSettings, nextRequests] = await Promise.all([
+          getResidentSettings(),
+          listAccountRequests(),
+        ])
+        if (!cancelled) {
+          setSettings(nextSettings)
+          setAccountRequests(nextRequests)
+        }
       } catch {
         if (!cancelled) toast.error("Could not load settings.")
       } finally {
@@ -171,6 +198,57 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleSosPlacement(value: ResidentSettings["sos_placement"]) {
+    if (!settings || settings.sos_placement === value) return
+    const previous = settings
+    setSettings({ ...settings, sos_placement: value })
+    setSavingSosPlacement(true)
+    try {
+      const next = await updateResidentSettings({ sos_placement: value })
+      setSettings(next)
+      localStorage.setItem("eboses:sos-placement", value)
+      window.dispatchEvent(
+        new CustomEvent("eboses:sos-placement-change", { detail: { placement: value } }),
+      )
+      toast.success("SOS shortcut preference saved")
+    } catch {
+      setSettings(previous)
+      toast.error("Could not save SOS shortcut preference.")
+    } finally {
+      setSavingSosPlacement(false)
+    }
+  }
+
+  async function handleAccountRequest(type: AccountRequest["type"]) {
+    const existing = accountRequests.find(
+      (request) => request.type === type && ["submitted", "reviewed"].includes(request.status),
+    )
+    if (existing) {
+      toast.info("Request already submitted", {
+        description: `Status: ${existing.status.replace("_", " ")}`,
+      })
+      return
+    }
+    if (type === "deletion" && !window.confirm("Request permanent deletion of your E-Boses account?")) {
+      return
+    }
+    setSavingRequest(type)
+    try {
+      const created = await createAccountRequest({
+        type,
+        note: type === "deletion"
+          ? "Resident requested account deletion from Settings."
+          : "Resident requested an account data export from Settings.",
+      })
+      setAccountRequests((current) => [created, ...current])
+      toast.success(type === "deletion" ? "Deletion request submitted" : "Data export requested")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not submit the request.")
+    } finally {
+      setSavingRequest(null)
+    }
+  }
+
   const browserTitle = !browserState.supported
     ? "Not supported on this browser"
     : browserState.permission === "denied"
@@ -189,6 +267,12 @@ export default function SettingsPage() {
         : browserState.subscribed
           ? "This browser is subscribed for background report and SOS updates."
           : "Subscribe this browser for urgent report and SOS updates."
+  const pendingExport = accountRequests.find(
+    (request) => request.type === "data_export" && ["submitted", "reviewed"].includes(request.status),
+  )
+  const pendingDeletion = accountRequests.find(
+    (request) => request.type === "deletion" && ["submitted", "reviewed"].includes(request.status),
+  )
 
   if (!loaded)
     return (
@@ -213,13 +297,13 @@ export default function SettingsPage() {
         </div>
 
         <div className="mt-6 grid max-w-3xl gap-4">
-          <Card>
+          <Card className="rounded-lg shadow-none">
             <CardHeader>
               <CardTitle>Browser Push Notifications</CardTitle>
               <CardDescription>Allow urgent report and SOS updates to appear even when E-Boses is in the background.</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="flex flex-col gap-4 rounded-lg border border-border bg-background p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-start gap-3">
                   <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#fff0e8] text-[#ff6a1a]">
                     <BellRingIcon className="size-5" />
@@ -246,7 +330,7 @@ export default function SettingsPage() {
           </Card>
 
           {settingsGroups.map((group) => (
-            <Card key={group.title}>
+            <Card key={group.title} className="rounded-lg shadow-none">
               <CardHeader>
                 <CardTitle>{group.title}</CardTitle>
                 <CardDescription>{group.description}</CardDescription>
@@ -256,7 +340,7 @@ export default function SettingsPage() {
                   {group.items.map((item) => (
                     <Field
                       key={item.id}
-                      className="flex-row items-start justify-between gap-4 rounded-lg border border-border bg-background p-4"
+                      className="flex-row items-start justify-between gap-4 border-b border-border py-4 last:border-b-0"
                     >
                       <div className="min-w-0">
                         <FieldLabel htmlFor={item.id}>{item.label}</FieldLabel>
@@ -278,6 +362,115 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
           ))}
+
+          <Card className="rounded-lg shadow-none">
+            <CardHeader>
+              <CardTitle>Emergency shortcut</CardTitle>
+              <CardDescription>Choose where the SOS control appears in the Resident dashboard.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-2 sm:grid-cols-3" aria-label="SOS shortcut placement">
+                {[
+                  { id: "sidebar", label: "Navigation", detail: "Show in the desktop sidebar and compact mobile control" },
+                  { id: "inline", label: "Inline", detail: "Show only in emergency-related content" },
+                  { id: "compact", label: "Compact", detail: "Use the small floating emergency control" },
+                ].map((option) => {
+                  const selected = settings?.sos_placement === option.id
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      disabled={!settings || savingSosPlacement}
+                      onClick={() => void handleSosPlacement(option.id as ResidentSettings["sos_placement"])}
+                      className={`min-h-20 rounded-lg border p-3 text-left transition-colors disabled:opacity-60 ${
+                        selected
+                          ? "border-[#ff6a1a] bg-[#fff7f1] text-[#07145f]"
+                          : "border-border bg-background text-foreground hover:border-[#ff6a1a]"
+                      }`}
+                      aria-pressed={selected}
+                    >
+                      <span className="flex items-center gap-2 text-sm font-bold">
+                        <MapPinIcon className="size-4" /> {option.label}
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-muted-foreground">{option.detail}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-lg shadow-none">
+            <CardHeader>
+              <CardTitle>Account actions</CardTitle>
+              <CardDescription>Manage your session and privacy requests.</CardDescription>
+            </CardHeader>
+            <CardContent className="divide-y divide-border">
+              <div className="flex flex-col gap-3 py-4 first:pt-0 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <DownloadIcon className="mt-0.5 size-5 text-[#07145f]" />
+                  <div>
+                    <p className="text-sm font-bold text-foreground">Account data export</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      {pendingExport ? `Request status: ${pendingExport.status.replace("_", " ")}` : "Request a copy of your E-Boses account data."}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={Boolean(pendingExport) || savingRequest === "data_export"}
+                  onClick={() => void handleAccountRequest("data_export")}
+                  className="min-h-11 sm:w-auto"
+                >
+                  {savingRequest === "data_export" ? <Loader2Icon className="size-4 animate-spin" /> : null}
+                  {pendingExport ? "Requested" : "Request export"}
+                </Button>
+              </div>
+
+              <div className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <Trash2Icon className="mt-0.5 size-5 text-red-600" />
+                  <div>
+                    <p className="text-sm font-bold text-foreground">Delete account</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      {pendingDeletion ? `Request status: ${pendingDeletion.status.replace("_", " ")}` : "Request permanent deletion after administrative review."}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={Boolean(pendingDeletion) || savingRequest === "deletion"}
+                  onClick={() => void handleAccountRequest("deletion")}
+                  className="min-h-11 border-red-200 text-red-700 hover:bg-red-50 sm:w-auto"
+                >
+                  {savingRequest === "deletion" ? <Loader2Icon className="size-4 animate-spin" /> : null}
+                  {pendingDeletion ? "Requested" : "Request deletion"}
+                </Button>
+              </div>
+
+              <div className="flex flex-col gap-3 py-4 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <LogOutIcon className="mt-0.5 size-5 text-[#07145f]" />
+                  <div>
+                    <p className="text-sm font-bold text-foreground">Sign out</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">End this browser session securely.</p>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    void signOut().finally(() => navigate("/"))
+                  }}
+                  className="min-h-11 sm:w-auto"
+                >
+                  Sign out
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         </div>
       </div>
     </div>

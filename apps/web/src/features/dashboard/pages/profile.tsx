@@ -3,49 +3,34 @@ import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import {
   BellIcon,
-  BookOpenIcon,
   CalendarDaysIcon,
   CameraIcon,
   CheckCircle2Icon,
   ChevronRightIcon,
   ClipboardListIcon,
-  FileTextIcon,
   HomeIcon,
-  InfoIcon,
   LifeBuoyIcon,
   Loader2Icon,
-  LogOutIcon,
   MailIcon,
   MapPinIcon,
-  MegaphoneIcon,
-  MessageSquareIcon,
   PencilIcon,
   PhoneIcon,
   SaveIcon,
   SettingsIcon,
   ShieldCheckIcon,
-  Trash2Icon,
+  SirenIcon,
   UserIcon,
   UsersIcon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/components/popover"
-import { Switch } from "@workspace/ui/components/switch"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { Topbar } from "@/features/dashboard/components/topbar"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { getDashboardSummary, type DashboardSummary } from "@/features/dashboard/api"
-import {
-  createAccountRequest,
-  getResidentSettings,
-  listAccountRequests,
-  updateMe,
-  updateResidentSettings,
-  type AccountRequest,
-  type ResidentSettings,
-} from "@/features/auth/api"
+import { updateMe } from "@/features/auth/api"
 import { ApiError } from "@/lib/api"
 
 type ProfileFormState = {
@@ -57,28 +42,6 @@ type ProfileFormState = {
 }
 
 type ProfileField = keyof ProfileFormState
-type SettingKey = "push_alerts" | "report_updates" | "community_sharing" | "location_confirmation"
-type SosPlacement = ResidentSettings["sos_placement"]
-
-const sosOptions: Array<{ id: SosPlacement; title: string; desc: string }> = [
-  { id: "inline", title: "Inline SOS", desc: "Show SOS as contextual access inside help and emergency sections." },
-  { id: "sidebar", title: "Sidebar SOS", desc: "Desktop only. Appears inside the sidebar and becomes an icon when collapsed." },
-  { id: "compact", title: "Compact round button", desc: "Less visual noise on desktop dashboards." },
-]
-
-const sosIdeas = [
-  "Desktop: use Sidebar SOS when you want the emergency action grouped with navigation.",
-  "Collapsed sidebar: SOS remains as a red phone icon with a tooltip.",
-  "Mobile: Sidebar SOS automatically falls back to the compact round button above the bottom nav.",
-  "Inline SOS works best inside Emergency/Help sections, not every content card.",
-]
-
-function normalizeSosPlacement(value: string | null): SosPlacement {
-  if (value === "bottom_bar") return "sidebar"
-  if (value === "floating") return "inline"
-  if (value === "sidebar" || value === "compact" || value === "inline") return value
-  return "inline"
-}
 
 import { computeDefaultAvatar, getAvatarChoices } from "@/features/dashboard/avatar-utils"
 
@@ -151,7 +114,7 @@ function SectionCard({
   children: React.ReactNode
 }) {
   return (
-    <section className="rounded-2xl border border-[#dfe7f5] bg-white p-5 shadow-sm">
+    <section className="rounded-lg border border-[#dfe7f5] bg-white p-5">
       <div className="mb-5 flex items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-extrabold text-[#07145f]">{title}</h2>
@@ -215,20 +178,15 @@ function TextInput({
 
 export default function ProfilePage() {
   usePageTitle("Profile")
-  const { user, loading, refreshUser, signOut } = useAuthSession()
+  const { user, loading, refreshUser } = useAuthSession()
   const navigate = useNavigate()
 
   const [loaded, setLoaded] = useState(false)
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
-  const [settings, setSettings] = useState<ResidentSettings | null>(null)
-  const [accountRequests, setAccountRequests] = useState<AccountRequest[]>([])
-  const [savingSetting, setSavingSetting] = useState<SettingKey | null>(null)
-  const [savingRequest, setSavingRequest] = useState<AccountRequest["type"] | null>(null)
   const [profileForm, setProfileForm] = useState<ProfileFormState>(() => profileFormFromUser(null))
   const [profileErrors, setProfileErrors] = useState<Partial<Record<ProfileField, string>>>({})
   const [savingProfile, setSavingProfile] = useState(false)
   const [editing, setEditing] = useState(false)
-  const [sosPlacement, setSosPlacement] = useState<SosPlacement>(() => normalizeSosPlacement(localStorage.getItem("eboses:sos-placement")))
 
   useEffect(() => {
     if (!user) return
@@ -242,13 +200,9 @@ export default function ProfilePage() {
     async function loadProfile() {
       setLoaded(false)
       try {
-        const [nextSummary, nextSettings, nextRequests] = await Promise.all([getDashboardSummary(), getResidentSettings(), listAccountRequests()])
+        const nextSummary = await getDashboardSummary()
         if (!cancelled) {
           setSummary(nextSummary)
-          setSettings(nextSettings)
-          setAccountRequests(nextRequests)
-          setSosPlacement(normalizeSosPlacement(nextSettings.sos_placement))
-          localStorage.setItem("eboses:sos-placement", normalizeSosPlacement(nextSettings.sos_placement))
         }
       } catch {
         if (!cancelled) toast.error("Could not load profile details.")
@@ -271,9 +225,6 @@ export default function ProfilePage() {
   const initials = fullName.split(" ").filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?"
 
   const accountStatus = user?.status === "verified" ? "Active" : roleLabel(user?.status)
-  const pendingDeletion = accountRequests.find((request) => request.type === "deletion" && ["submitted", "reviewed"].includes(request.status))
-  const pendingExport = accountRequests.find((request) => request.type === "data_export" && ["submitted", "reviewed"].includes(request.status))
-
   const personalRows = useMemo(() => [
     { icon: UserIcon, label: "Full Name", value: fullName },
     { icon: MailIcon, label: "Email Address", value: user?.email ?? "" },
@@ -281,13 +232,6 @@ export default function ProfilePage() {
     { icon: HomeIcon, label: "Home Address", value: user?.address ?? "" },
     { icon: UsersIcon, label: "Emergency Contact", value: "Barangay hotline / 911 for life-threatening emergencies" },
   ], [fullName, user])
-
-  const notificationRows = [
-    { icon: BellIcon, key: "push_alerts" as SettingKey, label: "In-app Notifications", desc: "Bell updates while using E-Boses" },
-    { icon: MailIcon, key: "report_updates" as SettingKey, label: "Report Updates", desc: "Status changes and report comments" },
-    { icon: MessageSquareIcon, key: "community_sharing" as SettingKey, label: "Community Sharing", desc: "Eligible reports may appear in Feed" },
-    { icon: MapPinIcon, key: "location_confirmation" as SettingKey, label: "Location Confirmation", desc: "Ask before precise location use" },
-  ]
 
   function handleProfileChange(field: ProfileField, value: string) {
     setProfileForm((current) => ({ ...current, [field]: value }))
@@ -320,61 +264,6 @@ export default function ProfilePage() {
     }
   }
 
-  async function handleSettingChange(key: SettingKey, value: boolean) {
-    if (!settings) return
-    const previous = settings
-    setSettings({ ...settings, [key]: value })
-    setSavingSetting(key)
-    try {
-      setSettings(await updateResidentSettings({ [key]: value }))
-      if (key === "push_alerts") window.dispatchEvent(new Event("eboses:notifications-refresh"))
-      toast.success("Preference saved")
-    } catch {
-      setSettings(previous)
-      toast.error("Could not save preference. Try again.")
-    } finally {
-      setSavingSetting(null)
-    }
-  }
-
-  async function handleSosPlacement(value: SosPlacement) {
-    const previous = sosPlacement
-    setSosPlacement(value)
-    localStorage.setItem("eboses:sos-placement", value)
-    window.dispatchEvent(new CustomEvent("eboses:sos-placement-change", { detail: { placement: value } }))
-    try {
-      const nextSettings = await updateResidentSettings({ sos_placement: value })
-      setSettings(nextSettings)
-      toast.success("SOS display preference saved")
-    } catch {
-      setSosPlacement(previous)
-      localStorage.setItem("eboses:sos-placement", previous)
-      window.dispatchEvent(new CustomEvent("eboses:sos-placement-change", { detail: { placement: previous } }))
-      toast.error("Could not save SOS preference.")
-    }
-  }
-
-  async function handleAccountRequest(type: AccountRequest["type"]) {
-    const pending = accountRequests.find((request) => request.type === type && ["submitted", "reviewed"].includes(request.status))
-    if (pending) {
-      toast.info("Request already submitted", { description: `Status: ${pending.status.replace("_", " ")}` })
-      return
-    }
-    setSavingRequest(type)
-    try {
-      const created = await createAccountRequest({
-        type,
-        note: type === "deletion" ? "Resident requested account deletion from profile page." : "Resident requested account data export from profile page.",
-      })
-      setAccountRequests((current) => [created, ...current])
-      toast.success(type === "deletion" ? "Deletion request submitted" : "Data export request submitted")
-    } catch {
-      toast.error("Could not submit request. Try again.")
-    } finally {
-      setSavingRequest(null)
-    }
-  }
-
   if (!loaded) {
     return (
       <div className="flex flex-col">
@@ -385,13 +274,13 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="flex flex-col bg-[#f8fbff]">
+    <div className="flex flex-col bg-[#f7f8fc]">
       <Topbar />
 
       <div className="flex-1 p-4 sm:p-6 md:p-8">
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_270px]">
           <main className="min-w-0 space-y-5">
-            <section className="overflow-hidden rounded-2xl border border-[#dfe7f5] bg-white p-5 shadow-sm">
+            <section className="overflow-hidden rounded-lg border border-[#dfe7f5] bg-white p-5">
               <div className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_360px] lg:items-center">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
                   <Popover>
@@ -461,7 +350,7 @@ export default function ProfilePage() {
               </div>
 
               {editing ? (
-                <div className="mt-5 rounded-xl border border-[#dfe7f5] bg-[#f8fbff] p-4">
+                <div className="mt-5 rounded-lg border border-[#dfe7f5] bg-[#f8fbff] p-4">
                   <div className="grid gap-3 md:grid-cols-3">
                     <TextInput label="First name" value={profileForm.first_name} error={profileErrors.first_name} onChange={(value) => handleProfileChange("first_name", sanitizeName(value))} />
                     <TextInput label="Middle name" value={profileForm.middle_name} error={profileErrors.middle_name} onChange={(value) => handleProfileChange("middle_name", sanitizeName(value))} />
@@ -503,145 +392,60 @@ export default function ProfilePage() {
               ) : null}
             </section>
 
-            <div className="grid gap-5 lg:grid-cols-3">
+            <div className="grid gap-5 lg:grid-cols-2">
               <SectionCard title="Personal Information" desc="Manage your personal profile and contact details.">
                 <div className="space-y-4">
                   {personalRows.map((row) => <InfoItem key={row.label} {...row} />)}
                 </div>
               </SectionCard>
 
-              <SectionCard title="Notification Preferences" desc="Choose how you receive updates and alerts.">
-                <div className="space-y-4">
-                  {notificationRows.map((item) => {
-                    const Icon = item.icon
-                    return (
-                      <div key={item.key} className="flex items-center gap-3">
-                        <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[#eef3ff] text-[#2447b3]"><Icon className="size-4" /></span>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-extrabold text-[#07145f]">{item.label}</p>
-                          <p className="text-xs font-semibold leading-5 text-[#43507f]">{item.desc}</p>
-                        </div>
-                        <Switch
-                          checked={settings?.[item.key] ?? false}
-                          onCheckedChange={(checked) => void handleSettingChange(item.key, checked)}
-                          disabled={!settings || savingSetting === item.key}
-                          aria-label={item.label}
-                        />
-                      </div>
-                    )
-                  })}
-                </div>
-              </SectionCard>
-
-              <SectionCard title="Legal" desc="Review policies and guidelines that apply to your account.">
-                <div className="space-y-4">
-                  <InfoItem icon={FileTextIcon} label="Terms and Conditions" value="Rules and guidelines for using E-Boses" />
-                  <InfoItem icon={ShieldCheckIcon} label="Data Privacy Notice" value="How we collect, use, and protect your data" />
-                  <InfoItem icon={BookOpenIcon} label="Community Guidelines" value="Standards for respectful community engagement" />
-                </div>
-              </SectionCard>
-
-              <SectionCard title="Barangay Information" desc="Access public information and local resources.">
-                <div className="space-y-4">
-                  <InfoItem icon={MegaphoneIcon} label="Announcements" value="Latest news from your barangay" />
-                  <InfoItem icon={PhoneIcon} label="Hotlines & Contacts" value="Emergency and local hotlines" />
-                  <InfoItem icon={UsersIcon} label="Officials Directory" value="Barangay officials and contacts" />
-                </div>
-              </SectionCard>
-
-              <SectionCard title="Account Actions" desc="Manage your session and account settings.">
-                <div className="space-y-4">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void signOut()
-                      navigate("/")
-                    }}
-                    className="w-full text-left"
-                  >
-                    <InfoItem icon={LogOutIcon} label="Sign Out" value="Sign out of your current session" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleAccountRequest("data_export")}
-                    disabled={savingRequest === "data_export"}
-                    className="w-full text-left disabled:opacity-60"
-                  >
-                    <InfoItem
-                      icon={FileTextIcon}
-                      label={pendingExport ? "Data Export Requested" : "Request Data Export"}
-                      value={pendingExport ? `Status: ${pendingExport.status.replace("_", " ")}` : "Ask barangay staff for a copy of your account data"}
-                    />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleAccountRequest("deletion")}
-                    disabled={savingRequest === "deletion"}
-                    className="w-full text-left"
-                  >
-                    <InfoItem
-                      icon={Trash2Icon}
-                      label={pendingDeletion ? "Deletion Requested" : "Delete Account"}
-                      value={pendingDeletion ? `Status: ${pendingDeletion.status.replace("_", " ")}` : "Request permanent deletion"}
-                      danger
-                    />
-                  </button>
-                </div>
-              </SectionCard>
-
-              <SectionCard title="About Your Account" desc="Important details about your account status.">
+              <SectionCard title="About Your Account" desc="Important details about your verified account.">
                 <div className="space-y-4">
                   <InfoItem icon={ShieldCheckIcon} label="Account Type" value={roleLabel(user?.role)} />
                   <InfoItem icon={CheckCircle2Icon} label="Account Status" value={accountStatus} />
-                  <InfoItem icon={CalendarDaysIcon} label="Last Login" value={formatDateTime(user?.last_seen_at)} />
+                  <InfoItem icon={CalendarDaysIcon} label="Last Active" value={formatDateTime(user?.last_seen_at)} />
                   <InfoItem icon={CalendarDaysIcon} label="Member Since" value={memberSince} />
                 </div>
               </SectionCard>
 
-              <section className="rounded-2xl border border-red-200 bg-white p-5 shadow-sm lg:col-span-3">
-                <div className="grid gap-5 lg:grid-cols-[240px_1fr]">
-                  <div>
-                    <h2 className="text-base font-extrabold text-red-600">Emergency Access</h2>
-                    <p className="mt-1 text-xs font-semibold leading-5 text-red-700">Choose how the SOS shortcut appears while you use E-Boses.</p>
-                    <button
-                      type="button"
-                      onClick={() => window.dispatchEvent(new Event("eboses:open-sos"))}
-                      className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-red-600 text-sm font-extrabold text-white transition-colors hover:bg-red-700"
-                    >
-                      <PhoneIcon className="size-4" />
-                      Send SOS
-                    </button>
-                    <p className="mt-3 text-xs font-bold leading-5 text-red-700">For life-threatening emergencies, call 911 immediately.</p>
-                  </div>
-                  <div className="grid gap-3 md:grid-cols-3">
-                    {sosOptions.map((option) => (
+              <SectionCard title="Account & Preferences" desc="Notification, privacy, emergency shortcut, and account controls.">
+                <button
+                  type="button"
+                  onClick={() => navigate("/dashboard/settings")}
+                  className="flex min-h-11 w-full items-center justify-between rounded-lg border border-[#cbd8ee] px-4 text-left text-sm font-extrabold text-[#07145f] transition-colors hover:border-[#ff6a1a] hover:text-[#ff6a1a]"
+                >
+                  <span className="flex items-center gap-3"><SettingsIcon className="size-4" /> Open settings</span>
+                  <ChevronRightIcon className="size-4" />
+                </button>
+              </SectionCard>
+
+              <SectionCard title="Resident Activity" desc="Continue with your reports and community updates.">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {[
+                    { icon: ClipboardListIcon, label: "My Reports", path: "/dashboard/reports" },
+                    { icon: UsersIcon, label: "Community", path: "/dashboard/feed" },
+                    { icon: SirenIcon, label: "Emergency History", path: "/dashboard/emergency-history" },
+                    { icon: BellIcon, label: "Notifications", path: "/dashboard/notifications" },
+                  ].map((link) => {
+                    const Icon = link.icon
+                    return (
                       <button
-                        key={option.id}
+                        key={link.label}
                         type="button"
-                        onClick={() => void handleSosPlacement(option.id)}
-                        className={cn(
-                          "rounded-xl border p-4 text-left transition-colors",
-                          sosPlacement === option.id ? "border-red-400 bg-red-50" : "border-[#dfe7f5] bg-white hover:border-red-300",
-                        )}
+                        onClick={() => navigate(link.path)}
+                        className="flex min-h-11 items-center gap-2 rounded-lg border border-[#dfe7f5] px-3 text-left text-sm font-bold text-[#2447b3] transition-colors hover:border-[#ff6a1a] hover:text-[#ff6a1a]"
                       >
-                        <p className="text-sm font-extrabold text-[#07145f]">{option.title}</p>
-                        <p className="mt-1 text-xs font-semibold leading-5 text-[#43507f]">{option.desc}</p>
+                        <Icon className="size-4" /> {link.label}
                       </button>
-                    ))}
-                    <div className="rounded-xl border border-[#dfe7f5] bg-[#f8fbff] p-4 md:col-span-3">
-                      <p className="flex items-center gap-2 text-sm font-extrabold text-[#07145f]"><InfoIcon className="size-4 text-[#ff6a1a]" /> Placement guidance</p>
-                      <ul className="mt-2 space-y-1 text-xs font-semibold leading-5 text-[#43507f]">
-                        {sosIdeas.map((idea) => <li key={idea}>{idea}</li>)}
-                      </ul>
-                    </div>
-                  </div>
+                    )
+                  })}
                 </div>
-              </section>
+              </SectionCard>
             </div>
           </main>
 
           <aside className="space-y-5">
-            <section className="rounded-2xl border border-[#dfe7f5] bg-white p-5 shadow-sm">
+            <section className="rounded-lg border border-[#dfe7f5] bg-white p-5">
               <div className="flex items-center gap-3">
                 <span className="flex size-10 items-center justify-center rounded-full bg-[#eef3ff] text-[#2447b3]"><LifeBuoyIcon className="size-5" /></span>
                 <div>
@@ -651,21 +455,21 @@ export default function ProfilePage() {
               </div>
               <button
                 type="button"
-                onClick={() => navigate("/dashboard/feed")}
+                onClick={() => navigate("/dashboard/settings")}
                 className="mt-5 flex h-10 w-full items-center justify-center rounded-lg border border-[#cbd8ee] text-sm font-extrabold text-[#07145f] transition-colors hover:border-[#ff6a1a] hover:text-[#ff6a1a]"
               >
-                View Help Center
+                Open settings
               </button>
             </section>
 
-            <section className="rounded-2xl border border-[#dfe7f5] bg-white p-5 shadow-sm">
+            <section className="rounded-lg border border-[#dfe7f5] bg-white p-5">
               <h2 className="text-base font-extrabold text-[#07145f]">Quick Links</h2>
               <div className="mt-5 space-y-4">
                 {[
                   { icon: ClipboardListIcon, label: "My Reports", path: "/dashboard/reports" },
-                  { icon: PencilIcon, label: "Create Report", path: "/dashboard/home" },
+                  { icon: BellIcon, label: "Notifications", path: "/dashboard/notifications" },
                   { icon: UsersIcon, label: "Community Feed", path: "/dashboard/feed" },
-                  { icon: SettingsIcon, label: "Track Reports", path: "/dashboard/reports" },
+                  { icon: SettingsIcon, label: "Settings", path: "/dashboard/settings" },
                 ].map((link) => {
                   const Icon = link.icon
                   return (

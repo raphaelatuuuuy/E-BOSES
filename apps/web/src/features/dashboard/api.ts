@@ -1,9 +1,9 @@
 import { apiRequest } from "@/lib/api"
 
 export type ConcernCategory = "infrastructure" | "environment" | "public_safety" | "others"
-export type ConcernStatus = "submitted" | "under_review" | "in_progress" | "resolved" | "rejected" | "appealed"
+export type ConcernStatus = "submitted" | "under_review" | "assigned" | "in_progress" | "resolved" | "rejected" | "appealed"
 export type ConcernVisibility = "private" | "community"
-export type ConcernValidationStatus = "pending_review" | "accepted" | "rejected" | "resolved"
+export type ConcernValidationStatus = "pending" | "accepted" | "rejected"
 
 export interface PublicUser {
   id: number
@@ -13,13 +13,16 @@ export interface PublicUser {
   last_seen_at: string | null
   responder_unit?: "tanod" | "bhw" | "bdrrmo" | "other" | ""
   is_on_duty?: boolean
+  avatar?: string
+  /** Street line from residence (e.g. "123 Champaca Street") */
+  street?: string
+  barangay?: string
+}
+
+export interface ActiveResponder extends PublicUser {
   current_latitude?: string | null
   current_longitude?: string | null
   location_updated_at?: string | null
-  email?: string
-  avatar?: string
-  gender?: string
-  date_of_birth?: string
 }
 
 export interface ConcernMedia {
@@ -29,6 +32,8 @@ export interface ConcernMedia {
   file_size: number
   preview_url: string
   raw_url: string
+  validation_status: "accepted" | "rejected" | "pending"
+  validation_detail: string
   uploaded_at: string
 }
 
@@ -124,8 +129,12 @@ export interface ConcernComment {
 
 export interface Concern {
   id: number
+  public_id: string
   tracking_id: string
   validation_status: ConcernValidationStatus
+  validation_summary: string
+  rejection_code: string
+  status_version: number
   reporter: PublicUser
   title: string
   description: string
@@ -229,6 +238,13 @@ export function createConcern(formData: FormData) {
   })
 }
 
+export function checkConcernMedia(formData: FormData) {
+  return apiRequest<{ files: Array<{ name: string; status: "accepted" }> }>("/concerns/media/check/", {
+    method: "POST",
+    body: formData,
+  })
+}
+
 export function listMyConcerns(status?: string, dateFrom?: string, dateTo?: string) {
   const params = new URLSearchParams()
   if (status && status !== "all") params.set("status", status)
@@ -262,11 +278,14 @@ export function listFeedConcerns(
   return apiRequest<Concern[]>(`/concerns/feed/${query}`)
 }
 
-export function getConcern(id: number) {
-  return apiRequest<Concern>(`/concerns/${id}/`)
+export function getConcern(id: number | string) {
+  const path = typeof id === "number" || /^\d+$/.test(id)
+    ? `/concerns/${id}/`
+    : `/concerns/by-public-id/${id}/`
+  return apiRequest<Concern>(path)
 }
 
-export function updateConcernStatus(id: number, payload: { status: ConcernStatus; note?: string }) {
+export function updateConcernStatus(id: number, payload: { status: ConcernStatus; note?: string; status_version?: number }) {
   return apiRequest<Concern>(`/concerns/${id}/status/`, {
     method: "POST",
     body: JSON.stringify(payload),
@@ -419,7 +438,7 @@ export function deleteManagedBarangayEvent(id: number) {
 }
 
 export function listActiveResponders() {
-  return apiRequest<PublicUser[]>("/responders/active/")
+  return apiRequest<ActiveResponder[]>("/responders/active/")
 }
 
 export interface LiveMapGeometry {
