@@ -1,0 +1,37 @@
+# Core
+django>=5.2,<5.3
+django-environ>=0.11
+
+# REST API
+djangorestframework>=3.16
+djangorestframework-simplejwt>=5.5
+django-cors-headers>=4.7
+
+# WebSocket
+channels>=4.2
+channels-redis>=4.2
+daphne>=4.2
+
+# Database
+psycopg2-binary>=2.9
+# psycopg[c]>=3.2  # Uncomment for psycopg 3 support
+
+# Geospatial
+# GDAL may need system-level install: https://docs.djangoproject.com/en/5.2/ref/contrib/gis/install/
+
+# Utilities
+Pillow>=11
+python-dateutil>=2.9
+
+# Async
+httpx>=0.28
+requests>=2.31,<3
+celery[redis]>=5.4,<6
+
+# Forensics / Media authenticity
+c2pa-python>=0.5.0
+imagehash>=4.3,<5
+opencv-python-headless>=4.8,<5
+
+# Concern classification (downloads are pinned during setup/deployment)
+ultralytics>=8.4,<9
