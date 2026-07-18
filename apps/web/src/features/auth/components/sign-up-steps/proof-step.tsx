@@ -39,9 +39,62 @@ interface ProofStepProps {
   onChange: <K extends keyof SignUpValues>(field: K, value: SignUpValues[K]) => void
   onSetFieldError: (field: keyof SignUpValues, message: string | undefined) => void
   onRefreshProofOptions: () => Promise<unknown>
-  onContinue: () => void
+  /**
+   * Called after successful OCR. Optional detect payload avoids stale React state
+   * when the parent advances immediately (name re-verify match uses this).
+   */
+  onContinue: (detect?: ResidenceProofDetectResult | null) => void
   proofDetect: ResidenceProofDetectResult | null
   onProofDetectChange: (detect: ResidenceProofDetectResult | null) => void
+  /** Override default title (e.g. name re-verify flow). */
+  title?: string
+}
+
+/** Prefer non-empty field values when combining front + back OCR. */
+function mergeProofDetects(
+  parts: ResidenceProofDetectResult[],
+): ResidenceProofDetectResult | null {
+  if (parts.length === 0) return null
+  const base = { ...parts[parts.length - 1]! }
+  const merged: NonNullable<ResidenceProofDetectResult["extracted_fields"]> = {
+    ...(base.extracted_fields || {}),
+  }
+  for (const part of parts) {
+    for (const [key, item] of Object.entries(part.extracted_fields || {})) {
+      const nextVal =
+        item == null
+          ? ""
+          : typeof item === "string" || typeof item === "number"
+            ? String(item).trim()
+            : String(
+                (item as { value?: string; raw_value?: string }).value ??
+                  (item as { raw_value?: string }).raw_value ??
+                  "",
+              ).trim()
+      const prev = merged[key]
+      const prevVal =
+        prev == null
+          ? ""
+          : typeof prev === "string" || typeof prev === "number"
+            ? String(prev).trim()
+            : String(
+                (prev as { value?: string; raw_value?: string }).value ??
+                  (prev as { raw_value?: string }).raw_value ??
+                  "",
+              ).trim()
+      if (nextVal && !prevVal) {
+        merged[key] = item as (typeof merged)[string]
+      } else if (nextVal && prevVal && nextVal.length > prevVal.length) {
+        // Prefer richer OCR hit when both sides return something for the same key.
+        merged[key] = item as (typeof merged)[string]
+      }
+    }
+  }
+  return {
+    ...base,
+    detected: parts.some((p) => p.detected) || base.detected,
+    extracted_fields: merged,
+  }
 }
 
 type TypeStatus = "idle" | "approved" | "rejected"
@@ -58,6 +111,7 @@ export function ProofStep({
   onContinue,
   proofDetect,
   onProofDetectChange,
+  title = "One quick check that you live in this area.",
 }: ProofStepProps) {
   const [selectedType, setSelectedType] = React.useState(values.proofType || "")
   const [typeStatus, setTypeStatus] = React.useState<TypeStatus>(() =>
@@ -294,7 +348,8 @@ export function ProofStep({
 
     try {
       // OCR each photo with its own fields (front boxes on front, back boxes on back).
-      let lastDetect: Awaited<ReturnType<typeof detectProofOcr>> | null = null
+      // Merge all sides — National ID names live on front; last side alone is often back-only.
+      const successfulDetects: ResidenceProofDetectResult[] = []
       for (let i = 0; i < files.length; i += 1) {
         const side = requiredSides[i] ?? "front"
         const ocr = await detectProofOcr({
@@ -302,7 +357,6 @@ export function ProofStep({
           option: dialogOption,
           side,
         })
-        lastDetect = ocr
         if (!ocr.ok) {
           const message = humanizeProofError(
             ocr.message,
@@ -321,12 +375,15 @@ export function ProofStep({
           onChange("proofOfResidency", [])
           return
         }
+        successfulDetects.push(ocr.detect)
       }
+
+      const mergedDetect = mergeProofDetects(successfulDetects)
 
       flushSync(() => {
         onChange("proofType", dialogOption.key)
         onChange("proofOfResidency", files)
-        onProofDetectChange(lastDetect && lastDetect.ok ? lastDetect.detect : null)
+        onProofDetectChange(mergedDetect)
         onSetFieldError("proofOfResidency", undefined)
         onSetFieldError("proofType", undefined)
         setSelectedType(dialogOption.key)
@@ -334,9 +391,9 @@ export function ProofStep({
       })
 
       // Valid document → close dialog and go to the next sign-up step.
-      // Errors stay in the dialog (handled above / in catch).
+      // Pass mergedDetect so callers don't rely on stale React state.
       setDialogOpen(false)
-      onContinue()
+      onContinue(mergedDetect)
     } catch (error) {
       const message =
         error instanceof Error
@@ -352,14 +409,15 @@ export function ProofStep({
 
   function handlePrimaryAction() {
     if (!isApproved) return
-    onContinue()
+    // Re-use last known detect from parent (already approved earlier).
+    onContinue(proofDetect)
   }
 
   const busy = verifyingOcr || checkingSide !== null
 
   return (
     <div className="flex flex-1 flex-col pt-2">
-      <StepTitle>One quick check that you live in this area.</StepTitle>
+      <StepTitle>{title}</StepTitle>
 
       <div className="mt-8 space-y-4">
         {proofOptionsLoading ? (

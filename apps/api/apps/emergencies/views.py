@@ -4,7 +4,7 @@ from math import asin, cos, radians, sin, sqrt
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import models, transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -24,11 +24,17 @@ from apps.accounts.services import (
 )
 from apps.accounts.views import request_meta, touch_last_seen
 from apps.notifications.models import Notification
-from apps.notifications.services import broadcast_emergency_update, create_emergency_notification, notify_emergency_status
+from apps.notifications.services import (
+    broadcast_emergency_chat_message,
+    broadcast_emergency_update,
+    create_emergency_notification,
+    notify_emergency_status,
+)
 
 from .models import (
     EmergencyAlert,
     EmergencyAppeal,
+    EmergencyChatMessage,
     EmergencyEscalation,
     EmergencyLocationPing,
     EmergencyMedia,
@@ -42,6 +48,8 @@ from .serializers import (
     EmergencyAppealReviewSerializer,
     EmergencyAppealSerializer,
     EmergencyAssignSerializer,
+    EmergencyChatCreateSerializer,
+    EmergencyChatMessageSerializer,
     EmergencyCreateSerializer,
     EmergencyEscalateSerializer,
     EmergencyEscalationSerializer,
@@ -60,12 +68,17 @@ ACTIVE_STATUSES = {
     EmergencyAlert.Status.ARRIVED,
 }
 
+# Map SOS category → first-responder units that handle that case
 UNIT_BY_EMERGENCY_TYPE = {
     EmergencyAlert.Type.MEDICAL: {"bhw"},
     EmergencyAlert.Type.FIRE: {"bdrrmo"},
     EmergencyAlert.Type.CRIME: {"tanod"},
     EmergencyAlert.Type.DISASTER: {"bdrrmo"},
+    EmergencyAlert.Type.OTHER: {"tanod", "bhw", "bdrrmo"},
 }
+
+# Prefer responders with GPS updated within this window when ranking
+RESPONDER_LOCATION_FRESH_MINUTES = 30
 
 
 def can_manage_emergencies(user):
@@ -111,6 +124,27 @@ def create_status_event(alert, status_value, actor=None, note=""):
     )
 
 
+def post_responder_chat(alert, sender, body: str):
+    """Post a group-chat message from a responder (visible to resident + all assignees)."""
+    if not sender or not body.strip():
+        return None
+    # Avoid spamming the same auto message twice for one status transition
+    recent = (
+        EmergencyChatMessage.objects.filter(alert=alert, sender=sender, body=body.strip())
+        .order_by("-id")
+        .first()
+    )
+    if recent and (timezone.now() - recent.created_at).total_seconds() < 120:
+        return recent
+    message = EmergencyChatMessage.objects.create(alert=alert, sender=sender, body=body.strip())
+    message = (
+        EmergencyChatMessage.objects.select_related("sender", "sender__resident_profile")
+        .get(pk=message.pk)
+    )
+    transaction.on_commit(lambda m=message: broadcast_emergency_chat_message(m))
+    return message
+
+
 def location_distance_score(alert, responder):
     if responder.current_latitude is None or responder.current_longitude is None:
         return None
@@ -132,7 +166,7 @@ def distance_meters(latitude_a, longitude_a, latitude_b, longitude_b):
     return 2 * earth_radius * asin(sqrt(value))
 
 def preferred_units_for(alert_type):
-    return UNIT_BY_EMERGENCY_TYPE.get(alert_type, set())
+    return set(UNIT_BY_EMERGENCY_TYPE.get(alert_type) or set())
 
 def responder_unit_label(unit):
     labels = {
@@ -144,55 +178,85 @@ def responder_unit_label(unit):
     }
     return labels.get(unit or "", "Responder")
 
-def find_auto_responder(alert):
+
+def normalize_barangay(value: str) -> str:
+    text = (value or "").strip()
+    if not text or text.lower() == "pending":
+        return "Marikina Heights"
+    return text
+
+
+def _on_duty_unit_candidates(alert, *, exclude_ids=None):
+    """
+    On-duty first responders whose unit matches the emergency category
+    (medical→BHW, crime→Tanod, fire/disaster→BDRRMO).
+    Location freshness is preferred for ranking but not required.
+    """
     User = get_user_model()
     preferred_units = preferred_units_for(alert.type)
     if not preferred_units:
-        return None
-    fresh_after = timezone.now() - timedelta(minutes=2)
-    responders = list(
-        User.objects
-        .filter(
+        return []
+
+    barangay = normalize_barangay(alert.barangay)
+    qs = (
+        User.objects.filter(
             role=User.Role.FIRST_RESPONDER,
             status=User.Status.VERIFIED,
             is_on_duty=True,
             responder_unit__in=preferred_units,
-            resident_profile__barangay=alert.barangay,
-            current_latitude__isnull=False,
-            current_longitude__isnull=False,
-            location_updated_at__gte=fresh_after,
+        )
+        .filter(
+            # Match barangay case-insensitively; treat blank/Pending as Marikina Heights
+            models.Q(resident_profile__barangay__iexact=barangay)
+            | models.Q(resident_profile__barangay__iexact="Marikina Heights")
+            | models.Q(resident_profile__barangay__iexact="Pending")
+            | models.Q(resident_profile__barangay="")
         )
         .select_related("resident_profile")
     )
-    if not responders:
-        return None
-    return min(responders, key=lambda responder: location_distance_score(alert, responder) or float("inf"))
+    if exclude_ids:
+        qs = qs.exclude(pk__in=list(exclude_ids))
+    return list(qs)
+
+
+def _rank_responders(alert, responders):
+    fresh_after = timezone.now() - timedelta(minutes=RESPONDER_LOCATION_FRESH_MINUTES)
+
+    def sort_key(responder):
+        dist = location_distance_score(alert, responder)
+        has_coords = dist is not None
+        fresh = bool(
+            has_coords
+            and responder.location_updated_at
+            and responder.location_updated_at >= fresh_after
+        )
+        # 0 = fresh GPS nearest, 1 = GPS but stale, 2 = on-duty no GPS
+        if fresh:
+            return (0, dist)
+        if has_coords:
+            return (1, dist)
+        return (2, float("inf"))
+
+    return sorted(responders, key=sort_key)
+
+
+def find_auto_responders(alert, *, limit=5, exclude_ids=None):
+    candidates = _on_duty_unit_candidates(alert, exclude_ids=exclude_ids)
+    if not candidates:
+        return []
+    ranked = _rank_responders(alert, candidates)
+    return ranked[: max(1, limit)]
+
+
+def find_auto_responder(alert):
+    responders = find_auto_responders(alert, limit=1)
+    return responders[0] if responders else None
+
 
 def find_backup_responder(alert):
-    User = get_user_model()
-    preferred_units = preferred_units_for(alert.type)
-    if not preferred_units:
-        return None
-    fresh_after = timezone.now() - timedelta(minutes=2)
     assigned_ids = alert.assignments.values_list("responder_id", flat=True)
-    responders = list(
-        User.objects
-        .filter(
-            role=User.Role.FIRST_RESPONDER,
-            status=User.Status.VERIFIED,
-            is_on_duty=True,
-            responder_unit__in=preferred_units,
-            resident_profile__barangay=alert.barangay,
-            current_latitude__isnull=False,
-            current_longitude__isnull=False,
-            location_updated_at__gte=fresh_after,
-        )
-        .exclude(pk__in=assigned_ids)
-        .select_related("resident_profile")
-    )
-    if not responders:
-        return None
-    return min(responders, key=lambda responder: location_distance_score(alert, responder) or float("inf"))
+    responders = find_auto_responders(alert, limit=1, exclude_ids=assigned_ids)
+    return responders[0] if responders else None
 
 
 def escalate_overdue_assignments(*, minutes, triggered_by=None, audit_request_meta=None):
@@ -270,10 +334,16 @@ def escalate_overdue_assignments(*, minutes, triggered_by=None, audit_request_me
 
 def notify_officials_no_responder(alert):
     User = get_user_model()
+    preferred = preferred_units_for(alert.type)
+    unit_names = ", ".join(responder_unit_label(u) for u in sorted(preferred)) or alert.type
+    barangay = normalize_barangay(alert.barangay)
     officials = User.objects.filter(
         role=User.Role.BARANGAY_OFFICIAL,
         status=User.Status.VERIFIED,
-        resident_profile__barangay=alert.barangay,
+    ).filter(
+        models.Q(resident_profile__barangay__iexact=barangay)
+        | models.Q(resident_profile__barangay__iexact="Marikina Heights")
+        | models.Q(resident_profile__barangay="")
     )
     for official in officials:
         create_emergency_notification(
@@ -281,7 +351,10 @@ def notify_officials_no_responder(alert):
             recipient=official,
             type=Notification.Type.EMERGENCY_ESCALATED,
             title="Emergency needs manual dispatch",
-            body=f"No fresh on-duty {alert.type} responder was available in {alert.barangay}.",
+            body=(
+                f"No on-duty {unit_names} available for this {alert.get_type_display()} "
+                f"emergency in {barangay}."
+            ),
         )
 
 
@@ -295,52 +368,123 @@ def privacy_safe_user_name(user):
 
 
 def auto_route_alert(alert, request):
-    responder = find_auto_responder(alert)
-    if not responder:
+    """
+    Route SOS to on-duty first responders whose unit matches the case type:
+    medical→BHW, crime→Tanod, fire/disaster→BDRRMO.
+    Assigns all matching on-duty responders (nearest first), not only one with fresh GPS.
+    """
+    preferred = preferred_units_for(alert.type)
+    unit_names = ", ".join(responder_unit_label(u) for u in sorted(preferred)) or "responder"
+    case_label = alert.get_type_display() if hasattr(alert, "get_type_display") else alert.type
+
+    responders = find_auto_responders(alert, limit=8)
+    if not responders:
         EmergencyEscalation.objects.create(
             alert=alert,
-            reason="No fresh same-barangay responder from the required unit was available.",
+            reason=(
+                f"No on-duty {unit_names} in {normalize_barangay(alert.barangay)} "
+                f"available for this {case_label} emergency."
+            ),
         )
         create_status_event(
             alert,
             alert.status,
             None,
+            f"No on-duty {unit_names} online for {case_label}. "
             "Awaiting manual dispatch from the barangay emergency desk.",
         )
         notify_officials_no_responder(alert)
         return None
-    EmergencyResponderAssignment.objects.update_or_create(
-        alert=alert,
-        responder=responder,
-        defaults={"status": EmergencyResponderAssignment.Status.ASSIGNED},
-    )
+
+    primary = responders[0]
+    for responder in responders:
+        EmergencyResponderAssignment.objects.update_or_create(
+            alert=alert,
+            responder=responder,
+            defaults={"status": EmergencyResponderAssignment.Status.ASSIGNED},
+        )
+
     alert.status = EmergencyAlert.Status.ROUTED
     alert.routed_at = timezone.now()
     alert.status_version += 1
     alert.save(update_fields=["status", "routed_at", "status_version", "updated_at"])
-    unit_label = responder_unit_label(responder.responder_unit)
-    create_status_event(
+
+    primary_unit = responder_unit_label(primary.responder_unit)
+    if len(responders) == 1:
+        route_note = (
+            f"Auto-routed to on-duty {primary_unit} {privacy_safe_user_name(primary)} "
+            f"for this {case_label} case."
+        )
+        reporter_body = f"A {primary_unit} responder has been assigned to your {case_label.lower()} emergency."
+    else:
+        names = ", ".join(
+            f"{responder_unit_label(r.responder_unit)} {privacy_safe_user_name(r)}" for r in responders
+        )
+        route_note = (
+            f"Auto-routed to {len(responders)} on-duty {unit_names} responder(s) for this "
+            f"{case_label} case: {names}."
+        )
+        reporter_body = (
+            f"{len(responders)} on-duty {unit_names} responders were assigned to your "
+            f"{case_label.lower()} emergency."
+        )
+
+    create_status_event(alert, EmergencyAlert.Status.ROUTED, None, route_note)
+    notify_emergency_status(
         alert,
-        EmergencyAlert.Status.ROUTED,
-        None,
-        f"Auto-routed to {unit_label} {privacy_safe_user_name(responder)}.",
+        type=EmergencyAlert.Status.ROUTED,
+        body=reporter_body,
     )
-    notify_emergency_status(alert, type=EmergencyAlert.Status.ROUTED, body=f"A {unit_label} responder has been assigned to your emergency.")
-    create_emergency_notification(
-        alert=alert,
-        recipient=responder,
-        type=Notification.Type.EMERGENCY_ROUTED,
-        title=f"{alert.type.title()} emergency assigned",
-        body=f"Auto-routed to you as nearest on-duty {unit_label}.",
+
+    # Primary opens the shared group chat; extra unit mates announce join
+    post_responder_chat(
+        alert,
+        primary,
+        (
+            f"Hi, this is {privacy_safe_user_name(primary)} ({primary_unit}). "
+            f"I've been assigned to your {case_label.lower()} emergency. "
+            "Please stay safe — we're coordinating response now."
+        ),
     )
+
+    for index, responder in enumerate(responders):
+        unit_label = responder_unit_label(responder.responder_unit)
+        nearest = index == 0
+        create_emergency_notification(
+            alert=alert,
+            recipient=responder,
+            type=Notification.Type.EMERGENCY_ROUTED,
+            title=f"{case_label} emergency assigned",
+            body=(
+                f"Auto-routed to you as nearest on-duty {unit_label} for this {case_label.lower()} case."
+                if nearest
+                else f"Auto-routed to you as on-duty {unit_label} for this {case_label.lower()} case."
+            ),
+        )
+        if index > 0:
+            post_responder_chat(
+                alert,
+                responder,
+                (
+                    f"{privacy_safe_user_name(responder)} ({unit_label}) also joined this response. "
+                    "We're all in this group chat with you."
+                ),
+            )
+
     create_audit_log(
         "emergency.auto_routed",
         actor=None,
         target_user=alert.reporter,
-        metadata={"alert_id": alert.pk, "responder_id": responder.pk, "responder_unit": responder.responder_unit},
+        metadata={
+            "alert_id": alert.pk,
+            "responder_ids": [r.pk for r in responders],
+            "primary_responder_id": primary.pk,
+            "responder_units": [r.responder_unit for r in responders],
+            "emergency_type": alert.type,
+        },
         request_meta=request_meta(request),
     )
-    return responder
+    return primary
 
 def create_witness_notifications(alert):
     reporter_profile = getattr(alert.reporter, "resident_profile", None)
@@ -648,6 +792,72 @@ class EmergencyDetailView(APIView):
         return Response(serialize_alert(alert, request))
 
 
+class EmergencyChatView(APIView):
+    """
+    Resident ↔ assigned responders chat for one SOS alert.
+    GET list messages · POST send a message.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        touch_last_seen(request.user)
+        alert = get_object_or_404(EmergencyAlert, pk=pk)
+        if not can_view_alert(request.user, alert):
+            return Response(
+                {"detail": "You do not have permission to view this emergency chat."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        after_id = request.query_params.get("after")
+        qs = (
+            EmergencyChatMessage.objects.filter(alert=alert)
+            .select_related("sender", "sender__resident_profile")
+            .order_by("created_at", "id")
+        )
+        if after_id and str(after_id).isdigit():
+            qs = qs.filter(pk__gt=int(after_id))
+        messages = list(qs[:200])
+        return Response(
+            EmergencyChatMessageSerializer(messages, many=True, context={"request": request}).data
+        )
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        alert = get_object_or_404(EmergencyAlert, pk=pk)
+        if not can_view_alert(request.user, alert):
+            return Response(
+                {"detail": "You do not have permission to chat on this emergency."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        # Chat opens only after at least one responder is assigned (group room)
+        if not alert.assignments.exists():
+            return Response(
+                {"detail": "Chat opens after a responder is assigned to this emergency."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Only active cases (or recently closed for wrap-up)
+        if alert.status == EmergencyAlert.Status.CANCELLED:
+            return Response(
+                {"detail": "Chat is closed for cancelled alerts."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = EmergencyChatCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        message = EmergencyChatMessage.objects.create(
+            alert=alert,
+            sender=request.user,
+            body=serializer.validated_data["body"],
+        )
+        message = (
+            EmergencyChatMessage.objects.select_related("sender", "sender__resident_profile")
+            .get(pk=message.pk)
+        )
+        payload = EmergencyChatMessageSerializer(message, context={"request": request}).data
+        # Live delivery via emergency tracking websocket; REST poll is fallback
+        transaction.on_commit(lambda m=message: broadcast_emergency_chat_message(m))
+        return Response(payload, status=status.HTTP_201_CREATED)
+
+
 class EmergencyCancelView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -697,7 +907,7 @@ class EmergencyAssignView(APIView):
         responder_labels = ", ".join(responder.email for responder in responders)
         create_status_event(alert, EmergencyAlert.Status.ROUTED, request.user, f"Assigned to {responder_labels}.")
         notify_emergency_status(alert, type=EmergencyAlert.Status.ROUTED, body="A responder has been assigned to your emergency.")
-        for responder in responders:
+        for index, responder in enumerate(responders):
             create_emergency_notification(
                 alert=alert,
                 recipient=responder,
@@ -705,6 +915,26 @@ class EmergencyAssignView(APIView):
                 title=f"{alert.type.title()} emergency assigned",
                 body="Open your responder dashboard and acknowledge this assignment.",
             )
+            unit = responder_unit_label(getattr(responder, "responder_unit", None))
+            if index == 0:
+                post_responder_chat(
+                    alert,
+                    responder,
+                    (
+                        f"Hi, this is {privacy_safe_user_name(responder)} ({unit}). "
+                        f"I've been assigned to your {alert.type} emergency. "
+                        "Please stay safe — we're coordinating response now."
+                    ),
+                )
+            else:
+                post_responder_chat(
+                    alert,
+                    responder,
+                    (
+                        f"{privacy_safe_user_name(responder)} ({unit}) joined this response team. "
+                        "We're all in this group chat with you."
+                    ),
+                )
         create_audit_log("emergency.assigned", actor=request.user, target_user=alert.reporter, metadata={"alert_id": alert.pk, "responder_ids": [responder.pk for responder in responders]}, request_meta=request_meta(request))
         return Response(serialize_alert(alert, request))
 
@@ -827,6 +1057,25 @@ class AssignmentActionMixin:
             alert.save(update_fields=["status", "status_version", "updated_at"])
         create_status_event(alert, self.target_status, request.user, note)
         notify_emergency_status(alert, type=self.target_status, body=note)
+        # Auto chat updates for the resident group room
+        if self.target_status == EmergencyAlert.Status.ACKNOWLEDGED:
+            post_responder_chat(
+                alert,
+                request.user,
+                "I've accepted your alert and I'm preparing to respond. Please stay safe.",
+            )
+        elif self.target_status == EmergencyAlert.Status.ARRIVED:
+            post_responder_chat(
+                alert,
+                request.user,
+                "I've arrived at your location. Looking for you now — stay visible if you can.",
+            )
+        elif self.target_status == EmergencyAlert.Status.RESOLVED:
+            post_responder_chat(
+                alert,
+                request.user,
+                "This emergency has been marked resolved. Take care.",
+            )
         return Response(serialize_alert(alert, request))
 
 
@@ -890,6 +1139,11 @@ class EmergencyLocationPingView(APIView):
             assignment.save(update_fields=["status"])
             create_status_event(alert, EmergencyAlert.Status.EN_ROUTE, request.user, "Responder is on the way.")
             notify_emergency_status(alert, type=EmergencyAlert.Status.EN_ROUTE, body="Responder is on the way.")
+            post_responder_chat(
+                alert,
+                request.user,
+                "I'm on my way to your location now. Please stay safe and keep your phone nearby.",
+            )
         else:
             nearby_distance = int(getattr(settings, "EMERGENCY_NEARBY_DISTANCE_METERS", 100))
             distance = distance_meters(
@@ -904,6 +1158,11 @@ class EmergencyLocationPingView(APIView):
                 alert.save(update_fields=["status", "status_version", "updated_at"])
                 create_status_event(alert, EmergencyAlert.Status.NEARBY, request.user, "Responder is near your location.")
                 notify_emergency_status(alert, type=EmergencyAlert.Status.NEARBY, body="Responder is near your location.")
+                post_responder_chat(
+                    alert,
+                    request.user,
+                    "I'm nearby. Please stay where you are if it's safe — watch for me.",
+                )
             else:
                 broadcast_emergency_update(alert)
         return Response(serialize_alert(alert, request), status=status.HTTP_201_CREATED)

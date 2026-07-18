@@ -95,7 +95,7 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
         if (typeof detail === "string" && detail.toLowerCase().includes("suspended")) {
           setErrors({
             email: SILENT_SIGN_IN_ERROR,
-            password: "Account suspended. Please contact your barangay administrator.",
+            password: "Account is inactive. Sign in again to reactivate, or contact your barangay office.",
           })
           setSubmitError("")
           return

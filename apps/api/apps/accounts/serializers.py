@@ -123,8 +123,10 @@ class LoginSerializer(serializers.Serializer):
             user = get_user_model().objects.filter(phone_number=identifier).first()
         if user is None or not user.check_password(password):
             raise serializers.ValidationError("Invalid credentials.")
-        if user.status == User.Status.SUSPENDED:
-            raise serializers.ValidationError("This account is suspended.")
+        # Suspended (self-deactivated) users may sign in to reactivate.
+        # Rejected accounts stay blocked.
+        if user.status == User.Status.REJECTED:
+            raise serializers.ValidationError("This account was not approved.")
         attrs["user"] = user
         return attrs
 
@@ -196,8 +198,15 @@ class UserSummarySerializer(serializers.ModelSerializer):
         return profile.address if profile else ""
 
     def get_barangay(self, obj):
+        # Root cause of UI "Pending": ResidentProfile.barangay defaults to "Pending"
+        # (and may never be updated after registration). This product is scoped to
+        # Marikina Heights — never surface the placeholder string to clients.
         profile = self.profile(obj)
-        return profile.barangay if profile else ""
+        raw = (profile.barangay if profile else "") or ""
+        raw = raw.strip()
+        if not raw or raw.lower() == "pending":
+            return "Marikina Heights"
+        return raw
 
     def get_date_of_birth(self, obj):
         profile = self.profile(obj)
@@ -368,6 +377,85 @@ class EmailOTPVerifySerializer(serializers.Serializer):
 
     def validate_email(self, value):
         return value.strip().lower()
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True, min_length=8, max_length=128)
+    stay_logged_in = serializers.BooleanField(required=False, default=True)
+
+    def validate_new_password(self, value):
+        try:
+            validate_password(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages)) from exc
+        return value
+
+
+class AccountPhoneChangeRequestSerializer(serializers.Serializer):
+    phone_number = serializers.RegexField(regex=r"^\+63\d{10}$")
+
+    def validate_phone_number(self, value):
+        user = self.context.get("user")
+        qs = get_user_model().objects.filter(phone_number=value)
+        if user is not None:
+            qs = qs.exclude(pk=user.pk)
+        if qs.exists():
+            raise serializers.ValidationError("An account with this phone number already exists.")
+        return value
+
+
+class AccountPhoneChangeVerifySerializer(serializers.Serializer):
+    phone_number = serializers.RegexField(regex=r"^\+63\d{10}$")
+    code = serializers.RegexField(regex=r"^\d{6}$")
+
+
+class AccountEmailChangeRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        email = value.strip().lower()
+        user = self.context.get("user")
+        qs = get_user_model().objects.filter(email__iexact=email)
+        if user is not None:
+            qs = qs.exclude(pk=user.pk)
+        if qs.exists():
+            raise serializers.ValidationError("An account with this email already exists.")
+        return email
+
+
+class AccountEmailChangeVerifySerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    code = serializers.RegexField(regex=r"^\d{6}$")
+
+    def validate_email(self, value):
+        return value.strip().lower()
+
+
+class AccountNameChangeConfirmSerializer(serializers.Serializer):
+    first_name = serializers.CharField(max_length=50)
+    middle_name = serializers.CharField(max_length=50, allow_blank=True, required=False, default="")
+    last_name = serializers.CharField(max_length=50)
+    ocr_first_name = serializers.CharField(max_length=80)
+    ocr_middle_name = serializers.CharField(max_length=80, allow_blank=True, required=False, default="")
+    ocr_last_name = serializers.CharField(max_length=80)
+
+    def validate_first_name(self, value):
+        if not NAME_PATTERN.fullmatch(value):
+            raise serializers.ValidationError(NAME_MESSAGE)
+        return value
+
+    def validate_last_name(self, value):
+        if not NAME_PATTERN.fullmatch(value):
+            raise serializers.ValidationError(NAME_MESSAGE)
+        return value
+
+    def validate_middle_name(self, value):
+        if value == "":
+            return value
+        if not NAME_PATTERN.fullmatch(value):
+            raise serializers.ValidationError(NAME_MESSAGE)
+        return value
 
 
 class AdminCreateUserSerializer(serializers.Serializer):

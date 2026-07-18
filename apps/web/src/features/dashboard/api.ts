@@ -122,6 +122,9 @@ export interface ConcernComment {
   author: PublicUser
   parent: number | null
   body: string
+  /** Present after first edit — original text before any changes */
+  original_body?: string
+  is_edited?: boolean
   created_at: string
   updated_at: string
   replies: ConcernComment[]
@@ -182,7 +185,11 @@ export interface ResidentRoleSummary extends CommonRoleSummary {
   reports_active: number
   reports_resolved: number
   reports_appealed: number
+  /** User's own active emergencies */
   active_emergencies: number
+  /** Barangay-wide active emergencies (home rail / feed banner) */
+  barangay_active_emergencies?: number
+  has_ongoing_emergencies?: boolean
   emergencies_resolved: number
   open_account_requests: number
 }
@@ -341,6 +348,29 @@ export function createConcernRemark(id: number, payload: { body: string; visible
   })
 }
 
+export interface ConcernChatMessage {
+  id: number
+  concern: number
+  sender: PublicUser
+  body: string
+  created_at: string
+  is_mine: boolean
+}
+
+export function listConcernChat(concernId: number, afterId?: number) {
+  const params = new URLSearchParams()
+  if (afterId) params.set("after", String(afterId))
+  const q = params.toString() ? `?${params.toString()}` : ""
+  return apiRequest<ConcernChatMessage[]>(`/concerns/${concernId}/chat/${q}`)
+}
+
+export function sendConcernChat(concernId: number, body: string) {
+  return apiRequest<ConcernChatMessage>(`/concerns/${concernId}/chat/`, {
+    method: "POST",
+    body: JSON.stringify({ body }),
+  })
+}
+
 export function flagConcern(id: number, payload: { reason: string; note?: string; comment?: number | null }) {
   return apiRequest<ContentFlag>(`/concerns/${id}/flags/`, {
     method: "POST",
@@ -366,6 +396,23 @@ export function commentOnConcern(id: number, payload: { body: string; parent?: n
   return apiRequest<ConcernComment>(`/concerns/${id}/comments/`, {
     method: "POST",
     body: JSON.stringify(payload),
+  })
+}
+
+export function updateConcernComment(
+  concernId: number,
+  commentId: number,
+  payload: { body: string },
+) {
+  return apiRequest<ConcernComment>(`/concerns/${concernId}/comments/${commentId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteConcernComment(concernId: number, commentId: number) {
+  return apiRequest<void>(`/concerns/${concernId}/comments/${commentId}/`, {
+    method: "DELETE",
   })
 }
 
@@ -545,6 +592,80 @@ export type LiveMapUpdate =
 
 export function getOfficialLiveMap() {
   return apiRequest<LiveMapSnapshot>("/dashboard/official/live-map/")
+}
+
+/** Public community concern pin on resident alerts map */
+export interface ResidentMapConcern {
+  id: number
+  tracking_id: string
+  title: string
+  description: string
+  category: ConcernCategory
+  status: ConcernStatus
+  address: string
+  barangay: string
+  latitude: string | null
+  longitude: string | null
+  preview_url: string | null
+  reporter: { id: number; full_name: string; role: string; barangay: string }
+  created_at: string
+  updated_at: string
+  priority: "high" | "normal"
+  kind: "concern"
+}
+
+/** Active emergency pin — no reporter / responder GPS */
+export interface ResidentMapEmergency {
+  id: number
+  type: string
+  type_label: string
+  note: string
+  status: string
+  address: string
+  barangay: string
+  latitude: string
+  longitude: string
+  preview_url: string | null
+  created_at: string
+  updated_at: string
+  kind: "emergency"
+  source: string
+}
+
+export interface ResidentMapService {
+  id: string
+  name: string
+  type: string
+  label: string
+  sector: string
+  latitude: number
+  longitude: number
+  source: string
+  kind: "service"
+}
+
+export interface ResidentAlertsMapSnapshot {
+  map: {
+    provider: "OpenStreetMap"
+    center: { latitude: number; longitude: number; zoom: number }
+    boundary: { osm_relation_id: number; name: string; geometry?: LiveMapGeometry | null }
+  }
+  concerns: ResidentMapConcern[]
+  emergencies: ResidentMapEmergency[]
+  services: ResidentMapService[]
+  poi_types: Array<{ type: string; label: string; sector: string }>
+  summary: {
+    public_concerns: number
+    active_concerns: number
+    active_emergencies: number
+    services: number
+    has_ongoing_emergencies: boolean
+  }
+  generated_at: string
+}
+
+export function getResidentAlertsMap() {
+  return apiRequest<ResidentAlertsMapSnapshot>("/locations/resident-alerts-map/")
 }
 
 export function sendLocationPing(payload: { latitude: number; longitude: number; accuracy?: number | null; source?: "active_session" | "pwa_background" | "manual" | "incident" }) {

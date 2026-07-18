@@ -98,7 +98,7 @@ export function RotatingSearchField({
 
       <div className="relative h-11">
         <SearchIcon
-          className="pointer-events-none absolute left-3.5 top-1/2 z-[2] size-[18px] -translate-y-1/2 text-neutral-600"
+          className="pointer-events-none absolute left-3.5 top-1/2 z-[2] size-7 -translate-y-1/2 text-neutral-600"
           strokeWidth={2.25}
           aria-hidden
         />

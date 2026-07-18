@@ -9,7 +9,6 @@ import {
   LeafIcon,
   LockIcon,
   MapPinIcon,
-  PencilIcon,
   PlusIcon,
   ShieldCheckIcon,
   TrafficConeIcon,
@@ -64,9 +63,48 @@ const ACCEPT_STRING = ".png,.jpg,.jpeg," + ALLOWED_TYPES.join(",")
 const MAX_FILE_SIZE = 2 * 1024 * 1024
 const MAX_FILES = 5
 const descriptionMax = 1500
+
+/**
+ * Backend still requires a `title` field; residents only type description.
+ * Auto-fill a short internal label from the description (not shown as a separate UI field).
+ */
+function titleFromDescription(text: string, max = 80): string {
+  const cleaned = text.trim().replace(/\s+/g, " ")
+  if (!cleaned) return "Community report"
+  const sentence = cleaned.split(/(?<=[.!?…])\s+/)[0]?.trim() || cleaned
+  const base = sentence.length <= max ? sentence : cleaned
+  if (base.length <= max) return base
+  const slice = base.slice(0, max)
+  const atWord = slice.replace(/\s+\S*$/, "").trim()
+  return (atWord.length >= 24 ? atWord : slice).trim()
+}
+
 const DRAFT_DB = "eboses-resident-drafts"
 const DRAFT_STORE = "report-drafts"
 const DRAFT_KEY = "current-report"
+/**
+ * After the user confirms close once this session:
+ * - no more “Close without reporting?” sheet
+ * - no more “Draft saved.” toast
+ * Draft still saves silently on close.
+ */
+const DRAFT_CLOSE_ACK_KEY = "eboses-draft-close-ack"
+
+function hasAcknowledgedDraftClose() {
+  try {
+    return typeof sessionStorage !== "undefined" && sessionStorage.getItem(DRAFT_CLOSE_ACK_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
+function markDraftCloseAcknowledged() {
+  try {
+    sessionStorage.setItem(DRAFT_CLOSE_ACK_KEY, "1")
+  } catch {
+    /* private mode / blocked storage */
+  }
+}
 
 interface ReportDraft {
   concern: string
@@ -166,6 +204,8 @@ export function CreateReportDialog({
   const [submittedReport, setSubmittedReport] = useState<Concern | null>(null)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [draftRestored, setDraftRestored] = useState(false)
+  /** Confirm sheet when leaving with a draft */
+  const [closeConfirmOpen, setCloseConfirmOpen] = useState(false)
   const clientRequestIdRef = useRef(crypto.randomUUID())
   const fileInputRef = useRef<HTMLInputElement>(null)
   const previewUrls = useMemo(
@@ -187,6 +227,19 @@ export function CreateReportDialog({
     !rawStreet || rawStreet.toLowerCase() === "pending" ? "" : rawStreet
 
   useEffect(() => () => previewUrls.forEach((url) => URL.revokeObjectURL(url)), [previewUrls])
+
+  // Escape on the confirm sheet = “Keep reporting”
+  useEffect(() => {
+    if (!closeConfirmOpen) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation()
+        setCloseConfirmOpen(false)
+      }
+    }
+    document.addEventListener("keydown", onKey, true)
+    return () => document.removeEventListener("keydown", onKey, true)
+  }, [closeConfirmOpen])
 
   useEffect(() => {
     if (!open || draftRestored) return
@@ -211,7 +264,7 @@ export function CreateReportDialog({
     const timeout = window.setTimeout(() => {
       void writeDraft({
         concern,
-        title: description.trim().slice(0, 80),
+        title: titleFromDescription(description),
         description,
         address,
         visibility,
@@ -235,9 +288,87 @@ export function CreateReportDialog({
     setMoreOpen(false)
     setLocationOpen(false)
     setVisibilityMenuOpen(false)
+    setCloseConfirmOpen(false)
     clientRequestIdRef.current = crypto.randomUUID()
     setDraftRestored(false)
   }
+
+  function hasDraftContent() {
+    return Boolean(
+      concern.trim() ||
+        description.trim() ||
+        address.trim() ||
+        locationPin ||
+        mediaFiles.length > 0,
+    )
+  }
+
+  function buildDraftPayload(): ReportDraft {
+    return {
+      concern,
+      title: titleFromDescription(description),
+      description,
+      address,
+      visibility,
+      locationPin,
+    }
+  }
+
+  async function saveDraftQuietly() {
+    if (hasDraftContent()) {
+      await writeDraft(buildDraftPayload())
+    } else {
+      await deleteDraft()
+    }
+  }
+
+  /** X / overlay / Escape — confirm only the first time with content this session */
+  function requestClose() {
+    if (isSubmitting) return
+    setMoreOpen(false)
+    setLocationOpen(false)
+    setVisibilityMenuOpen(false)
+    setCloseConfirmOpen(false)
+
+    if (!hasDraftContent()) {
+      void deleteDraft().catch(() => undefined)
+      setOpen(false)
+      return
+    }
+
+    // Already confirmed once this session → save + close, no dialog/toast
+    if (hasAcknowledgedDraftClose()) {
+      void saveDraftQuietly()
+        .catch(() => undefined)
+        .finally(() => setOpen(false))
+      return
+    }
+
+    setCloseConfirmOpen(true)
+  }
+
+  async function confirmCloseAndSaveDraft() {
+    try {
+      await saveDraftQuietly()
+      // First confirmation only: toast once, then never prompt again this session
+      if (!hasAcknowledgedDraftClose()) {
+        toast.success("Draft saved.")
+        markDraftCloseAcknowledged()
+      }
+    } catch {
+      toast.error("Could not save draft.")
+    }
+    setCloseConfirmOpen(false)
+    setMoreOpen(false)
+    setLocationOpen(false)
+    setOpen(false)
+  }
+
+  function keepReporting() {
+    setCloseConfirmOpen(false)
+  }
+  // Alias: older HMR bundles may still call keepPosting
+  const keepPosting = keepReporting
 
   function validate() {
     const errors: Record<string, string> = {}
@@ -333,7 +464,7 @@ export function CreateReportDialog({
   async function handleSubmit() {
     if (!validate()) return
 
-    const title = description.trim().slice(0, 80)
+    const title = titleFromDescription(description)
     const formData = new FormData()
     formData.append("client_request_id", clientRequestIdRef.current)
     formData.append("title", title)
@@ -343,7 +474,25 @@ export function CreateReportDialog({
       concernConfig.find((c) => c.label === concern)?.value ?? "others",
     )
     formData.append("visibility", visibility)
-    formData.append("address", address.trim())
+    // Persist the human street line with the report (DB Concern.address).
+    // Prefer primary street from the map picker; never store raw "Lat: …" alone.
+    {
+      const primary = (addressPrimary || address).trim().split(",")[0]?.trim() || address.trim()
+      const secondary = addressSecondary.trim()
+      const looksLikeCoords =
+        !primary ||
+        /^lat\b/i.test(primary) ||
+        /^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(primary)
+      if (looksLikeCoords) {
+        setFieldErrors((prev) => ({
+          ...prev,
+          address: "Pin a location with a street name before submitting.",
+        }))
+        return
+      }
+      const storedAddress = secondary ? `${primary}, ${secondary}` : primary
+      formData.append("address", storedAddress.slice(0, 255))
+    }
     if (locationPin) {
       formData.append("latitude", locationPin.lat.toFixed(7))
       formData.append("longitude", locationPin.lng.toFixed(7))
@@ -403,23 +552,20 @@ export function CreateReportDialog({
 
       <Dialog
         open={open}
-        onClose={() => {
-          setOpen(false)
-          setMoreOpen(false)
-          setLocationOpen(false)
-        }}
+        onClose={requestClose}
         maxW={moreOpen ? "max-w-[820px]" : "max-w-[520px]"}
       >
-        <DialogBody className="!space-y-0 !overflow-hidden !p-0 bg-white">
-          <div className="flex min-h-[min(500px,88vh)] flex-col pt-4 md:flex-row md:pt-5">
+        <DialogBody className="!flex !h-full !min-h-0 !flex-1 !flex-col !space-y-0 !overflow-hidden !p-0 bg-white">
+          {/* h-full so mobile footer pins to dialog bottom, not under description */}
+          <div className="flex h-full min-h-0 flex-1 flex-col pt-[max(0.75rem,env(safe-area-inset-top))] md:min-h-[min(500px,88vh)] md:flex-row md:pt-5">
             {/* Main composer */}
-            <div className="flex min-w-0 flex-1 flex-col">
-              {/* Header: Close · Anyone · Post */}
-              <div className="flex shrink-0 items-center gap-2.5 px-5">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {/* Sticky header: Close · Anyone · Report */}
+              <div className="flex shrink-0 items-center gap-2.5 px-4 sm:px-5">
                 <button
                   type="button"
-                  onClick={() => setOpen(false)}
-                  className="flex size-12 shrink-0 items-center justify-center rounded-full text-neutral-600 transition-colors hover:bg-neutral-100"
+                  onClick={requestClose}
+                  className="flex size-11 shrink-0 items-center justify-center rounded-full text-neutral-600 transition-colors hover:bg-neutral-100 sm:size-12"
                   aria-label="Close"
                 >
                   <XIcon className="size-6" strokeWidth={2} />
@@ -429,7 +575,7 @@ export function CreateReportDialog({
                   <button
                     type="button"
                     onClick={() => setVisibilityMenuOpen((v) => !v)}
-                    className="inline-flex h-11 items-center gap-2 rounded-full border border-neutral-200 bg-neutral-100/80 px-4 text-[15px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-100"
+                    className="inline-flex h-10 items-center gap-2 rounded-full border border-neutral-200 bg-neutral-100/80 px-3.5 text-[14px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-100 sm:h-11 sm:px-4 sm:text-[15px]"
                   >
                     {visibility === "community" ? (
                       <GlobeIcon className="size-4" />
@@ -470,16 +616,16 @@ export function CreateReportDialog({
                     type="button"
                     disabled={isSubmitting || isCheckingMedia}
                     onClick={() => void handleSubmit()}
-                    className="inline-flex h-11 items-center justify-center rounded-full bg-[#ff6a1a] px-6 text-[15px] font-semibold text-white transition-colors hover:bg-[#e85f12] disabled:opacity-60"
+                    className="inline-flex h-10 items-center justify-center rounded-full bg-[#ff8133] px-5 text-[14px] font-semibold text-white transition-colors hover:bg-[#e6732e] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:opacity-100 sm:h-11 sm:px-6 sm:text-[15px]"
                   >
-                    {isSubmitting ? "Posting…" : "Post"}
+                    {isSubmitting ? "Reporting…" : "Report"}
                   </button>
                 </div>
               </div>
 
-              {/* Identity — below Close / Anyone / Post, left-aligned under close */}
-              <div className="flex items-center gap-3 px-5 pt-4">
-                <span className="inline-flex size-12 shrink-0 items-center justify-center rounded-full bg-[#c5d0e6] text-[18px] font-semibold text-[#2c3a5a]">
+              {/* Identity */}
+              <div className="flex items-center gap-3 px-4 pt-4 sm:px-5">
+                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-[#c5d0e6] text-[17px] font-semibold text-[#2c3a5a] sm:size-12 sm:text-[18px]">
                   {letter}
                 </span>
                 <div className="min-w-0 flex-1">
@@ -498,8 +644,8 @@ export function CreateReportDialog({
                 ) : null}
               </div>
 
-              {/* Body — compact description (no huge empty flex gap inside the field) */}
-              <div className="flex min-h-0 flex-1 flex-col px-5 pt-4">
+              {/* Scrollable body — description / media / location chip only */}
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-4 sm:px-5">
                 <textarea
                   value={description}
                   maxLength={descriptionMax}
@@ -508,7 +654,6 @@ export function CreateReportDialog({
                     setDescription(e.target.value)
                     if (fieldErrors.description)
                       setFieldErrors((prev) => ({ ...prev, description: "" }))
-                    // Auto-grow with content (cap so footer stays visible)
                     const el = e.currentTarget
                     el.style.height = "auto"
                     el.style.height = `${Math.min(el.scrollHeight, 220)}px`
@@ -523,23 +668,18 @@ export function CreateReportDialog({
                     el.style.height = "auto"
                     el.style.height = `${Math.min(Math.max(el.scrollHeight, 72), 220)}px`
                   }}
-                  placeholder={
-                    hasMedia || locationPin
-                      ? "Add a caption (optional)"
-                      : "What's happening in your barangay?"
-                  }
-                  className="max-h-[220px] min-h-[72px] w-full shrink-0 resize-none overflow-y-auto border-0 bg-transparent text-[17px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400"
+                  placeholder="What's happening in your barangay?"
+                  className="max-h-[220px] min-h-[72px] w-full resize-none overflow-y-auto border-0 bg-transparent text-[17px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400"
                 />
 
-                {/* Media — above footer */}
                 {hasMedia ? (
-                  <div className="mt-3 flex shrink-0 flex-wrap gap-2.5">
+                  <div className="mt-3 flex flex-wrap gap-2.5">
                     {mediaFiles.map((file, index) => {
                       const url = previewUrls[index]
                       return (
                         <div
                           key={`${file.name}-${index}`}
-                          className="relative h-[168px] w-[168px] overflow-hidden rounded-2xl bg-neutral-100 shadow-sm ring-1 ring-black/5 sm:h-[180px] sm:w-[180px]"
+                          className="relative h-[148px] w-[148px] overflow-hidden rounded-2xl bg-neutral-100 shadow-sm ring-1 ring-black/5 sm:h-[168px] sm:w-[168px]"
                         >
                           <button
                             type="button"
@@ -558,39 +698,31 @@ export function CreateReportDialog({
                           >
                             <XIcon className="size-4" strokeWidth={2.25} />
                           </button>
-                          {index === 0 ? (
-                            <button
-                              type="button"
-                              onClick={() => fileInputRef.current?.click()}
-                              className="absolute bottom-2.5 left-2.5 inline-flex items-center gap-1.5 rounded-full bg-black/70 px-3 py-1.5 text-[13px] font-semibold text-white backdrop-blur-[2px]"
-                            >
-                              <PencilIcon className="size-3.5" />
-                              Modify
-                            </button>
-                          ) : null}
                         </div>
                       )
                     })}
                   </div>
                 ) : null}
 
-                {/* Location row — above footer */}
                 {locationPin && address ? (
-                  <div className="mt-3 flex shrink-0 items-center gap-3 rounded-full border border-neutral-200 bg-white px-3.5 py-2.5 shadow-sm">
+                  <div className="mt-3 flex items-center gap-3 rounded-md border border-neutral-300 bg-white px-3.5 py-2.5">
                     <button
                       type="button"
                       onClick={() => setLocationOpen(true)}
                       className="flex min-w-0 flex-1 items-center gap-3 text-left"
                     >
-                      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-700">
-                        <MapPinIcon className="size-4" strokeWidth={2} />
-                      </span>
+                      <img
+                        src="/contents/map-pin-gps.png"
+                        alt=""
+                        className="size-5 shrink-0 object-contain"
+                        aria-hidden
+                      />
                       <span className="min-w-0">
                         <span className="block truncate text-[14px] font-semibold leading-tight text-neutral-900">
                           {addressPrimary || address}
                         </span>
                         {addressSecondary ? (
-                          <span className="mt-0.5 block truncate text-[12px] leading-tight text-neutral-500">
+                          <span className="mt-0.5 block truncate text-[12px] leading-snug text-neutral-500">
                             {addressSecondary}
                           </span>
                         ) : null}
@@ -604,23 +736,18 @@ export function CreateReportDialog({
                         setAddressPrimary("")
                         setAddressSecondary("")
                       }}
-                      className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700"
+                      className="flex size-10 shrink-0 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800"
                       aria-label="Remove location"
                     >
-                      <XIcon className="size-4" />
+                      <XIcon className="size-6" strokeWidth={1.75} />
                     </button>
                   </div>
                 ) : null}
 
-                {/* Empty space stays outside the description field */}
-                <div className="min-h-0 flex-1" aria-hidden />
-
-                {/* All feedback errors above photo / location / Category toolbar */}
                 {(() => {
                   const messages = [
                     fieldErrors.description,
                     fieldErrors.concern,
-                    // Media may contain multiple newline-separated check messages
                     ...(fieldErrors.media
                       ? fieldErrors.media.split("\n").map((m) => m.trim()).filter(Boolean)
                       : []),
@@ -629,7 +756,7 @@ export function CreateReportDialog({
                   if (messages.length === 0) return null
                   return (
                     <ul
-                      className="mt-2 shrink-0 list-none space-y-1 text-xs font-medium text-destructive"
+                      className="mt-2 list-none space-y-1 text-xs font-medium text-destructive"
                       role="alert"
                     >
                       {messages.map((msg) => (
@@ -640,93 +767,145 @@ export function CreateReportDialog({
                 })()}
               </div>
 
-              {/* Footer actions */}
-              <div className="flex shrink-0 items-center gap-0.5 px-3 pb-3 pt-2 sm:px-4">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept={ACCEPT_STRING}
-                  multiple
-                  className="sr-only"
-                  onChange={(e) => {
-                    void addFiles(Array.from(e.target.files ?? []))
-                    e.target.value = ""
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isCheckingMedia || mediaFiles.length >= MAX_FILES}
-                  className="flex size-11 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 disabled:opacity-50"
-                  aria-label="Add photo"
-                >
-                  <ImageIcon className="size-5" strokeWidth={1.75} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLocationOpen(true)}
-                  className={cn(
-                    "flex size-11 items-center justify-center rounded-full transition-colors hover:bg-neutral-100",
-                    locationPin ? "text-[#ff6a1a]" : "text-neutral-500 hover:text-neutral-800",
-                  )}
-                  aria-label="Add location"
-                >
-                  <MapPinIcon className="size-5" strokeWidth={1.75} />
-                </button>
+              {/* Bottom chrome: toolbar always first; categories expand below it on mobile */}
+              <div className="shrink-0 border-t border-neutral-100 bg-white">
+                <div className="flex items-center gap-0.5 px-3 pt-2 sm:px-4">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept={ACCEPT_STRING}
+                    multiple
+                    className="sr-only"
+                    onChange={(e) => {
+                      void addFiles(Array.from(e.target.files ?? []))
+                      e.target.value = ""
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isCheckingMedia || mediaFiles.length >= MAX_FILES}
+                    className={cn(
+                      "flex size-11 items-center justify-center rounded-full transition-colors hover:bg-neutral-100 disabled:opacity-50",
+                      hasMedia
+                        ? "text-neutral-800"
+                        : "text-neutral-500 hover:text-neutral-800",
+                    )}
+                    aria-label="Add photo"
+                  >
+                    <ImageIcon className="size-5" strokeWidth={1.75} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLocationOpen(true)}
+                    className={cn(
+                      "flex size-11 items-center justify-center rounded-full transition-colors hover:bg-neutral-100",
+                      locationPin
+                        ? "text-neutral-800"
+                        : "text-neutral-500 hover:text-neutral-800",
+                    )}
+                    aria-label="Add location"
+                  >
+                    <MapPinIcon className="size-5" strokeWidth={1.75} />
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => setMoreOpen((v) => !v)}
-                  className="ml-auto inline-flex h-10 items-center gap-1.5 rounded-full px-4 text-[13px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-100"
-                >
-                  <LayoutGridIcon className="size-4" strokeWidth={1.75} />
-                  Category
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => setMoreOpen((v) => !v)}
+                    className={cn(
+                      "ml-auto inline-flex h-10 items-center gap-1.5 rounded-full px-4 text-[13px] font-semibold transition-colors hover:bg-neutral-100",
+                      moreOpen || concern
+                        ? "text-neutral-800"
+                        : "text-neutral-500 hover:text-neutral-800",
+                    )}
+                  >
+                    <LayoutGridIcon className="size-4" strokeWidth={1.75} />
+                    Category
+                  </button>
+                </div>
+
+                {/* Mobile: expand categories below the toolbar */}
+                {moreOpen ? (
+                  <div className="md:hidden">
+                    <div className="flex items-center px-4 pb-1 pt-2">
+                      <h3 className="text-[15px] font-semibold text-neutral-900">Category</h3>
+                    </div>
+                    <div className="max-h-[40svh] space-y-1 overflow-y-auto overscroll-contain px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+                      {concernConfig.map((item) => {
+                        const Icon = item.icon
+                        const selected = concern === item.label
+                        return (
+                          <button
+                            key={item.label}
+                            type="button"
+                            onClick={() => {
+                              setConcern(item.label)
+                              setFieldErrors((prev) => ({ ...prev, concern: "" }))
+                              setMoreOpen(false)
+                            }}
+                            className={cn(
+                              "flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-neutral-800 transition-colors",
+                              selected ? "bg-neutral-100" : "bg-transparent hover:bg-neutral-100",
+                            )}
+                          >
+                            <Icon className="size-5 shrink-0 text-neutral-600" strokeWidth={1.75} />
+                            <span className="min-w-0">
+                              <span className="block text-[14px] font-semibold">{item.label}</span>
+                              <span className="mt-0.5 block text-[12px] text-neutral-500">
+                                {item.desc}
+                              </span>
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="pb-[max(0.75rem,env(safe-area-inset-bottom))] md:pb-[max(0.75rem,env(safe-area-inset-bottom))]" />
+                )}
               </div>
             </div>
 
-            {/* Category panel */}
+            {/* Desktop: expandable category panel on the side */}
             {moreOpen ? (
-              <aside className="flex w-full shrink-0 flex-col border-t border-neutral-100 bg-white md:w-[260px] md:border-l md:border-t-0">
-                <div className="flex items-center justify-between px-4 pb-1 pt-4">
-                  <h3 className="text-[15px] font-semibold text-neutral-900">Category</h3>
-                  <button
-                    type="button"
-                    onClick={() => setMoreOpen(false)}
-                    className="flex size-8 items-center justify-center rounded-full text-neutral-500 hover:bg-neutral-100 md:hidden"
-                    aria-label="Close categories"
-                  >
-                    <XIcon className="size-4" />
-                  </button>
-                </div>
-                <div className="flex flex-col gap-0.5 px-2 pb-4 pt-1">
-                  {concernConfig.map((item) => {
-                    const Icon = item.icon
-                    const selected = concern === item.label
-                    return (
-                      <button
-                        key={item.label}
-                        type="button"
-                        onClick={() => {
-                          setConcern(item.label)
-                          setFieldErrors((prev) => ({ ...prev, concern: "" }))
-                          setMoreOpen(false)
-                        }}
-                        className={cn(
-                          "flex items-center gap-3 rounded-xl px-3 py-3 text-left text-neutral-800 transition-colors",
-                          selected ? "bg-neutral-100" : "bg-transparent hover:bg-neutral-100",
-                        )}
-                      >
-                        <Icon className="size-5 shrink-0 text-neutral-600" strokeWidth={1.75} />
-                        <span className="min-w-0">
-                          <span className="block text-[14px] font-semibold">{item.label}</span>
-                          <span className="mt-0.5 block text-[12px] text-neutral-500">
-                            {item.desc}
+              <aside className="hidden min-h-0 w-[260px] shrink-0 flex-col self-stretch bg-white md:flex">
+                <div className="relative flex min-h-0 flex-1 flex-col">
+                  <div
+                    className="pointer-events-none absolute bottom-5 left-0 top-5 w-px bg-neutral-200"
+                    aria-hidden
+                  />
+                  <div className="flex shrink-0 items-center px-4 pb-2 pt-1 pl-5">
+                    <h3 className="text-[15px] font-semibold text-neutral-900">Category</h3>
+                  </div>
+                  <div className="flex min-h-0 flex-1 flex-col gap-1.5 px-2 pb-4 pt-1 pl-3 md:min-h-[280px]">
+                    {concernConfig.map((item) => {
+                      const Icon = item.icon
+                      const selected = concern === item.label
+                      return (
+                        <button
+                          key={item.label}
+                          type="button"
+                          onClick={() => {
+                            setConcern(item.label)
+                            setFieldErrors((prev) => ({ ...prev, concern: "" }))
+                            setMoreOpen(false)
+                          }}
+                          className={cn(
+                            "flex min-h-0 flex-1 items-center gap-3 rounded-xl px-3 py-3 text-left text-neutral-800 transition-colors",
+                            selected ? "bg-neutral-100" : "bg-transparent hover:bg-neutral-100",
+                          )}
+                        >
+                          <Icon className="size-5 shrink-0 text-neutral-600" strokeWidth={1.75} />
+                          <span className="min-w-0">
+                            <span className="block text-[14px] font-semibold">{item.label}</span>
+                            <span className="mt-0.5 block text-[12px] text-neutral-500">
+                              {item.desc}
+                            </span>
                           </span>
-                        </span>
-                      </button>
-                    )
-                  })}
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
               </aside>
             ) : null}
@@ -776,6 +955,44 @@ export function CreateReportDialog({
             navigate(`/dashboard/reports/${reportId}`)
           }}
         />
+      ) : null}
+
+      {/* Close without reporting? */}
+      {closeConfirmOpen ? (
+        <div
+          className="fixed inset-0 z-[260] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="close-without-reporting-title"
+        >
+          <div
+            className="absolute inset-0 bg-black/45"
+            onClick={keepPosting}
+            aria-hidden
+          />
+          <div className="relative z-10 w-full max-w-[340px] rounded-2xl border border-neutral-200 bg-white px-6 pb-6 pt-7 shadow-2xl">
+            <h2
+              id="close-without-reporting-title"
+              className="text-center text-[20px] font-semibold tracking-tight text-neutral-900"
+            >
+              Close without reporting?
+            </h2>
+            <button
+              type="button"
+              onClick={() => void confirmCloseAndSaveDraft()}
+              className="mt-6 flex h-12 w-full items-center justify-center rounded-full bg-neutral-200 text-[16px] font-semibold text-neutral-900 transition-colors hover:bg-neutral-300 active:scale-[0.99]"
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              onClick={keepPosting}
+              className="mt-3 flex h-11 w-full items-center justify-center rounded-full text-[15px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50"
+            >
+              Keep reporting
+            </button>
+          </div>
+        </div>
       ) : null}
 
       {previewUrl ? (

@@ -119,6 +119,9 @@ class ConcernComment(models.Model):
     author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="concern_comments")
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE, related_name="replies")
     body = models.TextField()
+    # Kept after first edit so readers can preview the original text
+    original_body = models.TextField(blank=True, default="")
+    is_edited = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -325,3 +328,25 @@ class ConcernOfficialRemark(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class ConcernChatMessage(models.Model):
+    """Private thread between the reporting resident and barangay officials on one report."""
+
+    concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="chat_messages")
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="concern_chat_messages",
+    )
+    body = models.TextField(max_length=2000)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(fields=["concern", "created_at"], name="concern_chat_concern_created"),
+        ]
+
+    def __str__(self):
+        return f"Chat #{self.pk} on concern {self.concern_id}"

@@ -58,7 +58,7 @@ export interface ResidentSettings {
 export interface AccountRequest {
   id: number
   user?: AuthUser
-  type: "deletion" | "data_export"
+  type: "deletion" | "data_export" | "deactivation"
   status: "submitted" | "reviewed" | "completed" | "rejected"
   note: string
   staff_note: string
@@ -209,6 +209,79 @@ export function createAccountRequest(payload: { type: AccountRequest["type"]; no
   })
 }
 
+export function deactivateAccount(payload: { reason?: string; feedback?: string }) {
+  return apiRequest<{ user: AuthUser; request: AccountRequest }>("/auth/account/deactivate/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function reactivateAccount() {
+  return apiRequest<AuthUser>("/auth/account/reactivate/", {
+    method: "POST",
+    body: JSON.stringify({}),
+  })
+}
+
+export function changePassword(payload: {
+  current_password: string
+  new_password: string
+  stay_logged_in?: boolean
+}) {
+  return apiRequest<{ detail: string }>("/auth/account/change-password/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function requestAccountPhoneOtp(payload: { phone_number: string }) {
+  return apiRequest<{ detail?: string; debug_code?: string } | void>(
+    "/auth/account/phone/request-otp/",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function verifyAccountPhoneOtp(payload: { phone_number: string; code: string }) {
+  return apiRequest<AuthUser>("/auth/account/phone/verify/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function requestAccountEmailOtp(payload: { email: string }) {
+  return apiRequest<{ detail?: string; debug_code?: string } | void>(
+    "/auth/account/email/request-otp/",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function verifyAccountEmailOtp(payload: { email: string; code: string }) {
+  return apiRequest<AuthUser>("/auth/account/email/verify/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function confirmAccountNameChange(payload: {
+  first_name: string
+  middle_name?: string
+  last_name: string
+  ocr_first_name: string
+  ocr_middle_name?: string
+  ocr_last_name: string
+}) {
+  return apiRequest<AuthUser>("/auth/account/name-change/confirm/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
 export function listManagedAccountRequests(status?: string) {
   const params = new URLSearchParams()
   if (status && status !== "all") params.set("status", status)
@@ -228,6 +301,16 @@ export function listResidents(search?: string) {
   if (search?.trim()) params.set("search", search.trim())
   const query = params.toString() ? `?${params.toString()}` : ""
   return apiRequest<AuthUser[]>(`/auth/residents/${query}`)
+}
+
+/** Any authenticated user — for @mentions in comments (id + names only) */
+export function searchResidentsForMention(search?: string) {
+  const params = new URLSearchParams()
+  if (search?.trim()) params.set("search", search.trim())
+  const query = params.toString() ? `?${params.toString()}` : ""
+  return apiRequest<
+    { id: number; firstName: string; lastName: string; full_name: string }[]
+  >(`/auth/residents/mentions/${query}`)
 }
 
 export function updateResidentStatus(id: number, status: UserStatus) {

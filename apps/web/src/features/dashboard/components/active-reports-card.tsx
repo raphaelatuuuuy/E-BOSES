@@ -54,13 +54,21 @@ export function ActiveReportsCard({ reports }: Props) {
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <p className="truncate text-sm font-bold text-[#07145f]">{r.title}</p>
+                  <p className="line-clamp-2 min-w-0 flex-1 text-sm font-bold leading-snug text-[#07145f]">
+                    {(() => {
+                      const body = (r.description || r.title || "").replace(/\s+/g, " ").trim()
+                      if (!body) return "No description"
+                      if (body.length <= 72) return body
+                      const slice = body.slice(0, 72)
+                      const atWord = slice.replace(/\s+\S*$/, "").trim()
+                      return `${(atWord.length >= 28 ? atWord : slice).trim()}...`
+                    })()}
+                  </p>
                   <span className="shrink-0 rounded-full bg-[#eef3ff] px-2.5 py-0.5 text-[11px] font-medium text-[#2447b3]">{categoryLabel[r.category] ?? "Others"}</span>
                 </div>
                 <div className="mt-0.5 flex items-center gap-x-2 text-xs font-medium text-[#24518f]">
                   <span>{formatDate(r.created_at)}</span>
                 </div>
-                <p className="mt-1 truncate text-xs text-[#46537d]">{r.description}</p>
               </div>
               <ChevronRight className="size-5 shrink-0 text-[#0047b3]" />
             </Link>

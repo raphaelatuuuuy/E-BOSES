@@ -76,6 +76,9 @@ class EmergencyTrackingConsumer(AuthenticatedJsonConsumer):
     async def emergency_update(self, event):
         await self.send_json({"type": "emergency.update", "payload": event["payload"]})
 
+    async def emergency_chat(self, event):
+        await self.send_json({"type": "emergency.chat", "payload": event["payload"]})
+
 
 @database_sync_to_async
 def user_can_view_live_map(user) -> bool:

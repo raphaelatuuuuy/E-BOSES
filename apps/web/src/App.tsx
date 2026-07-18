@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useNavigate } from "react-router-dom"
 import { LoaderCircle } from "lucide-react"
 import { toast } from "sonner"
 
+import AccountInactivePage from "@/features/auth/account-inactive"
 import AccountOtpVerificationPage from "@/features/auth/account-otp-verification"
 import { confirmPasswordReset, verifyPasswordReset } from "@/features/auth/api"
 import { AuthSessionProvider, getStatusPath, useAuthSession } from "@/features/auth/auth-session"
@@ -14,6 +15,7 @@ import SignUpPage from "@/features/auth/sign-up"
 import DashboardLayout from "@/features/dashboard/dashboard"
 import AdminPage from "@/features/dashboard/pages/admin"
 import AlertsMapPage from "@/features/dashboard/pages/alerts-map"
+import ResidentAlertsMapPage from "@/features/dashboard/pages/resident-alerts-map"
 import OnboardingPage from "@/features/onboarding/onboarding-page"
 import OfficialOnboardingPage from "@/features/onboarding/official-onboarding-page"
 import ResponderOnboardingPage from "@/features/onboarding/responder-onboarding-page"
@@ -23,6 +25,10 @@ import HomePage from "@/features/dashboard/pages/home"
 import ProfilePage from "@/features/dashboard/pages/profile"
 import ReportsPage from "@/features/dashboard/pages/reports"
 import SettingsPage from "@/features/dashboard/pages/settings"
+import ChangePasswordPage from "@/features/dashboard/pages/change-password"
+import AccountReverifyNamePage from "@/features/dashboard/pages/account-reverify-name"
+import AccountReverifyPhonePage from "@/features/dashboard/pages/account-reverify-phone"
+import AccountReverifyEmailPage from "@/features/dashboard/pages/account-reverify-email"
 import NotificationsPage from "@/features/dashboard/pages/notifications"
 import EmergencyHistoryPage from "@/features/dashboard/pages/emergency-history"
 import OcrConfigurationPage from "@/features/ocr/ocr-configuration-page"
@@ -107,10 +113,54 @@ function OfficialRoute({ children }: { children: ReactNode }) {
   return user?.role === "barangay_official" || user?.is_staff || user?.is_superuser ? children : <Navigate to="/dashboard" replace />
 }
 
+function AlertsMapRoute() {
+  const { user, loading } = useAuthSession()
+  // Wait for session so we never bounce residents away while user is still null.
+  if (loading && !user) {
+    return (
+      <div className="flex min-h-[50vh] items-center justify-center">
+        <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+  if (!user) return <Navigate to="/sign-in" replace />
+  const isOfficial = user.role === "barangay_official" || user.is_staff || user.is_superuser
+  if (isOfficial) return <AlertsMapPage />
+  // Residents (and any non-official verified user) get the public alerts map.
+  return <ResidentAlertsMapPage />
+}
+
 function EmergencyOpsRoute({ children }: { children: ReactNode }) {
   const { user } = useAuthSession()
   const allowed = user?.role === "barangay_official" || user?.role === "first_responder" || user?.is_staff || user?.is_superuser
   return allowed ? children : <Navigate to="/dashboard" replace />
+}
+
+function AccountInactiveGate() {
+  const { loading, user } = useAuthSession()
+
+  if (loading && !user) {
+    return (
+      <div className="flex min-h-svh items-center justify-center">
+        <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <Navigate to="/sign-in" replace />
+  }
+
+  if (user.status !== "suspended") {
+    return (
+      <Navigate
+        to={getStatusPath(user.status, { isOnboarded: user.is_onboarded })}
+        replace
+      />
+    )
+  }
+
+  return <AccountInactivePage />
 }
 
 function AppRoutes() {
@@ -130,7 +180,7 @@ function AppRoutes() {
         <Route path="home" element={<ResidentRoute><HomePage /></ResidentRoute>} />
         <Route path="feed" element={<ResidentRoute><FeedPage /></ResidentRoute>} />
         <Route path="emergencies" element={<EmergencyOpsRoute><EmergenciesPage /></EmergencyOpsRoute>} />
-        <Route path="alerts-map" element={<OfficialRoute><AlertsMapPage /></OfficialRoute>} />
+        <Route path="alerts-map" element={<AlertsMapRoute />} />
         <Route path="admin" element={<OfficialRoute><AdminPage /></OfficialRoute>} />
         <Route path="verification-queue" element={<OfficialRoute><VerificationQueuePage /></OfficialRoute>} />
         <Route path="ocr-templates" element={<OfficialRoute><OcrTemplateBuilderPage /></OfficialRoute>} />
@@ -142,6 +192,10 @@ function AppRoutes() {
         <Route path="emergency-history" element={<ResidentRoute><EmergencyHistoryPage /></ResidentRoute>} />
         <Route path="profile" element={<ResidentRoute><ProfilePage /></ResidentRoute>} />
         <Route path="settings" element={<ResidentRoute><SettingsPage /></ResidentRoute>} />
+        <Route path="settings/change-password" element={<ResidentRoute><ChangePasswordPage /></ResidentRoute>} />
+        <Route path="settings/reverify/name" element={<ResidentRoute><AccountReverifyNamePage /></ResidentRoute>} />
+        <Route path="settings/reverify/phone" element={<ResidentRoute><AccountReverifyPhonePage /></ResidentRoute>} />
+        <Route path="settings/reverify/email" element={<ResidentRoute><AccountReverifyEmailPage /></ResidentRoute>} />
       </Route>
 
       {/* Onboarding */}
@@ -149,6 +203,9 @@ function AppRoutes() {
 
       {/* Legacy account-pending URL → continue into app flow */}
       <Route path="/account-pending" element={<Navigate to="/onboarding" replace />} />
+
+      {/* Self-deactivated / suspended — reactivate */}
+      <Route path="/account-inactive" element={<AccountInactiveGate />} />
 
       {/* Auth routes */}
       <Route path="/sign-in" element={

@@ -4,7 +4,6 @@ import { ArrowLeft, LoaderCircle } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { Topbar } from "@/features/dashboard/components/topbar"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { ProofSetupWizard } from "@/features/ocr/components/proof-setup-wizard"
 import { ProofTypeList } from "@/features/ocr/components/proof-type-list"
@@ -97,7 +96,6 @@ export default function OcrTemplateBuilderPage() {
   if (loading) {
     return (
       <div className={cn("flex min-h-[70vh] flex-col", PROOF_THEME.bg)}>
-        <Topbar />
         <div className="flex flex-1 items-center justify-center gap-3">
           <LoaderCircle className="size-8 animate-spin text-[#145be7]" />
           <span className={cn("text-sm font-semibold", PROOF_THEME.muted)}>
@@ -111,7 +109,6 @@ export default function OcrTemplateBuilderPage() {
   if (!configuration) {
     return (
       <div className={cn("flex min-h-full flex-col", PROOF_THEME.bg)}>
-        <Topbar />
         <div
           className="m-6 rounded-2xl border border-red-200 bg-red-50 p-6 text-red-700"
           role="alert"
@@ -125,7 +122,6 @@ export default function OcrTemplateBuilderPage() {
   if (view === "list") {
     return (
       <div className={cn("flex min-h-full flex-col", PROOF_THEME.bg)}>
-        <Topbar />
         <ProofTypeList
           documents={configuration.document_types}
           saving={saving}
@@ -156,7 +152,6 @@ export default function OcrTemplateBuilderPage() {
   if (!selectedDocument) {
     return (
       <div className={cn("flex min-h-full flex-col", PROOF_THEME.bg)}>
-        <Topbar />
         <div
           className="m-6 space-y-4 rounded-2xl border border-red-200 bg-red-50 p-6 text-red-700"
           role="alert"
@@ -173,7 +168,6 @@ export default function OcrTemplateBuilderPage() {
 
   return (
     <div className={cn("flex min-h-full flex-col", PROOF_THEME.bg)}>
-      <Topbar />
       <ProofSetupWizard
         document={selectedDocument}
         step={step}

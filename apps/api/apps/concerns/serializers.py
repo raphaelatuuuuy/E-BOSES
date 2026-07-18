@@ -1,3 +1,5 @@
+import re
+
 from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
 
@@ -11,6 +13,7 @@ from .models import (
     ConcernAppeal,
     ConcernAssignment,
     ConcernAiAssessment,
+    ConcernChatMessage,
     ConcernClarification,
     ConcernComment,
     ConcernOfficialRemark,
@@ -154,9 +157,22 @@ class ConcernCommentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ConcernComment
-        fields = ("id", "author", "parent", "body", "created_at", "updated_at", "replies")
+        fields = (
+            "id",
+            "author",
+            "parent",
+            "body",
+            "original_body",
+            "is_edited",
+            "created_at",
+            "updated_at",
+            "replies",
+        )
 
     def get_replies(self, obj):
+        # One-level stack only: never nest replies under replies
+        if obj.parent_id is not None:
+            return []
         replies = obj.replies.select_related("author", "author__resident_profile").all()
         return ConcernCommentSerializer(replies, many=True, context=self.context).data
 
@@ -262,6 +278,32 @@ class ConcernAppealReviewSerializer(serializers.Serializer):
 class ConcernOfficialRemarkCreateSerializer(serializers.Serializer):
     body = serializers.CharField(max_length=2000)
     visible_to_resident = serializers.BooleanField(required=False, default=True)
+
+
+class ConcernChatMessageSerializer(serializers.ModelSerializer):
+    sender = PublicUserSerializer(read_only=True)
+    is_mine = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ConcernChatMessage
+        fields = ("id", "concern", "sender", "body", "created_at", "is_mine")
+        read_only_fields = ("id", "concern", "sender", "created_at", "is_mine")
+
+    def get_is_mine(self, obj):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        return bool(user and user.is_authenticated and obj.sender_id == user.pk)
+
+
+class ConcernChatCreateSerializer(serializers.Serializer):
+    body = serializers.CharField(max_length=2000, trim_whitespace=True)
+
+    def validate_body(self, value):
+        text = (value or "").strip()
+        if not text:
+            raise serializers.ValidationError("Message cannot be empty.")
+        return text
+
 
 class ConcernSerializer(serializers.ModelSerializer):
     tracking_id = serializers.SerializerMethodField()
@@ -397,6 +439,21 @@ class ConcernCreateSerializer(serializers.Serializer):
     longitude = serializers.DecimalField(max_digits=10, decimal_places=7)
     location_source = serializers.ChoiceField(choices=("gps", "manual_pin"))
     location_accuracy = serializers.FloatField(required=False, allow_null=True)
+
+    def validate_address(self, value: str) -> str:
+        """Persist a human street line with the report — reject Lat/Lng placeholders."""
+        text = (value or "").strip()
+        if not text:
+            raise serializers.ValidationError("Pin a location with a street name.")
+        lower = text.lower()
+        if lower in {"pending", "selected location", "finding street…", "finding street..."}:
+            raise serializers.ValidationError("Pin a location with a street name.")
+        if lower.startswith("lat ") or lower.startswith("lat:") or lower.startswith("lat,"):
+            raise serializers.ValidationError("Pin a location with a street name.")
+        # "14.65, 121.12" style
+        if re.match(r"^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$", text):
+            raise serializers.ValidationError("Pin a location with a street name.")
+        return text[:255]
 
     def validate(self, attrs):
         try:

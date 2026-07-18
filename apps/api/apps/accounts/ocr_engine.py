@@ -1132,18 +1132,64 @@ def extract_fields(
         aliases.extend(value for value in hints.get("expected_keywords", []) if isinstance(value, str))
         # Expand common synonyms so alias fallback still works when regions miss.
         code = field.code.lower()
-        if "name" in code and "place" not in code:
-            aliases.extend(["last name first name middle name", "full name", "name"])
+        if code in {"first_name", "firstname", "given_name", "given_names"}:
+            # PhilSys National ID uses "Given Names", not "First Name".
+            aliases.extend(
+                [
+                    "given name",
+                    "given names",
+                    "first name",
+                    "pangalan",
+                    "mga pangalan",
+                ]
+            )
+        elif code in {"last_name", "lastname", "surname", "family_name"}:
+            aliases.extend(
+                [
+                    "last name",
+                    "surname",
+                    "family name",
+                    "apelyido",
+                ]
+            )
+        elif code in {"middle_name", "middlename", "middle_initial"}:
+            aliases.extend(
+                [
+                    "middle name",
+                    "middle initial",
+                    "gitnang pangalan",
+                ]
+            )
+        elif "name" in code and "place" not in code:
+            aliases.extend(
+                [
+                    "last name first name middle name",
+                    "given name middle name last name",
+                    "given names",
+                    "full name",
+                    "name",
+                ]
+            )
         if "birth" in code and "place" not in code:
-            aliases.extend(["birthdate", "date of birth", "birthday", "dob"])
+            aliases.extend(["birthdate", "date of birth", "birthday", "dob", "petsa ng kapanganakan", "kapanganakan"])
         if "place" in code and "birth" in code:
             aliases.extend(["place of birth", "pob"])
         if "civil" in code:
             aliases.extend(["civil status", "status"])
         if "gender" in code or code == "sex":
-            aliases.extend(["gender", "sex"])
-        if "document" in code or "id" in code or "number" in code:
-            aliases.extend(["id no", "id number", "identification no", "document number"])
+            aliases.extend(["gender", "sex", "kasarian"])
+        if "document" in code or "id" in code or "number" in code or "digital" in code or "pcn" in code:
+            aliases.extend(
+                [
+                    "id no",
+                    "id number",
+                    "identification no",
+                    "document number",
+                    "digital number",
+                    "pcn",
+                    "philsys number",
+                ]
+            )
         if "issue" in code:
             aliases.extend(["date issued", "issued", "date of issue"])
         if "expir" in code or "valid" in code:
@@ -1196,6 +1242,32 @@ def extract_fields(
                     id_value, id_conf, id_ev = _find_id_number_near_region(clean_lines, None)
                 if id_value:
                     value, confidence, evidence = id_value, id_conf, id_ev
+
+            # Critical for National ID / phone captures: sample-drawn boxes rarely align
+            # with real photos. Fall back to label/alias proximity for non-ID fields.
+            if not value and not is_id_field:
+                alias_value, alias_conf, alias_ev = _candidate_after_alias(clean_lines, aliases)
+                if alias_value and not _looks_like_label(alias_value, aliases):
+                    value, confidence, evidence = (
+                        alias_value,
+                        alias_conf,
+                        {**(alias_ev or {}), "method": "alias_after_region_miss"},
+                    )
+                profile_value = _profile_value(field, profile)
+                if profile_value and confidence < 0.55:
+                    profile_candidate = _candidate_matching_profile(clean_lines, profile_value)
+                    if profile_candidate[1] > confidence and not _looks_like_label(
+                        profile_candidate[0], aliases
+                    ):
+                        value, confidence, evidence = (
+                            profile_candidate[0],
+                            profile_candidate[1],
+                            {
+                                **profile_candidate[2],
+                                "method": "profile_after_region_miss",
+                                "bbox": (evidence or {}).get("bbox"),
+                            },
+                        )
         else:
             # No canvas box: alias proximity (legacy / incomplete templates).
             if is_id_field:

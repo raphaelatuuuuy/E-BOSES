@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
+from django.db.models import Q
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
@@ -20,9 +21,15 @@ from .models import AccountRequest, OTPChallenge, ResidenceProof, ResidentSettin
 from .permissions import IsStaffOrSuperuser, user_has_role_permission
 from .selectors import find_user_by_identifier, latest_active_otp_challenge
 from .serializers import (
+    AccountEmailChangeRequestSerializer,
+    AccountEmailChangeVerifySerializer,
+    AccountNameChangeConfirmSerializer,
+    AccountPhoneChangeRequestSerializer,
+    AccountPhoneChangeVerifySerializer,
     AccountRequestSerializer,
     AccountRequestReviewSerializer,
     AdminCreateUserSerializer,
+    ChangePasswordSerializer,
     LoginSerializer,
     OTPResendSerializer,
     OTPVerifySerializer,
@@ -597,6 +604,341 @@ class AccountRequestListCreateView(APIView):
         )
         return Response(AccountRequestSerializer(account_request).data, status=status.HTTP_201_CREATED)
 
+
+class DeactivateAccountView(APIView):
+    """Temporary self-deactivation — sets status to suspended immediately."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        touch_last_seen(request.user)
+        user = request.user
+        if user.status == user.Status.SUSPENDED:
+            return Response({"detail": "This account is already deactivated."}, status=status.HTTP_400_BAD_REQUEST)
+        if user.status != user.Status.VERIFIED:
+            return Response({"detail": "Only verified accounts can be deactivated."}, status=status.HTTP_400_BAD_REQUEST)
+
+        reason = str(request.data.get("reason") or "").strip()[:120]
+        feedback = str(request.data.get("feedback") or "").strip()[:200]
+        note_parts = []
+        if reason:
+            note_parts.append(f"Reason: {reason}")
+        if feedback:
+            note_parts.append(f"Feedback: {feedback}")
+        note = " | ".join(note_parts)[:255] or "Resident deactivated their account."
+
+        user.status = user.Status.SUSPENDED
+        user.save(update_fields=["status", "updated_at"])
+
+        account_request = AccountRequest.objects.create(
+            user=user,
+            type=AccountRequest.Type.DEACTIVATION,
+            status=AccountRequest.Status.COMPLETED,
+            note=note,
+        )
+        create_audit_log(
+            "account.deactivated",
+            actor=user,
+            target_user=user,
+            metadata={"request_id": account_request.pk, "reason": reason},
+            request_meta=request_meta(request),
+        )
+        return Response(
+            {
+                "user": UserSummarySerializer(user).data,
+                "request": AccountRequestSerializer(account_request).data,
+            }
+        )
+
+
+class ReactivateAccountView(APIView):
+    """Restore a self-deactivated (suspended) account."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        touch_last_seen(request.user)
+        user = request.user
+        if user.status != user.Status.SUSPENDED:
+            return Response({"detail": "This account is not deactivated."}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.status = user.Status.VERIFIED
+        user.save(update_fields=["status", "updated_at"])
+        create_audit_log(
+            "account.reactivated",
+            actor=user,
+            target_user=user,
+            metadata={},
+            request_meta=request_meta(request),
+        )
+        return Response(UserSummarySerializer(user).data)
+
+
+def _normalize_person_name(value: str) -> str:
+    import re as _re
+    text = (value or "").strip().casefold()
+    text = _re.sub(r"[^\w\sñ]", " ", text, flags=_re.UNICODE)
+    text = _re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+class ChangePasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        touch_last_seen(request.user)
+        serializer = ChangePasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        current = serializer.validated_data["current_password"]
+        new_password = serializer.validated_data["new_password"]
+        if not request.user.check_password(current):
+            return Response(
+                {"detail": "Current password is incorrect.", "current_password": ["Current password is incorrect."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if current == new_password:
+            return Response(
+                {"detail": "New password must be different from your current password."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            validate_password(new_password, user=request.user)
+        except DjangoValidationError as exc:
+            return Response({"new_password": list(exc.messages)}, status=status.HTTP_400_BAD_REQUEST)
+
+        request.user.set_password(new_password)
+        request.user.save(update_fields=["password", "updated_at"])
+        create_audit_log(
+            "account.password_changed",
+            actor=request.user,
+            target_user=request.user,
+            metadata={},
+            request_meta=request_meta(request),
+        )
+        return Response({"detail": "Password updated."})
+
+
+class AccountPhoneChangeRequestView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_scope = "otp"
+
+    def post(self, request):
+        from django.conf import settings as django_settings
+        from .services import OTPDeliveryError
+
+        touch_last_seen(request.user)
+        serializer = AccountPhoneChangeRequestSerializer(
+            data=request.data, context={"user": request.user}
+        )
+        serializer.is_valid(raise_exception=True)
+        phone_number = serializer.validated_data["phone_number"]
+        if phone_number == (request.user.phone_number or ""):
+            return Response(
+                {"detail": "That is already your mobile number."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            _challenge, code = create_phone_otp_challenge(phone_number)
+        except OTPDeliveryError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception:
+            return Response(
+                {"detail": "We could not send the SMS code. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        if getattr(django_settings, "IS_LOCAL_DEVELOPMENT", False) or django_settings.DEBUG:
+            return Response(
+                {"detail": "Code sent (development mode).", "debug_code": code},
+                status=status.HTTP_200_OK,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AccountPhoneChangeVerifyView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_scope = "otp"
+
+    def post(self, request):
+        touch_last_seen(request.user)
+        serializer = AccountPhoneChangeVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        phone_number = serializer.validated_data["phone_number"]
+        # Uniqueness again
+        if (
+            get_user_model()
+            .objects.filter(phone_number=phone_number)
+            .exclude(pk=request.user.pk)
+            .exists()
+        ):
+            return Response(
+                {"detail": "An account with this phone number already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            verify_phone_otp_challenge(phone_number, serializer.validated_data["code"])
+        except OTPVerificationError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        request.user.phone_number = phone_number
+        request.user.phone_verified_at = timezone.now()
+        request.user.save(update_fields=["phone_number", "phone_verified_at", "updated_at"])
+        create_audit_log(
+            "account.phone_changed",
+            actor=request.user,
+            target_user=request.user,
+            metadata={"phone_number": phone_number},
+            request_meta=request_meta(request),
+        )
+        return Response(UserSummarySerializer(request.user).data)
+
+
+class AccountEmailChangeRequestView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_scope = "otp"
+
+    def post(self, request):
+        from django.conf import settings as django_settings
+        from .services import OTPDeliveryError
+
+        touch_last_seen(request.user)
+        serializer = AccountEmailChangeRequestSerializer(
+            data=request.data, context={"user": request.user}
+        )
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data["email"]
+        if email == (request.user.email or "").lower():
+            return Response(
+                {"detail": "That is already your email address."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            _challenge, code = create_email_otp_challenge(email)
+        except OTPDeliveryError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception:
+            return Response(
+                {"detail": "We could not send the email code. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        if getattr(django_settings, "IS_LOCAL_DEVELOPMENT", False) or django_settings.DEBUG:
+            return Response(
+                {"detail": "Code sent (development mode).", "debug_code": code},
+                status=status.HTTP_200_OK,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AccountEmailChangeVerifyView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_scope = "otp"
+
+    def post(self, request):
+        from .services import verify_email_otp_challenge
+
+        touch_last_seen(request.user)
+        serializer = AccountEmailChangeVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data["email"]
+        if (
+            get_user_model()
+            .objects.filter(email__iexact=email)
+            .exclude(pk=request.user.pk)
+            .exists()
+        ):
+            return Response(
+                {"detail": "An account with this email already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            verify_email_otp_challenge(email, serializer.validated_data["code"])
+        except OTPVerificationError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        request.user.email = email
+        request.user.email_verified_at = timezone.now()
+        request.user.save(update_fields=["email", "email_verified_at", "updated_at"])
+        create_audit_log(
+            "account.email_changed",
+            actor=request.user,
+            target_user=request.user,
+            metadata={"email": email},
+            request_meta=request_meta(request),
+        )
+        return Response(UserSummarySerializer(request.user).data)
+
+
+class AccountNameChangeConfirmView(APIView):
+    """Apply a name change only when OCR-extracted name matches the requested name."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        touch_last_seen(request.user)
+        if not hasattr(request.user, "resident_profile"):
+            return Response(
+                {"detail": "Profile is not available for this account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = AccountNameChangeConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        req_first = _normalize_person_name(data["first_name"])
+        req_last = _normalize_person_name(data["last_name"])
+        req_middle = _normalize_person_name(data.get("middle_name") or "")
+        ocr_first = _normalize_person_name(data["ocr_first_name"])
+        ocr_last = _normalize_person_name(data["ocr_last_name"])
+        ocr_middle = _normalize_person_name(data.get("ocr_middle_name") or "")
+
+        if not ocr_first or not ocr_last:
+            return Response(
+                {
+                    "detail": "We could not read a full name on your document. Please resubmit a clearer ID.",
+                    "code": "ocr_name_missing",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        first_ok = req_first == ocr_first or req_first in ocr_first or ocr_first in req_first
+        last_ok = req_last == ocr_last or req_last in ocr_last or ocr_last in req_last
+        if not first_ok or not last_ok:
+            return Response(
+                {
+                    "detail": "The name on your document does not match the name you entered. Please correct the name or resubmit a clearer ID.",
+                    "code": "ocr_name_mismatch",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Middle name: only enforce when both sides provide one
+        if req_middle and ocr_middle:
+            if req_middle != ocr_middle and req_middle not in ocr_middle and ocr_middle not in req_middle:
+                return Response(
+                    {
+                        "detail": "The middle name on your document does not match. Please correct it or resubmit.",
+                        "code": "ocr_name_mismatch",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        profile = request.user.resident_profile
+        profile.first_name = data["first_name"].strip()
+        profile.middle_name = (data.get("middle_name") or "").strip()
+        profile.last_name = data["last_name"].strip()
+        profile.save(update_fields=["first_name", "middle_name", "last_name", "updated_at"])
+        create_audit_log(
+            "account.name_changed",
+            actor=request.user,
+            target_user=request.user,
+            metadata={"first_name": profile.first_name, "last_name": profile.last_name},
+            request_meta=request_meta(request),
+        )
+        request.user.refresh_from_db()
+        return Response(UserSummarySerializer(request.user).data)
+
 class AccountRequestManageListView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -655,6 +997,48 @@ class ResidentDirectoryView(APIView):
         if search:
             queryset = queryset.filter(email__icontains=search) | queryset.filter(phone_number__icontains=search) | queryset.filter(resident_profile__first_name__icontains=search) | queryset.filter(resident_profile__last_name__icontains=search)
         return Response(UserSummarySerializer(queryset.order_by("-date_joined"), many=True).data)
+
+
+class ResidentMentionSearchView(APIView):
+    """
+    Lightweight mention directory for any authenticated user.
+    Returns only id + names (no email/phone) for verified residents.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        User = get_user_model()
+        search = (request.query_params.get("search") or request.query_params.get("q") or "").strip()
+        queryset = (
+            User.objects.filter(role=User.Role.RESIDENT, status=User.Status.VERIFIED)
+            .select_related("resident_profile")
+            .order_by("resident_profile__first_name", "resident_profile__last_name", "id")
+        )
+        if search:
+            queryset = queryset.filter(
+                Q(resident_profile__first_name__icontains=search)
+                | Q(resident_profile__last_name__icontains=search)
+            )
+        # Empty @ query: return a short starter list so the picker isn't empty
+        limit = 20 if search else 12
+        rows = []
+        for user in queryset[:limit]:
+            profile = getattr(user, "resident_profile", None)
+            first = (getattr(profile, "first_name", None) or "").strip()
+            last = (getattr(profile, "last_name", None) or "").strip()
+            full = f"{first} {last}".strip() or (user.email.split("@")[0] if user.email else f"User {user.id}")
+            rows.append(
+                {
+                    "id": user.id,
+                    "firstName": first or full.split()[0],
+                    "lastName": last,
+                    "full_name": full,
+                }
+            )
+        return Response(rows)
+
 
 class ResidentStatusUpdateView(APIView):
     permission_classes = [IsAuthenticated]

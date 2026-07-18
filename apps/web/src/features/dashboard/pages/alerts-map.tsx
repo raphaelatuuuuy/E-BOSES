@@ -33,7 +33,6 @@ import {
   type LiveMapUpdate,
 } from "@/features/dashboard/api"
 import { resolveEmergency } from "@/features/dashboard/emergency-api"
-import { Topbar } from "@/features/dashboard/components/topbar"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { websocketTicket, websocketUrl } from "@/lib/api"
 
@@ -555,28 +554,23 @@ export default function AlertsMapPage() {
 
   if (!loaded) {
     return (
-      <div className="flex flex-col">
-        <Topbar />
-        <main className="min-h-screen bg-[#f7f8fc] p-4 md:p-6">
-          <Skeleton className="h-20 rounded-2xl" />
-          <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_360px]"><Skeleton className="h-[620px] rounded-2xl" /><Skeleton className="h-[620px] rounded-2xl" /></div>
-        </main>
+      <div className="bg-white p-4 md:p-6">
+        <Skeleton className="h-20 rounded-2xl" />
+        <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_360px]"><Skeleton className="h-[620px] rounded-2xl" /><Skeleton className="h-[620px] rounded-2xl" /></div>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col">
-      <Topbar />
-      <main className="min-h-screen bg-[#f7f8fc] p-4 md:p-6">
+    <div className="bg-white p-4 md:p-6">
         <div className="mb-4 grid gap-4 xl:grid-cols-[1fr_560px_auto] xl:items-center">
           <div>
-            <h1 className="font-heading text-3xl font-black text-[#07145f]">Alerts Map</h1>
-            <p className="mt-1 text-sm font-semibold text-[#43507f]">Live monitoring and response for Marikina Heights</p>
+            <h1 className="text-[22px] font-bold tracking-tight text-neutral-900 sm:text-2xl">Alerts map</h1>
+            <p className="mt-1 text-[15px] font-medium text-neutral-600">Live monitoring and response for Marikina Heights</p>
           </div>
-          <label className="flex h-12 items-center gap-3 rounded-xl border border-[#dfe7f5] bg-white px-4 shadow-sm">
-            <SearchIcon className="size-4 text-[#68739c]" />
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search streets, residents, reports, or emergencies..." className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-[#07145f] outline-none placeholder:text-[#8b96b8]" />
+          <label className="flex h-12 items-center gap-3 rounded-full border border-neutral-200 bg-[#f8fafc] px-4">
+            <SearchIcon className="size-4 text-neutral-400" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search streets, residents, reports, or emergencies..." className="min-w-0 flex-1 bg-transparent text-[14px] font-medium text-neutral-900 outline-none placeholder:text-neutral-400" />
           </label>
           <div className="flex gap-2">
             <Button type="button" variant="outline" onClick={() => toast.info("Create alerts from resident SOS or Emergency Ops.")}><BellIcon className="mr-2 size-4" />Create Alert</Button>

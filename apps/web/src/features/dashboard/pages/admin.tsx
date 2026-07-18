@@ -37,7 +37,6 @@ import {
   reviewEmergencyAppeal,
   type EmergencyAppeal,
 } from "@/features/dashboard/emergency-api"
-import { Topbar } from "@/features/dashboard/components/topbar"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { usePageTitle } from "@/hooks/use-page-title"
 
@@ -55,8 +54,8 @@ const statuses: UserStatus[] = ["verified", "pending_verification", "rejected", 
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-2xl border border-[#dfe7f5] bg-white p-5 shadow-sm">
-      <h2 className="text-base font-black text-[#07145f]">{title}</h2>
+    <section className="rounded-2xl border border-neutral-200 bg-white p-5">
+      <h2 className="text-[16px] font-bold text-neutral-900">{title}</h2>
       <div className="mt-4">{children}</div>
     </section>
   )
@@ -68,7 +67,7 @@ function TextField({ value, onChange, placeholder }: { value: string; onChange: 
       value={value}
       onChange={(event) => onChange(event.target.value)}
       placeholder={placeholder}
-      className="h-10 rounded-lg border border-[#cbd8ee] px-3 text-sm font-semibold text-[#07145f] outline-none placeholder:text-[#8b96b8] focus:border-[#ff6a1a]"
+      className="h-11 rounded-xl border border-neutral-200 bg-[#f8fafc] px-3 text-[14px] font-medium text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-[#ff6a1a]"
     />
   )
 }
@@ -135,15 +134,12 @@ export default function AdminPage() {
 
   if (!canManage) {
     return (
-      <div className="flex flex-col bg-[#f7f8fc]">
-        <Topbar />
-        <main className="p-4 md:p-8">
-          <section className="rounded-2xl border border-[#dfe7f5] bg-white p-8 text-center shadow-sm">
-            <ShieldCheckIcon className="mx-auto size-10 text-[#07145f]" />
-            <h1 className="mt-3 text-xl font-black text-[#07145f]">Official admin workspace is restricted</h1>
-            <p className="mt-2 text-sm font-semibold text-[#43507f]">Only authorized barangay officials can manage content, account requests, appeals, and directories.</p>
-          </section>
-        </main>
+      <div className="bg-white p-4 md:p-8">
+        <section className="rounded-2xl border border-neutral-200 bg-white p-8 text-center">
+          <ShieldCheckIcon className="mx-auto size-10 text-[#07145f]" />
+          <h1 className="mt-3 text-xl font-bold text-neutral-900">Official admin workspace is restricted</h1>
+          <p className="mt-2 text-[15px] font-medium text-neutral-600">Only authorized barangay officials can manage content, account requests, appeals, and directories.</p>
+        </section>
       </div>
     )
   }
@@ -189,13 +185,11 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="flex flex-col bg-[#f7f8fc]">
-      <Topbar />
-      <main className="space-y-5 p-4 md:p-8">
-        <section className="rounded-2xl border border-[#dfe7f5] bg-white p-5 shadow-sm">
-          <p className="text-xs font-black uppercase tracking-wide text-[#ff6a1a]">Barangay operations</p>
-          <h1 className="mt-1 text-2xl font-black text-[#07145f]">Official Admin Workspace</h1>
-          <p className="mt-2 text-sm font-semibold text-[#43507f]">Manage published content, account requests, appeals, residents, and responder records.</p>
+    <div className="space-y-5 bg-white p-4 md:p-6 lg:p-8">
+        <section className="rounded-2xl border border-neutral-200 bg-white p-5">
+          <p className="text-[12px] font-semibold uppercase tracking-wide text-[#ff6a1a]">Barangay operations</p>
+          <h1 className="mt-1 text-[22px] font-bold tracking-tight text-neutral-900 sm:text-2xl">Admin workspace</h1>
+          <p className="mt-2 max-w-3xl text-[15px] font-medium leading-6 text-neutral-600">Manage published content, account requests, appeals, residents, and responder records.</p>
           <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             {[
               ["Pending reviews", summary?.pending_reviews ?? 0],
@@ -204,9 +198,9 @@ export default function AdminPage() {
               ["Pending appeals", (summary?.pending_appeals ?? 0) + (summary?.pending_emergency_appeals ?? 0)],
               ["Account requests", summary?.pending_account_requests ?? 0],
             ].map(([label, value]) => (
-              <div key={label} className="rounded-xl border border-[#dfe7f5] bg-[#f8fafc] p-3">
-                <p className="text-xl font-black text-[#07145f]">{value}</p>
-                <p className="text-[11px] font-bold text-[#43507f]">{label}</p>
+              <div key={String(label)} className="rounded-2xl border border-neutral-200 bg-[#fafbfc] p-3.5">
+                <p className="text-xl font-bold text-neutral-900">{value}</p>
+                <p className="mt-0.5 text-[12px] font-medium text-neutral-500">{label}</p>
               </div>
             ))}
           </div>
@@ -218,7 +212,12 @@ export default function AdminPage() {
                   key={item.id}
                   type="button"
                   onClick={() => setTab(item.id)}
-                  className={cn("flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-sm font-black", tab === item.id ? "border-[#ff6a1a] bg-[#ff6a1a] text-white" : "border-[#cbd8ee] bg-white text-[#07145f]")}
+                  className={cn(
+                    "flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-[13px] font-semibold",
+                    tab === item.id
+                      ? "border-[#ff6a1a] bg-[#ff6a1a] text-white"
+                      : "border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50",
+                  )}
                 >
                   <Icon className="size-4" />
                   {item.label}
@@ -228,7 +227,7 @@ export default function AdminPage() {
           </div>
         </section>
 
-        {loading ? <div className="rounded-2xl border border-[#dfe7f5] bg-white p-8 text-sm font-bold text-[#68739c]">Loading admin workspace...</div> : null}
+        {loading ? <div className="rounded-2xl border border-neutral-200 bg-white p-8 text-[14px] font-medium text-neutral-500">Loading admin workspace...</div> : null}
 
         {!loading && tab === "content" ? (
           <div className="grid gap-5 xl:grid-cols-2">
@@ -350,7 +349,6 @@ export default function AdminPage() {
             </Card>
           </div>
         ) : null}
-      </main>
     </div>
   )
 }

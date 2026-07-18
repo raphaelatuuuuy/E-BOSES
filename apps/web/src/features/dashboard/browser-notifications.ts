@@ -21,7 +21,14 @@ export interface BrowserNotificationState {
 
 export async function registerNotificationWorker() {
   if (!browserNotificationsSupported()) return null
-  return navigator.serviceWorker.register("/eboses-sw.js")
+  // Self-signed / broken HTTPS on local (https://localhost) fails SW registration
+  // with SecurityError. Swallow so it never becomes an uncaught promise.
+  try {
+    if (!window.isSecureContext) return null
+    return await navigator.serviceWorker.register("/eboses-sw.js")
+  } catch {
+    return null
+  }
 }
 
 async function getPublicKey() {
@@ -96,11 +103,17 @@ export async function showBrowserNotification(item: NotificationItem) {
     : item.concern_id
       ? `/dashboard/reports/${item.concern_public_id || item.concern_id}`
       : "/dashboard/home"
+  const rawBody = (item.body || "Open E-Boses for details.").replace(/\s+/g, " ").trim()
+  const body =
+    rawBody.length > 90
+      ? `${(rawBody.slice(0, 90).replace(/\s+\S*$/, "").trim() || rawBody.slice(0, 90)).trim()}...`
+      : rawBody
+
   registration?.active?.postMessage({
     type: "eboses.show-notification",
     payload: {
       title: item.title || "E-Boses update",
-      body: item.body || "Open E-Boses for details.",
+      body,
       url,
     },
   })

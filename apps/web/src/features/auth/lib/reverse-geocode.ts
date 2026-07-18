@@ -124,8 +124,13 @@ export async function reverseGeocodeToMarikinaStreet(
     }
   }
 
-  // Fallback: try matching against full display name segments
+  // Fallback: only match display-name segments that look like roads
+  // (skip "Eastern Manila District", "Marikina Heights", etc. — those
+  // used to false-match short cores like "east" → East Drive Street).
   for (const part of displayName.split(",").map((p) => p.trim())) {
+    if (!/\b(street|st\.?|avenue|ave\.?|road|rd\.?|drive|dr\.?|lane|ln\.?|extension|ext\.?|boulevard|blvd\.?)\b/i.test(part)) {
+      continue
+    }
     const matched = matchMarikinaHeightsStreet(part)
     if (matched) {
       return {

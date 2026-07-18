@@ -43,6 +43,8 @@ class ResidentDashboardSummaryView(APIView):
         touch_last_seen(request.user)
         mine = Concern.objects.filter(reporter=request.user)
         emergencies = EmergencyAlert.objects.filter(reporter=request.user)
+        # Barangay-wide active emergencies (for home rail red state + feed banner)
+        barangay_active = EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE).count()
         return Response({
             **common_counts(request.user),
             "reports_total": mine.count(),
@@ -50,6 +52,8 @@ class ResidentDashboardSummaryView(APIView):
             "reports_resolved": mine.filter(status=Concern.Status.RESOLVED).count(),
             "reports_appealed": mine.filter(status=Concern.Status.APPEALED).count(),
             "active_emergencies": emergencies.filter(status__in=EMERGENCY_ACTIVE).count(),
+            "barangay_active_emergencies": barangay_active,
+            "has_ongoing_emergencies": barangay_active > 0,
             "emergencies_resolved": emergencies.filter(status=EmergencyAlert.Status.RESOLVED).count(),
             "open_account_requests": AccountRequest.objects.filter(
                 user=request.user,

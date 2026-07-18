@@ -349,6 +349,163 @@ class OfficialLiveMapView(APIView):
         return Response(live_map_snapshot())
 
 
+def public_reporter_payload(user):
+    """Community-safe reporter identity (no home address / live GPS)."""
+    profile = getattr(user, "resident_profile", None)
+    full_name = f"{profile.first_name} {profile.last_name}".strip() if profile else user.email.split("@")[0]
+    return {
+        "id": user.pk,
+        "full_name": full_name or "Neighbor",
+        "role": user.role,
+        "barangay": getattr(profile, "barangay", "") or "Marikina Heights",
+    }
+
+
+def resident_concern_payload(concern, request=None):
+    """Public community concern for resident alerts map (no private coords of people)."""
+    preview_url = None
+    media = list(concern.media.all()[:1]) if hasattr(concern, "media") else []
+    if media:
+        path = f"/api/concerns/media/{media[0].pk}/preview/"
+        preview_url = request.build_absolute_uri(path) if request else path
+    return {
+        "id": concern.pk,
+        "tracking_id": concern.tracking_id,
+        "title": concern.title,
+        "description": concern.description,
+        "category": concern.category,
+        "status": concern.status,
+        "address": concern.address,
+        "barangay": concern.barangay,
+        "latitude": decimal_string(concern.latitude),
+        "longitude": decimal_string(concern.longitude),
+        "preview_url": preview_url,
+        "reporter": public_reporter_payload(concern.reporter),
+        "created_at": concern.created_at,
+        "updated_at": concern.updated_at,
+        "priority": "high" if concern.category == Concern.Category.PUBLIC_SAFETY else "normal",
+        "kind": "concern",
+    }
+
+
+def resident_emergency_payload(alert, request=None):
+    """
+    Active emergency for residents — operational facts only.
+    No reporter identity, no responder GPS, no routes.
+    """
+    # Media for emergencies is private/ops-only; residents get type + note + location.
+    _ = request
+    type_label = alert.get_type_display() if hasattr(alert, "get_type_display") else alert.type
+    return {
+        "id": alert.pk,
+        "type": alert.type,
+        "type_label": type_label,
+        "note": (alert.note or "")[:280],
+        "status": alert.status,
+        "address": alert.address,
+        "barangay": alert.barangay,
+        "latitude": decimal_string(alert.latitude),
+        "longitude": decimal_string(alert.longitude),
+        "preview_url": None,
+        "created_at": alert.created_at,
+        "updated_at": alert.updated_at,
+        "kind": "emergency",
+        "source": "resident",  # resident-reported operational alert (not weather feed)
+    }
+
+
+def barangay_active_emergencies_count() -> int:
+    return EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE).count()
+
+
+def resident_alerts_map_snapshot(request=None):
+    """
+    Resident-safe map payload:
+    - community-visible concerns with coordinates
+    - active emergencies (minimized PII)
+    - service POIs (OSM + admin)
+    - boundary / center for map framing
+    Does NOT include people tracking, responder routes, or private reports.
+    """
+    from apps.geo_services import collect_service_pois, map_context_payload
+
+    static_map = static_map_payload()
+    context = map_context_payload()
+
+    concerns_qs = (
+        Concern.objects.filter(
+            visibility=Concern.Visibility.COMMUNITY,
+            latitude__isnull=False,
+            longitude__isnull=False,
+        )
+        .exclude(status=Concern.Status.REJECTED)
+        .select_related("reporter", "reporter__resident_profile")
+        .prefetch_related("media")
+        .order_by("-created_at")[:200]
+    )
+    concerns = [resident_concern_payload(c, request=request) for c in concerns_qs]
+
+    alerts_qs = (
+        EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE)
+        .prefetch_related("media")
+        .order_by("-created_at")[:100]
+    )
+    emergencies = [resident_emergency_payload(a, request=request) for a in alerts_qs]
+
+    pois = collect_service_pois()
+    services = [
+        {
+            "id": p.get("id"),
+            "name": p.get("name"),
+            "type": p.get("type"),
+            "label": p.get("label") or p.get("type"),
+            "sector": p.get("sector") or "public",
+            "latitude": p.get("latitude"),
+            "longitude": p.get("longitude"),
+            "source": p.get("source") or "osm",
+            "kind": "service",
+        }
+        for p in pois
+    ]
+
+    active_concerns = [c for c in concerns if c["status"] in CONCERN_ACTIVE or c["status"] == Concern.Status.ASSIGNED]
+    emergency_count = len(emergencies)
+
+    return {
+        "map": {
+            "provider": "OpenStreetMap",
+            "center": MARIKINA_HEIGHTS_CENTER,
+            "boundary": {
+                "osm_relation_id": static_map["boundary"].get("osm_relation_id", MARIKINA_HEIGHTS_OSM_RELATION_ID),
+                "name": static_map["boundary"].get("name") or "Marikina Heights",
+                "geometry": static_map["boundary"].get("geometry") or context.get("boundary", {}).get("geometry"),
+            },
+        },
+        "concerns": concerns,
+        "emergencies": emergencies,
+        "services": services,
+        "poi_types": context.get("poi_types") or [],
+        "summary": {
+            "public_concerns": len(concerns),
+            "active_concerns": len(active_concerns),
+            "active_emergencies": emergency_count,
+            "services": len(services),
+            "has_ongoing_emergencies": emergency_count > 0,
+        },
+        "generated_at": timezone.now(),
+    }
+
+
+class ResidentAlertsMapView(APIView):
+    """Resident alerts map: public concerns, active emergencies, service POIs."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        return Response(resident_alerts_map_snapshot(request=request))
+
+
 class LocationPingView(APIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
@@ -357,11 +514,209 @@ class LocationPingView(APIView):
     def post(self, request):
         touch_last_seen(request.user)
         serializer = LocationPingSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            # Background GPS often reports outside Marikina Heights (VPN, travel,
+            # or GPS drift). Treat as soft reject so browsers don't log 400 spam.
+            return Response(
+                {"accepted": False, "errors": serializer.errors},
+                status=status.HTTP_200_OK,
+            )
         request.user.current_latitude = serializer.validated_data["latitude"]
         request.user.current_longitude = serializer.validated_data["longitude"]
         request.user.location_updated_at = timezone.now()
         request.user.save(update_fields=["current_latitude", "current_longitude", "location_updated_at", "updated_at"])
         payload = person_payload(request.user)
         broadcast_live_map_event("location.updated", {"person": payload})
-        return Response({"person": payload, "source": serializer.validated_data["source"]})
+        return Response(
+            {
+                "accepted": True,
+                "person": payload,
+                "source": serializer.validated_data["source"],
+            }
+        )
+
+
+class LocationMapContextView(APIView):
+    """Clean map context for resident pin picker: boundary, streets, emergency POIs."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from apps.geo_services import map_context_payload
+
+        return Response(map_context_payload())
+
+
+class LocationValidateView(APIView):
+    """Classify a pin as inside / edge buffer / too far."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from apps.geo_services import classify_location
+
+        try:
+            lat = float(request.data.get("latitude"))
+            lng = float(request.data.get("longitude"))
+        except (TypeError, ValueError):
+            return Response(
+                {"accepted": False, "status": "far", "message": "Invalid coordinates."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        result = classify_location(lat, lng)
+        return Response(result)
+
+
+class LocationSearchView(APIView):
+    """Place search biased to Marikina Heights; drops far results."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        import urllib.parse
+
+        from apps.geo_services import (
+            MARIKINA_HEIGHTS_CENTER as CENTER,
+            filter_and_rank_search_results,
+            map_context_payload,
+            search_viewbox_with_buffer,
+        )
+
+        q = (request.query_params.get("q") or "").strip()
+        if len(q) < 2:
+            return Response({"results": []})
+
+        context = map_context_payload()
+        q_lower = q.casefold()
+        local_hits = []
+        for street in context.get("streets") or []:
+            name = street.get("name") or ""
+            if q_lower not in name.casefold():
+                continue
+            # Street catalog is Heights-local; pin to center (map still lets user adjust)
+            local_hits.append(
+                {
+                    "lat": CENTER["latitude"],
+                    "lng": CENTER["longitude"],
+                    "label": f"{name}, Marikina Heights",
+                    "primary": name,
+                    "secondary": "Marikina Heights, Marikina City",
+                    "source": "street_catalog",
+                }
+            )
+
+        remote = []
+        try:
+            # Tight viewbox around Heights + query biased to Marikina (blocks QC Katipunan, etc.)
+            viewbox = search_viewbox_with_buffer()
+            queries = [
+                f"{q}, Marikina Heights, Marikina, Philippines",
+                f"{q}, Marikina City, Philippines",
+                q,
+            ]
+            seen_remote: set[tuple[float, float, str]] = set()
+            with httpx.Client(timeout=8.0, headers={"User-Agent": "E-Boses/1.0 (barangay-map)"}) as client:
+                for query in queries:
+                    url = (
+                        "https://nominatim.openstreetmap.org/search?"
+                        + urllib.parse.urlencode(
+                            {
+                                "q": query,
+                                "format": "json",
+                                "addressdetails": 1,
+                                "limit": 12,
+                                "countrycodes": "ph",
+                                "viewbox": viewbox,
+                                "bounded": 1,
+                            }
+                        )
+                    )
+                    try:
+                        response = client.get(url)
+                        response.raise_for_status()
+                        data = response.json()
+                    except Exception:
+                        continue
+                    for item in data:
+                        addr = item.get("address") or {}
+                        city = (
+                            addr.get("city")
+                            or addr.get("town")
+                            or addr.get("municipality")
+                            or addr.get("city_district")
+                            or ""
+                        )
+                        city_l = str(city).casefold()
+                        # Hard drop other Metro Manila cities at parse time
+                        if city_l and "marikina" not in city_l:
+                            # allow empty city; reject known non-Marikina cities
+                            if any(
+                                bad in city_l
+                                for bad in (
+                                    "quezon",
+                                    "pasig",
+                                    "san juan",
+                                    "manila",
+                                    "makati",
+                                    "cainta",
+                                    "antipolo",
+                                    "mandaluyong",
+                                    "san mateo",
+                                    "taguig",
+                                    "caloocan",
+                                )
+                            ):
+                                continue
+                        house = addr.get("house_number")
+                        road = addr.get("road") or addr.get("pedestrian") or addr.get("residential")
+                        primary = (
+                            f"{house} {road}".strip()
+                            if house and road
+                            else road
+                            or addr.get("neighbourhood")
+                            or addr.get("suburb")
+                            or (item.get("display_name") or "").split(",")[0]
+                        )
+                        secondary_bits = [
+                            addr.get("suburb") or addr.get("neighbourhood") or addr.get("village"),
+                            city or "Marikina",
+                        ]
+                        secondary = ", ".join([b for b in secondary_bits if b])
+                        lat = float(item["lat"])
+                        lng = float(item["lon"])
+                        key = (round(lat, 5), round(lng, 5), str(primary).casefold())
+                        if key in seen_remote:
+                            continue
+                        seen_remote.add(key)
+                        remote.append(
+                            {
+                                "lat": lat,
+                                "lng": lng,
+                                "label": item.get("display_name") or primary,
+                                "primary": primary,
+                                "secondary": secondary or "Marikina Heights",
+                                "source": "nominatim",
+                            }
+                        )
+                    # Enough local hits — stop extra queries
+                    if len(remote) >= 8:
+                        break
+        except Exception:
+            remote = []
+
+        # Prefer remote coords; fill with local street names; both re-filtered near Heights
+        pool = remote + local_hits
+        ranked = filter_and_rank_search_results(pool, limit=8)
+        results = [
+            {
+                "lat": row["lat"],
+                "lng": row["lng"],
+                "label": row.get("label") or row.get("primary"),
+                "primary": row.get("primary") or row.get("label"),
+                "secondary": row.get("secondary") or "",
+                "zone": row.get("zone"),
+                "accepted": True,
+            }
+            for row in ranked
+        ]
+        return Response({"results": results})

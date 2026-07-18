@@ -375,10 +375,28 @@ class EmergencyAPITests(APITestCase):
 
         alert.refresh_from_db()
         self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
+        # All on-duty BHW (medical unit) get the case; tanod does not (crime unit)
         self.assertTrue(alert.assignments.filter(responder=bhw_near).exists())
-        self.assertFalse(alert.assignments.filter(responder=bhw_far).exists())
-        self.assertTrue(EmergencyStatusEvent.objects.filter(alert=alert, status=EmergencyAlert.Status.ROUTED, note__icontains="Auto-routed").exists())
-        self.assertTrue(Notification.objects.filter(recipient=bhw_near, emergency=alert, type=Notification.Type.EMERGENCY_ROUTED).exists())
+        self.assertTrue(alert.assignments.filter(responder=bhw_far).exists())
+        self.assertFalse(
+            alert.assignments.filter(responder__responder_unit=User.ResponderUnit.TANOD).exists()
+        )
+        # Nearest is listed first in auto-route note
+        route_event = EmergencyStatusEvent.objects.filter(
+            alert=alert, status=EmergencyAlert.Status.ROUTED, note__icontains="Auto-routed"
+        ).first()
+        self.assertIsNotNone(route_event)
+        self.assertIn("Near", route_event.note)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=bhw_near, emergency=alert, type=Notification.Type.EMERGENCY_ROUTED
+            ).exists()
+        )
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=bhw_far, emergency=alert, type=Notification.Type.EMERGENCY_ROUTED
+            ).exists()
+        )
 
     def test_responder_can_update_duty_location(self):
         self.client.force_authenticate(self.responder)
@@ -622,6 +640,59 @@ class EmergencyAPITests(APITestCase):
         self.assertTrue(any(item["id"] == alert.pk for item in allowed.data["emergencies"]))
         self.assertTrue(any(item["id"] == self.responder.pk for item in allowed.data["people"]))
 
+    def test_resident_alerts_map_is_public_safe(self):
+        from apps.concerns.models import Concern
+
+        alert = self.create_alert()
+        EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
+        public = Concern.objects.create(
+            reporter=self.resident,
+            title="Broken streetlight",
+            description="Near the plaza",
+            category=Concern.Category.INFRASTRUCTURE,
+            visibility=Concern.Visibility.COMMUNITY,
+            latitude="14.6507000",
+            longitude="121.1133000",
+            address="Plaza",
+            status=Concern.Status.UNDER_REVIEW,
+        )
+        private = Concern.objects.create(
+            reporter=self.resident,
+            title="Private only",
+            visibility=Concern.Visibility.PRIVATE,
+            latitude="14.6508000",
+            longitude="121.1134000",
+            status=Concern.Status.SUBMITTED,
+        )
+
+        self.client.force_authenticate(self.resident)
+        response = self.client.get("/api/locations/resident-alerts-map/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("concerns", response.data)
+        self.assertIn("emergencies", response.data)
+        self.assertIn("services", response.data)
+        # Official ops fields must never appear on the resident path
+        self.assertNotIn("people", response.data)
+        self.assertNotIn("routes", response.data)
+        self.assertTrue(response.data["summary"]["has_ongoing_emergencies"])
+        self.assertGreaterEqual(response.data["summary"]["active_emergencies"], 1)
+        self.assertTrue(any(item["id"] == public.pk for item in response.data["concerns"]))
+        self.assertFalse(any(item["id"] == private.pk for item in response.data["concerns"]))
+        public_row = next(item for item in response.data["concerns"] if item["id"] == public.pk)
+        self.assertEqual(public_row["category"], Concern.Category.INFRASTRUCTURE)
+        self.assertEqual(public_row["kind"], "concern")
+        self.assertIn("latitude", public_row)
+        emergency = next(item for item in response.data["emergencies"] if item["id"] == alert.pk)
+        self.assertNotIn("reporter", emergency)
+        self.assertNotIn("current_assignment", emergency)
+        self.assertEqual(emergency["kind"], "emergency")
+        self.assertIn("type", emergency)
+        self.assertIn("latitude", emergency)
+        # Official live map remains staff-only
+        still_denied = self.client.get("/api/dashboard/official/live-map/")
+        self.assertEqual(still_denied.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_official_live_map_snapshot_serves_cached_geometry(self):
         cache.delete("live-map-static-geometry:v2")
         MapGeometry.objects.all().delete()
@@ -692,4 +763,6 @@ class EmergencyAPITests(APITestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        # Soft 200: GPS noise outside barangay should not error the client
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data.get("accepted", True))

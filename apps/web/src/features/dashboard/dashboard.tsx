@@ -1,7 +1,6 @@
 import * as React from "react"
-import { Outlet, useNavigate } from "react-router-dom"
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom"
 
-import { useSidebar } from "@/features/dashboard/components/sidebar-context"
 import { Sidebar } from "@/features/dashboard/components/sidebar"
 import { SidebarProvider } from "@/features/dashboard/components/sidebar-context"
 import { SOSButton } from "@/features/dashboard/components/sos-button"
@@ -9,9 +8,12 @@ import { useAuthSession } from "@/features/auth/auth-session"
 import { MobileNav } from "@/features/dashboard/components/mobile-nav"
 import { useLocationPing } from "@/features/dashboard/hooks/use-location-ping"
 import { NotificationProvider, fetchConcern } from "@/features/dashboard/components/notification-context"
+import { NotificationPopover } from "@/features/dashboard/components/notification-popover"
+import { ProfileAccountMenu } from "@/features/dashboard/components/profile-account-menu"
 import { ReportStatusDialog, statusModeFromReport } from "@/features/dashboard/components/report-status-dialog"
 import { ResidentSearchProvider } from "@/features/dashboard/components/resident-search-context"
 import {
+  OfficialMainTopBar,
   ResidentLogoBar,
   ResidentMainTopBar,
   RESIDENT_DESKTOP_MIN_PX,
@@ -40,8 +42,8 @@ function useResidentDesktop() {
 }
 
 function DashboardContent() {
-  const { isOpen } = useSidebar()
   const navigate = useNavigate()
+  const location = useLocation()
   const isDesktop = useResidentDesktop()
   const { user } = useAuthSession()
   useLocationPing(user)
@@ -52,6 +54,18 @@ function DashboardContent() {
     user?.is_superuser
   const isResident = !isStaffRole
   const isMobile = !isDesktop
+  const isAlertsMapRoute =
+    location.pathname === "/dashboard/alerts-map" ||
+    location.pathname.endsWith("/alerts-map")
+  const isBackChromeRoute =
+    location.pathname.startsWith("/dashboard/settings") ||
+    location.pathname.startsWith("/dashboard/profile") ||
+    location.pathname.startsWith("/dashboard/notifications")
+  const isAccountWizardRoute =
+    location.pathname.startsWith("/dashboard/settings/reverify/") ||
+    location.pathname === "/dashboard/settings/change-password"
+  const hideMobileNav =
+    isMobile && (isAlertsMapRoute || isBackChromeRoute || isAccountWizardRoute)
 
   const [statusDialogOpen, setStatusDialogOpen] = React.useState(false)
   const [statusDialogMode, setStatusDialogMode] = React.useState<StatusDialogMode>("submitted")
@@ -76,103 +90,99 @@ function DashboardContent() {
     return () => window.removeEventListener("eboses:open-status-dialog", onEvent as EventListener)
   }, [])
 
-  const staffMarginLeft = isMobile ? 0 : isOpen ? 208 : 56
+  const shellHome = isResident
+    ? "/dashboard/home"
+    : user?.role === "first_responder"
+      ? "/dashboard/emergencies"
+      : "/dashboard/alerts-map"
 
-  if (isResident) {
-    return (
-      <ResidentSearchProvider>
-        {/*
-          Single shell: top chrome + body share one width.
-          Main column owns search + avatar so they share the feed|rail grid with home.
-        */}
-        <div className="min-h-svh overflow-x-hidden bg-white">
-          <div
-            className="mx-auto min-h-svh w-full bg-white"
-            style={{
-              maxWidth: RESIDENT_SHELL_MAX,
-              minWidth: 0,
-            }}
-          >
-            {isDesktop ? (
-              <div
-                className="grid min-h-svh"
-                style={{
-                  // Shrinks with CSS viewport (zoom-in) between MIN and preferred W
-                  gridTemplateColumns: `minmax(${RESIDENT_SIDEBAR_MIN}px, min(${RESIDENT_SIDEBAR_W}px, 36vw)) minmax(0, 1fr)`,
-                }}
-              >
-                {/* LEFT: logo + nav */}
-                <div className="flex min-h-0 min-w-0 flex-col">
-                  <ResidentLogoBar />
-                  <div className="min-h-0 flex-1">
-                    <Sidebar />
-                  </div>
-                </div>
-
-                {/* RIGHT: main top (search | avatar) + page */}
-                <div className="flex min-h-0 min-w-0 flex-col">
-                  <ResidentMainTopBar />
-                  <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-white">
-                    <Outlet />
-                  </main>
-                </div>
-              </div>
-            ) : (
-              <main className="flex min-h-svh min-w-0 flex-col bg-white pb-20">
-                <Outlet />
-              </main>
-            )}
-          </div>
-
-          {isMobile ? (
-            <div className="fixed bottom-0 left-0 right-0 z-30">
-              <MobileNav />
-            </div>
-          ) : null}
-
-          <SOSButton />
-
-          {statusDialogReport ? (
-            <ReportStatusDialog
-              open={statusDialogOpen}
-              onOpenChange={setStatusDialogOpen}
-              report={statusDialogReport}
-              mode={statusDialogMode}
-              onTrack={() => navigate(`/dashboard/reports/${statusDialogReport.public_id}`)}
-            />
-          ) : null}
-        </div>
-      </ResidentSearchProvider>
-    )
-  }
+  const statusDialog = statusDialogReport ? (
+    <ReportStatusDialog
+      open={statusDialogOpen}
+      onOpenChange={setStatusDialogOpen}
+      report={statusDialogReport}
+      mode={statusDialogMode}
+      onTrack={() =>
+        navigate(
+          isResident
+            ? `/dashboard/reports/${statusDialogReport.public_id}`
+            : `/dashboard/reports/${statusDialogReport.id}`,
+        )
+      }
+    />
+  ) : null
 
   return (
-    <div className="flex min-h-svh">
-      <div className="hidden md:block">
-        <Sidebar />
+    <ResidentSearchProvider>
+      <div className="min-h-svh overflow-x-hidden bg-white">
+        <div
+          className="mx-auto min-h-svh w-full bg-white"
+          style={{
+            maxWidth: isResident ? RESIDENT_SHELL_MAX : 1800,
+            minWidth: 0,
+          }}
+        >
+          {isAccountWizardRoute ? (
+            <main className="flex min-h-svh min-w-0 flex-col overflow-x-hidden overflow-y-auto overscroll-contain bg-white">
+              <Outlet />
+            </main>
+          ) : isDesktop ? (
+            <div
+              className="grid h-svh max-h-svh min-h-0 overflow-hidden"
+              style={{
+                gridTemplateColumns: `minmax(${RESIDENT_SIDEBAR_MIN}px, min(${RESIDENT_SIDEBAR_W}px, 36vw)) minmax(0, 1fr)`,
+              }}
+            >
+              <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-neutral-100">
+                <ResidentLogoBar homeTo={shellHome} />
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                  <Sidebar />
+                </div>
+              </div>
+
+              <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+                {isResident ? <ResidentMainTopBar /> : <OfficialMainTopBar />}
+                <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-white [scrollbar-width:thin]">
+                  <Outlet />
+                </main>
+              </div>
+            </div>
+          ) : (
+            <main
+              className={
+                hideMobileNav
+                  ? "flex min-h-svh min-w-0 flex-col overflow-hidden bg-white"
+                  : "flex min-h-svh min-w-0 flex-col overflow-x-hidden bg-white pb-24"
+              }
+            >
+              {!hideMobileNav && !isResident ? (
+                <header className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-neutral-100 bg-white px-3">
+                  <Link to={shellHome} className="flex min-w-0 items-center gap-2 no-underline">
+                    <img src="/contents/logo.png" alt="" className="size-8 shrink-0 object-contain" />
+                    <span className="truncate text-[18px] font-bold leading-none tracking-tight text-[#ff6a1a]">
+                      E-Boses
+                    </span>
+                  </Link>
+                  <div className="flex items-center gap-0.5">
+                    <NotificationPopover />
+                    <ProfileAccountMenu placeLabel="Marikina Heights" />
+                  </div>
+                </header>
+              ) : null}
+              <Outlet />
+            </main>
+          )}
+        </div>
+
+        {isMobile && !hideMobileNav ? <MobileNav /> : null}
+
+        {isResident ? (
+          <SOSButton suppressed={isAlertsMapRoute || isAccountWizardRoute} />
+        ) : null}
+
+        {statusDialog}
       </div>
-
-      <main
-        className="flex min-h-svh flex-1 flex-col pb-20 transition-all duration-300 md:pb-0"
-        style={{ marginLeft: staffMarginLeft }}
-      >
-        <Outlet />
-      </main>
-
-      <div className="fixed bottom-0 left-0 right-0 z-30 md:hidden">
-        <MobileNav />
-      </div>
-
-      {statusDialogReport ? (
-        <ReportStatusDialog
-          open={statusDialogOpen}
-          onOpenChange={setStatusDialogOpen}
-          report={statusDialogReport}
-          mode={statusDialogMode}
-          onTrack={() => navigate(`/dashboard/reports/${statusDialogReport.id}`)}
-        />
-      ) : null}
-    </div>
+    </ResidentSearchProvider>
   )
 }
 

@@ -1,23 +1,20 @@
 import { Link, useLocation } from "react-router-dom"
 import {
   AlertTriangleIcon,
-  BarChart3Icon,
+  BrainCircuitIcon,
   FileCheck2Icon,
   HomeIcon,
   MapPinnedIcon,
-  PhoneIcon,
   Settings2Icon,
   ShieldCheckIcon,
-  BrainCircuitIcon,
-  UsersIcon,
+  ClipboardListIcon,
 } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { useSidebar } from "@/features/dashboard/components/sidebar-context"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { computeDefaultAvatar } from "@/features/dashboard/avatar-utils"
 import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
+import { FeedUserAvatar } from "@/features/dashboard/components/feed-post-card"
 
 interface NavItem {
   label: string
@@ -25,80 +22,69 @@ interface NavItem {
   icon: React.ElementType
 }
 
-const residentNavItems: { label: string; path: string }[] = [
-  { label: "Home", path: "/dashboard/home" },
-  { label: "My Reports", path: "/dashboard/reports" },
-  { label: "Emergency History", path: "/dashboard/emergency-history" },
+/** Same Flaticon glyphs as mobile bottom nav: home · alerts · reports */
+const residentNavItems: { label: string; path: string; iconSrc: string }[] = [
+  { label: "Home", path: "/dashboard/home", iconSrc: "/contents/nav-home.png" },
+  { label: "Alerts", path: "/dashboard/alerts-map", iconSrc: "/contents/nav-alert.png" },
+  { label: "My reports", path: "/dashboard/reports", iconSrc: "/contents/nav-clipboard.png" },
 ]
+
+function NavMaskIcon({ src, className }: { src: string; className?: string }) {
+  return (
+    <span
+      className={cn("inline-block shrink-0 bg-current", className)}
+      style={{
+        WebkitMaskImage: `url(${src})`,
+        maskImage: `url(${src})`,
+        WebkitMaskSize: "contain",
+        maskSize: "contain",
+        WebkitMaskRepeat: "no-repeat",
+        maskRepeat: "no-repeat",
+        WebkitMaskPosition: "center",
+        maskPosition: "center",
+      }}
+      aria-hidden
+    />
+  )
+}
 
 const officialNavItems: NavItem[] = [
   { label: "Dashboard", path: "/dashboard/home", icon: HomeIcon },
-  { label: "Alerts Map", path: "/dashboard/alerts-map", icon: MapPinnedIcon },
-  { label: "Emergency Ops", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
-  { label: "Concerns", path: "/dashboard/reports", icon: BarChart3Icon },
-  { label: "Verification Queue", path: "/dashboard/verification-queue", icon: FileCheck2Icon },
-  { label: "ID & Proof Templates", path: "/dashboard/ocr-templates", icon: Settings2Icon },
-  { label: "Concern Classification", path: "/dashboard/concern-classification", icon: BrainCircuitIcon },
+  { label: "Alerts map", path: "/dashboard/alerts-map", icon: MapPinnedIcon },
+  { label: "Emergency ops", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
+  { label: "Concerns", path: "/dashboard/reports", icon: ClipboardListIcon },
+  { label: "Verification", path: "/dashboard/verification-queue", icon: FileCheck2Icon },
+  { label: "ID templates", path: "/dashboard/ocr-templates", icon: Settings2Icon },
+  { label: "Classification", path: "/dashboard/concern-classification", icon: BrainCircuitIcon },
   { label: "Admin", path: "/dashboard/admin", icon: ShieldCheckIcon },
 ]
 
-const responderNavItems: NavItem[] = []
-
-const bottomNavItems: NavItem[] = [
-  { label: "Profile", path: "/dashboard/profile", icon: UsersIcon },
+const responderNavItems: NavItem[] = [
+  { label: "Emergency ops", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
+  { label: "Alerts map", path: "/dashboard/alerts-map", icon: MapPinnedIcon },
 ]
 
-type SosPlacement = "inline" | "sidebar" | "compact"
-
-function normalizeSosPlacement(value: string | null): SosPlacement {
-  if (value === "bottom_bar") return "sidebar"
-  if (value === "floating") return "inline"
-  if (value === "sidebar" || value === "compact" || value === "inline") return value
-  return "inline"
-}
-
-function SidebarSosButton({ isOpen }: { isOpen: boolean }) {
-  const [placement, setPlacement] = useState<SosPlacement>(() =>
-    normalizeSosPlacement(localStorage.getItem("eboses:sos-placement")),
-  )
-
-  useEffect(() => {
-    function handlePlacement(event: Event) {
-      const nextPlacement = (event as CustomEvent<{ placement?: SosPlacement }>).detail
-        ?.placement
-      setPlacement(
-        normalizeSosPlacement(nextPlacement || localStorage.getItem("eboses:sos-placement")),
-      )
-    }
-    window.addEventListener("eboses:sos-placement-change", handlePlacement)
-    return () => window.removeEventListener("eboses:sos-placement-change", handlePlacement)
-  }, [])
-
-  if (placement !== "sidebar") return null
-
-  return (
-    <li className="group/sos relative">
-      <button
-        type="button"
-        onClick={() => window.dispatchEvent(new Event("eboses:open-sos"))}
-        className={cn(
-          "sos-glow flex w-full items-center rounded-lg bg-red-600 text-sm font-extrabold text-white shadow-[0_8px_18px_rgba(220,38,38,0.28)] transition-colors hover:bg-red-700",
-          isOpen ? "gap-3 px-3 py-2.5" : "justify-center px-0 py-2.5",
-        )}
-      >
-        <PhoneIcon className="size-5 shrink-0" fill="currentColor" />
-        {isOpen && <span>SOS</span>}
-      </button>
-      {!isOpen && (
-        <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-red-600 px-3.5 text-xs font-bold text-white opacity-0 shadow-lg transition-opacity group-hover/sos:opacity-100">
-          Send SOS
-        </span>
-      )}
-    </li>
+function navLinkClass(active: boolean) {
+  return cn(
+    "group flex h-11 items-center gap-3 px-2.5 text-[16px] leading-none transition-[colors,font-weight] duration-150",
+    "bg-transparent hover:bg-transparent focus-visible:bg-transparent active:bg-transparent",
+    "hover:font-semibold focus-visible:font-semibold",
+    active
+      ? "font-semibold text-[#07145f]"
+      : "font-light text-neutral-700 hover:text-[#07145f] focus-visible:text-[#07145f]",
   )
 }
 
-/** Nextdoor-style nav column — logo lives in ResidentTopBar; sticky under top bar */
+function navIconClass(active: boolean) {
+  return cn(
+    "size-5 shrink-0 transition-colors",
+    active
+      ? "text-[#07145f]"
+      : "text-neutral-500 group-hover:text-[#07145f] group-focus-visible:text-[#07145f]",
+  )
+}
+
+/** Nextdoor-style nav column — logo lives in ResidentLogoBar */
 function ResidentSidebar() {
   const location = useLocation()
   const [createOpen, setCreateOpen] = useState(false)
@@ -116,9 +102,8 @@ function ResidentSidebar() {
 
   return (
     <>
-      {/* Nav under logo (logo is sibling in dashboard left column) */}
-      <aside className="flex h-full min-h-0 w-full flex-col bg-white">
-        <nav className="flex flex-1 flex-col pt-6">
+      <aside className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-white">
+        <nav className="min-h-0 flex-1 overflow-y-auto overscroll-contain pt-6 [scrollbar-width:thin]">
           <ul className="flex flex-col gap-0.5 px-3">
             {residentNavItems.map((item) => {
               const active = isActive(item.path)
@@ -127,23 +112,17 @@ function ResidentSidebar() {
                   <Link
                     to={item.path}
                     aria-current={active ? "page" : undefined}
-                    className={cn(
-                      "group flex h-11 items-center rounded-lg px-2.5 text-[16px] font-light transition-[colors,font-weight] duration-150",
-                      "hover:font-semibold focus-visible:font-semibold active:font-semibold",
-                      active
-                        ? "font-semibold text-[#07145f]"
-                        : "text-neutral-700 hover:text-[#07145f] focus-visible:text-[#07145f]",
-                    )}
+                    className={navLinkClass(active)}
                   >
-                    <span className="text-[16px] leading-none">{item.label}</span>
+                    <NavMaskIcon src={item.iconSrc} className={navIconClass(active)} />
+                    {item.label}
                   </Link>
                 </li>
               )
             })}
           </ul>
 
-          {/* Wider than nav links — nearly full sidebar column */}
-          <div className="mt-3 px-3">
+          <div className="mt-3 px-3 pb-3">
             <button
               type="button"
               onClick={() => setCreateOpen(true)}
@@ -154,14 +133,15 @@ function ResidentSidebar() {
           </div>
         </nav>
 
-        <div className="mt-auto px-3 pb-5 pt-2">
+        <div className="shrink-0 bg-white px-3 pb-5 pt-2">
           <Link
             to="/dashboard/settings"
             className={cn(
-              "group flex h-10 items-center rounded-lg px-2.5 text-[16px] font-medium transition-colors",
+              "flex h-10 items-center px-2.5 text-[16px] transition-[colors,font-weight]",
+              "bg-transparent hover:bg-transparent focus-visible:bg-transparent active:bg-transparent",
               isActive("/dashboard/settings")
                 ? "font-semibold text-[#07145f]"
-                : "text-neutral-600 hover:text-[#07145f] focus-visible:text-[#07145f]",
+                : "font-medium text-neutral-600 hover:text-[#07145f] focus-visible:text-[#07145f]",
             )}
           >
             Settings
@@ -174,9 +154,11 @@ function ResidentSidebar() {
   )
 }
 
-/** Dark admin sidebar (officials / responders) */
+/**
+ * Official / responder sidebar — same white Nextdoor chrome as residents,
+ * with staff destinations and letter avatar footer.
+ */
 function StaffSidebar() {
-  const { isOpen } = useSidebar()
   const location = useLocation()
   const { user } = useAuthSession()
   const isOfficialRole = user?.role === "barangay_official" || user?.is_staff || user?.is_superuser
@@ -184,154 +166,91 @@ function StaffSidebar() {
   const navItems = isOfficialRole ? officialNavItems : isResponderRole ? responderNavItems : []
 
   function isActive(path: string) {
-    return location.pathname === path
+    if (path === "/dashboard/home") {
+      return (
+        location.pathname === path ||
+        location.pathname === "/dashboard" ||
+        location.pathname === "/dashboard/"
+      )
+    }
+    return location.pathname === path || location.pathname.startsWith(`${path}/`)
   }
 
-  return (
-    <aside
-      className={cn(
-        "fixed left-0 top-0 z-40 flex h-svh flex-col border-r border-background/10 bg-foreground motion-safe:transition-all motion-safe:duration-300",
-        isOpen ? "w-52" : "w-14",
-      )}
-    >
-      <div
-        className={cn(
-          "flex items-start gap-3 border-b border-white/10 px-4 py-4",
-          !isOpen && "justify-center px-0 py-4",
-        )}
-      >
-        <img src="/contents/logo.png" alt="E-Boses" className="size-10 shrink-0 object-contain" />
-        {isOpen && (
-          <div>
-            <div className="text-lg font-bold tracking-wide text-white">
-              E-<span className="text-orange-500">BOSES</span>
-            </div>
-            <div className="text-[10px] leading-tight text-white/80">
-              YOUR VOICE.
-              <br />
-              OUR ACTION.
-              <br />
-              BETTER COMMUNITY.
-            </div>
-          </div>
-        )}
-      </div>
+  const displayName = user
+    ? `${(user.firstName ?? "").split(/\s+/)[0]} ${user.lastName ?? ""}`.trim() || user.email
+    : "Staff"
+  const displayRole =
+    user?.role?.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) ?? "Official"
 
-      <nav className="flex-1 p-2">
-        <ul className="flex flex-col gap-1">
-          <li className="group/sos relative">
-            <Link
-              to="/dashboard/emergencies"
-              className={cn(
-                "sos-glow flex w-full items-center rounded-lg bg-red-600 text-sm font-extrabold text-white shadow-[0_8px_18px_rgba(220,38,38,0.28)] transition-colors hover:bg-red-700",
-                isOpen ? "gap-3 px-3 py-2.5" : "justify-center px-0 py-2.5",
-              )}
-            >
-              <AlertTriangleIcon className="size-5 shrink-0" />
-              {isOpen && <span>Alerts</span>}
-            </Link>
-            {!isOpen && (
-              <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-red-600 px-3.5 text-xs font-bold text-white opacity-0 shadow-lg transition-opacity group-hover/sos:opacity-100">
-                Emergency Ops
-              </span>
-            )}
-          </li>
+  return (
+    <aside className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-white">
+      <nav className="min-h-0 flex-1 overflow-y-auto overscroll-contain pt-6 [scrollbar-width:thin]">
+        {/* Primary emergency shortcut — orange/red CTA like resident Report */}
+        <div className="px-3 pb-2">
+          <Link
+            to="/dashboard/emergencies"
+            className="flex h-11 w-full items-center justify-center gap-2 rounded-[9999px] bg-[#f23b35] text-[15px] font-semibold text-white transition-colors hover:bg-[#e02f2a] active:scale-[0.99]"
+          >
+            <AlertTriangleIcon className="size-4" strokeWidth={2.25} />
+            Emergency ops
+          </Link>
+        </div>
+
+        <ul className="mt-2 flex flex-col gap-0.5 px-3">
           {navItems.map((item) => {
             const active = isActive(item.path)
             const Icon = item.icon
-
             return (
-              <li key={item.path} className="group/nav relative">
+              <li key={item.path}>
                 <Link
                   to={item.path}
                   aria-current={active ? "page" : undefined}
-                  className={cn(
-                    "flex items-center rounded-md px-3 text-sm font-medium motion-safe:transition-colors",
-                    active ? "text-primary" : "text-background/65 hover:text-primary",
-                    isOpen ? "gap-3" : "justify-center px-0",
-                  )}
+                  className={navLinkClass(active)}
                 >
-                  {item.label === "Dashboard" ? (
-                    <img
-                      src="/contents/home.png"
-                      alt=""
-                      className="size-10 shrink-0 rounded-full object-cover"
-                    />
-                  ) : item.label === "Reports" || item.label === "Concerns" ? (
-                    <img
-                      src="/contents/reports.png"
-                      alt=""
-                      className="size-10 shrink-0 rounded-full object-cover"
-                    />
-                  ) : (
-                    <Icon className="size-10 shrink-0" />
-                  )}
-                  {isOpen && <span>{item.label}</span>}
+                  <Icon className={navIconClass(active)} strokeWidth={1.75} />
+                  {item.label}
                 </Link>
-                {!isOpen && (
-                  <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-foreground px-3.5 text-xs font-medium text-background opacity-0 shadow-lg transition-opacity group-hover/nav:opacity-100">
-                    {item.label}
-                  </span>
-                )}
               </li>
             )
           })}
         </ul>
       </nav>
 
-      <div className="border-t border-white/10 p-2">
-        <ul className="flex flex-col gap-1">
-          {bottomNavItems.map((item) => {
-            const isProfile = item.label === "Profile"
-            const avatarKey = user ? computeDefaultAvatar(user) : ""
-            const displayName = user
-              ? `${(user.firstName ?? "").split(/\s+/)[0]} ${user.lastName ?? ""}`.trim()
-              : "User"
-            const displayRole =
-              user?.role?.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) ??
-              "Resident"
-
-            return (
-              <li key={item.path} className="group/btm relative">
-                {isProfile ? (
-                  <Link
-                    to="/dashboard/profile"
-                    className={cn(
-                      "flex w-full items-center rounded-md px-3 text-sm font-medium motion-safe:transition-colors text-background/65 hover:text-primary",
-                      isOpen ? "gap-3" : "justify-center px-0",
-                    )}
-                  >
-                    <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted">
-                      <img
-                        src={`/contents/${avatarKey}.png`}
-                        alt=""
-                        className="block size-full scale-125 object-cover"
-                      />
-                    </span>
-                    {isOpen && (
-                      <div className="min-w-0 flex-1 text-left">
-                        <p className="truncate text-sm font-semibold text-white">{displayName}</p>
-                        <p className="truncate text-xs text-white/60">{displayRole}</p>
-                      </div>
-                    )}
-                  </Link>
-                ) : (
-                  <Link
-                    to={item.path}
-                    className={cn(
-                      "flex items-center rounded-md px-3 text-sm font-medium motion-safe:transition-colors",
-                      isActive(item.path) ? "text-primary" : "text-background/65 hover:text-primary",
-                      isOpen ? "gap-3" : "justify-center px-0",
-                    )}
-                  >
-                    <item.icon className="size-10 shrink-0" />
-                    {isOpen && <span>{item.label}</span>}
-                  </Link>
-                )}
-              </li>
-            )
-          })}
-        </ul>
+      <div className="shrink-0 space-y-1 bg-white px-3 pb-5 pt-2">
+        <Link
+          to="/dashboard/settings"
+          className={cn(
+            "flex h-10 items-center px-2.5 text-[16px] transition-[colors,font-weight]",
+            isActive("/dashboard/settings")
+              ? "font-semibold text-[#07145f]"
+              : "font-medium text-neutral-600 hover:text-[#07145f]",
+          )}
+        >
+          Settings
+        </Link>
+        <Link
+          to="/dashboard/profile"
+          className={cn(
+            "flex items-center gap-3 rounded-xl px-2.5 py-2 transition-colors hover:bg-neutral-50",
+            isActive("/dashboard/profile") && "bg-neutral-50",
+          )}
+        >
+          <FeedUserAvatar
+            user={{
+              id: user?.id ?? 0,
+              full_name: displayName,
+              initials: displayName.slice(0, 2).toUpperCase(),
+              role: user?.role ?? "barangay_official",
+              last_seen_at: null,
+            }}
+            size="sm"
+            className="!size-9 !text-[14px]"
+          />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[14px] font-semibold text-neutral-900">{displayName}</p>
+            <p className="truncate text-[12px] text-neutral-500">{displayRole}</p>
+          </div>
+        </Link>
       </div>
     </aside>
   )
@@ -349,4 +268,6 @@ export function Sidebar() {
   return <StaffSidebar />
 }
 
-export { SidebarSosButton }
+export function SidebarSosButton(_props: { isOpen: boolean }) {
+  return null
+}

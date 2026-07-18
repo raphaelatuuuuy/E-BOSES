@@ -19,7 +19,6 @@ import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { Topbar } from "@/features/dashboard/components/topbar"
 import {
   getOfficialDashboardSummary,
   getResponderDashboardSummary,
@@ -29,6 +28,7 @@ import {
   type PublicUser,
   type ResponderRoleSummary,
 } from "@/features/dashboard/api"
+import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
 import {
   acknowledgeEmergency,
   assignEmergency,
@@ -289,6 +289,27 @@ function IncidentBoard({ alert }: { alert: EmergencyAlert | null }) {
           ))}
         </div>
       </div>
+
+      {/* Shared group chat: resident + all assigned responders (same thread) */}
+      {(alert.assignments?.length > 0 || alert.current_assignment) &&
+      alert.status !== "submitted" ? (
+        <EmergencyChatPanel
+          alertId={alert.id}
+          open
+          theme="light"
+          disabled={alert.status === "cancelled" || alert.status === "resolved"}
+          participantHint={
+            alert.assignments?.length
+              ? `Group · resident + ${alert.assignments.length} responder${alert.assignments.length === 1 ? "" : "s"}`
+              : "Group · resident + assigned responders"
+          }
+          className="min-h-[320px]"
+        />
+      ) : (
+        <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-3 text-xs leading-5 text-[#68739c]">
+          Live chat opens once a responder is assigned. Everyone on the assignment list shares one group thread with the resident.
+        </div>
+      )}
     </section>
   )
 }
@@ -732,31 +753,26 @@ export default function EmergenciesPage() {
 
   if (!isOfficial && !isResponder) {
     return (
-      <div className="flex flex-col">
-        <Topbar />
-        <main className="p-5 md:p-8">
-          <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
-            <AlertTriangleIcon className="mx-auto size-10 text-red-600" />
-            <h1 className="mt-3 text-xl font-black text-[#07145f]">Emergency operations are staff-only</h1>
-            <p className="mt-2 text-sm text-[#68739c]">Residents can send SOS alerts from the SOS button.</p>
-          </div>
-        </main>
+      <div className="bg-white p-5 md:p-8">
+        <div className="rounded-2xl border border-neutral-200 bg-white p-8 text-center">
+          <AlertTriangleIcon className="mx-auto size-10 text-red-600" />
+          <h1 className="mt-3 text-xl font-bold text-neutral-900">Emergency operations are staff-only</h1>
+          <p className="mt-2 text-[15px] text-neutral-600">Residents can send SOS alerts from the SOS button.</p>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col bg-[#f7f8fc]">
-      <Topbar />
-      <main className="space-y-5 p-4 md:p-8">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5">
+    <div className="space-y-5 bg-white p-4 md:p-6 lg:p-8">
+        <div className="rounded-2xl border border-neutral-200 bg-white p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <p className="text-xs font-black uppercase tracking-wide text-red-600">Emergency operations</p>
-              <h1 className="mt-1 text-2xl font-black text-[#07145f] md:text-3xl">
+              <p className="text-[12px] font-semibold uppercase tracking-wide text-red-600">Emergency operations</p>
+              <h1 className="mt-1 text-[22px] font-bold tracking-tight text-neutral-900 sm:text-2xl">
                 {isOfficial ? "Dispatch console" : "Responder field dashboard"}
               </h1>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-[#43507f]">
+              <p className="mt-2 max-w-3xl text-[15px] font-medium leading-6 text-neutral-600">
                 {isOfficial
                   ? "SOS alerts auto-route to the nearest on-duty matching unit. Officials can override or add responders when the incident needs more support."
                   : "Keep your duty location live, acknowledge assigned alerts, and update the resident as you respond."}
@@ -777,19 +793,19 @@ export default function EmergenciesPage() {
         ) : null}
 
         {loading ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-8 text-sm font-bold text-[#68739c]">Loading emergencies...</div>
+          <div className="rounded-2xl border border-neutral-200 bg-white p-8 text-[14px] font-medium text-neutral-500">Loading emergencies...</div>
         ) : alerts.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
+          <div className="rounded-2xl border border-neutral-200 bg-white p-8 text-center">
             <ShieldCheckIcon className="mx-auto size-10 text-emerald-600" />
-            <h2 className="mt-3 text-lg font-black text-[#07145f]">No active emergencies</h2>
-            <p className="mt-2 text-sm text-[#68739c]">New SOS alerts and assignments will appear here.</p>
+            <h2 className="mt-3 text-lg font-bold text-neutral-900">No active emergencies</h2>
+            <p className="mt-2 text-[14px] text-neutral-500">New SOS alerts and assignments will appear here.</p>
           </div>
         ) : isOfficial ? (
           <div className="grid gap-5 2xl:grid-cols-[340px_minmax(0,1fr)_360px]">
             <aside className="space-y-3">
               <div className="flex items-center justify-between">
-                <p className="text-sm font-black text-[#07145f]">Incoming emergency queue</p>
-                <span className="rounded-full bg-red-100 px-3 py-1 text-[11px] font-black text-red-700">{alerts.length} live</span>
+                <p className="text-[14px] font-bold text-neutral-900">Incoming emergency queue</p>
+                <span className="rounded-full bg-red-50 px-3 py-1 text-[11px] font-semibold text-red-700">{alerts.length} live</span>
               </div>
               {alerts.map((alert) => (
                 <QueueCard key={alert.id} alert={alert} active={selected?.id === alert.id} onClick={() => setSelectedId(alert.id)} />
@@ -805,14 +821,13 @@ export default function EmergenciesPage() {
               {selected ? <ResponderActions alert={selected} onChanged={updateAlert} /> : null}
             </div>
             <aside className="space-y-3">
-              <p className="text-sm font-black text-[#07145f]">Assigned alerts</p>
+              <p className="text-[14px] font-bold text-neutral-900">Assigned alerts</p>
               {alerts.map((alert) => (
                 <QueueCard key={alert.id} alert={alert} active={selected?.id === alert.id} onClick={() => setSelectedId(alert.id)} />
               ))}
             </aside>
           </div>
         )}
-      </main>
     </div>
   )
 }

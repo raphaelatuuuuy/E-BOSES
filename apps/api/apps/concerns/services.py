@@ -1,55 +1,20 @@
+from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 
 from apps.accounts.media_services import build_sanitized_preview_bytes
-from apps.accounts.services import validate_location_pair
-from apps.emergencies.models import MapGeometry
-
-
-def _point_in_ring(longitude, latitude, ring):
-    inside = False
-    previous = ring[-1]
-    for current in ring:
-        x1, y1 = previous[:2]
-        x2, y2 = current[:2]
-        crosses = (y1 > latitude) != (y2 > latitude)
-        if crosses:
-            edge_x = (x2 - x1) * (latitude - y1) / (y2 - y1) + x1
-            if longitude < edge_x:
-                inside = not inside
-        previous = current
-    return inside
-
-
-def _point_in_polygon(longitude, latitude, polygon):
-    if not polygon or not _point_in_ring(longitude, latitude, polygon[0]):
-        return False
-    return not any(_point_in_ring(longitude, latitude, hole) for hole in polygon[1:])
+from apps.geo_services import classify_location
 
 
 def validate_barangay_location(latitude, longitude):
-    """Validate against the active GeoJSON boundary, with bounds as a safe fallback."""
-    validate_location_pair(latitude, longitude, required=True)
-    boundary = (
-        MapGeometry.objects.filter(kind=MapGeometry.Kind.BOUNDARY, is_active=True)
-        .order_by("name", "id")
-        .first()
-    )
-    if not boundary:
-        return
-    geometry = boundary.geometry or {}
-    coordinates = geometry.get("coordinates") or []
-    longitude = float(longitude)
-    latitude = float(latitude)
-    if geometry.get("type") == "Polygon":
-        inside = _point_in_polygon(longitude, latitude, coordinates)
-    elif geometry.get("type") == "MultiPolygon":
-        inside = any(_point_in_polygon(longitude, latitude, polygon) for polygon in coordinates)
-    else:
-        inside = False
-    if not inside:
-        from django.core.exceptions import ValidationError
-
-        raise ValidationError("Location must be inside Barangay Marikina Heights.")
+    """
+    Accept pins inside Marikina Heights or within a small edge buffer (~280 m).
+    Reject locations that are far outside the barangay / Marikina City.
+    """
+    if latitude is None or longitude is None:
+        raise ValidationError("Latitude and longitude must be provided together.")
+    result = classify_location(latitude, longitude)
+    if not result.get("accepted"):
+        raise ValidationError(result.get("message") or "Location must be inside Barangay Marikina Heights.")
 
 
 def ensure_concern_media_preview(media):

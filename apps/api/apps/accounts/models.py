@@ -95,7 +95,7 @@ class ResidentProfile(models.Model):
     last_name = models.CharField(max_length=50)
     date_of_birth = models.DateField()
     address = models.CharField(max_length=200)
-    barangay = models.CharField(max_length=120, default="Pending")
+    barangay = models.CharField(max_length=120, default="Marikina Heights")
     gender = models.CharField(max_length=20, choices=Gender.choices, blank=True)
     avatar = models.CharField(max_length=30, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -124,6 +124,7 @@ class AccountRequest(models.Model):
     class Type(models.TextChoices):
         DELETION = "deletion", "Deletion"
         DATA_EXPORT = "data_export", "Data Export"
+        DEACTIVATION = "deactivation", "Deactivation"
 
     class Status(models.TextChoices):
         SUBMITTED = "submitted", "Submitted"

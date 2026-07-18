@@ -143,6 +143,29 @@ export function getEmergency(id: number) {
   return apiRequest<EmergencyAlert>(`/emergencies/${id}/`)
 }
 
+export interface EmergencyChatMessage {
+  id: number
+  alert: number
+  sender: PublicUser
+  body: string
+  created_at: string
+  is_mine: boolean
+}
+
+export function listEmergencyChat(alertId: number, afterId?: number) {
+  const params = new URLSearchParams()
+  if (afterId) params.set("after", String(afterId))
+  const q = params.toString() ? `?${params.toString()}` : ""
+  return apiRequest<EmergencyChatMessage[]>(`/emergencies/${alertId}/chat/${q}`)
+}
+
+export function sendEmergencyChat(alertId: number, body: string) {
+  return apiRequest<EmergencyChatMessage>(`/emergencies/${alertId}/chat/`, {
+    method: "POST",
+    body: JSON.stringify({ body }),
+  })
+}
+
 export function cancelEmergency(id: number) {
   return apiRequest<EmergencyAlert>(`/emergencies/${id}/cancel/`, {
     method: "POST",

@@ -166,25 +166,53 @@ export function isKnownMarikinaHeightsStreet(street: string) {
   return STREET_LOOKUP.has(normalizeStreetKey(street))
 }
 
+/**
+ * Match a road string to a curated Marikina Heights street.
+ * Avoids loose substring hits (e.g. "Eastern Manila District" → "East Drive"
+ * because both contain "east").
+ */
 export function matchMarikinaHeightsStreet(input: string): string | null {
   if (!input?.trim()) return null
+  const raw = input.trim()
+
+  // Never treat bare admin / city labels as street names
+  if (
+    /^(barangay\b|district\b|metro\b|eastern\b|manila\b|philippines\b|marikina(\s+city)?\b|marikina heights\b)/i.test(
+      raw,
+    ) &&
+    !/\b(street|st\.?|avenue|ave\.?|road|rd\.?|drive|dr\.?|lane|ln\.?|extension|ext\.?)\b/i.test(raw)
+  ) {
+    return null
+  }
+
   const exact = MARIKINA_HEIGHTS_STREETS.find(
-    (street) => street.toLowerCase() === input.trim().toLowerCase(),
+    (street) => street.toLowerCase() === raw.toLowerCase(),
   )
   if (exact) return exact
 
-  const key = normalizeStreetKey(input)
+  const key = normalizeStreetKey(raw)
+  if (!key || key.length < 3) return null
+
   const direct = STREET_LOOKUP.get(key)
   if (direct) return direct
 
-  // Partial match: road name contains known street core or vice versa
+  // Token match only — never bare substring ("east" inside "eastern")
+  const keyTokens = new Set(key.split(" ").filter(Boolean))
+  let best: { street: string; score: number } | null = null
+
   for (const [knownKey, street] of STREET_LOOKUP.entries()) {
-    if (!knownKey || !key) continue
-    if (key.includes(knownKey) || knownKey.includes(key)) {
-      return street
-    }
+    if (!knownKey || knownKey.length < 3) continue
+    const knownTokens = knownKey.split(" ").filter(Boolean)
+    if (knownTokens.length === 0) continue
+
+    // Every curated token must appear as a full word in the input
+    if (!knownTokens.every((t) => keyTokens.has(t))) continue
+
+    const score = knownTokens.join(" ").length
+    if (!best || score > best.score) best = { street, score }
   }
-  return null
+
+  return best?.street ?? null
 }
 
 export function filterMarikinaHeightsStreets(query: string, limit = 40) {

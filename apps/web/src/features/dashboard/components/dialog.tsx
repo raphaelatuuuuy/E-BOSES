@@ -34,35 +34,39 @@ export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerCl
     return () => document.removeEventListener("keydown", onKey)
   }, [open, onClose])
 
-  if (!open) return null
+  // Always portal a stable host so open/close doesn't thrash body children
+  // (avoids NotFoundError: removeChild when unmount races with Leaflet/portals).
+  if (typeof document === "undefined") return null
 
   return createPortal(
-    <div
-      className={cn(
-        "fixed inset-0 flex items-center justify-center motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200",
-        containerClassName ?? "z-[200]",
-      )}
-    >
-      {/* Overlay */}
+    open ? (
       <div
-        ref={overlayRef}
-        className="absolute inset-0 bg-black/40"
-        onClick={onClose}
-      />
-
-      {/* Content */}
-      <div
-        ref={contentRef}
         className={cn(
-          "z-10 flex w-full flex-col overflow-hidden bg-background",
-          "fixed inset-0 md:relative md:max-h-[90vh] md:rounded-2xl md:border md:border-border md:shadow-2xl",
-          "motion-safe:md:animate-in motion-safe:md:fade-in motion-safe:md:zoom-in-95 motion-safe:md:duration-200 motion-safe:md:ease-out",
-          maxW,
+          "fixed inset-0 flex items-center justify-center motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200",
+          containerClassName ?? "z-[200]",
         )}
       >
-        {children}
+        {/* Overlay */}
+        <div
+          ref={overlayRef}
+          className="absolute inset-0 bg-black/40"
+          onClick={onClose}
+        />
+
+        {/* Content */}
+        <div
+          ref={contentRef}
+          className={cn(
+            "z-10 flex w-full flex-col overflow-hidden bg-background",
+            "fixed inset-0 md:relative md:max-h-[90vh] md:rounded-2xl md:border md:border-border md:shadow-2xl",
+            "motion-safe:md:animate-in motion-safe:md:fade-in motion-safe:md:zoom-in-95 motion-safe:md:duration-200 motion-safe:md:ease-out",
+            maxW,
+          )}
+        >
+          {children}
+        </div>
       </div>
-    </div>,
+    ) : null,
     document.body,
   )
 }

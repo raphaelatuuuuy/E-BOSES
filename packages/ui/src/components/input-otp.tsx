@@ -49,10 +49,15 @@ function InputOTPSlot({
       )}
       {...props}
     >
-      {slot.char !== null ? slot.char : slot.placeholderChar}
+      {slot.char !== null ? (
+        <span className="text-inherit">{slot.char}</span>
+      ) : slot.placeholderChar ? (
+        <span className="text-inherit">{slot.placeholderChar}</span>
+      ) : null}
       {slot.hasFakeCaret ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div className="bg-foreground h-5 w-px animate-caret-blink duration-1000" />
+          {/* Soft caret — avoid heavy black “skeleton” flash in empty slots */}
+          <div className="h-5 w-px animate-pulse bg-neutral-400 duration-1000" />
         </div>
       ) : null}
     </div>

@@ -1,10 +1,9 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { ChevronRightIcon, MapPinIcon, SirenIcon } from "lucide-react"
 import { useSearchParams } from "react-router-dom"
 
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
-import { Topbar } from "@/features/dashboard/components/topbar"
 import { EmergencyTrackingSheet } from "@/features/dashboard/components/emergency-tracking-sheet"
 import {
   listMyEmergencies,
@@ -13,28 +12,45 @@ import {
 } from "@/features/dashboard/emergency-api"
 import { usePageTitle } from "@/hooks/use-page-title"
 
+const activeStatuses: EmergencyStatus[] = [
+  "submitted",
+  "routed",
+  "acknowledged",
+  "en_route",
+  "nearby",
+  "arrived",
+]
 
-const statusStyles: Record<EmergencyStatus, string> = {
-  submitted: "border-amber-200 bg-amber-50 text-amber-800",
-  routed: "border-blue-200 bg-blue-50 text-blue-800",
-  acknowledged: "border-blue-200 bg-blue-50 text-blue-800",
-  en_route: "border-blue-200 bg-blue-50 text-blue-800",
-  nearby: "border-orange-200 bg-orange-50 text-orange-800",
-  arrived: "border-orange-200 bg-orange-50 text-orange-800",
-  resolved: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  cancelled: "border-neutral-200 bg-neutral-50 text-neutral-700",
-}
+type FilterKey = "all" | "active" | "resolved" | "cancelled"
+
+const filters: { key: FilterKey; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "active", label: "Active" },
+  { key: "resolved", label: "Resolved" },
+  { key: "cancelled", label: "Cancelled" },
+]
 
 function statusLabel(status: EmergencyStatus) {
   return status.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
+function statusChip(status: EmergencyStatus) {
+  if (activeStatuses.includes(status)) return "border-neutral-200 bg-neutral-100 text-neutral-800"
+  if (status === "resolved") return "border-neutral-200 bg-neutral-50 text-neutral-600"
+  return "border-neutral-200 bg-neutral-50 text-neutral-500"
+}
+
+function typeLabel(type: string) {
+  return type.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
 export default function EmergencyHistoryPage() {
-  usePageTitle("Emergency History")
+  usePageTitle("Alerts")
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedAlert = searchParams.get("alert")
   const [alerts, setAlerts] = useState<EmergencyAlert[]>([])
   const [selected, setSelected] = useState<EmergencyAlert | null>(null)
+  const [filter, setFilter] = useState<FilterKey>("all")
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState("")
 
@@ -46,7 +62,11 @@ export default function EmergencyHistoryPage() {
         if (!cancelled) {
           setAlerts(next)
           if (requestedAlert) {
-            setSelected(next.find((alert) => alert.public_id === requestedAlert || String(alert.id) === requestedAlert) || null)
+            setSelected(
+              next.find(
+                (alert) => alert.public_id === requestedAlert || String(alert.id) === requestedAlert,
+              ) || null,
+            )
           }
         }
       } catch (loadError) {
@@ -63,77 +83,111 @@ export default function EmergencyHistoryPage() {
     }
   }, [requestedAlert])
 
+  const visible = useMemo(() => {
+    if (filter === "all") return alerts
+    if (filter === "active") return alerts.filter((a) => activeStatuses.includes(a.status))
+    if (filter === "resolved") return alerts.filter((a) => a.status === "resolved")
+    return alerts.filter((a) => a.status === "cancelled")
+  }, [alerts, filter])
+
   function openAlert(alert: EmergencyAlert) {
     setSelected(alert)
     setSearchParams({ alert: alert.public_id }, { replace: true })
   }
 
   return (
-    <div className="flex flex-col bg-[#f7f8fc]">
-      <Topbar />
-      <main className="flex-1 p-4 pb-28 md:p-8">
-        <div className="mx-auto w-full max-w-3xl">
-          <p className="text-sm font-bold text-[#2447b3]">Safety records</p>
-          <h1 className="mt-1 text-2xl font-extrabold text-[#07145f] md:text-3xl">Emergency history</h1>
-          <p className="mt-2 text-sm leading-6 text-[#43507f]">
-            Review active and completed SOS alerts, responder updates, and evidence.
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-white">
+      <div className="min-w-0 flex-1 px-4 pb-[calc(7.5rem+env(safe-area-inset-bottom))] pt-4 md:px-6 md:pb-12 md:pt-6 lg:px-8">
+        <div className="w-full max-w-lg md:max-w-xl lg:max-w-2xl">
+          <h1 className="text-[20px] font-bold tracking-tight text-neutral-900 sm:text-2xl">Alerts</h1>
+          <p className="mt-1 text-sm text-neutral-500">
+            Active and past SOS alerts, with location and status.
           </p>
 
+          <div className="mt-4 flex gap-2 overflow-x-auto pb-0.5">
+            {filters.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => setFilter(item.key)}
+                className={cn(
+                  "h-9 shrink-0 rounded-full border px-3.5 text-[13px] font-semibold transition-colors",
+                  filter === item.key
+                    ? "border-[#ff6a1a] bg-[#ff6a1a] text-white"
+                    : "border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-50",
+                )}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
           {error ? (
-            <div role="alert" className="mt-5 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+            <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
               {error}
             </div>
           ) : null}
 
-          <section className="mt-5 overflow-hidden rounded-lg border border-[#dfe7f5] bg-white">
+          <section className="mt-4 overflow-hidden rounded-xl border border-neutral-200 bg-white">
             {!loaded ? (
-              <div className="space-y-3 p-4">
+              <div className="space-y-0 divide-y divide-neutral-100">
                 {Array.from({ length: 3 }).map((_, index) => (
-                  <Skeleton key={index} className="h-20 w-full rounded-lg" />
+                  <div key={index} className="p-4">
+                    <Skeleton className="h-14 w-full rounded-lg" />
+                  </div>
                 ))}
               </div>
-            ) : alerts.length === 0 ? (
-              <div className="flex flex-col items-center px-6 py-12 text-center">
-                <span className="flex size-12 items-center justify-center rounded-full bg-red-50 text-red-700">
+            ) : visible.length === 0 ? (
+              <div className="flex flex-col items-center px-6 py-14 text-center">
+                <span className="flex size-12 items-center justify-center rounded-full bg-neutral-100 text-neutral-600">
                   <SirenIcon className="size-6" />
                 </span>
-                <p className="mt-4 text-sm font-bold text-[#07145f]">No emergency alerts</p>
-                <p className="mt-1 text-sm text-[#68739c]">Your SOS history will appear here.</p>
+                <p className="mt-4 text-[15px] font-semibold text-neutral-900">No alerts in this view</p>
+                <p className="mt-1 text-sm text-neutral-500">Your SOS history will appear here.</p>
               </div>
             ) : (
-              <div className="divide-y divide-[#dfe7f5]">
-                {alerts.map((alert) => (
+              <div className="divide-y divide-neutral-100">
+                {visible.map((alert) => (
                   <button
                     key={alert.id}
                     type="button"
                     onClick={() => openAlert(alert)}
-                    className="flex min-h-24 w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-[#f8fbff]"
+                    className="flex min-h-[72px] w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-neutral-50"
                   >
-                    <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-700">
+                    <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-600">
                       <SirenIcon className="size-5" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-extrabold text-[#07145f]">
-                        {alert.type.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())} emergency
+                      <span className="block truncate text-[15px] font-semibold text-neutral-900">
+                        {typeLabel(alert.type)} emergency
                       </span>
-                      <span className="mt-1 flex items-center gap-1 truncate text-xs text-[#68739c]">
-                        <MapPinIcon className="size-3.5 shrink-0" /> {alert.address || alert.barangay}
+                      <span className="mt-0.5 flex items-center gap-1 truncate text-[13px] text-neutral-500">
+                        <MapPinIcon className="size-3.5 shrink-0" />
+                        {alert.address || alert.barangay || "Pinned location"}
                       </span>
-                      <span className="mt-1 block text-xs text-[#68739c]">
-                        {new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(alert.created_at))}
+                      <span className="mt-0.5 block text-[12px] text-neutral-400">
+                        {new Intl.DateTimeFormat("en", {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        }).format(new Date(alert.created_at))}
                       </span>
                     </span>
-                    <span className={cn("hidden rounded-md border px-2 py-1 text-[11px] font-bold sm:inline-flex", statusStyles[alert.status])}>
+                    <span
+                      className={cn(
+                        "hidden rounded-md border px-2 py-1 text-[11px] font-medium sm:inline-flex",
+                        statusChip(alert.status),
+                      )}
+                    >
                       {statusLabel(alert.status)}
                     </span>
-                    <ChevronRightIcon className="size-5 shrink-0 text-[#2447b3]" />
+                    <ChevronRightIcon className="size-4 shrink-0 text-neutral-300" />
                   </button>
                 ))}
               </div>
             )}
           </section>
         </div>
-      </main>
+      </div>
 
       <EmergencyTrackingSheet
         initialAlert={selected}
@@ -146,7 +200,7 @@ export default function EmergencyHistoryPage() {
         }}
         onAlertChange={(next) => {
           setSelected(next)
-          setAlerts((current) => current.map((alert) => alert.id === next.id ? next : alert))
+          setAlerts((current) => current.map((alert) => (alert.id === next.id ? next : alert)))
         }}
       />
     </div>

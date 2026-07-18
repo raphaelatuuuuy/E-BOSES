@@ -46,7 +46,7 @@ function weatherLabel(code: number | null | undefined) {
   return "Local weather"
 }
 
-function NeighborhoodPeekCards({
+export function NeighborhoodPeekCards({
   street,
   houseNumber,
 }: {

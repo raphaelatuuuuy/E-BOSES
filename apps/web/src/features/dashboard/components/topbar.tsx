@@ -16,7 +16,7 @@ export function Topbar() {
 
   const isStaffRole = user?.role === "barangay_official" || user?.role === "first_responder" || user?.is_staff || user?.is_superuser
   const pageLabel = location.pathname.includes("/reports")
-    ? "My Reports"
+    ? "Reports"
     : location.pathname.includes("/profile")
       ? "Profile"
       : location.pathname.includes("/settings")
@@ -24,7 +24,7 @@ export function Topbar() {
         : location.pathname.includes("/notifications")
           ? "Notifications"
           : location.pathname.includes("/emergency-history")
-            ? "Emergency History"
+            ? "Alerts"
           : "Community"
 
   return (

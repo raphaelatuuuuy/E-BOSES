@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 import { toast } from "sonner"
 import {
@@ -11,19 +11,14 @@ import {
   ClockIcon,
   CopyIcon,
   LeafIcon,
-  MapPinIcon,
   SearchIcon,
   Share2Icon,
   ShieldCheckIcon,
   TrafficConeIcon,
-  WrenchIcon,
+  XIcon,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import {
-  Card,
-  CardContent,
-} from "@workspace/ui/components/card"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -42,35 +37,41 @@ import {
   type ConcernStatusEvent,
   type ConcernValidationStatus,
 } from "@/features/dashboard/api"
-import { Topbar } from "@/features/dashboard/components/topbar"
+import { concernBodyText } from "@/features/dashboard/components/feed-post-card"
+import { ReportChatPanel } from "@/features/dashboard/components/report-chat-panel"
 import {
   AuthenticatedMediaImage,
   openAuthenticatedMedia,
 } from "@/features/dashboard/components/authenticated-media"
+import {
+  ReportLocationAddress,
+  ReportLocationMap,
+} from "@/features/dashboard/components/report-location-map"
 import { ReportStatusDialog, statusModeFromReport, type StatusDialogMode } from "@/features/dashboard/components/report-status-dialog"
-import { useHorizontalDragScroll } from "@/features/dashboard/hooks/use-horizontal-drag-scroll"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { usePageTitle } from "@/hooks/use-page-title"
 
 const filters = ["All", "Active", "Resolved", "Rejected", "Appealed"] as const
-const residentReportsPageSize = 6
+const residentReportsPageSize = 5
 
 const activeStatuses: ConcernStatus[] = ["submitted", "under_review", "assigned", "in_progress"]
 
+/** Minimal monochrome status chips — no rainbow “AI slop” badges */
 const statusColors: Record<string, string> = {
-  Active: "bg-blue-100 text-blue-700 border-blue-200",
-  Resolved: "bg-green-100 text-green-700 border-green-200",
-  Rejected: "bg-red-100 text-red-700 border-red-200",
-  Appealed: "bg-orange-100 text-orange-700 border-orange-200",
+  Active: "border-neutral-200 bg-neutral-100 text-neutral-700",
+  Resolved: "border-neutral-200 bg-neutral-50 text-neutral-600",
+  Rejected: "border-neutral-200 bg-neutral-50 text-neutral-600",
+  Appealed: "border-neutral-200 bg-neutral-50 text-neutral-600",
 }
 
 const timelineDotColors: Record<string, string> = {
-  Submitted: "bg-blue-500",
-  "In Review": "bg-amber-500",
-  "In Progress": "bg-blue-500",
-  Resolved: "bg-green-500",
-  Rejected: "bg-red-500",
-  Appealed: "bg-orange-500",
+  Submitted: "bg-neutral-400",
+  "In Review": "bg-neutral-500",
+  Assigned: "bg-neutral-500",
+  "In Progress": "bg-neutral-600",
+  Resolved: "bg-neutral-700",
+  Rejected: "bg-neutral-500",
+  Appealed: "bg-neutral-500",
 }
 
 const validationLabels: Record<ConcernValidationStatus, string> = {
@@ -104,9 +105,13 @@ function statusLabel(status: ConcernStatus) {
   return status.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
-function statusGroup(status: ConcernStatus) {
+function statusGroup(status: ConcernStatus): (typeof filters)[number] {
   if (activeStatuses.includes(status)) return "Active"
-  return statusLabel(status)
+  if (status === "resolved") return "Resolved"
+  if (status === "rejected") return "Rejected"
+  if (status === "appealed") return "Appealed"
+  // Fallback for any unexpected status → treat as active pipeline
+  return "Active"
 }
 
 function formatDate(value: string) {
@@ -131,20 +136,40 @@ function daysAgo(value: string) {
   return Math.max(0, Math.floor(diffMs / 86400000))
 }
 
+/** Brief list preview — hard ellipsis so rows stay short. */
+function truncateDescription(text: string, max = 72): string {
+  const cleaned = (text || "").replace(/\s+/g, " ").trim()
+  if (!cleaned) return "No description"
+  if (cleaned.length <= max) return cleaned
+  const slice = cleaned.slice(0, max)
+  const atWord = slice.replace(/\s+\S*$/, "").trim()
+  const base = atWord.length >= 28 ? atWord : slice.trim()
+  return `${base}...`
+}
+
 function filterReports(reports: Concern[], filter: string) {
   if (filter === "All") return reports
-  return reports.filter((report) => statusGroup(report.status) === filter)
+  if (filter === "Active") {
+    return reports.filter((report) => activeStatuses.includes(report.status))
+  }
+  if (filter === "Resolved") {
+    return reports.filter((report) => report.status === "resolved")
+  }
+  if (filter === "Rejected") {
+    return reports.filter((report) => report.status === "rejected")
+  }
+  if (filter === "Appealed") {
+    return reports.filter(
+      (report) =>
+        report.status === "appealed" ||
+        (report.appeals?.some((appeal) => appeal.status === "submitted") ?? false),
+    )
+  }
+  return reports
 }
 
 function reportUpdate(report: Concern) {
   return report.update_text || report.status_events.at(-1)?.note || "Your report was received."
-}
-
-function mapSrc(report: Concern) {
-  const lat = Number(report.latitude)
-  const lng = Number(report.longitude)
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return ""
-  return `https://www.openstreetmap.org/export/embed.html?bbox=${lng - 0.006}%2C${lat - 0.006}%2C${lng + 0.006}%2C${lat + 0.006}&layer=mapnik&marker=${lat}%2C${lng}`
 }
 
 async function openReportMedia(report: Concern) {
@@ -161,12 +186,17 @@ async function openReportMedia(report: Concern) {
   }
 }
 
-function ReportIcon({ report }: { report: Concern }) {
+function ReportIcon({ report, size = "md" }: { report: Concern; size?: "sm" | "md" }) {
   const style = categoryStyles[report.category]
   const Icon = style.icon
   return (
-    <span className={cn("flex size-12 shrink-0 items-center justify-center rounded-full", style.bg, style.text)}>
-      <Icon className="size-6" strokeWidth={2} />
+    <span
+      className={cn(
+        "flex shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-600",
+        size === "sm" ? "size-9" : "size-10",
+      )}
+    >
+      <Icon className={size === "sm" ? "size-4" : "size-5"} strokeWidth={2} />
     </span>
   )
 }
@@ -326,54 +356,85 @@ function ResidentFollowUpPanel({ report, onRefresh }: { report: Concern; onRefre
   }
 
   return (
-    <div className="rounded-xl border border-[#dfe7f5] bg-white p-4">
-      <h3 className="text-sm font-black text-[#07145f]">Follow-up actions</h3>
-      {report.official_remarks?.length ? (
-        <div className="mt-3 space-y-2">
-          {report.official_remarks.map((remark) => (
-            <p key={remark.id} className="rounded-lg bg-[#f8fafc] p-3 text-xs font-semibold leading-5 text-[#43507f]">{remark.body}</p>
-          ))}
-        </div>
-      ) : null}
-      {openClarifications.map((clarification) => (
-        <div key={clarification.id} className="mt-3 grid gap-2 border-t border-[#dfe7f5] pt-3">
-          <p className="text-xs font-bold text-[#07145f]">{clarification.request_text}</p>
-          <textarea value={responses[clarification.id] ?? ""} onChange={(event) => setResponses((current) => ({ ...current, [clarification.id]: event.target.value }))} placeholder="Type your response" className="min-h-20 rounded-lg border border-[#cbd8ee] px-3 py-2 text-xs font-semibold text-[#07145f] outline-none focus:border-[#ff6a1a]" />
-          <Button type="button" disabled={busy === `clarification-${clarification.id}`} onClick={() => void submitReply(clarification.id)} className="bg-[#ff6a1a] text-white hover:bg-[#e85f17]">
-            {busy === `clarification-${clarification.id}` ? "Sending" : "Send clarification"}
-          </Button>
-        </div>
-      ))}
-      {appealHistory.length ? (
-        <div className="mt-3 space-y-2 border-t border-[#dfe7f5] pt-3">
-          <p className="text-xs font-black uppercase text-[#68739c]">Appeal history</p>
-          {appealHistory.map((appeal) => (
-            <div key={appeal.id} className={cn(
-              "rounded-lg border p-3 text-xs font-semibold leading-5",
-              appeal.status === "approved" && "border-emerald-200 bg-emerald-50 text-emerald-800",
-              appeal.status === "denied" && "border-red-200 bg-red-50 text-red-800",
-              appeal.status === "submitted" && "border-orange-200 bg-orange-50 text-orange-800",
-            )}>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-black">Appeal {appeal.status.replace("_", " ")}</span>
-                <span>{formatEventTime(appeal.decided_at || appeal.created_at)}</span>
+    <section className="space-y-3">
+      <h3 className="text-[13px] font-semibold tracking-wide text-neutral-500 uppercase">Follow-up</h3>
+      <div className="rounded-xl border border-neutral-200 bg-white px-4 py-5">
+        {report.official_remarks?.length ? (
+          <div className="space-y-3">
+            {report.official_remarks.map((remark) => (
+              <p key={remark.id} className="rounded-lg bg-neutral-50 px-4 py-3 text-[14px] leading-6 text-neutral-700">
+                {remark.body}
+              </p>
+            ))}
+          </div>
+        ) : null}
+        {openClarifications.map((clarification) => (
+          <div key={clarification.id} className="mt-4 grid gap-3 border-t border-neutral-100 pt-4 first:mt-0 first:border-t-0 first:pt-0">
+            <p className="text-[14px] font-medium text-neutral-900">{clarification.request_text}</p>
+            <textarea
+              value={responses[clarification.id] ?? ""}
+              onChange={(event) => setResponses((current) => ({ ...current, [clarification.id]: event.target.value }))}
+              placeholder="Type your response"
+              className="min-h-24 rounded-xl border border-neutral-200 px-3.5 py-3 text-[14px] text-neutral-900 outline-none focus:border-neutral-400"
+            />
+            <Button
+              type="button"
+              disabled={busy === `clarification-${clarification.id}`}
+              onClick={() => void submitReply(clarification.id)}
+              className="h-11 bg-[#ff6a1a] text-white hover:bg-[#e85f17]"
+            >
+              {busy === `clarification-${clarification.id}` ? "Sending" : "Send clarification"}
+            </Button>
+          </div>
+        ))}
+        {appealHistory.length ? (
+          <div className="mt-4 space-y-3 border-t border-neutral-100 pt-4">
+            <p className="text-[12px] font-semibold tracking-wide text-neutral-500 uppercase">Appeal history</p>
+            {appealHistory.map((appeal) => (
+              <div
+                key={appeal.id}
+                className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-[14px] leading-6 text-neutral-700"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-semibold text-neutral-900">Appeal {appeal.status.replace("_", " ")}</span>
+                  <span className="text-[13px] text-neutral-500">{formatEventTime(appeal.decided_at || appeal.created_at)}</span>
+                </div>
+                <p className="mt-2">{appeal.reason}</p>
+                {appeal.decision_note ? <p className="mt-2 font-medium">Decision: {appeal.decision_note}</p> : null}
+                {appeal.reviewed_by ? <p className="mt-1 text-[13px] text-neutral-500">Reviewed by {appeal.reviewed_by.full_name}</p> : null}
               </div>
-              <p className="mt-2">{appeal.reason}</p>
-              {appeal.decision_note ? <p className="mt-2 font-bold">Decision: {appeal.decision_note}</p> : null}
-              {appeal.reviewed_by ? <p className="mt-1">Reviewed by {appeal.reviewed_by.full_name}</p> : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {canAppeal ? (
-        <div className="mt-3 grid gap-2 border-t border-[#dfe7f5] pt-3">
-          <textarea value={appealReason} onChange={(event) => setAppealReason(event.target.value)} placeholder="Explain why this report should be reviewed again" className="min-h-20 rounded-lg border border-[#cbd8ee] px-3 py-2 text-xs font-semibold text-[#07145f] outline-none focus:border-[#ff6a1a]" />
-          <Button type="button" disabled={busy === "appeal" || !appealReason.trim()} onClick={() => void submitAppeal()} className="bg-[#ff6a1a] text-white hover:bg-[#e85f17]">
-            {busy === "appeal" ? "Submitting" : "Submit appeal"}
-          </Button>
-        </div>
-      ) : null}
-    </div>
+            ))}
+          </div>
+        ) : null}
+        {canAppeal ? (
+          <div className="mt-4 grid gap-3 border-t border-neutral-100 pt-4">
+            <textarea
+              value={appealReason}
+              onChange={(event) => setAppealReason(event.target.value)}
+              placeholder="Explain why this report should be reviewed again"
+              className="min-h-24 rounded-xl border border-neutral-200 px-3.5 py-3 text-[14px] text-neutral-900 outline-none focus:border-neutral-400"
+            />
+            <Button
+              type="button"
+              disabled={busy === "appeal" || !appealReason.trim()}
+              onClick={() => void submitAppeal()}
+              className="h-11 bg-[#ff6a1a] text-white hover:bg-[#e85f17]"
+            >
+              {busy === "appeal" ? "Submitting" : "Submit appeal"}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  )
+}
+
+function DetailSection({ title, children, className }: { title: string; children: ReactNode; className?: string }) {
+  return (
+    <section className={cn("space-y-3", className)}>
+      <h3 className="text-[13px] font-semibold tracking-wide text-neutral-500 uppercase">{title}</h3>
+      {children}
+    </section>
   )
 }
 
@@ -391,29 +452,29 @@ function Timeline({ report, onStatusClick }: { report: Concern; onStatusClick: (
       ]
 
   return (
-    <div className="relative mt-2 space-y-0">
+    <div className="relative space-y-0">
       {events.map((step, i) => {
         const label = statusLabel(step.status)
         const isLast = i === events.length - 1
-        const dotColor = timelineDotColors[label] ?? "bg-muted-foreground"
+        const dotColor = timelineDotColors[label] ?? "bg-neutral-400"
         const mode = statusModeFromReport({ status: step.status })
         return (
-          <div key={`${step.id}-${step.status}`} className="flex gap-2">
-            <div className="flex flex-col items-center">
-              <div className={cn("flex size-4 shrink-0 items-center justify-center rounded-full", dotColor, isLast && activeStatuses.includes(report.status) && "animate-pulse")} />
-              {!isLast && <div className="mt-0.5 w-0.5 flex-1 rounded-full bg-border" />}
+          <div key={`${step.id}-${step.status}`} className="flex gap-3">
+            <div className="flex flex-col items-center pt-1">
+              <div className={cn("flex size-3.5 shrink-0 items-center justify-center rounded-full", dotColor, isLast && activeStatuses.includes(report.status) && "animate-pulse")} />
+              {!isLast && <div className="mt-1 w-px flex-1 bg-neutral-200" />}
             </div>
             <button
               type="button"
               onClick={() => onStatusClick(mode)}
               className={cn(
-                "flex-1 pb-3 text-left",
+                "min-w-0 flex-1 pb-5 text-left",
                 isLast && "pb-0",
                 "cursor-pointer hover:opacity-80",
               )}
             >
-              <p className="text-xs font-medium text-foreground">{label}</p>
-              <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              <p className="text-[15px] font-medium text-neutral-900">{label}</p>
+              <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[13px] text-neutral-500">
                 <span>{formatEventTime(step.created_at)}</span>
                 {step.actor ? (
                   <>
@@ -422,11 +483,218 @@ function Timeline({ report, onStatusClick }: { report: Concern; onStatusClick: (
                   </>
                 ) : null}
               </div>
-              {step.note ? <p className="mt-0.5 text-xs text-muted-foreground">{step.note}</p> : null}
+              {step.note ? <p className="mt-1.5 text-[13px] leading-5 text-neutral-600">{step.note}</p> : null}
             </button>
           </div>
         )
       })}
+    </div>
+  )
+}
+
+function ReportDetailsSidebar({
+  report,
+  onClose,
+  onCopyTrackingId,
+  onStatusClick,
+  onRefresh,
+  onUpdated,
+  isOfficial,
+}: {
+  report: Concern
+  onClose: () => void
+  onCopyTrackingId: () => void
+  onStatusClick: (mode: StatusDialogMode) => void
+  onRefresh: () => Promise<void>
+  onUpdated: (report: Concern) => void
+  isOfficial: boolean
+}) {
+  const evidenceImages = report.media.filter((media) => media.mime_type?.startsWith("image/"))
+  const group = statusGroup(report.status)
+
+  useEffect(() => {
+    const previous = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => {
+      document.body.style.overflow = previous
+      window.removeEventListener("keydown", onKey)
+    }
+  }, [onClose])
+
+  // Fixed right sidebar + solid dark dim (no blur)
+  return (
+    <div className="fixed inset-0 z-[200] flex justify-end">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/45"
+        aria-label="Close report details"
+        onClick={onClose}
+      />
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-label="Report details"
+        className={cn(
+          "relative flex h-full w-full max-w-[min(100%,28rem)] flex-col bg-white",
+          "border-l border-neutral-200 shadow-[-12px_0_32px_rgba(15,23,42,0.14)]",
+          "sm:max-w-[30rem] md:max-w-[32rem] lg:max-w-[34rem]",
+        )}
+      >
+        <header className="shrink-0 border-b border-neutral-200 px-5 py-4 sm:px-6 sm:py-5">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[12px] font-medium tracking-wide text-neutral-500 uppercase">
+              Report details
+            </p>
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-600 hover:bg-neutral-100"
+              aria-label="Close"
+            >
+              <XIcon className="size-5" />
+            </button>
+          </div>
+          {/* Tracking ID + status on one aligned row */}
+          <div className="mt-2 flex min-h-9 items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate font-mono text-[15px] font-semibold tracking-wide text-neutral-900 sm:text-[16px]">
+                {report.tracking_id}
+              </span>
+              <button
+                type="button"
+                onClick={onCopyTrackingId}
+                className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+                aria-label="Copy tracking ID"
+              >
+                <CopyIcon className="size-3.5" />
+              </button>
+            </div>
+            <span
+              className={cn(
+                "shrink-0 rounded-md border px-2.5 py-1 text-[12px] font-medium",
+                statusColors[group],
+              )}
+            >
+              {group}
+            </span>
+          </div>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-6 sm:px-6 sm:py-7">
+          <div className="space-y-8 pb-[max(2rem,env(safe-area-inset-bottom))]">
+            <div className="flex flex-wrap gap-x-5 gap-y-2 text-[13px] text-neutral-500">
+              <span className="inline-flex items-center gap-1.5">
+                <CalendarIcon className="size-4 text-neutral-400" />
+                Submitted {formatDate(report.created_at)}
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <ClockIcon className="size-4 text-neutral-400" />
+                {daysAgo(report.created_at)} days ago
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <Share2Icon className="size-4 text-neutral-400" />
+                {report.visibility === "community" ? "Public" : "Private"}
+              </span>
+              {report.visibility === "community" ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <ArrowUpIcon className="size-4 text-neutral-400" />
+                  {report.vote_count} upvotes
+                </span>
+              ) : null}
+            </div>
+
+            {isOfficial ? (
+              <DetailSection title="Official actions">
+                <OfficialStatusPanel report={report} onUpdated={onUpdated} />
+              </DetailSection>
+            ) : null}
+
+            <DetailSection title="Description">
+              <p className="text-[15px] leading-7 text-neutral-700 whitespace-pre-wrap">
+                {concernBodyText(report) || "No description provided."}
+              </p>
+            </DetailSection>
+
+            <DetailSection title="Category">
+              <div className="flex items-center gap-4 rounded-xl border border-neutral-200 px-4 py-4">
+                <ReportIcon report={report} size="md" />
+                <div>
+                  <p className="text-[15px] font-medium text-neutral-900">{categoryLabels[report.category]}</p>
+                  <p className="mt-0.5 text-[13px] text-neutral-500">{categoryStyles[report.category].sub}</p>
+                </div>
+              </div>
+            </DetailSection>
+
+            <DetailSection title="Location">
+              <div className="space-y-3">
+                <ReportLocationAddress
+                  address={report.address}
+                  barangay={report.barangay}
+                  latitude={report.latitude}
+                  longitude={report.longitude}
+                />
+                <ReportLocationMap
+                  latitude={report.latitude}
+                  longitude={report.longitude}
+                  heightClassName="h-56 sm:h-64"
+                />
+              </div>
+            </DetailSection>
+
+            <DetailSection title="Evidence">
+              <p className="text-[14px] text-neutral-500">
+                {report.media.length} file{report.media.length === 1 ? "" : "s"}
+              </p>
+              {evidenceImages.length > 0 ? (
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  {evidenceImages.slice(0, 4).map((media) => (
+                    <AuthenticatedMediaImage
+                      key={media.id}
+                      src={media.preview_url}
+                      alt={media.original_filename}
+                      className="h-36 w-full rounded-xl object-cover sm:h-40"
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-3 flex h-32 items-center justify-center rounded-xl border border-dashed border-neutral-200 text-[14px] text-neutral-500">
+                  No evidence uploaded
+                </div>
+              )}
+              {report.media.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => void openReportMedia(report)}
+                  className="mt-4 h-11 w-full rounded-xl border border-neutral-200 text-[14px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50"
+                >
+                  View all evidence
+                </button>
+              ) : null}
+            </DetailSection>
+
+            <DetailSection title="Status timeline">
+              <div className="rounded-xl border border-neutral-200 px-4 py-5">
+                <Timeline report={report} onStatusClick={onStatusClick} />
+              </div>
+            </DetailSection>
+
+            <DetailSection title="Chat">
+              <ReportChatPanel
+                concernId={report.id}
+                open
+                disabled={false}
+                className="min-h-[320px]"
+              />
+            </DetailSection>
+
+            <ResidentFollowUpPanel report={report} onRefresh={onRefresh} />
+          </div>
+        </div>
+      </aside>
     </div>
   )
 }
@@ -482,7 +750,9 @@ function OfficialQueueCard({ report, active, onClick }: { report: Concern; activ
         <ReportIcon report={report} />
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
-            <p className="truncate text-sm font-extrabold text-[#07145f]">{report.title}</p>
+            <p className="line-clamp-2 text-sm font-extrabold text-[#07145f]">
+              {truncateDescription(concernBodyText(report))}
+            </p>
             <span className="shrink-0 text-[11px] font-semibold text-[#43507f]">{formatEventTime(report.created_at).split(",").at(-1)?.trim()}</span>
           </div>
           <p className="mt-2 truncate text-xs font-semibold text-[#07145f]">{report.reporter.full_name}</p>
@@ -621,7 +891,6 @@ function OfficialConcernDashboard({
   const current = selected ?? filtered[0]
   return (
     <div className="flex flex-col">
-      <Topbar />
       <main className="min-h-screen bg-[#f7f8fc] p-4 md:p-6">
         <div className="mb-5 grid gap-4 xl:grid-cols-[1fr_520px_auto] xl:items-center">
           <div>
@@ -653,7 +922,7 @@ function OfficialConcernDashboard({
                   key={filter}
                   type="button"
                   onClick={() => setActiveFilter(filter)}
-                  className={cn("shrink-0 rounded-md border px-3 py-2 text-xs font-bold", activeFilter === filter ? "border-[#2447b3] bg-[#eef3ff] text-[#2447b3]" : "border-[#dfe7f5] bg-[#f8fafc] text-[#43507f]")}
+                  className={cn("shrink-0 rounded-md border px-3 py-2 text-xs font-bold", activeFilter === filter ? "border-[#ff6a1a] bg-[#ff6a1a] text-white" : "border-[#dfe7f5] bg-[#f8fafc] text-[#43507f]")}
                 >
                   {filter} {filter === "All" ? reports.length : ""}
                 </button>
@@ -703,8 +972,19 @@ function OfficialConcernDashboard({
                   <span className="mt-3 inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">Verified Resident</span>
                 </InfoCard>
                 <InfoCard title="Location">
-                  {mapSrc(current) ? <iframe title="Concern location" src={mapSrc(current)} className="h-36 w-full rounded-lg border border-[#dfe7f5]" /> : <div className="flex h-36 items-center justify-center rounded-lg border border-dashed border-[#dfe7f5] text-xs font-semibold text-[#68739c]">No map pin</div>}
-                  <p className="mt-3 text-xs font-semibold text-[#07145f]">{current.address || current.barangay}</p>
+                  <ReportLocationAddress
+                    address={current.address}
+                    barangay={current.barangay}
+                    latitude={current.latitude}
+                    longitude={current.longitude}
+                  />
+                  <div className="mt-3">
+                    <ReportLocationMap
+                      latitude={current.latitude}
+                      longitude={current.longitude}
+                      heightClassName="h-40"
+                    />
+                  </div>
                 </InfoCard>
               </div>
 
@@ -768,15 +1048,12 @@ export default function ReportsPage() {
   const navigate = useNavigate()
   const { reportId } = useParams()
   const { user } = useAuthSession()
-  const filterRailRef = useRef<HTMLDivElement>(null)
-  const filterDragScroll = useHorizontalDragScroll<HTMLDivElement>()
   const hasLoadedRef = useRef(false)
   const [loaded, setLoaded] = useState(false)
   const [activeFilter, setActiveFilter] = useState<string>("All")
   const [search, setSearch] = useState("")
   const [selectedReport, setSelectedReport] = useState<string | null>(null)
   const [reportPage, setReportPage] = useState(1)
-  const [timelineExpanded, setTimelineExpanded] = useState(true)
   const [reports, setReports] = useState<Concern[]>([])
   const [error, setError] = useState("")
   const [statusDialogOpen, setStatusDialogOpen] = useState(false)
@@ -826,10 +1103,27 @@ export default function ReportsPage() {
     setReportPage(1)
   }, [activeFilter])
 
+  useEffect(() => {
+    // Wait until list is loaded so we don't drop a deep-linked selection on first paint.
+    if (!loaded || !selectedReport || reports.length === 0) return
+    const inFilter = filterReports(reports, activeFilter).some(
+      (report) => report.public_id === selectedReport || String(report.id) === selectedReport,
+    )
+    if (!inFilter) {
+      setSelectedReport(null)
+      if (routeReportId) navigate("/dashboard/reports", { replace: true })
+    }
+  }, [activeFilter, reports, selectedReport, routeReportId, navigate, loaded])
+
+  // All hooks must run before any conditional return (Rules of Hooks).
+  const closeReportDetails = useCallback(() => {
+    setSelectedReport(null)
+    navigate("/dashboard/reports")
+  }, [navigate])
+
   if (!loaded)
     return (
       <div className="flex flex-col">
-        <Topbar />
         <div className="flex-1 p-4 md:p-10">
           <Skeleton className="h-28 w-full rounded-2xl" />
           <div className="scrollbar-hide mt-6 w-full max-w-full min-w-0 touch-pan-x overflow-x-scroll overscroll-x-contain [-webkit-overflow-scrolling:touch] lg:overflow-visible">
@@ -859,10 +1153,12 @@ export default function ReportsPage() {
   const pagedReports = filtered.slice((currentPage - 1) * residentReportsPageSize, currentPage * residentReportsPageSize)
   const firstShown = filtered.length === 0 ? 0 : (currentPage - 1) * residentReportsPageSize + 1
   const lastShown = Math.min(filtered.length, currentPage * residentReportsPageSize)
-  const selected =
-    reports.find(
-      (report) => report.public_id === selectedReport || String(report.id) === selectedReport,
-    ) ?? filtered[0]
+  // Only show details when the user picks a row (or deep-links). Do not auto-open first row.
+  const selected = selectedReport
+    ? reports.find(
+        (report) => report.public_id === selectedReport || String(report.id) === selectedReport,
+      ) ?? null
+    : null
 
   function selectReport(report: Concern) {
     setSelectedReport(report.public_id)
@@ -899,350 +1195,166 @@ export default function ReportsPage() {
   }
 
   return (
-    <div className="flex flex-col">
-      <Topbar />
-
-      <div className="flex-1 bg-[#f7f8fc] p-4 md:p-8 xl:p-10">
-        <div className="flex items-center justify-between gap-6">
-          <div>
-            <p className="text-sm font-bold text-[#2447b3]">Marikina Heights</p>
-            <h1 className="mt-1 font-heading text-2xl font-extrabold leading-tight text-[#07145f] md:text-3xl">
-              {isOfficial ? "Report Management" : "My Reports"}
-            </h1>
-            <p className="mt-2 max-w-xl text-sm font-semibold leading-6 text-[#43507f]">
-              {isOfficial
-                ? "Review resident reports, validate details, and update status with accountable notes."
-                : "Track the status and updates of the reports you've submitted to the barangay."}
-            </p>
-          </div>
-          <img src="/contents/reports-header.png" alt="" className="hidden h-24 w-40 shrink-0 object-contain lg:block" />
+    <div className="flex min-h-0 flex-1 flex-col bg-white">
+      <div
+        className="min-w-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-[calc(7.5rem+env(safe-area-inset-bottom))] pt-4 md:px-6 md:pb-10 md:pt-6 lg:px-6 lg:pb-8"
+      >
+        <div className="mb-5">
+          <h1 className="text-[20px] font-bold tracking-tight text-neutral-900 sm:text-2xl">
+            My reports
+          </h1>
+          <p className="mt-1 text-sm text-neutral-500">
+            Track status and updates on reports you submitted.
+          </p>
         </div>
 
-        <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(420px,0.9fr)_minmax(560px,1fr)]">
-          <section className="flex min-w-0 flex-col gap-4">
-            {/* Status pills */}
-            <div className="relative w-full min-w-0">
-              <div ref={filterRailRef} {...filterDragScroll} className="scrollbar-hide min-w-0 cursor-grab touch-pan-x overflow-x-scroll overscroll-x-contain active:cursor-grabbing lg:overflow-visible">
-                <div className="flex min-w-max flex-nowrap gap-2 lg:grid lg:min-w-0 lg:grid-cols-5">
-                  {filters.map((filter) => (
-                    <Button key={filter} data-filter-option type="button" size="sm" variant="outline" aria-pressed={activeFilter === filter} onClick={() => setActiveFilter(filter)}
-                      className={cn(
-                        "h-9 shrink-0 rounded-md border-[#cbd8ee] px-5 text-xs font-extrabold whitespace-nowrap lg:w-full lg:min-w-0 lg:shrink",
-                        activeFilter === filter ? "border-[#ff6a1a] bg-[#ff6a1a] text-white hover:bg-[#ff6a1a]" : "bg-white text-[#07145f] hover:border-[#ff6a1a] hover:text-[#ff6a1a]",
-                      )}>
-                      {filter}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            </div>
+        {/* Filters + table: fixed custom width (not max-w utility) */}
+        <section
+          className="flex min-w-0 flex-col items-stretch gap-5"
+          style={{ width: "min(100%, 52rem)" }}
+        >
+          <div
+            className="scrollbar-hide flex w-full gap-2 overflow-x-auto overscroll-x-contain pb-0.5 [-webkit-overflow-scrolling:touch]"
+            role="tablist"
+            aria-label="Report status filters"
+          >
+            {filters.map((filter) => (
+              <button
+                key={filter}
+                type="button"
+                role="tab"
+                data-filter-option
+                aria-selected={activeFilter === filter}
+                aria-pressed={activeFilter === filter}
+                onClick={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setActiveFilter(filter)
+                  setReportPage(1)
+                }}
+                className={cn(
+                  "relative z-10 h-10 shrink-0 cursor-pointer rounded-full border px-4 text-[13px] font-semibold whitespace-nowrap transition-colors",
+                  activeFilter === filter
+                    ? "border-[#ff6a1a] bg-[#ff6a1a] text-white"
+                    : "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:bg-neutral-50",
+                )}
+              >
+                {filter}
+              </button>
+            ))}
+          </div>
 
-            {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
-            <Card className="flex flex-col gap-0 overflow-hidden rounded-lg border-[#dfe7f5] bg-white py-0 shadow-none">
-              <div className="flex flex-col">
-                {pagedReports.map((report, i) => {
-                  const group = statusGroup(report.status)
-                  return (
-                    <button
-                      key={report.id}
-                      type="button"
-                      onClick={() => selectReport(report)}
+          {/* Same width band as filters */}
+          <div className="w-full overflow-hidden rounded-lg border border-neutral-200 bg-white">
+            <div className="flex flex-col divide-y divide-neutral-100">
+              {pagedReports.map((report) => {
+                const group = statusGroup(report.status)
+                const isSelected = selected?.id === report.id
+                return (
+                  <button
+                    key={report.id}
+                    type="button"
+                    onClick={() => selectReport(report)}
+                    className={cn(
+                      "flex min-h-[68px] w-full items-center gap-3 px-4 py-3.5 text-left transition-colors",
+                      isSelected ? "bg-neutral-50" : "bg-white hover:bg-neutral-50/80",
+                    )}
+                  >
+                    <ReportIcon report={report} size="sm" />
+                    <div className="min-w-0 flex-1">
+                      <p className="line-clamp-2 text-[15px] font-medium leading-snug text-neutral-900">
+                        {truncateDescription(concernBodyText(report))}
+                      </p>
+                      <p className="mt-0.5 truncate text-[13px] text-neutral-500">
+                        {categoryLabels[report.category]}
+                        <span className="mx-1 text-neutral-300">·</span>
+                        {formatDate(report.created_at)}
+                      </p>
+                    </div>
+                    <span
                       className={cn(
-                        "flex w-full items-center gap-4 bg-white px-4 py-4 text-left transition-colors hover:bg-[#fbfcff]",
-                        selected?.id === report.id && "border border-[#ff6a1a] bg-[#fff8f3]",
-                        selected?.id !== report.id && i < pagedReports.length - 1 && "border-b border-[#dfe7f5]",
+                        "shrink-0 rounded-md border px-2.5 py-1 text-[11px] font-medium",
+                        statusColors[group],
                       )}
                     >
-                      <ReportIcon report={report} />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <p className="truncate text-base font-extrabold text-[#07145f]">
-                            {report.title}
-                          </p>
-                        </div>
-                        <p className="mt-1 font-mono text-xs font-bold text-[#2447b3]">{report.tracking_id}</p>
-                        <p className="mt-1 text-xs font-semibold text-[#43507f]">
-                          {categoryLabels[report.category]} <span className="mx-1 text-[#8b96b8]">•</span> {categoryStyles[report.category].sub}
-                        </p>
-                      </div>
-                      <div className="hidden text-right sm:block">
-                        <p className="text-xs font-semibold text-[#43507f]">{formatDate(report.created_at)}</p>
-                        <span className={cn("mt-2 inline-flex rounded-md border px-3 py-1 text-xs font-bold", statusColors[group])}>
-                          {group}
-                        </span>
-                      </div>
-                      <ChevronRightIcon className="size-5 shrink-0 text-[#2447b3]" />
-                    </button>
-                  )
-                })}
-                {filtered.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center p-8 text-center text-sm text-muted-foreground">
-                    <img src="/contents/reports.png" alt="" className="mb-4 h-32 w-auto" aria-hidden="true" />
-                    No reports found.
-                  </div>
-                ) : null}
-              </div>
+                      {group}
+                    </span>
+                    <ChevronRightIcon className="size-4 shrink-0 text-neutral-300" />
+                  </button>
+                )
+              })}
+              {filtered.length === 0 ? (
+                <div className="flex flex-col items-center justify-center px-6 py-14 text-center text-sm text-neutral-500">
+                  {activeFilter === "All"
+                    ? "No reports yet."
+                    : `No ${activeFilter.toLowerCase()} reports.`}
+                </div>
+              ) : null}
+            </div>
 
-              <div className="flex items-center justify-between border-t border-[#dfe7f5] px-4 py-3">
-                <p className="text-xs font-semibold text-[#68739c]">
-                  Showing {firstShown}-{lastShown} of {filtered.length} reports
+            {filtered.length > 0 ? (
+              <div className="flex items-center justify-between gap-3 border-t border-neutral-100 px-4 py-3">
+                <p className="text-[12px] font-medium text-neutral-500">
+                  {firstShown}–{lastShown} of {filtered.length}
                 </p>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-0.5">
                   <button
                     type="button"
                     onClick={() => setReportPage((value) => Math.max(1, value - 1))}
-                    className="flex size-8 items-center justify-center rounded-md bg-white text-xs text-[#8b96b8] disabled:opacity-40"
+                    className="flex size-8 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-50 disabled:opacity-40"
                     disabled={currentPage <= 1}
+                    aria-label="Previous page"
                   >
                     <ChevronLeftIcon className="size-3.5" />
                   </button>
-                  <button
-                    type="button"
-                    className="flex size-8 items-center justify-center rounded-md border border-[#ff6a1a] bg-white text-xs font-bold text-[#ff6a1a]"
-                  >
-                    {currentPage}
-                  </button>
+                  {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => (
+                    <button
+                      key={page}
+                      type="button"
+                      onClick={() => setReportPage(page)}
+                      aria-current={page === currentPage ? "page" : undefined}
+                      className={cn(
+                        "flex size-8 items-center justify-center rounded-md text-xs font-semibold transition-colors",
+                        page === currentPage
+                          ? "border border-[#ff6a1a] bg-[#ff6a1a] text-white"
+                          : "text-neutral-600 hover:bg-neutral-50",
+                      )}
+                    >
+                      {page}
+                    </button>
+                  ))}
                   <button
                     type="button"
                     onClick={() => setReportPage((value) => Math.min(totalPages, value + 1))}
-                    className="flex size-8 items-center justify-center rounded-md bg-white text-xs text-[#2447b3] disabled:opacity-40"
+                    className="flex size-8 items-center justify-center rounded-md text-neutral-600 hover:bg-neutral-50 disabled:opacity-40"
                     disabled={currentPage >= totalPages}
+                    aria-label="Next page"
                   >
                     <ChevronRightIcon className="size-3.5" />
                   </button>
                 </div>
               </div>
-            </Card>
-          </section>
-
-          <aside className="hidden min-w-0 flex-col xl:sticky xl:top-6 xl:flex xl:self-start">
-            {selected ? (
-              <div className="overflow-hidden rounded-lg border border-[#dfe7f5] bg-white">
-                <div className="flex items-start justify-between gap-4 px-5 pb-4 pt-5">
-                  <div className="min-w-0">
-                    <h2 className="truncate text-xl font-extrabold text-[#07145f]">{selected.title}</h2>
-                    <div className="mt-1 flex items-center gap-2">
-                      <span className="font-mono text-xs font-bold text-[#2447b3]">{selected.tracking_id}</span>
-                      <button type="button" onClick={() => void copyTrackingId(selected)} className="text-[#2447b3]" aria-label="Copy tracking ID">
-                        <CopyIcon className="size-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <div className="flex justify-end gap-2">
-                      <span className={cn("rounded-md border px-3 py-1 text-xs font-bold", statusColors[statusGroup(selected.status)])}>
-                        {statusGroup(selected.status)}
-                      </span>
-                      <span className={cn("rounded-md border px-3 py-1 text-xs font-bold", validationColors[selected.validation_status])}>
-                        {validationLabels[selected.validation_status]}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-xs font-semibold text-[#43507f]">Submitted on {formatDate(selected.created_at)}</p>
-                  </div>
-                </div>
-
-                <div className="border-y border-[#dfe7f5] bg-[#f8fbff] px-5 py-3">
-                  <p className="text-xs font-extrabold text-[#07145f]">Automated validation</p>
-                  <p className="mt-1 text-xs font-semibold leading-5 text-[#43507f]">
-                    {selected.validation_summary || validationLabels[selected.validation_status]}
-                  </p>
-                </div>
-
-                {isOfficial ? (
-                  <div className="border-b border-[#dfe7f5] p-5">
-                    <OfficialStatusPanel report={selected} onUpdated={updateReport} />
-                  </div>
-                ) : null}
-
-                <div className="grid border-b border-[#dfe7f5] md:grid-cols-[0.7fr_1.1fr_1fr]">
-                  <div className="border-[#dfe7f5] p-5 md:border-r">
-                    <p className="text-xs font-extrabold text-[#07145f]">Category</p>
-                    <div className="mt-3 flex items-start gap-3">
-                      <ReportIcon report={selected} />
-                      <div>
-                        <p className="text-sm font-bold text-[#07145f]">{categoryLabels[selected.category]}</p>
-                        <p className="text-xs font-semibold text-[#43507f]">{categoryStyles[selected.category].sub}</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="border-[#dfe7f5] p-5 md:border-r">
-                    <p className="text-xs font-extrabold text-[#07145f]">Location</p>
-                    <div className="mt-3 flex items-start gap-2 text-xs font-semibold text-[#43507f]">
-                      <MapPinIcon className="mt-0.5 size-4 shrink-0 text-[#2447b3]" />
-                      <span>
-                        {selected.latitude && selected.longitude ? `Lat: ${Number(selected.latitude).toFixed(5)}, Lng: ${Number(selected.longitude).toFixed(5)}` : selected.address || selected.barangay}
-                        <br />
-                        {selected.address || selected.barangay}
-                      </span>
-                    </div>
-                    {mapSrc(selected) ? (
-                      <iframe title="Report location map" src={mapSrc(selected)} className="mt-3 h-32 w-full rounded-lg border border-[#dfe7f5]" />
-                    ) : (
-                      <div className="mt-3 flex h-32 items-center justify-center rounded-lg border border-dashed border-[#dfe7f5] text-xs font-semibold text-[#68739c]">
-                        No map location
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="p-5">
-                    <p className="text-xs font-extrabold text-[#07145f]">Evidence</p>
-                    <p className="mt-2 text-xs font-semibold text-[#43507f]">{selected.media.length} file{selected.media.length === 1 ? "" : "s"}</p>
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      {selected.media.filter((media) => media.mime_type?.startsWith("image/")).slice(0, 2).map((media) => (
-                        <AuthenticatedMediaImage key={media.id} src={media.preview_url} alt={media.original_filename} className="h-24 w-full rounded-lg object-cover" />
-                      ))}
-                      {selected.media.length === 0 ? (
-                        <div className="col-span-2 flex h-24 items-center justify-center rounded-lg border border-dashed border-[#dfe7f5] text-xs font-semibold text-[#68739c]">
-                          No evidence
-                        </div>
-                      ) : null}
-                    </div>
-                    <button type="button" onClick={() => openReportMedia(selected)} className="mt-3 h-9 w-full rounded-lg border border-[#dfe7f5] text-xs font-extrabold text-[#2447b3]">
-                      View all evidence
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid md:grid-cols-[1fr_0.95fr]">
-                  <div className="border-[#dfe7f5] p-5 md:border-r">
-                    <p className="text-sm font-extrabold text-[#07145f]">Summary</p>
-                    <p className="mt-3 text-sm font-semibold leading-6 text-[#43507f]">{selected.description}</p>
-                    <div className="mt-4 flex flex-wrap gap-3 text-xs font-semibold text-[#68739c]">
-                      <span className="inline-flex items-center gap-1"><ClockIcon className="size-3.5" /> Submitted {daysAgo(selected.created_at)} days ago</span>
-                      <span className="inline-flex items-center gap-1"><Share2Icon className="size-3.5" /> {selected.visibility === "community" ? "Public" : "Private"}</span>
-                      {selected.visibility === "community" ? <span className="inline-flex items-center gap-1"><ArrowUpIcon className="size-3.5" /> {selected.vote_count} upvotes</span> : null}
-                    </div>
-                  </div>
-                  <div className="p-5">
-                    <p className="text-sm font-extrabold text-[#07145f]">Status timeline</p>
-                    <Timeline report={selected} onStatusClick={(mode) => { setStatusDialogMode(mode); setStatusDialogOpen(true) }} />
-                  </div>
-                </div>
-                <div className="border-t border-[#dfe7f5] p-5">
-                  <ResidentFollowUpPanel report={selected} onRefresh={loadReports} />
-                </div>
-              </div>
-            ) : (
-              <Card className="flex h-full min-h-[300px] items-center justify-center">
-                <CardContent>
-                  <div className="flex flex-col items-center text-center text-sm text-muted-foreground">
-                    <img src="/contents/report_details.png" alt="" className="mb-4 h-32 w-auto" aria-hidden="true" />
-                    No reports found.
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </aside>
-        </div>
+            ) : null}
+          </div>
+        </section>
       </div>
 
-      {selectedReport && selected ? (
-        <div className="fixed inset-0 z-[200] flex min-h-0 flex-col bg-white md:hidden">
-          <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[#dfe7f5] bg-white px-3">
-            <button
-              type="button"
-              onClick={() => navigate("/dashboard/reports")}
-              className="flex size-11 items-center justify-center rounded-md text-[#07145f] hover:bg-[#eef3ff]"
-              aria-label="Back to reports"
-            >
-              <ChevronLeftIcon className="size-5" />
-            </button>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-extrabold text-[#07145f]">Report details</p>
-              <p className="truncate font-mono text-[11px] font-bold text-[#2447b3]">{selected.tracking_id}</p>
-            </div>
-          </header>
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-24 pt-4">
-              <div className="mb-4 flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <p className="text-base font-extrabold text-[#07145f]">{selected.title}</p>
-                  <p className="mt-1 font-mono text-xs font-bold text-[#2447b3]">{selected.tracking_id}</p>
-                </div>
-                <span className={cn("shrink-0 rounded-md border px-3 py-1 text-xs font-bold", statusColors[statusGroup(selected.status)])}>
-                  {statusGroup(selected.status)}
-                </span>
-              </div>
-
-              <div className="rounded-lg border border-[#dfe7f5] bg-[#f8fbff] p-3">
-                <p className="text-xs font-extrabold text-[#07145f]">Automated validation</p>
-                <p className="mt-1 text-xs font-semibold leading-5 text-[#43507f]">
-                  {selected.validation_summary || validationLabels[selected.validation_status]}
-                </p>
-              </div>
-
-              <div className="mt-4 space-y-4">
-                {isOfficial ? <OfficialStatusPanel report={selected} onUpdated={updateReport} /> : null}
-
-                <div className="rounded-lg border border-[#dfe7f5] p-3">
-                  <p className="text-xs font-extrabold text-[#07145f]">Category</p>
-                  <div className="mt-3 flex items-center gap-3">
-                    <ReportIcon report={selected} />
-                    <div>
-                      <p className="text-sm font-bold text-[#07145f]">{categoryLabels[selected.category]}</p>
-                      <p className="text-xs font-semibold text-[#43507f]">{categoryStyles[selected.category].sub}</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-[#dfe7f5] p-3">
-                  <p className="text-xs font-extrabold text-[#07145f]">Location</p>
-                  <p className="mt-2 flex items-start gap-2 text-xs font-semibold leading-5 text-[#43507f]">
-                    <MapPinIcon className="mt-0.5 size-4 shrink-0 text-[#2447b3]" />
-                    <span>{selected.address || selected.barangay}</span>
-                  </p>
-                  {mapSrc(selected) ? (
-                    <iframe title="Report location map" src={mapSrc(selected)} className="mt-3 h-36 w-full rounded-lg border border-[#dfe7f5]" />
-                  ) : null}
-                </div>
-
-                <div className="rounded-lg border border-[#dfe7f5] p-3">
-                  <p className="text-xs font-extrabold text-[#07145f]">Evidence</p>
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    {selected.media.filter((media) => media.mime_type?.startsWith("image/")).slice(0, 2).map((media) => (
-                        <AuthenticatedMediaImage key={media.id} src={media.preview_url} alt={media.original_filename} className="h-28 w-full rounded-lg object-cover" />
-                    ))}
-                    {selected.media.length === 0 ? (
-                      <div className="col-span-2 flex h-20 items-center justify-center rounded-lg border border-dashed border-[#dfe7f5] text-xs font-semibold text-[#68739c]">
-                        No evidence
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-[#dfe7f5] p-3">
-                  <p className="text-xs font-extrabold text-[#07145f]">Summary</p>
-                  <p className="mt-2 text-xs font-semibold leading-5 text-[#43507f]">{selected.description}</p>
-                  <div className="mt-3 flex flex-wrap gap-3 text-xs font-semibold text-[#68739c]">
-                    <span className="inline-flex items-center gap-1"><CalendarIcon className="size-3.5" /> {formatDate(selected.created_at)}</span>
-                    <span className="inline-flex items-center gap-1"><Share2Icon className="size-3.5" /> {selected.visibility === "community" ? "Public" : "Private"}</span>
-                    {selected.visibility === "community" ? (
-                      <span className="inline-flex items-center gap-1"><ArrowUpIcon className="size-3.5" /> {selected.vote_count}</span>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-[#dfe7f5] p-3">
-                  <button
-                    type="button"
-                    onClick={() => setTimelineExpanded(!timelineExpanded)}
-                    className="flex w-full items-center justify-between"
-                  >
-                    <p className="text-xs font-extrabold text-[#07145f]">Status timeline</p>
-                    {timelineExpanded ? <ChevronUpIcon className="size-4 text-[#2447b3]" /> : <ChevronDownIcon className="size-4 text-[#2447b3]" />}
-                  </button>
-                  {timelineExpanded ? (
-                    <div className="mt-3">
-                      <Timeline report={selected} onStatusClick={(mode) => { setStatusDialogMode(mode); setStatusDialogOpen(true) }} />
-                    </div>
-                  ) : null}
-                </div>
-
-                <ResidentFollowUpPanel report={selected} onRefresh={loadReports} />
-              </div>
-            </div>
-          </div>
+      {/* Right details sidebar only — no dim/blur backdrop */}
+      {selected ? (
+        <ReportDetailsSidebar
+          report={selected}
+          onClose={closeReportDetails}
+          onCopyTrackingId={() => void copyTrackingId(selected)}
+          onStatusClick={(mode) => {
+            setStatusDialogMode(mode)
+            setStatusDialogOpen(true)
+          }}
+          onRefresh={loadReports}
+          onUpdated={updateReport}
+          isOfficial={isOfficial}
+        />
       ) : null}
 
       {selected ? (

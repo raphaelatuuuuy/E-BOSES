@@ -52,7 +52,7 @@ THIRD_PARTY_APPS = [
 LOCAL_APPS = [
     "apps.accounts",
     "apps.concerns",
-    "apps.emergencies",
+    "apps.emergencies.apps.EmergenciesConfig",
     "apps.notifications",
 ]
 

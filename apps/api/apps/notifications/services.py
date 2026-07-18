@@ -118,6 +118,14 @@ def broadcast_emergency_update(alert) -> None:
     broadcast_live_map_event("emergency.updated", {"emergency": emergency_payload(alert), "route": route_for_assignment(alert)})
 
 
+def broadcast_emergency_chat_message(message) -> None:
+    """Push a chat message to everyone watching this emergency room."""
+    from apps.emergencies.serializers import EmergencyChatMessageSerializer
+
+    payload = EmergencyChatMessageSerializer(message).data
+    _broadcast(f"emergency_{message.alert_id}", "emergency.chat", payload)
+
+
 @transaction.atomic
 def create_notification(*, concern: Concern, type: str) -> object | None:
     """Create a notification for the report's reporter."""

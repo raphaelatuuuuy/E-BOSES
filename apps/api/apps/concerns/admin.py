@@ -7,6 +7,7 @@ from .models import (
     ConcernAppeal,
     ConcernAssignment,
     ConcernAiAssessment,
+    ConcernChatMessage,
     ConcernClarification,
     ConcernComment,
     ConcernMedia,
@@ -21,6 +22,7 @@ admin.site.register(ConcernAssignment)
 admin.site.register(ConcernClarification)
 admin.site.register(ConcernAppeal)
 admin.site.register(ConcernOfficialRemark)
+admin.site.register(ConcernChatMessage)
 admin.site.register(ConcernMedia)
 admin.site.register(ConcernStatusEvent)
 admin.site.register(ConcernVote)

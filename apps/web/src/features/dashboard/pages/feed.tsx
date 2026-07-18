@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { toast } from "sonner"
 import { usePageTitle } from "@/hooks/use-page-title"
-import { Topbar } from "@/features/dashboard/components/topbar"
+import { concernBodyText } from "@/features/dashboard/components/feed-post-card"
 import {
+  AlertTriangleIcon,
   ArrowUpIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -18,17 +19,15 @@ import {
   TrafficConeIcon,
   MegaphoneIcon,
   WrenchIcon,
-  XIcon,
 } from "lucide-react"
 import { cn } from "@workspace/ui/lib/utils"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Skeleton } from "@workspace/ui/components/skeleton"
-import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/components/popover"
 import {
   commentOnConcern,
-  flagConcern,
+  getResidentDashboardSummary,
   listActiveResponders,
   listAnnouncements,
   listFeedConcerns,
@@ -39,10 +38,12 @@ import {
   type ConcernComment,
   type PublicUser,
 } from "@/features/dashboard/api"
+import {
+  PostMoreMenu,
+  ReportPostDialog,
+} from "@/features/dashboard/components/report-post-dialog"
 
 const filters = ["All", "Announcements", "Infrastructure", "Environment", "Public Safety", "Others"] as const
-
-import { computeDefaultAvatar } from "@/features/dashboard/avatar-utils"
 
 const avatarColors = [
   "bg-primary/10 text-primary",
@@ -54,13 +55,6 @@ const avatarColors = [
 ]
 
 const avatarGrey = "bg-muted text-muted-foreground"
-
-const reportReasons = [
-  "Spam or off topic",
-  "Hate speech or harassment",
-  "False or misleading content",
-  "Others (please specify)",
-] as const
 
 const filterCategoryMap: Record<string, ConcernCategory | "all"> = {
   All: "all",
@@ -97,15 +91,24 @@ function responderRoleLabel(value: string) {
 
 function Avatar({ user }: { user: PublicUser }) {
   const online = Boolean(user.last_seen_at)
-  const avatarKey = computeDefaultAvatar(user)
-  // Use user.id for deterministic color instead of index
   const colorIdx = user.id % avatarColors.length
+  const letter = (user.full_name?.[0] || user.initials?.[0] || "?").toUpperCase()
   return (
     <div className="relative inline-flex shrink-0 self-start overflow-visible">
-      <div className={cn("flex size-10 items-center justify-center overflow-hidden rounded-full text-sm font-bold", online ? avatarColors[colorIdx] : avatarGrey)}>
-        {avatarKey ? <img src={`/contents/${avatarKey}.png`} alt="" className="h-full w-full scale-125 object-cover" /> : user.initials}
+      <div
+        className={cn(
+          "flex size-10 items-center justify-center overflow-hidden rounded-full text-sm font-bold",
+          online ? avatarColors[colorIdx] : avatarGrey,
+        )}
+      >
+        {letter}
       </div>
-      <span className={cn("absolute bottom-0 right-0 z-10 size-3 translate-x-1/4 translate-y-1/4 rounded-full border-2 border-card", online ? "bg-primary" : "bg-muted-foreground/50")} />
+      <span
+        className={cn(
+          "absolute bottom-0 right-0 z-10 size-3 translate-x-1/4 translate-y-1/4 rounded-full border-2 border-card",
+          online ? "bg-primary" : "bg-muted-foreground/50",
+        )}
+      />
     </div>
   )
 }
@@ -200,10 +203,9 @@ export default function FeedPage() {
   const [expandedReplies, setExpandedReplies] = useState<Set<string>>(new Set())
   const [commentInputs, setCommentInputs] = useState<Record<number, string>>({})
   const [replyInputs, setReplyInputs] = useState<Record<string, string>>({})
-  const [reportOpen, setReportOpen] = useState<number | null>(null)
-  const [reportReason, setReportReason] = useState<string>("")
-  const [reportOther, setReportOther] = useState<string>("")
-  const [flaggingPost, setFlaggingPost] = useState<number | null>(null)
+  const [menuOpenPostId, setMenuOpenPostId] = useState<number | null>(null)
+  const [reportDialogPostId, setReportDialogPostId] = useState<number | null>(null)
+  const [barangayActiveEmergencies, setBarangayActiveEmergencies] = useState(0)
   const [error, setError] = useState("")
   const [filterPageSize, setFilterPageSize] = useState(() => {
     if (typeof window === "undefined") return filters.length
@@ -242,14 +244,19 @@ export default function FeedPage() {
     setError("")
     try {
       const category = filterCategoryMap[activeFilter]
-      const [nextConcerns, nextAnnouncements, responders] = await Promise.all([
+      const [nextConcerns, nextAnnouncements, responders, summary] = await Promise.all([
         activeFilter === "Announcements" ? Promise.resolve([]) : listFeedConcerns(category, undefined, undefined, search),
         activeFilter === "All" || activeFilter === "Announcements" ? listAnnouncements() : Promise.resolve([]),
         listActiveResponders(),
+        getResidentDashboardSummary().catch(() => null),
       ])
       setConcerns(nextConcerns)
       setAnnouncements(nextAnnouncements)
       setActiveResponders(responders)
+      const count =
+        summary?.barangay_active_emergencies ??
+        (summary?.has_ongoing_emergencies ? 1 : 0)
+      setBarangayActiveEmergencies(typeof count === "number" ? count : 0)
     } catch {
       setError("Could not load feed.")
     } finally {
@@ -274,7 +281,6 @@ export default function FeedPage() {
   if (!loaded)
     return (
       <div className="flex flex-col">
-        <Topbar />
         <div className="flex-1 p-4 md:p-10">
           <Skeleton className="h-28 w-full rounded-2xl" />
           <div className="mt-6 flex gap-2">
@@ -342,33 +348,12 @@ export default function FeedPage() {
     })
   }
 
-  async function submitFlag(postId: number) {
-    const reason = reportReason === "Others (please specify)" ? reportOther.trim() : reportReason
-    if (!reason) {
-      toast.error("Choose a reason before submitting.")
-      return
-    }
-    setFlaggingPost(postId)
-    try {
-      await flagConcern(postId, { reason, note: reportOther.trim() })
-      toast.success("Post flagged for review")
-      setReportOpen(null)
-      setReportReason("")
-      setReportOther("")
-    } catch (flagError) {
-      toast.error(flagError instanceof Error ? flagError.message : "Could not flag this post.")
-    } finally {
-      setFlaggingPost(null)
-    }
-  }
-
   const trendingConcerns = [...concerns]
     .sort((a, b) => b.vote_count - a.vote_count || b.priority_score - a.priority_score)
     .slice(0, 5)
 
   return (
     <div className="flex flex-col">
-      <Topbar />
 
       <div className="flex-1 bg-[#f7f8fc] p-4 md:p-8 xl:p-10">
         <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_330px]">
@@ -385,6 +370,27 @@ export default function FeedPage() {
               </div>
               <img src="/contents/feed-header.png" alt="" className="mx-auto h-32 w-full object-contain md:h-40" />
             </div>
+
+            {barangayActiveEmergencies > 0 ? (
+              <Link
+                to="/dashboard/alerts-map"
+                className="mt-5 flex items-center gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3.5 no-underline transition-colors hover:bg-red-100/80"
+              >
+                <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600">
+                  <AlertTriangleIcon className="size-5" strokeWidth={2.25} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[15px] font-bold text-red-800">
+                    {barangayActiveEmergencies} ongoing alert
+                    {barangayActiveEmergencies === 1 ? "" : "s"} in Marikina Heights
+                  </span>
+                  <span className="mt-0.5 block text-[13px] font-medium text-red-700/90">
+                    Open the alerts map for locations and nearby services
+                  </span>
+                </span>
+                <ChevronRightIcon className="size-5 shrink-0 text-red-600" strokeWidth={2} />
+              </Link>
+            ) : null}
 
             <div className="mt-7">
               <div className="flex w-full min-w-0 items-center gap-2">
@@ -490,7 +496,7 @@ export default function FeedPage() {
                 const style = categoryStyles[post.category]
                 const CategoryIcon = style.icon
                 return (
-                  <article key={post.id} className="rounded-2xl border border-[#dfe7f5] bg-white p-4 shadow-sm">
+                  <article key={post.id} className="relative rounded-2xl border border-[#dfe7f5] bg-white p-4 shadow-sm">
                     <div className="grid gap-4 md:grid-cols-[64px_minmax(0,1fr)_120px_150px] md:items-center">
                       <div className={cn("flex size-14 items-center justify-center rounded-full", style.bg, style.text)}>
                         <CategoryIcon className="size-7" />
@@ -502,8 +508,9 @@ export default function FeedPage() {
                             {categoryLabel(post.category)}
                           </Badge>
                         </div>
-                        <h2 className="mt-1 truncate text-lg font-extrabold text-[#07145f]">{post.title}</h2>
-                        <p className="mt-1 line-clamp-2 text-sm font-semibold leading-6 text-[#43507f]">{post.description}</p>
+                        <p className="mt-1 line-clamp-3 text-sm font-semibold leading-6 text-[#07145f]">
+                          {concernBodyText(post)}
+                        </p>
                         <p className="mt-2 truncate text-xs font-bold text-[#2447b3]">
                           {post.reporter.full_name} <span className="mx-1 text-[#8b96b8]">•</span> Verified Resident <span className="mx-1 text-[#8b96b8]">•</span> {timeAgo(post.created_at)}
                         </p>
@@ -528,44 +535,14 @@ export default function FeedPage() {
                             <span className="text-xs font-semibold text-[#43507f]">Comments</span>
                           </button>
                         </div>
-                        <Popover open={reportOpen === post.id} onOpenChange={(open) => { if (!open) { setReportOpen(null); setReportReason(""); setReportOther("") } else { setReportOpen(post.id) } }}>
-                        <PopoverTrigger className="flex size-9 items-center justify-center rounded-lg text-[#2447b3] transition-colors hover:bg-[#fff1ea] hover:text-[#ff6a1a]" aria-label="Flag post">
-                          <FlagIcon className="size-5" />
-                        </PopoverTrigger>
-                        <PopoverContent className="w-72 max-sm:w-[calc(100vw-2rem)] right-0 left-auto">
-                          <div className="flex flex-col gap-3 p-4">
-                            <div className="flex items-center gap-2">
-                              <div className="flex size-7 items-center justify-center rounded-full bg-destructive/10">
-                                <FlagIcon className="size-3.5 text-destructive" />
-                              </div>
-                              <h4 className="flex-1 text-sm font-semibold text-foreground">Report this post</h4>
-                              <button type="button" onClick={() => setReportOpen(null)} className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
-                                <XIcon className="size-3.5" />
-                              </button>
-                            </div>
-                            <p className="text-xs text-muted-foreground">Barangay moderators will review this report.</p>
-                            <div className="flex flex-col gap-1.5">
-                              {reportReasons.map((reason) => (
-                                <label key={reason} className="flex items-center gap-2 cursor-pointer text-xs text-foreground">
-                                  <input type="radio" name={`report-${post.id}`} value={reason} checked={reportReason === reason} onChange={() => setReportReason(reason)} />
-                                  {reason}
-                                </label>
-                              ))}
-                            </div>
-                            {reportReason === "Others (please specify)" && <Input type="text" value={reportOther} onChange={(e) => setReportOther(e.target.value)} placeholder="Please specify..." className="h-8 text-xs" />}
-                            <Button
-                              type="button"
-                              variant="destructive"
-                              size="sm"
-                              className="w-full text-xs"
-                              disabled={flaggingPost === post.id}
-                              onClick={() => void submitFlag(post.id)}
-                            >
-                              {flaggingPost === post.id ? "Submitting..." : "Submit Report"}
-                            </Button>
-                          </div>
-                        </PopoverContent>
-                      </Popover>
+                        <PostMoreMenu
+                          open={menuOpenPostId === post.id}
+                          onOpenChange={(open) =>
+                            setMenuOpenPostId(open ? post.id : null)
+                          }
+                          onReport={() => setReportDialogPostId(post.id)}
+                          triggerClassName="size-9 rounded-lg text-[#2447b3] hover:bg-[#fff1ea] hover:text-[#ff6a1a]"
+                        />
                       </div>
                     </div>
 
@@ -691,6 +668,12 @@ export default function FeedPage() {
           </aside>
         </div>
       </div>
+
+      <ReportPostDialog
+        open={reportDialogPostId != null}
+        concernId={reportDialogPostId}
+        onClose={() => setReportDialogPostId(null)}
+      />
     </div>
   )
 }

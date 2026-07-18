@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Link, useLocation } from "react-router-dom"
 import {
   AlertTriangleIcon,
@@ -6,35 +6,111 @@ import {
   FileCheck2Icon,
   HomeIcon,
   MapPinnedIcon,
+  PhoneIcon,
   SearchIcon,
   Settings2Icon,
   ShieldCheckIcon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
-import {
-  SolarCommunityIcon,
-  SolarHomeIcon,
-  SolarReportsIcon,
-} from "@/features/dashboard/components/resident-nav-icons"
-import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { getActiveEmergency } from "@/features/dashboard/emergency-api"
 
 type NavItem = {
   label: string
   path: string | null
   icon?: typeof HomeIcon
-  /** Resident SVG icon (regular ↔ solid) */
-  NavIcon?: React.ComponentType<{ solid?: boolean; className?: string }>
-  isCenter?: boolean
   isAvatar?: boolean
-  /** Solid always (e.g. Report FAB) */
-  solidAlways?: boolean
+  /** Flaticon / public glyph used as CSS mask */
+  iconSrc?: string
+}
+
+const ACTIVE_EMERGENCY = new Set([
+  "submitted",
+  "routed",
+  "acknowledged",
+  "en_route",
+  "nearby",
+  "arrived",
+])
+
+function MaskIcon({
+  src,
+  className,
+}: {
+  src: string
+  className?: string
+}) {
+  return (
+    <span
+      className={cn("inline-block shrink-0 bg-current", className)}
+      style={{
+        WebkitMaskImage: `url(${src})`,
+        maskImage: `url(${src})`,
+        WebkitMaskSize: "contain",
+        maskSize: "contain",
+        WebkitMaskRepeat: "no-repeat",
+        maskRepeat: "no-repeat",
+        WebkitMaskPosition: "center",
+        maskPosition: "center",
+      }}
+      aria-hidden
+    />
+  )
+}
+
+function SosFab() {
+  const [activeEmergency, setActiveEmergency] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const alert = await getActiveEmergency()
+        if (!cancelled) {
+          setActiveEmergency(
+            Boolean(alert && ACTIVE_EMERGENCY.has(String(alert.status))),
+          )
+        }
+      } catch {
+        if (!cancelled) setActiveEmergency(false)
+      }
+    })()
+    function onChange(event: Event) {
+      const active = (event as CustomEvent<{ active?: boolean }>).detail?.active
+      setActiveEmergency(Boolean(active))
+    }
+    window.addEventListener("eboses:sos-active-change", onChange as EventListener)
+    return () => {
+      cancelled = true
+      window.removeEventListener("eboses:sos-active-change", onChange as EventListener)
+    }
+  }, [])
+
+  return (
+    <button
+      type="button"
+      onClick={() => window.dispatchEvent(new CustomEvent("eboses:open-sos"))}
+      className="pointer-events-auto flex w-14 shrink-0 items-end justify-center"
+      aria-label="SOS"
+    >
+      <span
+        className={cn(
+          "flex size-14 flex-col items-center justify-center gap-0.5 rounded-full bg-gradient-to-b from-[#ff625a] to-[#f23b35] text-white shadow-[0_6px_20px_rgba(242,59,53,0.38)]",
+          activeEmergency && "sos-fab-blink",
+        )}
+      >
+        <PhoneIcon className="size-5 shrink-0" fill="currentColor" />
+        <span className="text-[10px] font-extrabold leading-none tracking-wide text-white">
+          SOS
+        </span>
+      </span>
+    </button>
+  )
 }
 
 export function MobileNav() {
   const location = useLocation()
-  const [createOpen, setCreateOpen] = useState(false)
   const { user } = useAuthSession()
 
   const letter = (user?.firstName?.[0] || user?.lastName?.[0] || "?").toUpperCase()
@@ -42,163 +118,151 @@ export function MobileNav() {
   const isOfficialRole =
     user?.role === "barangay_official" || user?.is_staff || user?.is_superuser
   const isResponderRole = user?.role === "first_responder"
-
-  const navItems: NavItem[] = isOfficialRole
-    ? [
-        { label: "Map", path: "/dashboard/alerts-map", icon: MapPinnedIcon },
-        { label: "Concerns", path: "/dashboard/reports", icon: BarChart3Icon },
-        { label: "Emergency", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
-        { label: "Queue", path: "/dashboard/verification-queue", icon: FileCheck2Icon },
-        { label: "IDs", path: "/dashboard/ocr-templates", icon: Settings2Icon },
-        { label: "Admin", path: "/dashboard/admin", icon: ShieldCheckIcon },
-        { label: "Profile", path: "/dashboard/profile", isAvatar: true },
-      ]
-    : isResponderRole
-      ? [
-          { label: "Emergency", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
-          { label: "Profile", path: "/dashboard/profile", isAvatar: true },
-        ]
-      : [
-          { label: "Home", path: "/dashboard/home", NavIcon: SolarHomeIcon },
-          { label: "Community", path: "/dashboard/feed", NavIcon: SolarCommunityIcon },
-          { label: "Report", path: null, isCenter: true, solidAlways: true },
-          { label: "Reports", path: "/dashboard/reports", NavIcon: SolarReportsIcon },
-          { label: "Profile", path: "/dashboard/profile", isAvatar: true },
-        ]
-
   const isResident = !isOfficialRole && !isResponderRole
+
+  const officialItems: NavItem[] = [
+    { label: "Map", path: "/dashboard/alerts-map", icon: MapPinnedIcon },
+    { label: "Concerns", path: "/dashboard/reports", icon: BarChart3Icon },
+    { label: "Emergency", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
+    { label: "Queue", path: "/dashboard/verification-queue", icon: FileCheck2Icon },
+    { label: "IDs", path: "/dashboard/ocr-templates", icon: Settings2Icon },
+    { label: "Admin", path: "/dashboard/admin", icon: ShieldCheckIcon },
+    { label: "Profile", path: "/dashboard/profile", isAvatar: true },
+  ]
+
+  const responderItems: NavItem[] = [
+    { label: "Emergency", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
+    { label: "Profile", path: "/dashboard/profile", isAvatar: true },
+  ]
+
+  /** Latest Flaticon nav glyphs: home · reports · alerts */
+  const residentItems: NavItem[] = [
+    { label: "Home", path: "/dashboard/home", iconSrc: "/contents/nav-home.png" },
+    { label: "Reports", path: "/dashboard/reports", iconSrc: "/contents/nav-clipboard.png" },
+    { label: "Alerts", path: "/dashboard/alerts-map", iconSrc: "/contents/nav-alert.png" },
+  ]
+
+  const navItems = isOfficialRole
+    ? officialItems
+    : isResponderRole
+      ? responderItems
+      : residentItems
 
   return (
     <>
-      <nav className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 lg:hidden">
-        <div
-          className={cn(
-            "pointer-events-auto mx-auto flex min-h-[68px] items-end justify-around pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2",
-            isResident
-              ? "w-full border-t border-[#dfe3eb] bg-white px-2"
-              : "mx-3 rounded-[2rem] border border-border/60 bg-white px-3 pb-3 pt-2 shadow-sm",
-          )}
-        >
-          {navItems.map((item) => {
-            const active = item.path
-              ? location.pathname === item.path ||
-                (item.path === "/dashboard/home" && location.pathname === "/dashboard")
-              : false
+      <style>{`
+        @keyframes sos-fab-blink {
+          0%, 100% { box-shadow: 0 6px 20px rgba(242, 59, 53, 0.38); transform: scale(1); }
+          50% { box-shadow: 0 8px 26px rgba(242, 59, 53, 0.5), 0 0 0 10px rgba(242, 59, 53, 0.1); transform: scale(1.04); }
+        }
+        .sos-fab-blink { animation: sos-fab-blink 1.4s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) {
+          .sos-fab-blink { animation: none; }
+        }
+      `}</style>
 
-            if (item.isCenter) {
-              return (
-                <button
-                  key="create"
-                  type="button"
-                  onClick={() => setCreateOpen(true)}
-                  className="group -mt-5 flex min-w-[3.25rem] flex-col items-center gap-1"
-                >
-                  <div
+      <div className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 lg:hidden">
+        <div className="pointer-events-none flex items-end justify-center gap-3 px-4 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))]">
+          {/* Resident: pill width follows Home/Reports/Alerts content. Others: wider bar. */}
+          <nav
+            className={cn(
+              "pointer-events-auto flex h-[3.75rem] items-center gap-1 rounded-full border-2 border-neutral-300/90 bg-[#eef0f4] px-2 shadow-[0_10px_32px_rgba(15,23,42,0.18)]",
+              isResident
+                ? "w-auto shrink-0"
+                : "w-full max-w-lg justify-evenly gap-0.5 px-1.5",
+            )}
+            aria-label="Primary"
+          >
+            {navItems.map((item) => {
+              const active = item.path
+                ? location.pathname === item.path ||
+                  (item.path === "/dashboard/home" &&
+                    location.pathname === "/dashboard") ||
+                  (item.path === "/dashboard/reports" &&
+                    location.pathname.startsWith("/dashboard/reports"))
+                : false
+
+              if (item.isAvatar) {
+                return (
+                  <Link
+                    key={item.path}
+                    to={item.path!}
                     className={cn(
-                      "flex items-center justify-center rounded-full text-white shadow-sm",
+                      "flex h-12 flex-col items-center justify-center gap-0.5 rounded-full",
                       isResident
-                        ? "size-12 bg-[#ff8133]"
-                        : "size-12 bg-primary shadow-primary/30",
+                        ? "w-auto shrink-0 px-3"
+                        : "min-w-0 flex-1 px-1",
+                      active ? "text-neutral-900" : "text-neutral-500",
                     )}
                   >
-                    <i className="bx bxs-edit text-[20px] leading-none text-white" aria-hidden />
-                  </div>
-                  <span
-                    className={cn(
-                      "text-[12px] font-light leading-none",
-                      isResident ? "text-[#ff6a1a]" : "text-primary",
-                    )}
-                  >
-                    {item.label}
-                  </span>
-                </button>
-              )
-            }
+                    <span className="flex size-7 items-center justify-center rounded-full bg-[#c5d0e6] text-[13px] font-semibold text-[#2c3a5a]">
+                      {letter}
+                    </span>
+                    <span className="text-[10px] font-medium leading-none">{item.label}</span>
+                  </Link>
+                )
+              }
 
-            if (item.isAvatar) {
+              if (isResident && item.iconSrc) {
+                return (
+                  <Link
+                    key={item.path}
+                    to={item.path!}
+                    className={cn(
+                      "group flex h-12 w-auto shrink-0 flex-col items-center justify-center gap-0.5 rounded-full px-3.5 transition-colors",
+                      active
+                        ? "text-[#07145f]"
+                        : "text-neutral-500 hover:text-neutral-700",
+                    )}
+                  >
+                    <MaskIcon
+                      src={item.iconSrc}
+                      className={cn(
+                        "size-6 transition-colors",
+                        active
+                          ? "text-[#07145f]"
+                          : "text-neutral-500 group-hover:text-neutral-700",
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "text-[10px] font-semibold leading-none transition-colors",
+                        active
+                          ? "text-[#07145f]"
+                          : "text-neutral-500 group-hover:text-neutral-700",
+                      )}
+                    >
+                      {item.label}
+                    </span>
+                  </Link>
+                )
+              }
+
+              const Icon = item.icon ?? SearchIcon
               return (
                 <Link
-                  key={item.path}
+                  key={item.path ?? item.label}
                   to={item.path!}
                   className={cn(
-                    "group flex min-w-[3.25rem] flex-col items-center gap-1 px-1 py-1 transition-colors",
-                    active ? "text-neutral-900" : "text-neutral-500",
+                    "group flex h-12 flex-col items-center justify-center gap-0.5 rounded-full transition-colors",
+                    isResident
+                      ? "w-auto shrink-0 px-3"
+                      : "min-w-0 flex-1 px-1",
+                    active
+                      ? "text-[#07145f]"
+                      : "text-neutral-500 hover:text-neutral-700",
                   )}
                 >
-                  <span
-                    className={cn(
-                      "flex size-8 items-center justify-center overflow-hidden rounded-full bg-[#c5d0e6] text-[15px] font-semibold text-[#2c3a5a] ring-2",
-                      active ? "ring-[#ff6a1a]/40" : "ring-transparent",
-                    )}
-                  >
-                    {letter}
-                  </span>
-                  <span className="text-[12px] font-light leading-none">{item.label}</span>
+                  <Icon className="size-5" />
+                  <span className="text-[10px] font-medium leading-none">{item.label}</span>
                 </Link>
               )
-            }
+            })}
+          </nav>
 
-            if (isResident && item.NavIcon) {
-              const NavIcon = item.NavIcon
-              return (
-                <Link
-                  key={item.path}
-                  to={item.path!}
-                  className={cn(
-                    "group flex min-w-[3.25rem] flex-col items-center gap-1 px-1 py-1 transition-colors",
-                    active ? "text-[#ff6a1a]" : "text-neutral-500",
-                  )}
-                >
-                  <NavIcon
-                    solid={active}
-                    className={cn(
-                      "size-8",
-                      active ? "text-[#ff6a1a]" : "text-neutral-500",
-                    )}
-                  />
-                  <span
-                    className={cn(
-                      "text-[12px] font-light leading-none",
-                      active && "font-normal text-[#ff6a1a]",
-                    )}
-                  >
-                    {item.label}
-                  </span>
-                </Link>
-              )
-            }
-
-            const Icon = item.icon ?? SearchIcon
-            return (
-              <Link
-                key={item.path}
-                to={item.path!}
-                className={cn(
-                  "flex min-w-[3.25rem] flex-col items-center gap-1 px-1 py-1 transition-colors",
-                  active ? "text-neutral-900" : "text-neutral-500",
-                )}
-              >
-                {item.label === "Dashboard" || item.label === "Home" ? (
-                  <img src="/contents/home.png" alt="" className="size-10 rounded-full object-cover" />
-                ) : item.label === "Feed" ? (
-                  <img src="/contents/feed.png" alt="" className="size-10 rounded-full object-cover" />
-                ) : item.label === "Reports" || item.label === "Concerns" ? (
-                  <img
-                    src="/contents/reports.png"
-                    alt=""
-                    className="size-10 rounded-full object-cover"
-                  />
-                ) : (
-                  <Icon className="size-6" />
-                )}
-                <span className="text-[12px] font-light leading-none">{item.label}</span>
-              </Link>
-            )
-          })}
+          {isResident ? <SosFab /> : null}
         </div>
-      </nav>
-
-      <CreateReportDialog open={createOpen} onOpenChange={setCreateOpen} />
+      </div>
     </>
   )
 }

@@ -9,6 +9,7 @@ from apps.concerns.services import validate_barangay_location
 from .models import (
     EmergencyAlert,
     EmergencyAppeal,
+    EmergencyChatMessage,
     EmergencyEscalation,
     EmergencyLocationPing,
     EmergencyMedia,
@@ -214,3 +215,28 @@ class EmergencyLocationPingCreateSerializer(serializers.Serializer):
 
 class EmergencyNoteSerializer(serializers.Serializer):
     note = serializers.CharField(max_length=255, allow_blank=True, required=False)
+
+
+class EmergencyChatMessageSerializer(serializers.ModelSerializer):
+    sender = PublicUserSerializer(read_only=True)
+    is_mine = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EmergencyChatMessage
+        fields = ("id", "alert", "sender", "body", "created_at", "is_mine")
+        read_only_fields = ("id", "alert", "sender", "created_at", "is_mine")
+
+    def get_is_mine(self, obj):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        return bool(user and user.is_authenticated and obj.sender_id == user.pk)
+
+
+class EmergencyChatCreateSerializer(serializers.Serializer):
+    body = serializers.CharField(max_length=2000, trim_whitespace=True)
+
+    def validate_body(self, value):
+        text = (value or "").strip()
+        if not text:
+            raise serializers.ValidationError("Message cannot be empty.")
+        return text

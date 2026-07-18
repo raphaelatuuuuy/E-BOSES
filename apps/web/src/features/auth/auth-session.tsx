@@ -17,7 +17,9 @@ const AuthSessionContext = React.createContext<AuthSessionContextValue | null>(n
 export function getStatusPath(status: UserStatus, options?: { isOnboarded?: boolean }) {
   if (status === "pending_otp") return "/sign-up-otp"
   if (status === "pending_profile") return "/sign-up"
-  if (status === "rejected" || status === "suspended") return "/sign-in"
+  if (status === "rejected") return "/sign-in"
+  // Self-deactivated / suspended accounts land on reactivate screen (not hard-blocked at login).
+  if (status === "suspended") return "/account-inactive"
   // After email OTP, backend may still be finishing OCR as pending_verification.
   // Skip the old account-pending screen and continue into onboarding/dashboard.
   const canEnterApp = status === "verified" || status === "pending_verification"

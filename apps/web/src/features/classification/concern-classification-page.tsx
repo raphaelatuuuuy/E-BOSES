@@ -19,7 +19,6 @@ import { toast } from "sonner"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
-import { Topbar } from "@/features/dashboard/components/topbar"
 import { usePageTitle } from "@/hooks/use-page-title"
 import {
   getConcernClassificationConfig,
@@ -175,7 +174,6 @@ export default function ConcernClassificationPage() {
 
   return (
     <div className="flex min-h-full flex-col bg-[#f7f8fc]">
-      <Topbar />
       <main className="space-y-5 p-4 md:p-7">
         <header className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div><h1 className="text-2xl font-black text-[#07145f] md:text-3xl">AI Report Validation</h1><p className="mt-2 max-w-2xl text-sm font-semibold text-[#43507f]">Configure how AI checks citizen-submitted concerns before an official makes the final decision.</p></div>

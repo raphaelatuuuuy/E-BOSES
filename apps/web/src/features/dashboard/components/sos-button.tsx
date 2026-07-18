@@ -1,34 +1,38 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
+import { createPortal } from "react-dom"
 import { toast } from "sonner"
 import {
-  AlertTriangleIcon,
   ArrowLeftIcon,
+  CameraIcon,
   CheckIcon,
-  InfoIcon,
-  LightbulbIcon,
-  CloudUploadIcon,
   Loader2Icon,
-  LocateFixedIcon,
-  MapPinIcon,
+  Maximize2Icon,
+  Minimize2Icon,
   PhoneIcon,
-  SearchIcon,
+  XIcon,
 } from "lucide-react"
+// Note: tracking UI lives in EmergencyTrackingSheet (dock-styled)
 
 import { cn } from "@workspace/ui/lib/utils"
-import { lazy, Suspense } from "react"
 import {
-  Dialog,
-  DialogBody,
-  DialogFooter,
-} from "@/features/dashboard/components/dialog"
-
-const LocationPickerModal = lazy(() => import("@/features/dashboard/components/location-picker"))
-import { createEmergency, getActiveEmergency, getEmergency, type EmergencyAlert, type EmergencyType } from "@/features/dashboard/emergency-api"
+  createEmergency,
+  getActiveEmergency,
+  getEmergency,
+  type EmergencyAlert,
+  type EmergencyType,
+} from "@/features/dashboard/emergency-api"
 import { EmergencyTrackingSheet } from "@/features/dashboard/components/emergency-tracking-sheet"
+import {
+  isSosLocationReady,
+  SosLocationStep,
+  type SosLocationValue,
+} from "@/features/dashboard/components/sos-location-step"
 
 const activeEmergencyStatuses = ["submitted", "routed", "acknowledged", "en_route", "nearby", "arrived"] as const
 type SosPlacement = "inline" | "sidebar" | "compact"
-type SosStep = "details" | "review"
+type WizardStep = "category" | "location" | "details" | "review" | "countdown"
+
+const WIZARD_STEPS: WizardStep[] = ["category", "location", "details", "review", "countdown"]
 
 function normalizeSosPlacement(value: string | null): SosPlacement {
   if (value === "bottom_bar") return "sidebar"
@@ -38,43 +42,197 @@ function normalizeSosPlacement(value: string | null): SosPlacement {
 }
 
 const emergencies = [
-  { label: "Medical", value: "medical", img: "/contents/medical.png", desc: "Injury, illness, rescue", color: "blue" },
-  { label: "Fire", value: "fire", img: "/contents/fire.png", desc: "Building, forest, vehicle", color: "orange" },
-  { label: "Crime", value: "crime", img: "/contents/crime.png", desc: "Assault, theft, threat", color: "red" },
-  { label: "Disaster", value: "disaster", img: "/contents/disaster.png", desc: "Flood, quake, storm", color: "purple" },
-] as const
+  { label: "Medical", value: "medical" as const, img: "/contents/medical.png", desc: "Injury, illness, rescue" },
+  { label: "Fire", value: "fire" as const, img: "/contents/fire.png", desc: "Building, forest, vehicle" },
+  { label: "Crime", value: "crime" as const, img: "/contents/crime.png", desc: "Assault, theft, threat" },
+  { label: "Disaster", value: "disaster" as const, img: "/contents/disaster.png", desc: "Flood, quake, storm" },
+]
 
-const emergencyColorMap: Record<string, { border: string; bg: string; text: string; iconBg: string }> = {
-  blue: { border: "border-blue-500", bg: "bg-blue-50", text: "text-blue-700", iconBg: "bg-blue-100" },
-  red: { border: "border-red-500", bg: "bg-red-50", text: "text-red-700", iconBg: "bg-red-100" },
-  orange: { border: "border-orange-500", bg: "bg-orange-50", text: "text-orange-700", iconBg: "bg-orange-100" },
-  purple: { border: "border-purple-500", bg: "bg-purple-50", text: "text-purple-700", iconBg: "bg-purple-100" },
+function stepTitle(step: WizardStep) {
+  if (step === "category") return "What’s the emergency?"
+  if (step === "location") return "Confirm your location"
+  if (step === "details") return "Add details (optional)"
+  if (step === "review") return "Review & send"
+  return "Sending alert"
 }
 
-export function SOSButton() {
-  const [placement, setPlacement] = useState<SosPlacement>(() => normalizeSosPlacement(localStorage.getItem("eboses:sos-placement")))
-  const [open, setOpen] = useState(false)
-  const [step, setStep] = useState<SosStep>("details")
+function stepIndex(step: WizardStep) {
+  return WIZARD_STEPS.indexOf(step) + 1
+}
+
+const WIZARD_LABELS = ["Type", "Location", "Details", "Review"] as const
+
+function isActiveAlert(alert: EmergencyAlert | null) {
+  return Boolean(alert && activeEmergencyStatuses.includes(alert.status as (typeof activeEmergencyStatuses)[number]))
+}
+
+function useIsDesktop() {
+  const [desktop, setDesktop] = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia("(min-width: 1024px)").matches : true,
+  )
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)")
+    const apply = () => setDesktop(mq.matches)
+    apply()
+    mq.addEventListener("change", apply)
+    return () => mq.removeEventListener("change", apply)
+  }, [])
+  return desktop
+}
+
+function SosShell({
+  open,
+  expanded,
+  onExpandChange,
+  onClose,
+  title,
+  subtitle,
+  showBack,
+  onBack,
+  footer,
+  children,
+}: {
+  open: boolean
+  expanded: boolean
+  onExpandChange: (v: boolean) => void
+  onClose: () => void
+  title: string
+  subtitle?: string
+  showBack?: boolean
+  onBack?: () => void
+  footer?: ReactNode
+  children: ReactNode
+}) {
+  const isDesktop = useIsDesktop()
+
+  useEffect(() => {
+    if (!open) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+    return () => {
+      document.body.style.overflow = prev
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose()
+    }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [open, onClose])
+
+  if (typeof document === "undefined" || !open) return null
+
+  return createPortal(
+    <div className="fixed inset-0 z-[220]">
+      {/* Plain dark scrim only — no blur/blue (avoids lag) */}
+      <button
+        type="button"
+        className={cn(
+          "absolute inset-0 bg-black/60",
+          isDesktop && !expanded && "bg-black/45",
+        )}
+        aria-label="Close"
+        onClick={onClose}
+      />
+
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className={cn(
+          "z-10 flex flex-col overflow-hidden bg-[#07145f] text-white",
+          // Mobile: full screen
+          !isDesktop && "fixed inset-0 h-full w-full",
+          // Desktop dock (chat widget)
+          isDesktop &&
+            !expanded &&
+            "fixed bottom-6 right-6 h-[min(640px,calc(100dvh-3rem))] w-[min(400px,calc(100vw-2.5rem))] rounded-2xl border border-white/10 shadow-[0_16px_48px_rgba(0,0,0,0.45)]",
+          // Desktop expanded = right sidebar (full height)
+          isDesktop &&
+            expanded &&
+            "fixed inset-y-0 right-0 h-full w-[min(480px,100vw)] max-w-[100vw] border-l border-white/10 shadow-[-12px_0_40px_rgba(0,0,0,0.4)]",
+        )}
+      >
+        {/* Red urgency header */}
+        <header className="flex shrink-0 items-center gap-1 bg-gradient-to-r from-[#c41212] via-[#e11d2e] to-[#b91c1c] px-3 py-2.5 sm:px-4">
+          {showBack ? (
+            <button
+              type="button"
+              onClick={onBack}
+              className="flex size-10 shrink-0 items-center justify-center rounded-full text-white hover:bg-white/15"
+              aria-label="Back"
+            >
+              <ArrowLeftIcon className="size-5" strokeWidth={2.25} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex size-10 shrink-0 items-center justify-center rounded-full text-white hover:bg-white/15"
+              aria-label="Close"
+            >
+              <XIcon className="size-5" />
+            </button>
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[11px] font-bold tracking-wide text-white/80 uppercase">Emergency SOS</p>
+            <p className="truncate text-[15px] font-semibold text-white">{title}</p>
+            {subtitle ? <p className="truncate text-[12px] text-white/75">{subtitle}</p> : null}
+          </div>
+          {isDesktop ? (
+            <button
+              type="button"
+              onClick={() => onExpandChange(!expanded)}
+              className="flex size-10 shrink-0 items-center justify-center rounded-full text-white hover:bg-white/15"
+              aria-label={expanded ? "Collapse panel" : "Expand panel"}
+            >
+              {expanded ? <Minimize2Icon className="size-4" /> : <Maximize2Icon className="size-4" />}
+            </button>
+          ) : null}
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-[#07145f] px-4 py-4 sm:px-5">
+          {children}
+        </div>
+
+        {footer ? (
+          <div className="shrink-0 border-t border-white/10 bg-[#050e45] px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
+            {footer}
+          </div>
+        ) : null}
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
+  const [placement, setPlacement] = useState<SosPlacement>(() =>
+    normalizeSosPlacement(localStorage.getItem("eboses:sos-placement")),
+  )
+  const [shellOpen, setShellOpen] = useState(false)
+  const [shellMode, setShellMode] = useState<"wizard" | "tracking">("wizard")
+  const [expanded, setExpanded] = useState(false)
+  const [step, setStep] = useState<WizardStep>("category")
   const [emergency, setEmergency] = useState<EmergencyType | "">("")
   const [note, setNote] = useState("")
-  const [address, setAddress] = useState("")
-  const [location, setLocation] = useState<{
-    lat: number
-    lng: number
-    accuracy?: number | null
-    source: "gps" | "manual"
-  } | null>(null)
+  const [location, setLocation] = useState<SosLocationValue | null>(null)
   const [mediaFiles, setMediaFiles] = useState<File[]>([])
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
-  const [locating, setLocating] = useState(false)
-  const [locationOpen, setLocationOpen] = useState(false)
   const [checkingActive, setCheckingActive] = useState(false)
-  const [pendingDispatch, setPendingDispatch] = useState(false)
   const [dispatchCountdown, setDispatchCountdown] = useState(5)
-  const [trackingOpen, setTrackingOpen] = useState(false)
   const [trackingAlert, setTrackingAlert] = useState<EmergencyAlert | null>(null)
   const clientRequestIdRef = useRef(crypto.randomUUID())
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!suppressed) return
+    setShellOpen(false)
+  }, [suppressed])
 
   useEffect(() => {
     async function loadActive() {
@@ -82,14 +240,22 @@ export function SOSButton() {
         const active = await getActiveEmergency()
         if (active) {
           setTrackingAlert(active)
-          setTrackingOpen(true)
+          if (!suppressed && isActiveAlert(active)) {
+            setShellMode("tracking")
+            setShellOpen(true)
+          }
         }
       } catch {
-        // Tracking is helpful but should not block dashboard use.
+        /* non-blocking */
       }
     }
     void loadActive()
-  }, [])
+  }, [suppressed])
+
+  useEffect(() => {
+    const active = isActiveAlert(trackingAlert)
+    window.dispatchEvent(new CustomEvent("eboses:sos-active-change", { detail: { active } }))
+  }, [trackingAlert])
 
   useEffect(() => {
     function handlePlacement(event: Event) {
@@ -100,26 +266,54 @@ export function SOSButton() {
     return () => window.removeEventListener("eboses:sos-placement-change", handlePlacement)
   }, [])
 
-  const handleSosRef = useRef(handleSosButtonClick)
+  const handleSosRef = useRef(() => {})
+  const suppressedRef = useRef(suppressed)
+  suppressedRef.current = suppressed
+
+  async function handleSosButtonClick() {
+    if (isActiveAlert(trackingAlert)) {
+      setShellMode("tracking")
+      setShellOpen(true)
+      return
+    }
+    setCheckingActive(true)
+    try {
+      const active = await getActiveEmergency()
+      if (active && isActiveAlert(active)) {
+        setTrackingAlert(active)
+        setShellMode("tracking")
+        setShellOpen(true)
+        return
+      }
+      resetWizard()
+      setShellMode("wizard")
+      setShellOpen(true)
+    } catch {
+      resetWizard()
+      setShellMode("wizard")
+      setShellOpen(true)
+    } finally {
+      setCheckingActive(false)
+    }
+  }
   handleSosRef.current = handleSosButtonClick
 
   useEffect(() => {
     function handleOpenEmergency(event: Event) {
       const emergencyId = (event as CustomEvent<{ emergencyId?: number }>).detail?.emergencyId
       if (!emergencyId) return
-      void getEmergency(emergencyId).then((alert) => {
-        setTrackingAlert(alert)
-        setTrackingOpen(true)
-        setOpen(false)
-      }).catch(() => {
-        toast.error("Could not open emergency tracking.")
-      })
+      void getEmergency(emergencyId)
+        .then((alert) => {
+          setTrackingAlert(alert)
+          setShellMode("tracking")
+          setShellOpen(true)
+        })
+        .catch(() => toast.error("Could not open emergency tracking."))
     }
-
     function handleOpenSos() {
-      handleSosRef.current()
+      if (suppressedRef.current) return
+      void handleSosRef.current()
     }
-
     window.addEventListener("eboses:open-emergency-tracking", handleOpenEmergency)
     window.addEventListener("eboses:open-sos", handleOpenSos)
     return () => {
@@ -128,86 +322,90 @@ export function SOSButton() {
     }
   }, [])
 
-  function resetForm() {
+  function resetWizard() {
     clientRequestIdRef.current = crypto.randomUUID()
-    setStep("details")
+    setStep("category")
     setEmergency("")
     setNote("")
-    setAddress("")
     setLocation(null)
     setMediaFiles([])
     setFieldErrors({})
-    setPendingDispatch(false)
     setDispatchCountdown(5)
+    setSubmitting(false)
   }
 
-  function isActiveAlert(alert: EmergencyAlert | null) {
-    return Boolean(alert && activeEmergencyStatuses.includes(alert.status as (typeof activeEmergencyStatuses)[number]))
-  }
-
-  async function handleSosButtonClick() {
-    if (isActiveAlert(trackingAlert)) {
-      setTrackingOpen(true)
+  function closeShell() {
+    if (step === "countdown") {
+      setStep("review")
+      setDispatchCountdown(5)
+      toast.info("Alert cancelled before sending.")
       return
     }
+    setShellOpen(false)
+    setExpanded(false)
+    if (shellMode === "wizard") resetWizard()
+  }
 
-    setCheckingActive(true)
-    try {
-      const active = await getActiveEmergency()
-      if (active && isActiveAlert(active)) {
-        setTrackingAlert(active)
-        setTrackingOpen(true)
+  function goBack() {
+    if (shellMode === "tracking") {
+      setShellOpen(false)
+      return
+    }
+    if (step === "countdown") {
+      setStep("review")
+      setDispatchCountdown(5)
+      return
+    }
+    const idx = WIZARD_STEPS.indexOf(step)
+    if (idx <= 0) {
+      closeShell()
+      return
+    }
+    setStep(WIZARD_STEPS[idx - 1]!)
+  }
+
+  function goNext() {
+    if (step === "category") {
+      if (!emergency) {
+        setFieldErrors({ type: "Select the emergency type." })
         return
       }
-      setStep("details")
-      setOpen(true)
-    } catch {
-      setOpen(true)
-    } finally {
-      setCheckingActive(false)
-    }
-  }
-
-  function captureLocation() {
-    if (!navigator.geolocation) {
-      setFieldErrors((current) => ({ ...current, location: "Location is not supported by this browser." }))
+      setFieldErrors({})
+      setStep("location")
       return
     }
-    setLocating(true)
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude, longitude, accuracy } = pos.coords
-        setLocation({ lat: latitude, lng: longitude, accuracy, source: "gps" })
-        setAddress((current) => current || `Lat: ${latitude.toFixed(5)}, Lng: ${longitude.toFixed(5)}`)
-        setFieldErrors((current) => ({ ...current, location: "" }))
-        setLocating(false)
-      },
-      () => {
-        setFieldErrors((current) => ({ ...current, location: "Allow location access or enter/pin a location before sending SOS." }))
-        setLocating(false)
-      },
-      { enableHighAccuracy: true, timeout: 10000 },
+    if (step === "location") {
+      if (!isSosLocationReady(location)) {
+        setFieldErrors({ location: "Confirm a street location on the map." })
+        return
+      }
+      setFieldErrors({})
+      setStep("details")
+      return
+    }
+    if (step === "details") {
+      setStep("review")
+      return
+    }
+    if (step === "review") {
+      setDispatchCountdown(5)
+      setStep("countdown")
+    }
+  }
+
+  function handleMediaSelection(files: FileList | null) {
+    if (!files) return
+    const selected = Array.from(files).slice(0, 2)
+    const invalid = selected.find(
+      (file) => !["image/jpeg", "image/png"].includes(file.type) || file.size > 2 * 1024 * 1024,
     )
-  }
-
-  function validate() {
-    const errors: Record<string, string> = {}
-    if (!emergency) errors.type = "Select the emergency type."
-    if (!location) errors.location = "Confirm your location before sending SOS."
-    setFieldErrors(errors)
-    return Object.keys(errors).length === 0
-  }
-
-  function handleMediaSelection(files: File[]) {
-    const selected = files.slice(0, 2)
-    const invalid = selected.find((file) => !["image/jpeg", "image/png"].includes(file.type) || file.size > 2 * 1024 * 1024)
     if (invalid) {
       setMediaFiles([])
-      setFieldErrors((current) => ({ ...current, media: `${invalid.name}: use a JPG or PNG file up to 2 MB.` }))
+      setFieldErrors((c) => ({ ...c, media: `${invalid.name}: use JPG/PNG up to 2 MB.` }))
       return
     }
     setMediaFiles(selected)
-    setFieldErrors((current) => ({ ...current, media: "" }))
+    setFieldErrors((c) => ({ ...c, media: "" }))
   }
 
   async function submitEmergency() {
@@ -220,94 +418,106 @@ export function SOSButton() {
       formData.append("note", note)
       formData.append("latitude", location.lat.toFixed(7))
       formData.append("longitude", location.lng.toFixed(7))
-      formData.append("location_source", location.source)
+      formData.append("location_source", location.source === "gps" ? "gps" : "manual_pin")
       if (location.accuracy != null) formData.append("location_accuracy", String(location.accuracy))
-      formData.append("address", address)
-      for (const file of mediaFiles) {
-        formData.append("media", file)
-      }
+      const addr = location.address || location.addressPrimary
+      formData.append("address", addr.slice(0, 255))
+      for (const file of mediaFiles) formData.append("media", file)
+
       const alert = await createEmergency(formData)
       setTrackingAlert(alert)
-      setTrackingOpen(true)
-      setOpen(false)
-      resetForm()
+      setShellMode("tracking")
+      resetWizard()
       toast.success("Emergency alert sent")
-      if (alert.media_warnings.length) toast.warning(alert.media_warnings[0])
+      if (alert.media_warnings?.length) toast.warning(alert.media_warnings[0])
     } catch (error) {
       try {
         const active = await getActiveEmergency()
         if (active && isActiveAlert(active)) {
           setTrackingAlert(active)
-          setTrackingOpen(true)
-          setOpen(false)
-          resetForm()
+          setShellMode("tracking")
+          resetWizard()
           toast.info("Your active emergency is already open.")
           return
         }
       } catch {
-        // Keep the original submission error below.
+        /* keep error */
       }
-      toast.error(error instanceof Error ? error.message : "Could not send emergency alert. Try again.")
+      setStep("review")
+      toast.error(error instanceof Error ? error.message : "Could not send emergency alert.")
     } finally {
       setSubmitting(false)
-      setPendingDispatch(false)
       setDispatchCountdown(5)
     }
   }
 
-  function handleSubmit() {
-    if (!validate()) return
-    setStep("review")
-  }
-
-  function startPendingDispatch() {
-    setPendingDispatch(true)
-    setDispatchCountdown(5)
-  }
-
-  function cancelPendingDispatch() {
-    setPendingDispatch(false)
-    setDispatchCountdown(5)
-    toast.info("Emergency alert cancelled before sending.")
-  }
-
-  function closeDialog() {
-    if (pendingDispatch) cancelPendingDispatch()
-    setOpen(false)
-  }
-
-  function goBack() {
-    if (pendingDispatch) {
-      cancelPendingDispatch()
-      return
-    }
-    if (step === "review") {
-      setStep("details")
-      return
-    }
-    setOpen(false)
-  }
-
   useEffect(() => {
-    if (!pendingDispatch) return
+    if (step !== "countdown") return
     if (dispatchCountdown <= 0) {
       void submitEmergency()
       return
     }
-    const timeout = window.setTimeout(() => setDispatchCountdown((current) => current - 1), 1000)
-    return () => window.clearTimeout(timeout)
-  }, [pendingDispatch, dispatchCountdown])
+    const t = window.setTimeout(() => setDispatchCountdown((c) => c - 1), 1000)
+    return () => window.clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, dispatchCountdown])
+
+  const hasActiveEmergency = isActiveAlert(trackingAlert)
+  const typeMeta = emergencies.find((e) => e.value === emergency)
+
+  const wizardFooter =
+    shellMode === "wizard" && step !== "countdown" ? (
+      <div className="flex gap-2">
+        {step !== "category" ? (
+          <button
+            type="button"
+            onClick={goBack}
+            className="h-11 flex-1 rounded-full border border-white/20 bg-white/10 text-[14px] font-semibold text-white hover:bg-white/15"
+          >
+            Back
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={goNext}
+          className="h-11 flex-[1.4] rounded-full bg-[#ff6a1a] text-[14px] font-semibold text-white hover:bg-[#e85f17]"
+        >
+          {step === "details" ? "Skip / Next" : step === "review" ? "Submit" : "Next"}
+        </button>
+      </div>
+    ) : shellMode === "wizard" && step === "countdown" ? (
+      <button
+        type="button"
+        onClick={() => {
+          setStep("review")
+          setDispatchCountdown(5)
+          toast.info("Alert cancelled before sending.")
+        }}
+        disabled={submitting}
+        className="h-11 w-full rounded-full border border-white/25 bg-white text-[14px] font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
+      >
+        {submitting ? "Sending…" : "Cancel before send"}
+      </button>
+    ) : null
 
   return (
     <>
-      <style>{`@keyframes sos-pulse { 0%,100% { box-shadow: 0 10px 24px rgba(248,69,63,0.32); } 50% { box-shadow: 0 10px 24px rgba(248,69,63,0.32), 0 0 0 14px rgba(248,69,63,0.10); } } .sos-glow { animation: sos-pulse 2s ease-in-out infinite; }`}</style>
-      {/* Floating SOS quick alert */}
+      <style>{`
+        @keyframes sos-pulse {
+          0%, 100% { box-shadow: 0 10px 24px rgba(248, 69, 63, 0.32); }
+          50% { box-shadow: 0 10px 24px rgba(248, 69, 63, 0.32), 0 0 0 14px rgba(248, 69, 63, 0.12); }
+        }
+        .sos-glow { animation: sos-pulse 1.6s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) {
+          .sos-glow { animation: none; }
+        }
+      `}</style>
+
       <div
         className={cn(
           "fixed z-40",
-          placement === "inline" && "bottom-26 right-5 lg:bottom-8 lg:right-8",
-          placement === "sidebar" && "bottom-26 right-5 lg:hidden",
-          placement === "compact" && "bottom-26 right-5 lg:bottom-8 lg:right-8",
+          suppressed || placement === "sidebar" ? "hidden" : "hidden lg:block",
+          (placement === "inline" || placement === "compact") && "lg:bottom-8 lg:right-8",
         )}
       >
         <button
@@ -315,367 +525,248 @@ export function SOSButton() {
           onClick={() => void handleSosButtonClick()}
           disabled={checkingActive}
           className={cn(
-            "sos-glow group flex items-center bg-gradient-to-b from-[#ff625a] to-[#f23b35] text-white transition-all hover:-translate-y-0.5 hover:shadow-[0_14px_28px_rgba(248,69,63,0.38)] active:translate-y-0 active:scale-[0.98] disabled:cursor-wait disabled:opacity-80",
-            placement === "inline" && "gap-2 rounded-l-full rounded-br-md rounded-tr-full py-1.5 pl-1.5 pr-3 md:gap-3 md:py-3 md:pl-3 md:pr-5",
-            placement === "sidebar" && "size-14 justify-center rounded-full p-0",
-            placement === "compact" && "size-14 justify-center rounded-full p-0 md:size-20",
+            "group flex items-center gap-2 rounded-full bg-gradient-to-b from-[#ff625a] to-[#f23b35] py-2 pl-2 pr-4 text-white shadow-[0_10px_24px_rgba(248,69,63,0.28)] transition-all hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98] disabled:cursor-wait disabled:opacity-80",
+            hasActiveEmergency && "sos-glow",
           )}
-          aria-label="Open SOS quick alert"
+          aria-label="SOS"
         >
-          <span className={cn("flex shrink-0 items-center justify-center rounded-full", placement === "compact" || placement === "sidebar" ? "size-12" : "size-8 md:size-11")}>
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-full">
             {checkingActive ? (
-              <Loader2Icon className="size-4 md:size-6 animate-spin" />
+              <Loader2Icon className="size-5 animate-spin" />
             ) : (
-              <PhoneIcon className="size-5 md:size-7" fill="currentColor" />
+              <PhoneIcon className="size-5" fill="currentColor" />
             )}
           </span>
-          <span className={cn("text-left leading-none", (placement === "compact" || placement === "sidebar") && "sr-only")}>
-            <span className="block text-lg md:text-2xl font-extrabold tracking-wide">SOS</span>
-            <span className="block text-[10px] font-semibold text-white/90 md:text-xs">Quick alert</span>
+          <span className="text-left leading-none">
+            <span className="block text-lg font-extrabold tracking-wide">SOS</span>
           </span>
         </button>
       </div>
 
-      <Dialog open={open} onClose={closeDialog} maxW="max-w-6xl">
-        <DialogBody className="bg-white px-5 py-5 md:px-7 md:py-6">
-            <div className="flex items-start justify-between gap-6">
-              <div>
-                <div className="flex items-start gap-3">
-                  <button
-                    type="button"
-                    onClick={goBack}
-                    className="inline-flex items-center gap-2 text-sm font-semibold text-[#2447b3] transition-colors hover:text-[#07145f]"
-                  >
-                    <ArrowLeftIcon className="size-4" />
-                    {step === "review" && !pendingDispatch ? "Details" : "Back"}
-                  </button>
-                  <div className="inline-flex items-center gap-2 rounded-full bg-[#fff1ea] px-3 py-1.5 text-xs font-bold text-[#ff5003]">
-                    <PhoneIcon className="size-3.5 rotate-[135deg]" fill="currentColor" />
-                    EMERGENCY SOS
-                  </div>
-                </div>
-                <h1 className="mt-5 font-heading text-3xl font-bold text-[#07145f]">Send Emergency Alert</h1>
-                <p className="mt-2 text-sm font-medium text-[#324270]">
-                  Send an immediate alert to our response team.<br />Help will be dispatched to your location as soon as responders are available.
-                </p>
-              </div>
-              <img src="/contents/emergency-header.png" alt="" className="hidden w-80 shrink-0 self-center object-contain md:block" />
-            </div>
-
-          <div className="relative mx-auto grid w-full max-w-lg grid-cols-3 gap-2 py-1">
-            <div className={cn("absolute left-[30%] right-[62%] top-[13px] h-0.1", step === "review" || pendingDispatch ? "bg-[#07145f]" : "bg-[#dfe7f5]")} />
-            <div className={cn("absolute left-[62%] right-[30%] top-[13px] h-0.1", pendingDispatch ? "bg-[#07145f]" : "bg-[#dfe7f5]")} />
-            {[
-              { key: "details", label: "Details" },
-              { key: "review", label: "Review" },
-              { key: "submit", label: "Submit" },
-            ].map((item, index) => {
-              const isDone = item.key === "details" ? step === "review" || pendingDispatch : item.key === "review" ? pendingDispatch : false
-              const isCurrent = item.key === "details" ? step === "details" && !pendingDispatch : item.key === "review" ? step === "review" && !pendingDispatch : pendingDispatch
-              return (
-                <div key={item.key} className="relative z-10 flex flex-col items-center text-center">
-                  <div
-                    className={cn(
-                      "flex size-7 items-center justify-center rounded-full border text-[11px] font-extrabold",
-                      isDone && "border-[#07145f] bg-[#07145f] text-white",
-                      isCurrent && !isDone && "border-[#ff6a1a] bg-[#ff6a1a] text-white",
-                      !isDone && !isCurrent && "border-[#cbd8ee] bg-white text-[#68739c]",
-                    )}
-                  >
-                    {isDone ? <CheckIcon className="size-4" /> : index + 1}
-                  </div>
-                  <p className="mt-2 text-[11px] font-extrabold text-[#07145f]">{item.label}</p>
-                </div>
-              )
-            })}
-          </div>
-
-          {pendingDispatch ? (
-            <div className="flex min-h-[420px] items-center justify-center">
-              <div className="w-full max-w-md rounded-2xl border border-red-200 bg-red-50 p-6 text-center shadow-sm">
-                <div className="mx-auto flex size-24 items-center justify-center rounded-full bg-red-600 text-4xl font-black text-white shadow-[0_0_0_12px_rgba(220,38,38,0.10)]">
-                  {dispatchCountdown}
-                </div>
-                <h2 className="mt-6 text-2xl font-black text-[#07145f]">Sending alert in {dispatchCountdown}s</h2>
-                <p className="mt-2 text-sm leading-6 text-red-800">
-                  Cancel now if this was triggered by mistake. Once sent, barangay responders will receive your location and emergency details.
-                </p>
-                <p className="mt-4 rounded-xl bg-white px-4 py-3 text-xs font-bold text-[#07145f]">
-                  For life-threatening emergencies, call 911 immediately.
-                </p>
-              </div>
-            </div>
-          ) : step === "review" ? (
-            <div className="grid gap-6 lg:grid-cols-[1fr_0.85fr]">
-              <section className="rounded-2xl border border-slate-200 bg-white p-5">
-                <div className="flex items-start gap-3">
-                  <div className="flex size-11 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-700">
-                    <PhoneIcon className="size-5 rotate-[135deg]" fill="currentColor" />
-                  </div>
-                  <div>
-                    <p className="text-xs font-black uppercase tracking-wide text-red-600">Review emergency details</p>
-                    <h2 className="mt-1 text-xl font-black text-[#07145f]">{emergencies.find((item) => item.value === emergency)?.label ?? "Emergency"} alert</h2>
-                    <p className="mt-1 text-sm leading-6 text-[#43507f]">Check the details before sending. A short cancel window appears next.</p>
-                  </div>
-                </div>
-
-                <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-xl border border-slate-200 bg-[#f8fafc] p-4">
-                    <p className="text-xs font-bold uppercase text-[#68739c]">Emergency type</p>
-                    <p className="mt-1 text-sm font-black text-[#07145f]">{emergencies.find((item) => item.value === emergency)?.label ?? "Not selected"}</p>
-                  </div>
-                  <div className="rounded-xl border border-slate-200 bg-[#f8fafc] p-4">
-                    <p className="text-xs font-bold uppercase text-[#68739c]">Evidence</p>
-                    <p className="mt-1 text-sm font-black text-[#07145f]">{mediaFiles.length ? `${mediaFiles.length} file${mediaFiles.length > 1 ? "s" : ""} attached` : "No files attached"}</p>
-                  </div>
-                </div>
-
-                <div className="mt-3 rounded-xl border border-slate-200 bg-[#f8fafc] p-4">
-                  <p className="text-xs font-bold uppercase text-[#68739c]">Location</p>
-                  <div className="mt-2 flex items-start gap-2">
-                    <MapPinIcon className="mt-0.5 size-4 shrink-0 text-[#ff6a1a]" />
-                    <div className="min-w-0">
-                      <p className="text-sm font-bold text-[#07145f]">{address || "Pinned location"}</p>
-                      {location ? <p className="mt-1 text-xs text-[#68739c]">{location.lat.toFixed(5)}, {location.lng.toFixed(5)}</p> : null}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-3 rounded-xl border border-slate-200 bg-[#f8fafc] p-4">
-                  <p className="text-xs font-bold uppercase text-[#68739c]">Note</p>
-                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[#07145f]">{note.trim() || "No note added. Responders will use your emergency type and pinned location."}</p>
-                </div>
-              </section>
-
-              <aside className="space-y-3">
-                <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
-                  <div className="flex items-start gap-3">
-                    <AlertTriangleIcon className="mt-0.5 size-5 shrink-0 text-red-600" />
-                    <div>
-                      <p className="text-sm font-black text-red-800">Emergency privacy notice</p>
-                      <p className="mt-2 text-xs leading-5 text-red-800">Your exact location, note, and attached evidence are shared only with authorized barangay responders and officials.</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
-                  <p className="text-sm font-black text-amber-900">Before sending</p>
-                  <ul className="mt-3 space-y-2 text-xs leading-5 text-amber-900">
-                    <li>Make sure the pin is near the actual emergency.</li>
-                    <li>Only attach media if it is safe to do so.</li>
-                    <li>For life-threatening emergencies, call 911 immediately.</li>
-                  </ul>
-                </div>
-              </aside>
-            </div>
-          ) : (
-
-          <div className="grid gap-7 xl:grid-cols-[minmax(360px,0.95fr)_minmax(460px,1.15fr)]">
-            <section className="space-y-7">
-              <div>
-              <h2 className="text-base font-bold text-[#07145f]">1. What's the emergency?</h2>
-              <div className="mt-4 grid grid-cols-2 gap-3">
-                {emergencies.map((e) => {
-                  const selected = emergency === e.value
-                  const colors = emergencyColorMap[e.color]
-                  return (
-                    <button
-                      key={e.label}
-                      type="button"
-                      disabled={pendingDispatch || submitting}
-                      onClick={() => {
-                        setEmergency(e.value)
-                        setFieldErrors((current) => ({ ...current, type: "" }))
-                      }}
-                      aria-pressed={selected}
-                      aria-invalid={Boolean(fieldErrors.type)}
+      <SosShell
+        open={shellOpen && shellMode === "wizard"}
+        expanded={expanded}
+        onExpandChange={setExpanded}
+        onClose={closeShell}
+        title={stepTitle(step)}
+        subtitle={
+          step === "countdown"
+            ? "Tap cancel if this was accidental"
+            : `Step ${Math.min(stepIndex(step), 4)} of 4 · Emergency SOS`
+        }
+        showBack={step !== "category" && step !== "countdown"}
+        onBack={goBack}
+        footer={wizardFooter}
+      >
+        {step !== "countdown" ? (
+          <div className="mb-5">
+            <div className="mb-3 flex items-center justify-between gap-1">
+              {WIZARD_LABELS.map((label, i) => {
+                const n = i + 1
+                const current = Math.min(stepIndex(step), 4)
+                const done = n < current
+                const active = n === current
+                return (
+                  <div key={label} className="flex min-w-0 flex-1 flex-col items-center gap-1.5">
+                    <span
                       className={cn(
-                        "group flex min-h-[130px] flex-col items-center justify-center gap-3 rounded-xl border bg-white p-4 text-center transition-colors",
-                        selected
-                          ? cn(colors.border, colors.bg, colors.text, "shadow-[0_0_0_1px_rgba(255,106,26,0.25)]")
-                          : fieldErrors.type
-                            ? "border-destructive text-destructive"
-                            : "border-slate-200 text-[#07145f] hover:border-[#ff6a1a]/60",
+                        "flex size-7 items-center justify-center rounded-full text-[11px] font-bold",
+                        done && "bg-emerald-500 text-white",
+                        active && "bg-[#ff6a1a] text-white shadow-[0_0_0_3px_rgba(255,106,26,0.28)]",
+                        !done && !active && "border border-white/25 bg-transparent text-white/45",
                       )}
                     >
-                      <div className={cn("flex size-12 items-center justify-center rounded-full transition-colors", selected ? colors.iconBg : "bg-[#eef3ff]")}>
-                        <img src={e.img} alt="" className="h-14 w-14 object-contain" />
-                      </div>
-                      <span className="text-sm font-bold">{e.label}</span>
-                      <span className="text-xs leading-5 text-[#43507f]">{e.desc}</span>
-                    </button>
-                  )
-                })}
-              </div>
-              {fieldErrors.type ? <p className="mt-2 text-xs text-destructive">{fieldErrors.type}</p> : null}
-            </div>
-
-            <div>
-              <h2 className="text-base font-bold text-[#07145f]">2. Emergency details</h2>
-              <label htmlFor="sos-note" className="mt-4 block text-sm font-bold text-[#07145f]">Note</label>
-              <textarea
-                id="sos-note"
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-                disabled={pendingDispatch || submitting}
-                placeholder="Describe what happened, who needs help, and any visible risks nearby."
-                className="mt-2 min-h-[180px] w-full resize-none rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-[#07145f] outline-none transition-colors placeholder:text-[#8b96b8] focus:border-[#ff6a1a] focus:ring-2 focus:ring-[#ff6a1a]/15"
-              />
-              <p className="mt-3 flex items-center justify-center gap-1.5 text-xs font-medium text-[#68739c]">
-                <LightbulbIcon className="size-3.5 text-[#2447b3]" />
-                Keep it short if urgent. Location and emergency type are the required details.
-              </p>
-            </div>
-          </section>
-
-          <section className="space-y-6">
-            <div>
-              <h2 className="flex items-center justify-between text-base font-bold text-[#07145f]">
-                <span className="flex items-center gap-2">
-                  3. Add photos or documents
-                  <div className="relative group">
-                    <InfoIcon className="size-4 text-[#68739c] cursor-help" />
-                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 hidden group-hover:block w-56 rounded-lg bg-[#07145f] p-3 text-xs leading-5 text-white shadow-lg z-10">
-                      <p className="font-bold mb-1">File tips</p>
-                      <ul className="list-disc space-y-1 pl-4">
-                        <li>Clear photos help us understand the issue.</li>
-                        <li>Include documents if available.</li>
-                        <li>Avoid personal or sensitive information.</li>
-                      </ul>
-                    </div>
+                      {done ? <CheckIcon className="size-3.5" strokeWidth={3} /> : n}
+                    </span>
+                    <span
+                      className={cn(
+                        "truncate text-[10px] font-semibold",
+                        active ? "text-white" : done ? "text-white/70" : "text-white/40",
+                      )}
+                    >
+                      {label}
+                    </span>
                   </div>
-                </span>
-                <span className="text-xs font-semibold text-[#68739c]">Help Responders</span>
-              </h2>
-              <label htmlFor="sos-media" className="mt-4 flex min-h-[168px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-[#9eb7e6] bg-white p-5 text-center transition-colors hover:border-[#ff6a1a] hover:bg-[#fff8f3]">
-                <CloudUploadIcon className="size-11 text-[#07145f]" strokeWidth={2} />
-                <p className="mt-3 text-sm font-semibold text-[#43507f]">Upload emergency evidence</p>
-                <p className="mt-1 text-xs text-[#8b96b8]">Optional, only if safe to attach</p>
-                <span className="mt-1 text-sm font-semibold text-[#43507f]">
-                  {mediaFiles.length ? `${mediaFiles.length} selected` : "Browse files"}
-                </span>
-                <p className="mt-3 text-xs text-[#8b96b8]">JPG or PNG, up to 2 MB each</p>
-                <input
-                  id="sos-media"
-                  type="file"
-                  accept=".png,.jpg,.jpeg,image/png,image/jpeg"
-                  multiple
-                  className="sr-only"
-                  onChange={(event) => handleMediaSelection(Array.from(event.target.files ?? []))}
-                  disabled={pendingDispatch || submitting}
-                />
-              </label>
-              {fieldErrors.media ? <p className="mt-2 text-xs font-semibold text-red-700" role="alert">{fieldErrors.media}</p> : null}
+                )
+              })}
             </div>
+            <div className="h-1 overflow-hidden rounded-full bg-white/15">
+              <div
+                className="h-full rounded-full bg-[#ff6a1a] transition-all duration-300"
+                style={{ width: `${(Math.min(stepIndex(step), 4) / 4) * 100}%` }}
+              />
+            </div>
+          </div>
+        ) : null}
 
-            <div>
-              <h2 className="text-base font-bold text-[#07145f]">4. Where are you?</h2>
-              <div className="mt-4 flex items-center gap-2">
-                <div className="relative flex-1">
-                  <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-[#68739c] pointer-events-none" />
-                  <input
-                    type="text"
-                    value={address}
-                    onChange={(event) => setAddress(event.target.value)}
-                    disabled={pendingDispatch || submitting}
-                    placeholder="Search location"
-                    className="h-11 w-full rounded-lg border border-slate-200 bg-white pl-9 pr-4 text-sm outline-none transition-colors placeholder:text-[#8b96b8] focus:border-[#ff6a1a] focus:ring-2 focus:ring-[#ff6a1a]/15"
-                  />
-                </div>
+        {step === "category" ? (
+          <div className="space-y-3">
+            <p className="text-[14px] leading-6 text-white/75">
+              Pick the closest match. Barangay responders will verify before dispatch.
+            </p>
+            <div className="space-y-2">
+              {emergencies.map((item) => {
+                const selected = emergency === item.value
+                return (
+                  <button
+                    key={item.value}
+                    type="button"
+                    onClick={() => {
+                      setEmergency(item.value)
+                      setFieldErrors((c) => ({ ...c, type: "" }))
+                    }}
+                    className={cn(
+                      "flex w-full items-center gap-3 rounded-xl border px-3.5 py-3.5 text-left transition-colors",
+                      selected
+                        ? "border-[#ff6a1a] bg-white/15 ring-1 ring-[#ff6a1a]/50"
+                        : "border-white/15 bg-white/5 hover:bg-white/10",
+                    )}
+                  >
+                    <img src={item.img} alt="" className="size-11 shrink-0 rounded-lg bg-white object-contain p-1" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[15px] font-semibold text-white">{item.label}</span>
+                      <span className="mt-0.5 block text-[13px] text-white/60">{item.desc}</span>
+                    </span>
+                    <span
+                      className={cn(
+                        "flex size-6 shrink-0 items-center justify-center rounded-full border",
+                        selected ? "border-[#ff6a1a] bg-[#ff6a1a] text-white" : "border-white/30 bg-transparent",
+                      )}
+                    >
+                      {selected ? <CheckIcon className="size-3.5" strokeWidth={3} /> : null}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            {fieldErrors.type ? <p className="text-[13px] font-medium text-red-300">{fieldErrors.type}</p> : null}
+          </div>
+        ) : null}
+
+        {step === "location" ? (
+          <div className="flex min-h-[360px] flex-col">
+            <p className="mb-3 text-[14px] leading-6 text-white/75">
+              GPS first — drag the map so help goes to the right pin.
+            </p>
+            <SosLocationStep value={location} onChange={setLocation} className="min-h-[280px]" />
+            {fieldErrors.location ? (
+              <p className="mt-2 text-[13px] font-medium text-red-300">{fieldErrors.location}</p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {step === "details" ? (
+          <div className="space-y-4">
+            <p className="text-[14px] leading-6 text-white/75">
+              Optional — a photo or note helps responders prepare.
+            </p>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/jpeg,image/png"
+              multiple
+              className="hidden"
+              onChange={(e) => handleMediaSelection(e.target.files)}
+            />
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/10 text-[14px] font-semibold text-white hover:bg-white/15"
+            >
+              <CameraIcon className="size-4" />
+              {mediaFiles.length ? `${mediaFiles.length} photo(s) selected` : "Add photo"}
+            </button>
+            {mediaFiles.length ? (
+              <div className="flex flex-wrap gap-2">
+                {mediaFiles.map((file) => (
+                  <span
+                    key={file.name}
+                    className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[12px] font-medium text-white/90"
+                  >
+                    {file.name}
+                  </span>
+                ))}
                 <button
                   type="button"
-                  onClick={captureLocation}
-                  disabled={locating || pendingDispatch || submitting}
-                  className="flex h-11 shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-[#43507f] transition-colors hover:bg-[#fff8f3] hover:border-[#ff6a1a] hover:text-[#ff6a1a] disabled:opacity-60"
+                  onClick={() => setMediaFiles([])}
+                  className="text-[12px] font-semibold text-white/60 underline"
                 >
-                  <LocateFixedIcon className="size-4" />
-                  {locating ? "..." : "Locate me"}
+                  Clear
                 </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setLocationOpen(true)}
-                disabled={pendingDispatch || submitting}
-                className={cn(
-                  "mt-4 flex w-full items-center gap-3 rounded-xl border bg-white px-4 py-3 text-left transition-colors hover:border-[#ff6a1a]/50",
-                  fieldErrors.location ? "border-destructive" : "border-slate-200",
-                )}
-              >
-                <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#fff1ea] text-[#ff6a1a]">
-                  <MapPinIcon className="size-5" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-bold text-[#07145f]">
-                    {location ? "Pinned location" : "Open map to pin location"}
-                  </span>
-                  <span className="mt-0.5 block truncate text-xs font-medium text-[#68739c]">
-                    {address || "Move the map, then tap Use this location"}
-                  </span>
-                </span>
-              </button>
-              {fieldErrors.location ? <p className="mt-2 text-xs text-destructive">{fieldErrors.location}</p> : null}
-              <div className="mt-4 flex items-center justify-start gap-1.5 text-xs text-[#68739c] md:justify-center">
-                <InfoIcon className="size-3.5 shrink-0 text-[#2447b3]" />
-                <span>Open the map, move the pin, and confirm with Use this location.</span>
-              </div>
+            ) : null}
+            {fieldErrors.media ? <p className="text-[13px] font-medium text-red-300">{fieldErrors.media}</p> : null}
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Quick note for responders (optional)"
+              rows={4}
+              className="w-full resize-none rounded-xl border border-white/15 bg-black/25 px-3.5 py-3 text-[14px] text-white outline-none placeholder:text-white/40 focus:border-[#ff6a1a]"
+            />
+          </div>
+        ) : null}
+
+        {step === "review" ? (
+          <div className="space-y-3">
+            <div className="rounded-xl border border-white/15 bg-white/10 p-4">
+              <p className="text-[11px] font-semibold tracking-wide text-white/55 uppercase">Emergency type</p>
+              <p className="mt-1 text-[15px] font-semibold text-white">{typeMeta?.label ?? "—"}</p>
             </div>
-          </section>
+            <div className="rounded-xl border border-white/15 bg-white/10 p-4">
+              <p className="text-[11px] font-semibold tracking-wide text-white/55 uppercase">Location</p>
+              <p className="mt-1 text-[15px] font-semibold text-white">
+                {location?.addressPrimary || location?.address || "—"}
+              </p>
+            </div>
+            <div className="rounded-xl border border-white/15 bg-white/10 p-4">
+              <p className="text-[11px] font-semibold tracking-wide text-white/55 uppercase">Evidence</p>
+              <p className="mt-1 text-[15px] font-semibold text-white">
+                {mediaFiles.length ? `${mediaFiles.length} photo(s)` : "None"}
+              </p>
+              {note.trim() ? <p className="mt-2 text-[14px] leading-6 text-white/75">{note.trim()}</p> : null}
+            </div>
+            <div className="rounded-xl border border-amber-400/40 bg-amber-500/15 px-4 py-3 text-[13px] leading-5 text-amber-100">
+              False or misleading alerts are logged. Repeated abuse can suspend your account. After send, this alert cannot be cancelled.
+            </div>
+          </div>
+        ) : null}
 
-          <div className="flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2.5 md:col-span-2">
-            <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-amber-500" />
-            <p className="text-xs leading-relaxed text-amber-800">
-              False or misleading alerts are logged and may lead to account suspension or legal consequences.
+        {step === "countdown" ? (
+          <div className="flex min-h-[320px] flex-col items-center justify-center px-4 text-center">
+            <div className="relative flex size-36 items-center justify-center">
+              <span className="absolute inset-0 rounded-full bg-red-500/15" />
+              <span className="absolute inset-3 rounded-full bg-red-500/20" />
+              <p className="relative text-6xl font-black tabular-nums text-red-300">
+                {submitting ? "…" : dispatchCountdown}
+              </p>
+            </div>
+            <p className="mt-5 text-[12px] font-bold tracking-wide text-white/55 uppercase">
+              {submitting ? "Sending alert…" : "Broadcasting in"}
             </p>
+            <p className="mt-2 max-w-xs text-[15px] font-medium text-white">
+              Tap cancel if you sent this by accident.
+            </p>
+            <div className="mt-6 w-full max-w-xs rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-left text-[12px] text-white/70">
+              <p>
+                <span className="font-semibold text-white">{typeMeta?.label ?? "Emergency"}</span>
+                {" · "}
+                {location?.addressPrimary || location?.address || "Pinned location"}
+              </p>
+              <p className="mt-1 text-white/45">After send, this alert cannot be cancelled.</p>
+            </div>
           </div>
-          </div>
-          )}
-        </DialogBody>
+        ) : null}
+      </SosShell>
 
-        <DialogFooter className="bg-white">
-          <div className="flex w-full flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-            <button
-              type="button"
-              onClick={pendingDispatch ? cancelPendingDispatch : goBack}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg px-6 text-sm font-bold text-[#2447b3] transition-colors hover:bg-[#eef3ff] active:scale-[0.98]"
-            >
-              {pendingDispatch ? "Cancel alert" : step === "review" ? "Back to details" : "Cancel"}
-            </button>
-            <button
-              type="button"
-              disabled={submitting || pendingDispatch}
-              onClick={step === "details" ? () => void handleSubmit() : startPendingDispatch}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#ff6a1a] px-6 text-sm font-bold text-white transition-colors hover:bg-[#e85f17] active:scale-[0.98] disabled:opacity-70"
-            >
-              {submitting ? <Loader2Icon className="size-4 animate-spin" /> : null}
-              {submitting ? "Sending" : pendingDispatch ? `Sending in ${dispatchCountdown}s` : step === "details" ? "Next: Review" : "Send SOS"}
-              <img src="/contents/sos-icon-btn.png" alt="" className="ml-1.5 h-7 w-auto shrink-0" />
-            </button>
-          </div>
-        </DialogFooter>
-      </Dialog>
-
-      <Suspense fallback={null}>
-        <LocationPickerModal
-          open={locationOpen}
-          onClose={() => setLocationOpen(false)}
-          initialLat={location?.lat}
-          initialLng={location?.lng}
-          initialAddress={address}
-          onConfirm={(payload) => {
-            setLocation({
-              lat: payload.lat,
-              lng: payload.lng,
-              accuracy: null,
-              source: payload.source === "gps" ? "gps" : "manual",
-            })
-            setAddress(payload.address)
-            setFieldErrors((prev) => ({ ...prev, location: "" }))
-          }}
-        />
-      </Suspense>
-
+      {/* Tracking reuses existing sheet for full lifecycle (cancel, appeal, live map) */}
       <EmergencyTrackingSheet
-        open={trackingOpen}
-        onOpenChange={setTrackingOpen}
+        open={shellOpen && shellMode === "tracking"}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShellOpen(false)
+            setShellMode("wizard")
+          }
+        }}
         initialAlert={trackingAlert}
         onAlertChange={setTrackingAlert}
       />

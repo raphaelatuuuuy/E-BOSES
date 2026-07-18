@@ -31,6 +31,95 @@ class MapGeometry(models.Model):
         return f"{self.name} ({self.osm_type}{self.osm_id})"
 
 
+class MapServicePoi(models.Model):
+    """
+    Admin-managed map service markers (hall, tanod, clinic, etc.).
+
+    Merge rules with OpenStreetMap (see apps.geo_services.collect_service_pois):
+    - Active admin rows always appear on the Services layer.
+    - If osm_type + osm_id are set on an active row, that OSM feature is replaced
+      by the admin record (custom name/coords).
+    - If osm_type + osm_id are set and is_active=False, that OSM feature is hidden.
+    """
+
+    class Source(models.TextChoices):
+        ADMIN = "admin", "Admin managed"
+        CURATED = "curated", "Curated seed"
+
+    class Sector(models.TextChoices):
+        PUBLIC = "public", "Public"
+        PRIVATE = "private", "Private"
+
+    class PoiType(models.TextChoices):
+        BARANGAY_HALL = "barangay_hall", "Barangay Hall"
+        HEALTH_CENTER = "health_center", "Health Center"
+        HOSPITAL = "hospital", "Hospital"
+        POLICE = "police", "Police"
+        FIRE = "fire", "Fire Station"
+        TANOD = "tanod", "Tanod"
+        BDRRMO = "bdrrmo", "BDRRMO"
+        EVACUATION = "evacuation", "Evacuation"
+        SCHOOL = "school", "School"
+        PHARMACY = "pharmacy", "Pharmacy"
+        CLINIC = "clinic", "Clinic"
+        DENTIST = "dentist", "Dentist"
+        VETERINARY = "veterinary", "Veterinary"
+        AMBULANCE = "ambulance", "Ambulance"
+        SECURITY = "security", "Security"
+        COMMUNITY = "community", "Community"
+        OTHER = "other", "Other"
+
+    name = models.CharField(max_length=200)
+    poi_type = models.CharField(max_length=40, choices=PoiType.choices, default=PoiType.OTHER)
+    label = models.CharField(
+        max_length=80,
+        blank=True,
+        help_text="Short map label; defaults from type if blank.",
+    )
+    sector = models.CharField(max_length=16, choices=Sector.choices, default=Sector.PUBLIC)
+    latitude = models.DecimalField(max_digits=10, decimal_places=7)
+    longitude = models.DecimalField(max_digits=10, decimal_places=7)
+    source = models.CharField(max_length=16, choices=Source.choices, default=Source.ADMIN)
+    osm_type = models.CharField(
+        max_length=1,
+        blank=True,
+        help_text="OSM element type N/W/R when this row overrides or suppresses an OSM feature.",
+    )
+    osm_id = models.PositiveBigIntegerField(
+        null=True,
+        blank=True,
+        help_text="OSM id to replace (active) or hide (inactive).",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Show on map. If False and osm_id is set, hide that OSM POI.",
+    )
+    notes = models.TextField(blank=True)
+    priority = models.PositiveSmallIntegerField(
+        default=10,
+        help_text="Higher priority sorts first when merging duplicates.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-priority", "name", "id"]
+        verbose_name = "Map service POI"
+        verbose_name_plural = "Map service POIs"
+        indexes = [
+            models.Index(fields=["is_active", "poi_type"], name="emerg_svcpoi_active_type"),
+            models.Index(fields=["osm_type", "osm_id"], name="emerg_svcpoi_osm"),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.poi_type})"
+
+    def resolved_label(self) -> str:
+        if self.label.strip():
+            return self.label.strip()
+        return self.get_poi_type_display()
+
+
 class EmergencyAlert(models.Model):
     class Type(models.TextChoices):
         MEDICAL = "medical", "Medical"
@@ -182,3 +271,25 @@ class EmergencyEscalation(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class EmergencyChatMessage(models.Model):
+    """Live chat between the resident and assigned responders for one SOS alert."""
+
+    alert = models.ForeignKey(EmergencyAlert, on_delete=models.CASCADE, related_name="chat_messages")
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="emergency_chat_messages",
+    )
+    body = models.TextField(max_length=2000)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(fields=["alert", "created_at"], name="emerg_chat_alert_created"),
+        ]
+
+    def __str__(self):
+        return f"Chat #{self.pk} on alert {self.alert_id}"

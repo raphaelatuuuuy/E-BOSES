@@ -2,29 +2,23 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import { MapPinIcon, SearchIcon, XIcon } from "lucide-react"
+import { SearchIcon, XIcon } from "lucide-react"
 import type leaflet from "leaflet"
 
 import { cn } from "@workspace/ui/lib/utils"
+import { apiRequest } from "@/lib/api"
 
-const NOMINATIM_HEADERS = {
-  Accept: "application/json",
-  // Nominatim usage policy requires a valid identifying User-Agent
-  "User-Agent": "E-Boses/1.0 (barangay-concern-reports)",
-}
-
-const DEFAULT_CENTER: [number, number] = [14.6515, 121.1207]
+const DEFAULT_CENTER: [number, number] = [14.6507, 121.1133]
 
 export type LocationConfirmPayload = {
   lat: number
   lng: number
-  /** Full single-line address (for API / drafts) */
   address: string
-  /** Primary line e.g. street */
   addressPrimary: string
-  /** Secondary line e.g. barangay, city */
   addressSecondary: string
   source: "gps" | "manual_pin"
+  zone?: string
+  warning?: string | null
 }
 
 interface LocationPickerModalProps {
@@ -37,6 +31,38 @@ interface LocationPickerModalProps {
 }
 
 type AddressParts = { primary: string; secondary: string; full: string }
+
+type MapContext = {
+  center: { latitude: number; longitude: number; zoom: number }
+  bounds: {
+    min_latitude: number
+    max_latitude: number
+    min_longitude: number
+    max_longitude: number
+  }
+  boundary: { name: string; geometry: unknown }
+  soft_buffer_meters: number
+  hard_reject_meters: number
+}
+
+type LocationClass = {
+  status: "inside" | "edge" | "far"
+  zone: string
+  accepted: boolean
+  warning: string | null
+  message: string
+  distance_meters: number | null
+}
+
+type SearchHit = {
+  lat: number
+  lng: number
+  label: string
+  primary: string
+  secondary: string
+  zone?: string
+  accepted?: boolean
+}
 
 function formatNominatimParts(data: {
   address?: Record<string, string>
@@ -60,60 +86,33 @@ function formatNominatimParts(data: {
   const secondaryBits = [
     a.suburb || a.neighbourhood || a.village,
     a.city || a.town || a.municipality || a.city_district,
-    a.state,
   ].filter(Boolean) as string[]
-  // Prefer "Barangay, City" style without duplicating primary
   const secondary = secondaryBits
     .filter((part, i, arr) => part !== primary && arr.indexOf(part) === i)
     .slice(0, 2)
     .join(", ")
 
-  const full = secondary ? `${primary}, ${secondary}` : primary
-  return { primary, secondary, full }
+  return {
+    primary,
+    secondary,
+    full: secondary ? `${primary}, ${secondary}` : primary,
+  }
 }
 
 async function reverseGeocode(lat: number, lng: number): Promise<AddressParts> {
   try {
     const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1`
-    const res = await fetch(url, { headers: NOMINATIM_HEADERS })
-    if (!res.ok) throw new Error("reverse failed")
-    const data = (await res.json()) as {
-      address?: Record<string, string>
-      display_name?: string
-    }
-    return formatNominatimParts(data)
-  } catch {
-    const fallback = `Lat ${lat.toFixed(5)}, Lng ${lng.toFixed(5)}`
-    return { primary: fallback, secondary: "", full: fallback }
-  }
-}
-
-async function searchPlaces(query: string): Promise<
-  Array<{ lat: number; lng: number; label: string; parts: AddressParts }>
-> {
-  const q = query.trim()
-  if (q.length < 2) return []
-  try {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=5&countrycodes=ph&viewbox=121.08,14.68,121.16,14.62&bounded=0`
-    const res = await fetch(url, { headers: NOMINATIM_HEADERS })
-    if (!res.ok) return []
-    const data = (await res.json()) as Array<{
-      lat: string
-      lon: string
-      display_name: string
-      address?: Record<string, string>
-    }>
-    return data.map((item) => {
-      const parts = formatNominatimParts(item)
-      return {
-        lat: Number(item.lat),
-        lng: Number(item.lon),
-        label: parts.full,
-        parts,
-      }
+    const res = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "E-Boses/1.0 (barangay-concern-reports)",
+      },
     })
+    if (!res.ok) throw new Error("reverse failed")
+    return formatNominatimParts(await res.json())
   } catch {
-    return []
+    // Do not persist Lat/Lng as a fake street — keep UI empty until lookup works.
+    return { primary: "Finding street…", secondary: "Marikina Heights", full: "" }
   }
 }
 
@@ -127,9 +126,9 @@ export default function LocationPickerModal({
 }: LocationPickerModalProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
-  const LRef = useRef<typeof leaflet | null>(null)
   const reverseTimer = useRef<number | null>(null)
   const ignoreMove = useRef(false)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   const [previewParts, setPreviewParts] = useState<AddressParts>({
     primary: initialAddress || "Move the map to adjust",
@@ -141,24 +140,50 @@ export default function LocationPickerModal({
   )
   const [geocoding, setGeocoding] = useState(false)
   const [search, setSearch] = useState("")
-  const [results, setResults] = useState<
-    Array<{ lat: number; lng: number; label: string; parts: AddressParts }>
-  >([])
+  const [results, setResults] = useState<SearchHit[]>([])
   const [searching, setSearching] = useState(false)
+  const [searchFocused, setSearchFocused] = useState(false)
+  const [mapContext, setMapContext] = useState<MapContext | null>(null)
+  const [locationClass, setLocationClass] = useState<LocationClass | null>(null)
 
-  const scheduleReverse = useCallback((lat: number, lng: number) => {
+  const scheduleReverseAndValidate = useCallback((lat: number, lng: number) => {
     setPreviewLatLng({ lat, lng })
     if (reverseTimer.current) window.clearTimeout(reverseTimer.current)
     reverseTimer.current = window.setTimeout(() => {
       setGeocoding(true)
-      void reverseGeocode(lat, lng).then((parts) => {
+      void Promise.all([
+        reverseGeocode(lat, lng),
+        apiRequest<LocationClass>("/locations/validate/", {
+          method: "POST",
+          body: JSON.stringify({ latitude: lat, longitude: lng }),
+        }).catch(
+          () =>
+            ({
+              status: "inside",
+              zone: "unknown",
+              accepted: true,
+              warning: null,
+              message: "",
+              distance_meters: null,
+            }) as LocationClass,
+        ),
+      ]).then(([parts, classification]) => {
         setPreviewParts(parts)
+        setLocationClass(classification)
         setGeocoding(false)
       })
     }, 350)
   }, [])
 
-  // Init / destroy map when open
+  // Load map context
+  useEffect(() => {
+    if (!open) return
+    void apiRequest<MapContext>("/locations/map-context/")
+      .then(setMapContext)
+      .catch(() => setMapContext(null))
+  }, [open])
+
+  // Init map
   useEffect(() => {
     if (!open) return
     let cancelled = false
@@ -168,48 +193,41 @@ export default function LocationPickerModal({
       const L = await import("leaflet")
       await import("leaflet/dist/leaflet.css")
       if (cancelled || !containerRef.current) return
-      LRef.current = L
 
       const center: [number, number] =
-        initialLat != null && initialLng != null ? [initialLat, initialLng] : DEFAULT_CENTER
+        initialLat != null && initialLng != null
+          ? [initialLat, initialLng]
+          : mapContext
+            ? [mapContext.center.latitude, mapContext.center.longitude]
+            : DEFAULT_CENTER
 
       map = L.map(containerRef.current, {
         center,
-        zoom: 16,
+        zoom: mapContext?.center.zoom ?? 15,
         zoomControl: false,
         attributionControl: false,
       })
       L.control.zoom({ position: "topright" }).addTo(map)
+      containerRef.current.querySelector(".leaflet-control-zoom")?.classList.add("eboses-map-zoom")
 
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "&copy; OpenStreetMap",
+      // Clean Carto light basemap (sign-up style — not busy)
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+        attribution: "&copy; OSM &copy; CARTO",
+        subdomains: "abcd",
+        maxZoom: 19,
       }).addTo(map)
-
-      // Optional barangay boundary
-      fetch(
-        "https://nominatim.openstreetmap.org/lookup?osm_ids=R371327&format=json&polygon_geojson=1",
-        { headers: NOMINATIM_HEADERS },
-      )
-        .then((r) => r.json())
-        .then((data) => {
-          if (cancelled || !data?.[0]?.geojson || !map) return
-          L.geoJSON(data[0].geojson, {
-            style: { color: "#ff6a1a", weight: 2, fillOpacity: 0.06, opacity: 0.65 },
-          }).addTo(map)
-        })
-        .catch(() => {})
 
       map.on("moveend", () => {
         if (ignoreMove.current || !map) return
         const c = map.getCenter()
-        scheduleReverse(c.lat, c.lng)
+        scheduleReverseAndValidate(c.lat, c.lng)
       })
 
       mapRef.current = map
       requestAnimationFrame(() => {
         map?.invalidateSize()
         const c = map?.getCenter()
-        if (c) scheduleReverse(c.lat, c.lng)
+        if (c) scheduleReverseAndValidate(c.lat, c.lng)
       })
     }
 
@@ -218,12 +236,46 @@ export default function LocationPickerModal({
     return () => {
       cancelled = true
       if (reverseTimer.current) window.clearTimeout(reverseTimer.current)
-      map?.remove()
+      try {
+        map?.off()
+        map?.remove()
+      } catch {
+        /* Leaflet may already have detached panes during portal close */
+      }
       mapRef.current = null
     }
-  }, [open, initialLat, initialLng, scheduleReverse])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- init once per open
+  }, [open, scheduleReverseAndValidate])
 
-  // Debounced search
+  // Draw barangay boundary when context loads (no service/POI markers)
+  useEffect(() => {
+    const map = mapRef.current
+    if (!open || !map || !mapContext) return
+    void import("leaflet").then((L) => {
+      const geometry = mapContext.boundary?.geometry as leaflet.GeoJSON | null
+      if (geometry) {
+        L.geoJSON(geometry as never, {
+          style: {
+            color: "#ff6a1a",
+            weight: 2,
+            fillColor: "#ff6a1a",
+            fillOpacity: 0.04,
+            opacity: 0.75,
+          },
+        }).addTo(map)
+        try {
+          map.fitBounds(L.geoJSON(geometry as never).getBounds(), {
+            padding: [28, 28],
+            maxZoom: 16,
+          })
+        } catch {
+          /* ignore */
+        }
+      }
+    })
+  }, [open, mapContext])
+
+  // Debounced API search
   useEffect(() => {
     if (!open) return
     if (search.trim().length < 2) {
@@ -232,11 +284,13 @@ export default function LocationPickerModal({
     }
     const t = window.setTimeout(() => {
       setSearching(true)
-      void searchPlaces(search).then((items) => {
-        setResults(items)
-        setSearching(false)
-      })
-    }, 400)
+      void apiRequest<{ results: SearchHit[] }>(
+        `/locations/search/?q=${encodeURIComponent(search.trim())}`,
+      )
+        .then((data) => setResults(data.results || []))
+        .catch(() => setResults([]))
+        .finally(() => setSearching(false))
+    }, 350)
     return () => window.clearTimeout(t)
   }, [search, open])
 
@@ -247,7 +301,7 @@ export default function LocationPickerModal({
     map.setView([lat, lng], 17)
     setPreviewLatLng({ lat, lng })
     if (parts) setPreviewParts(parts)
-    else scheduleReverse(lat, lng)
+    scheduleReverseAndValidate(lat, lng)
     window.setTimeout(() => {
       ignoreMove.current = false
     }, 500)
@@ -259,13 +313,32 @@ export default function LocationPickerModal({
     const lat = previewLatLng?.lat ?? center?.lat
     const lng = previewLatLng?.lng ?? center?.lng
     if (lat == null || lng == null) return
+    if (locationClass && !locationClass.accepted) {
+      return
+    }
+    // Require a real street line so Concern.address is saved for later display
+    // without reverse-geocoding again on My Reports.
+    const primary = (previewParts.primary || "").trim()
+    const badPrimary =
+      !primary ||
+      primary === "Finding street…" ||
+      primary === "Selected location" ||
+      /^lat\b/i.test(primary) ||
+      /^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(primary)
+    if (badPrimary || geocoding) {
+      return
+    }
+    const secondary = (previewParts.secondary || "Marikina Heights").trim()
+    const full = previewParts.full?.trim() || `${primary}, ${secondary}`
     onConfirm({
       lat,
       lng,
-      address: previewParts.full,
-      addressPrimary: previewParts.primary,
-      addressSecondary: previewParts.secondary,
+      address: full,
+      addressPrimary: primary,
+      addressSecondary: secondary,
       source: "manual_pin",
+      zone: locationClass?.zone,
+      warning: locationClass?.warning,
     })
     onClose()
   }
@@ -279,10 +352,74 @@ export default function LocationPickerModal({
     return () => document.removeEventListener("keydown", onKey)
   }, [open, onClose])
 
+  const hasQuery = search.trim().length >= 2
+  const sheetMode: "collapsed" | "peek" | "expanded" = !hasQuery
+    ? "collapsed"
+    : searchFocused
+      ? "expanded"
+      : "peek"
+
+  const streetPrimary = (previewParts.primary || "").trim()
+  const hasUsableStreet =
+    Boolean(streetPrimary) &&
+    streetPrimary !== "Finding street…" &&
+    streetPrimary !== "Selected location" &&
+    !/^lat\b/i.test(streetPrimary) &&
+    !/^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(streetPrimary)
+  const canConfirm = (!locationClass || locationClass.accepted) && hasUsableStreet && !geocoding
+
   if (!open) return null
 
   return createPortal(
     <div className="fixed inset-0 z-[320] flex items-center justify-center p-3 sm:p-6">
+      <style>{`
+        .eboses-pin-pulse::before,
+        .eboses-pin-pulse::after {
+          content: "";
+          position: absolute;
+          inset: 50%;
+          width: 12px;
+          height: 12px;
+          margin: -6px 0 0 -6px;
+          border-radius: 9999px;
+          background: rgba(43, 127, 255, 0.35);
+          animation: eboses-pin-scan 1.8s ease-out infinite;
+          pointer-events: none;
+        }
+        .eboses-pin-pulse::after {
+          animation-delay: 0.9s;
+          background: rgba(43, 127, 255, 0.22);
+        }
+        @keyframes eboses-pin-scan {
+          0% { transform: scale(1); opacity: 0.7; }
+          70% { transform: scale(2.8); opacity: 0; }
+          100% { transform: scale(2.8); opacity: 0; }
+        }
+        .eboses-map-zoom.leaflet-control-zoom {
+          border: none !important;
+          border-radius: 10px !important;
+          overflow: hidden;
+          box-shadow: 0 4px 14px rgba(0,0,0,0.28) !important;
+        }
+        .eboses-map-zoom .leaflet-control-zoom-in,
+        .eboses-map-zoom .leaflet-control-zoom-out {
+          width: 36px !important;
+          height: 36px !important;
+          line-height: 36px !important;
+          font-size: 22px !important;
+          font-weight: 700 !important;
+          color: #18181b !important;
+          background: #fff !important;
+          border: none !important;
+          border-bottom: 1px solid #e4e4e7 !important;
+        }
+        .eboses-map-zoom .leaflet-control-zoom-out { border-bottom: none !important; }
+        .eboses-map-zoom a:hover { background: #f4f4f5 !important; color: #000 !important; }
+        .eboses-map-search-expanded .leaflet-control-zoom {
+          visibility: hidden !important;
+          pointer-events: none !important;
+        }
+      `}</style>
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div
         className={cn(
@@ -290,7 +427,6 @@ export default function LocationPickerModal({
           "h-[min(640px,92vh)]",
         )}
       >
-        {/* Header */}
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-100 px-4 py-3">
           <h2 className="text-[17px] font-semibold text-neutral-900">Move map to pin location</h2>
           <button
@@ -299,78 +435,172 @@ export default function LocationPickerModal({
             className="flex size-9 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100"
             aria-label="Close"
           >
-            <XIcon className="size-5" />
+            <XIcon className="size-5" strokeWidth={2} />
           </button>
         </div>
 
-        {/* Map + floating pin + callout */}
-        <div className="relative min-h-0 flex-1">
+        <div
+          className={cn(
+            "relative min-h-0 flex-1 overflow-hidden",
+            sheetMode === "expanded" && "eboses-map-search-expanded",
+          )}
+        >
           <div ref={containerRef} className="absolute inset-0 z-0" />
 
-          {/* Fixed center pin */}
-          <div className="pointer-events-none absolute left-1/2 top-1/2 z-[500] -translate-x-1/2 -translate-y-full">
-            <MapPinIcon className="size-10 fill-[#ff6a1a] text-[#ff6a1a] drop-shadow-md" strokeWidth={1.5} />
-            <span className="absolute bottom-1 left-1/2 size-2.5 -translate-x-1/2 rounded-full bg-[#2447b3] ring-2 ring-white" />
-          </div>
+          {sheetMode !== "expanded" ? (
+            <>
+              <div
+                className="pointer-events-none absolute left-1/2 top-1/2 z-[1100] h-0 w-0 overflow-visible"
+                aria-hidden
+              >
+                <img
+                  src="/contents/map-pin-gps.png"
+                  alt=""
+                  width={56}
+                  height={56}
+                  className="absolute left-0 top-0 h-14 w-14 max-w-none object-contain drop-shadow-[0_6px_14px_rgba(0,0,0,0.45)]"
+                  style={{
+                    marginLeft: -28,
+                    marginTop: -(56 + 28),
+                  }}
+                  draggable={false}
+                />
+                <span
+                  className="eboses-pin-pulse absolute left-0 top-0 size-3 rounded-full bg-[#2b7fff]"
+                  style={{
+                    marginLeft: -6,
+                    marginTop: -6,
+                    boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
+                  }}
+                />
+              </div>
 
-          {/* Use this location pill */}
-          <div className="pointer-events-none absolute inset-x-0 top-[42%] z-[500] flex justify-center px-4">
-            <button
-              type="button"
-              onClick={handleConfirm}
-              className="pointer-events-auto flex max-w-[min(100%,320px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-5 py-2.5 text-center shadow-lg transition-transform hover:scale-[1.02] active:scale-[0.99]"
+              <div
+                className={cn(
+                  "pointer-events-none absolute inset-x-0 z-[1100] flex flex-col items-center gap-2 px-4",
+                  sheetMode === "peek" ? "top-[calc(50%+24px)]" : "top-[calc(50%+36px)]",
+                )}
+              >
+                {locationClass?.warning ? (
+                  <p className="pointer-events-none max-w-[min(100%,320px)] rounded-xl bg-amber-50 px-3 py-2 text-center text-[12px] font-medium text-amber-800 shadow-sm ring-1 ring-amber-200/80">
+                    {locationClass.warning}
+                  </p>
+                ) : null}
+                {locationClass && !locationClass.accepted ? (
+                  <p className="pointer-events-none max-w-[min(100%,320px)] rounded-xl bg-red-50 px-3 py-2 text-center text-[12px] font-medium text-red-700 shadow-sm ring-1 ring-red-200/80">
+                    {locationClass.message}
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={handleConfirm}
+                  disabled={!canConfirm || geocoding}
+                  className={cn(
+                    "pointer-events-auto flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)] transition-transform",
+                    canConfirm
+                      ? "hover:scale-[1.02] active:scale-[0.99]"
+                      : "cursor-not-allowed opacity-60",
+                  )}
+                >
+                  <span className="text-[16px] font-semibold leading-none text-neutral-900">
+                    Use this location
+                  </span>
+                  <span className="mt-1.5 line-clamp-2 text-[14px] font-medium leading-snug text-neutral-500">
+                    {geocoding ? "Finding address…" : previewParts.primary}
+                  </span>
+                </button>
+              </div>
+            </>
+          ) : null}
+
+          {/* Bottom sheet: slides up from bottom */}
+          <div
+            className={cn(
+              "absolute inset-x-0 bottom-0 z-[1400] flex h-full flex-col overflow-hidden bg-white",
+              "rounded-t-2xl border-t border-neutral-200 shadow-[0_-8px_28px_rgba(0,0,0,0.12)]",
+              "transition-transform duration-300 ease-out will-change-transform",
+              sheetMode === "expanded" &&
+                "translate-y-0 rounded-none border-0 shadow-none",
+              sheetMode === "peek" && "translate-y-[calc(100%-100px)]",
+              sheetMode === "collapsed" && "translate-y-[calc(100%-72px)]",
+            )}
+            onClick={() => {
+              if (sheetMode === "peek") {
+                setSearchFocused(true)
+                searchInputRef.current?.focus()
+              }
+            }}
+          >
+            <div className="shrink-0 px-4 pb-2 pt-3">
+              <div className="relative">
+                <SearchIcon className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-neutral-400" />
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onFocus={() => setSearchFocused(true)}
+                  onBlur={() => {
+                    window.setTimeout(() => setSearchFocused(false), 180)
+                  }}
+                  placeholder="Search streets in Marikina Heights"
+                  autoComplete="off"
+                  className={cn(
+                    "h-11 w-full rounded-full border border-neutral-200 bg-white pl-10 pr-4 text-[15px] text-neutral-900 outline-none",
+                    "placeholder:text-neutral-400 focus:border-neutral-300 focus:ring-2 focus:ring-neutral-100",
+                  )}
+                />
+              </div>
+            </div>
+
+            <ul
+              className={cn(
+                "min-h-0 flex-1 list-none overflow-y-auto",
+                sheetMode === "collapsed" && "hidden",
+                sheetMode === "peek" && "pointer-events-none select-none",
+              )}
             >
-              <span className="inline-flex items-center gap-1.5 text-[14px] font-semibold text-neutral-900">
-                <MapPinIcon className="size-3.5 text-neutral-700" />
-                Use this location
-              </span>
-              <span className="mt-0.5 line-clamp-2 text-[12px] font-medium text-neutral-500">
-                {geocoding
-                  ? "Finding address…"
-                  : previewParts.secondary
-                    ? `${previewParts.primary} · ${previewParts.secondary}`
-                    : previewParts.primary}
-              </span>
-            </button>
-          </div>
-        </div>
-
-        {/* Search */}
-        <div className="relative shrink-0 border-t border-neutral-100 bg-white p-3">
-          <div className="relative">
-            <SearchIcon className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-neutral-400" />
-            <input
-              type="search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search"
-              className="h-11 w-full rounded-full border border-neutral-200 bg-neutral-50 pl-10 pr-4 text-[15px] text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-300 focus:bg-white focus:ring-2 focus:ring-neutral-100"
-            />
-          </div>
-          {results.length > 0 || searching ? (
-            <ul className="absolute inset-x-3 bottom-full z-[600] mb-1 max-h-40 overflow-auto rounded-xl border border-neutral-200 bg-white py-1 shadow-lg">
               {searching ? (
-                <li className="px-3 py-2 text-[13px] text-neutral-500">Searching…</li>
+                <li className="px-5 py-3 text-[14px] text-neutral-500">Searching…</li>
+              ) : results.length === 0 && hasQuery ? (
+                <li className="px-5 py-3 text-[14px] text-neutral-500">
+                  No places found inside Marikina Heights (or its edge buffer)
+                </li>
               ) : (
                 results.map((item) => (
-                  <li key={`${item.lat}-${item.lng}-${item.label}`}>
+                  <li
+                    key={`${item.lat}-${item.lng}-${item.label}`}
+                    className="border-b border-neutral-100 last:border-b-0"
+                  >
                     <button
                       type="button"
-                      className="flex w-full items-start gap-2 px-3 py-2 text-left text-[13px] text-neutral-800 hover:bg-neutral-50"
+                      className="flex w-full flex-col px-5 py-3.5 text-left transition-colors hover:bg-neutral-50 active:bg-neutral-100"
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => {
-                        setSearch(item.label)
+                        setSearch("")
                         setResults([])
-                        flyTo(item.lat, item.lng, item.parts)
+                        setSearchFocused(false)
+                        flyTo(item.lat, item.lng, {
+                          primary: item.primary,
+                          secondary: item.secondary,
+                          full: item.secondary
+                            ? `${item.primary}, ${item.secondary}`
+                            : item.primary,
+                        })
                       }}
                     >
-                      <MapPinIcon className="mt-0.5 size-3.5 shrink-0 text-neutral-400" />
-                      <span className="line-clamp-2">{item.label}</span>
+                      <span className="text-[15px] font-semibold text-neutral-900">
+                        {item.primary || item.label}
+                      </span>
+                      {item.secondary ? (
+                        <span className="mt-0.5 text-[13px] text-neutral-500">{item.secondary}</span>
+                      ) : null}
                     </button>
                   </li>
                 ))
               )}
             </ul>
-          ) : null}
+          </div>
         </div>
       </div>
     </div>,

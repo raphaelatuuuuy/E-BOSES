@@ -35,6 +35,7 @@ from .models import (
     ConcernAppeal,
     ConcernAssignment,
     ConcernAiAssessment,
+    ConcernChatMessage,
     ConcernClassificationConfiguration,
     ConcernClarification,
     ConcernComment,
@@ -55,6 +56,8 @@ from .serializers import (
     ConcernAppealSerializer,
     ConcernAssignSerializer,
     ConcernAssignmentSerializer,
+    ConcernChatCreateSerializer,
+    ConcernChatMessageSerializer,
     ConcernCommentCreateSerializer,
     ConcernCommentSerializer,
     ConcernCreateSerializer,
@@ -137,6 +140,19 @@ def can_update_concern_status(user):
             or user.is_superuser
             or user_has_role_permission(user, "concerns.manage")
         )
+    )
+
+
+def can_chat_on_concern(user, concern):
+    """Private report thread: reporting resident + barangay officials/staff only."""
+    if not user or not user.is_authenticated:
+        return False
+    return (
+        user.is_superuser
+        or user.is_staff
+        or user.role == user.Role.BARANGAY_OFFICIAL
+        or user.pk == concern.reporter_id
+        or user_has_role_permission(user, "concerns.manage")
     )
 
 
@@ -523,6 +539,9 @@ class ConcernCommentCreateView(APIView):
         parent_id = serializer.validated_data.get("parent")
         if parent_id:
             parent = get_object_or_404(ConcernComment, pk=parent_id, concern=concern)
+            # One-level replies only — always hang off the top-level comment
+            if parent.parent_id is not None:
+                parent = parent.parent
         comment = ConcernComment.objects.create(
             concern=concern,
             author=request.user,
@@ -533,6 +552,43 @@ class ConcernCommentCreateView(APIView):
             ConcernCommentSerializer(comment, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
+
+
+class ConcernCommentDetailView(APIView):
+    """Author can edit or delete their own comment."""
+
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk, comment_id):
+        touch_last_seen(request.user)
+        concern = get_object_or_404(Concern, pk=pk)
+        comment = get_object_or_404(ConcernComment, pk=comment_id, concern=concern)
+        if comment.author_id != request.user.id:
+            return Response({"detail": "You can only edit your own comments."}, status=status.HTTP_403_FORBIDDEN)
+        body = (request.data.get("body") or "").strip()
+        if not body:
+            return Response({"body": ["Comment cannot be empty."]}, status=status.HTTP_400_BAD_REQUEST)
+        if len(body) > 1000:
+            return Response({"body": ["Comment is too long."]}, status=status.HTTP_400_BAD_REQUEST)
+        if body == comment.body:
+            return Response(ConcernCommentSerializer(comment, context={"request": request}).data)
+        # Preserve original text on first edit only
+        if not comment.is_edited:
+            comment.original_body = comment.body
+            comment.is_edited = True
+        comment.body = body
+        comment.save(update_fields=["body", "original_body", "is_edited", "updated_at"])
+        return Response(ConcernCommentSerializer(comment, context={"request": request}).data)
+
+    def delete(self, request, pk, comment_id):
+        touch_last_seen(request.user)
+        concern = get_object_or_404(Concern, pk=pk)
+        comment = get_object_or_404(ConcernComment, pk=comment_id, concern=concern)
+        if comment.author_id != request.user.id:
+            return Response({"detail": "You can only delete your own comments."}, status=status.HTTP_403_FORBIDDEN)
+        comment.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class ContentFlagCreateView(APIView):
     permission_classes = [IsAuthenticated]
@@ -749,6 +805,91 @@ class ConcernOfficialRemarkCreateView(APIView):
             create_concern_notification(concern, recipient=concern.reporter, type=Notification.Type.UNDER_REVIEW, title="Official remark added", body=remark.body[:240])
         create_audit_log("concern.remark_added", actor=request.user, target_user=concern.reporter, metadata={"concern_id": concern.pk, "remark_id": remark.pk, "visible_to_resident": remark.visible_to_resident}, request_meta=request_meta(request))
         return Response(ConcernOfficialRemarkSerializer(remark, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
+
+class ConcernChatView(APIView):
+    """
+    Private chat on one report: resident reporter ↔ barangay officials.
+    GET list · POST send.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        touch_last_seen(request.user)
+        concern = get_object_or_404(Concern, pk=pk)
+        if not can_chat_on_concern(request.user, concern):
+            return Response(
+                {"detail": "You do not have permission to view this report chat."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        after_id = request.query_params.get("after")
+        qs = (
+            ConcernChatMessage.objects.filter(concern=concern)
+            .select_related("sender", "sender__resident_profile")
+            .order_by("created_at", "id")
+        )
+        if after_id and str(after_id).isdigit():
+            qs = qs.filter(pk__gt=int(after_id))
+        messages = list(qs[:200])
+        return Response(
+            ConcernChatMessageSerializer(messages, many=True, context={"request": request}).data
+        )
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        concern = get_object_or_404(Concern, pk=pk)
+        if not can_chat_on_concern(request.user, concern):
+            return Response(
+                {"detail": "You do not have permission to chat on this report."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = ConcernChatCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        message = ConcernChatMessage.objects.create(
+            concern=concern,
+            sender=request.user,
+            body=serializer.validated_data["body"],
+        )
+        message = (
+            ConcernChatMessage.objects.select_related("sender", "sender__resident_profile")
+            .get(pk=message.pk)
+        )
+        preview = message.body[:240]
+        # Notify the other party
+        if request.user.pk == concern.reporter_id:
+            User = get_user_model()
+            officials = User.objects.filter(
+                role=User.Role.BARANGAY_OFFICIAL,
+                status=User.Status.VERIFIED,
+            ).exclude(pk=request.user.pk)[:20]
+            for official in officials:
+                create_concern_notification(
+                    concern,
+                    recipient=official,
+                    type=Notification.Type.CLARIFICATION_REPLIED,
+                    title=f"New message on {concern.tracking_id}",
+                    body=preview,
+                )
+        elif concern.reporter_id:
+            create_concern_notification(
+                concern,
+                recipient=concern.reporter,
+                type=Notification.Type.CLARIFICATION_REQUESTED,
+                title="New message on your report",
+                body=preview,
+            )
+        create_audit_log(
+            "concern.chat_message",
+            actor=request.user,
+            target_user=concern.reporter,
+            metadata={"concern_id": concern.pk, "message_id": message.pk},
+            request_meta=request_meta(request),
+        )
+        return Response(
+            ConcernChatMessageSerializer(message, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 class ConcernStatusUpdateView(APIView):
     permission_classes = [IsAuthenticated]

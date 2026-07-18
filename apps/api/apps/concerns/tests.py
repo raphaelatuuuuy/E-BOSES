@@ -801,6 +801,8 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(resident_response.status_code, status.HTTP_200_OK)
         self.assertEqual(resident_response.data["reports_active"], 2)
         self.assertEqual(resident_response.data["active_emergencies"], 1)
+        self.assertEqual(resident_response.data["barangay_active_emergencies"], 1)
+        self.assertTrue(resident_response.data["has_ongoing_emergencies"])
         self.assertEqual(resident_response.data["unread_notifications"], 1)
         self.assertEqual(resident_response.data["open_account_requests"], 1)
         self.assertEqual(official_denied.status_code, status.HTTP_403_FORBIDDEN)

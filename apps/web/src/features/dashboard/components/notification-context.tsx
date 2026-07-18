@@ -75,7 +75,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   React.useEffect(() => {
     void fetchAll()
-    void registerNotificationWorker()
+    void registerNotificationWorker().catch(() => null)
     const interval = setInterval(() => {
       if (!socketLiveRef.current) void fetchAll()
     }, 30_000)
@@ -85,11 +85,20 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       }
     }
     window.addEventListener("eboses:notifications-refresh", fetchAll)
-    navigator.serviceWorker?.addEventListener("message", handleWorkerClick)
+    // Optional chaining on API is fine; registration may fail under bad local SSL
+    try {
+      navigator.serviceWorker?.addEventListener("message", handleWorkerClick)
+    } catch {
+      /* ignore insecure SW */
+    }
     return () => {
       clearInterval(interval)
       window.removeEventListener("eboses:notifications-refresh", fetchAll)
-      navigator.serviceWorker?.removeEventListener("message", handleWorkerClick)
+      try {
+        navigator.serviceWorker?.removeEventListener("message", handleWorkerClick)
+      } catch {
+        /* ignore */
+      }
     }
   }, [])
 
