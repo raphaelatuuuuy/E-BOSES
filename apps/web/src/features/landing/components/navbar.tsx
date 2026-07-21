@@ -1,21 +1,46 @@
 import { Link } from "react-router-dom"
-import { MenuIcon, XIcon } from "lucide-react"
-import { useEffect, useState } from "react"
+import { ArrowRight, List, X } from "@phosphor-icons/react"
+import { useEffect, useRef, useState } from "react"
+
+import { ArrowPillButton } from "./ui-bits"
+
+const NAV_LINKS = [
+  { label: "Home", href: "#top" },
+  { label: "About E-Boses", href: "#about" },
+  { label: "Features", href: "#features" },
+  { label: "Impact", href: "#impact" },
+  { label: "Partners", href: "#partners" },
+]
 
 export function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false)
-  const [menuAnim, setMenuAnim] = useState(false)
-  const [mounted, setMounted] = useState(false)
+  const [scrolled, setScrolled] = useState(false)
+  const [hidden, setHidden] = useState(false)
+  const lastScrollY = useRef(0)
 
   useEffect(() => {
-    setMounted(true)
+    const onScroll = () => {
+      const y = window.scrollY
+      setScrolled(y > 24)
+      const delta = y - lastScrollY.current
+      if (y < 80) {
+        setHidden(false)
+      } else if (delta > 6) {
+        setHidden(true)
+      } else if (delta < -6) {
+        setHidden(false)
+      }
+      lastScrollY.current = y
+    }
+    onScroll()
+    window.addEventListener("scroll", onScroll, { passive: true })
+    return () => window.removeEventListener("scroll", onScroll)
   }, [])
 
   useEffect(() => {
-    if (mobileOpen) {
-      requestAnimationFrame(() => setMenuAnim(true))
-    } else {
-      setMenuAnim(false)
+    document.body.style.overflow = mobileOpen ? "hidden" : ""
+    return () => {
+      document.body.style.overflow = ""
     }
   }, [mobileOpen])
 
@@ -24,137 +49,119 @@ export function Navbar() {
 
   return (
     <>
-      {/* Header bar — always transparent, just logo + hamburger */}
       <header
-        className={`fixed top-0 left-0 right-0 z-50 w-full transition-all duration-700 ${
-          mounted ? "translate-y-0" : "-translate-y-full"
-        }`}
+        className={`sticky top-0 z-[100] w-full border-b bg-white transition-transform transition-colors duration-300 ${
+          scrolled ? "border-gray-200" : "border-transparent"
+        } ${hidden && !mobileOpen ? "-translate-y-full" : "translate-y-0"}`}
       >
-        <div className="mx-auto flex h-20 max-w-7xl items-center px-4 md:px-8">
-          <Link to="/" className="shrink-0">
-            <img src="/contents/logo.png" alt="E-Boses" className="h-14 w-auto object-contain" />
-          </Link>
-
-          {/* Desktop nav links — absolute centered */}
-          <nav className="hidden md:flex absolute left-1/2 -translate-x-1/2 items-center gap-8">
-            <Link to="/" className="text-sm font-medium text-white/70 hover:text-white transition-colors">
-              Home
+        <div className="px-5 md:px-10 lg:px-16">
+          <div className="flex h-20 items-center justify-between">
+            <Link to="/" className="relative z-50 flex shrink-0 items-center">
+              <img
+                src="/contents/logo.png"
+                alt="E-Boses"
+                className="h-10 w-auto object-contain md:h-12"
+              />
             </Link>
-            <span className="text-sm font-medium text-white/40 cursor-not-allowed">
-              About E-Boses
-            </span>
-            <span className="text-sm font-medium text-white/40 cursor-not-allowed">
-              Features
-            </span>
-            <span className="text-sm font-medium text-white/40 cursor-not-allowed">
-              Contact Us
-            </span>
-          </nav>
 
-          <div className="hidden md:flex flex-1" />
+            {/* Desktop nav links */}
+            <nav className="hidden lg:flex items-center gap-8">
+              {NAV_LINKS.map((link) => (
+                <a
+                  key={link.label}
+                  href={link.href}
+                  className="group relative text-sm font-medium text-gray-600 transition-colors hover:text-[#ff5003]"
+                >
+                  {link.label}
+                  <span className="absolute -bottom-1 left-0 h-0.5 w-0 bg-[#ff8133] opacity-0 transition-all duration-300 group-hover:w-full group-hover:opacity-100" />
+                </a>
+              ))}
+            </nav>
 
-          <div className="hidden md:flex items-center gap-3">
-            <Link
-              to="/sign-in"
-              className="text-sm font-medium text-white/70 hover:text-white transition-colors px-3 py-2"
+            <div className="hidden lg:flex items-center">
+              <Link
+                to="/sign-in"
+                className="rounded-full px-5 py-2 text-sm font-medium text-gray-600 transition-all duration-300 hover:bg-[#ff8133] hover:text-white"
+              >
+                Sign in
+              </Link>
+            </div>
+
+            {/* Hamburger */}
+            <button
+              type="button"
+              onClick={openMenu}
+              className="lg:hidden relative z-50 inline-flex size-11 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-700 transition-colors duration-300"
+              aria-label="Open menu"
             >
-              Sign in
-            </Link>
-            <Link
-              to="/sign-up"
-              className="inline-flex h-9 items-center justify-center rounded-full bg-[#ff8133] px-4 text-sm font-semibold text-white transition-all duration-300 hover:bg-[#ff5003] hover:scale-105 active:scale-[0.97]"
-            >
-              Sign up
-            </Link>
+              <List className="size-5" />
+            </button>
           </div>
-
-          {/* Hamburger */}
-          <button
-            type="button"
-            onClick={openMenu}
-            className="md:hidden flex size-10 items-center justify-center text-white ml-auto"
-            aria-label="Open menu"
-          >
-            <MenuIcon className="size-6" />
-          </button>
         </div>
       </header>
 
-      {/* Fullscreen mobile overlay — covers EVERYTHING */}
-      {mobileOpen && (
-        <div className="md:hidden fixed inset-0 z-[60] flex flex-col bg-[#020c4e]">
-          {/* Top bar with logo + close */}
-          <div className="flex h-20 items-center justify-between px-4">
-            <Link to="/" className="shrink-0" onClick={closeMenu}>
-              <img src="/contents/logo-name.png" alt="E-Boses" className="h-14 w-auto object-contain" />
-            </Link>
-            <button
-              type="button"
-              onClick={closeMenu}
-              className="flex size-10 items-center justify-center text-white"
-              aria-label="Close menu"
-            >
-              <XIcon className="size-6" />
-            </button>
-          </div>
+      {/* Fullscreen mobile overlay (lenol style: white, circle reveal, silhouette watermark) */}
+      <div
+        className={`lg:hidden fixed inset-0 z-[110] flex flex-col overflow-hidden bg-white transition-[clip-path] duration-700 ease-[cubic-bezier(0.4,0,0.2,1)] ${
+          mobileOpen
+            ? "[clip-path:circle(150%_at_100%_0%)]"
+            : "pointer-events-none [clip-path:circle(0%_at_100%_0%)]"
+        }`}
+        aria-hidden={!mobileOpen}
+      >
+        {/* Placeholder watermark */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -bottom-24 -right-20 h-[360px] w-[360px] rounded-full bg-gradient-to-br from-[#ff8133]/15 to-[#020c4e]/10 blur-2xl"
+        />
 
-          <nav className="flex flex-col gap-8 px-8 pt-16">
-            <Link
-              to="/"
-              onClick={closeMenu}
-              className={`text-4xl font-bold text-white/70 hover:text-white transition-all duration-500 ${
-                menuAnim ? "translate-x-0 opacity-100" : "-translate-x-8 opacity-0"
-              }`}
-            >
-              Home
-            </Link>
-            <span
-              className={`text-4xl font-bold text-white/40 cursor-not-allowed transition-all duration-500 delay-100 ${
-                menuAnim ? "translate-x-0 opacity-100" : "-translate-x-8 opacity-0"
-              }`}
-            >
-              About E-Boses
-            </span>
-            <span
-              className={`text-4xl font-bold text-white/40 cursor-not-allowed transition-all duration-500 delay-200 ${
-                menuAnim ? "translate-x-0 opacity-100" : "-translate-x-8 opacity-0"
-              }`}
-            >
-              Features
-            </span>
-            <span
-              className={`text-4xl font-bold text-white/40 cursor-not-allowed transition-all duration-500 delay-[300ms] ${
-                menuAnim ? "translate-x-0 opacity-100" : "-translate-x-8 opacity-0"
-              }`}
-            >
-              Contact Us
-            </span>
-            <Link
-              to="/sign-in"
-              onClick={closeMenu}
-              className={`text-4xl font-bold text-white/70 hover:text-white transition-all duration-500 delay-[400ms] ${
-                menuAnim ? "translate-x-0 opacity-100" : "-translate-x-8 opacity-0"
-              }`}
-            >
-              Sign in
-            </Link>
-          </nav>
-
-          <div
-            className={`mt-auto flex items-center justify-center pb-10 transition-all duration-500 delay-[500ms] ${
-              menuAnim ? "translate-y-0 opacity-100" : "translate-y-8 opacity-0"
-            }`}
+        <div className="flex h-20 items-center justify-between px-5">
+          <Link to="/" className="shrink-0" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1}>
+            <img src="/contents/logo-name.png" alt="E-Boses" className="h-10 w-auto object-contain" />
+          </Link>
+          <button
+            type="button"
+            onClick={closeMenu}
+            className="flex size-11 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-700"
+            aria-label="Close menu"
+            tabIndex={mobileOpen ? 0 : -1}
           >
-            <Link
-              to="/sign-up"
-              onClick={closeMenu}
-              className="inline-flex h-12 items-center justify-center rounded-full bg-[#ff8133] px-10 text-base font-semibold text-white transition-all duration-300 hover:bg-[#ff5003] hover:scale-105 active:scale-[0.97]"
-            >
-              Sign up
-            </Link>
-          </div>
+            <X className="size-5" />
+          </button>
         </div>
-      )}
+
+        <nav className="flex flex-col gap-2 px-5 pt-8">
+          {NAV_LINKS.map((link) => (
+            <a
+              key={link.label}
+              href={link.href}
+              onClick={closeMenu}
+              tabIndex={mobileOpen ? 0 : -1}
+              className="group flex items-center justify-between border-b border-gray-100 py-4 text-2xl font-semibold text-[#020c4e]"
+            >
+              {link.label}
+              <ArrowRight className="size-6 text-[#ff5003] transition-transform duration-300 group-hover:-rotate-45" />
+            </a>
+          ))}
+          <Link
+            to="/sign-in"
+            onClick={closeMenu}
+            tabIndex={mobileOpen ? 0 : -1}
+            className="group flex items-center justify-between border-b border-gray-100 py-4 text-2xl font-semibold text-[#020c4e]"
+          >
+            Sign in
+            <ArrowRight className="size-6 text-[#ff5003] transition-transform duration-300 group-hover:-rotate-45" />
+          </Link>
+        </nav>
+
+        <div className="mt-auto px-5 pb-8">
+          <Link to="/sign-up" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="block">
+            <ArrowPillButton size="lg" className="w-full justify-center">
+              Get Started
+            </ArrowPillButton>
+          </Link>
+        </div>
+      </div>
     </>
   )
 }
