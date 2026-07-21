@@ -65,3 +65,4 @@ apps/api/model_weights/*.onnx
 apps/api/private_media/raw/
 New_UI_Reference/
 id/
+tmp/

@@ -85,9 +85,8 @@ export function Reveal({
   as?: "div" | "section" | "span"
 }) {
   const ref = useRef<HTMLDivElement | null>(null)
-  // Reduced-motion users start visible (no entrance transition). Lazy init keeps
-  // this out of the effect body so we never trigger a cascading re-render.
-  const [visible, setVisible] = useState(() => prefersReducedMotion())
+  // Content is visible by default. JavaScript only marks it as observed; it never gates access.
+  const [visible, setVisible] = useState(true)
 
   useEffect(() => {
     const el = ref.current
@@ -156,6 +155,15 @@ function ensureParallaxListening() {
   window.addEventListener("resize", scheduleParallax)
 }
 
+function stopParallaxListening() {
+  if (parallaxSubscribers.size || !parallaxListening) return
+  parallaxListening = false
+  window.removeEventListener("scroll", scheduleParallax)
+  window.removeEventListener("resize", scheduleParallax)
+  if (parallaxRaf) window.cancelAnimationFrame(parallaxRaf)
+  parallaxRaf = 0
+}
+
 export function ParallaxText({
   children,
   className = "",
@@ -198,6 +206,9 @@ export function ParallaxText({
 
     return () => {
       parallaxSubscribers.delete(update)
+      el.style.removeProperty("transform")
+      el.style.removeProperty("opacity")
+      stopParallaxListening()
     }
   }, [speed, fade])
 

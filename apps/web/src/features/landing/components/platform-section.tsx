@@ -1,104 +1,72 @@
-import { useState } from "react"
-import { PlaceholderImage } from "./placeholder-image"
-import { ParallaxText, Reveal, SECTION_PADDING } from "./ui-bits"
+import { Reveal } from "./ui-bits"
 
-const MODULES = [
+const STEPS = [
   {
-    tag: "Reporting",
-    title: "Report a Concern",
-    body: "Send a photo, a short description, and your location. Each report gets an official tracking number so you can follow it from the moment you send it until it is fixed.",
+    title: "Send your report",
+    label: "Submitted",
+    body: "Add a photo, a short description, and the location of the concern.",
   },
   {
-    tag: "Emergency",
-    title: "Emergency Alert",
-    body: "One tap sends an alert with your location straight to tanods and health workers on duty, while nearby residents are notified so they can help.",
+    title: "See when it is reviewed",
+    label: "Received",
+    body: "The barangay confirms that your report arrived and sends it to the right office or responder.",
   },
   {
-    tag: "Checking",
-    title: "The System Checks It",
-    body: "Every report is reviewed by the system to estimate how serious the problem is and to filter out fake or unrelated submissions before it reaches officials.",
+    title: "See who is handling it",
+    label: "Assigned",
+    body: "Your report shows who is responsible and includes each dated status update.",
   },
-]
+  {
+    title: "See how it was resolved",
+    label: "Resolved",
+    body: "The final update records the action taken and the date the report was completed.",
+  },
+] as const
 
 export function PlatformSection() {
-  const [active, setActive] = useState(0)
-
   return (
-    <section id="features" className={`bg-white ${SECTION_PADDING}`}>
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8">
-        <Reveal className="mb-16 flex flex-col justify-between gap-8 md:flex-row md:items-end">
-          <div className="max-w-3xl">
-            <ParallaxText
-              as="h2"
-              speed={1}
-              className="mb-6 font-heading text-3xl font-bold leading-tight text-[#020c4e] md:text-5xl"
-            >
-              Everyday concerns and emergencies, handled in one place.
-            </ParallaxText>
-            <ParallaxText as="p" speed={0.7} className="max-w-2xl font-sans text-lg text-gray-600">
-              E-Boses keeps everyday concerns separate from emergencies. Each one has its own
-              clear path, from sending it in to getting a response and seeing it resolved.
-            </ParallaxText>
+    <section id="features" className="scroll-mt-24 bg-white px-5 py-24 md:px-10 md:py-32 lg:px-16">
+      <div className="mx-auto max-w-7xl">
+        <Reveal className="grid gap-8 lg:grid-cols-[1fr_0.72fr] lg:items-end lg:gap-16">
+          <div>
+            <p className="mb-4 text-sm font-bold uppercase tracking-[0.18em] text-[#ff5003]">How E-Boses works</p>
+            <h2 className="font-heading text-4xl font-bold leading-tight text-[#020c4e] md:text-6xl">
+              Follow a community report from submission to resolution.
+            </h2>
           </div>
-          <div className="hidden gap-2 md:flex" aria-hidden="true">
-            {MODULES.map((mod, i) => (
-              <div
-                key={mod.tag}
-                className="h-1.5 rounded-full transition-all duration-300"
-                style={{
-                  width: i === active ? "32px" : "8px",
-                  backgroundColor: i === active ? "#ff8133" : "#e5e7eb",
-                }}
-              />
-            ))}
-          </div>
+          <p className="max-w-xl text-lg leading-relaxed text-gray-600">
+            Community concerns move through a clear review process. Emergency alerts take a separate, faster path to officials and responders.
+          </p>
         </Reveal>
 
-        <Reveal delay={150}>
-          <div className="flex h-[800px] flex-col gap-4 lg:h-[500px] lg:flex-row">
-            {MODULES.map((mod, i) => {
-              const isActive = i === active
-              return (
-                <div
-                  key={mod.tag}
-                  role="button"
-                  tabIndex={0}
-                  onMouseEnter={() => setActive(i)}
-                  onFocus={() => setActive(i)}
-                  onClick={() => setActive(i)}
-                  className="group relative cursor-pointer overflow-hidden rounded-[32px] bg-gray-900 transition-all duration-500"
-                  style={{ flex: isActive ? 3.5 : 1, opacity: isActive ? 1 : 0.7 }}
-                >
-                  <div className="absolute inset-0">
-                    <PlaceholderImage tone="dark" label={mod.tag} iconClassName="size-12" />
+        <div id="how-it-works" className="mt-14 scroll-mt-24 lg:grid lg:grid-cols-[0.72fr_1.28fr] lg:gap-16">
+          <aside className="hidden lg:block">
+            <div className="sticky top-28 border-l-4 border-[#ff5003] bg-[#020c4e] p-8 text-white">
+              <p className="text-base font-semibold text-[#ffb37f]">Your report history</p>
+              <p className="mt-5 text-3xl font-bold">Every update stays with your report.</p>
+              <p className="mt-4 leading-relaxed text-white/75">
+                Submission, assignment, action, and resolution appear on one dated timeline, so you can check progress without calling or visiting again.
+              </p>
+            </div>
+          </aside>
+
+          <ol className="border-t border-[#020c4e]/20">
+            {STEPS.map((step, index) => (
+              <li key={step.label} className="border-b border-[#020c4e]/20 py-8 md:py-10">
+                <Reveal delay={index * 50} className="grid gap-4 sm:grid-cols-[5rem_1fr] sm:gap-8">
+                  <div className="flex items-center gap-3 sm:block">
+                    <span className="font-mono text-sm text-[#ff5003]">0{index + 1}</span>
+                    <span className="ml-3 text-sm font-semibold text-[#020c4e]/60 sm:ml-0 sm:mt-2 sm:block">{step.label}</span>
                   </div>
-                  <div className="absolute inset-0 bg-gradient-to-b from-black/0 via-black/20 to-black/80" />
-                  <div className="absolute top-6 left-6 z-10 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-bold uppercase tracking-wider text-white backdrop-blur-md">
-                    {mod.tag}
+                  <div>
+                    <h3 className="text-3xl font-bold text-[#020c4e] md:text-4xl">{step.title}</h3>
+                    <p className="mt-3 max-w-xl text-base leading-relaxed text-gray-600 md:text-lg">{step.body}</p>
                   </div>
-                  <div className="absolute bottom-0 left-0 z-10 flex h-full w-full flex-col justify-end p-6 md:p-8">
-                    <div>
-                      <h3
-                        className={`mb-2 font-bold text-white transition-all duration-300 origin-bottom-left ${
-                          isActive
-                            ? "text-2xl md:text-3xl"
-                            : "text-xl lg:absolute lg:bottom-12 lg:left-8 lg:-rotate-90 lg:whitespace-nowrap lg:translate-x-1/2"
-                        }`}
-                      >
-                        {mod.title}
-                      </h3>
-                      {isActive && (
-                        <p className="max-w-lg font-sans text-base leading-relaxed text-gray-300 md:text-lg">
-                          {mod.body}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </Reveal>
+                </Reveal>
+              </li>
+            ))}
+          </ol>
+        </div>
       </div>
     </section>
   )

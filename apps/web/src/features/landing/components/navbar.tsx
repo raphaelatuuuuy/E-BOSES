@@ -2,163 +2,140 @@ import { Link } from "react-router-dom"
 import { ArrowRight, List, X } from "@phosphor-icons/react"
 import { useEffect, useRef, useState } from "react"
 
-import { ArrowPillButton } from "./ui-bits"
-
 const NAV_LINKS = [
   { label: "Home", href: "#top" },
-  { label: "About E-Boses", href: "#about" },
-  { label: "Features", href: "#features" },
-  { label: "Impact", href: "#impact" },
-  { label: "Partners", href: "#partners" },
+  { label: "How E-Boses helps", href: "#about" },
+  { label: "How it works", href: "#how-it-works" },
+  { label: "Resident benefits", href: "#impact" },
+  { label: "Contact", href: "#contact" },
 ]
+
+const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 export function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
   const [hidden, setHidden] = useState(false)
   const lastScrollY = useRef(0)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
-    const onScroll = () => {
+    let frame = 0
+    const update = () => {
+      frame = 0
       const y = window.scrollY
       setScrolled(y > 24)
       const delta = y - lastScrollY.current
-      if (y < 80) {
-        setHidden(false)
-      } else if (delta > 6) {
-        setHidden(true)
-      } else if (delta < -6) {
-        setHidden(false)
-      }
+      if (y >= 80 && delta > 6) setHidden(true)
+      if (delta < -6) setHidden(false)
       lastScrollY.current = y
     }
-    onScroll()
+    const onScroll = () => {
+      if (!frame) frame = window.requestAnimationFrame(update)
+    }
+    update()
     window.addEventListener("scroll", onScroll, { passive: true })
-    return () => window.removeEventListener("scroll", onScroll)
+    return () => {
+      window.removeEventListener("scroll", onScroll)
+      if (frame) window.cancelAnimationFrame(frame)
+    }
   }, [])
 
   useEffect(() => {
-    document.body.style.overflow = mobileOpen ? "hidden" : ""
+    if (!mobileOpen) return
+    document.body.style.overflow = "hidden"
+    closeButtonRef.current?.focus()
+    const menuButton = menuButtonRef.current
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMobileOpen(false)
+        return
+      }
+      if (event.key !== "Tab" || !menuRef.current) return
+      const focusable = Array.from(menuRef.current.querySelectorAll<HTMLElement>(FOCUSABLE))
+      const first = focusable[0]
+      const last = focusable.at(-1)
+      if (!first || !last) return
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener("keydown", onKeyDown)
     return () => {
       document.body.style.overflow = ""
+      document.removeEventListener("keydown", onKeyDown)
+      menuButton?.focus()
     }
   }, [mobileOpen])
 
-  const openMenu = () => setMobileOpen(true)
   const closeMenu = () => setMobileOpen(false)
 
   return (
     <>
-      <header
-        className={`sticky top-0 z-[100] w-full border-b bg-white transition-transform transition-colors duration-300 ${
-          scrolled ? "border-gray-200" : "border-transparent"
-        } ${hidden && !mobileOpen ? "-translate-y-full" : "translate-y-0"}`}
-      >
+      <header className={`sticky top-0 z-40 w-full border-b bg-white transition-[transform,border-color] duration-200 ${scrolled ? "border-gray-200" : "border-transparent"} ${hidden && !mobileOpen ? "-translate-y-full" : "translate-y-0"}`}>
         <div className="px-5 md:px-10 lg:px-16">
-          <div className="flex h-20 items-center justify-between">
-            <Link to="/" className="relative z-50 flex shrink-0 items-center">
-              <img
-                src="/contents/logo.png"
-                alt="E-Boses"
-                className="h-10 w-auto object-contain md:h-12"
-              />
+          <div className="mx-auto flex h-20 max-w-7xl items-center justify-between">
+            <Link to="/" className="flex shrink-0 items-center rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#020c4e]">
+              <img src="/contents/logo.png" alt="E-Boses" className="h-10 w-auto object-contain md:h-12" />
             </Link>
 
-            {/* Desktop nav links */}
-            <nav className="hidden lg:flex items-center gap-8">
+            <nav aria-label="Primary navigation" className="hidden items-center gap-7 lg:flex">
               {NAV_LINKS.map((link) => (
-                <a
-                  key={link.label}
-                  href={link.href}
-                  className="group relative text-sm font-medium text-gray-600 transition-colors hover:text-[#ff5003]"
-                >
+                <a key={link.label} href={link.href} className="min-h-11 py-3 text-sm font-medium text-gray-700 transition-colors hover:text-[#c93f00] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#020c4e]">
                   {link.label}
-                  <span className="absolute -bottom-1 left-0 h-0.5 w-0 bg-[#ff8133] opacity-0 transition-all duration-300 group-hover:w-full group-hover:opacity-100" />
                 </a>
               ))}
             </nav>
 
-            <div className="hidden lg:flex items-center">
-              <Link
-                to="/sign-in"
-                className="rounded-full px-5 py-2 text-sm font-medium text-gray-600 transition-all duration-300 hover:bg-[#ff8133] hover:text-white"
-              >
-                Sign in
-              </Link>
-            </div>
+            <Link to="/sign-in" className="hidden min-h-11 items-center px-4 text-sm font-semibold text-[#020c4e] underline decoration-[#ff8133] decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#020c4e] lg:inline-flex">
+              Sign in
+            </Link>
 
-            {/* Hamburger */}
-            <button
-              type="button"
-              onClick={openMenu}
-              className="lg:hidden relative z-50 inline-flex size-11 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-700 transition-colors duration-300"
-              aria-label="Open menu"
-            >
-              <List className="size-5" />
+            <button ref={menuButtonRef} type="button" onClick={() => setMobileOpen(true)} className="inline-flex size-11 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#020c4e] lg:hidden" aria-label="Open menu" aria-expanded={mobileOpen} aria-controls="mobile-navigation">
+              <List className="size-5" aria-hidden="true" />
             </button>
           </div>
         </div>
       </header>
 
-      {/* Fullscreen mobile overlay (lenol style: white, circle reveal, silhouette watermark) */}
-      <div
-        className={`lg:hidden fixed inset-0 z-[110] flex flex-col overflow-hidden bg-white transition-[clip-path] duration-700 ease-[cubic-bezier(0.4,0,0.2,1)] ${
-          mobileOpen
-            ? "[clip-path:circle(150%_at_100%_0%)]"
-            : "pointer-events-none [clip-path:circle(0%_at_100%_0%)]"
-        }`}
-        aria-hidden={!mobileOpen}
-      >
-        {/* Placeholder watermark */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -bottom-24 -right-20 h-[360px] w-[360px] rounded-full bg-gradient-to-br from-[#ff8133]/15 to-[#020c4e]/10 blur-2xl"
+      <div ref={menuRef} id="mobile-navigation" role="dialog" aria-modal="true" aria-label="Navigation menu" aria-hidden={!mobileOpen} className={`fixed inset-0 z-50 flex flex-col overflow-hidden bg-white transition-opacity duration-200 lg:hidden ${mobileOpen ? "opacity-100" : "pointer-events-none invisible opacity-0"}`}>
+        <img
+          src="/contents/marikina-heights.svg"
+          alt=""
+          aria-hidden="true"
+          className="pointer-events-none absolute left-1/2 top-1/2 w-[120%] -translate-x-1/2 -translate-y-1/2 opacity-[0.03]"
         />
-
-        <div className="flex h-20 items-center justify-between px-5">
-          <Link to="/" className="shrink-0" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1}>
-            <img src="/contents/logo-name.png" alt="E-Boses" className="h-10 w-auto object-contain" />
+        <div className="relative z-10 flex h-20 items-center justify-between px-5">
+          <Link to="/" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#020c4e]">
+            <img src="/contents/logo.png" alt="E-Boses" className="h-10 w-auto object-contain" />
           </Link>
-          <button
-            type="button"
-            onClick={closeMenu}
-            className="flex size-11 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-700"
-            aria-label="Close menu"
-            tabIndex={mobileOpen ? 0 : -1}
-          >
-            <X className="size-5" />
+          <button ref={closeButtonRef} type="button" onClick={closeMenu} className="flex size-11 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#020c4e]" aria-label="Close menu" tabIndex={mobileOpen ? 0 : -1}>
+            <X className="size-5" aria-hidden="true" />
           </button>
         </div>
 
-        <nav className="flex flex-col gap-2 px-5 pt-8">
+        <nav aria-label="Mobile navigation" className="relative z-10 flex flex-col px-5 pt-6">
           {NAV_LINKS.map((link) => (
-            <a
-              key={link.label}
-              href={link.href}
-              onClick={closeMenu}
-              tabIndex={mobileOpen ? 0 : -1}
-              className="group flex items-center justify-between border-b border-gray-100 py-4 text-2xl font-semibold text-[#020c4e]"
-            >
-              {link.label}
-              <ArrowRight className="size-6 text-[#ff5003] transition-transform duration-300 group-hover:-rotate-45" />
+            <a key={link.label} href={link.href} onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="flex min-h-14 items-center justify-between border-b border-gray-200 py-4 text-xl font-semibold text-[#020c4e] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#020c4e]">
+              {link.label}<ArrowRight className="size-5 text-[#c93f00]" aria-hidden="true" />
             </a>
           ))}
-          <Link
-            to="/sign-in"
-            onClick={closeMenu}
-            tabIndex={mobileOpen ? 0 : -1}
-            className="group flex items-center justify-between border-b border-gray-100 py-4 text-2xl font-semibold text-[#020c4e]"
-          >
-            Sign in
-            <ArrowRight className="size-6 text-[#ff5003] transition-transform duration-300 group-hover:-rotate-45" />
+          <Link to="/sign-in" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="flex min-h-14 items-center justify-between border-b border-gray-200 py-4 text-xl font-semibold text-[#020c4e] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#020c4e]">
+            Sign in<ArrowRight className="size-5 text-[#c93f00]" aria-hidden="true" />
           </Link>
         </nav>
 
-        <div className="mt-auto px-5 pb-8">
-          <Link to="/sign-up" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="block">
-            <ArrowPillButton size="lg" className="w-full justify-center">
-              Get Started
-            </ArrowPillButton>
+        <div className="relative z-10 mt-auto p-5 pb-8">
+          <Link to="/sign-up" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="flex min-h-12 w-full items-center justify-center bg-[#ff5003] px-6 font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#020c4e]">
+            Create an account to report
           </Link>
         </div>
       </div>

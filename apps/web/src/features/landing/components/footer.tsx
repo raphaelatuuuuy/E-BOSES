@@ -1,29 +1,25 @@
 import { useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
-import {
-  EnvelopeSimple,
-  FacebookLogo,
-  GlobeHemisphereWest,
-  MapPin,
-  Phone,
-} from "@phosphor-icons/react"
+import { MapPin, Phone } from "@phosphor-icons/react"
 
 import { ArrowPillButton } from "./ui-bits"
 
 const PLATFORM_LINKS = [
   { label: "How it Works", href: "#how-it-works" },
   { label: "Community", href: "#community" },
-  { label: "The Future", href: "#future" },
-  { label: "Guide", href: "#journal" },
+  { label: "Resident Benefits", href: "#impact" },
+  { label: "Contact", href: "#contact" },
 ]
 
 export function Footer() {
   const handsRef = useRef<HTMLDivElement | null>(null)
-  const [handsInView, setHandsInView] = useState(false)
+  const [handsInView, setHandsInView] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  )
 
   useEffect(() => {
     const el = handsRef.current
-    if (!el) return
+    if (!el || handsInView) return
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -37,7 +33,7 @@ export function Footer() {
     )
     observer.observe(el)
     return () => observer.disconnect()
-  }, [])
+  }, [handsInView])
 
   return (
     <footer className="relative overflow-hidden border-t border-zinc-800 bg-zinc-950 text-white">
@@ -107,8 +103,8 @@ export function Footer() {
                 <span className="text-lg font-bold text-[#ff8133]">Boses</span>
               </Link>
               <p className="mt-3 text-sm leading-relaxed text-zinc-500">
-                E-Boses is the online home of Barangay Marikina Heights. Report problems, send
-                emergency alerts, and follow every report until it is resolved.
+                E-Boses helps Marikina Heights residents report local concerns, send emergency
+                alerts, and follow updates in one place.
               </p>
             </div>
           </div>
@@ -150,35 +146,13 @@ export function Footer() {
                 <span>Marikina City hotline 161</span>
               </li>
             </ul>
-            <div className="mt-8 flex items-center gap-4">
-              {[
-                { icon: FacebookLogo, label: "Facebook" },
-                { icon: EnvelopeSimple, label: "Email" },
-                { icon: GlobeHemisphereWest, label: "Website" },
-              ].map((social) => (
-                <a
-                  key={social.label}
-                  href="#contact"
-                  aria-label={social.label}
-                  className="flex h-10 w-10 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 text-zinc-400 transition-all hover:border-[#ff8133] hover:bg-[#ff8133] hover:text-white"
-                >
-                  <social.icon className="size-4" />
-                </a>
-              ))}
-            </div>
+
           </div>
         </div>
 
         <div className="relative z-10 flex flex-col items-center justify-between gap-4 border-t border-zinc-800 pt-8 text-sm text-zinc-500 md:flex-row">
           <p>© 2026 E-Boses · A PUP Capstone Project. All rights reserved.</p>
-          <div className="flex items-center gap-6">
-            <a className="transition-colors hover:text-white" href="#">
-              Privacy Policy
-            </a>
-            <a className="transition-colors hover:text-white" href="#">
-              Terms of Service
-            </a>
-          </div>
+          <p>Privacy and terms will be published before public launch.</p>
         </div>
       </div>
     </footer>

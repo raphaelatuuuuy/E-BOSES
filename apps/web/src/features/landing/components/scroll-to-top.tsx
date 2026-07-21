@@ -12,7 +12,8 @@ export function ScrollToTop() {
   }, [])
 
   const scrollUp = () => {
-    window.scrollTo({ top: 0, behavior: "smooth" })
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    window.scrollTo({ top: 0, behavior: reducedMotion ? "auto" : "smooth" })
   }
 
   return (
@@ -20,7 +21,7 @@ export function ScrollToTop() {
       type="button"
       onClick={scrollUp}
       aria-label="Back to top"
-      className={`fixed bottom-6 right-6 z-[90] flex size-12 items-center justify-center rounded-full bg-[#ff8133] text-white shadow-lg shadow-[#ff8133]/30 transition-all duration-300 hover:bg-[#ff5003] hover:scale-110 active:scale-95 ${
+      className={`fixed bottom-6 right-6 z-30 flex size-12 items-center justify-center rounded-full bg-[#ff5003] text-white transition-all duration-200 hover:bg-[#d94300] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#020c4e] motion-reduce:transition-none ${
         visible ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-4 opacity-0"
       }`}
     >
