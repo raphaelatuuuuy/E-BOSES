@@ -726,11 +726,13 @@ export function FeedPostCard({
                 />
               ) : null}
             </div>
-
-            <p className={cn("mt-2 leading-relaxed text-neutral-900", FS.body)}>
-              {concernBodyText(post)}
-            </p>
           </div>
+        </div>
+
+        <div className="space-y-2.5 p-3.5 pt-2">
+          <p className={cn("leading-relaxed text-neutral-900", FS.body)}>
+            {concernBodyText(post)}
+          </p>
         </div>
 
         {post.media.length > 0 && post.media[0].mime_type?.startsWith("image/") ? (

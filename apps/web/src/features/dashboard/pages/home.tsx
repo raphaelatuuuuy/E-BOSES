@@ -270,7 +270,8 @@ function FeedCommentItem({
 
   // Reset original preview when comment body changes after reload
   useEffect(() => {
-    setShowOriginal(false)
+    const timer = window.setTimeout(() => setShowOriginal(false), 0)
+    return () => window.clearTimeout(timer)
   }, [comment.id, comment.body, comment.is_edited])
 
   const hasReplies = !isReply && comment.replies.length > 0
@@ -837,7 +838,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (authLoading) return
-    void loadHome()
+    const initialLoad = window.setTimeout(() => void loadHome(), 0)
     function refresh() {
       void loadHome()
     }
@@ -845,6 +846,7 @@ export default function HomePage() {
     window.addEventListener("eboses:report-created", refresh)
     window.addEventListener("eboses:concern-updated", refresh)
     return () => {
+      window.clearTimeout(initialLoad)
       window.clearInterval(interval)
       window.removeEventListener("eboses:report-created", refresh)
       window.removeEventListener("eboses:concern-updated", refresh)
@@ -1331,11 +1333,16 @@ export default function HomePage() {
                       </div>
                       <span
                         className={cn(
-                          "shrink-0 rounded-md bg-[#fff1ea] px-1.5 py-0.5 font-bold uppercase text-[#ff6a1a]",
+                          "shrink-0 rounded-md px-1.5 py-0.5 font-bold uppercase",
+                          announcement.urgency === "urgent"
+                            ? "bg-red-50 text-red-700"
+                            : announcement.urgency === "important"
+                              ? "bg-amber-50 text-amber-700"
+                              : "bg-[#fff1ea] text-[#ff6a1a]",
                           FS.label,
                         )}
                       >
-                        {announcement.tag || "Announcement"}
+                        {announcement.is_pinned ? "Pinned · " : ""}{announcement.tag || "Announcement"}
                       </span>
                     </div>
                     <h3 className={cn("mt-2 font-bold leading-snug text-neutral-900", FS.body)}>
@@ -1344,6 +1351,13 @@ export default function HomePage() {
                     <p className={cn("mt-1 leading-relaxed text-neutral-800", FS.body)}>
                       {announcement.body}
                     </p>
+                    {announcement.image_url ? (
+                      <img
+                        src={announcement.image_url}
+                        alt={announcement.image_alt || ""}
+                        className="mt-3 max-h-72 w-full rounded-xl object-cover"
+                      />
+                    ) : null}
                   </div>
                 </div>
               </article>

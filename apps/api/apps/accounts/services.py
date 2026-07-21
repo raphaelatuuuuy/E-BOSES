@@ -23,7 +23,16 @@ from django.db import transaction
 from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.utils import timezone
 
-from .media_forensics import check_image_quality, check_image_quality_soft, check_media_authenticity
+from .media_forensics import (
+    analyze_video_authenticity,
+    c2pa_forensics,
+    check_media_authenticity,
+    check_image_quality,
+    check_image_quality_soft,
+    exif_forensics,
+    png_metadata_forensics,
+    visual_tamper_forensics,
+)
 from .ocr import ocr_bytes, validate_barangay_id_ocr
 from .models import (
     AuditLog,
@@ -44,6 +53,7 @@ ALLOWED_PROOF_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 ALLOWED_PROOF_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 # Phone gallery photos are often larger than 2MB; client compresses when possible.
 MAX_PROOF_FILE_SIZE = 10 * 1024 * 1024
+MAX_CHAT_ATTACHMENT_SIZE = 25 * 1024 * 1024
 MAX_IMAGE_WIDTH = 4000
 MAX_IMAGE_HEIGHT = 4000
 # Reject decompress bombs before full-res NumPy forensics
@@ -156,6 +166,11 @@ EMERGENCY_MEDIA_UPLOAD_PROFILE = UploadValidationProfile(
     allowed_extensions=frozenset(ALLOWED_PROOF_EXTENSIONS),
     max_size=MAX_PROOF_FILE_SIZE,
 )
+CHAT_VIDEO_MIME_TYPES = {
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "video/quicktime": ".mov",
+}
 _SIGNATURE_MIME_TYPES = {
     b"\xff\xd8\xff": "image/jpeg",
     b"\x89PNG\r\n\x1a\n": "image/png",
@@ -476,6 +491,65 @@ def validate_concern_media_file(uploaded_file):
         authenticity=True,
         quality="soft",
         deskew=False,
+    )
+
+
+def validate_concern_chat_attachment(uploaded_file):
+    """Validate a private concern-chat image/video and return review metadata.
+
+    Images reuse the existing report quality and malware checks. Supported
+    videos are container/scanner checked, then a bounded set of decoded frames
+    is assessed locally. Any decoder or frame failure remains manual review.
+    """
+    if not uploaded_file or uploaded_file.size <= 0:
+        raise ValidationError("Attach a non-empty image or video file.")
+    if uploaded_file.size > MAX_CHAT_ATTACHMENT_SIZE:
+        raise ValidationError("Chat attachments must be 25MB or smaller.")
+
+    extension = _extension(uploaded_file)
+    content = _read_upload(uploaded_file)
+    detected_mime_type = detect_file_signature(content)
+    if extension in CONCERN_MEDIA_UPLOAD_PROFILE.allowed_extensions:
+        validated = validate_uploaded_media_file(
+            uploaded_file,
+            profile=CONCERN_MEDIA_UPLOAD_PROFILE,
+            authenticity=False,
+            quality="soft",
+            deskew=False,
+            normalize=False,
+        )
+        authenticity_detail = (
+            exif_forensics(content)
+            or png_metadata_forensics(content)
+            or c2pa_forensics(content)
+            or visual_tamper_forensics(content)
+        )
+        return (
+            validated,
+            detected_mime_type or getattr(uploaded_file, "content_type", "") or "image/jpeg",
+            "image",
+            "flagged" if authenticity_detail else "clear",
+            authenticity_detail or "No obvious edit detected by the base media checks.",
+        )
+
+    expected_video_mime = next(
+        (mime for mime, suffix in CHAT_VIDEO_MIME_TYPES.items() if suffix == extension),
+        None,
+    )
+    if not expected_video_mime:
+        raise ValidationError("Chat attachments must be JPG, PNG, WebP, MP4, WebM, or MOV files.")
+    if expected_video_mime in {"video/mp4", "video/quicktime"} and b"ftyp" not in content[:128]:
+        raise ValidationError("The video file signature does not match its extension.")
+    if expected_video_mime == "video/webm" and not content.startswith(b"\x1a\x45\xdf\xa3"):
+        raise ValidationError("The video file signature does not match its extension.")
+    scan_uploaded_file(uploaded_file, content=content, detected_mime_type=expected_video_mime)
+    authenticity = analyze_video_authenticity(content, extension=extension)
+    return (
+        uploaded_file,
+        expected_video_mime,
+        "video",
+        authenticity["status"],
+        authenticity["detail"],
     )
 
 

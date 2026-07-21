@@ -1,0 +1,50 @@
+{
+  "name": "E-Boses",
+  "short_name": "E-Boses",
+  "description": "Barangay concern reporting, emergency SOS, responder dispatch, and official alerts.",
+  "start_url": "/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "window-controls-overlay", "browser"],
+  "background_color": "#ffffff",
+  "theme_color": "#ff6a1a",
+  "orientation": "portrait",
+  "categories": ["utilities", "government", "safety"],
+  "icons": [
+    {
+      "src": "/contents/logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/contents/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Open SOS",
+      "short_name": "SOS",
+      "description": "Open the emergency SOS screen.",
+      "url": "/dashboard/home?open=sos",
+      "icons": [{ "src": "/contents/sos-icon-btn.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Alerts Map",
+      "short_name": "Alerts",
+      "description": "View barangay alerts and incidents.",
+      "url": "/dashboard/alerts-map",
+      "icons": [{ "src": "/contents/alerts.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Notifications",
+      "short_name": "Notices",
+      "description": "Open E-Boses notifications.",
+      "url": "/dashboard/notifications",
+      "icons": [{ "src": "/contents/notification-bell.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

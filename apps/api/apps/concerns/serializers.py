@@ -14,9 +14,11 @@ from .models import (
     ConcernAssignment,
     ConcernAiAssessment,
     ConcernChatMessage,
+    ConcernChatAttachment,
     ConcernClarification,
     ConcernComment,
     ConcernOfficialRemark,
+    ConcernResolutionEvidence,
     ContentFlag,
     ConcernMedia,
     ConcernStatusEvent,
@@ -72,6 +74,8 @@ class PublicUserSerializer(serializers.ModelSerializer):
         return obj.email[:2].upper()
 
     def get_street(self, obj):
+        if self.context.get("privacy_safe"):
+            return ""
         profile = getattr(obj, "resident_profile", None)
         if not profile or not (profile.address or "").strip():
             return ""
@@ -138,7 +142,32 @@ class ConcernMediaSerializer(serializers.ModelSerializer):
         return request.build_absolute_uri(path) if request else path
 
     def get_raw_url(self, obj):
+        if self.context.get("privacy_safe"):
+            return ""
         path = f"/api/concerns/media/{obj.pk}/raw/"
+        request = self.context.get("request")
+        return request.build_absolute_uri(path) if request else path
+
+
+class ConcernResolutionEvidenceSerializer(serializers.ModelSerializer):
+    uploaded_by = PublicUserSerializer(read_only=True)
+    raw_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ConcernResolutionEvidence
+        fields = (
+            "id",
+            "uploaded_by",
+            "original_filename",
+            "mime_type",
+            "file_size",
+            "note",
+            "raw_url",
+            "created_at",
+        )
+
+    def get_raw_url(self, obj):
+        path = f"/api/concerns/resolution-evidence/{obj.pk}/raw/"
         request = self.context.get("request")
         return request.build_absolute_uri(path) if request else path
 
@@ -177,6 +206,12 @@ class ConcernCommentSerializer(serializers.ModelSerializer):
         return ConcernCommentSerializer(replies, many=True, context=self.context).data
 
 class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
+    official_reviewer = PublicUserSerializer(read_only=True)
+    possible_duplicate = serializers.SerializerMethodField()
+    duplicate_similarity = serializers.SerializerMethodField()
+    duplicate_distance_meters = serializers.SerializerMethodField()
+    duplicate_match = serializers.SerializerMethodField()
+
     class Meta:
         model = ConcernAiAssessment
         fields = (
@@ -190,8 +225,55 @@ class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
             "recommendation",
             "explanation",
             "model_version",
+            "possible_duplicate",
+            "duplicate_similarity",
+            "duplicate_distance_meters",
+            "duplicate_match",
+            "official_decision",
+            "official_reason",
+            "official_reviewer",
+            "official_reviewed_at",
             "updated_at",
         )
+
+    def _duplicate_payload(self, obj):
+        return (obj.raw_result or {}).get("duplicate") or {}
+
+    def get_possible_duplicate(self, obj):
+        return bool(self._duplicate_payload(obj).get("possible_duplicate"))
+
+    def get_duplicate_similarity(self, obj):
+        return self._duplicate_payload(obj).get("similarity")
+
+    def get_duplicate_distance_meters(self, obj):
+        return self._duplicate_payload(obj).get("distance_meters")
+
+    def get_duplicate_match(self, obj):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated or not (
+            getattr(user, "is_staff", False) or getattr(user, "role", "") == "barangay_official"
+        ):
+            return None
+        payload = self._duplicate_payload(obj)
+        matched_id = payload.get("matched_concern_id")
+        if not matched_id:
+            return None
+        match = Concern.objects.filter(pk=matched_id).only("id", "public_id", "title", "status", "tracking_number", "created_at").first()
+        if not match:
+            return None
+        return {
+            "id": match.pk,
+            "public_id": str(match.public_id),
+            "tracking_id": match.tracking_id,
+            "title": match.title,
+            "status": match.status,
+        }
+
+
+class ConcernAiReviewSerializer(serializers.Serializer):
+    decision = serializers.ChoiceField(choices=ConcernAiAssessment.OfficialDecision.choices)
+    reason = serializers.CharField(min_length=10, max_length=2000, trim_whitespace=True)
 
 class ContentFlagSerializer(serializers.ModelSerializer):
     reporter = PublicUserSerializer(read_only=True)
@@ -212,6 +294,17 @@ class ContentFlagSerializer(serializers.ModelSerializer):
             "updated_at",
         )
         read_only_fields = ("id", "concern", "reporter", "status", "staff_note", "created_at", "updated_at")
+
+
+class ContentFlagReviewSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=[
+            ContentFlag.Status.REVIEWED,
+            ContentFlag.Status.DISMISSED,
+            ContentFlag.Status.ACTION_TAKEN,
+        ]
+    )
+    staff_note = serializers.CharField(min_length=5, max_length=255, trim_whitespace=True)
 
 
 class ConcernAssignmentSerializer(serializers.ModelSerializer):
@@ -283,10 +376,11 @@ class ConcernOfficialRemarkCreateSerializer(serializers.Serializer):
 class ConcernChatMessageSerializer(serializers.ModelSerializer):
     sender = PublicUserSerializer(read_only=True)
     is_mine = serializers.SerializerMethodField()
+    attachment = serializers.SerializerMethodField()
 
     class Meta:
         model = ConcernChatMessage
-        fields = ("id", "concern", "sender", "body", "created_at", "is_mine")
+        fields = ("id", "concern", "sender", "body", "attachment", "created_at", "is_mine")
         read_only_fields = ("id", "concern", "sender", "created_at", "is_mine")
 
     def get_is_mine(self, obj):
@@ -294,15 +388,31 @@ class ConcernChatMessageSerializer(serializers.ModelSerializer):
         user = getattr(request, "user", None)
         return bool(user and user.is_authenticated and obj.sender_id == user.pk)
 
+    def get_attachment(self, obj):
+        attachment = getattr(obj, "attachment", None)
+        if not attachment:
+            return None
+        path = f"/api/concerns/chat-media/{attachment.pk}/"
+        request = self.context.get("request")
+        return {
+            "id": attachment.pk,
+            "original_filename": attachment.original_filename,
+            "mime_type": attachment.mime_type,
+            "kind": attachment.kind,
+            "file_size": attachment.file_size,
+            "authenticity_status": attachment.authenticity_status,
+            "authenticity_detail": attachment.authenticity_detail,
+            "raw_url": request.build_absolute_uri(path) if request else path,
+            "created_at": attachment.created_at,
+        }
+
 
 class ConcernChatCreateSerializer(serializers.Serializer):
-    body = serializers.CharField(max_length=2000, trim_whitespace=True)
+    body = serializers.CharField(max_length=2000, trim_whitespace=True, allow_blank=True, required=False, default="")
+    media = serializers.FileField(required=False, write_only=True, allow_empty_file=False)
 
     def validate_body(self, value):
-        text = (value or "").strip()
-        if not text:
-            raise serializers.ValidationError("Message cannot be empty.")
-        return text
+        return (value or "").strip()
 
 
 class ConcernSerializer(serializers.ModelSerializer):
@@ -314,13 +424,15 @@ class ConcernSerializer(serializers.ModelSerializer):
     location_accuracy = serializers.SerializerMethodField()
     reporter = PublicUserSerializer(read_only=True)
     media = ConcernMediaSerializer(many=True, read_only=True)
-    status_events = ConcernStatusEventSerializer(many=True, read_only=True)
+    status_events = serializers.SerializerMethodField()
     comments = serializers.SerializerMethodField()
     ai_assessment = ConcernAiAssessmentSerializer(read_only=True)
     assignments = serializers.SerializerMethodField()
     clarifications = serializers.SerializerMethodField()
     appeals = serializers.SerializerMethodField()
     official_remarks = serializers.SerializerMethodField()
+    resolution_evidence = serializers.SerializerMethodField()
+    conversation = serializers.SerializerMethodField()
     vote_count = serializers.IntegerField(read_only=True, default=0)
     comment_count = serializers.IntegerField(read_only=True, default=0)
     priority_score = serializers.IntegerField(read_only=True, default=0)
@@ -357,6 +469,8 @@ class ConcernSerializer(serializers.ModelSerializer):
             "clarifications",
             "appeals",
             "official_remarks",
+            "resolution_evidence",
+            "conversation",
             "vote_count",
             "comment_count",
             "priority_score",
@@ -367,6 +481,39 @@ class ConcernSerializer(serializers.ModelSerializer):
 
     def is_privacy_safe(self):
         return bool(self.context.get("privacy_safe"))
+
+    def _viewer(self):
+        request = self.context.get("request")
+        return getattr(request, "user", None)
+
+    def _viewer_roles(self, obj):
+        user = self._viewer()
+        if not user or not user.is_authenticated:
+            return False, False, False
+        is_official = bool(
+            user.is_staff
+            or user.is_superuser
+            or user.role == User.Role.BARANGAY_OFFICIAL
+        )
+        is_owner = user.pk == obj.reporter_id
+        is_assignee = obj.assignments.filter(
+            assignee=user,
+            status=ConcernAssignment.Status.ACTIVE,
+        ).exists()
+        return is_official, is_owner, is_assignee
+
+    def _can_view_case(self, obj):
+        if self.is_privacy_safe():
+            return False
+        return any(self._viewer_roles(obj))
+
+    def _public_user(self, user):
+        if not user:
+            return None
+        return PublicUserSerializer(user, context=self.context).data
+
+    def _date(self, value):
+        return serializers.DateTimeField().to_representation(value) if value else None
 
     def get_tracking_id(self, obj):
         return obj.tracking_id
@@ -396,36 +543,236 @@ class ConcernSerializer(serializers.ModelSerializer):
             return None
         return obj.location_accuracy
 
+    def get_status_events(self, obj):
+        queryset = obj.status_events.select_related("actor", "actor__resident_profile")
+        if self._can_view_case(obj):
+            return ConcernStatusEventSerializer(queryset, many=True, context=self.context).data
+        return [
+            {
+                "id": event.pk,
+                "status": event.status,
+                "note": "",
+                "actor": None,
+                "created_at": self._date(event.created_at),
+            }
+            for event in queryset
+        ]
+
     def get_comments(self, obj):
         comments = obj.comments.filter(parent__isnull=True).select_related("author", "author__resident_profile")
         return ConcernCommentSerializer(comments, many=True, context=self.context).data
 
     def get_assignments(self, obj):
-        if self.is_privacy_safe():
+        if not self._can_view_case(obj):
             return []
         queryset = obj.assignments.select_related("assignee", "assignee__resident_profile", "assigned_by", "assigned_by__resident_profile")
         return ConcernAssignmentSerializer(queryset, many=True, context=self.context).data
 
     def get_clarifications(self, obj):
-        if self.is_privacy_safe():
+        if not self._can_view_case(obj):
             return []
         queryset = obj.clarifications.select_related("requested_by", "requested_by__resident_profile", "responded_by", "responded_by__resident_profile")
         return ConcernClarificationSerializer(queryset, many=True, context=self.context).data
 
     def get_appeals(self, obj):
-        if self.is_privacy_safe():
+        is_official, is_owner, _ = self._viewer_roles(obj)
+        if self.is_privacy_safe() or not (is_official or is_owner):
             return []
         queryset = obj.appeals.select_related("appellant", "appellant__resident_profile", "reviewed_by", "reviewed_by__resident_profile")
         return ConcernAppealSerializer(queryset, many=True, context=self.context).data
 
     def get_official_remarks(self, obj):
         queryset = obj.official_remarks.select_related("author", "author__resident_profile")
-        request = self.context.get("request")
-        user = getattr(request, "user", None)
-        is_official = bool(user and (user.is_staff or user.is_superuser or user.role == User.Role.BARANGAY_OFFICIAL))
-        if self.is_privacy_safe() or not is_official:
+        is_official, is_owner, is_assignee = self._viewer_roles(obj)
+        if self.is_privacy_safe() or not (is_official or is_owner or is_assignee):
+            return []
+        if not is_official:
             queryset = queryset.filter(visible_to_resident=True)
         return ConcernOfficialRemarkSerializer(queryset, many=True, context=self.context).data
+
+    def get_resolution_evidence(self, obj):
+        if not self._can_view_case(obj):
+            return []
+        queryset = obj.resolution_evidence.select_related(
+            "uploaded_by",
+            "uploaded_by__resident_profile",
+        )
+        return ConcernResolutionEvidenceSerializer(queryset, many=True, context=self.context).data
+
+    def get_conversation(self, obj):
+        is_official, is_owner, is_assignee = self._viewer_roles(obj)
+        if self.is_privacy_safe() or not (is_official or is_owner or is_assignee):
+            return []
+
+        items = []
+
+        def add(*, item_id, kind, body, created_at, actor=None, visibility="participants", status="", attachments=None, metadata=None):
+            if not created_at:
+                return
+            items.append({
+                "id": item_id,
+                "kind": kind,
+                "body": body or "",
+                "created_at": self._date(created_at),
+                "actor": self._public_user(actor),
+                "visibility": visibility,
+                "status": status or "",
+                "attachments": attachments or [],
+                "metadata": metadata or {},
+                "_sort_at": created_at,
+            })
+
+        for event in obj.status_events.select_related("actor", "actor__resident_profile"):
+            add(
+                item_id=f"status-{event.pk}",
+                kind="status",
+                body=event.note or event.get_status_display(),
+                created_at=event.created_at,
+                actor=event.actor,
+                status=event.status,
+                metadata={"phase": "status_change"},
+            )
+
+        assignments = obj.assignments.select_related(
+            "assignee",
+            "assignee__resident_profile",
+            "assigned_by",
+            "assigned_by__resident_profile",
+        )
+        for assignment in assignments:
+            assignee_name = (
+                self._public_user(assignment.assignee).get("full_name")
+                if assignment.assignee
+                else "the assigned response team"
+            )
+            assignment_context = " · ".join(
+                part for part in (assignee_name, assignment.office.strip()) if part
+            )
+            body = f"Assigned to {assignment_context}."
+            if assignment.note.strip():
+                body = f"{body} {assignment.note.strip()}"
+            add(
+                item_id=f"assignment-{assignment.pk}-assigned",
+                kind="assignment",
+                body=body,
+                created_at=assignment.created_at,
+                actor=assignment.assigned_by,
+                status=ConcernAssignment.Status.ACTIVE,
+                metadata={
+                    "phase": "assigned",
+                    "assignment_id": assignment.pk,
+                    "assignee_id": assignment.assignee_id,
+                    "assignee_name": assignee_name,
+                    "office": assignment.office,
+                },
+            )
+            if assignment.status != ConcernAssignment.Status.ACTIVE:
+                add(
+                    item_id=f"assignment-{assignment.pk}-{assignment.status}",
+                    kind="assignment",
+                    body=f"Assignment for {assignment_context} was {assignment.get_status_display().lower()}.",
+                    created_at=assignment.updated_at,
+                    # The current schema records who opened the assignment but
+                    # not who closed it. Do not attribute the closing action to
+                    # the original assigning official.
+                    actor=None,
+                    status=assignment.status,
+                    metadata={
+                        "phase": assignment.status,
+                        "assignment_id": assignment.pk,
+                        "assignee_id": assignment.assignee_id,
+                        "assignee_name": assignee_name,
+                        "office": assignment.office,
+                    },
+                )
+
+        messages = obj.chat_messages.select_related(
+            "sender", "sender__resident_profile", "attachment"
+        )
+        for message in messages:
+            serialized = ConcernChatMessageSerializer(message, context=self.context).data
+            attachment = serialized.get("attachment")
+            add(
+                item_id=f"chat-{message.pk}",
+                kind="chat",
+                body=message.body,
+                created_at=message.created_at,
+                actor=message.sender,
+                attachments=[attachment] if attachment else [],
+                metadata={"phase": "message"},
+            )
+
+        clarifications = obj.clarifications.select_related(
+            "requested_by", "requested_by__resident_profile",
+            "responded_by", "responded_by__resident_profile",
+        )
+        for clarification in clarifications:
+            add(
+                item_id=f"clarification-{clarification.pk}-request",
+                kind="clarification",
+                body=clarification.request_text,
+                created_at=clarification.created_at,
+                actor=clarification.requested_by,
+                status=clarification.status,
+                metadata={"phase": "request", "clarification_id": clarification.pk},
+            )
+            if clarification.response_text and clarification.responded_at:
+                add(
+                    item_id=f"clarification-{clarification.pk}-reply",
+                    kind="clarification",
+                    body=clarification.response_text,
+                    created_at=clarification.responded_at,
+                    actor=clarification.responded_by,
+                    status=clarification.status,
+                    metadata={"phase": "reply", "clarification_id": clarification.pk},
+                )
+
+        remarks = obj.official_remarks.select_related("author", "author__resident_profile")
+        if not is_official:
+            remarks = remarks.filter(visible_to_resident=True)
+        for remark in remarks:
+            add(
+                item_id=f"official-remark-{remark.pk}",
+                kind="official_remark",
+                body=remark.body,
+                created_at=remark.created_at,
+                actor=remark.author,
+                visibility="resident" if remark.visible_to_resident else "official",
+                metadata={"visible_to_resident": remark.visible_to_resident},
+            )
+
+        if is_official or is_owner:
+            appeals = obj.appeals.select_related(
+                "appellant", "appellant__resident_profile",
+                "reviewed_by", "reviewed_by__resident_profile",
+            )
+            for appeal in appeals:
+                add(
+                    item_id=f"appeal-{appeal.pk}-submitted",
+                    kind="appeal",
+                    body=appeal.reason,
+                    created_at=appeal.created_at,
+                    actor=appeal.appellant,
+                    visibility="resident",
+                    status=appeal.status,
+                    metadata={"phase": "submitted", "appeal_id": appeal.pk},
+                )
+                if appeal.decided_at:
+                    add(
+                        item_id=f"appeal-{appeal.pk}-decision",
+                        kind="appeal",
+                        body=appeal.decision_note or f"Appeal {appeal.get_status_display().lower()}.",
+                        created_at=appeal.decided_at,
+                        actor=appeal.reviewed_by,
+                        visibility="resident",
+                        status=appeal.status,
+                        metadata={"phase": "decision", "appeal_id": appeal.pk},
+                    )
+
+        items.sort(key=lambda item: (item["_sort_at"], item["kind"], item["id"]))
+        for item in items:
+            item.pop("_sort_at", None)
+        return items
 
 
 class ConcernCreateSerializer(serializers.Serializer):
@@ -485,6 +832,8 @@ class ConcernStatusUpdateSerializer(serializers.Serializer):
 
 class AnnouncementSerializer(serializers.ModelSerializer):
     date_label = serializers.SerializerMethodField()
+    status_label = serializers.SerializerMethodField()
+    image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Announcement
@@ -495,17 +844,63 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             "tag",
             "audience",
             "barangay",
+            "urgency",
+            "is_pinned",
             "is_published",
             "published_at",
+            "starts_at",
+            "expires_at",
+            "notification_sent_at",
+            "image",
+            "image_url",
+            "image_alt",
             "date_label",
+            "status_label",
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("created_at", "updated_at")
+        read_only_fields = ("created_at", "updated_at", "notification_sent_at", "image_url")
+        extra_kwargs = {"image": {"required": False, "write_only": True}}
+
+    def validate_image(self, value):
+        if not value:
+            return value
+        mime_type = (getattr(value, "content_type", "") or "").lower()
+        if not mime_type.startswith("image/"):
+            raise serializers.ValidationError("Announcement media must be an image.")
+        if getattr(value, "size", 0) > 8 * 1024 * 1024:
+            raise serializers.ValidationError("Announcement image must be 8MB or smaller.")
+        return value
+
+    def validate(self, attrs):
+        starts_at = attrs.get("starts_at", getattr(self.instance, "starts_at", None))
+        expires_at = attrs.get("expires_at", getattr(self.instance, "expires_at", None))
+        if starts_at and expires_at and expires_at <= starts_at:
+            raise serializers.ValidationError({"expires_at": "Expiry must be after the scheduled start."})
+        return attrs
 
     def get_date_label(self, obj):
-        target = obj.published_at or obj.created_at
+        target = obj.starts_at or obj.published_at or obj.created_at
         return target.strftime("%b %d, %Y")
+
+    def get_status_label(self, obj):
+        from django.utils import timezone
+
+        now = timezone.now()
+        if not obj.is_published:
+            return "draft"
+        if obj.starts_at and obj.starts_at > now:
+            return "scheduled"
+        if obj.expires_at and obj.expires_at <= now:
+            return "expired"
+        return "published"
+
+    def get_image_url(self, obj):
+        if not obj.image:
+            return None
+        request = self.context.get("request")
+        url = obj.image.url
+        return request.build_absolute_uri(url) if request else url
 
 
 class BarangayEventSerializer(serializers.ModelSerializer):
@@ -526,6 +921,13 @@ class BarangayEventSerializer(serializers.ModelSerializer):
             "updated_at",
         )
         read_only_fields = ("created_at", "updated_at")
+
+    def validate(self, attrs):
+        starts_at = attrs.get("starts_at", getattr(self.instance, "starts_at", None))
+        ends_at = attrs.get("ends_at", getattr(self.instance, "ends_at", None))
+        if starts_at and ends_at and ends_at <= starts_at:
+            raise serializers.ValidationError({"ends_at": "The event must end after it starts."})
+        return attrs
 
     def get_time_label(self, obj):
         if not obj.starts_at:

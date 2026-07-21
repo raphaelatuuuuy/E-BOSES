@@ -61,7 +61,7 @@ OVERPASS_URLS = (
 OSM_POI_CACHE_KEY = "locations-osm-pois:v2"
 OSM_POI_CACHE_TTL = 60 * 60 * 6  # 6 hours
 OSM_POI_FAIL_TTL = 90  # brief empty so map still loads; retries soon
-MAP_CONTEXT_CACHE_KEY = "locations-map-context:v3"
+MAP_CONTEXT_CACHE_KEY = "locations-map-context:v4"
 MAP_CONTEXT_CACHE_TTL = 300
 
 POI_TYPE_META: list[dict[str, str]] = [
@@ -147,6 +147,51 @@ def point_in_geojson(longitude: float, latitude: float, geometry: dict | None) -
     return None
 
 
+def _distance_to_ring_meters(longitude: float, latitude: float, ring: list) -> float | None:
+    """Return the approximate shortest distance from a point to a GeoJSON ring."""
+    if not ring or len(ring) < 2:
+        return None
+    # A local equirectangular projection is accurate enough for a barangay-sized
+    # boundary and avoids a GIS runtime dependency for the JSON map geometry.
+    lat_scale = 110_540.0
+    lng_scale = 111_320.0 * math.cos(math.radians(latitude))
+    px, py = longitude * lng_scale, latitude * lat_scale
+    shortest = float("inf")
+    for first, second in zip(ring, ring[1:]):
+        if len(first) < 2 or len(second) < 2:
+            continue
+        ax, ay = first[0] * lng_scale, first[1] * lat_scale
+        bx, by = second[0] * lng_scale, second[1] * lat_scale
+        dx, dy = bx - ax, by - ay
+        length_sq = dx * dx + dy * dy
+        if length_sq:
+            projection = ((px - ax) * dx + (py - ay) * dy) / length_sq
+            projection = min(1.0, max(0.0, projection))
+        else:
+            projection = 0.0
+        distance = math.hypot(px - (ax + projection * dx), py - (ay + projection * dy))
+        shortest = min(shortest, distance)
+    return None if shortest == float("inf") else shortest
+
+
+def distance_to_geojson_boundary_meters(longitude: float, latitude: float, geometry: dict | None) -> float | None:
+    """Return the shortest distance to a Polygon/MultiPolygon boundary in meters."""
+    if not geometry:
+        return None
+    polygons = geometry.get("coordinates") or []
+    if geometry.get("type") == "Polygon":
+        polygons = [polygons]
+    if geometry.get("type") != "MultiPolygon" and not polygons:
+        return None
+    distances = []
+    for polygon in polygons:
+        for ring in polygon or []:
+            distance = _distance_to_ring_meters(longitude, latitude, ring)
+            if distance is not None:
+                distances.append(distance)
+    return min(distances) if distances else None
+
+
 def get_active_boundary_geometry() -> dict | None:
     try:
         from apps.emergencies.models import MapGeometry
@@ -161,6 +206,44 @@ def get_active_boundary_geometry() -> dict | None:
     except Exception:
         pass
     return None
+
+
+def dispatch_policy_payload() -> dict[str, Any]:
+    try:
+        from apps.emergencies.models import MapDispatchPolicy
+
+        return MapDispatchPolicy.current().as_payload()
+    except Exception:
+        return {
+            "id": None,
+            "barangay": "Marikina Heights",
+            "acceptance_center_latitude": MARIKINA_HEIGHTS_CENTER["latitude"],
+            "acceptance_center_longitude": MARIKINA_HEIGHTS_CENTER["longitude"],
+            "acceptance_radius_meters": 800,
+            "out_of_zone_action": "review",
+            "witness_radius_meters": 250,
+            "responder_nearby_radius_meters": 100,
+            "updated_at": None,
+        }
+
+
+def acceptance_zone_result(latitude: float, longitude: float) -> dict[str, Any]:
+    policy = dispatch_policy_payload()
+    distance = haversine_meters(
+        float(latitude),
+        float(longitude),
+        float(policy["acceptance_center_latitude"]),
+        float(policy["acceptance_center_longitude"]),
+    )
+    radius = int(policy["acceptance_radius_meters"])
+    return {
+        "center_latitude": policy["acceptance_center_latitude"],
+        "center_longitude": policy["acceptance_center_longitude"],
+        "radius_meters": radius,
+        "distance_meters": round(distance),
+        "within": distance <= radius,
+        "action": policy["out_of_zone_action"],
+    }
 
 
 def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
@@ -188,9 +271,15 @@ def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
     in_heights_bbox = point_in_bbox(lat, lng, MARIKINA_HEIGHTS_BOUNDS)
     in_city = point_in_bbox(lat, lng, MARIKINA_CITY_BOUNDS)
     dist_bbox = meters_outside_bbox(lat, lng, MARIKINA_HEIGHTS_BOUNDS)
+    boundary_distance = (
+        distance_to_geojson_boundary_meters(lng, lat, geometry)
+        if in_poly is False
+        else None
+    )
+    distance_outside = boundary_distance if boundary_distance is not None else dist_bbox
 
     if in_poly is True or (in_poly is None and in_heights_bbox):
-        return {
+        result = {
             "status": "inside",
             "zone": "barangay",
             "accepted": True,
@@ -198,6 +287,20 @@ def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
             "message": "Location is inside Barangay Marikina Heights.",
             "distance_meters": 0,
         }
+        zone = acceptance_zone_result(lat, lng)
+        result["acceptance_zone"] = zone
+        if not zone["within"]:
+            if zone["action"] == "block":
+                result.update({
+                    "status": "far",
+                    "zone": "outside_acceptance_zone",
+                    "accepted": False,
+                    "message": "Location is outside the official acceptance zone.",
+                })
+            else:
+                result["warning"] = "Location is inside the barangay but outside the official acceptance zone."
+                result["message"] = "Inside barangay; outside configured acceptance zone."
+        return result
 
     # Outside polygon or bbox
     if not in_city and dist_bbox > HARD_REJECT_METERS:
@@ -210,20 +313,31 @@ def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
             "distance_meters": round(dist_bbox),
         }
 
-    if dist_bbox <= SOFT_BUFFER_METERS:
-        return {
+    if distance_outside <= SOFT_BUFFER_METERS:
+        result = {
             "status": "edge",
             "zone": "edge_buffer",
             "accepted": True,
             "warning": (
                 "This pin is just outside the barangay boundary "
-                f"(~{round(dist_bbox)} m). Continue only if the concern is on the edge."
+                f"(~{round(distance_outside)} m). Continue only if the concern is on the edge."
             ),
             "message": "Near the barangay boundary.",
-            "distance_meters": round(dist_bbox),
+            "distance_meters": round(distance_outside),
         }
+        zone = acceptance_zone_result(lat, lng)
+        result["acceptance_zone"] = zone
+        if not zone["within"] and zone["action"] == "block":
+            result.update({
+                "status": "far",
+                "zone": "outside_acceptance_zone",
+                "accepted": False,
+                "warning": None,
+                "message": "Location is outside the official acceptance zone.",
+            })
+        return result
 
-    if dist_bbox <= HARD_REJECT_METERS and in_city:
+    if distance_outside <= HARD_REJECT_METERS and in_city:
         return {
             "status": "far",
             "zone": "outside_barangay",
@@ -233,7 +347,7 @@ def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
                 "Location is outside Barangay Marikina Heights. "
                 "Please pin a place inside the barangay (or within a few hundred meters of the boundary)."
             ),
-            "distance_meters": round(dist_bbox),
+            "distance_meters": round(distance_outside),
         }
 
     return {
@@ -242,7 +356,7 @@ def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
         "accepted": False,
         "warning": None,
         "message": "Location is too far from Barangay Marikina Heights.",
-        "distance_meters": round(dist_bbox),
+        "distance_meters": round(distance_outside),
     }
 
 
@@ -806,6 +920,7 @@ def map_context_payload() -> dict[str, Any]:
         "city_bounds": MARIKINA_CITY_BOUNDS,
         "soft_buffer_meters": SOFT_BUFFER_METERS,
         "hard_reject_meters": HARD_REJECT_METERS,
+        "dispatch_policy": dispatch_policy_payload(),
         "boundary": {
             "name": "Marikina Heights",
             "osm_relation_id": MARIKINA_HEIGHTS_OSM_RELATION_ID,

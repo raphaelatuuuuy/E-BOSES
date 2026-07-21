@@ -6,6 +6,7 @@ import { SidebarProvider } from "@/features/dashboard/components/sidebar-context
 import { SOSButton } from "@/features/dashboard/components/sos-button"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { MobileNav } from "@/features/dashboard/components/mobile-nav"
+import { ResponderDispatchFab } from "@/features/dashboard/components/responder-dispatch-fab"
 import { useLocationPing } from "@/features/dashboard/hooks/use-location-ping"
 import { NotificationProvider, fetchConcern } from "@/features/dashboard/components/notification-context"
 import { NotificationPopover } from "@/features/dashboard/components/notification-popover"
@@ -57,6 +58,7 @@ function DashboardContent() {
   const isAlertsMapRoute =
     location.pathname === "/dashboard/alerts-map" ||
     location.pathname.endsWith("/alerts-map")
+  const isResponderMapRoute = location.pathname === "/dashboard/responders/map"
   const isBackChromeRoute =
     location.pathname.startsWith("/dashboard/settings") ||
     location.pathname.startsWith("/dashboard/profile") ||
@@ -65,7 +67,7 @@ function DashboardContent() {
     location.pathname.startsWith("/dashboard/settings/reverify/") ||
     location.pathname === "/dashboard/settings/change-password"
   const hideMobileNav =
-    isMobile && (isAlertsMapRoute || isBackChromeRoute || isAccountWizardRoute)
+    isMobile && (isBackChromeRoute || isAccountWizardRoute)
 
   const [statusDialogOpen, setStatusDialogOpen] = React.useState(false)
   const [statusDialogMode, setStatusDialogMode] = React.useState<StatusDialogMode>("submitted")
@@ -93,7 +95,7 @@ function DashboardContent() {
   const shellHome = isResident
     ? "/dashboard/home"
     : user?.role === "first_responder"
-      ? "/dashboard/emergencies"
+      ? "/dashboard/responders/map"
       : "/dashboard/alerts-map"
 
   const statusDialog = statusDialogReport ? (
@@ -152,6 +154,8 @@ function DashboardContent() {
               className={
                 hideMobileNav
                   ? "flex min-h-svh min-w-0 flex-col overflow-hidden bg-white"
+                  : isResponderMapRoute
+                    ? "flex min-h-svh min-w-0 flex-col overflow-hidden bg-white"
                   : "flex min-h-svh min-w-0 flex-col overflow-x-hidden bg-white pb-24"
               }
             >
@@ -179,6 +183,8 @@ function DashboardContent() {
         {isResident ? (
           <SOSButton suppressed={isAlertsMapRoute || isAccountWizardRoute} />
         ) : null}
+
+        {!isResident ? <ResponderDispatchFab /> : null}
 
         {statusDialog}
       </div>

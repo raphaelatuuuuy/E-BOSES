@@ -252,6 +252,15 @@ _default_cors_origins = [
 if frontend_origin and frontend_origin not in _default_cors_origins:
     _default_cors_origins.append(frontend_origin)
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=_default_cors_origins)
+_default_cors_origin_regexes = []
+if IS_LOCAL_DEVELOPMENT:
+    _default_cors_origin_regexes = [
+        r"^https://[a-z0-9-]+\.ngrok-free\.app$",
+        r"^https://[a-z0-9-]+\.ngrok-free\.dev$",
+        r"^https://[a-z0-9-]+\.ngrok\.app$",
+        r"^https://[a-z0-9-]+\.ngrok\.dev$",
+    ]
+CORS_ALLOWED_ORIGIN_REGEXES = env.list("CORS_ALLOWED_ORIGIN_REGEXES", default=_default_cors_origin_regexes)
 
 # Deployment security
 # Local/LAN demos use plain HTTP — secure cookies must stay off in development.
@@ -278,6 +287,18 @@ _default_csrf_trusted = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
 ]
+if IS_LOCAL_DEVELOPMENT:
+    _default_csrf_trusted.extend(
+        env.list(
+            "LOCAL_HTTPS_TUNNEL_ORIGINS",
+            default=[
+                "https://*.ngrok-free.app",
+                "https://*.ngrok-free.dev",
+                "https://*.ngrok.app",
+                "https://*.ngrok.dev",
+            ],
+        )
+    )
 if frontend_origin and frontend_origin not in _default_csrf_trusted:
     _default_csrf_trusted.append(frontend_origin)
 CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=_default_csrf_trusted)

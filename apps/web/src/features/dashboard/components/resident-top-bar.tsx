@@ -1,24 +1,9 @@
-import { Link, useLocation } from "react-router-dom"
+import { Link } from "react-router-dom"
 
 import { NotificationPopover } from "@/features/dashboard/components/notification-popover"
 import { ProfileAccountMenu } from "@/features/dashboard/components/profile-account-menu"
 import { useResidentSearch } from "@/features/dashboard/components/resident-search-context"
 import { RotatingSearchField } from "@/features/dashboard/components/rotating-search-field"
-
-function staffPageTitle(pathname: string) {
-  if (pathname.includes("/emergencies")) return "Emergency ops"
-  if (pathname.includes("/alerts-map")) return "Alerts map"
-  if (pathname.includes("/reports")) return "Concerns"
-  if (pathname.includes("/verification-queue")) return "Verification"
-  if (pathname.includes("/ocr-templates")) return "ID templates"
-  if (pathname.includes("/concern-classification")) return "Classification"
-  if (pathname.includes("/admin")) return "Admin"
-  if (pathname.includes("/profile")) return "Profile"
-  if (pathname.includes("/settings")) return "Settings"
-  if (pathname.includes("/notifications")) return "Notifications"
-  if (pathname.includes("/home")) return "Dashboard"
-  return "Operations"
-}
 
 /** Layout tokens — MUST match home body grid */
 export const RESIDENT_FEED_MAX = 680
@@ -119,18 +104,23 @@ export function ResidentLogoBar({ homeTo = "/dashboard/home" }: { homeTo?: strin
  * Page title left · bell + avatar right — same white bar as residents.
  */
 export function OfficialMainTopBar() {
-  const location = useLocation()
-  const title = staffPageTitle(location.pathname)
+  const { search, setSearch } = useResidentSearch()
 
   return (
     <header className="sticky top-0 z-40 h-14 w-full shrink-0 border-b border-neutral-100 bg-white">
-      <div className="flex h-14 w-full items-center justify-between gap-3 px-4 sm:px-6">
-        <div className="min-w-0">
-          <p className="truncate text-[17px] font-bold tracking-tight text-neutral-900 sm:text-[18px]">
-            {title}
-          </p>
+      <div className="relative flex h-14 w-full items-center">
+        <div className="pointer-events-none absolute inset-0 flex justify-center">
+          <div className="flex h-14 w-full max-w-md items-center justify-center px-4 sm:px-6">
+            <div className="pointer-events-auto w-full">
+              <RotatingSearchField
+                value={search}
+                onChange={setSearch}
+                maxWidth={RESIDENT_SEARCH_MAX}
+              />
+            </div>
+          </div>
         </div>
-        <div className="flex shrink-0 items-center gap-0.5">
+        <div className="relative z-10 ml-auto flex shrink-0 items-center gap-0.5 pr-4 sm:pr-6">
           <NotificationPopover />
           <ProfileAccountMenu placeLabel="Marikina Heights" />
         </div>

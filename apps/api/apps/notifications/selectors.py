@@ -6,7 +6,7 @@ def notification_queryset(base_queryset, *, recipient=None, unread_only=False, n
     if recipient is not None:
         queryset = queryset.filter(recipient=recipient)
     if unread_only:
-        queryset = queryset.filter(read_at__isnull=True)
+        queryset = queryset.filter(is_read=False)
     if notification_type:
         queryset = queryset.filter(type=notification_type)
     return queryset

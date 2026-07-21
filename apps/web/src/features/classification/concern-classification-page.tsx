@@ -35,8 +35,8 @@ type Tab = "image" | "report"
 
 const defaults: ConcernClassificationConfig = {
   revision: 0,
-  image_model: "YOLOv8m",
-  text_model: "multilingual zero-shot classification",
+  image_model: "yolov8m.pt",
+  text_model: "multilingual-keyword-v1",
   image_confidence_threshold: 0.7,
   text_relevance_threshold: 0.7,
   duplicate_similarity_threshold: 0.85,
@@ -176,7 +176,7 @@ export default function ConcernClassificationPage() {
     <div className="flex min-h-full flex-col bg-[#f7f8fc]">
       <main className="space-y-5 p-4 md:p-7">
         <header className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div><h1 className="text-2xl font-black text-[#07145f] md:text-3xl">AI Report Validation</h1><p className="mt-2 max-w-2xl text-sm font-semibold text-[#43507f]">Configure how AI checks citizen-submitted concerns before an official makes the final decision.</p></div>
+          <div><h1 className="text-2xl font-black text-[#07145f] md:text-3xl">Base AI Report Validation</h1><p className="mt-2 max-w-2xl text-sm font-semibold text-[#43507f]">Configure how base YOLOv8m image detection and the built-in multilingual keyword checker guide officials before the final decision.</p></div>
           <div className="flex flex-wrap gap-2"><Button onClick={() => void save()} disabled={Boolean(busy)} className="bg-[#145be7] text-white hover:bg-[#104bc0]"><SaveIcon className="size-4" /> {busy === "save" ? "Saving…" : "Save Configuration"}</Button><Button variant="outline" onClick={() => void reset()} disabled={Boolean(busy)}><RotateCcwIcon className="size-4" /> Reset Defaults</Button><Button variant="outline" onClick={() => document.getElementById(tab === "image" ? "test-image-detection" : "test-report-validation")?.scrollIntoView({ behavior: "smooth" })}><TestTube2Icon className="size-4" /> Test Validation</Button></div>
         </header>
 
@@ -191,7 +191,7 @@ export default function ConcernClassificationPage() {
 
         {tab === "image" ? <div className="grid gap-5 xl:grid-cols-12">
           <Panel title="Supported Classes" step={1} className="xl:col-span-6">
-            <p className="mb-4 text-sm font-semibold text-[#43507f]">YOLOv8m’s base model can recognize these 80 general COCO objects. Use Category Mapping to decide what a detected object means for E-Boses.</p>
+            <p className="mb-4 text-sm font-semibold text-[#43507f]">The base YOLOv8m model can recognize these 80 general COCO objects. Use Category Mapping to decide what a detected object means for E-Boses.</p>
             <div className="grid max-h-64 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-4">{(config.supported_classes ?? []).map((label) => <div key={label} className="rounded-xl border border-[#dfe7f5] bg-[#f8fafc] p-3"><div className="flex items-center justify-between gap-2"><span className="font-black capitalize text-[#07145f]">{label}</span><CheckCircle2Icon className="size-4 text-green-600" /></div><p className="mt-1 text-[11px] font-semibold text-[#68739c]">COCO-supported</p></div>)}</div>
             <div className="mt-4"><ModelStatus ready={config.image_available === true} name="YOLOv8 medium (COCO base)" detail={config.image_available ? "General-object detection is available. Civic meanings still depend on the mapping rules." : "Model weights are unavailable. Photos safely go to an official until configured."} /></div>
           </Panel>
@@ -211,7 +211,7 @@ export default function ConcernClassificationPage() {
             <OutcomeCard tone="amber" title="Irrelevant" detail="The description does not match the selected category." example="Category: Flood · Description: There are many stray dogs." />
             <OutcomeCard tone="red" title="Suspicious" detail="Potential spam, abuse, or meaningless text." example="asdfasdf, test, 123123" />
           </div>
-          <Panel title="Minimum Description Requirements" className="xl:col-span-3"><label className="flex items-center justify-between text-sm font-black text-[#07145f]">Character Count <span className="text-lg text-[#145be7]">{config.minimum_description_length}</span></label><input type="range" min="10" max="150" step="5" value={config.minimum_description_length} onChange={(event) => update("minimum_description_length", Number(event.target.value))} className="mt-3 w-full accent-[#145be7]" /><p className="mt-3 text-xs font-semibold leading-5 text-[#68739c]">Reports shorter than this are flagged for review.</p><div className="mt-4"><ModelStatus name="Multilingual text checker" detail="Supports Filipino, Taglish, and English descriptions." /></div></Panel>
+          <Panel title="Minimum Description Requirements" className="xl:col-span-3"><label className="flex items-center justify-between text-sm font-black text-[#07145f]">Character Count <span className="text-lg text-[#145be7]">{config.minimum_description_length}</span></label><input type="range" min="10" max="150" step="5" value={config.minimum_description_length} onChange={(event) => update("minimum_description_length", Number(event.target.value))} className="mt-3 w-full accent-[#145be7]" /><p className="mt-3 text-xs font-semibold leading-5 text-[#68739c]">Reports shorter than this are flagged for review.</p><div className="mt-4"><ModelStatus name={config.text_model || "multilingual-keyword-v1"} detail="Built-in base keyword checker for Filipino, Taglish, and English descriptions." /></div></Panel>
           <Panel title="Suspicious Content Rules" className="xl:col-span-3"><div className="flex flex-wrap gap-2">{config.suspicious_terms.map((word) => <button key={word} type="button" onClick={() => update("suspicious_terms", config.suspicious_terms.filter((item) => item !== word))} className="rounded-full bg-red-50 px-3 py-1.5 text-xs font-bold text-red-700">{word} ×</button>)}</div><div className="mt-3 flex gap-2"><input value={term} onChange={(event) => setTerm(event.target.value)} placeholder="Add keyword" className="h-10 min-w-0 flex-1 rounded-lg border border-[#cbd8ee] px-3 text-sm font-semibold text-[#07145f]" /><Button variant="outline" onClick={() => { const next = term.trim().toLowerCase(); if (next && !config.suspicious_terms.includes(next)) update("suspicious_terms", [...config.suspicious_terms, next]); setTerm("") }}><PlusIcon className="size-4" /> Add</Button></div><p className="mt-3 text-xs font-semibold text-[#68739c]">These terms flag a report; they do not automatically reject it.</p></Panel>
           <Panel title="Duplicate Report Detection" className="xl:col-span-2"><label className="mb-4 flex items-center justify-between text-sm font-black text-[#07145f]">Enabled <input type="checkbox" checked={config.flag_duplicates} onChange={(event) => update("flag_duplicates", event.target.checked)} className="size-5 accent-[#145be7]" /></label><RangeSetting label="Similarity Threshold" value={config.duplicate_similarity_threshold} onChange={(value) => update("duplicate_similarity_threshold", value)} help="Similar nearby reports are flagged for officials to combine." /></Panel>
           <Panel title="Relevance Threshold" className="xl:col-span-2"><RangeSetting label="Required Match" value={config.text_relevance_threshold} onChange={(value) => update("text_relevance_threshold", value)} help="Below this score, the report is marked Irrelevant and reviewed." /></Panel>

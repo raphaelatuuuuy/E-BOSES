@@ -213,11 +213,13 @@ export default function FeedPage() {
     return window.innerWidth >= 640 ? 2 : 1
   })
   const [filterStart, setFilterStart] = useState(0)
+  const maxFilterStart = Math.max(0, filters.length - filterPageSize)
+  const visibleFilterStart = Math.min(filterStart, maxFilterStart)
 
   function moveFilterRail(direction: -1 | 1) {
     setFilterStart((current) =>
       Math.min(
-        filters.length - filterPageSize,
+        maxFilterStart,
         Math.max(0, current + direction * filterPageSize),
       ),
     )
@@ -232,10 +234,6 @@ export default function FeedPage() {
     window.addEventListener("resize", syncFilterPageSize)
     return () => window.removeEventListener("resize", syncFilterPageSize)
   }, [])
-
-  useEffect(() => {
-    setFilterStart((current) => Math.min(current, Math.max(0, filters.length - filterPageSize)))
-  }, [filterPageSize])
 
   async function loadFeed() {
     if (!hasLoadedRef.current) {
@@ -266,12 +264,13 @@ export default function FeedPage() {
   }
 
   useEffect(() => {
-    void loadFeed()
+    const initialLoad = window.setTimeout(() => void loadFeed(), 0)
     function refresh() { void loadFeed() }
     const interval = window.setInterval(refresh, 30000)
     window.addEventListener("eboses:report-created", refresh)
     window.addEventListener("eboses:concern-updated", refresh)
     return () => {
+      window.clearTimeout(initialLoad)
       window.clearInterval(interval)
       window.removeEventListener("eboses:report-created", refresh)
       window.removeEventListener("eboses:concern-updated", refresh)
@@ -397,7 +396,7 @@ export default function FeedPage() {
                 <button
                   type="button"
                   onClick={() => moveFilterRail(-1)}
-                  disabled={filterStart === 0}
+                  disabled={visibleFilterStart === 0}
                   className="flex size-10 shrink-0 items-center justify-center rounded-md bg-white text-[#07145f] transition-colors hover:text-[#ff6a1a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ff6a1a]/30 disabled:cursor-default disabled:opacity-35 lg:hidden"
                   aria-label="Show previous filters"
                 >
@@ -407,7 +406,7 @@ export default function FeedPage() {
                   className="grid min-w-0 flex-1 gap-3"
                   style={{ gridTemplateColumns: `repeat(${filterPageSize}, minmax(0, 1fr))` }}
                 >
-                    {filters.slice(filterStart, filterStart + filterPageSize).map((f) => (
+                    {filters.slice(visibleFilterStart, visibleFilterStart + filterPageSize).map((f) => (
                       <button
                         key={f}
                         data-filter-option
@@ -428,7 +427,7 @@ export default function FeedPage() {
                 <button
                   type="button"
                   onClick={() => moveFilterRail(1)}
-                  disabled={filterStart + filterPageSize >= filters.length}
+                  disabled={visibleFilterStart + filterPageSize >= filters.length}
                   className="flex size-10 shrink-0 items-center justify-center rounded-md bg-white text-[#07145f] transition-colors hover:text-[#ff6a1a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ff6a1a]/30 disabled:cursor-default disabled:opacity-35 lg:hidden"
                   aria-label="Show next filters"
                 >
@@ -474,12 +473,12 @@ export default function FeedPage() {
                       <MegaphoneIcon className="size-7" />
                     </div>
                     <div className="min-w-0">
-                      <Badge className="mb-2 border-0 bg-[#fff1ea] text-[10px] font-extrabold uppercase text-[#ff6a1a] hover:bg-[#fff1ea]">{announcement.tag || "Announcement"}</Badge>
+                      <Badge className={cn("mb-2 border-0 text-[10px] font-extrabold uppercase", announcement.urgency === "urgent" ? "bg-red-50 text-red-700 hover:bg-red-50" : announcement.urgency === "important" ? "bg-amber-50 text-amber-700 hover:bg-amber-50" : "bg-[#fff1ea] text-[#ff6a1a] hover:bg-[#fff1ea]")}>{announcement.is_pinned ? "Pinned · " : ""}{announcement.tag || "Announcement"}</Badge>
                       <h2 className="truncate text-lg font-extrabold text-[#07145f]">{announcement.title}</h2>
                       <p className="mt-1 line-clamp-2 text-sm font-semibold leading-6 text-[#43507f]">{announcement.body}</p>
                       <p className="mt-2 text-xs font-bold text-[#2447b3]">Barangay Hall <span className="mx-2 text-[#8b96b8]">•</span>{announcement.date_label}</p>
                     </div>
-                    <img src="/contents/feed-header.png" alt="" className="hidden h-20 w-full rounded-lg object-cover md:block" />
+                    <img src={announcement.image_url || "/contents/feed-header.png"} alt={announcement.image_alt || ""} className="hidden h-20 w-full rounded-lg object-cover md:block" />
                     <div className="flex items-center justify-end gap-5 border-[#dfe7f5] text-[#07145f] md:border-l md:pl-6">
                       <div className="text-center">
                         <p className="text-sm font-extrabold">0</p>
@@ -497,23 +496,25 @@ export default function FeedPage() {
                 const CategoryIcon = style.icon
                 return (
                   <article key={post.id} className="relative rounded-2xl border border-[#dfe7f5] bg-white p-4 shadow-sm">
-                    <div className="grid gap-4 md:grid-cols-[64px_minmax(0,1fr)_120px_150px] md:items-center">
-                      <div className={cn("flex size-14 items-center justify-center rounded-full", style.bg, style.text)}>
-                        <CategoryIcon className="size-7" />
-                      </div>
-
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge className={cn("border-0 text-[10px] font-extrabold uppercase hover:bg-transparent", style.bg, style.text)}>
-                            {categoryLabel(post.category)}
-                          </Badge>
+                    <div className="flex flex-col gap-4 md:grid md:grid-cols-[64px_minmax(0,1fr)_120px_150px] md:items-center">
+                      <div className="flex items-start gap-3 md:contents">
+                        <div className={cn("flex size-14 shrink-0 items-center justify-center rounded-full", style.bg, style.text)}>
+                          <CategoryIcon className="size-7" />
                         </div>
-                        <p className="mt-1 line-clamp-3 text-sm font-semibold leading-6 text-[#07145f]">
-                          {concernBodyText(post)}
-                        </p>
-                        <p className="mt-2 truncate text-xs font-bold text-[#2447b3]">
-                          {post.reporter.full_name} <span className="mx-1 text-[#8b96b8]">•</span> Verified Resident <span className="mx-1 text-[#8b96b8]">•</span> {timeAgo(post.created_at)}
-                        </p>
+
+                        <div className="min-w-0 flex-1 md:min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge className={cn("border-0 text-[10px] font-extrabold uppercase hover:bg-transparent", style.bg, style.text)}>
+                              {categoryLabel(post.category)}
+                            </Badge>
+                          </div>
+                          <p className="mt-1 line-clamp-3 text-sm font-semibold leading-6 text-[#07145f]">
+                            {concernBodyText(post)}
+                          </p>
+                          <p className="mt-2 truncate text-xs font-bold text-[#2447b3]">
+                            {post.reporter.full_name} <span className="mx-1 text-[#8b96b8]">•</span> Verified Resident <span className="mx-1 text-[#8b96b8]">•</span> {timeAgo(post.created_at)}
+                          </p>
+                        </div>
                       </div>
 
                       <div className="hidden md:block">
@@ -522,7 +523,7 @@ export default function FeedPage() {
                         ) : null}
                       </div>
 
-                      <div className="flex items-center justify-between gap-4 border-[#dfe7f5] md:border-l md:pl-6">
+                      <div className="flex items-center justify-between gap-4 border-t border-[#dfe7f5] pt-3 md:border-l md:border-t-0 md:pt-0 md:pl-6">
                         <div className="grid gap-3">
                           <button type="button" onClick={() => void handleVote(post)} className={cn("flex items-center gap-2 text-sm font-extrabold transition-colors", post.user_vote === 1 ? "text-[#ff6a1a]" : "text-[#2447b3] hover:text-[#ff6a1a]")}>
                             <ArrowUpIcon className="size-5" />

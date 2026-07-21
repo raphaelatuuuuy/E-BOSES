@@ -1,26 +1,24 @@
 import { useEffect, useState } from "react"
 import { Link, useLocation } from "react-router-dom"
 import {
-  AlertTriangleIcon,
   BarChart3Icon,
-  FileCheck2Icon,
+  ClockIcon,
   HomeIcon,
   MapPinnedIcon,
   PhoneIcon,
   SearchIcon,
   Settings2Icon,
-  ShieldCheckIcon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import { getActiveEmergency } from "@/features/dashboard/emergency-api"
 
 type NavItem = {
   label: string
   path: string | null
   icon?: typeof HomeIcon
-  isAvatar?: boolean
   /** Flaticon / public glyph used as CSS mask */
   iconSrc?: string
 }
@@ -113,26 +111,19 @@ export function MobileNav() {
   const location = useLocation()
   const { user } = useAuthSession()
 
-  const letter = (user?.firstName?.[0] || user?.lastName?.[0] || "?").toUpperCase()
-
-  const isOfficialRole =
-    user?.role === "barangay_official" || user?.is_staff || user?.is_superuser
-  const isResponderRole = user?.role === "first_responder"
+  const isResponderRole = isResponderUser(user)
+  const isOfficialRole = isOfficialUser(user)
   const isResident = !isOfficialRole && !isResponderRole
 
   const officialItems: NavItem[] = [
-    { label: "Map", path: "/dashboard/alerts-map", icon: MapPinnedIcon },
+    { label: "Alert", path: "/dashboard/alerts-map", icon: MapPinnedIcon },
     { label: "Concerns", path: "/dashboard/reports", icon: BarChart3Icon },
-    { label: "Emergency", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
-    { label: "Queue", path: "/dashboard/verification-queue", icon: FileCheck2Icon },
-    { label: "IDs", path: "/dashboard/ocr-templates", icon: Settings2Icon },
-    { label: "Admin", path: "/dashboard/admin", icon: ShieldCheckIcon },
-    { label: "Profile", path: "/dashboard/profile", isAvatar: true },
+    { label: "Configuration", path: "/dashboard/configuration/id-proof-template", icon: Settings2Icon },
   ]
 
   const responderItems: NavItem[] = [
-    { label: "Emergency", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
-    { label: "Profile", path: "/dashboard/profile", isAvatar: true },
+    { label: "Map", path: "/dashboard/responders/map", icon: MapPinnedIcon },
+    { label: "Shift", path: "/dashboard/responders/shift", icon: ClockIcon },
   ]
 
   /** Latest Flaticon nav glyphs: home · reports · alerts */
@@ -142,10 +133,10 @@ export function MobileNav() {
     { label: "Alerts", path: "/dashboard/alerts-map", iconSrc: "/contents/nav-alert.png" },
   ]
 
-  const navItems = isOfficialRole
-    ? officialItems
-    : isResponderRole
-      ? responderItems
+  const navItems = isResponderRole
+    ? responderItems
+    : isOfficialRole
+      ? officialItems
       : residentItems
 
   return (
@@ -176,32 +167,19 @@ export function MobileNav() {
             {navItems.map((item) => {
               const active = item.path
                 ? location.pathname === item.path ||
+                  location.pathname.startsWith(`${item.path}/`) ||
                   (item.path === "/dashboard/home" &&
                     location.pathname === "/dashboard") ||
                   (item.path === "/dashboard/reports" &&
-                    location.pathname.startsWith("/dashboard/reports"))
+                    location.pathname.startsWith("/dashboard/reports")) ||
+                  (item.path === "/dashboard/configuration/id-proof-template" &&
+                    (location.pathname.startsWith("/dashboard/configuration") ||
+                      location.pathname.startsWith("/dashboard/configuration/map-dispatch") ||
+                      location.pathname.startsWith("/dashboard/ocr-templates") ||
+                      location.pathname.startsWith("/dashboard/verification-queue") ||
+                      location.pathname.startsWith("/dashboard/concern-classification") ||
+                      location.pathname.startsWith("/dashboard/admin")))
                 : false
-
-              if (item.isAvatar) {
-                return (
-                  <Link
-                    key={item.path}
-                    to={item.path!}
-                    className={cn(
-                      "flex h-12 flex-col items-center justify-center gap-0.5 rounded-full",
-                      isResident
-                        ? "w-auto shrink-0 px-3"
-                        : "min-w-0 flex-1 px-1",
-                      active ? "text-neutral-900" : "text-neutral-500",
-                    )}
-                  >
-                    <span className="flex size-7 items-center justify-center rounded-full bg-[#c5d0e6] text-[13px] font-semibold text-[#2c3a5a]">
-                      {letter}
-                    </span>
-                    <span className="text-[10px] font-medium leading-none">{item.label}</span>
-                  </Link>
-                )
-              }
 
               if (isResident && item.iconSrc) {
                 return (

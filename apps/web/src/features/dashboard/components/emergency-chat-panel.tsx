@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Loader2Icon, SendIcon, UsersIcon } from "lucide-react"
+import { Loader2Icon, PaperclipIcon, SendIcon, UsersIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
+import { websocketTicket, websocketUrl } from "@/lib/api"
 import { useAuthSession } from "@/features/auth/auth-session"
 import type { PublicUser } from "@/features/dashboard/api"
 import { FeedUserAvatar } from "@/features/dashboard/components/feed-post-card"
+import { AuthenticatedMediaImage, openAuthenticatedMedia } from "@/features/dashboard/components/authenticated-media"
 import {
   listEmergencyChat,
   sendEmergencyChat,
@@ -43,6 +45,7 @@ export function EmergencyChatPanel({
   disabled,
   incomingMessage,
   participantHint,
+  realtime = true,
   theme = "dark",
   className,
 }: {
@@ -54,6 +57,8 @@ export function EmergencyChatPanel({
   incomingMessage?: EmergencyChatMessage | null
   /** e.g. "2 responders in this room" */
   participantHint?: string
+  /** Disable when a parent tracking socket already supplies incomingMessage. */
+  realtime?: boolean
   /** dark = resident SOS dock; light = responder/official ops */
   theme?: "dark" | "light"
   className?: string
@@ -62,18 +67,22 @@ export function EmergencyChatPanel({
   const [messages, setMessages] = useState<EmergencyChatMessage[]>([])
   const [draft, setDraft] = useState("")
   const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState("")
+  const [connectionState, setConnectionState] = useState<"connecting" | "live" | "polling">("connecting")
   const [sending, setSending] = useState(false)
+  const [attachment, setAttachment] = useState<File | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const isDark = theme === "dark"
+  const userId = user?.id
 
   const isMine = useCallback(
     (msg: EmergencyChatMessage) => {
-      if (user?.id != null && msg.sender?.id != null) {
-        return msg.sender.id === user.id
+      if (userId != null && msg.sender?.id != null) {
+        return msg.sender.id === userId
       }
       return Boolean(msg.is_mine)
     },
-    [user?.id],
+    [userId],
   )
 
   const scrollToBottom = useCallback(() => {
@@ -85,20 +94,77 @@ export function EmergencyChatPanel({
   const load = useCallback(async () => {
     if (!open || !alertId) return
     setLoading(true)
+    setLoadError("")
     try {
       const next = await listEmergencyChat(alertId)
       setMessages(next)
       scrollToBottom()
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not load chat.")
+      const message = error instanceof Error ? error.message : "Could not load chat."
+      setLoadError(message)
+      toast.error(message)
     } finally {
       setLoading(false)
     }
   }, [alertId, open, scrollToBottom])
 
   useEffect(() => {
-    void load()
+    const timer = window.setTimeout(() => void load(), 0)
+    return () => window.clearTimeout(timer)
   }, [load])
+
+  useEffect(() => {
+    if (!open || !alertId || !realtime) return
+    let socket: WebSocket | null = null
+    let reconnectTimer: number | undefined
+    let closed = false
+    let attempts = 0
+
+    async function connect() {
+      setConnectionState("connecting")
+      try {
+        const ticket = await websocketTicket()
+        if (closed) return
+        socket = new WebSocket(
+          websocketUrl(`/ws/emergencies/${alertId}/tracking/?ticket=${encodeURIComponent(ticket)}`),
+        )
+      } catch {
+        setConnectionState("polling")
+        attempts += 1
+        reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** attempts))
+        return
+      }
+      socket.onopen = () => {
+        attempts = 0
+        setConnectionState("live")
+      }
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data) as { type?: string; payload?: EmergencyChatMessage }
+          if (message.type !== "emergency.chat" || !message.payload || message.payload.alert !== alertId) return
+          setMessages((current) => current.some((item) => item.id === message.payload!.id)
+            ? current
+            : [...current, message.payload!])
+        } catch {
+          // The REST poll remains the fallback for malformed frames.
+        }
+      }
+      socket.onclose = () => {
+        if (closed) return
+        setConnectionState("polling")
+        attempts += 1
+        reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** attempts))
+      }
+      socket.onerror = () => socket?.close()
+    }
+
+    void connect()
+    return () => {
+      closed = true
+      if (reconnectTimer) window.clearTimeout(reconnectTimer)
+      socket?.close()
+    }
+  }, [alertId, open, realtime])
 
   useEffect(() => {
     if (!open || !alertId) return
@@ -119,11 +185,14 @@ export function EmergencyChatPanel({
 
   useEffect(() => {
     if (!incomingMessage || incomingMessage.alert !== alertId) return
-    setMessages((prev) => {
-      if (prev.some((m) => m.id === incomingMessage.id)) return prev
-      return [...prev, { ...incomingMessage }]
-    })
-    scrollToBottom()
+    const timer = window.setTimeout(() => {
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === incomingMessage.id)) return prev
+        return [...prev, { ...incomingMessage }]
+      })
+      scrollToBottom()
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [incomingMessage, alertId, scrollToBottom])
 
   useEffect(() => {
@@ -132,11 +201,13 @@ export function EmergencyChatPanel({
 
   async function handleSend() {
     const body = draft.trim()
-    if (!body || sending || disabled) return
+    if ((!body && !attachment) || sending || disabled) return
     setSending(true)
     try {
-      const created = await sendEmergencyChat(alertId, body)
+      const created = await sendEmergencyChat(alertId, body, attachment)
       setDraft("")
+      setAttachment(null)
+      setLoadError("")
       setMessages((prev) => {
         if (prev.some((m) => m.id === created.id)) return prev
         return [...prev, created]
@@ -182,6 +253,8 @@ export function EmergencyChatPanel({
             <span className="truncate">
               {participantHint || "Group room · resident + assigned responders"}
             </span>
+            <span aria-hidden="true"> · </span>
+            <span>{!realtime ? "Live tracking" : connectionState === "live" ? "Live" : connectionState === "connecting" ? "Connecting" : "Polling"}</span>
           </p>
         </div>
         {loading ? (
@@ -192,7 +265,12 @@ export function EmergencyChatPanel({
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
-        {messages.length === 0 && !loading ? (
+        {loadError && messages.length === 0 && !loading ? (
+          <div className="py-6 text-center">
+            <p className={cn("text-[12px]", isDark ? "text-red-200" : "text-red-600")}>{loadError}</p>
+            <button type="button" onClick={() => void load()} className={cn("mt-2 rounded-lg border px-3 py-1.5 text-xs font-bold", isDark ? "border-white/20 text-white" : "border-slate-200 text-[#07145f]")}>Try again</button>
+          </div>
+        ) : messages.length === 0 && !loading ? (
           <p
             className={cn(
               "py-6 text-center text-[12px]",
@@ -260,7 +338,27 @@ export function EmergencyChatPanel({
                         : "rounded-bl-md border border-slate-100 bg-[#f4f6fb] text-[#1a2340]",
                   )}
                 >
-                  {msg.body}
+                  {msg.body ? <p>{msg.body}</p> : null}
+                  {msg.attachment ? (
+                    <div className="mt-2 space-y-1">
+                      {msg.attachment.media_type === "image" && msg.attachment.preview_url ? (
+                        <AuthenticatedMediaImage
+                          src={msg.attachment.preview_url}
+                          alt={msg.attachment.original_filename}
+                          className="max-h-40 max-w-full rounded-lg object-cover"
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          className="text-left text-[12px] underline"
+                          onClick={() => void openAuthenticatedMedia(msg.attachment!.raw_url, msg.attachment!.original_filename)}
+                        >
+                          Open {msg.attachment.original_filename}
+                        </button>
+                      )}
+                      <p className="text-[10px] opacity-70">Media review: {msg.attachment.authenticity}</p>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -272,7 +370,7 @@ export function EmergencyChatPanel({
       {!disabled ? (
         <div
           className={cn(
-            "flex items-end gap-2 border-t p-2.5",
+            "relative flex items-end gap-2 border-t p-2.5",
             isDark ? "border-white/10" : "border-slate-100",
           )}
         >
@@ -294,9 +392,47 @@ export function EmergencyChatPanel({
                 : "border-slate-200 bg-[#f8fafc] text-[#07145f] placeholder:text-slate-400",
             )}
           />
+          <input
+            id={`emergency-chat-media-${alertId}`}
+            type="file"
+            accept="image/*,video/mp4,video/webm,video/quicktime"
+            className="sr-only"
+            onChange={(event) => {
+              const file = event.target.files?.[0] ?? null
+              if (!file) return
+              if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
+                toast.error("Attach an image or video only.")
+                event.currentTarget.value = ""
+                return
+              }
+              if (file.size > 25 * 1024 * 1024) {
+                toast.error("Media must be 25 MB or smaller.")
+                event.currentTarget.value = ""
+                return
+              }
+              setAttachment(file)
+            }}
+          />
+          <label
+            htmlFor={`emergency-chat-media-${alertId}`}
+            className="flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-full border border-slate-200 text-slate-500 hover:bg-slate-50"
+            aria-label="Attach image or video"
+          >
+            <PaperclipIcon className="size-4" />
+          </label>
+          {attachment ? (
+            <button
+              type="button"
+              className="absolute bottom-14 left-3 flex max-w-[70%] items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-700"
+              onClick={() => setAttachment(null)}
+              aria-label="Remove attachment"
+            >
+              <span className="truncate">{attachment.name}</span><XIcon className="size-3 shrink-0" />
+            </button>
+          ) : null}
           <button
             type="button"
-            disabled={sending || !draft.trim()}
+            disabled={sending || (!draft.trim() && !attachment)}
             onClick={() => void handleSend()}
             className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#ff6a1a] text-white hover:bg-[#e85f17] disabled:opacity-50"
             aria-label="Send message"

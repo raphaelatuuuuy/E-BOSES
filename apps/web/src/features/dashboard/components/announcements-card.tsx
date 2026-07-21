@@ -25,6 +25,7 @@ export function AnnouncementsCard({ announcements }: Props) {
         {announcements.slice(0, 3).map((a) => {
           const Icon = iconFor(a)
           const isRoad = `${a.title} ${a.tag}`.toLowerCase().includes("road")
+          const badge = a.is_pinned ? "Pinned" : a.urgency === "urgent" ? "Urgent" : a.urgency === "important" ? "Important" : isRoad ? "" : "New"
           return (
             <article
               key={a.id}
@@ -34,13 +35,16 @@ export function AnnouncementsCard({ announcements }: Props) {
                 <Icon className="size-5" strokeWidth={2} />
               </div>
               <div className="min-w-0 flex-1">
+                {a.image_url ? (
+                  <img src={a.image_url} alt={a.image_alt || ""} className="mb-2 h-24 w-full rounded-xl object-cover" />
+                ) : null}
                 <div className="flex items-start gap-3">
                   <p className="min-w-0 flex-1 text-sm font-bold leading-snug text-[#07145f]">
                     {a.title}
                   </p>
-                  {!isRoad ? (
+                  {badge ? (
                     <Badge className="shrink-0 rounded-full border-0 bg-red-50 px-3 py-1 text-xs font-medium text-red-500">
-                      New
+                      {badge}
                     </Badge>
                   ) : null}
                 </div>

@@ -60,6 +60,9 @@ class Concern(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["barangay", "latitude", "longitude"], name="concern_location_lookup"),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["reporter", "client_request_id"],
@@ -89,6 +92,29 @@ class ConcernMedia(models.Model):
     validation_status = models.CharField(max_length=16, default="accepted")
     validation_detail = models.CharField(max_length=255, blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
+
+
+class ConcernResolutionEvidence(models.Model):
+    concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="resolution_evidence")
+    file = models.FileField(
+        storage=PrivateMediaStorage(),
+        upload_to="raw/concern-resolution-evidence/%Y/%m/",
+    )
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="concern_resolution_evidence",
+    )
+    original_filename = models.CharField(max_length=255)
+    mime_type = models.CharField(max_length=120, blank=True)
+    file_size = models.PositiveIntegerField(default=0)
+    note = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
 
 
 class ConcernStatusEvent(models.Model):
@@ -133,19 +159,33 @@ class Announcement(models.Model):
     class Audience(models.TextChoices):
         ALL = "all", "All"
         RESIDENTS = "residents", "Residents"
+        RESPONDERS = "responders", "Responders"
+        OFFICIALS = "officials", "Officials"
+
+    class Urgency(models.TextChoices):
+        NORMAL = "normal", "Normal"
+        IMPORTANT = "important", "Important"
+        URGENT = "urgent", "Urgent"
 
     title = models.CharField(max_length=160)
     body = models.TextField()
     tag = models.CharField(max_length=40, default="Barangay")
     audience = models.CharField(max_length=24, choices=Audience.choices, default=Audience.ALL)
     barangay = models.CharField(max_length=120, default="Marikina Heights")
+    urgency = models.CharField(max_length=16, choices=Urgency.choices, default=Urgency.NORMAL)
+    is_pinned = models.BooleanField(default=False)
     is_published = models.BooleanField(default=False)
     published_at = models.DateTimeField(null=True, blank=True)
+    starts_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    notification_sent_at = models.DateTimeField(null=True, blank=True)
+    image = models.FileField(storage=PublicMediaStorage(), upload_to="announcements/%Y/%m/", blank=True)
+    image_alt = models.CharField(max_length=160, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["-published_at", "-created_at"]
+        ordering = ["-is_pinned", "-published_at", "-created_at"]
 
 
 class BarangayEvent(models.Model):
@@ -196,6 +236,12 @@ class ConcernAiAssessment(models.Model):
         COMPLETED = "completed", "Completed"
         FAILED = "failed", "Failed"
 
+    class OfficialDecision(models.TextChoices):
+        RELATED = "related", "Related"
+        IRRELEVANT = "irrelevant", "Irrelevant"
+        SUSPICIOUS = "suspicious", "Suspicious"
+        NEEDS_REVIEW = "needs_review", "Needs review"
+
     concern = models.OneToOneField(Concern, on_delete=models.CASCADE, related_name="ai_assessment")
     status = models.CharField(max_length=24, choices=Status.choices, default=Status.NOT_CONFIGURED)
     image_objects = models.JSONField(default=list, blank=True)
@@ -208,6 +254,10 @@ class ConcernAiAssessment(models.Model):
     explanation = models.TextField(blank=True)
     model_version = models.CharField(max_length=80, blank=True)
     raw_result = models.JSONField(default=dict, blank=True)
+    official_decision = models.CharField(max_length=24, choices=OfficialDecision.choices, blank=True)
+    official_reason = models.TextField(blank=True)
+    official_reviewer = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="ai_assessment_reviews")
+    official_reviewed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -350,3 +400,34 @@ class ConcernChatMessage(models.Model):
 
     def __str__(self):
         return f"Chat #{self.pk} on concern {self.concern_id}"
+
+
+class ConcernChatAttachment(models.Model):
+    """Private image/video attachment belonging to one concern chat message."""
+
+    class Kind(models.TextChoices):
+        IMAGE = "image", "Image"
+        VIDEO = "video", "Video"
+
+    class AuthenticityStatus(models.TextChoices):
+        CLEAR = "clear", "No obvious edit detected"
+        FLAGGED = "flagged", "Potentially edited media"
+        REVIEW_REQUIRED = "review_required", "Review required"
+
+    concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="chat_attachments")
+    message = models.OneToOneField(
+        ConcernChatMessage,
+        on_delete=models.CASCADE,
+        related_name="attachment",
+    )
+    file = models.FileField(storage=PrivateMediaStorage(), upload_to="raw/concern-chat/%Y/%m/")
+    original_filename = models.CharField(max_length=255)
+    mime_type = models.CharField(max_length=120)
+    kind = models.CharField(max_length=12, choices=Kind.choices)
+    file_size = models.PositiveIntegerField(default=0)
+    authenticity_status = models.CharField(max_length=24, choices=AuthenticityStatus.choices, default=AuthenticityStatus.REVIEW_REQUIRED)
+    authenticity_detail = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]

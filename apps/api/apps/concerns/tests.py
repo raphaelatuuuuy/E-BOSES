@@ -1,5 +1,6 @@
 from io import BytesIO
-from io import StringIO
+from io import BytesIO, StringIO
+from pathlib import Path
 import uuid
 from unittest.mock import patch
 
@@ -13,15 +14,15 @@ from PIL import Image
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from apps.accounts.models import AccountRequest, AuditLog, ResidenceProof
+from apps.accounts.models import AccountRequest, AuditLog, ResidenceProof, ResidentProfile
 from apps.accounts.services import sha256_file
 from apps.emergencies.models import EmergencyAlert, EmergencyResponderAssignment
 from apps.notifications.models import Notification
 from apps.concerns.ai import process_concern_ai
 from apps.concerns.ai.image_detector import ImageDetectionResult
-from apps.concerns.ai.text_classifier import TextClassificationResult
+from apps.geo_services import classify_location
 
-from .models import Announcement, BarangayEvent, Concern, ConcernAiAssessment, ConcernAppeal, ConcernAssignment, ConcernClarification, ConcernComment, ConcernMedia, ConcernOfficialRemark, ConcernStatusEvent, ConcernVote, ContentFlag
+from .models import Announcement, BarangayEvent, Concern, ConcernAiAssessment, ConcernAppeal, ConcernAssignment, ConcernChatAttachment, ConcernClassificationConfiguration, ConcernClarification, ConcernComment, ConcernMedia, ConcernOfficialRemark, ConcernResolutionEvidence, ConcernStatusEvent, ConcernVote, ContentFlag
 
 def png_bytes():
     output = BytesIO()
@@ -78,7 +79,11 @@ class PrivateMediaAccessTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertFalse(AuditLog.objects.filter(action="media.raw_accessed").exists())
 
-    def test_public_can_access_safe_residence_proof_preview(self):
+    def test_only_authorized_user_can_access_safe_residence_proof_preview(self):
+        unauthenticated = self.client.get(f"/api/auth/media/residence-proofs/{self.proof.pk}/preview/")
+        self.assertEqual(unauthenticated.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        self.client.force_authenticate(self.owner)
         response = self.client.get(f"/api/auth/media/residence-proofs/{self.proof.pk}/preview/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -109,6 +114,8 @@ class PrivateMediaAccessTests(APITestCase):
         preview = b"".join(response.streaming_content)
         self.assertTrue(preview.startswith(b"\xff\xd8"))
         self.assertNotEqual(preview, png_bytes())
+        self.media.refresh_from_db()
+        self.assertIn("redacted-v2-", self.media.preview_file.name)
 
     def test_public_cannot_access_private_concern_media_preview(self):
         self.concern.visibility = Concern.Visibility.PRIVATE
@@ -151,22 +158,24 @@ class ResidentDashboardAPITests(APITestCase):
         self.client.force_authenticate(self.resident)
 
     def test_resident_can_create_report_with_initial_status_event(self):
-        response = self.client.post(
-            "/api/concerns/",
-            {
-                "title": "Broken streetlight",
-                "description": "Madilim sa kanto at delikado para sa mga dumadaan.",
-                "category": "infrastructure",
-                "visibility": "community",
-                "address": "Bayan-Bayanan St.",
-                "latitude": "14.6515000",
-                "longitude": "121.1207000",
-                "location_source": "manual_pin",
-                "location_accuracy": 12.5,
-                "media": png_upload("streetlight.png"),
-            },
-            format="multipart",
-        )
+        with patch("apps.concerns.tasks.process_concern_ai_task.delay") as enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    "/api/concerns/",
+                    {
+                        "title": "Broken streetlight",
+                        "description": "Madilim sa kanto at delikado para sa mga dumadaan.",
+                        "category": "infrastructure",
+                        "visibility": "community",
+                        "address": "Bayan-Bayanan St.",
+                        "latitude": "14.6515000",
+                        "longitude": "121.1207000",
+                        "location_source": "manual_pin",
+                        "location_accuracy": 12.5,
+                        "media": png_upload("streetlight.png"),
+                    },
+                    format="multipart",
+                )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         concern = Concern.objects.get(pk=response.data["id"])
@@ -182,6 +191,7 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(response.data["ai_assessment"]["status"], ConcernAiAssessment.Status.PENDING)
         self.assertRegex(response.data["tracking_id"], r"^RPT-\d{4}-\d{6}$")
         self.assertEqual(response.data["validation_status"], "accepted")
+        enqueue.assert_called_once_with(concern.pk)
 
     def test_unverified_account_cannot_access_resident_dashboard_apis(self):
         pending = get_user_model().objects.create_user(
@@ -226,20 +236,61 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(detail.data["tracking_id"], first.data["tracking_id"])
 
     def test_feed_reporter_does_not_expose_private_identity_or_location_fields(self):
+        ResidentProfile.objects.create(
+            user=self.other,
+            first_name="Private",
+            last_name="Resident",
+            date_of_birth="1990-01-01",
+            address="123 Exact Home Street, Marikina Heights",
+            barangay="Marikina Heights",
+        )
         concern = Concern.objects.create(
             reporter=self.other,
             title="Privacy-safe community report",
             description="A community report that should use a privacy-safe public actor.",
             visibility=Concern.Visibility.COMMUNITY,
             validation_status=Concern.ValidationStatus.ACCEPTED,
+            address="123 Exact Home Street",
+            barangay="Marikina Heights",
+            latitude="14.6515000",
+            longitude="121.1207000",
+        )
+        media_file = png_upload("public-evidence.png")
+        ConcernMedia.objects.create(
+            concern=concern,
+            file=media_file,
+            original_filename="public-evidence.png",
+            mime_type="image/png",
+            file_size=media_file.size,
         )
 
         response = self.client.get("/api/concerns/feed/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        reporter = next(item["reporter"] for item in response.data if item["id"] == concern.pk)
+        public_item = next(item for item in response.data if item["id"] == concern.pk)
+        reporter = public_item["reporter"]
         for private_field in ("email", "phone_number", "date_of_birth", "gender", "current_latitude", "current_longitude"):
             self.assertNotIn(private_field, reporter)
+        self.assertEqual(reporter["street"], "")
+        self.assertEqual(public_item["address"], "Marikina Heights")
+        self.assertIsNone(public_item["latitude"])
+        self.assertIsNone(public_item["longitude"])
+        self.assertTrue(public_item["media"][0]["preview_url"])
+        self.assertEqual(public_item["media"][0]["raw_url"], "")
+
+        public_detail = self.client.get(f"/api/concerns/{concern.public_id}/")
+        self.assertEqual(public_detail.status_code, status.HTTP_200_OK)
+        self.assertEqual(public_detail.data["address"], "Marikina Heights")
+        self.assertIsNone(public_detail.data["latitude"])
+        self.assertEqual(public_detail.data["reporter"]["street"], "")
+        self.assertEqual(public_detail.data["media"][0]["raw_url"], "")
+
+        self.client.force_authenticate(self.other)
+        owner_detail = self.client.get(f"/api/concerns/{concern.public_id}/")
+        self.assertEqual(owner_detail.status_code, status.HTTP_200_OK)
+        self.assertEqual(owner_detail.data["address"], "123 Exact Home Street")
+        self.assertEqual(owner_detail.data["latitude"], "14.6515000")
+        self.assertTrue(owner_detail.data["media"][0]["raw_url"])
 
     def test_non_resident_roles_cannot_create_report(self):
         User = get_user_model()
@@ -281,9 +332,29 @@ class ResidentDashboardAPITests(APITestCase):
         call_command("process_concern_ai", "--pending", stdout=output)
 
         concern.ai_assessment.refresh_from_db()
-        self.assertEqual(concern.ai_assessment.status, ConcernAiAssessment.Status.COMPLETED)
+        self.assertEqual(concern.ai_assessment.status, ConcernAiAssessment.Status.NOT_CONFIGURED)
         self.assertIn("Concern", output.getvalue())
-        self.assertIn("official review", concern.ai_assessment.recommendation)
+        self.assertIn("review", concern.ai_assessment.recommendation.lower())
+
+    @override_settings(EBOSES_YOLO_MODEL_PATH="", EBOSES_NLP_MODEL_PATH="")
+    def test_concern_ai_task_runs_base_text_assessment_without_external_model(self):
+        from apps.concerns.tasks import process_concern_ai_task
+
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Tambak na basura sa kanto",
+            description="Maraming garbage at basura malapit sa covered court.",
+            category=Concern.Category.ENVIRONMENT,
+        )
+        ConcernAiAssessment.objects.create(concern=concern, status=ConcernAiAssessment.Status.PENDING)
+
+        task_result = process_concern_ai_task.apply(args=[concern.pk]).get()
+
+        concern.ai_assessment.refresh_from_db()
+        self.assertEqual(task_result["concern_id"], concern.pk)
+        self.assertEqual(concern.ai_assessment.nlp_validity, "related_environment")
+        self.assertTrue(concern.ai_assessment.raw_result["text"]["inference_succeeded"])
+        self.assertEqual(concern.ai_assessment.raw_result["text"]["model_version"], "multilingual-keyword-v1")
 
     @override_settings(EBOSES_YOLO_MODEL_PATH="configured.pt", EBOSES_NLP_MODEL_PATH="configured-nlp")
     def test_ai_pipeline_stores_completed_assessment(self):
@@ -293,29 +364,41 @@ class ResidentDashboardAPITests(APITestCase):
             description="Baradong kanal sa gilid ng kalsada.",
             category=Concern.Category.INFRASTRUCTURE,
         )
-        with patch("apps.concerns.ai.pipeline.YoloImageDetector") as detector, patch("apps.concerns.ai.pipeline.RobertaTagalogClassifier") as classifier:
+        with patch("apps.concerns.ai.pipeline.YoloImageDetector") as detector, patch("apps.concerns.ai.text_classifier.RobertaTagalogClassifier") as classifier:
             detector.return_value.detect.return_value = ImageDetectionResult(
                 objects=[{"label": "drainage", "confidence": 0.91}],
                 confidence=0.91,
                 model_version="fake-yolo",
             )
-            classifier.return_value.classify.return_value = TextClassificationResult(
-                label="valid_infrastructure",
-                confidence=0.88,
-                category=Concern.Category.INFRASTRUCTURE,
-                severity="medium",
-                model_version="fake-roberta",
-            )
 
             assessment = process_concern_ai(concern.id)
 
         self.assertEqual(assessment.status, ConcernAiAssessment.Status.COMPLETED)
-        self.assertEqual(assessment.nlp_validity, "valid_infrastructure")
+        classifier.assert_not_called()
+        self.assertEqual(assessment.nlp_validity, "related_infrastructure")
         self.assertTrue(assessment.category_match)
         self.assertIn("fake-yolo", assessment.model_version)
+        self.assertIn("nlp:multilingual-keyword-v1", assessment.model_version)
+
+    @override_settings(EBOSES_YOLO_MODEL_PATH="", EBOSES_NLP_MODEL_PATH="configured-nlp")
+    def test_ai_pipeline_uses_base_keyword_text_even_when_nlp_path_is_set(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Tambak na basura",
+            description="Maraming garbage at basura sa tabi ng kalsada.",
+            category=Concern.Category.ENVIRONMENT,
+        )
+
+        with patch("apps.concerns.ai.text_classifier.RobertaTagalogClassifier") as classifier:
+            assessment = process_concern_ai(concern.id)
+
+        classifier.assert_not_called()
+        self.assertEqual(assessment.status, ConcernAiAssessment.Status.NOT_CONFIGURED)
+        self.assertEqual(assessment.nlp_validity, "related_environment")
+        self.assertEqual(assessment.raw_result["text"]["model_version"], "multilingual-keyword-v1")
 
     @override_settings(EBOSES_YOLO_MODEL_PATH="configured.pt", EBOSES_NLP_MODEL_PATH="configured-nlp")
-    def test_ai_pipeline_records_failure_without_breaking_review(self):
+    def test_ai_pipeline_image_failure_completes_with_base_text_review(self):
         concern = Concern.objects.create(reporter=self.resident, title="AI failure", category=Concern.Category.OTHERS)
         with patch("apps.concerns.ai.pipeline.YoloImageDetector") as detector:
             detector.return_value.detect.side_effect = RuntimeError("model crashed")
@@ -323,7 +406,8 @@ class ResidentDashboardAPITests(APITestCase):
             assessment = process_concern_ai(concern.id)
 
         self.assertEqual(assessment.status, ConcernAiAssessment.Status.FAILED)
-        self.assertEqual(assessment.recommendation, "Manual review required.")
+        self.assertEqual(assessment.raw_result["image"]["error"], "RuntimeError")
+        self.assertIn("review", assessment.recommendation.lower())
 
     def test_duplicate_concern_media_is_rejected_without_creating_report(self):
         response = self.client.post(
@@ -389,6 +473,25 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("Location must be inside Barangay Marikina Heights", str(response.data))
         self.assertFalse(Concern.objects.filter(title="Outside boundary").exists())
+
+    def test_location_outside_active_polygon_uses_real_boundary_distance(self):
+        boundary = {
+            "type": "Polygon",
+            "coordinates": [[
+                [121.1000, 14.6400],
+                [121.1300, 14.6400],
+                [121.1300, 14.6600],
+                [121.1000, 14.6600],
+                [121.1000, 14.6400],
+            ]],
+        }
+        with patch("apps.geo_services.get_active_boundary_geometry", return_value=boundary):
+            result = classify_location(14.6605, 121.1150)
+
+        self.assertEqual(result["status"], "edge")
+        self.assertTrue(result["accepted"])
+        self.assertGreater(result["distance_meters"], 0)
+        self.assertLess(result["distance_meters"], 280)
 
     def test_private_reports_are_hidden_from_feed_and_non_owner_detail(self):
         private = Concern.objects.create(
@@ -538,6 +641,62 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(ConcernComment.objects.filter(concern=concern).count(), 2)
         self.assertEqual(ConcernComment.objects.get(pk=reply_response.data["id"]).parent_id, comment_response.data["id"])
 
+    def test_comment_mentions_and_replies_notify_each_participant_once(self):
+        User = get_user_model()
+        mentioned = User.objects.create_user(
+            email="mentioned-neighbor@example.com",
+            phone_number="+639100000119",
+            password="pass",
+            status=User.Status.VERIFIED,
+        )
+        concern = Concern.objects.create(
+            reporter=self.other,
+            title="Community mention workflow",
+            visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+
+        comment_response = self.client.post(
+            f"/api/concerns/{concern.pk}/comments/",
+            {"body": f"@[Neighbor](u:{mentioned.pk}) please check this area."},
+            format="json",
+        )
+
+        self.assertEqual(comment_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            Notification.objects.filter(
+                recipient=mentioned,
+                concern=concern,
+                type=Notification.Type.CONCERN_MENTION,
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            Notification.objects.filter(
+                recipient=self.other,
+                concern=concern,
+                type=Notification.Type.CONCERN_COMMENT,
+            ).count(),
+            1,
+        )
+
+        self.client.force_authenticate(self.other)
+        reply_response = self.client.post(
+            f"/api/concerns/{concern.pk}/comments/",
+            {"body": "Thanks, I will add an update.", "parent": comment_response.data["id"]},
+            format="json",
+        )
+
+        self.assertEqual(reply_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            Notification.objects.filter(
+                recipient=self.resident,
+                concern=concern,
+                type=Notification.Type.CONCERN_COMMENT,
+            ).count(),
+            1,
+        )
+
     def test_announcements_events_responders_and_summary(self):
         User = get_user_model()
         Concern.objects.create(reporter=self.resident, title="Active", status=Concern.Status.IN_PROGRESS)
@@ -636,6 +795,34 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(event.status, Concern.Status.IN_PROGRESS)
         self.assertEqual(event.note, "Maintenance work has started.")
         self.assertEqual(event.actor, official)
+
+    def test_barangay_official_can_move_submitted_report_to_under_review(self):
+        User = get_user_model()
+        official = User.objects.create_user(
+            email='official-under-review@example.com',
+            phone_number='+639100000117',
+            password='pass',
+            role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
+        )
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title='Needs official review',
+            status=Concern.Status.SUBMITTED,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        self.client.force_authenticate(official)
+
+        response = self.client.post(
+            f'/api/concerns/{concern.pk}/status/',
+            {'status': Concern.Status.UNDER_REVIEW, 'note': 'Official review has started.'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        concern.refresh_from_db()
+        self.assertEqual(concern.status, Concern.Status.UNDER_REVIEW)
+        self.assertEqual(concern.update_text, 'Official review has started.')
 
     def test_pending_validation_cannot_move_to_operational_status(self):
         User = get_user_model()
@@ -741,6 +928,165 @@ class PhaseOneFoundationAPITests(APITestCase):
             responder_unit=User.ResponderUnit.TANOD,
             is_on_duty=True,
         )
+
+    @override_settings(EBOSES_YOLO_MODEL_PATH="configured.pt")
+    def test_ai_pipeline_passes_stored_image_to_yolo_and_persists_category_mapping(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Broken traffic light",
+            description="The traffic light is not working on the main road.",
+            category=Concern.Category.INFRASTRUCTURE,
+        )
+        media = png_upload("traffic-light.png")
+        ConcernMedia.objects.create(
+            concern=concern,
+            file=media,
+            original_filename=media.name,
+            mime_type="image/png",
+            file_size=media.size,
+        )
+
+        def infer(paths, **kwargs):
+            self.assertEqual(len(paths), 1)
+            self.assertTrue(Path(paths[0]).exists())
+            return ImageDetectionResult(
+                objects=[{"label": "traffic light", "confidence": 0.93}],
+                confidence=0.93,
+                model_version="yolov8m.pt",
+            )
+
+        with patch("apps.concerns.ai.pipeline.YoloImageDetector") as detector:
+            detector.return_value.detect.side_effect = infer
+            assessment = process_concern_ai(concern.pk)
+
+        self.assertEqual(assessment.status, ConcernAiAssessment.Status.COMPLETED)
+        self.assertEqual(assessment.image_objects[0]["category"], Concern.Category.INFRASTRUCTURE)
+        self.assertEqual(assessment.raw_result["image"]["inference_status"], "available")
+        self.assertEqual(assessment.raw_result["text"]["inference_status"], "available")
+        self.assertIn("priority", assessment.raw_result)
+
+    @override_settings(EBOSES_YOLO_MODEL_PATH="")
+    def test_ai_pipeline_marks_image_inference_unavailable_without_claiming_completion(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Broken streetlight",
+            description="The streetlight is broken and the road is dark at night.",
+            category=Concern.Category.INFRASTRUCTURE,
+        )
+
+        assessment = process_concern_ai(concern.pk)
+
+        self.assertEqual(assessment.status, ConcernAiAssessment.Status.NOT_CONFIGURED)
+        self.assertEqual(assessment.raw_result["image"]["inference_status"], "unavailable")
+        self.assertFalse(assessment.raw_result["image"]["inference_succeeded"])
+        self.assertTrue(assessment.raw_result["text"]["inference_succeeded"])
+
+    @override_settings(EBOSES_YOLO_MODEL_PATH="")
+    def test_ai_pipeline_flags_similar_nearby_report_using_published_threshold(self):
+        existing = Concern.objects.create(
+            reporter=self.resident,
+            title="Garbage beside Sampaguita covered court",
+            description="Maraming nakatambak na basura sa Sampaguita Street beside the covered court.",
+            category=Concern.Category.ENVIRONMENT,
+            barangay="Marikina Heights",
+            latitude="14.6500000",
+            longitude="121.1100000",
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Garbage beside Sampaguita covered court",
+            description="Maraming nakatambak na basura sa Sampaguita Street beside the covered court.",
+            category=Concern.Category.ENVIRONMENT,
+            barangay="Marikina Heights",
+            latitude="14.6503000",
+            longitude="121.1102000",
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        config = ConcernClassificationConfiguration.current()
+        config.duplicate_detection_enabled = True
+        config.duplicate_threshold = 0.85
+        config.save(update_fields=["duplicate_detection_enabled", "duplicate_threshold"])
+
+        assessment = process_concern_ai(concern.pk)
+
+        duplicate = assessment.raw_result["duplicate"]
+        self.assertTrue(duplicate["possible_duplicate"])
+        self.assertEqual(duplicate["matched_concern_id"], existing.pk)
+        self.assertGreaterEqual(duplicate["similarity"], 0.85)
+        self.assertLess(duplicate["distance_meters"], 100)
+        self.assertIn("Possible duplicate", assessment.recommendation)
+
+    @override_settings(EBOSES_YOLO_MODEL_PATH="")
+    def test_duplicate_match_identity_is_visible_to_official_but_hidden_from_resident(self):
+        matched = Concern.objects.create(
+            reporter=self.resident,
+            title="Blocked drainage on Rainbow Street",
+            description="The drainage on Rainbow Street is blocked and overflowing.",
+            category=Concern.Category.INFRASTRUCTURE,
+            latitude="14.6500000",
+            longitude="121.1100000",
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Blocked drainage on Rainbow Street",
+            description="The drainage on Rainbow Street is blocked and overflowing.",
+            category=Concern.Category.INFRASTRUCTURE,
+            latitude="14.6501000",
+            longitude="121.1101000",
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        process_concern_ai(concern.pk)
+
+        self.client.force_authenticate(self.resident)
+        resident_response = self.client.get(f"/api/concerns/{concern.pk}/")
+        self.client.force_authenticate(self.official)
+        official_response = self.client.get(f"/api/concerns/{concern.pk}/")
+
+        self.assertEqual(resident_response.status_code, status.HTTP_200_OK)
+        self.assertTrue(resident_response.data["ai_assessment"]["possible_duplicate"])
+        self.assertIsNone(resident_response.data["ai_assessment"]["duplicate_match"])
+        self.assertEqual(official_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(official_response.data["ai_assessment"]["duplicate_match"]["id"], matched.pk)
+        self.assertEqual(
+            official_response.data["ai_assessment"]["duplicate_match"]["tracking_id"],
+            matched.tracking_id,
+        )
+
+    def test_official_ai_review_requires_reason_and_is_audited(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="AI review target",
+            description="A report that requires an official AI decision.",
+            category=Concern.Category.INFRASTRUCTURE,
+        )
+        self.client.force_authenticate(self.resident)
+        forbidden = self.client.post(
+            f"/api/concerns/{concern.pk}/ai-review/",
+            {"decision": "related", "reason": "Resident attempt"},
+            format="json",
+        )
+        self.assertEqual(forbidden.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(self.official)
+        missing_reason = self.client.post(
+            f"/api/concerns/{concern.pk}/ai-review/",
+            {"decision": "related", "reason": "short"},
+            format="json",
+        )
+        self.assertEqual(missing_reason.status_code, status.HTTP_400_BAD_REQUEST)
+
+        response = self.client.post(
+            f"/api/concerns/{concern.pk}/ai-review/",
+            {"decision": "related", "reason": "Image and description match the selected category."},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        assessment = ConcernAiAssessment.objects.get(concern=concern)
+        self.assertEqual(assessment.official_decision, "related")
+        self.assertEqual(assessment.official_reviewer_id, self.official.pk)
+        self.assertTrue(AuditLog.objects.filter(action="concern.ai_assessment_reviewed", actor=self.official).exists())
 
     def test_resident_account_request_and_sos_setting_are_persisted(self):
         self.client.force_authenticate(self.resident)
@@ -893,6 +1239,220 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(clarification.status, ConcernClarification.Status.ANSWERED)
         self.assertTrue(Notification.objects.filter(recipient=self.official, type=Notification.Type.CLARIFICATION_REPLIED).exists())
 
+    def test_assigned_responder_can_list_open_chat_and_view_private_concern_media(self):
+        User = get_user_model()
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Private field inspection",
+            description="A private concern assigned for responder field inspection.",
+            visibility=Concern.Visibility.PRIVATE,
+            status=Concern.Status.ASSIGNED,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        assignment = ConcernAssignment.objects.create(
+            concern=concern,
+            assignee=self.responder,
+            assigned_by=self.official,
+            note="Inspect the reported location.",
+        )
+        upload = png_upload("private-assignment.png")
+        media = ConcernMedia.objects.create(
+            concern=concern,
+            file=upload,
+            original_filename=upload.name,
+            mime_type="image/png",
+            file_size=upload.size,
+        )
+        self.client.force_authenticate(self.responder)
+
+        assigned = self.client.get("/api/concerns/assigned/")
+        detail = self.client.get(f"/api/concerns/{concern.pk}/")
+        chat = self.client.post(
+            f"/api/concerns/{concern.pk}/chat/",
+            {"body": "I am checking the reported location now."},
+            format="json",
+        )
+        evidence = self.client.get(f"/api/concerns/media/{media.pk}/raw/")
+
+        self.assertEqual(assigned.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in assigned.data], [concern.pk])
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+        self.assertEqual(chat.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(evidence.status_code, status.HTTP_200_OK)
+
+        unrelated = User.objects.create_user(
+            email="unassigned-responder@example.com",
+            phone_number="+639100000205",
+            password="pass",
+            role=User.Role.FIRST_RESPONDER,
+            status=User.Status.VERIFIED,
+        )
+        self.client.force_authenticate(unrelated)
+        denied_detail = self.client.get(f"/api/concerns/{concern.pk}/")
+        denied_chat = self.client.post(
+            f"/api/concerns/{concern.pk}/chat/",
+            {"body": "I should not enter this thread."},
+            format="json",
+        )
+        self.assertEqual(denied_detail.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(denied_chat.status_code, status.HTTP_403_FORBIDDEN)
+
+        assignment.status = ConcernAssignment.Status.CANCELLED
+        assignment.save(update_fields=["status", "updated_at"])
+        self.client.force_authenticate(self.responder)
+        removed = self.client.get("/api/concerns/assigned/")
+        self.assertEqual(removed.status_code, status.HTTP_200_OK)
+        self.assertEqual(removed.data, [])
+
+    def test_official_reassignment_revokes_old_responder_and_activates_new_responder(self):
+        User = get_user_model()
+        second_responder = User.objects.create_user(
+            email="phase1-second-responder@example.com",
+            phone_number="+639100000206",
+            password="pass",
+            role=User.Role.FIRST_RESPONDER,
+            status=User.Status.VERIFIED,
+        )
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Reassign field concern",
+            description="This accepted concern needs a different field responder.",
+            visibility=Concern.Visibility.PRIVATE,
+            status=Concern.Status.SUBMITTED,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        self.client.force_authenticate(self.official)
+
+        first = self.client.post(
+            f"/api/concerns/{concern.pk}/assign/",
+            {
+                "assignee_id": self.responder.pk,
+                "office": "Field Team A",
+                "note": "Initial field inspection assignment.",
+            },
+            format="json",
+        )
+        second = self.client.post(
+            f"/api/concerns/{concern.pk}/assign/",
+            {
+                "assignee_id": second_responder.pk,
+                "office": "Field Team B",
+                "note": "Reassigned because Team B is available nearby.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(second.status_code, status.HTTP_201_CREATED)
+        first_assignment = ConcernAssignment.objects.get(pk=first.data["id"])
+        second_assignment = ConcernAssignment.objects.get(pk=second.data["id"])
+        self.assertEqual(first_assignment.status, ConcernAssignment.Status.CANCELLED)
+        self.assertEqual(second_assignment.status, ConcernAssignment.Status.ACTIVE)
+        self.assertEqual(
+            ConcernAssignment.objects.filter(
+                concern=concern,
+                status=ConcernAssignment.Status.ACTIVE,
+            ).count(),
+            1,
+        )
+
+        self.client.force_authenticate(self.responder)
+        old_access = self.client.get(f"/api/concerns/{concern.pk}/")
+        self.assertEqual(old_access.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(second_responder)
+        new_access = self.client.get(f"/api/concerns/{concern.pk}/")
+        assigned_list = self.client.get("/api/concerns/assigned/")
+        self.assertEqual(new_access.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in assigned_list.data], [concern.pk])
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.responder,
+                concern=concern,
+                title="Concern assignment changed",
+            ).exists()
+        )
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=second_responder,
+                concern=concern,
+                title="Concern report assigned",
+            ).exists()
+        )
+
+    def test_resolution_requires_evidence_persists_it_and_protects_access(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Blocked drainage resolved",
+            description="The drainage beside the road was blocked by accumulated waste.",
+            visibility=Concern.Visibility.PRIVATE,
+            status=Concern.Status.IN_PROGRESS,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        assignment = ConcernAssignment.objects.create(
+            concern=concern,
+            assignee=self.responder,
+            assigned_by=self.official,
+            note="Complete the drainage clearing.",
+        )
+        self.client.force_authenticate(self.official)
+
+        missing_evidence = self.client.post(
+            f"/api/concerns/{concern.pk}/status/",
+            {
+                "status": Concern.Status.RESOLVED,
+                "note": "Drainage clearing was completed today.",
+                "status_version": concern.status_version,
+            },
+            format="json",
+        )
+        self.assertEqual(missing_evidence.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("resolution_evidence", missing_evidence.data)
+
+        resolved = self.client.post(
+            f"/api/concerns/{concern.pk}/status/",
+            {
+                "status": Concern.Status.RESOLVED,
+                "note": "Drainage clearing was completed today.",
+                "status_version": concern.status_version,
+                "resolution_evidence": png_upload("completed-drainage.png"),
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(resolved.status_code, status.HTTP_200_OK)
+        self.assertEqual(resolved.data["status"], Concern.Status.RESOLVED)
+        self.assertEqual(len(resolved.data["resolution_evidence"]), 1)
+        evidence = ConcernResolutionEvidence.objects.get(concern=concern)
+        self.assertEqual(evidence.uploaded_by, self.official)
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.status, ConcernAssignment.Status.COMPLETED)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.resident,
+                concern=concern,
+                type=Notification.Type.RESOLVED,
+            ).exists()
+        )
+
+        self.client.force_authenticate(self.resident)
+        owner_access = self.client.get(f"/api/concerns/resolution-evidence/{evidence.pk}/raw/")
+        self.assertEqual(owner_access.status_code, status.HTTP_200_OK)
+
+        intruder = get_user_model().objects.create_user(
+            email="phase1-intruder@example.com",
+            phone_number="+639100000204",
+            password="pass",
+            status=get_user_model().Status.VERIFIED,
+        )
+        self.client.force_authenticate(intruder)
+        denied = self.client.get(f"/api/concerns/resolution-evidence/{evidence.pk}/raw/")
+        self.assertEqual(denied.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(self.responder)
+        responder_access_after_completion = self.client.get(f"/api/concerns/{concern.pk}/")
+        self.assertEqual(responder_access_after_completion.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_resident_can_appeal_and_official_can_review(self):
         concern = Concern.objects.create(reporter=self.resident, title="Rejected report", status=Concern.Status.REJECTED)
         self.client.force_authenticate(self.resident)
@@ -928,3 +1488,96 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(appeal.status, ConcernAppeal.Status.APPROVED)
         self.assertEqual(concern.status, Concern.Status.SUBMITTED)
         self.assertTrue(Notification.objects.filter(recipient=self.resident, type=Notification.Type.APPEAL_APPROVED).exists())
+
+
+class ConcernChatAttachmentAPITests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.resident = User.objects.create_user(
+            email="chat-resident@example.com",
+            phone_number="+639100000701",
+            password="pass",
+            status=User.Status.VERIFIED,
+        )
+        self.official = User.objects.create_user(
+            email="chat-official@example.com",
+            phone_number="+639100000702",
+            password="pass",
+            role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
+            is_staff=True,
+        )
+        self.other = User.objects.create_user(
+            email="chat-other@example.com",
+            phone_number="+639100000703",
+            password="pass",
+            status=User.Status.VERIFIED,
+        )
+        self.concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Chat attachment report",
+            description="Follow-up evidence belongs in the private report chat.",
+            status=Concern.Status.UNDER_REVIEW,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+
+    def test_resident_can_send_image_attachment_and_read_protected_media(self):
+        self.client.force_authenticate(self.resident)
+        response = self.client.post(
+            f"/api/concerns/{self.concern.pk}/chat/",
+            {"body": "Here is a clearer photo.", "media": png_upload("follow-up.png")},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["attachment"]["kind"], "image")
+        self.assertIn(response.data["attachment"]["authenticity_status"], {"clear", "flagged"})
+        attachment = ConcernChatAttachment.objects.get(message_id=response.data["id"])
+        media_response = self.client.get(f"/api/concerns/chat-media/{attachment.pk}/")
+        self.assertEqual(media_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(media_response["Content-Type"], "image/png")
+
+    def test_resident_video_attachment_uses_sampled_authenticity_result(self):
+        video_upload = SimpleUploadedFile(
+            "follow-up.mp4",
+            b"\x00\x00\x00\x18ftypisom" + b"\x00" * 32,
+            content_type="video/mp4",
+        )
+        sampled_result = {
+            "status": "clear",
+            "detail": "No obvious edit detected in 3 sampled video frames.",
+            "sampled_frames": 3,
+        }
+        self.client.force_authenticate(self.resident)
+
+        with patch(
+            "apps.accounts.services.analyze_video_authenticity",
+            create=True,
+            return_value=sampled_result,
+        ):
+            response = self.client.post(
+                f"/api/concerns/{self.concern.pk}/chat/",
+                {"body": "Short incident clip.", "media": video_upload},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["attachment"]["kind"], "video")
+        self.assertEqual(response.data["attachment"]["authenticity_status"], "clear")
+        self.assertEqual(
+            response.data["attachment"]["authenticity_detail"],
+            sampled_result["detail"],
+        )
+
+    def test_unrelated_resident_cannot_read_chat_attachment(self):
+        self.client.force_authenticate(self.resident)
+        created = self.client.post(
+            f"/api/concerns/{self.concern.pk}/chat/",
+            {"media": png_upload("private.png")},
+            format="multipart",
+        )
+        attachment = ConcernChatAttachment.objects.get(message_id=created.data["id"])
+
+        self.client.force_authenticate(self.other)
+        response = self.client.get(f"/api/concerns/chat-media/{attachment.pk}/")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

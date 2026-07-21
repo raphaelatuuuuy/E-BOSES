@@ -5,6 +5,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import models
 from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
@@ -205,7 +206,18 @@ def assignment_last_location(assignment):
 
 
 def emergency_payload(alert):
-    assignment = alert.assignments.select_related("responder", "responder__resident_profile").order_by("-assigned_at", "-id").first()
+    assignments = list(alert.assignments.filter(
+        status__in=["assigned", "acknowledged", "en_route", "arrived"]
+    ).select_related("responder", "responder__resident_profile").order_by("assigned_at", "id"))
+    assignment_payloads = [
+        {
+            "id": assignment.pk,
+            "responder": person_payload(assignment.responder),
+            "status": assignment.status,
+            "last_location": assignment_last_location(assignment),
+        }
+        for assignment in assignments
+    ]
     return {
         "id": alert.pk,
         "type": alert.type,
@@ -216,12 +228,8 @@ def emergency_payload(alert):
         "latitude": decimal_string(alert.latitude),
         "longitude": decimal_string(alert.longitude),
         "reporter": person_payload(alert.reporter),
-        "current_assignment": {
-            "id": assignment.pk,
-            "responder": person_payload(assignment.responder),
-            "status": assignment.status,
-            "last_location": assignment_last_location(assignment),
-        } if assignment else None,
+        "active_assignments": assignment_payloads,
+        "current_assignment": assignment_payloads[0] if assignment_payloads else None,
         "created_at": alert.created_at,
         "updated_at": alert.updated_at,
         "resolved_at": alert.resolved_at,
@@ -229,7 +237,9 @@ def emergency_payload(alert):
 
 
 def route_for_assignment(alert):
-    assignment = alert.assignments.select_related("responder").order_by("-assigned_at", "-id").first()
+    assignment = alert.assignments.filter(
+        status__in=["assigned", "acknowledged", "en_route", "arrived"]
+    ).select_related("responder").order_by("assigned_at", "id").first()
     if not assignment:
         return None
     origin = assignment_last_location(assignment)
@@ -278,6 +288,8 @@ def route_for_assignment(alert):
 
 
 def live_map_snapshot():
+    from apps.geo_services import dispatch_policy_payload
+
     User = get_user_model()
     static_map = static_map_payload()
     people = [
@@ -286,7 +298,7 @@ def live_map_snapshot():
             status=User.Status.VERIFIED,
             current_latitude__isnull=False,
             current_longitude__isnull=False,
-        ).select_related("resident_profile")
+        ).filter(models.Q(role=User.Role.RESIDENT) | models.Q(is_on_duty=True)).select_related("resident_profile")
     ]
     concerns = [
         concern_payload(concern)
@@ -308,6 +320,7 @@ def live_map_snapshot():
             "center": MARIKINA_HEIGHTS_CENTER,
             "boundary": static_map["boundary"],
             "streets": static_map["streets"],
+            "dispatch_policy": dispatch_policy_payload(),
         },
         "people": people,
         "concerns": concerns,
@@ -352,7 +365,12 @@ class OfficialLiveMapView(APIView):
 def public_reporter_payload(user):
     """Community-safe reporter identity (no home address / live GPS)."""
     profile = getattr(user, "resident_profile", None)
-    full_name = f"{profile.first_name} {profile.last_name}".strip() if profile else user.email.split("@")[0]
+    if profile:
+        first_name = (profile.first_name or "").strip()
+        last_initial = (profile.last_name or "").strip()[:1]
+        full_name = f"{first_name} {last_initial}.".strip() if last_initial else first_name
+    else:
+        full_name = "Neighbor"
     return {
         "id": user.pk,
         "full_name": full_name or "Neighbor",
@@ -393,8 +411,24 @@ def resident_emergency_payload(alert, request=None):
     Active emergency for residents — operational facts only.
     No reporter identity, no responder GPS, no routes.
     """
-    # Media for emergencies is private/ops-only; residents get type + note + location.
-    _ = request
+    # Media for emergencies is private/ops-only; residents get type + note +
+    # location. Only the reporter may see the live position of their assigned
+    # responder; other residents receive no responder GPS.
+    responder_location = None
+    route = None
+    if request and getattr(request, "user", None) and request.user.is_authenticated and alert.reporter_id == request.user.pk:
+        assignment = (
+            alert.assignments.filter(
+                status__in=["assigned", "acknowledged", "en_route", "arrived"]
+            )
+            .select_related("responder")
+            .prefetch_related("location_pings")
+            .order_by("assigned_at", "id")
+            .first()
+        )
+        if assignment:
+            responder_location = assignment_last_location(assignment)
+            route = route_for_assignment(alert)
     type_label = alert.get_type_display() if hasattr(alert, "get_type_display") else alert.type
     return {
         "id": alert.pk,
@@ -402,15 +436,14 @@ def resident_emergency_payload(alert, request=None):
         "type_label": type_label,
         "note": (alert.note or "")[:280],
         "status": alert.status,
-        "address": alert.address,
         "barangay": alert.barangay,
-        "latitude": decimal_string(alert.latitude),
-        "longitude": decimal_string(alert.longitude),
         "preview_url": None,
         "created_at": alert.created_at,
         "updated_at": alert.updated_at,
         "kind": "emergency",
         "source": "resident",  # resident-reported operational alert (not weather feed)
+        "responder_location": responder_location,
+        "route": route,
     }
 
 
@@ -480,6 +513,7 @@ def resident_alerts_map_snapshot(request=None):
                 "name": static_map["boundary"].get("name") or "Marikina Heights",
                 "geometry": static_map["boundary"].get("geometry") or context.get("boundary", {}).get("geometry"),
             },
+            "dispatch_policy": context.get("dispatch_policy"),
         },
         "concerns": concerns,
         "emergencies": emergencies,

@@ -20,7 +20,7 @@ class ArchitectureBoundaryTests(SimpleTestCase):
 
     def test_views_do_not_import_cross_app_models(self):
         for view_path in APP_ROOT.glob("*/views.py"):
-            tree = ast.parse(view_path.read_text(), filename=str(view_path))
+            tree = ast.parse(view_path.read_text(encoding="utf-8"), filename=str(view_path))
             current_app = view_path.parent.name
             for node in ast.walk(tree):
                 if not isinstance(node, ast.ImportFrom) or not node.module:

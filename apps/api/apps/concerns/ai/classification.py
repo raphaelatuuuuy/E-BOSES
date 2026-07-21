@@ -5,6 +5,11 @@ from apps.concerns.models import ConcernClassificationConfiguration
 
 from .text_classifier import TextClassificationResult
 
+BASE_IMAGE_PROVIDER = "ultralytics"
+BASE_IMAGE_MODEL = "yolov8m.pt"
+BASE_TEXT_PROVIDER = "keyword_baseline"
+BASE_TEXT_MODEL = "multilingual-keyword-v1"
+
 
 class MultilingualKeywordClassifier:
     """Dependency-free Tagalog/Taglish baseline until the fine-tuned model exists."""
@@ -36,7 +41,7 @@ class MultilingualKeywordClassifier:
         else:
             label = f"related_{category}"
         severity = "high" if any(word in text for word in ("sunog", "fire", "aksidente", "accident", "danger", "delikado")) else "medium"
-        return TextClassificationResult(label=label, confidence=confidence, category=category, severity=severity, model_version=self.configuration.nlp_model)
+        return TextClassificationResult(label=label, confidence=confidence, category=category, severity=severity, model_version=BASE_TEXT_MODEL)
 
 
 def classification_payload(*, title, description, selected_category, configuration=None):

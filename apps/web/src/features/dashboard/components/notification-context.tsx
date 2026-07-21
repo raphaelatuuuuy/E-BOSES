@@ -17,6 +17,18 @@ export interface NotificationItem {
   emergency_id: number | null
   emergency_public_id: string | null
   emergency_status: string | null
+  safety_limited?: boolean
+  safety_guidance?: string | null
+  action_url?: string
+  display_title?: string
+  display_body?: string
+  category?: "announcement" | "emergency" | "appeal" | "chat" | "report" | string
+  priority?: "normal" | "important" | "urgent" | string
+  action_label?: string
+  tag?: string
+  icon_url?: string
+  image_url?: string | null
+  actions?: Array<{ action: string; title: string; url: string; icon?: string }>
 }
 
 interface NotificationContextValue {
@@ -132,6 +144,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           const message = JSON.parse(event.data) as { type?: string; payload?: NotificationItem }
           if (message.type !== "notification.created" || !message.payload) return
           const payload = message.payload
+          window.dispatchEvent(
+            new CustomEvent("eboses:notification-created", { detail: payload }),
+          )
           setNotifications((prev) => {
             if (prev.some((item) => item.id === payload.id)) return prev
             return [payload, ...prev].slice(0, 20)

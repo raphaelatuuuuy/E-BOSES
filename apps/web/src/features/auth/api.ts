@@ -209,6 +209,20 @@ export function createAccountRequest(payload: { type: AccountRequest["type"]; no
   })
 }
 
+export interface SensitiveAccessAudit {
+  id: number
+  action: "media.raw_accessed" | "account.data_export_downloaded"
+  actor: { id: number; email: string; full_name: string; role: AuthUser["role"] } | null
+  subject: { id: number; email: string; full_name: string; role: AuthUser["role"] } | null
+  resource_type: string
+  resource_id: string
+  created_at: string
+}
+
+export function getAccountDataExport(id: number) {
+  return apiRequest<Record<string, unknown>>(`/auth/account-requests/${id}/export/`)
+}
+
 export function deactivateAccount(payload: { reason?: string; feedback?: string }) {
   return apiRequest<{ user: AuthUser; request: AccountRequest }>("/auth/account/deactivate/", {
     method: "POST",
@@ -296,6 +310,14 @@ export function reviewAccountRequest(id: number, payload: { status: "reviewed" |
   })
 }
 
+export function listSensitiveAccessAudits(filters: { kind?: "all" | "media" | "export"; search?: string } = {}) {
+  const params = new URLSearchParams()
+  if (filters.kind && filters.kind !== "all") params.set("kind", filters.kind)
+  if (filters.search?.trim()) params.set("search", filters.search.trim())
+  const query = params.toString() ? `?${params.toString()}` : ""
+  return apiRequest<SensitiveAccessAudit[]>(`/auth/audit/sensitive-access/${query}`)
+}
+
 export function listResidents(search?: string) {
   const params = new URLSearchParams()
   if (search?.trim()) params.set("search", search.trim())
@@ -315,8 +337,21 @@ export function searchResidentsForMention(search?: string) {
 
 export function updateResidentStatus(id: number, status: UserStatus) {
   return apiRequest<AuthUser>(`/auth/residents/${id}/status/`, {
-    method: "POST",
+    method: "PATCH",
     body: JSON.stringify({ status }),
+  })
+}
+
+export function createManagedUser(payload: {
+  email: string
+  phone_number: string
+  password: string
+  role: "barangay_official" | "first_responder"
+  responder_unit?: AuthUser["responder_unit"]
+}) {
+  return apiRequest<AuthUser>("/auth/admin/users/", {
+    method: "POST",
+    body: JSON.stringify(payload),
   })
 }
 
@@ -327,7 +362,7 @@ export function listResponders(search?: string) {
   return apiRequest<AuthUser[]>(`/auth/responders/${query}`)
 }
 
-export function updateResponder(id: number, payload: { status?: UserStatus; responder_unit?: AuthUser["responder_unit"]; is_on_duty?: boolean }) {
+export function updateResponder(id: number, payload: { status?: UserStatus; responder_unit?: AuthUser["responder_unit"] }) {
   return apiRequest<AuthUser>(`/auth/responders/${id}/`, {
     method: "PATCH",
     body: JSON.stringify(payload),

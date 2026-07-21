@@ -5,16 +5,20 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 from io import BytesIO, StringIO
+from unittest.mock import patch
 
+import cv2
+import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, PngImagePlugin
 
 # Force DEBUG=True for all tests so DevelopmentOTPProvider works
 DEBUG_ALL = override_settings(DEBUG=True)
 
-from apps.accounts.models import AccountRequest, OTPChallenge, PhoneOTPChallenge, ResidenceProof, ResidenceVerificationCase, ResidentProfile, ResidentSettings
+from apps.accounts.models import AccountRequest, AuditLog, OTPChallenge, PhoneOTPChallenge, ResidenceProof, ResidenceVerificationCase, ResidentProfile, ResidentSettings
 from apps.accounts.serializers import RegisterSerializer
 from apps.accounts.services import (
     create_email_otp_challenge,
@@ -25,8 +29,170 @@ from apps.accounts.services import (
     verify_otp_challenge,
     verify_phone_otp_challenge,
 )
+from apps.emergencies.models import ResponderShift
+from apps.concerns.models import Concern
+from apps.notifications.models import BrowserPushSubscription, Notification
 
 VALID_PDF_BYTES = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF"
+
+
+class MediaPrivacyRedactionTests(TestCase):
+    def test_sensitive_regions_are_blurred_without_obscuring_the_whole_image(self):
+        from apps.accounts.media_services import _redact_sensitive_regions
+
+        image = Image.new("RGB", (80, 80), "white")
+        draw = ImageDraw.Draw(image)
+        for y in range(10, 50, 4):
+            for x in range(10, 50, 4):
+                draw.rectangle((x, y, x + 1, y + 1), fill="black")
+
+        with patch(
+            "apps.accounts.media_services._detect_sensitive_regions",
+            return_value=[(10, 10, 50, 50)],
+        ):
+            redacted = _redact_sensitive_regions(image)
+
+        self.assertEqual(redacted.getpixel((5, 5)), image.getpixel((5, 5)))
+        self.assertNotEqual(
+            redacted.crop((10, 10, 50, 50)).tobytes(),
+            image.crop((10, 10, 50, 50)).tobytes(),
+        )
+
+    def test_redaction_fails_closed_when_detector_is_unavailable(self):
+        from apps.accounts.media_services import _redact_sensitive_regions
+
+        image = Image.new("RGB", (80, 80), "white")
+        ImageDraw.Draw(image).rectangle((0, 0, 39, 79), fill="black")
+
+        with patch("apps.accounts.media_services._detect_sensitive_regions", return_value=None):
+            redacted = _redact_sensitive_regions(image)
+
+        self.assertNotEqual(redacted.tobytes(), image.tobytes())
+
+
+class _FakeVideoCapture:
+    def __init__(
+        self,
+        *,
+        frame_count=100,
+        opened=True,
+        width=320,
+        height=240,
+        failed_positions=None,
+    ):
+        self.frame_count = frame_count
+        self.opened = opened
+        self.width = width
+        self.height = height
+        self.failed_positions = set(failed_positions or [])
+        self.position = 0
+        self.read_count = 0
+        self.released = False
+
+    def isOpened(self):
+        return self.opened
+
+    def get(self, property_id):
+        values = {
+            cv2.CAP_PROP_FRAME_COUNT: self.frame_count,
+            cv2.CAP_PROP_FRAME_WIDTH: self.width,
+            cv2.CAP_PROP_FRAME_HEIGHT: self.height,
+        }
+        return values.get(property_id, 0)
+
+    def set(self, property_id, value):
+        if property_id == cv2.CAP_PROP_POS_FRAMES:
+            self.position = int(value)
+            return True
+        return False
+
+    def read(self):
+        if not self.opened or self.position >= self.frame_count:
+            return False, None
+        if self.position in self.failed_positions:
+            self.position += 1
+            return False, None
+        value = self.position % 255
+        frame = np.full((self.height, self.width, 3), value, dtype=np.uint8)
+        self.position += 1
+        self.read_count += 1
+        return True, frame
+
+    def release(self):
+        self.released = True
+
+
+class VideoMediaAuthenticityTests(TestCase):
+    def _analyzer(self):
+        from apps.accounts import media_forensics
+
+        return media_forensics, getattr(
+            media_forensics,
+            "analyze_video_authenticity",
+            lambda *args, **kwargs: {"status": "missing", "sampled_frames": 0},
+        )
+
+    def test_video_authenticity_samples_at_most_five_frames(self):
+        media_forensics, analyzer = self._analyzer()
+        capture = _FakeVideoCapture(frame_count=120)
+
+        with patch.object(media_forensics.cv2, "VideoCapture", return_value=capture), patch.object(
+            media_forensics,
+            "visual_tamper_forensics",
+            return_value=None,
+        ):
+            result = analyzer(b"video-container", extension=".mp4", max_frames=50)
+
+        self.assertEqual(result["status"], "clear")
+        self.assertEqual(result["sampled_frames"], 5)
+        self.assertLessEqual(capture.read_count, 5)
+        self.assertTrue(capture.released)
+
+    def test_video_authenticity_flags_when_any_sampled_frame_is_suspicious(self):
+        from apps.accounts.media_forensics import VISUAL_TAMPER_MESSAGE
+
+        media_forensics, analyzer = self._analyzer()
+        capture = _FakeVideoCapture(frame_count=12)
+
+        with patch.object(media_forensics.cv2, "VideoCapture", return_value=capture), patch.object(
+            media_forensics,
+            "visual_tamper_forensics",
+            side_effect=[None, VISUAL_TAMPER_MESSAGE],
+        ):
+            result = analyzer(b"video-container", extension=".mp4", max_frames=5)
+
+        self.assertEqual(result["status"], "flagged")
+        self.assertEqual(result["sampled_frames"], 2)
+        self.assertEqual(result["detail"], VISUAL_TAMPER_MESSAGE)
+        self.assertTrue(capture.released)
+
+    def test_video_authenticity_requires_manual_review_when_codec_is_unavailable(self):
+        media_forensics, analyzer = self._analyzer()
+        capture = _FakeVideoCapture(opened=False)
+
+        with patch.object(media_forensics.cv2, "VideoCapture", return_value=capture):
+            result = analyzer(b"video-container", extension=".webm", max_frames=5)
+
+        self.assertEqual(result["status"], "review_required")
+        self.assertEqual(result["sampled_frames"], 0)
+        self.assertIn("codec", result["detail"].lower())
+        self.assertTrue(capture.released)
+
+    def test_video_authenticity_requires_review_when_a_selected_frame_is_unreadable(self):
+        media_forensics, analyzer = self._analyzer()
+        capture = _FakeVideoCapture(frame_count=10, failed_positions={2})
+
+        with patch.object(media_forensics.cv2, "VideoCapture", return_value=capture), patch.object(
+            media_forensics,
+            "visual_tamper_forensics",
+            return_value=None,
+        ):
+            result = analyzer(b"video-container", extension=".mp4", max_frames=5)
+
+        self.assertEqual(result["status"], "review_required")
+        self.assertEqual(result["sampled_frames"], 1)
+        self.assertIn("frame", result["detail"].lower())
+        self.assertTrue(capture.released)
 
 
 def preverified_email_code(email):
@@ -1176,6 +1342,177 @@ class PhaseOneBAccountAPITests(APITestCase):
         self.assertEqual(account_request.status, AccountRequest.Status.COMPLETED)
         self.assertEqual(account_request.reviewed_by, self.official)
 
+    def test_resident_request_submission_rejects_duplicates_and_internal_type(self):
+        self.client.force_authenticate(self.resident)
+
+        first = self.client.post(
+            "/api/auth/account-requests/",
+            {"type": AccountRequest.Type.DATA_EXPORT, "note": "Please export my information."},
+            format="json",
+        )
+        duplicate = self.client.post(
+            "/api/auth/account-requests/",
+            {"type": AccountRequest.Type.DATA_EXPORT},
+            format="json",
+        )
+        internal = self.client.post(
+            "/api/auth/account-requests/",
+            {"type": AccountRequest.Type.DEACTIVATION},
+            format="json",
+        )
+
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(duplicate.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(internal.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_completed_data_export_is_downloadable_only_by_owner(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Exported concern",
+            description="This concern belongs in my export.",
+            status=Concern.Status.RESOLVED,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        account_request = AccountRequest.objects.create(
+            user=self.resident,
+            type=AccountRequest.Type.DATA_EXPORT,
+        )
+        self.client.force_authenticate(self.resident)
+        pending = self.client.get(f"/api/auth/account-requests/{account_request.pk}/export/")
+        self.assertEqual(pending.status_code, status.HTTP_409_CONFLICT)
+
+        self.client.force_authenticate(self.official)
+        completed = self.client.patch(
+            f"/api/auth/account-requests/{account_request.pk}/review/",
+            {"status": AccountRequest.Status.COMPLETED, "staff_note": "Export approved."},
+            format="json",
+        )
+        self.assertEqual(completed.status_code, status.HTTP_200_OK)
+
+        self.client.force_authenticate(self.responder)
+        denied = self.client.get(f"/api/auth/account-requests/{account_request.pk}/export/")
+        self.assertEqual(denied.status_code, status.HTTP_404_NOT_FOUND)
+
+        self.client.force_authenticate(self.resident)
+        exported = self.client.get(f"/api/auth/account-requests/{account_request.pk}/export/")
+        self.assertEqual(exported.status_code, status.HTTP_200_OK)
+        self.assertEqual(exported.data["account"]["email"], self.resident.email)
+        self.assertNotIn("password", exported.data["account"])
+        self.assertEqual(exported.data["profile"]["first_name"], "Cardu")
+        self.assertTrue(any(item["id"] == concern.pk for item in exported.data["concerns"]))
+        self.assertTrue(exported["Content-Disposition"].startswith("attachment;"))
+
+    def test_completed_deletion_anonymizes_private_data_and_preserves_civic_record(self):
+        original_email = self.resident.email
+        original_phone = self.resident.phone_number
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Retained civic record",
+            description="The report remains but its reporter is anonymized.",
+            status=Concern.Status.RESOLVED,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        proof_file = SimpleUploadedFile("delete-proof.pdf", VALID_PDF_BYTES, content_type="application/pdf")
+        ResidenceProof.objects.create(
+            user=self.resident,
+            file=proof_file,
+            original_filename="delete-proof.pdf",
+            mime_type="application/pdf",
+            file_size=proof_file.size,
+            sha256_hash=sha256_file(proof_file),
+        )
+        BrowserPushSubscription.objects.create(
+            user=self.resident,
+            endpoint="https://push.example.test/delete-me",
+            p256dh="key",
+            auth="auth",
+        )
+        Notification.objects.create(
+            recipient=self.resident,
+            type=Notification.Type.SUBMITTED,
+            title="Private notification",
+        )
+        account_request = AccountRequest.objects.create(
+            user=self.resident,
+            type=AccountRequest.Type.DELETION,
+        )
+        self.client.force_authenticate(self.official)
+
+        response = self.client.patch(
+            f"/api/auth/account-requests/{account_request.pk}/review/",
+            {"status": AccountRequest.Status.COMPLETED, "staff_note": "Retention checks complete."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.resident.refresh_from_db()
+        self.resident.resident_profile.refresh_from_db()
+        account_request.refresh_from_db()
+        concern.refresh_from_db()
+        self.assertNotEqual(self.resident.email, original_email)
+        self.assertTrue(self.resident.email.endswith("@privacy.invalid"))
+        self.assertNotEqual(self.resident.phone_number, original_phone)
+        self.assertFalse(self.resident.is_active)
+        self.assertEqual(self.resident.status, get_user_model().Status.SUSPENDED)
+        self.assertEqual(self.resident.resident_profile.first_name, "Deleted")
+        self.assertEqual(self.resident.resident_profile.address, "")
+        self.assertFalse(ResidenceProof.objects.filter(user=self.resident).exists())
+        self.assertFalse(BrowserPushSubscription.objects.filter(user=self.resident).exists())
+        self.assertFalse(Notification.objects.filter(recipient=self.resident).exists())
+        self.assertEqual(concern.reporter_id, self.resident.pk)
+        self.assertEqual(account_request.status, AccountRequest.Status.COMPLETED)
+        self.assertTrue(AuditLog.objects.filter(action="account.deletion_completed", target_user=self.resident).exists())
+
+    def test_deletion_completion_is_deferred_while_civic_case_is_active(self):
+        Concern.objects.create(
+            reporter=self.resident,
+            title="Active concern",
+            status=Concern.Status.IN_PROGRESS,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        account_request = AccountRequest.objects.create(
+            user=self.resident,
+            type=AccountRequest.Type.DELETION,
+        )
+        self.client.force_authenticate(self.official)
+
+        response = self.client.patch(
+            f"/api/auth/account-requests/{account_request.pk}/review/",
+            {"status": AccountRequest.Status.COMPLETED},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        account_request.refresh_from_db()
+        self.resident.refresh_from_db()
+        self.assertEqual(account_request.status, AccountRequest.Status.SUBMITTED)
+        self.assertTrue(self.resident.is_active)
+
+    def test_sensitive_access_review_is_official_only_and_privacy_scoped(self):
+        audit = AuditLog.objects.create(
+            actor=self.official,
+            target_user=self.resident,
+            action="media.raw_accessed",
+            metadata={"media_type": "residence_proof", "object_id": 42},
+            ip_address="192.0.2.10",
+            user_agent="Sensitive browser fingerprint",
+        )
+
+        self.client.force_authenticate(self.resident)
+        denied = self.client.get("/api/auth/audit/sensitive-access/")
+        self.assertEqual(denied.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(self.official)
+        response = self.client.get("/api/auth/audit/sensitive-access/?kind=media")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        row = next(item for item in response.data if item["id"] == audit.pk)
+        self.assertEqual(row["actor"]["email"], self.official.email)
+        self.assertEqual(row["subject"]["email"], self.resident.email)
+        self.assertEqual(row["resource_type"], "residence_proof")
+        self.assertEqual(row["resource_id"], "42")
+        self.assertNotIn("ip_address", row)
+        self.assertNotIn("user_agent", row)
+
     def test_official_can_list_and_update_residents_and_responders(self):
         self.client.force_authenticate(self.official)
 
@@ -1188,7 +1525,7 @@ class PhaseOneBAccountAPITests(APITestCase):
         responders = self.client.get("/api/auth/responders/?unit=tanod")
         responder_update = self.client.patch(
             f"/api/auth/responders/{self.responder.pk}/",
-            {"responder_unit": "bhw", "is_on_duty": True},
+            {"responder_unit": "bhw"},
             format="json",
         )
 
@@ -1198,4 +1535,63 @@ class PhaseOneBAccountAPITests(APITestCase):
         self.assertEqual(responders.status_code, status.HTTP_200_OK)
         self.assertEqual(responders.data[0]["id"], self.responder.pk)
         self.assertEqual(responder_update.data["responder_unit"], "bhw")
-        self.assertTrue(responder_update.data["is_on_duty"])
+        self.assertFalse(responder_update.data["is_on_duty"])
+
+    def test_official_cannot_bypass_shift_with_direct_duty_update(self):
+        self.client.force_authenticate(self.official)
+
+        response = self.client.patch(
+            f"/api/auth/responders/{self.responder.pk}/",
+            {"is_on_duty": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.responder.refresh_from_db()
+        self.assertFalse(self.responder.is_on_duty)
+        self.assertIn("shift", str(response.data).lower())
+
+    def test_official_cannot_change_unit_during_active_shift(self):
+        self.responder.is_on_duty = True
+        self.responder.save(update_fields=["is_on_duty"])
+        ResponderShift.objects.create(
+            responder=self.responder,
+            responder_unit=self.responder.responder_unit,
+            status=ResponderShift.Status.ACTIVE,
+            started_at=timezone.now(),
+        )
+        self.client.force_authenticate(self.official)
+
+        response = self.client.patch(
+            f"/api/auth/responders/{self.responder.pk}/",
+            {"responder_unit": "bhw"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.responder.refresh_from_db()
+        self.assertEqual(self.responder.responder_unit, get_user_model().ResponderUnit.TANOD)
+
+    def test_suspending_responder_closes_active_shift_and_availability(self):
+        self.responder.is_on_duty = True
+        self.responder.save(update_fields=["is_on_duty"])
+        shift = ResponderShift.objects.create(
+            responder=self.responder,
+            responder_unit=self.responder.responder_unit,
+            status=ResponderShift.Status.ACTIVE,
+            started_at=timezone.now(),
+        )
+        self.client.force_authenticate(self.official)
+
+        response = self.client.patch(
+            f"/api/auth/responders/{self.responder.pk}/",
+            {"status": get_user_model().Status.SUSPENDED},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.responder.refresh_from_db()
+        shift.refresh_from_db()
+        self.assertFalse(self.responder.is_on_duty)
+        self.assertEqual(shift.status, ResponderShift.Status.ENDED)
+        self.assertIsNotNone(shift.ended_at)

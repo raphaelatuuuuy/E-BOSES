@@ -60,6 +60,7 @@ import {
 } from "@/features/dashboard/components/feed-post-card"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { RESIDENT_DESKTOP_MIN_PX } from "@/features/dashboard/components/resident-top-bar"
+import { websocketTicket, websocketUrl } from "@/lib/api"
 
 import type leaflet from "leaflet"
 
@@ -217,7 +218,7 @@ function emergencyStatusLabel(status: string): { label: string; live: boolean } 
   const s = status.toLowerCase()
   if (s === "submitted") return { label: "Submitted", live: true }
   if (s === "routed") return { label: "Routed", live: true }
-  if (s === "acknowledged") return { label: "Acknowledged", live: true }
+  if (s === "acknowledged") return { label: "Responder routed", live: true }
   if (s === "en_route") return { label: "En route", live: true }
   if (s === "nearby") return { label: "Nearby", live: true }
   if (s === "arrived") return { label: "Arrived", live: true }
@@ -494,7 +495,7 @@ function CategoryFilterChips({
           disabled={filterLoading}
           onClick={() => onSelect(c.key)}
           className={cn(
-            "shrink-0 whitespace-nowrap rounded-xl border px-3 py-1.5 text-[12px] font-semibold transition-colors sm:text-[13px]",
+            "shrink-0 whitespace-nowrap rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition-colors sm:text-[13px]",
             chip === c.key
               ? "border-[#ff6a1a] bg-[#ff6a1a] text-white shadow-sm"
               : "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:bg-neutral-50",
@@ -604,8 +605,8 @@ function AlertsLeafletMap({
 
       /**
        * Product basemap: Carto light (clean grey streets — original E-Boses look).
-       * OSM fallback only if Carto CDN fails. Tailwind img max-width is overridden
-       * via .eboses-alerts-map CSS so tiles stay visible.
+       * Tailwind img max-width is overridden via .eboses-alerts-map CSS so
+       * tiles stay visible.
        */
       const carto = L.tileLayer(
         "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
@@ -618,29 +619,6 @@ function AlertsLeafletMap({
           className: "eboses-map-tiles",
         },
       )
-      const osm = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "&copy; OpenStreetMap",
-        maxZoom: 19,
-        subdomains: "abc",
-        keepBuffer: 6,
-        updateWhenIdle: true,
-        className: "eboses-map-tiles",
-      })
-
-      let usingFallback = false
-      let tileErrors = 0
-      carto.on("tileerror", () => {
-        tileErrors += 1
-        if (usingFallback || tileErrors < 6 || !map) return
-        usingFallback = true
-        try {
-          map.removeLayer(carto)
-        } catch {
-          /* ignore */
-        }
-        osm.addTo(map)
-        map.invalidateSize({ animate: false })
-      })
       carto.addTo(map)
 
       groupRef.current = L.layerGroup().addTo(map)
@@ -1464,6 +1442,79 @@ export default function ResidentAlertsMapPage() {
   }, [])
 
   useEffect(() => {
+    let socket: WebSocket | null = null
+    let reconnectTimer: number | undefined
+    let closed = false
+    let attempts = 0
+    const seen = new Set<string>()
+
+    async function connect() {
+      try {
+        const ticket = await websocketTicket()
+        if (closed) return
+        socket = new WebSocket(
+          websocketUrl(`/ws/dashboard/resident-live-map/?ticket=${encodeURIComponent(ticket)}`),
+        )
+      } catch {
+        if (!closed) {
+          attempts += 1
+          reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** attempts))
+        }
+        return
+      }
+      socket.onopen = () => {
+        attempts = 0
+      }
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data) as {
+            type?: string
+            payload?: { concern?: ResidentMapConcern; emergency?: ResidentMapEmergency; removed?: boolean }
+          }
+          if (message.type !== "concern.created" && message.type !== "concern.updated" && message.type !== "emergency.created" && message.type !== "emergency.updated") return
+          const resource = message.payload?.concern ?? message.payload?.emergency
+          if (!resource?.id) return
+          const key = `${message.type}:${resource.id}:${"updated_at" in resource ? resource.updated_at : ""}:${"status" in resource ? resource.status : ""}`
+          if (seen.has(key)) return
+          seen.add(key)
+          if (seen.size > 200) seen.delete(seen.values().next().value as string)
+          if (message.payload?.concern) {
+            if (message.payload.removed || message.payload.concern.status === "rejected") {
+              setPosts((current) => current.filter((post) => post.id !== resource.id))
+            } else {
+              void load(true)
+            }
+          } else if (message.payload?.emergency) {
+            const emergency = message.payload.emergency
+            const active = ["submitted", "routed", "acknowledged", "en_route", "nearby", "arrived"].includes(emergency.status)
+            setEmergencies((current) => active
+              ? current.some((item) => item.id === emergency.id)
+                ? current.map((item) => item.id === emergency.id ? emergency : item)
+                : [emergency, ...current]
+              : current.filter((item) => item.id !== emergency.id))
+          }
+        } catch {
+          // REST refresh remains the recovery path for malformed events.
+        }
+      }
+      socket.onclose = () => {
+        if (!closed) {
+          attempts += 1
+          reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** attempts))
+        }
+      }
+      socket.onerror = () => socket?.close()
+    }
+
+    void connect()
+    return () => {
+      closed = true
+      if (reconnectTimer) window.clearTimeout(reconnectTimer)
+      socket?.close()
+    }
+  }, [load, user?.id])
+
+  useEffect(() => {
     if (!navigator.geolocation) return
     navigator.geolocation.getCurrentPosition(
       (pos) => {
@@ -1827,7 +1878,7 @@ export default function ResidentAlertsMapPage() {
     <div
       className={cn(
         "relative w-full overflow-hidden bg-[#f4f6f9]",
-        isDesktop ? "h-[calc(100svh-3.5rem)]" : "h-svh",
+        isDesktop ? "h-[calc(100svh-3.5rem)]" : "h-[calc(100svh-5rem)]",
       )}
     >
       {mapMeta ? (
@@ -1932,7 +1983,7 @@ export default function ResidentAlertsMapPage() {
             type="button"
             onClick={goHomeOnMap}
             className={cn(
-              "inline-flex h-10 w-fit shrink-0 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-800 shadow-md",
+              "inline-flex h-10 w-fit shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-800 shadow-md",
               isDesktop ? "gap-1.5 px-2.5 text-[13px] font-semibold" : "size-10 p-0",
             )}
             aria-label="Home"
@@ -1946,7 +1997,7 @@ export default function ResidentAlertsMapPage() {
             onClick={goMyLocation}
             disabled={locating}
             className={cn(
-              "inline-flex h-10 w-fit shrink-0 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-800 shadow-md disabled:opacity-70",
+              "inline-flex h-10 w-fit shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-800 shadow-md disabled:opacity-70",
               isDesktop ? "gap-1.5 px-2.5 text-[13px] font-semibold" : "size-10 p-0",
             )}
             aria-label="Current location"
@@ -1957,7 +2008,7 @@ export default function ResidentAlertsMapPage() {
             ) : (
               <MapPinIcon className="size-5 shrink-0" strokeWidth={2} />
             )}
-            {isDesktop ? <span className="whitespace-nowrap">Current Location</span> : null}
+            {isDesktop ? <span className="whitespace-nowrap">Current location</span> : null}
           </button>
 
           <div className="relative flex flex-col items-end">
@@ -1967,7 +2018,7 @@ export default function ResidentAlertsMapPage() {
                 setWeatherOpen((value) => !value)
                 if (!isDesktop) snapSheetTo("hidden")
               }}
-              className="inline-flex h-10 w-fit shrink-0 items-center justify-center gap-1.5 rounded-xl border border-neutral-200 bg-white px-2.5 text-[13px] font-bold text-neutral-900 shadow-md"
+              className="inline-flex h-10 w-fit shrink-0 items-center justify-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 text-[13px] font-bold text-neutral-900 shadow-md"
               aria-label="Open weather"
               aria-expanded={weatherOpen}
             >
@@ -2008,7 +2059,7 @@ export default function ResidentAlertsMapPage() {
           </div>
 
           {/* +/- zoom directly under weather */}
-          <div className="flex w-10 flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-md">
+          <div className="flex w-10 flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-md">
             <button
               type="button"
               onClick={() => mapApiRef.current?.zoomIn()}

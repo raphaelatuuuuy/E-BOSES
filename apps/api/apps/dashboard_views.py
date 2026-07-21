@@ -92,11 +92,18 @@ class ResponderDashboardSummaryView(APIView):
         if not (request.user.is_staff or request.user.is_superuser or request.user.role == User.Role.FIRST_RESPONDER):
             return Response({"detail": "You do not have permission to view responder summaries."}, status=status.HTTP_403_FORBIDDEN)
         assigned = EmergencyResponderAssignment.objects.filter(responder=request.user)
+        newly_routed = assigned.filter(
+            status=EmergencyResponderAssignment.Status.ASSIGNED,
+            alert__status=EmergencyAlert.Status.ROUTED,
+        ).count()
         return Response({
             **common_counts(request.user),
             "is_on_duty": request.user.is_on_duty,
             "responder_unit": request.user.responder_unit,
             "assigned_active_emergencies": assigned.filter(alert__status__in=EMERGENCY_ACTIVE).count(),
             "assigned_resolved_emergencies": assigned.filter(alert__status=EmergencyAlert.Status.RESOLVED).count(),
-            "awaiting_acknowledgement": assigned.filter(status=EmergencyResponderAssignment.Status.ASSIGNED).count(),
+            "newly_routed": newly_routed,
+            # Transitional response key for older clients. No acknowledgement
+            # action exists; this now carries the same newly-routed count.
+            "awaiting_acknowledgement": newly_routed,
         })

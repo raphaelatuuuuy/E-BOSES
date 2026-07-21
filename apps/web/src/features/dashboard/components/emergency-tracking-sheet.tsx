@@ -17,6 +17,7 @@ import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 import { websocketTicket, websocketUrl } from "@/lib/api"
 import {
+  cancelEmergency,
   createEmergencyAppeal,
   getEmergency,
   type EmergencyAlert,
@@ -34,7 +35,6 @@ import type leaflet from "leaflet"
 const activeStatuses: EmergencyStatus[] = [
   "submitted",
   "routed",
-  "acknowledged",
   "en_route",
   "nearby",
   "arrived",
@@ -43,7 +43,7 @@ const activeStatuses: EmergencyStatus[] = [
 const statusLabels: Record<EmergencyStatus, string> = {
   submitted: "Alert sent",
   routed: "Responder assigned",
-  acknowledged: "Responder accepted",
+  acknowledged: "Responder routed",
   en_route: "On the way",
   nearby: "Nearby",
   arrived: "On scene",
@@ -85,16 +85,10 @@ const PIPELINE: Array<{
       `Finding nearest on-duty ${unitForEmergencyType(alert.type)} for this case…`,
   },
   {
-    status: "acknowledged",
-    label: "Responder accepted",
-    defaultNote: () => "The assigned responder accepted this alert.",
-    pendingHint: () => "Waiting for the assigned responder to accept",
-  },
-  {
     status: "en_route",
     label: "On the way",
     defaultNote: () => "Responder is traveling to your location.",
-    pendingHint: () => "Responder will head out after accepting",
+    pendingHint: () => "Responder is preparing to travel",
   },
   {
     status: "nearby",
@@ -235,7 +229,7 @@ function statusText(alert: EmergencyAlert) {
   if (alert.status === "routed") {
     return `Assigned to on-duty ${unit} for this ${alert.type} case.`
   }
-  if (alert.status === "acknowledged") return "The assigned responder accepted your alert."
+  if (alert.status === "acknowledged") return "Responder routed; location updates will appear when travel begins."
   if (alert.status === "en_route") return "Responder is on the way."
   if (alert.status === "nearby") return "Responder is near your location."
   if (alert.status === "arrived") return "Responder has arrived."
@@ -602,6 +596,7 @@ function DetailsColumn({
           open={chatOpen}
           disabled={alert.status === "cancelled" || alert.status === "resolved"}
           incomingMessage={chatMessage}
+          realtime={false}
           participantHint={
             alert.assignments?.length
               ? `Group · you + ${alert.assignments.length} responder${alert.assignments.length === 1 ? "" : "s"}`
@@ -700,6 +695,9 @@ export function EmergencyTrackingSheet({
   const [alert, setAlert] = useState<EmergencyAlert | null>(initialAlert)
   const [appealReason, setAppealReason] = useState("")
   const [appealBusy, setAppealBusy] = useState(false)
+  const [cancelOpen, setCancelOpen] = useState(false)
+  const [cancelReason, setCancelReason] = useState("")
+  const [cancelBusy, setCancelBusy] = useState(false)
   const [connectionState, setConnectionState] = useState<"connecting" | "live" | "degraded">("connecting")
   const [chatMessage, setChatMessage] = useState<EmergencyChatMessage | null>(null)
 
@@ -711,6 +709,8 @@ export function EmergencyTrackingSheet({
     if (!open) {
       setExpanded(false)
       setChatMessage(null)
+      setCancelOpen(false)
+      setCancelReason("")
     }
   }, [open])
 
@@ -822,6 +822,25 @@ export function EmergencyTrackingSheet({
   const canAppeal = Boolean(alert && ["resolved", "cancelled"].includes(alert.status) && !pendingAppeal)
   const appealHistory = alert.appeals ?? []
   const isLive = activeStatuses.includes(alert.status)
+  const canCancel = ["submitted", "routed"].includes(alert.status)
+
+  async function submitCancellation() {
+    const reason = cancelReason.trim()
+    if (!alert || reason.length < 10) return
+    setCancelBusy(true)
+    try {
+      const nextAlert = await cancelEmergency(alert.id, reason)
+      setAlert(nextAlert)
+      onAlertChange?.(nextAlert)
+      setCancelOpen(false)
+      setCancelReason("")
+      toast.success("Emergency alert cancelled")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not cancel this emergency alert.")
+    } finally {
+      setCancelBusy(false)
+    }
+  }
 
   async function submitAppeal() {
     if (!alert || !appealReason.trim()) return
@@ -977,18 +996,66 @@ export function EmergencyTrackingSheet({
           </div>
         </div>
 
-        {/* Footer — no cancel; close only */}
+        {/* Footer */}
         <div className="shrink-0 border-t border-white/10 bg-[#050e45] px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-          <button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            className="h-11 w-full rounded-full bg-[#ff6a1a] text-[14px] font-semibold text-white hover:bg-[#e85f17]"
-          >
-            Close tracking
-          </button>
-          {isLive ? (
+          {cancelOpen && canCancel ? (
+            <div className="mb-3 rounded-xl border border-red-300/25 bg-red-500/10 p-3">
+              <label htmlFor="emergency-cancel-reason" className="text-[13px] font-semibold text-white">
+                Why are you cancelling?
+              </label>
+              <p className="mt-1 text-[11px] leading-4 text-white/55">
+                Assigned responders will see this reason. Enter at least 10 characters.
+              </p>
+              <textarea
+                id="emergency-cancel-reason"
+                value={cancelReason}
+                onChange={(event) => setCancelReason(event.target.value.slice(0, 500))}
+                placeholder="Example: Sent by accident; everyone here is safe."
+                className="mt-2 min-h-20 w-full resize-none rounded-lg border border-white/15 bg-black/25 px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/35 focus:border-red-300"
+              />
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCancelOpen(false)
+                    setCancelReason("")
+                  }}
+                  className="h-10 flex-1 rounded-lg border border-white/15 text-[13px] font-semibold text-white hover:bg-white/10"
+                >
+                  Keep alert
+                </button>
+                <button
+                  type="button"
+                  disabled={cancelBusy || cancelReason.trim().length < 10}
+                  onClick={() => void submitCancellation()}
+                  className="h-10 flex-1 rounded-lg bg-red-600 text-[13px] font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {cancelBusy ? "Cancelling…" : "Confirm cancel"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+          <div className="flex gap-2">
+            {canCancel && !cancelOpen ? (
+              <button
+                type="button"
+                onClick={() => setCancelOpen(true)}
+                className="h-11 flex-1 rounded-full border border-red-300/40 text-[14px] font-semibold text-red-100 hover:bg-red-500/15"
+              >
+                Cancel alert
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="h-11 flex-1 rounded-full bg-[#ff6a1a] text-[14px] font-semibold text-white hover:bg-[#e85f17]"
+            >
+              Close tracking
+            </button>
+          </div>
+          {isLive && !canCancel ? (
             <p className="mt-2 text-center text-[11px] text-white/50">
-              This alert cannot be cancelled. Responders are handling it.
+              A responder is already handling this alert. Contact them in chat if circumstances change.
             </p>
           ) : null}
         </div>

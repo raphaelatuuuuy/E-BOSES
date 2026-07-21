@@ -1,5 +1,7 @@
 from datetime import timedelta
 
+import re
+
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -22,11 +24,11 @@ from apps.accounts.services import (
     phash_blocks_file,
     phash_file,
     sha256_file,
+    validate_concern_chat_attachment,
     validate_concern_media_file,
 )
 from apps.accounts.views import request_meta, touch_last_seen
-from apps.notifications.models import Notification
-from apps.notifications.services import broadcast_notification
+from apps.notifications.services import create_user_notification, notify_status_change
 
 from .models import (
     Announcement,
@@ -35,16 +37,19 @@ from .models import (
     ConcernAppeal,
     ConcernAssignment,
     ConcernAiAssessment,
+    ConcernChatAttachment,
     ConcernChatMessage,
     ConcernClassificationConfiguration,
     ConcernClarification,
     ConcernComment,
     ConcernMedia,
     ConcernOfficialRemark,
+    ConcernResolutionEvidence,
     ConcernStatusEvent,
     ConcernVote,
     ContentFlag,
 )
+from .announcement_services import dispatch_due_announcements, mark_announcement_published
 from .serializers import (
     ActiveResponderSerializer,
     AnnouncementSerializer,
@@ -55,6 +60,8 @@ from .serializers import (
     ConcernAppealReviewSerializer,
     ConcernAppealSerializer,
     ConcernAssignSerializer,
+    ConcernAiAssessmentSerializer,
+    ConcernAiReviewSerializer,
     ConcernAssignmentSerializer,
     ConcernChatCreateSerializer,
     ConcernChatMessageSerializer,
@@ -63,15 +70,18 @@ from .serializers import (
     ConcernCreateSerializer,
     ConcernClarificationSerializer,
     ContentFlagSerializer,
+    ContentFlagReviewSerializer,
     ConcernMediaSerializer,
     ConcernOfficialRemarkCreateSerializer,
     ConcernOfficialRemarkSerializer,
+    ConcernResolutionEvidenceSerializer,
     ConcernSerializer,
     ConcernStatusUpdateSerializer,
     ConcernVoteSerializer,
     PublicUserSerializer,
 )
 from .services import ensure_concern_media_preview, user_can_access_concern_media_raw
+from .tasks import enqueue_concern_ai
 
 
 ACTIVE_STATUSES = {
@@ -81,6 +91,68 @@ ACTIVE_STATUSES = {
     Concern.Status.IN_PROGRESS,
     Concern.Status.APPEALED,
 }
+
+COMMENT_MENTION_RE = re.compile(r"@\[([^\]]+)\]\(u:(\d+)\)")
+
+
+def comment_mention_ids(body):
+    ids = []
+    seen = set()
+    for match in COMMENT_MENTION_RE.finditer(body or ""):
+        user_id = int(match.group(2))
+        if user_id not in seen:
+            ids.append(user_id)
+            seen.add(user_id)
+        if len(ids) >= 10:
+            break
+    return ids
+
+
+def comment_notification_preview(body):
+    visible = COMMENT_MENTION_RE.sub(lambda match: f"@{match.group(1)}", body or "")
+    visible = " ".join(visible.split())
+    return visible[:237] + ("..." if len(visible) > 240 else "")
+
+
+def notify_comment_mentions(comment, mention_ids):
+    if not mention_ids:
+        return set()
+    User = get_user_model()
+    recipients = User.objects.filter(
+        pk__in=mention_ids,
+        is_active=True,
+        status=User.Status.VERIFIED,
+    ).exclude(pk=comment.author_id)
+    notified = set()
+    for recipient in recipients:
+        create_user_notification(
+            recipient=recipient,
+            concern=comment.concern,
+            type="concern_mention",
+            title="You were mentioned in a community report",
+            body=comment_notification_preview(comment.body),
+        )
+        notified.add(recipient.pk)
+    return notified
+
+
+def notify_comment_participants(comment):
+    notified = notify_comment_mentions(comment, comment_mention_ids(comment.body))
+    candidates = []
+    if comment.parent_id:
+        candidates.append(comment.parent.author)
+    candidates.append(comment.concern.reporter)
+    for recipient in candidates:
+        if recipient.pk == comment.author_id or recipient.pk in notified:
+            continue
+        create_user_notification(
+            recipient=recipient,
+            concern=comment.concern,
+            type="concern_comment",
+            title="New reply on a community report" if comment.parent_id else "New comment on your community report",
+            body=comment_notification_preview(comment.body),
+        )
+        notified.add(recipient.pk)
 
 FEED_VISIBLE_STATUSES = {
     Concern.Status.SUBMITTED,
@@ -92,7 +164,7 @@ FEED_VISIBLE_STATUSES = {
 }
 
 LEGAL_STATUS_TRANSITIONS = {
-    Concern.Status.SUBMITTED: {Concern.Status.ASSIGNED, Concern.Status.REJECTED},
+    Concern.Status.SUBMITTED: {Concern.Status.UNDER_REVIEW, Concern.Status.ASSIGNED, Concern.Status.REJECTED},
     Concern.Status.UNDER_REVIEW: {Concern.Status.SUBMITTED, Concern.Status.ASSIGNED, Concern.Status.REJECTED},
     Concern.Status.ASSIGNED: {Concern.Status.IN_PROGRESS, Concern.Status.REJECTED},
     Concern.Status.IN_PROGRESS: {Concern.Status.RESOLVED, Concern.Status.REJECTED},
@@ -124,6 +196,10 @@ def can_access_concern(user, concern):
         or user.is_staff
         or user.role == user.Role.BARANGAY_OFFICIAL
         or user.pk == concern.reporter_id
+        or concern.assignments.filter(
+            assignee=user,
+            status=ConcernAssignment.Status.ACTIVE,
+        ).exists()
         or (
             concern.visibility == Concern.Visibility.COMMUNITY
             and concern.validation_status == Concern.ValidationStatus.ACCEPTED
@@ -144,7 +220,7 @@ def can_update_concern_status(user):
 
 
 def can_chat_on_concern(user, concern):
-    """Private report thread: reporting resident + barangay officials/staff only."""
+    """Private operational thread: reporter, assigned responder, and authorized officials."""
     if not user or not user.is_authenticated:
         return False
     return (
@@ -152,6 +228,10 @@ def can_chat_on_concern(user, concern):
         or user.is_staff
         or user.role == user.Role.BARANGAY_OFFICIAL
         or user.pk == concern.reporter_id
+        or concern.assignments.filter(
+            assignee=user,
+            status=ConcernAssignment.Status.ACTIVE,
+        ).exists()
         or user_has_role_permission(user, "concerns.manage")
     )
 
@@ -185,35 +265,19 @@ def decorate_concerns(queryset, user):
         concern.priority_score = (concern.vote_count * 3) + (concern.comment_count * 2)
     return concerns
 
-def notify_announcement_published(announcement):
-    User = get_user_model()
-    recipients = User.objects.filter(
-        role=User.Role.RESIDENT,
-        status=User.Status.VERIFIED,
-    )
-    for recipient in recipients:
-        notification = Notification.objects.create(
-            recipient=recipient,
-            type=Notification.Type.ANNOUNCEMENT,
-            title=announcement.title,
-            body=announcement.body[:240],
-        )
-        transaction.on_commit(lambda notification=notification: broadcast_notification(notification))
-
 def create_concern_notification(concern, *, recipient, type, title, body):
-    notification = Notification.objects.create(
+    return create_user_notification(
         recipient=recipient,
         concern=concern,
         type=type,
         title=title,
         body=body,
     )
-    transaction.on_commit(lambda: broadcast_notification(notification))
-    return notification
 
 
 class ConcernMediaCheckView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
@@ -262,7 +326,7 @@ class ConcernMediaCheckView(APIView):
             media_phash_blocks = phash_blocks_file(raw_content)
             if media_hash in current_hashes or ConcernMedia.objects.filter(sha256_hash=media_hash).exists():
                 return Response(
-                    {"media": ["Duplicate media upload detected."]},
+                    {"media": ["duplicate media upload detected."]},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             if media_looks_duplicate(media_phash, media_phash_blocks, [*existing_phashes, *current_phashes]):
@@ -333,7 +397,7 @@ class ConcernListCreateView(APIView):
             media_phash = phash_file(raw_content)
             media_phash_blocks = phash_blocks_file(raw_content)
             if media_hash in media_hashes or ConcernMedia.objects.filter(sha256_hash=media_hash).exists():
-                return Response({"media": ["Duplicate media upload detected."]}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"media": ["duplicate media upload detected."]}, status=status.HTTP_400_BAD_REQUEST)
             if media_looks_duplicate(media_phash, media_phash_blocks, [*existing_phashes, *current_phashes]):
                 return Response(
                     {"media": ["This image appears to have been uploaded before."]},
@@ -383,6 +447,7 @@ class ConcernListCreateView(APIView):
         from apps.live_map import concern_payload
         from apps.notifications.services import broadcast_live_map_event
         transaction.on_commit(lambda: broadcast_live_map_event("concern.created", {"concern": concern_payload(decorated)}))
+        transaction.on_commit(lambda: enqueue_concern_ai(concern.pk))
         return Response(ConcernSerializer(decorated, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
@@ -406,6 +471,32 @@ class MyConcernListView(APIView):
             queryset = queryset.filter(created_at__date__lte=date_to)
         concerns = decorate_concerns(queryset, request.user)
         return Response(ConcernSerializer(concerns, many=True, context={"request": request}).data)
+
+
+class AssignedConcernListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        User = get_user_model()
+        if not (
+            request.user.is_staff
+            or request.user.is_superuser
+            or request.user.role in {User.Role.FIRST_RESPONDER, User.Role.BARANGAY_OFFICIAL}
+        ):
+            return Response(
+                {"detail": "You do not have permission to view assigned concerns."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        queryset = Concern.objects.filter(
+            assignments__assignee=request.user,
+            assignments__status=ConcernAssignment.Status.ACTIVE,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        ).exclude(status__in=[Concern.Status.RESOLVED, Concern.Status.REJECTED]).distinct()
+        concerns = decorate_concerns(queryset, request.user)
+        return Response(
+            ConcernSerializer(concerns, many=True, context={"request": request}).data
+        )
 
 
 class ManagedConcernListView(APIView):
@@ -458,7 +549,22 @@ class ConcernPublicDetailView(APIView):
         if not can_access_concern(request.user, concern):
             return Response({"detail": "You do not have permission to view this report."}, status=status.HTTP_403_FORBIDDEN)
         decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
-        return Response(ConcernSerializer(decorated, context={"request": request}).data)
+        can_view_private_case = bool(
+            request.user.is_superuser
+            or request.user.is_staff
+            or request.user.role == request.user.Role.BARANGAY_OFFICIAL
+            or request.user.pk == concern.reporter_id
+            or concern.assignments.filter(
+                assignee=request.user,
+                status=ConcernAssignment.Status.ACTIVE,
+            ).exists()
+        )
+        return Response(
+            ConcernSerializer(
+                decorated,
+                context={"request": request, "privacy_safe": not can_view_private_case},
+            ).data
+        )
 
 
 class ConcernFeedView(APIView):
@@ -548,6 +654,7 @@ class ConcernCommentCreateView(APIView):
             parent=parent,
             body=serializer.validated_data["body"],
         )
+        notify_comment_participants(comment)
         return Response(
             ConcernCommentSerializer(comment, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
@@ -572,12 +679,15 @@ class ConcernCommentDetailView(APIView):
             return Response({"body": ["Comment is too long."]}, status=status.HTTP_400_BAD_REQUEST)
         if body == comment.body:
             return Response(ConcernCommentSerializer(comment, context={"request": request}).data)
+        previous_mentions = set(comment_mention_ids(comment.body))
         # Preserve original text on first edit only
         if not comment.is_edited:
             comment.original_body = comment.body
             comment.is_edited = True
         comment.body = body
         comment.save(update_fields=["body", "original_body", "is_edited", "updated_at"])
+        new_mentions = [user_id for user_id in comment_mention_ids(body) if user_id not in previous_mentions]
+        notify_comment_mentions(comment, new_mentions)
         return Response(ConcernCommentSerializer(comment, context={"request": request}).data)
 
     def delete(self, request, pk, comment_id):
@@ -637,9 +747,37 @@ class ContentFlagListView(APIView):
         return Response(ContentFlagSerializer(flags, many=True, context={"request": request}).data)
 
 
+class ContentFlagReviewView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        return self.patch(request, pk)
+
+    def patch(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to review content flags."}, status=status.HTTP_403_FORBIDDEN)
+        serializer = ContentFlagReviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        flag = get_object_or_404(ContentFlag, pk=pk)
+        flag.status = serializer.validated_data["status"]
+        flag.staff_note = serializer.validated_data["staff_note"]
+        flag.reviewed_by = request.user
+        flag.save(update_fields=["status", "staff_note", "reviewed_by", "updated_at"])
+        create_audit_log(
+            "content.flag_reviewed",
+            actor=request.user,
+            target_user=flag.concern.reporter,
+            metadata={"flag_id": flag.pk, "concern_id": flag.concern_id, "status": flag.status},
+            request_meta=request_meta(request),
+        )
+        return Response(ContentFlagSerializer(flag, context={"request": request}).data)
+
+
 class ConcernAssignView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @transaction.atomic
     def post(self, request, pk):
         touch_last_seen(request.user)
         if not can_update_concern_status(request.user):
@@ -650,9 +788,14 @@ class ConcernAssignView(APIView):
                 {"validation_status": ["This report must pass validation before it can be assigned."]},
                 status=status.HTTP_409_CONFLICT,
             )
-        if concern.status not in {Concern.Status.SUBMITTED, Concern.Status.UNDER_REVIEW}:
+        if concern.status not in {
+            Concern.Status.SUBMITTED,
+            Concern.Status.UNDER_REVIEW,
+            Concern.Status.ASSIGNED,
+            Concern.Status.IN_PROGRESS,
+        }:
             return Response(
-                {"status": ["Only submitted reports can be assigned."]},
+                {"status": ["Only active reports can be assigned or reassigned."]},
                 status=status.HTTP_409_CONFLICT,
             )
         serializer = ConcernAssignSerializer(data=request.data)
@@ -662,12 +805,49 @@ class ConcernAssignView(APIView):
         if assignee_id:
             User = get_user_model()
             assignee = get_object_or_404(User, pk=assignee_id, role__in=[User.Role.BARANGAY_OFFICIAL, User.Role.FIRST_RESPONDER], status=User.Status.VERIFIED)
+        office = serializer.validated_data.get("office", "").strip()
+        assignment_note = serializer.validated_data.get("note", "").strip()
+        active_assignments = list(
+            ConcernAssignment.objects.select_for_update()
+            .filter(concern=concern, status=ConcernAssignment.Status.ACTIVE)
+            .select_related("assignee")
+        )
+        matching = next(
+            (
+                item
+                for item in active_assignments
+                if item.assignee_id == (assignee.pk if assignee else None)
+                and item.office.strip().casefold() == office.casefold()
+            ),
+            None,
+        )
+        if matching and len(active_assignments) == 1:
+            if assignment_note and assignment_note != matching.note:
+                matching.note = assignment_note
+                matching.save(update_fields=["note", "updated_at"])
+            return Response(
+                ConcernAssignmentSerializer(matching, context={"request": request}).data
+            )
+
+        previous_assignment_ids = [item.pk for item in active_assignments]
+        ConcernAssignment.objects.filter(pk__in=previous_assignment_ids).update(
+            status=ConcernAssignment.Status.CANCELLED
+        )
+        for previous in active_assignments:
+            if previous.assignee and previous.assignee_id != (assignee.pk if assignee else None):
+                create_concern_notification(
+                    concern,
+                    recipient=previous.assignee,
+                    type="assigned",
+                    title="Concern assignment changed",
+                    body="This concern was reassigned and is no longer in your active field queue.",
+                )
         assignment = ConcernAssignment.objects.create(
             concern=concern,
             assignee=assignee,
             assigned_by=request.user,
-            office=serializer.validated_data.get("office", ""),
-            note=serializer.validated_data.get("note", ""),
+            office=office,
+            note=assignment_note,
         )
         assignee_name = PublicUserSerializer(assignee).data["full_name"] if assignee else assignment.office
         note = assignment.note or f"Assigned to {assignee_name or 'the barangay response team'}."
@@ -677,8 +857,28 @@ class ConcernAssignView(APIView):
         concern.save(update_fields=["status", "update_text", "status_version", "updated_at"])
         ConcernStatusEvent.objects.create(concern=concern, status=Concern.Status.ASSIGNED, note=note, actor=request.user)
         if assignee:
-            create_concern_notification(concern, recipient=assignee, type=Notification.Type.ASSIGNED, title="Concern report assigned", body=note)
-        create_audit_log("concern.assigned", actor=request.user, target_user=concern.reporter, metadata={"concern_id": concern.pk, "assignment_id": assignment.pk}, request_meta=request_meta(request))
+            create_concern_notification(concern, recipient=assignee, type="assigned", title="Concern report assigned", body=note)
+        notify_status_change(concern)
+        create_audit_log(
+            "concern.reassigned" if previous_assignment_ids else "concern.assigned",
+            actor=request.user,
+            target_user=concern.reporter,
+            metadata={
+                "concern_id": concern.pk,
+                "assignment_id": assignment.pk,
+                "previous_assignment_ids": previous_assignment_ids,
+            },
+            request_meta=request_meta(request),
+        )
+        from apps.live_map import concern_payload
+        from apps.notifications.services import broadcast_live_map_event
+        decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
+        transaction.on_commit(
+            lambda: broadcast_live_map_event(
+                "concern.updated",
+                {"concern": concern_payload(decorated)},
+            )
+        )
         return Response(ConcernAssignmentSerializer(assignment, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 class ConcernClarificationRequestView(APIView):
@@ -695,7 +895,7 @@ class ConcernClarificationRequestView(APIView):
         concern.update_text = "Barangay requested clarification."
         concern.save(update_fields=["update_text", "updated_at"])
         ConcernStatusEvent.objects.create(concern=concern, status=concern.status, note=clarification.request_text, actor=request.user)
-        create_concern_notification(concern, recipient=concern.reporter, type=Notification.Type.CLARIFICATION_REQUESTED, title="Clarification requested", body=clarification.request_text)
+        create_concern_notification(concern, recipient=concern.reporter, type="clarification_requested", title="Clarification requested", body=clarification.request_text)
         create_audit_log("concern.clarification_requested", actor=request.user, target_user=concern.reporter, metadata={"concern_id": concern.pk, "clarification_id": clarification.pk}, request_meta=request_meta(request))
         return Response(ConcernClarificationSerializer(clarification, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
@@ -717,7 +917,7 @@ class ConcernClarificationReplyView(APIView):
         clarification.save(update_fields=["response_text", "responded_by", "status", "responded_at"])
         ConcernStatusEvent.objects.create(concern=concern, status=concern.status, note="Resident replied to clarification request.", actor=request.user)
         if clarification.requested_by:
-            create_concern_notification(concern, recipient=clarification.requested_by, type=Notification.Type.CLARIFICATION_REPLIED, title="Resident replied to clarification", body=clarification.response_text[:240])
+            create_concern_notification(concern, recipient=clarification.requested_by, type="clarification_replied", title="Resident replied to clarification", body=clarification.response_text[:240])
         create_audit_log("concern.clarification_replied", actor=request.user, target_user=concern.reporter, metadata={"concern_id": concern.pk, "clarification_id": clarification.pk}, request_meta=request_meta(request))
         return Response(ConcernClarificationSerializer(clarification, context={"request": request}).data)
 
@@ -740,7 +940,7 @@ class ConcernAppealCreateView(APIView):
         ConcernStatusEvent.objects.create(concern=concern, status=Concern.Status.APPEALED, note=appeal.reason[:255], actor=request.user)
         User = get_user_model()
         for official in User.objects.filter(role=User.Role.BARANGAY_OFFICIAL, status=User.Status.VERIFIED):
-            create_concern_notification(concern, recipient=official, type=Notification.Type.APPEAL_SUBMITTED, title="Report appeal submitted", body=appeal.reason[:240])
+            create_concern_notification(concern, recipient=official, type="appeal_submitted", title="Report appeal submitted", body=appeal.reason[:240])
         create_audit_log("concern.appeal_submitted", actor=request.user, target_user=request.user, metadata={"concern_id": concern.pk, "appeal_id": appeal.pk}, request_meta=request_meta(request))
         return Response(ConcernAppealSerializer(appeal, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
@@ -780,7 +980,7 @@ class ConcernAppealReviewView(APIView):
         concern.update_text = appeal.decision_note or f"Appeal {appeal.status}."
         concern.save(update_fields=["status", "update_text", "updated_at"])
         ConcernStatusEvent.objects.create(concern=concern, status=next_status, note=concern.update_text, actor=request.user)
-        notif_type = Notification.Type.APPEAL_APPROVED if appeal.status == ConcernAppeal.Status.APPROVED else Notification.Type.APPEAL_DENIED
+        notif_type = "appeal_approved" if appeal.status == ConcernAppeal.Status.APPROVED else "appeal_denied"
         create_concern_notification(concern, recipient=appeal.appellant, type=notif_type, title=f"Appeal {appeal.status}", body=concern.update_text)
         create_audit_log("concern.appeal_reviewed", actor=request.user, target_user=appeal.appellant, metadata={"concern_id": concern.pk, "appeal_id": appeal.pk, "status": appeal.status}, request_meta=request_meta(request))
         return Response(ConcernAppealSerializer(appeal, context={"request": request}).data)
@@ -802,9 +1002,40 @@ class ConcernOfficialRemarkCreateView(APIView):
             visible_to_resident=serializer.validated_data.get("visible_to_resident", True),
         )
         if remark.visible_to_resident:
-            create_concern_notification(concern, recipient=concern.reporter, type=Notification.Type.UNDER_REVIEW, title="Official remark added", body=remark.body[:240])
+            create_concern_notification(concern, recipient=concern.reporter, type="under_review", title="Official remark added", body=remark.body[:240])
         create_audit_log("concern.remark_added", actor=request.user, target_user=concern.reporter, metadata={"concern_id": concern.pk, "remark_id": remark.pk, "visible_to_resident": remark.visible_to_resident}, request_meta=request_meta(request))
         return Response(ConcernOfficialRemarkSerializer(remark, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
+
+class ConcernAiReviewView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "Only authorized officials can review AI assessment."}, status=status.HTTP_403_FORBIDDEN)
+        concern = get_object_or_404(Concern, pk=pk)
+        serializer = ConcernAiReviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        assessment, _ = ConcernAiAssessment.objects.get_or_create(concern=concern, defaults={"status": ConcernAiAssessment.Status.PENDING})
+        assessment.official_decision = serializer.validated_data["decision"]
+        assessment.official_reason = serializer.validated_data["reason"]
+        assessment.official_reviewer = request.user
+        assessment.official_reviewed_at = timezone.now()
+        assessment.save(update_fields=["official_decision", "official_reason", "official_reviewer", "official_reviewed_at", "updated_at"])
+        create_audit_log(
+            "concern.ai_assessment_reviewed",
+            actor=request.user,
+            target_user=concern.reporter,
+            metadata={"concern_id": concern.pk, "assessment_id": assessment.pk, "decision": assessment.official_decision, "reason": assessment.official_reason},
+            request_meta=request_meta(request),
+        )
+        from .tasks import broadcast_concern_ai_update
+
+        transaction.on_commit(
+            lambda assessment_id=assessment.pk: broadcast_concern_ai_update(assessment_id)
+        )
+        return Response(ConcernAiAssessmentSerializer(assessment, context={"request": request}).data)
 
 
 class ConcernChatView(APIView):
@@ -846,16 +1077,40 @@ class ConcernChatView(APIView):
             )
         serializer = ConcernChatCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        body = serializer.validated_data.get("body", "").strip()
+        uploaded_file = serializer.validated_data.get("media")
+        attachment_data = None
+        if uploaded_file:
+            try:
+                attachment_data = validate_concern_chat_attachment(uploaded_file)
+            except ValidationError as exc:
+                detail = getattr(exc, "message_dict", None) or getattr(exc, "messages", [str(exc)])
+                return Response({"media": detail}, status=status.HTTP_400_BAD_REQUEST)
+        if not body and not attachment_data:
+            return Response({"body": ["Message text or an image/video attachment is required."]}, status=status.HTTP_400_BAD_REQUEST)
         message = ConcernChatMessage.objects.create(
             concern=concern,
             sender=request.user,
-            body=serializer.validated_data["body"],
+            body=body,
         )
+        if attachment_data:
+            validated_file, mime_type, kind, authenticity_status, authenticity_detail = attachment_data
+            ConcernChatAttachment.objects.create(
+                concern=concern,
+                message=message,
+                file=validated_file,
+                original_filename=getattr(uploaded_file, "name", "attachment"),
+                mime_type=mime_type,
+                kind=kind,
+                file_size=getattr(uploaded_file, "size", 0),
+                authenticity_status=authenticity_status,
+                authenticity_detail=authenticity_detail,
+            )
         message = (
             ConcernChatMessage.objects.select_related("sender", "sender__resident_profile")
             .get(pk=message.pk)
         )
-        preview = message.body[:240]
+        preview = message.body[:240] or "New media attachment"
         # Notify the other party
         if request.user.pk == concern.reporter_id:
             User = get_user_model()
@@ -867,7 +1122,7 @@ class ConcernChatView(APIView):
                 create_concern_notification(
                     concern,
                     recipient=official,
-                    type=Notification.Type.CLARIFICATION_REPLIED,
+                    type="clarification_replied",
                     title=f"New message on {concern.tracking_id}",
                     body=preview,
                 )
@@ -875,7 +1130,7 @@ class ConcernChatView(APIView):
             create_concern_notification(
                 concern,
                 recipient=concern.reporter,
-                type=Notification.Type.CLARIFICATION_REQUESTED,
+                type="clarification_requested",
                 title="New message on your report",
                 body=preview,
             )
@@ -891,9 +1146,33 @@ class ConcernChatView(APIView):
             status=status.HTTP_201_CREATED,
         )
 
+
+class ConcernChatAttachmentRawView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        attachment = get_object_or_404(
+            ConcernChatAttachment.objects.select_related("concern", "message"),
+            pk=pk,
+        )
+        if not can_chat_on_concern(request.user, attachment.concern):
+            return Response({"detail": "You do not have permission to view this chat attachment."}, status=status.HTTP_403_FORBIDDEN)
+        log_raw_media_access(
+            actor=request.user,
+            target_user=attachment.concern.reporter,
+            media_type="concern_chat_attachment",
+            object_id=attachment.pk,
+            request_meta=request_meta(request),
+        )
+        return FileResponse(
+            attachment.file.open("rb"),
+            content_type=attachment.mime_type or "application/octet-stream",
+        )
+
 class ConcernStatusUpdateView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @transaction.atomic
     def post(self, request, pk):
         touch_last_seen(request.user)
         if not can_update_concern_status(request.user):
@@ -921,6 +1200,44 @@ class ConcernStatusUpdateView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
         note = serializer.validated_data.get("note", "").strip()
+        evidence_files = request.FILES.getlist("resolution_evidence")
+        if evidence_files and next_status != Concern.Status.RESOLVED:
+            return Response(
+                {"resolution_evidence": ["Resolution evidence can only be added when resolving a report."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(evidence_files) > 5:
+            return Response(
+                {"resolution_evidence": ["Upload no more than 5 resolution photos."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if next_status in {Concern.Status.RESOLVED, Concern.Status.REJECTED} and len(note) < 10:
+            return Response(
+                {"note": ["Explain the final decision in at least 10 characters."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if (
+            next_status == Concern.Status.RESOLVED
+            and not evidence_files
+            and not concern.resolution_evidence.exists()
+        ):
+            return Response(
+                {"resolution_evidence": ["Add at least one photo showing the completed resolution."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        validated_evidence = []
+        for uploaded_file in evidence_files:
+            try:
+                validated_file = validate_concern_media_file(uploaded_file)
+            except ValidationError as exc:
+                messages = getattr(exc, "messages", None) or [str(exc)]
+                return Response(
+                    {"resolution_evidence": messages},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            validated_evidence.append((uploaded_file, validated_file))
+
         if not note:
             note = f"Report status updated to {next_status.replace('_', ' ')}."
 
@@ -934,18 +1251,85 @@ class ConcernStatusUpdateView(APIView):
             note=note,
             actor=request.user,
         )
+        evidence_records = []
+        for uploaded_file, validated_file in validated_evidence:
+            evidence_records.append(
+                ConcernResolutionEvidence.objects.create(
+                    concern=concern,
+                    file=validated_file,
+                    uploaded_by=request.user,
+                    original_filename=uploaded_file.name,
+                    mime_type=getattr(validated_file, "content_type", "") or "",
+                    file_size=validated_file.size,
+                    note=note,
+                )
+            )
+        closed_assignments = list(
+            concern.assignments.filter(status=ConcernAssignment.Status.ACTIVE).select_related("assignee")
+        )
+        if next_status == Concern.Status.RESOLVED:
+            concern.assignments.filter(pk__in=[item.pk for item in closed_assignments]).update(
+                status=ConcernAssignment.Status.COMPLETED
+            )
+        elif next_status == Concern.Status.REJECTED:
+            concern.assignments.filter(pk__in=[item.pk for item in closed_assignments]).update(
+                status=ConcernAssignment.Status.CANCELLED
+            )
+        if next_status in {Concern.Status.RESOLVED, Concern.Status.REJECTED}:
+            for closed_assignment in closed_assignments:
+                if closed_assignment.assignee:
+                    create_concern_notification(
+                        concern,
+                        recipient=closed_assignment.assignee,
+                        type="assigned",
+                        title=f"Assigned concern {next_status.replace('_', ' ')}",
+                        body=note,
+                    )
         create_audit_log(
             "concern.status_updated",
             actor=request.user,
             target_user=concern.reporter,
-            metadata={"concern_id": concern.pk, "status": next_status},
+            metadata={
+                "concern_id": concern.pk,
+                "status": next_status,
+                "resolution_evidence_ids": [record.pk for record in evidence_records],
+                "closed_assignment_ids": [item.pk for item in closed_assignments],
+            },
             request_meta=request_meta(request),
         )
+        notify_status_change(concern)
         decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
         from apps.live_map import concern_payload
         from apps.notifications.services import broadcast_live_map_event
         transaction.on_commit(lambda: broadcast_live_map_event("concern.updated", {"concern": concern_payload(decorated)}))
         return Response(ConcernSerializer(decorated, context={"request": request}).data)
+
+
+class ConcernResolutionEvidenceRawView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        touch_last_seen(request.user)
+        evidence = get_object_or_404(
+            ConcernResolutionEvidence.objects.select_related("concern__reporter"),
+            pk=pk,
+        )
+        if not user_can_access_concern_media_raw(request.user, evidence):
+            return Response(
+                {"detail": "You do not have permission to access this resolution evidence."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        log_raw_media_access(
+            actor=request.user,
+            target_user=evidence.concern.reporter,
+            media_type="concern_resolution_evidence",
+            object_id=evidence.pk,
+            request_meta=request_meta(request),
+        )
+        return FileResponse(
+            evidence.file.open("rb"),
+            content_type=evidence.mime_type or "application/octet-stream",
+        )
 
 
 class ConcernSummaryView(APIView):
@@ -968,19 +1352,23 @@ class AnnouncementListView(APIView):
 
     def get(self, request):
         touch_last_seen(request.user)
+        dispatch_due_announcements()
+        now = timezone.now()
         announcements = Announcement.objects.filter(
             is_published=True,
             audience__in=[Announcement.Audience.ALL, Announcement.Audience.RESIDENTS],
-        )
+        ).filter(Q(starts_at__isnull=True) | Q(starts_at__lte=now)).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
         return Response(AnnouncementSerializer(announcements, many=True).data)
 
 class AnnouncementManageListCreateView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get(self, request):
         touch_last_seen(request.user)
         if not can_update_concern_status(request.user):
             return Response({"detail": "You do not have permission to manage announcements."}, status=status.HTTP_403_FORBIDDEN)
+        dispatch_due_announcements()
         announcements = Announcement.objects.all()
         published = request.query_params.get("published")
         if published in {"true", "false"}:
@@ -995,32 +1383,30 @@ class AnnouncementManageListCreateView(APIView):
         serializer.is_valid(raise_exception=True)
         announcement = serializer.save()
         if announcement.is_published:
-            if not announcement.published_at:
-                announcement.published_at = timezone.now()
-                announcement.save(update_fields=["published_at", "updated_at"])
-            notify_announcement_published(announcement)
+            mark_announcement_published(announcement)
+            dispatch_due_announcements()
+            announcement.refresh_from_db()
         create_audit_log("announcement.created", actor=request.user, metadata={"announcement_id": announcement.pk, "is_published": announcement.is_published}, request_meta=request_meta(request))
-        return Response(AnnouncementSerializer(announcement).data, status=status.HTTP_201_CREATED)
+        return Response(AnnouncementSerializer(announcement, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 class AnnouncementManageDetailView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def patch(self, request, pk):
         touch_last_seen(request.user)
         if not can_update_concern_status(request.user):
             return Response({"detail": "You do not have permission to update announcements."}, status=status.HTTP_403_FORBIDDEN)
         announcement = get_object_or_404(Announcement, pk=pk)
-        was_published = announcement.is_published
         serializer = AnnouncementSerializer(announcement, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         announcement = serializer.save()
-        if announcement.is_published and not was_published:
-            if not announcement.published_at:
-                announcement.published_at = timezone.now()
-                announcement.save(update_fields=["published_at", "updated_at"])
-            notify_announcement_published(announcement)
+        if announcement.is_published:
+            mark_announcement_published(announcement)
+            dispatch_due_announcements()
+            announcement.refresh_from_db()
         create_audit_log("announcement.updated", actor=request.user, metadata={"announcement_id": announcement.pk}, request_meta=request_meta(request))
-        return Response(AnnouncementSerializer(announcement).data)
+        return Response(AnnouncementSerializer(announcement, context={"request": request}).data)
 
     def delete(self, request, pk):
         touch_last_seen(request.user)

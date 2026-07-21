@@ -43,15 +43,22 @@ export function ActiveReportsCard({ reports }: Props) {
         {reports.slice(0, 3).map((r) => {
           const Icon = categoryIcon[r.category] ?? FileQuestionIcon
           const color = categoryColor[r.category] ?? { bg: "bg-slate-100", text: "text-slate-600" }
+          const firstImage = r.media?.find((m) => m.mime_type?.startsWith("image/"))
           return (
             <Link
               key={r.id}
               to={`/dashboard/reports/${r.id}`}
               className="-mx-5 flex min-h-16 items-center gap-4 border-b border-border px-5 py-3 transition-colors last:border-b-0 hover:bg-gray-50"
             >
-              <div className={cn("flex size-11 shrink-0 items-center justify-center rounded-full", color.bg)}>
-                <Icon className={cn("size-5", color.text)} />
-              </div>
+              {firstImage ? (
+                <div className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-full">
+                  <img src={firstImage.preview_url} alt="" className="size-full object-cover" />
+                </div>
+              ) : (
+                <div className={cn("flex size-11 shrink-0 items-center justify-center rounded-full", color.bg)}>
+                  <Icon className={cn("size-5", color.text)} />
+                </div>
+              )}
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <p className="line-clamp-2 min-w-0 flex-1 text-sm font-bold leading-snug text-[#07145f]">

@@ -47,6 +47,15 @@ class ConcernClassificationApiTests(APITestCase):
         self.assertEqual(reset.status_code, status.HTTP_200_OK)
         self.assertEqual(reset.data["text_relevance_threshold"], 0.65)
 
+    def test_configuration_rejects_non_base_text_model(self):
+        self.client.force_authenticate(self.official)
+        response = self.client.patch("/api/concerns/classification/", {
+            "text_model": "custom-roberta-checkpoint",
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("text_model", response.data)
+
     def test_tagalog_baseline_detects_matching_concern(self):
         self.client.force_authenticate(self.official)
         response = self.client.post("/api/concerns/classification/test-text/", {

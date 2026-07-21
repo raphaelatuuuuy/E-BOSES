@@ -15,7 +15,13 @@ from rest_framework.views import APIView
 
 from apps.accounts.permissions import HasRolePermission
 from apps.accounts.services import validate_concern_media_file
-from apps.concerns.ai.classification import classification_payload
+from apps.concerns.ai.classification import (
+    BASE_IMAGE_MODEL,
+    BASE_IMAGE_PROVIDER,
+    BASE_TEXT_MODEL,
+    BASE_TEXT_PROVIDER,
+    classification_payload,
+)
 from apps.concerns.ai.image_detector import ImageDetectorNotConfigured, YOLOV8_COCO_CLASSES, YoloImageDetector
 from apps.concerns.models import Concern, ConcernAiAssessment, ConcernClassificationConfiguration
 from apps.emergencies.models import EmergencyAlert
@@ -75,6 +81,10 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
             if not enabled:
                 raise serializers.ValidationError({"categories": "Keep at least one concern category enabled."})
             instance.enabled_categories = enabled
+        validated_data["image_provider"] = BASE_IMAGE_PROVIDER
+        validated_data["image_model"] = BASE_IMAGE_MODEL
+        validated_data["nlp_provider"] = BASE_TEXT_PROVIDER
+        validated_data["nlp_model"] = BASE_TEXT_MODEL
         return super().update(instance, validated_data)
 
     def get_metrics(self, obj):
@@ -111,8 +121,17 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
             value = attrs.get(field, getattr(self.instance, field, None))
             if value is not None and not 0 <= value <= 1:
                 raise serializers.ValidationError({field: "Enter a value from 0 to 1."})
-        if attrs.get("image_model", getattr(self.instance, "image_model", "")) != "yolov8m.pt":
-            raise serializers.ValidationError({"image_model": "The current base detector must remain yolov8m.pt."})
+        errors = {}
+        if "image_provider" in attrs and attrs["image_provider"] != BASE_IMAGE_PROVIDER:
+            errors["image_provider"] = f"The base image provider must remain {BASE_IMAGE_PROVIDER}."
+        if "image_model" in attrs and attrs["image_model"] != BASE_IMAGE_MODEL:
+            errors["image_model"] = f"The current base detector must remain {BASE_IMAGE_MODEL}."
+        if "nlp_provider" in attrs and attrs["nlp_provider"] != BASE_TEXT_PROVIDER:
+            errors["nlp_provider"] = f"The base text provider must remain {BASE_TEXT_PROVIDER}."
+        if "nlp_model" in attrs and attrs["nlp_model"] != BASE_TEXT_MODEL:
+            errors["text_model"] = f"The current base text checker must remain {BASE_TEXT_MODEL}."
+        if errors:
+            raise serializers.ValidationError(errors)
         return attrs
 
 

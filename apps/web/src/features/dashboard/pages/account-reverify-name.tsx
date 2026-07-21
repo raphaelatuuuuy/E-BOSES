@@ -20,9 +20,11 @@ import type { SignUpErrors, SignUpValues } from "@/features/auth/schemas/sign-up
 import { listResidenceProofOptions } from "@/features/ocr/api"
 import type { ResidenceProofOption } from "@/features/ocr/api"
 import { getAccessToken } from "@/lib/api"
-import { ApiError } from "@/lib/api"
 
 type Step = "name" | "proof" | "result"
+type ExtractedFieldValue =
+  | string
+  | { value?: string; label?: string; confidence?: number | null; raw_value?: string }
 
 /** Minimal SignUpValues shell — ProofStep only reads proof fields. */
 function emptyProofValues(): SignUpValues {
@@ -52,7 +54,7 @@ function fieldValue(
   key: string,
 ): string {
   if (!fields || !fields[key]) return ""
-  const item = fields[key]
+  const item = fields[key] as ExtractedFieldValue
   if (typeof item === "string") return item.trim()
   if (item && typeof item === "object") {
     return String(item.value ?? item.raw_value ?? "").trim()
@@ -524,5 +526,4 @@ export default function AccountReverifyNamePage() {
     </div>
   )
 }
-
 

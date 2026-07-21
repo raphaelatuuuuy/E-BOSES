@@ -2,6 +2,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Q
+from django.db import transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
@@ -17,8 +18,11 @@ from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import AccountRequest, OTPChallenge, ResidenceProof, ResidentSettings
-from .permissions import IsStaffOrSuperuser, user_has_role_permission
+from apps.emergencies.selectors import active_responder_shift_for_update
+
+from .models import AccountRequest, AuditLog, OTPChallenge, ResidenceProof, ResidentSettings
+from .permissions import user_has_role_permission
+from .privacy_services import PrivacyRequestConflict, anonymize_resident_account, build_account_data_export
 from .selectors import find_user_by_identifier, latest_active_otp_challenge
 from .serializers import (
     AccountEmailChangeRequestSerializer,
@@ -44,6 +48,7 @@ from .serializers import (
     RegisterSerializer,
     ResidentSettingsSerializer,
     ResponderUpdateSerializer,
+    SensitiveAccessAuditSerializer,
     UserStatusUpdateSerializer,
     UserProfileUpdateSerializer,
     UserSummarySerializer,
@@ -592,8 +597,28 @@ class AccountRequestListCreateView(APIView):
 
     def post(self, request):
         touch_last_seen(request.user)
+        if request.user.role != request.user.Role.RESIDENT:
+            return Response(
+                {"detail": "Only resident accounts can submit privacy requests."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = AccountRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        request_type = serializer.validated_data["type"]
+        if request_type not in {AccountRequest.Type.DELETION, AccountRequest.Type.DATA_EXPORT}:
+            return Response(
+                {"type": ["Use the account deactivation workflow for temporary deactivation."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if AccountRequest.objects.filter(
+            user=request.user,
+            type=request_type,
+            status__in=[AccountRequest.Status.SUBMITTED, AccountRequest.Status.REVIEWED],
+        ).exists():
+            return Response(
+                {"type": ["An active request of this type already exists."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         account_request = serializer.save(user=request.user)
         create_audit_log(
             "account.request_submitted",
@@ -961,14 +986,33 @@ class AccountRequestReviewView(APIView):
     def post(self, request, pk):
         return self.patch(request, pk)
 
+    @transaction.atomic
     def patch(self, request, pk):
         touch_last_seen(request.user)
         if not can_manage_accounts(request.user):
             return Response({"detail": "You do not have permission to review account requests."}, status=status.HTTP_403_FORBIDDEN)
-        account_request = get_object_or_404(AccountRequest, pk=pk)
+        account_request = get_object_or_404(
+            AccountRequest.objects.select_for_update().select_related("user", "user__resident_profile"),
+            pk=pk,
+        )
         serializer = AccountRequestReviewSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        account_request.status = serializer.validated_data["status"]
+        next_status = serializer.validated_data["status"]
+        if account_request.status == AccountRequest.Status.COMPLETED:
+            return Response(AccountRequestSerializer(account_request).data)
+        if account_request.type == AccountRequest.Type.DELETION and next_status == AccountRequest.Status.COMPLETED:
+            try:
+                anonymize_resident_account(account_request.user)
+            except PrivacyRequestConflict as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+            create_audit_log(
+                "account.deletion_completed",
+                actor=request.user,
+                target_user=account_request.user,
+                metadata={"request_id": account_request.pk, "retained": "anonymized civic case records"},
+                request_meta=request_meta(request),
+            )
+        account_request.status = next_status
         account_request.staff_note = serializer.validated_data.get("staff_note", "")
         account_request.reviewed_by = request.user
         account_request.save(update_fields=["status", "staff_note", "reviewed_by", "updated_at"])
@@ -980,6 +1024,72 @@ class AccountRequestReviewView(APIView):
             request_meta=request_meta(request),
         )
         return Response(AccountRequestSerializer(account_request).data)
+
+
+class AccountDataExportView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        touch_last_seen(request.user)
+        account_request = get_object_or_404(
+            AccountRequest,
+            pk=pk,
+            user=request.user,
+            type=AccountRequest.Type.DATA_EXPORT,
+        )
+        if account_request.status != AccountRequest.Status.COMPLETED:
+            return Response(
+                {"detail": "The data export is not ready for download."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        payload = build_account_data_export(request.user)
+        create_audit_log(
+            "account.data_export_downloaded",
+            actor=request.user,
+            target_user=request.user,
+            metadata={"request_id": account_request.pk},
+            request_meta=request_meta(request),
+        )
+        response = Response(payload)
+        response["Content-Disposition"] = f'attachment; filename="e-boses-data-export-{request.user.pk}.json"'
+        return response
+
+
+class SensitiveAccessAuditView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        if not can_manage_accounts(request.user):
+            return Response(
+                {"detail": "You do not have permission to review sensitive access."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        queryset = AuditLog.objects.filter(
+            action__in=["media.raw_accessed", "account.data_export_downloaded"]
+        ).select_related(
+            "actor", "actor__resident_profile", "target_user", "target_user__resident_profile"
+        )
+        kind = (request.query_params.get("kind") or "all").strip().lower()
+        if kind == "media":
+            queryset = queryset.filter(action="media.raw_accessed")
+        elif kind == "export":
+            queryset = queryset.filter(action="account.data_export_downloaded")
+        search = (request.query_params.get("search") or "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(actor__email__icontains=search)
+                | Q(target_user__email__icontains=search)
+                | Q(actor__resident_profile__first_name__icontains=search)
+                | Q(actor__resident_profile__last_name__icontains=search)
+                | Q(target_user__resident_profile__first_name__icontains=search)
+                | Q(target_user__resident_profile__last_name__icontains=search)
+            )
+        try:
+            limit = min(200, max(1, int(request.query_params.get("limit", 100))))
+        except (TypeError, ValueError):
+            return Response({"limit": ["Use a whole number from 1 to 200."]}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(SensitiveAccessAuditSerializer(queryset.order_by("-created_at", "-id")[:limit], many=True).data)
 
 class ResidentDirectoryView(APIView):
     permission_classes = [IsAuthenticated]
@@ -1082,19 +1192,51 @@ class ResponderDirectoryView(APIView):
 class ResponderUpdateView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @transaction.atomic
     def patch(self, request, pk):
         touch_last_seen(request.user)
         if not can_manage_accounts(request.user):
             return Response({"detail": "You do not have permission to update responders."}, status=status.HTTP_403_FORBIDDEN)
         User = get_user_model()
-        responder = get_object_or_404(User, pk=pk, role=User.Role.FIRST_RESPONDER)
+        responder = get_object_or_404(
+            User.objects.select_for_update(),
+            pk=pk,
+            role=User.Role.FIRST_RESPONDER,
+        )
         serializer = ResponderUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        active_shift = active_responder_shift_for_update(responder)
+        next_unit = serializer.validated_data.get("responder_unit")
+        if active_shift and next_unit is not None and next_unit != responder.responder_unit:
+            return Response(
+                {"responder_unit": ["End the responder's active shift before changing their unit."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         fields = []
         for field, value in serializer.validated_data.items():
             setattr(responder, field, value)
             fields.append(field)
+        next_status = serializer.validated_data.get("status")
+        if next_status is not None and next_status != User.Status.VERIFIED:
+            if active_shift:
+                active_shift.status = "ended"
+                active_shift.ended_at = timezone.now()
+                active_shift.save(update_fields=["status", "ended_at", "updated_at"])
+                create_audit_log(
+                    "responder.shift_ended",
+                    actor=request.user,
+                    target_user=responder,
+                    metadata={
+                        "shift_id": active_shift.pk,
+                        "reason": f"Responder account changed to {next_status}.",
+                    },
+                    request_meta=request_meta(request),
+                )
+            if responder.is_on_duty:
+                responder.is_on_duty = False
+                fields.append("is_on_duty")
         if fields:
+            fields = list(dict.fromkeys(fields))
             responder.save(update_fields=[*fields, "updated_at"])
             create_audit_log("account.responder_updated", actor=request.user, target_user=responder, metadata={"fields": fields}, request_meta=request_meta(request))
         return Response(UserSummarySerializer(responder).data)
@@ -1155,11 +1297,21 @@ class OTPResendView(APIView):
 
 
 class AdminCreateUserView(APIView):
-    permission_classes = [IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        if not can_manage_accounts(request.user):
+            return Response({"detail": "You do not have permission to create managed accounts."}, status=status.HTTP_403_FORBIDDEN)
         serializer = AdminCreateUserSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        if (
+            serializer.validated_data["role"] == get_user_model().Role.BARANGAY_OFFICIAL
+            and not (request.user.is_staff or request.user.is_superuser)
+        ):
+            return Response(
+                {"role": ["Only a system administrator can create another official account."]},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         user = serializer.save()
         create_audit_log("admin.user_created", actor=request.user, target_user=user, metadata={"role": user.role}, request_meta=request_meta(request))
         return Response(UserSummarySerializer(user).data, status=status.HTTP_201_CREATED)
@@ -1245,9 +1397,18 @@ class ResidenceProofRawMediaView(APIView):
 
 
 class ResidenceProofPreviewMediaView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
         proof = get_object_or_404(ResidenceProof, pk=pk)
+        if not user_can_access_residence_proof_raw(request.user, proof):
+            return Response({"detail": "You do not have permission to access this media."}, status=status.HTTP_403_FORBIDDEN)
+        log_raw_media_access(
+            actor=request.user,
+            target_user=proof.user,
+            media_type="residence_proof_preview",
+            object_id=proof.pk,
+            request_meta=request_meta(request),
+        )
         preview = ensure_residence_proof_preview(proof)
         return FileResponse(preview.open("rb"), content_type="image/jpeg")

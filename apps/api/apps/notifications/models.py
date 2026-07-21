@@ -16,6 +16,8 @@ class Notification(models.Model):
         APPEAL_SUBMITTED = "appeal_submitted", "Appeal Submitted"
         APPEAL_APPROVED = "appeal_approved", "Appeal Approved"
         APPEAL_DENIED = "appeal_denied", "Appeal Denied"
+        CONCERN_COMMENT = "concern_comment", "Concern Comment"
+        CONCERN_MENTION = "concern_mention", "Concern Mention"
         EMERGENCY_SUBMITTED = "emergency_submitted", "Emergency Submitted"
         EMERGENCY_ROUTED = "emergency_routed", "Emergency Routed"
         EMERGENCY_ACKNOWLEDGED = "emergency_acknowledged", "Emergency Acknowledged"
@@ -52,6 +54,7 @@ class Notification(models.Model):
     type = models.CharField(max_length=32, choices=Type.choices)
     title = models.CharField(max_length=255)
     body = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 

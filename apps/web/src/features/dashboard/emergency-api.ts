@@ -1,6 +1,11 @@
 import { apiRequest } from "@/lib/api"
 import type { PublicUser } from "@/features/dashboard/api"
 
+function normalizeCoordinate(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return value
+  return Number(value.toFixed(6))
+}
+
 export type EmergencyType = "medical" | "fire" | "crime" | "disaster" | "other"
 export type EmergencyStatus =
   | "submitted"
@@ -92,10 +97,44 @@ export interface EmergencyAlert {
   status_events: EmergencyStatusEvent[]
   appeals: EmergencyAppeal[]
   escalations: EmergencyEscalation[]
+  witness_notification_summary: {
+    triggered: boolean
+    recipient_count: number
+    in_app_delivered_count: number
+    read_count: number
+    push_attempted_count: number
+    push_delivered_count: number
+    push_failure_count: number
+    push_status_counts: Record<string, number>
+    nearest_distance_meters: number | null
+    farthest_distance_meters: number | null
+    triggered_at: string | null
+  } | null
   created_at: string
   updated_at: string
   routed_at: string | null
   resolved_at: string | null
+}
+
+export interface ResponderShift {
+  id: number
+  responder: PublicUser
+  responder_unit: PublicUser["responder_unit"]
+  status: "active" | "ended"
+  started_at: string
+  ended_at: string | null
+  duration_seconds: number
+  start_latitude: string | null
+  start_longitude: string | null
+  end_latitude: string | null
+  end_longitude: string | null
+  incidents_assigned: number
+  incidents_acknowledged: number
+  incidents_resolved: number
+  false_alarms: number
+  average_response_seconds: number | null
+  created_at: string
+  updated_at: string
 }
 
 export function createEmergency(formData: FormData) {
@@ -135,7 +174,48 @@ export function updateEmergencyDuty(payload: {
     location_updated_at: string | null
   }>("/emergencies/duty/", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      ...payload,
+      latitude: normalizeCoordinate(payload.latitude),
+      longitude: normalizeCoordinate(payload.longitude),
+    }),
+  })
+}
+
+export function listResponderShifts() {
+  return apiRequest<ResponderShift[]>("/emergencies/shifts/")
+}
+
+export function getActiveResponderShift() {
+  return apiRequest<ResponderShift | null>("/emergencies/shifts/active/")
+}
+
+export function startResponderShift(payload: {
+  responder_unit?: PublicUser["responder_unit"]
+  latitude: number
+  longitude: number
+}) {
+  return apiRequest<ResponderShift>("/emergencies/shifts/start/", {
+    method: "POST",
+    body: JSON.stringify({
+      ...payload,
+      latitude: normalizeCoordinate(payload.latitude),
+      longitude: normalizeCoordinate(payload.longitude),
+    }),
+  })
+}
+
+export function endResponderShift(payload: {
+  latitude?: number
+  longitude?: number
+} = {}) {
+  return apiRequest<ResponderShift>("/emergencies/shifts/end/", {
+    method: "POST",
+    body: JSON.stringify({
+      ...payload,
+      latitude: normalizeCoordinate(payload.latitude),
+      longitude: normalizeCoordinate(payload.longitude),
+    }),
   })
 }
 
@@ -148,6 +228,17 @@ export interface EmergencyChatMessage {
   alert: number
   sender: PublicUser
   body: string
+  attachment: {
+    id: number
+    media_type: "image" | "video"
+    original_filename: string
+    mime_type: string
+    analysis_status: string
+    authenticity: string
+    edited: string
+    raw_url: string
+    preview_url: string | null
+  } | null
   created_at: string
   is_mine: boolean
 }
@@ -159,17 +250,22 @@ export function listEmergencyChat(alertId: number, afterId?: number) {
   return apiRequest<EmergencyChatMessage[]>(`/emergencies/${alertId}/chat/${q}`)
 }
 
-export function sendEmergencyChat(alertId: number, body: string) {
+export function sendEmergencyChat(alertId: number, body: string, file?: File | null) {
+  const payload = file ? new FormData() : JSON.stringify({ body })
+  if (file && payload instanceof FormData) {
+    payload.append("body", body)
+    payload.append("attachment", file)
+  }
   return apiRequest<EmergencyChatMessage>(`/emergencies/${alertId}/chat/`, {
     method: "POST",
-    body: JSON.stringify({ body }),
+    body: payload,
   })
 }
 
-export function cancelEmergency(id: number) {
+export function cancelEmergency(id: number, reason: string) {
   return apiRequest<EmergencyAlert>(`/emergencies/${id}/cancel/`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ reason }),
   })
 }
 
@@ -184,6 +280,31 @@ export function assignEmergencyResponders(id: number, responderIds: number[]) {
   return apiRequest<EmergencyAlert>(`/emergencies/${id}/assign/`, {
     method: "POST",
     body: JSON.stringify({ responder_ids: responderIds }),
+  })
+}
+
+export function reassignEmergency(id: number, responderId: number, note: string, statusVersion: number) {
+  return apiRequest<EmergencyAlert>(`/emergencies/${id}/reassign/`, {
+    method: "POST",
+    body: JSON.stringify({ responder_id: responderId, note, status_version: statusVersion }),
+  })
+}
+
+export function removeEmergencyAssignment(
+  id: number,
+  assignmentId: number,
+  payload: { reason: string; status_version: number },
+) {
+  return apiRequest<EmergencyAlert>(`/emergencies/${id}/assignments/${assignmentId}/remove/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function requestEmergencyBackup(id: number) {
+  return apiRequest<EmergencyAlert>(`/emergencies/${id}/request-backup/`, {
+    method: "POST",
+    body: JSON.stringify({}),
   })
 }
 
@@ -215,20 +336,18 @@ export function escalateOverdueEmergencies(minutes = 5) {
   })
 }
 
-export function acknowledgeEmergency(id: number, note = "") {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/acknowledge/`, {
-    method: "POST",
-    body: JSON.stringify({ note }),
-  })
-}
-
 export function sendEmergencyLocationPing(
   id: number,
   payload: { latitude: number; longitude: number; accuracy?: number | null },
 ) {
   return apiRequest<EmergencyAlert>(`/emergencies/${id}/location-pings/`, {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      ...payload,
+      latitude: normalizeCoordinate(payload.latitude),
+      longitude: normalizeCoordinate(payload.longitude),
+      accuracy: payload.accuracy == null ? payload.accuracy : Number(payload.accuracy.toFixed(2)),
+    }),
   })
 }
 

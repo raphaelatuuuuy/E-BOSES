@@ -8,12 +8,15 @@ import { Toaster } from "@workspace/ui/components/sonner"
 
 import App from "./App"
 import { ThemeProvider } from "./components/theme-provider"
+import { registerAppServiceWorker } from "./lib/pwa"
 
 const rootElement = document.getElementById("root")
 
 if (!rootElement) {
   throw new Error("Root element #root was not found.")
 }
+
+void registerAppServiceWorker()
 
 createRoot(rootElement).render(
   <BrowserRouter>

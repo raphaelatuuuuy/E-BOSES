@@ -311,6 +311,7 @@ export interface VerificationResident {
 export interface VerificationProof {
   id: number
   filename: string
+  original_filename?: string
   side?: ProofSide
   mime_type?: string
   preview_url?: string
@@ -328,19 +329,34 @@ export interface VerificationExtractedField {
 
 export interface VerificationRuleResult {
   key?: string
-  label: string
+  code?: string
+  name?: string
+  label?: string
   passed: boolean
-  message: string
+  message?: string
+  detail?: string
   confidence?: number | null
 }
 
 export interface VerificationAttempt {
   id: number
   status: string
+  trigger?: string
   service_status?: OcrServiceState
   confidence?: number | null
+  ocr_confidence?: number | null
   error_code?: string
   error_message?: string
+  failure_reason_code?: string
+  failure_reason?: string
+  duplicate_match_found?: boolean
+  duplicate_identity_matches?: Array<{
+    field_code: string
+    matching_user_id: number
+    matching_case_id: number | null
+  }>
+  extracted_fields?: Record<string, { label?: string; value?: string; confidence?: number | null }>
+  rule_results?: VerificationRuleResult[]
   started_at?: string | null
   completed_at?: string | null
   created_at?: string
@@ -352,14 +368,16 @@ export interface ResidenceVerificationCase {
   status: VerificationCaseStatus
   reason_code?: string
   reason?: string
+  review_reason?: string
   resident: VerificationResident
-  document_type?: { key: string; name: string } | string | null
+  document_type?: { key?: string; code?: string; name: string } | string | null
   configuration_version?: number | null
   confidence?: number | null
   proofs: VerificationProof[]
-  extracted_fields: VerificationExtractedField[]
+  extracted_fields: VerificationExtractedField[] | Record<string, { label?: string; value?: string; confidence?: number | null }>
   rule_results: VerificationRuleResult[]
   attempts: VerificationAttempt[]
+  latest_attempt?: VerificationAttempt | null
   official_note?: string
   decided_by?: string | null
   queued_at?: string | null

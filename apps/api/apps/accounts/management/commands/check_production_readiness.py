@@ -46,8 +46,8 @@ class Command(BaseCommand):
             warnings.append("CSRF_TRUSTED_ORIGINS is empty.")
         if not getattr(settings, "WEB_PUSH_PUBLIC_KEY", "") or not getattr(settings, "WEB_PUSH_PRIVATE_KEY", ""):
             warnings.append("Browser push VAPID keys are missing.")
-        if not getattr(settings, "EBOSES_YOLO_MODEL_PATH", "") or not getattr(settings, "EBOSES_NLP_MODEL_PATH", ""):
-            warnings.append("AI model paths are missing; AI assessments will stay not_configured.")
+        if not getattr(settings, "EBOSES_YOLO_MODEL_PATH", ""):
+            warnings.append("YOLOv8m weights are missing; image assessment will fall back to official review. Text assessment uses the built-in base keyword model.")
 
         paddle_token = getattr(settings, "PADDLEOCR_TOKEN", "")
         paddle_url = getattr(settings, "PADDLEOCR_JOB_URL", "")

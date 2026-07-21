@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    AssignedConcernListView,
     ConcernAppealCreateView,
     ConcernAppealListView,
     ConcernAppealReviewView,
@@ -8,6 +9,7 @@ from .views import (
     ConcernClarificationReplyView,
     ConcernClarificationRequestView,
     ConcernChatView,
+    ConcernChatAttachmentRawView,
     ConcernCommentCreateView,
     ConcernCommentDetailView,
     ConcernDetailView,
@@ -17,12 +19,15 @@ from .views import (
     ConcernMediaPreviewView,
     ConcernMediaRawView,
     ConcernOfficialRemarkCreateView,
+    ConcernResolutionEvidenceRawView,
+    ConcernAiReviewView,
     ConcernPublicDetailView,
     ConcernStatusUpdateView,
     ConcernSummaryView,
     ConcernVoteView,
     ContentFlagCreateView,
     ContentFlagListView,
+    ContentFlagReviewView,
     ManagedConcernListView,
     MyConcernListView,
 )
@@ -43,10 +48,12 @@ urlpatterns = [
     path("", ConcernListCreateView.as_view(), name="concern-create"),
     path("media/check/", ConcernMediaCheckView.as_view(), name="concern-media-check"),
     path("mine/", MyConcernListView.as_view(), name="concern-mine"),
+    path("assigned/", AssignedConcernListView.as_view(), name="concern-assigned"),
     path("manage/", ManagedConcernListView.as_view(), name="concern-manage"),
     path("appeals/", ConcernAppealListView.as_view(), name="concern-appeal-list"),
     path("appeals/<int:appeal_id>/review/", ConcernAppealReviewView.as_view(), name="concern-appeal-review"),
     path("flags/", ContentFlagListView.as_view(), name="content-flag-list"),
+    path("flags/<int:pk>/review/", ContentFlagReviewView.as_view(), name="content-flag-review"),
     path("feed/", ConcernFeedView.as_view(), name="concern-feed"),
     path("summary/", ConcernSummaryView.as_view(), name="concern-summary"),
     path("by-public-id/<uuid:public_id>/", ConcernPublicDetailView.as_view(), name="concern-public-detail"),
@@ -58,7 +65,9 @@ urlpatterns = [
     path("<int:pk>/clarifications/<int:clarification_id>/reply/", ConcernClarificationReplyView.as_view(), name="concern-clarification-reply"),
     path("<int:pk>/appeals/", ConcernAppealCreateView.as_view(), name="concern-appeal-create"),
     path("<int:pk>/remarks/", ConcernOfficialRemarkCreateView.as_view(), name="concern-remark-create"),
+    path("<int:pk>/ai-review/", ConcernAiReviewView.as_view(), name="concern-ai-review"),
     path("<int:pk>/chat/", ConcernChatView.as_view(), name="concern-chat"),
+    path("chat-media/<int:pk>/", ConcernChatAttachmentRawView.as_view(), name="concern-chat-media-raw"),
     path("<int:pk>/vote/", ConcernVoteView.as_view(), name="concern-vote"),
     path("<int:pk>/comments/", ConcernCommentCreateView.as_view(), name="concern-comment-create"),
     path(
@@ -69,4 +78,9 @@ urlpatterns = [
     path("<int:pk>/flags/", ContentFlagCreateView.as_view(), name="content-flag-create"),
     path("media/<int:pk>/raw/", ConcernMediaRawView.as_view(), name="concern-media-raw"),
     path("media/<int:pk>/preview/", ConcernMediaPreviewView.as_view(), name="concern-media-preview"),
+    path(
+        "resolution-evidence/<int:pk>/raw/",
+        ConcernResolutionEvidenceRawView.as_view(),
+        name="concern-resolution-evidence-raw",
+    ),
 ]

@@ -27,8 +27,8 @@ from apps.accounts.models import (
     VerificationCheck,
 )
 from apps.accounts.ocr import OCRProviderUnavailable, ocr_file
-from apps.accounts.ocr_engine import run_engine
-from apps.accounts.ocr_runtime import decide_case, process_verification_case
+from apps.accounts.ocr_engine import EngineResult, run_engine
+from apps.accounts.ocr_runtime import decide_case, finalize_case_attempts, process_verification_case
 
 TEST_IMAGE = "C:\\Users\\TO GOD BE THE GLORY\\Downloads\\5207cdef-1047-45a1-ab29-b7f0df616458.jpg"
 
@@ -97,6 +97,189 @@ def _png_content():
 
 
 class ConfigurableOCRWorkflowTests(TestCase):
+    def test_duplicate_ocr_identifier_routes_registration_to_manual_review(self):
+        configuration = OCRConfigurationVersion.objects.get(status="published")
+        document_type = configuration.document_types.get(code="barangay_id")
+
+        def registration_case(email, phone_number, digest):
+            user = User.objects.create_user(
+                email=email,
+                phone_number=phone_number,
+                password="Str0ng!Pass123",
+                status=User.Status.PENDING_VERIFICATION,
+            )
+            ResidentProfile.objects.create(
+                user=user,
+                first_name="Juan",
+                last_name="Dela Cruz",
+                address="123 Sampaguita St, Marikina Heights",
+                date_of_birth=timezone.now().date(),
+            )
+            content = _png_content()
+            proof = ResidenceProof.objects.create(
+                user=user,
+                document_type=document_type,
+                original_filename=f"{digest}.png",
+                mime_type="image/png",
+                file_size=len(content),
+                sha256_hash=digest * 64,
+            )
+            proof.file.save(f"{digest}.png", ContentFile(content), save=True)
+            case = ResidenceVerificationCase.objects.create(
+                user=user,
+                configuration=configuration,
+                document_type=document_type,
+                status=ResidenceVerificationCase.Status.PROCESSING,
+            )
+            proof.case = case
+            proof.save(update_fields=["case"])
+            attempt = VerificationCheck.objects.create(
+                user=user,
+                proof=proof,
+                case=case,
+                configuration=configuration,
+                document_type=document_type,
+                status=VerificationCheck.Status.PROCESSING,
+                trigger=VerificationCheck.Trigger.REGISTRATION,
+            )
+            return user, case, attempt
+
+        engine = EngineResult(
+            detected_document_type_id=document_type.pk,
+            detected_document_type_code=document_type.code,
+            document_type_score=0.99,
+            document_type_mismatch=False,
+            confidence=0.98,
+            extracted_fields={
+                "document_number": {
+                    "label": "Document number",
+                    "value": "BRGY-ID-2026-00001",
+                    "normalized": "BRGYID202600001",
+                    "confidence": 0.98,
+                }
+            },
+            rule_results=[],
+            outcome="passed",
+            review_reason="",
+        )
+
+        first_user, first_case, first_attempt = registration_case(
+            "first-identity@example.com", "+639700000021", "a"
+        )
+        first_result = finalize_case_attempts(first_case.pk, [first_attempt], [], engine)
+        self.assertEqual(first_result.status, ResidenceVerificationCase.Status.APPROVED)
+        first_user.refresh_from_db()
+        self.assertEqual(first_user.status, User.Status.VERIFIED)
+
+        second_user, second_case, second_attempt = registration_case(
+            "second-identity@example.com", "+639700000022", "b"
+        )
+        second_result = finalize_case_attempts(second_case.pk, [second_attempt], [], engine)
+
+        self.assertEqual(second_result.status, ResidenceVerificationCase.Status.MANUAL_REVIEW)
+        self.assertEqual(second_result.review_reason, ResidenceVerificationCase.ReviewReason.DUPLICATE_IDENTITY)
+        second_user.refresh_from_db()
+        self.assertEqual(second_user.status, User.Status.PENDING_VERIFICATION)
+        second_attempt.refresh_from_db()
+        self.assertTrue(second_attempt.duplicate_match_found)
+        official = User.objects.create_user(
+            email="duplicate-review-official@example.com",
+            phone_number="+639700000023",
+            password="Str0ng!Pass123",
+            role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
+        )
+        resident_client = APIClient()
+        resident_client.force_authenticate(second_user)
+        self.assertEqual(
+            resident_client.get(f"/api/auth/ocr/verification-cases/{second_case.pk}/").status_code,
+            403,
+        )
+
+        official_client = APIClient()
+        official_client.force_authenticate(official)
+        detail = official_client.get(f"/api/auth/ocr/verification-cases/{second_case.pk}/")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.data["resident"]["id"], second_user.pk)
+        self.assertTrue(detail.data["latest_attempt"]["duplicate_match_found"])
+        self.assertEqual(
+            detail.data["latest_attempt"]["duplicate_identity_matches"][0]["matching_user_id"],
+            first_user.pk,
+        )
+        self.assertNotIn("value_hash", detail.data["latest_attempt"])
+
+        approval = official_client.post(
+            f"/api/auth/ocr/verification-cases/{second_case.pk}/decision/",
+            {"decision": "approve", "reason": "The submitted card appears readable."},
+            format="json",
+        )
+        self.assertEqual(approval.status_code, 409)
+        self.assertIn("already belongs", str(approval.data))
+        second_case.refresh_from_db()
+        self.assertEqual(second_case.status, ResidenceVerificationCase.Status.MANUAL_REVIEW)
+
+    def test_registration_soft_mismatch_remains_in_manual_review_queue(self):
+        configuration = OCRConfigurationVersion.objects.get(status="published")
+        document_type = configuration.document_types.get(code="barangay_certificate")
+        user = User.objects.create_user(
+            email="soft-review@example.com",
+            phone_number="+639700000024",
+            password="Str0ng!Pass123",
+            status=User.Status.PENDING_VERIFICATION,
+        )
+        ResidentProfile.objects.create(
+            user=user,
+            first_name="Maria",
+            last_name="Reyes",
+            address="456 Sampaguita St, Marikina Heights",
+            date_of_birth=timezone.now().date(),
+        )
+        content = _png_content()
+        proof = ResidenceProof.objects.create(
+            user=user,
+            document_type=document_type,
+            original_filename="soft-review.png",
+            mime_type="image/png",
+            file_size=len(content),
+            sha256_hash="c" * 64,
+        )
+        proof.file.save("soft-review.png", ContentFile(content), save=True)
+        case = ResidenceVerificationCase.objects.create(
+            user=user,
+            configuration=configuration,
+            document_type=document_type,
+            status=ResidenceVerificationCase.Status.PROCESSING,
+        )
+        proof.case = case
+        proof.save(update_fields=["case"])
+        attempt = VerificationCheck.objects.create(
+            user=user,
+            proof=proof,
+            case=case,
+            configuration=configuration,
+            document_type=document_type,
+            status=VerificationCheck.Status.PROCESSING,
+            trigger=VerificationCheck.Trigger.REGISTRATION,
+        )
+        engine = EngineResult(
+            detected_document_type_id=document_type.pk,
+            detected_document_type_code=document_type.code,
+            document_type_score=0.90,
+            document_type_mismatch=False,
+            confidence=0.72,
+            extracted_fields={},
+            rule_results=[],
+            outcome="manual_review",
+            review_reason=ResidenceVerificationCase.ReviewReason.LOW_CONFIDENCE,
+        )
+
+        result = finalize_case_attempts(case.pk, [attempt], [], engine)
+
+        self.assertEqual(result.status, ResidenceVerificationCase.Status.MANUAL_REVIEW)
+        self.assertEqual(result.review_reason, ResidenceVerificationCase.ReviewReason.LOW_CONFIDENCE)
+        user.refresh_from_db()
+        self.assertEqual(user.status, User.Status.PENDING_VERIFICATION)
+
     def test_migration_seeds_published_and_draft_policy(self):
         published = OCRConfigurationVersion.objects.get(scope="residence_proof", status="published")
         self.assertEqual(published.version, 1)

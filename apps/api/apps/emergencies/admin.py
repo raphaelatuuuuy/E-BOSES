@@ -11,6 +11,7 @@ from .models import (
     EmergencyStatusEvent,
     MapGeometry,
     MapServicePoi,
+    ResponderShift,
     WitnessNotification,
 )
 
@@ -23,6 +24,24 @@ admin.site.register(EmergencyMedia)
 admin.site.register(EmergencyResponderAssignment)
 admin.site.register(EmergencyLocationPing)
 admin.site.register(EmergencyStatusEvent)
+
+
+@admin.register(ResponderShift)
+class ResponderShiftAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "responder",
+        "responder_unit",
+        "status",
+        "started_at",
+        "ended_at",
+        "incidents_assigned",
+        "incidents_resolved",
+        "average_response_seconds",
+    )
+    list_filter = ("status", "responder_unit", "started_at")
+    search_fields = ("responder__email", "responder__resident_profile__first_name", "responder__resident_profile__last_name")
+    readonly_fields = ("created_at", "updated_at")
 
 
 @admin.register(MapGeometry)

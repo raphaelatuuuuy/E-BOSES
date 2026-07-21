@@ -13,13 +13,16 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Max
 from django.utils import timezone
+from django.utils.crypto import salted_hmac
 from PIL import Image, ImageDraw
 
 from .models import (
     OCRConfigurationVersion,
     OCRDocumentType,
+    OCRFieldDefinition,
     OCRServiceStatus,
     OCRTestRun,
+    IdentityIdentifierClaim,
     ResidenceProof,
     ResidenceVerificationCase,
     User,
@@ -38,6 +41,7 @@ from .ocr_engine import (
     extract_fields,
     field_side,
     merge_extracted_fields,
+    normalized_text,
     run_engine,
     suffix_for_filename,
 )
@@ -55,6 +59,117 @@ TERMINAL_CASE_STATUSES = {
     ResidenceVerificationCase.Status.APPROVED,
     ResidenceVerificationCase.Status.REJECTED,
 }
+
+
+def _identity_identifier_candidates(case, extracted_fields):
+    if case.document_type_id is None or not isinstance(extracted_fields, dict):
+        return []
+    candidates = []
+    fields = case.document_type.fields.filter(
+        enabled=True,
+        data_type=OCRFieldDefinition.DataType.IDENTIFIER,
+    ).values_list("code", flat=True)
+    for field_code in fields:
+        extracted = extracted_fields.get(field_code) or {}
+        value = extracted.get("normalized") or extracted.get("value")
+        normalized = normalized_text(value)
+        if len(normalized) < 4:
+            continue
+        namespace = f"{case.document_type.code}:{field_code}"
+        candidates.append(
+            {
+                "document_type_code": case.document_type.code,
+                "field_code": field_code,
+                "value_hash": salted_hmac(
+                    "accounts.identity-identifier",
+                    f"{namespace}:{normalized}",
+                ).hexdigest(),
+            }
+        )
+    return candidates
+
+
+def _identity_match_payload(claim, field_code):
+    return {
+        "field_code": field_code,
+        "matching_user_id": claim.user_id,
+        "matching_case_id": claim.source_case_id,
+    }
+
+
+def _historical_identity_matches(case, candidates):
+    """Cover approved OCR checks created before identifier claims existed."""
+    if not candidates:
+        return []
+    candidates_by_field = {item["field_code"]: item for item in candidates}
+    matches = []
+    checks = (
+        VerificationCheck.objects.filter(
+            case__status=ResidenceVerificationCase.Status.APPROVED,
+            document_type__code=case.document_type.code,
+        )
+        .exclude(user_id=case.user_id)
+        .select_related("case", "document_type")
+        .order_by("user_id", "-completed_at")
+    )
+    for check in checks.iterator():
+        for field_code, candidate in candidates_by_field.items():
+            extracted = (check.extracted_fields or {}).get(field_code) or {}
+            normalized = normalized_text(extracted.get("normalized") or extracted.get("value"))
+            if len(normalized) < 4:
+                continue
+            namespace = f"{case.document_type.code}:{field_code}"
+            digest = salted_hmac(
+                "accounts.identity-identifier",
+                f"{namespace}:{normalized}",
+            ).hexdigest()
+            if digest != candidate["value_hash"]:
+                continue
+            IdentityIdentifierClaim.objects.get_or_create(
+                document_type_code=candidate["document_type_code"],
+                field_code=field_code,
+                value_hash=digest,
+                defaults={"user_id": check.user_id, "source_case_id": check.case_id},
+            )
+            matches.append(
+                {
+                    "field_code": field_code,
+                    "matching_user_id": check.user_id,
+                    "matching_case_id": check.case_id,
+                }
+            )
+    return matches
+
+
+def _existing_identity_matches(case, candidates):
+    matches = []
+    for candidate in candidates:
+        claim = (
+            IdentityIdentifierClaim.objects.filter(
+                document_type_code=candidate["document_type_code"],
+                field_code=candidate["field_code"],
+                value_hash=candidate["value_hash"],
+            )
+            .exclude(user_id=case.user_id)
+            .first()
+        )
+        if claim:
+            matches.append(_identity_match_payload(claim, candidate["field_code"]))
+    return matches or _historical_identity_matches(case, candidates)
+
+
+def _claim_identity_identifiers(case, candidates):
+    matches = []
+    for candidate in candidates:
+        claim, created = IdentityIdentifierClaim.objects.get_or_create(
+            document_type_code=candidate["document_type_code"],
+            field_code=candidate["field_code"],
+            value_hash=candidate["value_hash"],
+            defaults={"user": case.user, "source_case": case},
+        )
+        if not created and claim.user_id != case.user_id:
+            matches.append(_identity_match_payload(claim, candidate["field_code"]))
+    return matches
 
 
 def published_configuration():
@@ -724,12 +839,20 @@ def finalize_case_attempts(case_id, attempts, responses, engine):
         )
         return case
 
+    identifier_candidates = _identity_identifier_candidates(case, engine.extracted_fields)
+    duplicate_identity_matches = _existing_identity_matches(case, identifier_candidates)
+    if not duplicate_identity_matches and engine.outcome == "passed":
+        # The unique database claim closes the race where two OCR workers try
+        # to approve the same configured document identifier concurrently.
+        duplicate_identity_matches = _claim_identity_identifiers(case, identifier_candidates)
+    duplicate_identity_found = bool(duplicate_identity_matches)
+
     response_by_index = {index: response for index, response in enumerate(responses)}
     for index, attempt in enumerate(attempts):
         response = response_by_index.get(index)
         attempt.status = (
             VerificationCheck.Status.PASSED
-            if engine.outcome == "passed"
+            if engine.outcome == "passed" and not duplicate_identity_found
             else VerificationCheck.Status.FAILED
             if engine.outcome == "reject"
             else VerificationCheck.Status.MANUAL_REVIEW
@@ -739,8 +862,16 @@ def finalize_case_attempts(case_id, attempts, responses, engine):
         attempt.extracted_fields = engine.extracted_fields
         attempt.rule_results = engine.rule_results
         attempt.retryable = engine.outcome in {"manual_review", "request_resubmission"}
-        attempt.failure_reason_code = engine.review_reason
-        attempt.failure_reason = "" if engine.outcome == "passed" else (
+        attempt.duplicate_match_found = duplicate_identity_found
+        attempt.failure_reason_code = (
+            ResidenceVerificationCase.ReviewReason.DUPLICATE_IDENTITY
+            if duplicate_identity_found
+            else engine.review_reason
+        )
+        attempt.failure_reason = "" if engine.outcome == "passed" and not duplicate_identity_found else (
+            "An exact identity-document identifier matches another verified account and requires official review."
+            if duplicate_identity_found
+            else
             "Automatic checks rejected this document."
             if engine.outcome == "reject"
             else "A new document submission is required."
@@ -758,29 +889,27 @@ def finalize_case_attempts(case_id, attempts, responses, engine):
             "detected_document_type": engine.detected_document_type_code,
             "document_type_score": engine.document_type_score,
             "document_type_mismatch": engine.document_type_mismatch,
+            "duplicate_identity_matches": duplicate_identity_matches,
         }
         attempt.completed_at = now
         attempt.save()
 
-    registration_attempt = any(
-        getattr(attempt, "trigger", "") == VerificationCheck.Trigger.REGISTRATION
-        for attempt in attempts
-    )
-
-    if engine.outcome == "passed" or (
-        # Sign-up already ran quality + OCR detect. Soft mismatches (e.g. address
-        # score) must not trap residents on the pending page after email OTP.
-        registration_attempt and engine.outcome == "manual_review"
-    ):
+    if duplicate_identity_found:
+        _manual_review_case(
+            case,
+            ResidenceVerificationCase.ReviewReason.DUPLICATE_IDENTITY,
+            decision_reason=(
+                "An exact configured identity-document identifier matches another verified account. "
+                "An official must resolve the duplicate before this account can be activated."
+            ),
+            retry_eligible=False,
+        )
+    elif engine.outcome == "passed":
         case.status = ResidenceVerificationCase.Status.APPROVED
         case.review_reason = ""
         case.retry_eligible = False
         case.decision_source = ResidenceVerificationCase.DecisionSource.SYSTEM
-        case.decision_reason = (
-            "All published OCR verification rules passed."
-            if engine.outcome == "passed"
-            else "Approved after registration. Soft OCR mismatches do not block after sign-up document checks."
-        )
+        case.decision_reason = "All published OCR verification rules passed."
         case.decided_at = now
         case.completed_at = now
         case.processing_started_at = None
@@ -789,13 +918,6 @@ def finalize_case_attempts(case_id, attempts, responses, engine):
         if case.user.status not in {User.Status.SUSPENDED, User.Status.REJECTED}:
             case.user.status = User.Status.VERIFIED
             case.user.save(update_fields=["status", "updated_at"])
-        # Mark soft-review attempts as passed so the queue reflects the system decision.
-        if engine.outcome == "manual_review":
-            VerificationCheck.objects.filter(pk__in=[item.pk for item in attempts]).update(
-                status=VerificationCheck.Status.PASSED,
-                failure_reason="",
-                retryable=False,
-            )
     elif engine.outcome == "reject":
         case.status = ResidenceVerificationCase.Status.REJECTED
         case.review_reason = ""
@@ -923,16 +1045,6 @@ def process_stuck_user_case(user):
     if case is None:
         return None
 
-    # Soft-approved registration cases that previously landed in manual_review
-    # (before registration soft-pass) can be released without re-running OCR.
-    if (
-        case.status == ResidenceVerificationCase.Status.MANUAL_REVIEW
-        and case.decision_source == ResidenceVerificationCase.DecisionSource.NONE
-        and user.status == User.Status.PENDING_VERIFICATION
-        and case.proofs.exists()
-    ):
-        return approve_registration_case(case)
-
     if case.status not in {
         ResidenceVerificationCase.Status.QUEUED,
         ResidenceVerificationCase.Status.PROCESSING,
@@ -955,53 +1067,48 @@ def process_stuck_user_case(user):
 
 
 @transaction.atomic
-def approve_registration_case(case):
-    """Mark a registration case approved and unlock the resident for onboarding."""
-    case = (
-        ResidenceVerificationCase.objects.select_for_update(of=("self",))
-        .select_related("user")
-        .get(pk=case.pk)
-    )
-    if case.status in TERMINAL_CASE_STATUSES:
-        return case
-    now = timezone.now()
-    case.status = ResidenceVerificationCase.Status.APPROVED
-    case.review_reason = ""
-    case.retry_eligible = False
-    case.decision_source = ResidenceVerificationCase.DecisionSource.SYSTEM
-    case.decision_reason = (
-        "Approved after registration. Soft OCR mismatches do not block after sign-up document checks."
-    )
-    case.decided_at = now
-    case.completed_at = now
-    case.processing_started_at = None
-    case.revision += 1
-    case.save()
-    if case.user.status not in {User.Status.SUSPENDED, User.Status.REJECTED}:
-        case.user.status = User.Status.VERIFIED
-        case.user.save(update_fields=["status", "updated_at"])
-    case.checks.filter(
-        status__in=[
-            VerificationCheck.Status.QUEUED,
-            VerificationCheck.Status.PROCESSING,
-            VerificationCheck.Status.MANUAL_REVIEW,
-        ]
-    ).update(
-        status=VerificationCheck.Status.PASSED,
-        failure_reason="",
-        retryable=False,
-        completed_at=now,
-    )
-    return case
-
-
-@transaction.atomic
 def decide_case(case_id, *, official, approve: bool, reason: str):
-    case = ResidenceVerificationCase.objects.select_for_update().select_related("user").get(pk=case_id)
+    case = (
+        ResidenceVerificationCase.objects.select_for_update()
+        .select_related("user", "document_type")
+        .get(pk=case_id)
+    )
     if case.status in TERMINAL_CASE_STATUSES:
         raise ValidationError("This verification case already has a final decision.")
     if not reason or not reason.strip():
         raise ValidationError("A decision reason is required.")
+    if approve:
+        latest_attempt = case.checks.order_by("-created_at").first()
+        identifier_candidates = _identity_identifier_candidates(
+            case,
+            latest_attempt.extracted_fields if latest_attempt else {},
+        )
+        duplicate_matches = _existing_identity_matches(case, identifier_candidates)
+        if not duplicate_matches:
+            duplicate_matches = _claim_identity_identifiers(case, identifier_candidates)
+        if duplicate_matches:
+            if latest_attempt:
+                latest_attempt.duplicate_match_found = True
+                latest_attempt.failure_reason_code = ResidenceVerificationCase.ReviewReason.DUPLICATE_IDENTITY
+                latest_attempt.failure_reason = (
+                    "An exact identity-document identifier matches another verified account."
+                )
+                latest_attempt.metadata = {
+                    **(latest_attempt.metadata or {}),
+                    "duplicate_identity_matches": duplicate_matches,
+                }
+                latest_attempt.save(
+                    update_fields=[
+                        "duplicate_match_found",
+                        "failure_reason_code",
+                        "failure_reason",
+                        "metadata",
+                    ]
+                )
+            raise ValidationError(
+                "This identity identifier already belongs to another verified account. "
+                "Reject the duplicate or request corrected proof before approval."
+            )
     now = timezone.now()
     case.status = ResidenceVerificationCase.Status.APPROVED if approve else ResidenceVerificationCase.Status.REJECTED
     case.review_reason = ""

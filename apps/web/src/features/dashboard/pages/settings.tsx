@@ -8,7 +8,6 @@ import {
   LockIcon,
   LogOutIcon,
   PencilIcon,
-  Trash2Icon,
   UserIcon,
 } from "lucide-react"
 import { useNavigate, useSearchParams } from "react-router-dom"
@@ -21,6 +20,7 @@ import { usePageTitle } from "@/hooks/use-page-title"
 import { useAuthSession } from "@/features/auth/auth-session"
 import {
   createAccountRequest,
+  getAccountDataExport,
   getResidentSettings,
   listAccountRequests,
   updateResidentSettings,
@@ -240,6 +240,7 @@ export default function SettingsPage() {
   const [browserBusy, setBrowserBusy] = useState(false)
   const [accountRequests, setAccountRequests] = useState<AccountRequest[]>([])
   const [savingRequest, setSavingRequest] = useState<AccountRequest["type"] | null>(null)
+  const [downloadingExport, setDownloadingExport] = useState(false)
   const [firstName, setFirstName] = useState("")
   const [lastName, setLastName] = useState("")
   const [middleName, setMiddleName] = useState("")
@@ -260,20 +261,26 @@ export default function SettingsPage() {
   }
 
   useEffect(() => {
-    setPanelState(parsePanel(searchParams.get("panel")))
+    const timer = window.setTimeout(() => {
+      setPanelState(parsePanel(searchParams.get("panel")))
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [searchParams])
 
   useEffect(() => {
     if (!user) return
-    setFirstName(user.firstName ?? "")
-    setLastName(user.lastName ?? "")
-    setMiddleName(user.middleName ?? "")
-    setPhoneLocal(localPhFromE164(user.phone_number ?? ""))
-    setEmailDraft(user.email ?? "")
-    const nextAddress = (user.address ?? "").trim()
-    setAddress(
-      !nextAddress || nextAddress.toLowerCase() === "pending" ? "" : nextAddress,
-    )
+    const timer = window.setTimeout(() => {
+      setFirstName(user.firstName ?? "")
+      setLastName(user.lastName ?? "")
+      setMiddleName(user.middleName ?? "")
+      setPhoneLocal(localPhFromE164(user.phone_number ?? ""))
+      setEmailDraft(user.email ?? "")
+      const nextAddress = (user.address ?? "").trim()
+      setAddress(
+        !nextAddress || nextAddress.toLowerCase() === "pending" ? "" : nextAddress,
+      )
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [user])
 
   useEffect(() => {
@@ -385,6 +392,27 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleDownloadExport(requestId: number) {
+    setDownloadingExport(true)
+    try {
+      const payload = await getAccountDataExport(requestId)
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement("a")
+      anchor.href = url
+      anchor.download = `e-boses-data-export-${new Date().toISOString().slice(0, 10)}.json`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+      toast.success("Your information was downloaded")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not download your information.")
+    } finally {
+      setDownloadingExport(false)
+    }
+  }
+
   const phoneE164 = e164FromLocalPh(phoneLocal)
   const phoneValid = isValidPhMobileE164(phoneE164)
   const phoneDirty =
@@ -430,6 +458,9 @@ export default function SettingsPage() {
   const pendingExport = accountRequests.find(
     (request) =>
       request.type === "data_export" && ["submitted", "reviewed"].includes(request.status),
+  )
+  const completedExport = accountRequests.find(
+    (request) => request.type === "data_export" && request.status === "completed",
   )
   const pendingDeletion = accountRequests.find(
     (request) => request.type === "deletion" && ["submitted", "reviewed"].includes(request.status),
@@ -754,8 +785,8 @@ export default function SettingsPage() {
 
                 <button
                   type="button"
-                  disabled={Boolean(pendingExport) || savingRequest === "data_export"}
-                  onClick={() => void handleAccountRequest("data_export")}
+                  disabled={Boolean(pendingExport) || savingRequest === "data_export" || downloadingExport}
+                  onClick={() => completedExport && !pendingExport ? void handleDownloadExport(completedExport.id) : void handleAccountRequest("data_export")}
                   className={cn(
                     "mt-4 flex h-11 w-full items-center justify-center rounded-full border text-[14px] font-semibold transition-colors",
                     pendingExport
@@ -763,10 +794,12 @@ export default function SettingsPage() {
                       : "border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50",
                   )}
                 >
-                  {savingRequest === "data_export" ? (
+                  {savingRequest === "data_export" || downloadingExport ? (
                     <Loader2Icon className="size-4 animate-spin" />
                   ) : pendingExport ? (
                     "Request submitted"
+                  ) : completedExport ? (
+                    <><DownloadIcon className="mr-2 size-4" />Download JSON export</>
                   ) : (
                     "Request my information"
                   )}
@@ -781,6 +814,12 @@ export default function SettingsPage() {
                         {pendingExport.status.replace("_", " ")}
                       </span>
                     </div>
+                  </div>
+                ) : null}
+                {completedExport && !pendingExport ? (
+                  <div className="mt-3 flex flex-col gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-[13px] font-semibold text-emerald-800">Your approved export is ready. Downloading it is recorded in your account audit history.</p>
+                    <button type="button" disabled={savingRequest === "data_export"} onClick={() => void handleAccountRequest("data_export")} className="shrink-0 text-[12px] font-bold text-emerald-800 underline underline-offset-2">Request updated copy</button>
                   </div>
                 ) : null}
               </section>

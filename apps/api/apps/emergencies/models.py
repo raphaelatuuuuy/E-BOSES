@@ -31,6 +31,58 @@ class MapGeometry(models.Model):
         return f"{self.name} ({self.osm_type}{self.osm_id})"
 
 
+class MapDispatchPolicy(models.Model):
+    class OutOfZoneAction(models.TextChoices):
+        BLOCK = "block", "Block submission"
+        WARN = "warn", "Warn and allow"
+        REVIEW = "review", "Flag for official review"
+
+    barangay = models.CharField(max_length=120, default="Marikina Heights", unique=True)
+    acceptance_center_latitude = models.DecimalField(max_digits=10, decimal_places=7, default=14.6507000)
+    acceptance_center_longitude = models.DecimalField(max_digits=10, decimal_places=7, default=121.1133000)
+    acceptance_radius_meters = models.PositiveIntegerField(default=800)
+    out_of_zone_action = models.CharField(
+        max_length=16,
+        choices=OutOfZoneAction.choices,
+        default=OutOfZoneAction.REVIEW,
+    )
+    witness_radius_meters = models.PositiveIntegerField(default=250)
+    responder_nearby_radius_meters = models.PositiveIntegerField(default=100)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="map_dispatch_policy_updates",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Map dispatch policy"
+        verbose_name_plural = "Map dispatch policies"
+
+    @classmethod
+    def current(cls):
+        obj, _ = cls.objects.get_or_create(pk=1, defaults={"barangay": "Marikina Heights"})
+        return obj
+
+    def as_payload(self):
+        return {
+            "id": self.pk,
+            "barangay": self.barangay,
+            "acceptance_center_latitude": float(self.acceptance_center_latitude),
+            "acceptance_center_longitude": float(self.acceptance_center_longitude),
+            "acceptance_radius_meters": int(self.acceptance_radius_meters),
+            "out_of_zone_action": self.out_of_zone_action,
+            "witness_radius_meters": int(self.witness_radius_meters),
+            "responder_nearby_radius_meters": int(self.responder_nearby_radius_meters),
+            "updated_at": self.updated_at,
+        }
+
+    def __str__(self):
+        return f"{self.barangay} dispatch policy"
+
+
 class MapServicePoi(models.Model):
     """
     Admin-managed map service markers (hall, tanod, clinic, etc.).
@@ -166,6 +218,10 @@ class EmergencyAlert(models.Model):
                 name="unique_emergency_client_request",
             ),
         ]
+        indexes = [
+            models.Index(fields=["status", "barangay", "created_at"], name="emerg_alert_status_brgy"),
+            models.Index(fields=["latitude", "longitude"], name="emerg_alert_coords"),
+        ]
 
 
 class EmergencyMedia(models.Model):
@@ -218,6 +274,55 @@ class EmergencyLocationPing(models.Model):
 
     class Meta:
         ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["assignment", "created_at"], name="emerg_ping_assignment_time"),
+            models.Index(fields=["responder", "created_at"], name="emerg_ping_responder_time"),
+        ]
+
+
+class ResponderShift(models.Model):
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        ENDED = "ended", "Ended"
+
+    responder = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="responder_shifts",
+    )
+    responder_unit = models.CharField(max_length=24, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    started_at = models.DateTimeField()
+    ended_at = models.DateTimeField(null=True, blank=True)
+    start_latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    start_longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    end_latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    end_longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    incidents_assigned = models.PositiveIntegerField(default=0)
+    incidents_acknowledged = models.PositiveIntegerField(default=0)
+    incidents_resolved = models.PositiveIntegerField(default=0)
+    false_alarms = models.PositiveIntegerField(default=0)
+    average_response_seconds = models.PositiveIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-started_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["responder"],
+                condition=models.Q(ended_at__isnull=True),
+                name="unique_active_responder_shift",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["responder", "started_at"], name="shift_responder_started"),
+            models.Index(fields=["status", "started_at"], name="shift_status_started"),
+            models.Index(fields=["responder", "ended_at"], name="shift_responder_active"),
+        ]
+
+    def __str__(self):
+        return f"Shift #{self.pk} · {self.responder_id} · {self.status}"
 
 
 class EmergencyStatusEvent(models.Model):
@@ -232,10 +337,23 @@ class EmergencyStatusEvent(models.Model):
 
 
 class WitnessNotification(models.Model):
+    class PushStatus(models.TextChoices):
+        NOT_CONFIGURED = "not_configured", "Not configured"
+        NOT_SUBSCRIBED = "not_subscribed", "Not subscribed"
+        DISABLED = "disabled", "Disabled by resident"
+        DELIVERED = "delivered", "Delivered"
+        PARTIAL = "partial", "Partially delivered"
+        FAILED = "failed", "Failed"
+
     alert = models.ForeignKey(EmergencyAlert, on_delete=models.CASCADE, related_name="witness_notifications")
     resident = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="emergency_witness_notifications")
     distance_meters = models.PositiveIntegerField(default=0)
     sent_at = models.DateTimeField(auto_now_add=True)
+    in_app_delivered_at = models.DateTimeField(null=True, blank=True)
+    push_status = models.CharField(max_length=24, choices=PushStatus.choices, default=PushStatus.NOT_CONFIGURED)
+    push_attempted_at = models.DateTimeField(null=True, blank=True)
+    push_delivered_at = models.DateTimeField(null=True, blank=True)
+    push_failure_count = models.PositiveIntegerField(default=0)
     read_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -282,7 +400,7 @@ class EmergencyChatMessage(models.Model):
         on_delete=models.CASCADE,
         related_name="emergency_chat_messages",
     )
-    body = models.TextField(max_length=2000)
+    body = models.TextField(max_length=2000, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -293,3 +411,27 @@ class EmergencyChatMessage(models.Model):
 
     def __str__(self):
         return f"Chat #{self.pk} on alert {self.alert_id}"
+
+
+class EmergencyChatAttachment(models.Model):
+    class MediaType(models.TextChoices):
+        IMAGE = "image", "Image"
+        VIDEO = "video", "Video"
+
+    class AnalysisStatus(models.TextChoices):
+        COMPLETE = "complete", "Complete"
+        PENDING = "pending", "Pending"
+        UNAVAILABLE = "unavailable", "Unavailable"
+
+    message = models.OneToOneField(EmergencyChatMessage, on_delete=models.CASCADE, related_name="attachment")
+    file = models.FileField(storage=PrivateMediaStorage(), upload_to="raw/emergency-chat/%Y/%m/")
+    preview_file = models.FileField(storage=PublicMediaStorage(), upload_to="previews/emergency-chat/%Y/%m/", blank=True)
+    media_type = models.CharField(max_length=12, choices=MediaType.choices)
+    original_filename = models.CharField(max_length=255)
+    mime_type = models.CharField(max_length=120)
+    file_size = models.PositiveIntegerField()
+    sha256_hash = models.CharField(max_length=64, db_index=True)
+    phash = models.CharField(max_length=16, blank=True, db_index=True)
+    analysis_status = models.CharField(max_length=16, choices=AnalysisStatus.choices)
+    analysis = models.JSONField(default=dict)
+    uploaded_at = models.DateTimeField(auto_now_add=True)

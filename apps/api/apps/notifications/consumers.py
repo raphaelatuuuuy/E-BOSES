@@ -104,3 +104,29 @@ class OfficialLiveMapConsumer(AuthenticatedJsonConsumer):
 
     async def live_map_update(self, event):
         await self.send_json(event["payload"])
+
+
+@database_sync_to_async
+def resident_live_map_groups(user):
+    from apps.notifications.services import _resident_group_for_barangay
+
+    profile = getattr(user, "resident_profile", None)
+    barangay = getattr(profile, "barangay", "") if profile else ""
+    return [_resident_group_for_barangay(barangay), f"resident_emergency_{user.pk}"]
+
+
+class ResidentLiveMapConsumer(AuthenticatedJsonConsumer):
+    async def connect(self):
+        if not await self.authenticate():
+            return
+        self.group_names = await resident_live_map_groups(self.user)
+        for group_name in self.group_names:
+            await self.channel_layer.group_add(group_name, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, code):
+        for group_name in getattr(self, "group_names", []):
+            await self.channel_layer.group_discard(group_name, self.channel_name)
+
+    async def resident_live_map_update(self, event):
+        await self.send_json(event["payload"])

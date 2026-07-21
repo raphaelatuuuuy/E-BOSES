@@ -79,6 +79,18 @@ class User(AbstractUser):
 
     objects = UserManager()
 
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["role", "status", "is_on_duty", "responder_unit"],
+                name="accounts_resp_avail",
+            ),
+            models.Index(
+                fields=["current_latitude", "current_longitude"],
+                name="accounts_resp_coords",
+            ),
+        ]
+
     def __str__(self):
         return self.email
 
@@ -590,6 +602,7 @@ class ResidenceVerificationCase(models.Model):
         MISSING_REQUIRED_FIELD = "missing_required_field", "Missing required field"
         DOCUMENT_TYPE_MISMATCH = "document_type_mismatch", "Document type mismatch"
         RULE_MISMATCH = "rule_mismatch", "Validation rule mismatch"
+        DUPLICATE_IDENTITY = "duplicate_identity", "Possible duplicate identity"
         RESUBMISSION_REQUIRED = "resubmission_required", "Request a new submission"
         OFFICIAL_REQUESTED = "official_requested", "Official requested review"
         LEGACY_PENDING = "legacy_pending", "Legacy pending verification"
@@ -790,6 +803,41 @@ class VerificationCheck(models.Model):
         indexes = [
             models.Index(fields=["status", "available_at"], name="accounts_ocr_attempt_queue_idx"),
             models.Index(fields=["case", "-created_at"], name="accounts_ocr_attempt_case_idx"),
+        ]
+
+
+class IdentityIdentifierClaim(models.Model):
+    """Non-reversible claim used to prevent reuse of an OCR identity number."""
+
+    user = models.ForeignKey(
+        django_settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="identity_identifier_claims",
+    )
+    source_case = models.ForeignKey(
+        ResidenceVerificationCase,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="identity_identifier_claims",
+    )
+    document_type_code = models.SlugField(max_length=64)
+    field_code = models.SlugField(max_length=64)
+    value_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["document_type_code", "field_code", "value_hash"],
+                name="accounts_identity_identifier_claim_uniq",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["document_type_code", "field_code", "value_hash"],
+                name="acct_identity_claim_lookup",
+            )
         ]
 
 

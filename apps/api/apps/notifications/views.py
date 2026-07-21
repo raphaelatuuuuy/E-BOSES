@@ -1,12 +1,15 @@
 from django.conf import settings
 from rest_framework import status
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated
+from apps.emergencies.services import mark_witness_notifications_read
 
 from .models import BrowserPushSubscription, Notification
 from .serializers import BrowserPushSubscriptionSerializer, NotificationSerializer
+from .services import broadcast_notification, send_browser_push, web_push_config_health
 from .tickets import issue_websocket_ticket
 
 
@@ -22,7 +25,7 @@ class NotificationListView(APIView):
 
     def get(self, request):
         unread_only = request.query_params.get("unread_only", "").lower() in ("true", "1")
-        qs = Notification.objects.filter(recipient=request.user)
+        qs = Notification.objects.filter(recipient=request.user).select_related("recipient", "concern", "emergency")
         if unread_only:
             qs = qs.filter(is_read=False)
         notification_type = request.query_params.get("type", "").strip()
@@ -59,6 +62,8 @@ class NotificationReadView(APIView):
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         notification.is_read = True
         notification.save(update_fields=["is_read"])
+        if notification.type == Notification.Type.WITNESS_ALERT and notification.emergency_id:
+            mark_witness_notifications_read(request.user, alert_id=notification.emergency_id)
         return Response(NotificationSerializer(notification).data)
 
 
@@ -67,13 +72,58 @@ class NotificationReadAllView(APIView):
 
     def post(self, request):
         Notification.objects.filter(recipient=request.user, is_read=False).update(is_read=True)
+        mark_witness_notifications_read(request.user)
         return Response({"detail": "All notifications marked as read."})
 
-class BrowserPushPublicKeyView(APIView):
+
+class BrowserPushTestView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def post(self, request):
+        subscriptions = request.user.browser_push_subscriptions.filter(is_active=True)
+        notification = Notification.objects.create(
+            recipient=request.user,
+            type=Notification.Type.ANNOUNCEMENT,
+            title="E-Boses test notification",
+            body="If you can see this, browser push is working on this device.",
+            metadata={
+                "display_title": "E-Boses test notification",
+                "display_body": "Browser push is connected. Closed-browser notifications should work after this device is subscribed.",
+                "tag_key": "test",  # fixed tag so new test notifications replace old ones
+                "urgency": "important",
+                "icon_url": "/contents/notification-bell.png",
+                "icon_url": "/contents/notification-bell.png",
+                "action_url": "/dashboard/notifications",
+                "actions": [
+                    {
+                        "action": "open",
+                        "title": "Open notifications",
+                        "url": "/dashboard/notifications",
+                    }
+                ],
+            },
+        )
+        # Only push — skip WebSocket broadcast so the test doesn't ping the in-app toast too.
+        push_result = send_browser_push(notification)
+        return Response(
+            {
+                "notification": NotificationSerializer(notification).data,
+                "push_result": push_result,
+                "active_subscriptions": subscriptions.count(),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+class BrowserPushPublicKeyView(APIView):
+    permission_classes = [AllowAny]  # Public — VAPID key is not sensitive.
+
     def get(self, request):
-        return Response({"public_key": getattr(settings, "WEB_PUSH_PUBLIC_KEY", "")})
+        return Response(
+            {
+                "public_key": getattr(settings, "WEB_PUSH_PUBLIC_KEY", ""),
+                "config": web_push_config_health(),
+            }
+        )
 
 class BrowserPushSubscriptionView(APIView):
     permission_classes = [IsAuthenticated]
@@ -90,4 +140,3 @@ class BrowserPushSubscriptionView(APIView):
             return Response({"endpoint": ["This field is required."]}, status=status.HTTP_400_BAD_REQUEST)
         BrowserPushSubscription.objects.filter(user=request.user, endpoint=endpoint).update(is_active=False)
         return Response(status=status.HTTP_204_NO_CONTENT)
-from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated

@@ -1,11 +1,16 @@
 """Domain services for notification creation and delivery orchestration."""
 
 import json
+import re
+import uuid
+from hmac import compare_digest
+from urllib.parse import urlparse
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
 from django.db import transaction
+from django.utils import timezone
 
 from apps.concerns.models import Concern
 
@@ -31,6 +36,379 @@ def _push_alerts_enabled(user) -> bool:
     return settings_obj is None or settings_obj.push_alerts
 
 
+def web_push_config_health() -> dict:
+    public_key = _clean_text(getattr(settings, "WEB_PUSH_PUBLIC_KEY", ""))
+    private_key = _clean_text(getattr(settings, "WEB_PUSH_PRIVATE_KEY", ""))
+    subject = _clean_text(getattr(settings, "WEB_PUSH_SUBJECT", ""))
+    result = {
+        "configured": bool(public_key and private_key),
+        "public_key_present": bool(public_key),
+        "private_key_present": bool(private_key),
+        "subject_present": bool(subject),
+        "subject_valid": bool(subject.startswith("mailto:") or subject.startswith("https://")),
+        "key_pair_valid": None,
+        "public_key_length": len(public_key),
+        "public_key_decoded_length": None,
+        "public_key_first_byte": None,
+        "public_key_format_valid": None,
+        "error": "",
+    }
+    if not public_key or not private_key:
+        return result
+    try:
+        from base64 import urlsafe_b64decode
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        from py_vapid import Vapid
+        from py_vapid.utils import b64urlencode
+
+        decoded_public = urlsafe_b64decode(public_key + "=" * ((4 - len(public_key) % 4) % 4))
+        result["public_key_decoded_length"] = len(decoded_public)
+        result["public_key_first_byte"] = decoded_public[0] if decoded_public else None
+        result["public_key_format_valid"] = len(decoded_public) == 65 and bool(decoded_public) and decoded_public[0] == 4
+        vapid = Vapid.from_string(private_key)
+        derived_public = b64urlencode(
+            vapid.public_key.public_bytes(
+                encoding=Encoding.X962,
+                format=PublicFormat.UncompressedPoint,
+            )
+        ).rstrip("=")
+        configured_public = public_key.rstrip("=")
+        result["key_pair_valid"] = compare_digest(derived_public, configured_public)
+    except Exception as exc:
+        result["key_pair_valid"] = False
+        result["error"] = f"{exc.__class__.__name__}: {_truncate(str(exc), 160)}"
+    return result
+
+
+def _clean_text(value) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _truncate(value, limit: int = 180) -> str:
+    text = _clean_text(value)
+    if len(text) <= limit:
+        return text
+    slice_ = text[:limit]
+    at_word = slice_.rsplit(" ", 1)[0].strip()
+    return f"{at_word if len(at_word) >= 32 else slice_.strip()}..."
+
+
+def _choice_label(obj, field: str, fallback: str = "") -> str:
+    method = getattr(obj, f"get_{field}_display", None)
+    if callable(method):
+        try:
+            value = method()
+            if value:
+                return str(value)
+        except Exception:
+            pass
+    raw = getattr(obj, field, fallback)
+    return str(raw or fallback).replace("_", " ").title()
+
+
+def _safe_metadata(notification) -> dict:
+    metadata = getattr(notification, "metadata", None)
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _safe_url(value: str | None) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    if text.startswith("/") or text.startswith("http://") or text.startswith("https://"):
+        return text
+    return ""
+
+
+def _concern_tracking_id(concern) -> str:
+    return _clean_text(getattr(concern, "tracking_id", "")) or f"Report #{getattr(concern, 'pk', '')}".strip()
+
+
+def notification_category(notification) -> str:
+    type_value = notification.type or ""
+    if type_value == "announcement":
+        return "announcement"
+    if type_value == "witness_alert" or type_value.startswith("emergency"):
+        return "emergency"
+    if "appeal" in type_value:
+        return "appeal"
+    if type_value in {"clarification_requested", "clarification_replied", "concern_comment", "concern_mention"}:
+        return "chat"
+    return "report"
+
+
+def notification_priority(notification) -> str:
+    metadata = _safe_metadata(notification)
+    urgency = _clean_text(metadata.get("urgency")).lower()
+    if urgency in {"urgent", "important", "normal"}:
+        return "urgent" if urgency == "urgent" else "important" if urgency == "important" else "normal"
+    type_value = notification.type or ""
+    if type_value == "witness_alert" or type_value in {
+        "emergency_submitted",
+        "emergency_routed",
+        "emergency_en_route",
+        "emergency_nearby",
+        "emergency_arrived",
+        "emergency_escalated",
+    }:
+        return "urgent"
+    if "appeal" in type_value or type_value in {"clarification_requested", "clarification_replied", "assigned"}:
+        return "important"
+    return "normal"
+
+
+def notification_icon_url(notification) -> str:
+    metadata = _safe_metadata(notification)
+    if _safe_url(metadata.get("icon_url")):
+        return _safe_url(metadata.get("icon_url"))
+    if notification.type == "announcement":
+        return "/contents/announcements.png"
+    if notification.type == "witness_alert" or notification.type.startswith("emergency"):
+        alert = getattr(notification, "emergency", None)
+        emergency_type = getattr(alert, "type", "")
+        return {
+            "medical": "/contents/medical.png",
+            "fire": "/contents/fire.png",
+            "crime": "/contents/crime.png",
+            "disaster": "/contents/disaster.png",
+            "other": "/contents/alerts.png",
+        }.get(emergency_type, "/contents/alerts.png")
+    if notification.type in {"concern_comment", "concern_mention", "clarification_requested", "clarification_replied"}:
+        return "/contents/chat-comment.png"
+    if "appeal" in (notification.type or ""):
+        return "/contents/reports.png"
+    concern = getattr(notification, "concern", None)
+    category = getattr(concern, "category", "")
+    return {
+        "infrastructure": "/contents/infrastructure.png",
+        "environment": "/contents/environment.png",
+        "public_safety": "/contents/public-safety.png",
+        "others": "/contents/others.png",
+    }.get(category, "/contents/notifications.png")
+
+
+def notification_image_url(notification) -> str:
+    metadata = _safe_metadata(notification)
+    # Only use public images in browser notifications. Private report/emergency
+    # media still opens safely inside the authenticated app after tap.
+    return _safe_url(metadata.get("image_url"))
+
+
+def notification_tag(notification) -> str:
+    metadata = _safe_metadata(notification)
+    tag = _clean_text(metadata.get("tag_key") or metadata.get("tag"))
+    if tag:
+        return f"eboses-{tag.lower().replace(' ', '-')[:48]}"
+    if notification.emergency_id and notification.type != "witness_alert":
+        return f"eboses-emergency-{notification.emergency_id}"
+    if notification.concern_id:
+        return f"eboses-concern-{notification.concern_id}"
+    return f"eboses-{notification.type or 'notification'}-{notification.pk}"
+
+
+def _display_concern_notification(notification) -> tuple[str, str]:
+    concern = notification.concern
+    type_value = notification.type or ""
+    role = getattr(notification.recipient, "role", "")
+    tracking = _concern_tracking_id(concern)
+    concern_title = _clean_text(getattr(concern, "title", "")) or "your report"
+    note = _clean_text(notification.body or getattr(concern, "update_text", ""))
+    status_label = _choice_label(concern, "status", type_value)
+    status_titles = {
+        "submitted": "Report received",
+        "under_review": "Report under review",
+        "assigned": "Concern assigned to you" if role == getattr(notification.recipient.Role, "FIRST_RESPONDER", "first_responder") else "Report assigned",
+        "in_progress": "Report in progress",
+        "resolved": "Report resolved",
+        "rejected": "Report rejected",
+    }
+    special_titles = {
+        "clarification_requested": "Reply needed on your report" if role == getattr(notification.recipient.Role, "RESIDENT", "resident") else "Clarification requested",
+        "clarification_replied": "Resident replied",
+        "appeal_submitted": "Report appeal submitted",
+        "appeal_approved": "Report appeal approved",
+        "appeal_denied": "Report appeal denied",
+        "concern_comment": notification.title or "New community comment",
+        "concern_mention": notification.title or "You were mentioned",
+    }
+    title = special_titles.get(type_value) or status_titles.get(type_value) or notification.title or f"Report {status_label.lower()}"
+    context = f"{tracking} · {concern_title}" if tracking else concern_title
+    if note:
+        body = f"{context}. {note}"
+    else:
+        body = f"{context}. Status: {status_label}."
+    return _truncate(title, 80), _truncate(body, 190)
+
+
+def _display_emergency_notification(notification) -> tuple[str, str]:
+    alert = notification.emergency
+    type_value = notification.type or ""
+    role = getattr(notification.recipient, "role", "")
+    emergency_type = _choice_label(alert, "type", "Emergency")
+    status_label = _choice_label(alert, "status", type_value)
+    barangay = _clean_text(getattr(alert, "barangay", "")) or "your barangay"
+    address = _clean_text(getattr(alert, "address", "")) or barangay
+    note = _clean_text(notification.body)
+    if type_value == "witness_alert":
+        return (
+            f"{emergency_type} emergency nearby",
+            _truncate(note or f"A {emergency_type.lower()} emergency was reported in {barangay}. Stay clear of the area and wait for official instructions.", 190),
+        )
+
+    responder_role = getattr(notification.recipient.Role, "FIRST_RESPONDER", "first_responder")
+    official_role = getattr(notification.recipient.Role, "BARANGAY_OFFICIAL", "barangay_official")
+    if role == responder_role and type_value in {"emergency_routed", "emergency_escalated"}:
+        title = f"Dispatch: {emergency_type} emergency"
+    elif role == official_role and type_value == "emergency_escalated":
+        title = "Emergency needs attention"
+    else:
+        title_map = {
+            "emergency_submitted": "Emergency alert sent",
+            "emergency_routed": "Responder routed",
+            "emergency_acknowledged": "Responder connected",
+            "emergency_en_route": "Responder en route",
+            "emergency_nearby": "Responder nearby",
+            "emergency_arrived": "Responder arrived",
+            "emergency_resolved": "Emergency resolved",
+            "emergency_cancelled": "Emergency cancelled",
+            "emergency_escalated": "Backup responder requested",
+            "emergency_appeal_submitted": "Emergency review requested",
+            "emergency_appeal_approved": "Emergency review approved",
+            "emergency_appeal_denied": "Emergency review denied",
+        }
+        title = title_map.get(type_value) or notification.title or f"Emergency {status_label.lower()}"
+    body_bits = [f"{emergency_type} emergency", address]
+    body = " · ".join(part for part in body_bits if part)
+    if note:
+        body = f"{body}. {note}"
+    else:
+        body = f"{body}. Status: {status_label}."
+    return _truncate(title, 80), _truncate(body, 190)
+
+
+def _display_announcement_notification(notification) -> tuple[str, str]:
+    metadata = _safe_metadata(notification)
+    urgency = _clean_text(metadata.get("urgency")).lower()
+    tag = _clean_text(metadata.get("tag")) or "Barangay"
+    title_prefix = "Urgent announcement" if urgency == "urgent" else "Important announcement" if urgency == "important" else f"{tag} announcement"
+    title = notification.title if notification.title.lower().startswith(("urgent", "important", "barangay")) else f"{title_prefix}: {notification.title}"
+    body = notification.body or "Open E-Boses for the announcement details."
+    return _truncate(title, 90), _truncate(body, 190)
+
+
+def notification_display(notification) -> tuple[str, str]:
+    metadata = _safe_metadata(notification)
+    custom_title = _clean_text(metadata.get("display_title"))
+    custom_body = _clean_text(metadata.get("display_body"))
+    if custom_title and custom_body:
+        return _truncate(custom_title, 90), _truncate(custom_body, 190)
+    if notification.type == "announcement":
+        return _display_announcement_notification(notification)
+    if notification.emergency_id:
+        return _display_emergency_notification(notification)
+    if notification.concern_id:
+        return _display_concern_notification(notification)
+    return _truncate(custom_title or notification.title or "E-Boses update", 90), _truncate(custom_body or notification.body or "Open E-Boses for details.", 190)
+
+
+def notification_actions(notification) -> list[dict]:
+    metadata = _safe_metadata(notification)
+    custom_actions = metadata.get("actions")
+    if isinstance(custom_actions, list):
+        actions = []
+        for item in custom_actions[:2]:
+            if not isinstance(item, dict):
+                continue
+            action = _clean_text(item.get("action")) or "open"
+            title = _clean_text(item.get("title")) or "Open"
+            url = _safe_url(item.get("url")) or notification_url(notification)
+            actions.append({"action": action[:32], "title": title[:32], "url": url})
+        if actions:
+            return actions
+    url = notification_url(notification)
+    if notification.type == "witness_alert":
+        return [{"action": "open", "title": "Open E-Boses", "url": url}]
+    if notification.type == "announcement":
+        return [{"action": "open", "title": "View announcement", "url": url}]
+    if notification.emergency_id:
+        label = "Open dispatch" if getattr(notification.recipient, "role", "") == getattr(notification.recipient.Role, "FIRST_RESPONDER", "first_responder") else "Track emergency"
+        if getattr(notification.recipient, "role", "") == getattr(notification.recipient.Role, "BARANGAY_OFFICIAL", "barangay_official"):
+            label = "Open alert map"
+        return [{"action": "open", "title": label, "url": url}]
+    if notification.concern_id:
+        label = "Open report"
+        if getattr(notification.recipient, "role", "") == getattr(notification.recipient.Role, "FIRST_RESPONDER", "first_responder"):
+            label = "Open map"
+        return [{"action": "open", "title": label, "url": url}]
+    return [{"action": "open", "title": "Open", "url": url}]
+
+
+def notification_display_payload(notification, serialized: dict | None = None) -> dict:
+    display_title, display_body = notification_display(notification)
+    metadata = _safe_metadata(notification)
+    priority = notification_priority(notification)
+    url = _safe_url(metadata.get("action_url")) or notification_url(notification)
+    payload = {
+        "title": display_title,
+        "body": display_body,
+        "url": url,
+        "tag": notification_tag(notification),
+        "category": notification_category(notification),
+        "priority": priority,
+        "icon": notification_icon_url(notification),
+        "badge": "/contents/logo.png",
+        "image": notification_image_url(notification),
+        "actions": notification_actions(notification),
+        "requireInteraction": priority == "urgent",
+        "renotify": priority in {"urgent", "important"},
+        "timestamp": timezone.now().isoformat(),
+        "notification": serialized or {},
+        "data": {
+            "notification_id": notification.pk,
+            "type": notification.type,
+            "concern_id": notification.concern_id,
+            "emergency_id": None if notification.type == "witness_alert" else notification.emergency_id,
+        },
+    }
+    if notification.emergency_id and notification.type != "witness_alert":
+        alert = notification.emergency
+        payload["data"]["location"] = {
+            "latitude": str(getattr(alert, "latitude", "")),
+            "longitude": str(getattr(alert, "longitude", "")),
+            "address": _clean_text(getattr(alert, "address", "")),
+            "barangay": _clean_text(getattr(alert, "barangay", "")),
+        }
+    if notification.concern_id:
+        concern = notification.concern
+        payload["data"]["location"] = {
+            "latitude": str(getattr(concern, "latitude", "") or ""),
+            "longitude": str(getattr(concern, "longitude", "") or ""),
+            "address": _clean_text(getattr(concern, "address", "")),
+            "barangay": _clean_text(getattr(concern, "barangay", "")),
+        }
+    return payload
+
+
+def browser_push_extra_headers(endpoint: str) -> dict:
+    host = (urlparse(endpoint).netloc or "").lower()
+    if "notify.windows.com" in host:
+        # Microsoft Edge/Windows Notification Service rejects encrypted Web
+        # Push requests without a WNS type header on some Windows builds.
+        return {"X-WNS-Type": "wns/raw"}
+    return {}
+
+
+def browser_push_service_label(endpoint: str) -> str:
+    host = (urlparse(endpoint).netloc or "").lower()
+    if "notify.windows.com" in host:
+        return "microsoft_wns"
+    if "fcm.googleapis.com" in host or "googleapis.com" in host:
+        return "google_fcm"
+    if "push.services.mozilla.com" in host or "mozilla.com" in host:
+        return "mozilla_autopush"
+    return host or "unknown"
+
+
 def _broadcast(group_name: str, event_type: str, payload: dict) -> None:
     channel_layer = get_channel_layer()
     if channel_layer is None:
@@ -41,6 +419,8 @@ def _broadcast(group_name: str, event_type: str, payload: dict) -> None:
             {
                 "type": event_type,
                 "payload": payload,
+                "event_id": uuid.uuid4().hex,
+                "emitted_at": timezone.now().isoformat(),
             },
         )
     except Exception:
@@ -53,40 +433,87 @@ def broadcast_notification(notification) -> None:
 
     payload = NotificationSerializer(notification).data
     _broadcast(f"user_{notification.recipient_id}", "notification.created", payload)
-    send_browser_push(notification, payload)
+    push_result = send_browser_push(notification, payload)
+    if notification.type == "witness_alert" and notification.emergency_id:
+        from apps.emergencies.models import WitnessNotification
+
+        WitnessNotification.objects.filter(
+            alert_id=notification.emergency_id,
+            resident_id=notification.recipient_id,
+        ).update(
+            in_app_delivered_at=notification.created_at,
+            push_status=push_result["status"],
+            push_attempted_at=push_result["attempted_at"],
+            push_delivered_at=push_result["delivered_at"],
+            push_failure_count=push_result["failure_count"],
+        )
+    return push_result
 
 def notification_url(notification) -> str:
+    if notification.type == "witness_alert":
+        return "/dashboard"
+    if notification.type == "announcement":
+        return "/dashboard/notifications?type=announcements"
     if notification.emergency_id:
         if notification.recipient.role == notification.recipient.Role.RESIDENT:
             return f"/dashboard/emergency-history?alert={notification.emergency.public_id}"
-        return "/dashboard/emergencies"
+        if notification.recipient.role == notification.recipient.Role.FIRST_RESPONDER:
+            return f"/dashboard/responders/map?alert={notification.emergency_id}"
+        return f"/dashboard/alerts-map?alert={notification.emergency_id}"
     if notification.concern_id:
+        if notification.recipient.role == notification.recipient.Role.FIRST_RESPONDER:
+            return "/dashboard/responders/map"
         return f"/dashboard/reports/{notification.concern.public_id}"
     return "/dashboard"
 
-def send_browser_push(notification, payload: dict | None = None) -> None:
+def send_browser_push(notification, payload: dict | None = None) -> dict:
+    result = {
+        "status": "not_configured",
+        "attempted_at": None,
+        "delivered_at": None,
+        "failure_count": 0,
+        "failure_details": [],
+        "config": web_push_config_health(),
+        "push_services": [],
+    }
     if not _push_alerts_enabled(notification.recipient):
-        return
+        result["status"] = "disabled"
+        return result
     if notification.concern_id and not _report_updates_enabled(notification.concern):
-        return
+        result["status"] = "disabled"
+        return result
     public_key = getattr(settings, "WEB_PUSH_PUBLIC_KEY", "")
     private_key = getattr(settings, "WEB_PUSH_PRIVATE_KEY", "")
     if not public_key or not private_key:
-        return
+        return result
+    subscriptions = list(notification.recipient.browser_push_subscriptions.filter(is_active=True))
+    if not subscriptions:
+        result["status"] = "not_subscribed"
+        return result
+    attempted_at = timezone.now()
+    result["attempted_at"] = attempted_at
     try:
         from pywebpush import WebPushException, webpush
-    except Exception:
-        return
+    except Exception as exc:
+        result["status"] = "failed"
+        result["failure_count"] = len(subscriptions)
+        result["failure_details"].append(
+            {
+                "type": exc.__class__.__name__,
+                "message": "pywebpush could not be imported.",
+            }
+        )
+        return result
 
     payload = payload or {}
-    data = json.dumps({
-        "title": notification.title,
-        "body": notification.body,
-        "url": notification_url(notification),
-        "notification": payload,
-    })
+    data = json.dumps(notification_display_payload(notification, payload), default=str)
     claims = {"sub": getattr(settings, "WEB_PUSH_SUBJECT", "mailto:admin@example.com")}
-    for subscription in notification.recipient.browser_push_subscriptions.filter(is_active=True):
+    delivered_count = 0
+    failure_count = 0
+    for subscription in subscriptions:
+        service_label = browser_push_service_label(subscription.endpoint)
+        if service_label not in result["push_services"]:
+            result["push_services"].append(service_label)
         try:
             webpush(
                 subscription_info={
@@ -96,17 +523,111 @@ def send_browser_push(notification, payload: dict | None = None) -> None:
                 data=data,
                 vapid_private_key=private_key,
                 vapid_claims=claims,
+                headers=browser_push_extra_headers(subscription.endpoint),
+                ttl=3600,
+                timeout=15,
             )
+            delivered_count += 1
         except WebPushException as exc:
-            if getattr(exc, "response", None) and exc.response.status_code in {404, 410}:
+            failure_count += 1
+            response = getattr(exc, "response", None)
+            status_code = getattr(response, "status_code", None)
+            reason = getattr(response, "reason", "") or ""
+            detail = ""
+            try:
+                detail = (response.text or "")[:240] if response is not None else ""
+            except Exception:
+                detail = ""
+            result["failure_details"].append(
+                {
+                    "type": "WebPushException",
+                    "status_code": status_code,
+                    "reason": reason,
+                    "push_service": service_label,
+                    "message": _truncate(detail or str(exc), 240),
+                }
+            )
+            if status_code in {404, 410}:
                 subscription.is_active = False
                 subscription.save(update_fields=["is_active", "updated_at"])
-        except Exception:
-            continue
+        except Exception as exc:
+            failure_count += 1
+            result["failure_details"].append(
+                {
+                    "type": exc.__class__.__name__,
+                    "push_service": service_label,
+                    "message": _truncate(str(exc), 240),
+                }
+            )
+    result["failure_count"] = failure_count
+    if delivered_count:
+        result["delivered_at"] = timezone.now()
+        result["status"] = "partial" if failure_count else "delivered"
+    else:
+        result["status"] = "failed"
+    return result
 
 
 def broadcast_live_map_event(message_type: str, payload: dict) -> None:
     _broadcast("official_live_map", "live_map.update", {"type": message_type, "payload": payload})
+    if message_type in {"concern.created", "concern.updated", "emergency.created", "emergency.updated"}:
+        _broadcast_resident_map_event(message_type, payload)
+    elif message_type == "location.updated":
+        # Responder GPS is operationally private. It belongs on the incident
+        # reporter's tracking channel, never on the community map stream.
+        emergency_data = payload.get("emergency") or {}
+        alert_id = emergency_data.get("id")
+        if alert_id:
+            _broadcast_reporter_emergency_map_event(alert_id)
+
+
+def _resident_group_suffix(barangay: str | None) -> str:
+    value = re.sub(r"[^a-z0-9]+", "-", (barangay or "marikina-heights").strip().lower()).strip("-")
+    return value or "marikina-heights"
+
+
+def _resident_group_for_barangay(barangay: str | None) -> str:
+    return f"resident_live_map_{_resident_group_suffix(barangay)}"
+
+
+def _broadcast_resident_map_event(message_type: str, payload: dict) -> None:
+    """Fan out only community-safe map events to matching barangay groups."""
+    from apps.concerns.models import Concern
+    from apps.emergencies.models import EmergencyAlert
+    from apps.live_map import resident_concern_payload, resident_emergency_payload
+
+    resource = payload.get("concern") or payload.get("emergency") or {}
+    resource_id = resource.get("id")
+    if not resource_id:
+        return
+    if message_type.startswith("concern."):
+        concern = Concern.objects.filter(pk=resource_id).select_related("reporter", "reporter__resident_profile").first()
+        if not concern:
+            return
+        event_payload = {"concern": resident_concern_payload(concern)} if concern.visibility == Concern.Visibility.COMMUNITY and concern.validation_status == Concern.ValidationStatus.ACCEPTED else {"concern": {"id": concern.pk, "status": Concern.Status.REJECTED}, "removed": True}
+        barangay = concern.barangay
+    else:
+        alert = EmergencyAlert.objects.filter(pk=resource_id).select_related("reporter", "reporter__resident_profile").first()
+        if not alert:
+            return
+        event_payload = {"emergency": resident_emergency_payload(alert)}
+        barangay = alert.barangay
+    group = _resident_group_for_barangay(barangay)
+    _broadcast(group, "resident_live_map.update", {"type": message_type, "payload": event_payload})
+
+
+def _broadcast_reporter_emergency_map_event(alert_id: int) -> None:
+    from apps.emergencies.models import EmergencyAlert
+    from apps.live_map import resident_emergency_payload
+
+    alert = EmergencyAlert.objects.filter(pk=alert_id).select_related("reporter", "reporter__resident_profile").first()
+    if not alert:
+        return
+    from types import SimpleNamespace
+
+    request = SimpleNamespace(user=alert.reporter)
+    payload = {"emergency": resident_emergency_payload(alert, request=request)}
+    _broadcast(f"resident_emergency_{alert.reporter_id}", "resident_live_map.update", {"type": "emergency.updated", "payload": payload})
 
 
 def broadcast_emergency_update(alert) -> None:
@@ -127,23 +648,56 @@ def broadcast_emergency_chat_message(message) -> None:
 
 
 @transaction.atomic
-def create_notification(*, concern: Concern, type: str) -> object | None:
-    """Create a notification for the report's reporter."""
+def create_user_notification(
+    *,
+    recipient,
+    type: str,
+    title: str,
+    body: str = "",
+    concern: Concern | None = None,
+    metadata: dict | None = None,
+) -> object | None:
+    """Create a notification for a specific user.
+
+    View layers call this service so they do not need to import notification
+    models directly across app boundaries.
+    """
     from .models import Notification
 
     notification = Notification.objects.create(
-        recipient=concern.reporter,
+        recipient=recipient,
         concern=concern,
         type=type,
-        title=_notification_title(concern),
-        body=_notification_body(concern, type),
+        title=title,
+        body=body,
+        metadata=metadata or {},
     )
     transaction.on_commit(lambda: broadcast_notification(notification))
     return notification
 
 
 @transaction.atomic
-def create_emergency_notification(*, alert, type: str, recipient=None, title: str = "", body: str = "") -> object | None:
+def create_notification(*, concern: Concern, type: str) -> object | None:
+    """Create a notification for the report's reporter."""
+    return create_user_notification(
+        recipient=concern.reporter,
+        concern=concern,
+        type=type,
+        title=_notification_title(concern),
+        body=_notification_body(concern, type),
+    )
+
+
+@transaction.atomic
+def create_emergency_notification(
+    *,
+    alert,
+    type: str,
+    recipient=None,
+    title: str = "",
+    body: str = "",
+    metadata: dict | None = None,
+) -> object | None:
     """Create a notification for an emergency participant."""
     from .models import Notification
 
@@ -154,6 +708,7 @@ def create_emergency_notification(*, alert, type: str, recipient=None, title: st
         type=type,
         title=title or f"Emergency alert #{alert.pk}",
         body=body or f"Emergency status updated to {alert.status.replace('_', ' ')}.",
+        metadata=metadata or {},
     )
     transaction.on_commit(lambda: broadcast_notification(notification))
     return notification

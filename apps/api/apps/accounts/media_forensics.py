@@ -82,6 +82,14 @@ VISUAL_TAMPER_MESSAGE = "Proof image appears digitally manipulated. Please uploa
 C2PA_INCONCLUSIVE_MESSAGE = (
     "Could not verify media authenticity (C2PA). Reinstall forensics dependencies or try another photo."
 )
+VIDEO_AUTHENTICITY_MAX_FRAMES = 5
+VIDEO_AUTHENTICITY_MAX_FRAME_PIXELS = 4096 * 2160
+VIDEO_CODEC_REVIEW_MESSAGE = (
+    "The local video codec could not decode frames; manual authenticity review is required."
+)
+VIDEO_FRAME_REVIEW_MESSAGE = (
+    "No readable video frames were available; manual authenticity review is required."
+)
 
 
 def _normalize_name(name: str) -> str:
@@ -400,3 +408,140 @@ def check_media_authenticity(content: bytes) -> None:
     )
     if msg:
         raise ValidationError(msg)
+
+
+def _video_sample_positions(frame_count: int, limit: int) -> list[int]:
+    if frame_count <= 0 or limit <= 0:
+        return []
+    count = min(frame_count, limit)
+    if count == 1:
+        return [0]
+    return [
+        round(index * (frame_count - 1) / (count - 1))
+        for index in range(count)
+    ]
+
+
+def analyze_video_authenticity(
+    content: bytes,
+    *,
+    extension: str = ".mp4",
+    max_frames: int = VIDEO_AUTHENTICITY_MAX_FRAMES,
+) -> dict:
+    """Sample a bounded set of local video frames using the base visual checks.
+
+    This does not claim provenance or inspect every frame. A successful result
+    means only that no obvious edit signal was found in the sampled frames.
+    Decoder, frame, and local-analysis failures always require manual review.
+    """
+    sample_limit = max(1, min(int(max_frames or 1), VIDEO_AUTHENTICITY_MAX_FRAMES))
+    suffix = (extension or ".mp4").lower()
+    if suffix not in {".mp4", ".mov", ".webm"}:
+        suffix = ".bin"
+
+    temporary_path = None
+    capture = None
+    sampled_frames = 0
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temporary:
+            temporary.write(content)
+            temporary_path = temporary.name
+
+        capture = cv2.VideoCapture(temporary_path)
+        if not capture or not capture.isOpened():
+            return {
+                "status": "review_required",
+                "detail": VIDEO_CODEC_REVIEW_MESSAGE,
+                "sampled_frames": 0,
+            }
+
+        width = float(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = float(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        if (
+            np.isfinite(width)
+            and np.isfinite(height)
+            and width > 0
+            and height > 0
+            and width * height > VIDEO_AUTHENTICITY_MAX_FRAME_PIXELS
+        ):
+            return {
+                "status": "review_required",
+                "detail": "Video frames exceed the safe local-analysis resolution; manual review is required.",
+                "sampled_frames": 0,
+            }
+
+        raw_frame_count = float(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        frame_count = (
+            int(raw_frame_count)
+            if np.isfinite(raw_frame_count) and raw_frame_count > 0
+            else 0
+        )
+        positions = _video_sample_positions(frame_count, sample_limit)
+        attempts = positions if positions else [None] * sample_limit
+
+        for position in attempts:
+            if position is not None:
+                capture.set(cv2.CAP_PROP_POS_FRAMES, position)
+            readable, frame = capture.read()
+            if not readable or frame is None or not getattr(frame, "size", 0):
+                return {
+                    "status": "review_required",
+                    "detail": VIDEO_FRAME_REVIEW_MESSAGE,
+                    "sampled_frames": sampled_frames,
+                }
+            frame_height, frame_width = frame.shape[:2]
+            if frame_height * frame_width > VIDEO_AUTHENTICITY_MAX_FRAME_PIXELS:
+                return {
+                    "status": "review_required",
+                    "detail": "Video frames exceed the safe local-analysis resolution; manual review is required.",
+                    "sampled_frames": sampled_frames,
+                }
+            encoded, frame_bytes = cv2.imencode(
+                ".jpg",
+                frame,
+                [int(cv2.IMWRITE_JPEG_QUALITY), 95],
+            )
+            if not encoded:
+                return {
+                    "status": "review_required",
+                    "detail": VIDEO_FRAME_REVIEW_MESSAGE,
+                    "sampled_frames": sampled_frames,
+                }
+            sampled_frames += 1
+            detail = visual_tamper_forensics(frame_bytes.tobytes())
+            if detail:
+                return {
+                    "status": "flagged",
+                    "detail": detail,
+                    "sampled_frames": sampled_frames,
+                }
+
+        if sampled_frames == 0:
+            return {
+                "status": "review_required",
+                "detail": VIDEO_FRAME_REVIEW_MESSAGE,
+                "sampled_frames": 0,
+            }
+        return {
+            "status": "clear",
+            "detail": f"No obvious edit detected in {sampled_frames} sampled video frames.",
+            "sampled_frames": sampled_frames,
+        }
+    except Exception as exc:
+        logger.warning("Local video frame authenticity analysis failed: %s", exc)
+        return {
+            "status": "review_required",
+            "detail": "Video frame analysis was unavailable; manual authenticity review is required.",
+            "sampled_frames": sampled_frames,
+        }
+    finally:
+        if capture is not None:
+            try:
+                capture.release()
+            except Exception:
+                pass
+        if temporary_path and os.path.exists(temporary_path):
+            try:
+                os.unlink(temporary_path)
+            except Exception:
+                pass

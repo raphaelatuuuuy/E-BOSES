@@ -28,6 +28,7 @@ from .models import (
     OCRTestRun,
     AuditLog,
     ResidenceVerificationCase,
+    User,
     VerificationCheck,
 )
 from .ocr_runtime import (
@@ -63,9 +64,11 @@ def _official(request):
     return bool(
         user
         and user.is_authenticated
+        and user.is_active
         and (
             user.is_staff
             or user.is_superuser
+            or user.role == User.Role.BARANGAY_OFFICIAL
             or user_has_role_permission(user, "accounts.verify_residents")
         )
     )
@@ -268,6 +271,8 @@ def _attempt_payload(attempt):
         "failure_reason_code": attempt.failure_reason_code,
         "failure_reason": attempt.failure_reason,
         "ocr_confidence": float(attempt.ocr_confidence) if attempt.ocr_confidence is not None else None,
+        "duplicate_match_found": attempt.duplicate_match_found,
+        "duplicate_identity_matches": (attempt.metadata or {}).get("duplicate_identity_matches", []),
         "extracted_fields": attempt.extracted_fields or {},
         "rule_results": attempt.rule_results or [],
         "created_at": attempt.created_at,
@@ -277,13 +282,33 @@ def _attempt_payload(attempt):
 
 def _case_payload(case, *, include_proofs=True):
     latest_attempt = case.checks.order_by("-created_at", "-id").first()
+    profile = getattr(case.user, "resident_profile", None)
+    full_name = " ".join(
+        part for part in [
+            getattr(profile, "first_name", ""),
+            getattr(profile, "middle_name", ""),
+            getattr(profile, "last_name", ""),
+        ] if part
+    )
     payload = {
         "id": case.pk,
+        "reference": f"VER-{case.pk:06d}",
         "user_id": case.user_id,
+        "resident": {
+            "id": case.user_id,
+            "full_name": full_name or case.user.email,
+            "email": case.user.email,
+            "phone_number": case.user.phone_number,
+            "address": getattr(profile, "address", ""),
+            "date_of_birth": getattr(profile, "date_of_birth", None),
+        },
         "status": case.status,
+        "reason_code": case.review_reason,
+        "reason": case.decision_reason,
         "review_reason": case.review_reason,
         "priority": case.priority,
         "retry_eligible": case.retry_eligible,
+        "can_retry": case.retry_eligible,
         "decision_source": case.decision_source,
         "decision_reason": case.decision_reason,
         "configuration_version": case.configuration.version if case.configuration_id else None,
@@ -294,12 +319,20 @@ def _case_payload(case, *, include_proofs=True):
         "queued_at": case.queued_at,
         "completed_at": case.completed_at,
         "latest_attempt": _attempt_payload(latest_attempt) if latest_attempt else None,
+        "confidence": (
+            float(latest_attempt.ocr_confidence)
+            if latest_attempt and latest_attempt.ocr_confidence is not None
+            else None
+        ),
+        "extracted_fields": latest_attempt.extracted_fields if latest_attempt else {},
+        "rule_results": latest_attempt.rule_results if latest_attempt else [],
         "attempts": [_attempt_payload(item) for item in case.checks.order_by("-created_at", "-id")[:20]],
     }
     if include_proofs:
         payload["proofs"] = [
             {
                 "id": proof.pk,
+                "filename": proof.original_filename,
                 "original_filename": proof.original_filename,
                 "mime_type": proof.mime_type,
                 "file_size": proof.file_size,
@@ -1180,7 +1213,9 @@ class VerificationCaseListView(APIView):
     def get(self, request):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        queryset = ResidenceVerificationCase.objects.select_related("user", "configuration", "document_type").prefetch_related("proofs", "checks")
+        queryset = ResidenceVerificationCase.objects.select_related(
+            "user", "user__resident_profile", "configuration", "document_type"
+        ).prefetch_related("proofs", "checks")
         requested_status = request.query_params.get("status")
         if requested_status:
             queryset = queryset.filter(status=requested_status)
@@ -1193,7 +1228,9 @@ class VerificationCaseDetailView(APIView):
     def get(self, request, pk):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        case = ResidenceVerificationCase.objects.select_related("user", "configuration", "document_type").prefetch_related("proofs", "checks").filter(pk=pk).first()
+        case = ResidenceVerificationCase.objects.select_related(
+            "user", "user__resident_profile", "configuration", "document_type"
+        ).prefetch_related("proofs", "checks").filter(pk=pk).first()
         if not case:
             return Response({"detail": "Verification case not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(_case_payload(case))

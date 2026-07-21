@@ -1,25 +1,27 @@
 import { Link, useLocation } from "react-router-dom"
 import {
-  AlertTriangleIcon,
   BrainCircuitIcon,
-  FileCheck2Icon,
-  HomeIcon,
+  ClockIcon,
   MapPinnedIcon,
+  SlidersHorizontalIcon,
   Settings2Icon,
   ShieldCheckIcon,
   ClipboardListIcon,
+  UserCircleIcon,
+  FileLock2Icon,
 } from "lucide-react"
 import { useState } from "react"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { useAuthSession } from "@/features/auth/auth-session"
+import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
-import { FeedUserAvatar } from "@/features/dashboard/components/feed-post-card"
 
 interface NavItem {
   label: string
   path: string
   icon: React.ElementType
+  children?: NavItem[]
 }
 
 /** Same Flaticon glyphs as mobile bottom nav: home · alerts · reports */
@@ -49,19 +51,45 @@ function NavMaskIcon({ src, className }: { src: string; className?: string }) {
 }
 
 const officialNavItems: NavItem[] = [
-  { label: "Dashboard", path: "/dashboard/home", icon: HomeIcon },
-  { label: "Alerts map", path: "/dashboard/alerts-map", icon: MapPinnedIcon },
-  { label: "Emergency ops", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
+  { label: "Alert", path: "/dashboard/alerts-map", icon: MapPinnedIcon },
   { label: "Concerns", path: "/dashboard/reports", icon: ClipboardListIcon },
-  { label: "Verification", path: "/dashboard/verification-queue", icon: FileCheck2Icon },
-  { label: "ID templates", path: "/dashboard/ocr-templates", icon: Settings2Icon },
-  { label: "Classification", path: "/dashboard/concern-classification", icon: BrainCircuitIcon },
-  { label: "Admin", path: "/dashboard/admin", icon: ShieldCheckIcon },
+  {
+    label: "Configuration",
+    path: "/dashboard/configuration/id-proof-template",
+    icon: Settings2Icon,
+    children: [
+      {
+        label: "ID & Proof template",
+        path: "/dashboard/configuration/id-proof-template",
+        icon: ShieldCheckIcon,
+      },
+      {
+        label: "Classification",
+        path: "/dashboard/configuration/classification",
+        icon: BrainCircuitIcon,
+      },
+      {
+        label: "Map & Dispatch",
+        path: "/dashboard/configuration/map-dispatch",
+        icon: SlidersHorizontalIcon,
+      },
+      {
+        label: "Users",
+        path: "/dashboard/configuration/users",
+        icon: UserCircleIcon,
+      },
+      {
+        label: "Privacy requests",
+        path: "/dashboard/configuration/privacy-requests",
+        icon: FileLock2Icon,
+      },
+    ],
+  },
 ]
 
 const responderNavItems: NavItem[] = [
-  { label: "Emergency ops", path: "/dashboard/emergencies", icon: AlertTriangleIcon },
-  { label: "Alerts map", path: "/dashboard/alerts-map", icon: MapPinnedIcon },
+  { label: "Map", path: "/dashboard/responders/map", icon: MapPinnedIcon },
+  { label: "Shift", path: "/dashboard/responders/shift", icon: ClockIcon },
 ]
 
 function navLinkClass(active: boolean) {
@@ -161,9 +189,9 @@ function ResidentSidebar() {
 function StaffSidebar() {
   const location = useLocation()
   const { user } = useAuthSession()
-  const isOfficialRole = user?.role === "barangay_official" || user?.is_staff || user?.is_superuser
-  const isResponderRole = user?.role === "first_responder"
-  const navItems = isOfficialRole ? officialNavItems : isResponderRole ? responderNavItems : []
+  const isResponderRole = isResponderUser(user)
+  const isOfficialRole = isOfficialUser(user)
+  const navItems = isResponderRole ? responderNavItems : isOfficialRole ? officialNavItems : []
 
   function isActive(path: string) {
     if (path === "/dashboard/home") {
@@ -173,32 +201,40 @@ function StaffSidebar() {
         location.pathname === "/dashboard/"
       )
     }
+    if (path === "/dashboard/configuration/id-proof-template") {
+      return (
+        location.pathname === path ||
+        location.pathname.startsWith(`${path}/`) ||
+        location.pathname.startsWith("/dashboard/configuration/map-dispatch") ||
+        location.pathname.startsWith("/dashboard/ocr-templates") ||
+        location.pathname.startsWith("/dashboard/ocr-configuration") ||
+        location.pathname.startsWith("/dashboard/verification-queue")
+      )
+    }
+    if (path === "/dashboard/configuration/classification") {
+      return (
+        location.pathname === path ||
+        location.pathname.startsWith(`${path}/`) ||
+        location.pathname.startsWith("/dashboard/concern-classification")
+      )
+    }
+    if (path === "/dashboard/configuration/users") {
+      return (
+        location.pathname === path ||
+        location.pathname.startsWith(`${path}/`) ||
+        location.pathname.startsWith("/dashboard/admin")
+      )
+    }
     return location.pathname === path || location.pathname.startsWith(`${path}/`)
   }
-
-  const displayName = user
-    ? `${(user.firstName ?? "").split(/\s+/)[0]} ${user.lastName ?? ""}`.trim() || user.email
-    : "Staff"
-  const displayRole =
-    user?.role?.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) ?? "Official"
 
   return (
     <aside className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-white">
       <nav className="min-h-0 flex-1 overflow-y-auto overscroll-contain pt-6 [scrollbar-width:thin]">
-        {/* Primary emergency shortcut — orange/red CTA like resident Report */}
-        <div className="px-3 pb-2">
-          <Link
-            to="/dashboard/emergencies"
-            className="flex h-11 w-full items-center justify-center gap-2 rounded-[9999px] bg-[#f23b35] text-[15px] font-semibold text-white transition-colors hover:bg-[#e02f2a] active:scale-[0.99]"
-          >
-            <AlertTriangleIcon className="size-4" strokeWidth={2.25} />
-            Emergency ops
-          </Link>
-        </div>
-
-        <ul className="mt-2 flex flex-col gap-0.5 px-3">
+        <ul className="flex flex-col gap-0.5 px-3">
           {navItems.map((item) => {
-            const active = isActive(item.path)
+            const childActive = item.children?.some((child) => isActive(child.path)) ?? false
+            const active = isActive(item.path) || childActive
             const Icon = item.icon
             return (
               <li key={item.path}>
@@ -210,56 +246,44 @@ function StaffSidebar() {
                   <Icon className={navIconClass(active)} strokeWidth={1.75} />
                   {item.label}
                 </Link>
+                {item.children && active ? (
+                  <ul className="ml-8 mt-1 flex flex-col gap-0.5 border-l border-neutral-100 pl-2">
+                    {item.children.map((child) => {
+                      const childIsActive = isActive(child.path)
+                      const ChildIcon = child.icon
+                      return (
+                        <li key={child.path}>
+                          <Link
+                            to={child.path}
+                            aria-current={childIsActive ? "page" : undefined}
+                            className={cn(
+                              "group flex min-h-9 items-center gap-2 rounded-lg px-2 text-[13px] leading-tight transition-colors",
+                              childIsActive
+                                ? "bg-[#fff4ed] font-semibold text-[#07145f]"
+                                : "font-medium text-neutral-500 hover:bg-neutral-50 hover:text-[#07145f]",
+                            )}
+                          >
+                            <ChildIcon className="size-3.5 shrink-0" strokeWidth={1.9} />
+                            <span className="min-w-0">{child.label}</span>
+                          </Link>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                ) : null}
               </li>
             )
           })}
         </ul>
       </nav>
-
-      <div className="shrink-0 space-y-1 bg-white px-3 pb-5 pt-2">
-        <Link
-          to="/dashboard/settings"
-          className={cn(
-            "flex h-10 items-center px-2.5 text-[16px] transition-[colors,font-weight]",
-            isActive("/dashboard/settings")
-              ? "font-semibold text-[#07145f]"
-              : "font-medium text-neutral-600 hover:text-[#07145f]",
-          )}
-        >
-          Settings
-        </Link>
-        <Link
-          to="/dashboard/profile"
-          className={cn(
-            "flex items-center gap-3 rounded-xl px-2.5 py-2 transition-colors hover:bg-neutral-50",
-            isActive("/dashboard/profile") && "bg-neutral-50",
-          )}
-        >
-          <FeedUserAvatar
-            user={{
-              id: user?.id ?? 0,
-              full_name: displayName,
-              initials: displayName.slice(0, 2).toUpperCase(),
-              role: user?.role ?? "barangay_official",
-              last_seen_at: null,
-            }}
-            size="sm"
-            className="!size-9 !text-[14px]"
-          />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[14px] font-semibold text-neutral-900">{displayName}</p>
-            <p className="truncate text-[12px] text-neutral-500">{displayRole}</p>
-          </div>
-        </Link>
-      </div>
     </aside>
   )
 }
 
 export function Sidebar() {
   const { user } = useAuthSession()
-  const isOfficialRole = user?.role === "barangay_official" || user?.is_staff || user?.is_superuser
-  const isResponderRole = user?.role === "first_responder"
+  const isResponderRole = isResponderUser(user)
+  const isOfficialRole = isOfficialUser(user)
 
   if (!isOfficialRole && !isResponderRole) {
     return <ResidentSidebar />
@@ -268,6 +292,6 @@ export function Sidebar() {
   return <StaffSidebar />
 }
 
-export function SidebarSosButton(_props: { isOpen: boolean }) {
+export function SidebarSosButton() {
   return null
 }

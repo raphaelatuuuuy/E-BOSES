@@ -7,13 +7,14 @@ import {
   MapPinIcon,
   NavigationIcon,
   PhoneCallIcon,
-  RadioIcon,
+  RefreshCwIcon,
   ShieldCheckIcon,
   SirenIcon,
   UserCheckIcon,
   UsersIcon,
 } from "lucide-react"
 import { toast } from "sonner"
+import { useSearchParams } from "react-router-dom"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
@@ -30,17 +31,22 @@ import {
 } from "@/features/dashboard/api"
 import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
 import {
-  acknowledgeEmergency,
   assignEmergency,
   assignEmergencyResponders,
   escalateOverdueEmergencies,
+  getEmergency,
   listAssignedEmergencies,
+  listEmergencyAppeals,
   listEmergencyQueue,
   markEmergencyArrived,
+  reassignEmergency,
+  removeEmergencyAssignment,
+  reviewEmergencyAppeal,
   resolveEmergency,
   sendEmergencyLocationPing,
   updateEmergencyDuty,
   type EmergencyAlert,
+  type EmergencyAppeal,
   type EmergencyStatus,
   type EmergencyType,
 } from "@/features/dashboard/emergency-api"
@@ -50,7 +56,7 @@ type ResponderUnit = NonNullable<PublicUser["responder_unit"]>
 const statusLabel: Record<EmergencyStatus, string> = {
   submitted: "Submitted",
   routed: "Routed",
-  acknowledged: "Acknowledged",
+  acknowledged: "Responder routed",
   en_route: "En route",
   nearby: "Nearby",
   arrived: "Arrived",
@@ -66,15 +72,15 @@ const unitLabel: Record<ResponderUnit, string> = {
   "": "Responder",
 }
 
-const preferredUnit: Record<EmergencyType, ResponderUnit> = {
-  medical: "bhw",
-  fire: "bdrrmo",
-  crime: "tanod",
-  disaster: "bdrrmo",
-  other: "other",
+const eligibleUnits: Record<EmergencyType, ResponderUnit[]> = {
+  medical: ["bhw"],
+  fire: ["bdrrmo"],
+  crime: ["tanod"],
+  disaster: ["bdrrmo"],
+  other: ["tanod", "bhw", "bdrrmo"],
 }
 
-const statusSteps: EmergencyStatus[] = ["submitted", "routed", "acknowledged", "en_route", "arrived", "resolved"]
+const statusSteps: EmergencyStatus[] = ["submitted", "routed", "en_route", "arrived", "resolved"]
 
 function formatTime(value: string) {
   return new Intl.DateTimeFormat("en", {
@@ -124,7 +130,8 @@ function hasAutoRoute(alert: EmergencyAlert) {
 }
 
 function StatusRail({ status }: { status: EmergencyStatus }) {
-  const index = status === "cancelled" ? -1 : statusSteps.indexOf(status)
+  const effectiveStatus = status === "acknowledged" ? "routed" : status
+  const index = effectiveStatus === "cancelled" ? -1 : statusSteps.indexOf(effectiveStatus)
   return (
     <div className="grid grid-cols-6 gap-1">
       {statusSteps.map((step, stepIndex) => {
@@ -237,6 +244,9 @@ function IncidentBoard({ alert }: { alert: EmergencyAlert | null }) {
 
   const assigned = alert.current_assignment?.responder
   const latest = alert.status_events.at(-1)
+  const activeTeam = alert.assignments?.filter(
+    (assignment) => !["cancelled", "declined", "resolved"].includes(assignment.status),
+  ) ?? []
   return (
     <section className="space-y-4">
       <div className="rounded-2xl border border-slate-200 bg-white p-5">
@@ -261,6 +271,45 @@ function IncidentBoard({ alert }: { alert: EmergencyAlert | null }) {
           <InfoTile icon={<ClockIcon className="size-4" />} label="Latest update" value={latest ? statusLabel[latest.status] : "Submitted"} detail={latest ? formatTime(latest.created_at) : formatTime(alert.created_at)} />
         </div>
       </div>
+
+      {alert.witness_notification_summary ? (
+        <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-[#07145f]">Nearby resident safety notice</p>
+              <p className="mt-1 text-xs leading-5 text-[#43507f]">
+                {alert.witness_notification_summary.triggered
+                  ? "A privacy-limited safety notification was sent. Reporter identity, exact coordinates, and media were not included."
+                  : "No eligible verified residents were within the configured notification radius."}
+              </p>
+            </div>
+            <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-[#2447b3]">
+              {alert.witness_notification_summary.recipient_count} notified
+            </span>
+          </div>
+          {alert.witness_notification_summary.triggered ? (
+            <div className="mt-3 grid gap-2 text-xs font-semibold text-[#43507f] sm:grid-cols-2 lg:grid-cols-4">
+              <span>{alert.witness_notification_summary.in_app_delivered_count} in-app delivered</span>
+              <span>{alert.witness_notification_summary.read_count} opened</span>
+              <span>
+                {alert.witness_notification_summary.push_delivered_count} push delivered
+                {alert.witness_notification_summary.push_failure_count ? ` · ${alert.witness_notification_summary.push_failure_count} failed` : ""}
+              </span>
+              <span>Nearest: {alert.witness_notification_summary.nearest_distance_meters ?? "—"} m</span>
+              <span>Farthest: {alert.witness_notification_summary.farthest_distance_meters ?? "—"} m</span>
+              {alert.witness_notification_summary.push_status_counts.not_configured ? (
+                <span className="text-amber-700">Browser push is not configured for {alert.witness_notification_summary.push_status_counts.not_configured} recipient{alert.witness_notification_summary.push_status_counts.not_configured === 1 ? "" : "s"}.</span>
+              ) : null}
+              {alert.witness_notification_summary.push_status_counts.not_subscribed ? (
+                <span>{alert.witness_notification_summary.push_status_counts.not_subscribed} recipient{alert.witness_notification_summary.push_status_counts.not_subscribed === 1 ? "" : "s"} not subscribed to push.</span>
+              ) : null}
+              {alert.witness_notification_summary.push_status_counts.disabled ? (
+                <span>{alert.witness_notification_summary.push_status_counts.disabled} recipient{alert.witness_notification_summary.push_status_counts.disabled === 1 ? "" : "s"} disabled push.</span>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <IncidentMap alert={alert} />
 
@@ -291,7 +340,7 @@ function IncidentBoard({ alert }: { alert: EmergencyAlert | null }) {
       </div>
 
       {/* Shared group chat: resident + all assigned responders (same thread) */}
-      {(alert.assignments?.length > 0 || alert.current_assignment) &&
+      {(activeTeam.length > 0 || alert.current_assignment) &&
       alert.status !== "submitted" ? (
         <EmergencyChatPanel
           alertId={alert.id}
@@ -299,8 +348,8 @@ function IncidentBoard({ alert }: { alert: EmergencyAlert | null }) {
           theme="light"
           disabled={alert.status === "cancelled" || alert.status === "resolved"}
           participantHint={
-            alert.assignments?.length
-              ? `Group · resident + ${alert.assignments.length} responder${alert.assignments.length === 1 ? "" : "s"}`
+            activeTeam.length
+              ? `Group · resident + ${activeTeam.length} responder${activeTeam.length === 1 ? "" : "s"}`
               : "Group · resident + assigned responders"
           }
           className="min-h-[320px]"
@@ -339,17 +388,29 @@ function DispatchPanel({
   const [busyId, setBusyId] = useState<number | null>(null)
   const [busyAction, setBusyAction] = useState("")
   const [selectedResponderIds, setSelectedResponderIds] = useState<number[]>([])
-  const preferred = alert ? preferredUnit[alert.type] : ""
+  const [teamAction, setTeamAction] = useState<
+    | { kind: "replace"; responder: ActiveResponder }
+    | { kind: "remove"; assignmentId: number; responderName: string }
+    | null
+  >(null)
+  const [teamReason, setTeamReason] = useState("")
+  const eligible = alert ? eligibleUnits[alert.type] : []
+  const activeAssignments = alert?.assignments.filter(
+    (assignment) => !["cancelled", "declined", "resolved"].includes(assignment.status),
+  ) ?? []
   const sorted = useMemo(() => {
     if (!alert) return responders
-    return [...responders].sort((a, b) => {
-      const aPreferred = a.responder_unit === preferred ? -1 : 0
-      const bPreferred = b.responder_unit === preferred ? -1 : 0
-      if (aPreferred !== bPreferred) return aPreferred - bPreferred
+    return responders.filter((responder) => eligible.includes(responder.responder_unit || "")).sort((a, b) => {
       return (distanceKm(alert.latitude, alert.longitude, a.current_latitude, a.current_longitude) ?? 999) -
         (distanceKm(alert.latitude, alert.longitude, b.current_latitude, b.current_longitude) ?? 999)
     })
-  }, [alert, preferred, responders])
+  }, [alert, eligible, responders])
+
+  useEffect(() => {
+    setSelectedResponderIds([])
+    setTeamAction(null)
+    setTeamReason("")
+  }, [alert?.id])
 
   async function assign(responder: ActiveResponder) {
     if (!alert) return
@@ -375,6 +436,32 @@ function DispatchPanel({
       setSelectedResponderIds([])
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not assign responders.")
+    } finally {
+      setBusyAction("")
+    }
+  }
+
+  async function confirmTeamAction() {
+    if (!alert || !teamAction) return
+    const reason = teamReason.trim()
+    if (reason.length < 5) {
+      toast.error("Add a brief operational reason before changing the response team.")
+      return
+    }
+    setBusyAction("team-change")
+    try {
+      const next = teamAction.kind === "replace"
+        ? await reassignEmergency(alert.id, teamAction.responder.id, reason, alert.status_version)
+        : await removeEmergencyAssignment(alert.id, teamAction.assignmentId, {
+            reason,
+            status_version: alert.status_version,
+          })
+      onChanged(next)
+      toast.success(teamAction.kind === "replace" ? "Primary responder replaced" : "Support responder removed")
+      setTeamAction(null)
+      setTeamReason("")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update the response team.")
     } finally {
       setBusyAction("")
     }
@@ -414,14 +501,92 @@ function DispatchPanel({
     }
   }
 
+  async function refreshTeam() {
+    if (!alert) return
+    setBusyAction("refresh-team")
+    try {
+      onChanged(await getEmergency(alert.id))
+      toast.success("Team status refreshed")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not refresh team status.")
+    } finally {
+      setBusyAction("")
+    }
+  }
+
   return (
     <aside className="space-y-4">
       <section className="rounded-2xl border border-slate-200 bg-white p-4">
         <div className="flex items-center justify-between gap-3">
           <div>
+            <p className="text-sm font-black text-[#07145f]">Response team</p>
+            <p className="mt-1 text-xs font-semibold text-[#68739c]">Add support, replace the team, or remove support with an audit reason.</p>
+          </div>
+          <span className="rounded-md bg-[#eaf0ff] px-2 py-1 text-xs font-black text-[#07145f]">{activeAssignments.length} active</span>
+        </div>
+        <div className="mt-3 grid gap-2">
+          {alert?.assignments.length ? alert.assignments.map((assignment) => {
+            const active = !["cancelled", "declined", "resolved"].includes(assignment.status)
+            return (
+              <div key={assignment.id} className={cn("flex items-center justify-between gap-2 rounded-xl border border-slate-200 px-3 py-2", !active && "bg-slate-50 opacity-60")}>
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-black text-[#07145f]">{responderName(assignment.responder)}</p>
+                  <p className="mt-0.5 text-[11px] font-semibold capitalize text-[#68739c]">{assignment.status.replace(/_/g, " ")}</p>
+                </div>
+                {active && activeAssignments.length > 1 ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={Boolean(busyAction)}
+                    onClick={() => {
+                      setTeamAction({ kind: "remove", assignmentId: assignment.id, responderName: responderName(assignment.responder) })
+                      setTeamReason("")
+                    }}
+                    className="h-8 border-red-200 text-xs text-red-700 hover:bg-red-50"
+                  >
+                    Remove
+                  </Button>
+                ) : null}
+              </div>
+            )
+          }) : (
+            <p className="rounded-xl bg-[#f8fafc] p-3 text-xs font-semibold text-[#68739c]">No response team has been assigned.</p>
+          )}
+        </div>
+        {teamAction ? (
+          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+            <p className="text-xs font-black text-amber-950">
+              {teamAction.kind === "replace"
+                ? `Replace the active response team with ${responderName(teamAction.responder)}?`
+                : `Remove ${teamAction.responderName} from this response?`}
+            </p>
+            <label htmlFor={`dispatch-team-reason-${alert?.id ?? "none"}`} className="mt-2 block text-[11px] font-bold text-amber-900">Operational reason</label>
+            <textarea
+              id={`dispatch-team-reason-${alert?.id ?? "none"}`}
+              value={teamReason}
+              onChange={(event) => setTeamReason(event.target.value)}
+              rows={2}
+              maxLength={255}
+              placeholder="Explain why this assignment is changing"
+              className="mt-1 w-full resize-none rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-[#07145f] outline-none focus:border-[#ff6a1a]"
+            />
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <Button type="button" size="sm" variant="outline" disabled={busyAction === "team-change"} onClick={() => { setTeamAction(null); setTeamReason("") }}>Keep team</Button>
+              <Button type="button" size="sm" disabled={busyAction === "team-change" || teamReason.trim().length < 5} onClick={() => void confirmTeamAction()} className="bg-[#07145f] text-white hover:bg-[#0b1b75]">
+                {busyAction === "team-change" ? "Updating" : "Confirm change"}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
             <p className="text-sm font-black text-[#07145f]">Assign responder</p>
             <p className="mt-1 text-xs font-semibold text-[#68739c]">
-              Preferred: {preferred ? unitLabel[preferred] : "Any responder"}
+              Eligible: {eligible.length ? eligible.map((unit) => unitLabel[unit]).join(", ") : "Select an incident"}
             </p>
           </div>
           <UsersIcon className="size-5 text-[#ff6a1a]" />
@@ -431,7 +596,7 @@ function DispatchPanel({
             <p className="rounded-xl bg-[#f8fafc] p-3 text-xs font-semibold text-[#68739c]">No on-duty responders with live location yet.</p>
           ) : sorted.map((responder) => {
             const km = alert ? distanceKm(alert.latitude, alert.longitude, responder.current_latitude, responder.current_longitude) : null
-            const assigned = alert?.current_assignment?.responder?.id === responder.id
+            const assigned = activeAssignments.some((assignment) => assignment.responder.id === responder.id)
             const selected = selectedResponderIds.includes(responder.id)
             return (
               <div key={responder.id} className={cn("rounded-xl border p-3", assigned ? "border-[#ff6a1a] bg-[#fff7f1]" : "border-slate-200 bg-white")}>
@@ -439,6 +604,7 @@ function DispatchPanel({
                   <input
                     type="checkbox"
                     checked={selected}
+                    disabled={assigned}
                     onChange={(event) => {
                       setSelectedResponderIds((current) => event.target.checked ? [...current, responder.id] : current.filter((id) => id !== responder.id))
                     }}
@@ -454,20 +620,35 @@ function DispatchPanel({
                       {unitLabel[responder.responder_unit || ""]} · {km == null ? "location pending" : `${km.toFixed(1)} km away`}
                     </p>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {responder.responder_unit === preferred ? <span className="rounded-full bg-[#eaf0ff] px-2 py-1 text-[10px] font-black text-[#07145f]">Best unit</span> : null}
+                      {eligible.includes(responder.responder_unit || "") ? <span className="rounded-full bg-[#eaf0ff] px-2 py-1 text-[10px] font-black text-[#07145f]">Suitable unit</span> : null}
                       {responder.is_on_duty ? <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-black text-emerald-700">On duty</span> : null}
                     </div>
                   </div>
                 </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={!alert || Boolean(busyId)}
-                  onClick={() => assign(responder)}
-                  className="mt-3 w-full bg-[#ff6a1a] text-white hover:bg-[#e85f17]"
-                >
-                  {busyId === responder.id ? "Assigning" : assigned ? "Reassign here" : "Assign responder"}
-                </Button>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={!alert || Boolean(busyId) || assigned}
+                    onClick={() => assign(responder)}
+                    className="bg-[#ff6a1a] text-white hover:bg-[#e85f17] disabled:bg-slate-200 disabled:text-slate-500"
+                  >
+                    {busyId === responder.id ? "Adding" : assigned ? "Assigned" : "Add support"}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={!alert || Boolean(busyId) || assigned || activeAssignments.length === 0}
+                    onClick={() => {
+                      setTeamAction({ kind: "replace", responder })
+                      setTeamReason("")
+                    }}
+                    className="border-[#b9c9f4] text-[#2447b3]"
+                  >
+                    Replace team
+                  </Button>
+                </div>
               </div>
             )
           })}
@@ -489,7 +670,7 @@ function DispatchPanel({
         <p className="text-sm font-black text-[#07145f]">Quick actions</p>
         <div className="mt-3 grid grid-cols-2 gap-2">
           <ActionButton icon={<PhoneCallIcon className="size-4" />} label="Call resident" onClick={callResident} />
-          <ActionButton icon={<RadioIcon className="size-4" />} label="Radio team" onClick={() => toast.info("Radio integration is not configured yet.")} />
+          <ActionButton icon={<RefreshCwIcon className="size-4" />} label={busyAction === "refresh-team" ? "Refreshing" : "Refresh team"} onClick={() => void refreshTeam()} />
           <ActionButton icon={<AlertTriangleIcon className="size-4" />} label={busyAction === "escalate" ? "Escalating" : "Escalate"} onClick={() => void escalate()} />
           <ActionButton icon={<ShieldCheckIcon className="size-4" />} label={busyAction === "false-alarm" ? "Closing" : "False alarm"} onClick={() => void markFalseAlarm()} />
         </div>
@@ -501,7 +682,7 @@ function DispatchPanel({
           <SummaryBox label="Active" value={alert ? "1" : "0"} />
           <SummaryBox label="Responders" value={responders.length.toString()} />
           <SummaryBox label="Auto route" value={alert && hasAutoRoute(alert) ? "Yes" : "No"} />
-          <SummaryBox label="Unit" value={preferred ? unitLabel[preferred] : "Any"} />
+          <SummaryBox label="Eligible units" value={eligible.length ? eligible.map((unit) => unitLabel[unit]).join(", ") : "—"} />
         </div>
       </section>
     </aside>
@@ -536,8 +717,11 @@ function DutyPanel({
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    setUnit((user?.responder_unit as ResponderUnit) || "tanod")
-    setIsOnDuty(Boolean(user?.is_on_duty))
+    const timer = window.setTimeout(() => {
+      setUnit((user?.responder_unit as ResponderUnit) || "tanod")
+      setIsOnDuty(Boolean(user?.is_on_duty))
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [user?.responder_unit, user?.is_on_duty])
 
   async function updateDuty(nextDuty = isOnDuty, nextUnit = unit, requireGps = nextDuty) {
@@ -657,15 +841,6 @@ function ResponderActions({ alert, onChanged }: { alert: EmergencyAlert; onChang
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <Button
           type="button"
-          disabled={Boolean(busy) || !["routed", "submitted"].includes(alert.status)}
-          onClick={() => run("ack", () => acknowledgeEmergency(alert.id))}
-          className="bg-[#07145f] text-white hover:bg-[#10227a]"
-        >
-          <CheckCircleIcon className="size-4" />
-          {busy === "ack" ? "Updating" : "Acknowledge"}
-        </Button>
-        <Button
-          type="button"
           disabled={Boolean(busy) || !["routed", "acknowledged", "en_route", "nearby"].includes(alert.status)}
           onClick={ping}
           className="bg-[#ff6a1a] text-white hover:bg-[#e85f17]"
@@ -696,11 +871,46 @@ function ResponderActions({ alert, onChanged }: { alert: EmergencyAlert; onChang
   )
 }
 
+function EmergencyAppealsPanel({ appeals, onUpdated }: { appeals: EmergencyAppeal[]; onUpdated: (appeal: EmergencyAppeal) => void }) {
+  const [notes, setNotes] = useState<Record<number, string>>({})
+  const [busy, setBusy] = useState<number | null>(null)
+
+  async function decide(appeal: EmergencyAppeal, status: "approved" | "denied") {
+    const decisionNote = (notes[appeal.id] || "").trim()
+    if (decisionNote.length < 5) {
+      toast.error("Add a clear decision note before completing the review.")
+      return
+    }
+    setBusy(appeal.id)
+    try {
+      onUpdated(await reviewEmergencyAppeal(appeal.id, { status, decision_note: decisionNote }))
+      toast.success(`Emergency review request ${status}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not review this emergency request.")
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  if (appeals.length === 0) return null
+  return (
+    <section className="rounded-2xl border border-amber-200 bg-amber-50/50 p-5">
+      <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-black text-[#07145f]">Emergency review requests</p><p className="mt-1 text-xs font-semibold text-[#68739c]">Decide resident requests from cancelled or disputed incidents with an auditable note.</p></div><span className="rounded-md bg-white px-2.5 py-1 text-xs font-black text-amber-800">{appeals.filter((item) => item.status === "submitted").length} pending</span></div>
+      <div className="mt-4 grid gap-3 xl:grid-cols-2">
+        {appeals.map((appeal) => <article key={appeal.id} className="rounded-xl border border-amber-200 bg-white p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-black capitalize text-[#07145f]">{appeal.alert_type || "Emergency"} incident</p><p className="mt-1 text-xs font-semibold text-[#68739c]">{appeal.appellant.full_name} · {formatTime(appeal.created_at)}</p></div><span className="rounded-md border border-[#dfe7f5] px-2 py-1 text-[10px] font-black uppercase text-[#43507f]">{appeal.status}</span></div><p className="mt-3 text-xs font-semibold leading-5 text-[#43507f]">{appeal.reason}</p>{appeal.status === "submitted" ? <><textarea rows={2} maxLength={255} value={notes[appeal.id] || ""} onChange={(event) => setNotes((current) => ({ ...current, [appeal.id]: event.target.value }))} placeholder="Decision note" className="mt-3 w-full resize-none rounded-xl border border-[#cbd8ee] p-3 text-xs font-semibold text-[#07145f] outline-none focus:border-[#ff6a1a]" /><div className="mt-2 grid grid-cols-2 gap-2"><Button type="button" size="sm" variant="outline" disabled={busy === appeal.id} onClick={() => void decide(appeal, "denied")} className="border-red-200 text-red-700">Deny</Button><Button type="button" size="sm" disabled={busy === appeal.id} onClick={() => void decide(appeal, "approved")} className="bg-emerald-600 text-white">Approve</Button></div></> : appeal.decision_note ? <p className="mt-3 rounded-lg bg-[#f8fafc] p-3 text-xs font-semibold text-[#43507f]">Decision: {appeal.decision_note}</p> : null}</article>)}
+      </div>
+    </section>
+  )
+}
+
 export default function EmergenciesPage() {
   usePageTitle("Emergency Ops")
   const { user } = useAuthSession()
+  const [searchParams] = useSearchParams()
+  const requestedAlertId = Number(searchParams.get("alert")) || null
   const [alerts, setAlerts] = useState<EmergencyAlert[]>([])
   const [responders, setResponders] = useState<ActiveResponder[]>([])
+  const [appeals, setAppeals] = useState<EmergencyAppeal[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [summary, setSummary] = useState<OfficialRoleSummary | ResponderRoleSummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -716,7 +926,7 @@ export default function EmergenciesPage() {
     unassigned: alerts.filter((alert) => !alert.current_assignment).length,
     enRoute: alerts.filter((alert) => ["acknowledged", "en_route", "nearby"].includes(alert.status)).length,
     respondersOnDuty: (summary as OfficialRoleSummary | null)?.responders_on_duty ?? responders.length,
-    awaitingAck: (summary as ResponderRoleSummary | null)?.awaiting_acknowledgement ?? alerts.filter((alert) => alert.current_assignment?.status === "assigned").length,
+    awaitingAck: (summary as ResponderRoleSummary | null)?.assigned_active_emergencies ?? alerts.length,
   }), [alerts, isOfficial, responders.length, summary])
 
   useEffect(() => {
@@ -726,16 +936,22 @@ export default function EmergenciesPage() {
       setLoading(true)
       setError("")
       try {
-        const [nextAlerts, nextResponders, nextSummary] = await Promise.all([
+        const [nextAlerts, nextResponders, nextSummary, requestedAlert, nextAppeals] = await Promise.all([
           isOfficial ? listEmergencyQueue() : isResponder ? listAssignedEmergencies() : Promise.resolve([]),
           isOfficial ? listActiveResponders() : Promise.resolve([]),
           isOfficial ? getOfficialDashboardSummary() : isResponder ? getResponderDashboardSummary() : Promise.resolve(null),
+          requestedAlertId ? getEmergency(requestedAlertId).catch(() => null) : Promise.resolve(null),
+          isOfficial ? listEmergencyAppeals() : Promise.resolve([]),
         ])
         if (cancelled) return
-        setAlerts(nextAlerts)
+        const mergedAlerts = requestedAlert && !nextAlerts.some((alert) => alert.id === requestedAlert.id)
+          ? [requestedAlert, ...nextAlerts]
+          : nextAlerts.map((alert) => alert.id === requestedAlert?.id ? requestedAlert : alert)
+        setAlerts(mergedAlerts)
         setResponders(nextResponders)
         setSummary(nextSummary)
-        setSelectedId((current) => current ?? nextAlerts[0]?.id ?? null)
+        setAppeals(nextAppeals)
+        setSelectedId(requestedAlert?.id ?? mergedAlerts[0]?.id ?? null)
       } catch {
         if (!cancelled) setError("Could not load emergency operations.")
       } finally {
@@ -744,7 +960,7 @@ export default function EmergenciesPage() {
     }
     void load()
     return () => { cancelled = true }
-  }, [user, isOfficial, isResponder])
+  }, [user, isOfficial, isResponder, requestedAlertId])
 
   function updateAlert(next: EmergencyAlert) {
     setAlerts((current) => current.map((alert) => alert.id === next.id ? next : alert))
@@ -775,16 +991,18 @@ export default function EmergenciesPage() {
               <p className="mt-2 max-w-3xl text-[15px] font-medium leading-6 text-neutral-600">
                 {isOfficial
                   ? "SOS alerts auto-route to the nearest on-duty matching unit. Officials can override or add responders when the incident needs more support."
-                  : "Keep your duty location live, acknowledge assigned alerts, and update the resident as you respond."}
+                  : "Keep your duty location live, follow automatically routed alerts, and update the resident as you respond."}
               </p>
             </div>
             <div className="grid grid-cols-3 gap-2 text-center">
               <SummaryBox label="Active" value={counts.active.toString()} />
               <SummaryBox label={isOfficial ? "Unassigned" : "En route"} value={(isOfficial ? counts.unassigned : counts.enRoute).toString()} />
-              <SummaryBox label={isOfficial ? "On duty" : "Awaiting ack"} value={(isOfficial ? counts.respondersOnDuty : counts.awaitingAck).toString()} />
+              <SummaryBox label={isOfficial ? "On duty" : "Routed"} value={(isOfficial ? counts.respondersOnDuty : counts.awaitingAck).toString()} />
             </div>
           </div>
         </div>
+
+        {isOfficial ? <EmergencyAppealsPanel appeals={appeals} onUpdated={(next) => setAppeals((items) => items.map((item) => item.id === next.id ? next : item))} /> : null}
 
         {error ? <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</div> : null}
 

@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 import re
 
-from .models import AccountRequest, OTPChallenge, ResidentSettings, User
+from .models import AccountRequest, AuditLog, OTPChallenge, ResidentSettings, User
 from .services import (
     ALLOWED_PROOF_EXTENSIONS,
     ALLOWED_PROOF_MIME_TYPES,
@@ -335,6 +335,57 @@ class ResponderUpdateSerializer(serializers.Serializer):
     responder_unit = serializers.ChoiceField(choices=User.ResponderUnit.choices, allow_blank=True, required=False)
     is_on_duty = serializers.BooleanField(required=False)
 
+    def validate(self, attrs):
+        if "is_on_duty" in attrs:
+            raise serializers.ValidationError({
+                "is_on_duty": "Responder availability is controlled by the Shift workflow."
+            })
+        return attrs
+
+
+class SensitiveAccessAuditSerializer(serializers.ModelSerializer):
+    actor = serializers.SerializerMethodField()
+    subject = serializers.SerializerMethodField()
+    resource_type = serializers.SerializerMethodField()
+    resource_id = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AuditLog
+        fields = ("id", "action", "actor", "subject", "resource_type", "resource_id", "created_at")
+
+    def _person(self, user):
+        if user is None:
+            return None
+        profile = getattr(user, "resident_profile", None)
+        full_name = ""
+        if profile:
+            full_name = f"{profile.first_name} {profile.last_name}".strip()
+        return {
+            "id": user.pk,
+            "email": user.email,
+            "full_name": full_name or user.email,
+            "role": user.role,
+        }
+
+    def get_actor(self, obj):
+        return self._person(obj.actor)
+
+    def get_subject(self, obj):
+        return self._person(obj.target_user)
+
+    def get_resource_type(self, obj):
+        if obj.action == "media.raw_accessed":
+            return str(obj.metadata.get("media_type") or "protected_media")
+        if obj.action == "account.data_export_downloaded":
+            return "account_data_export"
+        return "restricted_record"
+
+    def get_resource_id(self, obj):
+        value = obj.metadata.get("object_id")
+        if value is None:
+            value = obj.metadata.get("request_id")
+        return "" if value is None else str(value)
+
 
 class OTPVerifySerializer(serializers.Serializer):
     channel = serializers.ChoiceField(choices=OTPChallenge.Channel.choices)
@@ -468,6 +519,18 @@ class AdminCreateUserSerializer(serializers.Serializer):
             (User.Role.FIRST_RESPONDER, "First Responder"),
         ]
     )
+    responder_unit = serializers.ChoiceField(
+        choices=User.ResponderUnit.choices,
+        allow_blank=True,
+        required=False,
+        default="",
+    )
+
+    def validate_email(self, value):
+        email = value.strip().lower()
+        if get_user_model().objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError("An account with this email already exists.")
+        return email
 
     def validate_password(self, value):
         try:
@@ -480,6 +543,15 @@ class AdminCreateUserSerializer(serializers.Serializer):
         if phone_number_exists(value):
             raise serializers.ValidationError("An account with this phone number already exists.")
         return value
+
+    def validate(self, attrs):
+        role = attrs.get("role")
+        responder_unit = attrs.get("responder_unit", "")
+        if role == User.Role.FIRST_RESPONDER and not responder_unit:
+            raise serializers.ValidationError({"responder_unit": "Select the responder's operational unit."})
+        if role != User.Role.FIRST_RESPONDER:
+            attrs["responder_unit"] = ""
+        return attrs
 
     def create(self, validated_data):
         return get_user_model().objects.create_user(

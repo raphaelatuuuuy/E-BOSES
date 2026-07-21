@@ -17,7 +17,6 @@ import {
   UserIcon,
 } from "lucide-react"
 
-import { cn } from "@workspace/ui/lib/utils"
 import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/components/popover"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { usePageTitle } from "@/hooks/use-page-title"
@@ -237,7 +236,6 @@ export default function ProfilePage() {
               <PopoverContent
                 className="w-[260px] overflow-hidden rounded-2xl border border-neutral-200 bg-white p-0 shadow-[0_12px_36px_rgba(15,23,42,0.16)]"
                 side="bottom"
-                sideOffset={6}
               >
                 <div className="py-1.5">
                   {(

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   AlertTriangleIcon,
@@ -19,6 +19,13 @@ import {
 import { usePageTitle } from "@/hooks/use-page-title"
 import { apiRequest } from "@/lib/api"
 import { parseStoredAddress } from "@/features/dashboard/components/address-confirm-flow"
+import {
+  disableBrowserNotifications,
+  enableBrowserNotifications,
+  getBrowserNotificationState,
+  type BrowserNotificationState,
+} from "@/features/dashboard/browser-notifications"
+import { appInstalledStandalone } from "@/lib/pwa"
 
 type Filter = "all" | "unread" | "reports" | "emergencies" | "announcements"
 
@@ -31,6 +38,8 @@ const filters: Array<{ value: Filter; label: string }> = [
 ]
 
 function typeGroup(item: NotificationItem): Exclude<Filter, "all" | "unread"> {
+  if (item.category === "announcement") return "announcements"
+  if (item.category === "emergency") return "emergencies"
   if (item.emergency_id || item.type.startsWith("emergency") || item.type === "witness_alert") {
     return "emergencies"
   }
@@ -64,16 +73,63 @@ function relativeTime(value: string) {
   return new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(new Date(value))
 }
 
+function initialNotificationFilter(): Filter {
+  if (typeof window === "undefined") return "all"
+  const type = new URLSearchParams(window.location.search).get("type")
+  if (type === "announcements" || type === "emergencies" || type === "reports" || type === "unread") return type
+  return "all"
+}
+
 export default function NotificationsPage() {
   usePageTitle("Notifications")
   const navigate = useNavigate()
   const { user } = useAuthSession()
-  const { notifications, unreadCount, loading, markAsRead, markAllAsRead } = useNotifications()
-  const [filter, setFilter] = useState<Filter>("all")
+  const { notifications, unreadCount, loading, markAsRead, markAllAsRead, refresh } = useNotifications()
+  const [filter, setFilter] = useState<Filter>(initialNotificationFilter)
   const [olderNotifications, setOlderNotifications] = useState<NotificationItem[]>([])
   const [nextPage, setNextPage] = useState(2)
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(true)
+  const [browserState, setBrowserState] = useState<BrowserNotificationState>({
+    supported: true,
+    permission: "default",
+    serverConfigured: true,   // optimistic — corrected by retry loop below
+    subscribed: false,
+  })
+  const [browserBusy, setBrowserBusy] = useState(false)
+  const [testPushBusy, setTestPushBusy] = useState(false)
+  const [testPushResult, setTestPushResult] = useState<string | null>(null)
+  const [installPrompt, setInstallPrompt] = useState<Event | null>(null)
+  const [installedStandalone, setInstalledStandalone] = useState(appInstalledStandalone())
+
+  useEffect(() => {
+    // Retry a few times — the SW may still be activating on fresh page load.
+    let cancelled = false
+    ;(async () => {
+      for (let i = 0; i < 10; i++) {
+        const state = await getBrowserNotificationState().catch(() => null)
+        if (!state || cancelled) return
+        if (state.serverConfigured || state.subscribed) { setBrowserState(state); return }
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      setBrowserState(await getBrowserNotificationState().catch(() => browserState))
+    })()
+    return () => { cancelled = true }
+    function onBeforeInstallPrompt(event: Event) {
+      event.preventDefault()
+      setInstallPrompt(event)
+    }
+    function onInstalled() {
+      setInstalledStandalone(true)
+      setInstallPrompt(null)
+    }
+    window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt)
+    window.addEventListener("appinstalled", onInstalled)
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt)
+      window.removeEventListener("appinstalled", onInstalled)
+    }
+  }, [])
 
   const streetLabel = useMemo(() => {
     const raw = (user?.address ?? "").trim()
@@ -107,6 +163,11 @@ export default function NotificationsPage() {
         current.map((entry) => (entry.id === item.id ? { ...entry, is_read: true } : entry)),
       )
     }
+    if (item.safety_limited || item.type === "witness_alert") return
+    if (item.action_url) {
+      navigate(item.action_url)
+      return
+    }
     if (item.emergency_id) {
       navigate(
         `/dashboard/emergency-history?alert=${item.emergency_public_id || item.emergency_id}`,
@@ -132,6 +193,82 @@ export default function NotificationsPage() {
     } finally {
       setLoadingMore(false)
     }
+  }
+
+  async function toggleBrowserPush() {
+    setBrowserBusy(true)
+    setTestPushResult(null)
+    try {
+      if (browserState.subscribed) await disableBrowserNotifications()
+      else await enableBrowserNotifications()
+      const nextState = await getBrowserNotificationState()
+      setBrowserState(nextState)
+      setTestPushResult(
+        nextState.subscribed
+          ? "Push enabled for this browser. Click Send test to verify closed-tab delivery."
+          : "Push disabled for this browser.",
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not update browser push."
+      setTestPushResult(message)
+      setBrowserState(await getBrowserNotificationState().catch(() => browserState))
+    } finally {
+      setBrowserBusy(false)
+    }
+  }
+
+  async function sendTestPush() {
+    setTestPushBusy(true)
+    setTestPushResult(null)
+    try {
+      const result = await apiRequest<{
+        push_result?: {
+          status?: string
+          failure_count?: number
+          failure_details?: Array<{ status_code?: number | null; reason?: string; message?: string; type?: string; push_service?: string }>
+          push_services?: string[]
+          config?: {
+            key_pair_valid?: boolean | null
+            subject_valid?: boolean
+          }
+        }
+        active_subscriptions?: number
+      }>("/notifications/browser-push/test/", { method: "POST" })
+      const status = result.push_result?.status || "unknown"
+      const subscriptions = result.active_subscriptions ?? 0
+      const failures = result.push_result?.failure_count ?? 0
+      const failure = result.push_result?.failure_details?.[0]
+      const pushService = failure?.push_service || result.push_result?.push_services?.[0] || ""
+      const failureText = failure
+        ? ` ${failure.status_code ? `${failure.status_code} ` : ""}${failure.reason || failure.type || ""}${pushService ? ` · ${pushService}` : ""}${failure.message ? ` — ${failure.message}` : ""}`.trim()
+        : ""
+      const configText =
+        result.push_result?.config?.key_pair_valid === false
+          ? " VAPID key pair is invalid/mismatched."
+          : result.push_result?.config?.subject_valid === false
+            ? " VAPID subject is invalid."
+            : ""
+      setTestPushResult(
+        status === "delivered" || status === "partial"
+          ? `Server sent push: ${status}${failures ? ` (${failures} failed)` : ""}. If no desktop popup appears, check Windows/browser notification settings.`
+          : `Push not shown because server returned: ${status}${failureText ? ` (${failureText})` : ""}. Active subscriptions: ${subscriptions}.${configText}`,
+      )
+      setBrowserState(await getBrowserNotificationState())
+      await refresh()
+    } catch (error) {
+      setTestPushResult(error instanceof Error ? error.message : "Could not send test notification.")
+    } finally {
+      setTestPushBusy(false)
+    }
+  }
+
+  async function installApp() {
+    const prompt = installPrompt as (Event & { prompt?: () => Promise<void>; userChoice?: Promise<{ outcome: string }> }) | null
+    if (!prompt?.prompt) return
+    await prompt.prompt()
+    await prompt.userChoice?.catch(() => null)
+    setInstalledStandalone(appInstalledStandalone())
+    setInstallPrompt(null)
   }
 
   function goBack() {
@@ -189,6 +326,60 @@ export default function NotificationsPage() {
           </header>
 
           <div className="w-full" aria-label="Notification filters">
+            <div className="mb-2 rounded-2xl border border-[#ffd8c2] bg-[#fff7f2] p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="text-[15px] font-bold text-neutral-900">Install E-Boses and enable background alerts</p>
+                  <p className="mt-1 text-[13px] leading-5 text-neutral-600">
+                    Push notifications work even when the browser tab is closed after this device is subscribed.
+                  </p>
+                  {!browserState.serverConfigured ? (
+                    <p className="mt-1 text-[12px] font-semibold text-amber-700">Server Web Push keys are not configured yet.</p>
+                  ) : null}
+                  {browserState.config?.public_key_format_valid === false ? (
+                    <p className="mt-1 text-[12px] font-semibold text-red-700">
+                      Web Push public key is invalid. Decoded length: {browserState.config.public_key_decoded_length ?? "unknown"} · first byte: {browserState.config.public_key_first_byte ?? "unknown"}.
+                    </p>
+                  ) : null}
+                  {browserState.config?.key_pair_valid === false ? (
+                    <p className="mt-1 text-[12px] font-semibold text-red-700">
+                      Web Push public/private keys do not match. Use the Public Key and Private Key from the same generated pair.
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={browserBusy || !browserState.supported || browserState.permission === "denied" || !browserState.serverConfigured}
+                    onClick={() => void toggleBrowserPush()}
+                    className="h-10 rounded-full bg-[#ff6a1a] px-4 text-[13px] font-bold text-white hover:bg-[#e85f17] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {browserBusy ? "Working" : browserState.subscribed ? "Disable push" : "Enable push"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={testPushBusy || !browserState.supported || browserState.permission !== "granted" || !browserState.serverConfigured || !browserState.subscribed}
+                    onClick={() => void sendTestPush()}
+                    className="h-10 rounded-full border border-[#ff6a1a] bg-white px-4 text-[13px] font-bold text-[#ff6a1a] hover:bg-[#fff0e8] disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400 disabled:opacity-60"
+                  >
+                    {testPushBusy ? "Sending" : "Send test"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={installedStandalone || !installPrompt}
+                    onClick={() => void installApp()}
+                    className="h-10 rounded-full border border-neutral-300 bg-white px-4 text-[13px] font-bold text-neutral-800 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {installedStandalone ? "Installed" : installPrompt ? "Install app" : "Add to home screen"}
+                  </button>
+                </div>
+              </div>
+              {testPushResult ? (
+                <p className="mt-3 rounded-xl border border-[#ffd8c2] bg-white px-3 py-2 text-[12px] font-semibold leading-5 text-neutral-700">
+                  {testPushResult}
+                </p>
+              ) : null}
+            </div>
             <div className="scrollbar-hide flex w-full gap-2 overflow-x-auto overscroll-x-contain py-3 [-webkit-overflow-scrolling:touch]">
               {filters.map((item) => (
                 <button
@@ -243,15 +434,41 @@ export default function NotificationsPage() {
                     <span className="min-w-0 flex-1">
                       <span className="flex items-start justify-between gap-3">
                         <span className="text-[15px] font-semibold text-neutral-900">
-                          {item.title}
+                          {item.display_title || item.title}
                         </span>
                         <span className="shrink-0 pt-0.5 text-[12px] text-neutral-500">
                           {relativeTime(item.created_at)}
                         </span>
                       </span>
                       <span className="mt-1 block line-clamp-2 text-[14px] leading-6 text-neutral-600">
-                        {notificationSnippet(item.body)}
+                        {notificationSnippet(item.display_body || item.body)}
                       </span>
+                      {item.image_url ? (
+                        <img
+                          src={item.image_url}
+                          alt=""
+                          loading="lazy"
+                          className="mt-3 h-24 w-full rounded-xl object-cover"
+                        />
+                      ) : null}
+                      {item.safety_limited ? (
+                        <span className="mt-3 block rounded-lg border border-red-100 bg-red-50 px-3 py-2.5">
+                          <span className="block text-[12px] font-bold tracking-wide text-red-800 uppercase">
+                            Nearby safety alert
+                          </span>
+                          <span className="mt-1 block text-[13px] leading-5 text-red-950">
+                            {item.safety_guidance || "Stay clear of the area and do not intervene."}
+                          </span>
+                          <span className="mt-1.5 block text-[11px] leading-4 text-red-800/70">
+                            For privacy, the reporter’s identity, exact location, and media are not shared.
+                          </span>
+                        </span>
+                      ) : null}
+                      {item.action_label && !item.safety_limited ? (
+                        <span className="mt-2 block text-[12px] font-bold text-[#ff6a1a]">
+                          {item.action_label}
+                        </span>
+                      ) : null}
                     </span>
                     {!item.is_read ? (
                       <span

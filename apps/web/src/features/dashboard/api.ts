@@ -37,6 +37,17 @@ export interface ConcernMedia {
   uploaded_at: string
 }
 
+export interface ConcernResolutionEvidence {
+  id: number
+  uploaded_by: PublicUser | null
+  original_filename: string
+  mime_type: string
+  file_size: number
+  note: string
+  raw_url: string
+  created_at: string
+}
+
 export interface ConcernStatusEvent {
   id: number
   status: ConcernStatus
@@ -56,6 +67,20 @@ export interface ConcernAiAssessment {
   recommendation: string
   explanation: string
   model_version: string
+  possible_duplicate: boolean
+  duplicate_similarity: number | null
+  duplicate_distance_meters: number | null
+  duplicate_match: {
+    id: number
+    public_id: string
+    tracking_id: string
+    title: string
+    status: ConcernStatus
+  } | null
+  official_decision: "related" | "irrelevant" | "suspicious" | "needs_review" | ""
+  official_reason: string
+  official_reviewer: PublicUser | null
+  official_reviewed_at: string | null
   updated_at: string
 }
 
@@ -64,9 +89,9 @@ export interface ContentFlag {
   concern: number
   comment: number | null
   reporter: PublicUser
-  reason: string
+  reason: "irrelevant" | "false_info" | "sensitive" | "abusive" | "other"
   note: string
-  status: string
+  status: "submitted" | "reviewed" | "dismissed" | "action_taken"
   staff_note: string
   created_at: string
   updated_at: string
@@ -130,6 +155,38 @@ export interface ConcernComment {
   replies: ConcernComment[]
 }
 
+export type ConcernConversationKind =
+  | "status"
+  | "assignment"
+  | "chat"
+  | "clarification"
+  | "official_remark"
+  | "appeal"
+
+export interface ConcernChatAttachment {
+  id: number
+  original_filename: string
+  mime_type: string
+  kind: "image" | "video"
+  file_size: number
+  authenticity_status: "clear" | "flagged" | "review_required"
+  authenticity_detail: string
+  raw_url: string
+  created_at: string
+}
+
+export interface ConcernConversationItem {
+  id: string
+  kind: ConcernConversationKind
+  body: string
+  created_at: string
+  actor: PublicUser | null
+  visibility: "participants" | "resident" | "official"
+  status: string
+  attachments: ConcernChatAttachment[]
+  metadata: Record<string, unknown>
+}
+
 export interface Concern {
   id: number
   public_id: string
@@ -159,6 +216,8 @@ export interface Concern {
   clarifications?: ConcernClarification[]
   appeals?: ConcernAppeal[]
   official_remarks?: ConcernOfficialRemark[]
+  resolution_evidence?: ConcernResolutionEvidence[]
+  conversation?: ConcernConversationItem[]
   vote_count: number
   comment_count: number
   priority_score: number
@@ -212,7 +271,8 @@ export interface ResponderRoleSummary extends CommonRoleSummary {
   responder_unit: PublicUser["responder_unit"]
   assigned_active_emergencies: number
   assigned_resolved_emergencies: number
-  awaiting_acknowledgement: number
+  newly_routed: number
+  awaiting_acknowledgement?: number
 }
 
 export interface Announcement {
@@ -220,11 +280,19 @@ export interface Announcement {
   title: string
   body: string
   tag: string
-  audience: "all" | "residents"
+  audience: "all" | "residents" | "responders" | "officials"
   barangay: string
+  urgency: "normal" | "important" | "urgent"
+  is_pinned: boolean
   is_published: boolean
   published_at: string | null
+  starts_at: string | null
+  expires_at: string | null
+  notification_sent_at: string | null
+  image_url: string | null
+  image_alt: string
   date_label: string
+  status_label: "draft" | "scheduled" | "published" | "expired"
 }
 
 export interface BarangayEvent {
@@ -261,6 +329,10 @@ export function listMyConcerns(status?: string, dateFrom?: string, dateTo?: stri
   return apiRequest<Concern[]>(`/concerns/mine/${query}`)
 }
 
+export function listAssignedConcerns() {
+  return apiRequest<Concern[]>("/concerns/assigned/")
+}
+
 export function listManagedConcerns(status?: string, category?: string, search?: string) {
   const params = new URLSearchParams()
   if (status && status !== "all") params.set("status", status)
@@ -292,10 +364,28 @@ export function getConcern(id: number | string) {
   return apiRequest<Concern>(path)
 }
 
-export function updateConcernStatus(id: number, payload: { status: ConcernStatus; note?: string; status_version?: number }) {
+export function updateConcernStatus(
+  id: number,
+  payload: { status: ConcernStatus; note?: string; status_version?: number; resolution_evidence?: File[] },
+) {
+  if (payload.resolution_evidence?.length) {
+    const body = new FormData()
+    body.append("status", payload.status)
+    if (payload.note != null) body.append("note", payload.note)
+    if (payload.status_version != null) body.append("status_version", String(payload.status_version))
+    for (const file of payload.resolution_evidence) body.append("resolution_evidence", file)
+    return apiRequest<Concern>(`/concerns/${id}/status/`, {
+      method: "POST",
+      body,
+    })
+  }
   return apiRequest<Concern>(`/concerns/${id}/status/`, {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      status: payload.status,
+      note: payload.note,
+      status_version: payload.status_version,
+    }),
   })
 }
 
@@ -348,11 +438,22 @@ export function createConcernRemark(id: number, payload: { body: string; visible
   })
 }
 
+export function reviewConcernAi(
+  id: number,
+  payload: { decision: "related" | "irrelevant" | "suspicious" | "needs_review"; reason: string },
+) {
+  return apiRequest<ConcernAiAssessment>(`/concerns/${id}/ai-review/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
 export interface ConcernChatMessage {
   id: number
   concern: number
   sender: PublicUser
   body: string
+  attachment: ConcernChatAttachment | null
   created_at: string
   is_mine: boolean
 }
@@ -364,7 +465,16 @@ export function listConcernChat(concernId: number, afterId?: number) {
   return apiRequest<ConcernChatMessage[]>(`/concerns/${concernId}/chat/${q}`)
 }
 
-export function sendConcernChat(concernId: number, body: string) {
+export function sendConcernChat(concernId: number, body: string, media?: File | null) {
+  if (media) {
+    const form = new FormData()
+    if (body.trim()) form.append("body", body)
+    form.append("media", media)
+    return apiRequest<ConcernChatMessage>(`/concerns/${concernId}/chat/`, {
+      method: "POST",
+      body: form,
+    })
+  }
   return apiRequest<ConcernChatMessage>(`/concerns/${concernId}/chat/`, {
     method: "POST",
     body: JSON.stringify({ body }),
@@ -440,22 +550,40 @@ export function listManagedAnnouncements() {
   return apiRequest<Announcement[]>("/announcements/manage/")
 }
 
-export function createManagedAnnouncement(payload: Partial<Announcement>) {
+export function createManagedAnnouncement(payload: Partial<Announcement> | FormData) {
   return apiRequest<Announcement>("/announcements/manage/", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: payload instanceof FormData ? payload : JSON.stringify(payload),
   })
 }
 
-export function updateManagedAnnouncement(id: number, payload: Partial<Announcement>) {
+export function updateManagedAnnouncement(id: number, payload: Partial<Announcement> | FormData) {
   return apiRequest<Announcement>(`/announcements/manage/${id}/`, {
     method: "PATCH",
-    body: JSON.stringify(payload),
+    body: payload instanceof FormData ? payload : JSON.stringify(payload),
   })
 }
 
 export function deleteManagedAnnouncement(id: number) {
   return apiRequest<void>(`/announcements/manage/${id}/`, { method: "DELETE" })
+}
+
+export function getMapDispatchPolicy() {
+  return apiRequest<MapDispatchPolicy>("/emergencies/map-dispatch-policy/")
+}
+
+export function updateMapDispatchPolicy(payload: Partial<MapDispatchPolicy>) {
+  return apiRequest<MapDispatchPolicy>("/emergencies/map-dispatch-policy/", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function reviewContentFlag(id: number, payload: { status: Exclude<ContentFlag["status"], "submitted">; staff_note: string }) {
+  return apiRequest<ContentFlag>(`/concerns/flags/${id}/review/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  })
 }
 
 export function listTodayBarangayEvents() {
@@ -562,12 +690,25 @@ export interface LiveMapRoute {
   geometry: { type: "LineString"; coordinates: [number, number][] } | null
 }
 
+export interface MapDispatchPolicy {
+  id: number | null
+  barangay: string
+  acceptance_center_latitude: number | string
+  acceptance_center_longitude: number | string
+  acceptance_radius_meters: number
+  out_of_zone_action: "block" | "warn" | "review"
+  witness_radius_meters: number
+  responder_nearby_radius_meters: number
+  updated_at: string | null
+}
+
 export interface LiveMapSnapshot {
   map: {
     provider: "OpenStreetMap"
     center: { latitude: number; longitude: number; zoom: number }
     boundary: { osm_relation_id: number; name: string; geometry?: LiveMapGeometry | null }
     streets: { streets: LiveMapStreet[]; groups: Record<string, LiveMapStreet[]> }
+    dispatch_policy: MapDispatchPolicy
   }
   people: LiveMapPerson[]
   concerns: LiveMapConcern[]
@@ -587,6 +728,20 @@ export interface LiveMapSnapshot {
 export type LiveMapUpdate =
   | { type: "location.updated"; payload: { person: LiveMapPerson } }
   | { type: "concern.created" | "concern.updated"; payload: { concern: LiveMapConcern } }
+  | {
+      type: "concern.ai_assessment.updated"
+      payload: {
+        concern_id: number
+        assessment: {
+          id: number
+          status: ConcernAiAssessment["status"]
+          category_match: boolean | null
+          recommendation: string
+          model_version: string
+          updated_at: string
+        }
+      }
+    }
   | { type: "emergency.created" | "emergency.updated"; payload: { emergency: LiveMapEmergency; route: LiveMapRoute | null } }
   | { type: "route.updated"; payload: { route: LiveMapRoute } }
 
