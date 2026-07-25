@@ -9,6 +9,8 @@ import {
   ClipboardListIcon,
   UserCircleIcon,
   FileLock2Icon,
+  HomeIcon,
+  BellIcon,
 } from "lucide-react"
 import { useState } from "react"
 import { cn } from "@workspace/ui/lib/utils"
@@ -24,31 +26,12 @@ interface NavItem {
   children?: NavItem[]
 }
 
-/** Same Flaticon glyphs as mobile bottom nav: home · alerts · reports */
-const residentNavItems: { label: string; path: string; iconSrc: string }[] = [
-  { label: "Home", path: "/dashboard/home", iconSrc: "/contents/nav-home.png" },
-  { label: "Alerts", path: "/dashboard/alerts-map", iconSrc: "/contents/nav-alert.png" },
-  { label: "My reports", path: "/dashboard/reports", iconSrc: "/contents/nav-clipboard.png" },
+/** Lucide-react icons for resident nav: home · alerts · reports */
+const residentNavItems: { label: string; path: string; icon: React.ElementType }[] = [
+  { label: "Home", path: "/dashboard/home", icon: HomeIcon },
+  { label: "Alerts", path: "/dashboard/alerts-map", icon: BellIcon },
+  { label: "My reports", path: "/dashboard/reports", icon: ClipboardListIcon },
 ]
-
-function NavMaskIcon({ src, className }: { src: string; className?: string }) {
-  return (
-    <span
-      className={cn("inline-block shrink-0 bg-current", className)}
-      style={{
-        WebkitMaskImage: `url(${src})`,
-        maskImage: `url(${src})`,
-        WebkitMaskSize: "contain",
-        maskSize: "contain",
-        WebkitMaskRepeat: "no-repeat",
-        maskRepeat: "no-repeat",
-        WebkitMaskPosition: "center",
-        maskPosition: "center",
-      }}
-      aria-hidden
-    />
-  )
-}
 
 const officialNavItems: NavItem[] = [
   { label: "Alert", path: "/dashboard/alerts-map", icon: MapPinnedIcon },
@@ -135,6 +118,7 @@ function ResidentSidebar() {
           <ul className="flex flex-col gap-0.5 px-3">
             {residentNavItems.map((item) => {
               const active = isActive(item.path)
+              const Icon = item.icon
               return (
                 <li key={item.path}>
                   <Link
@@ -142,7 +126,7 @@ function ResidentSidebar() {
                     aria-current={active ? "page" : undefined}
                     className={navLinkClass(active)}
                   >
-                    <NavMaskIcon src={item.iconSrc} className={navIconClass(active)} />
+                    <Icon className={navIconClass(active)} />
                     {item.label}
                   </Link>
                 </li>

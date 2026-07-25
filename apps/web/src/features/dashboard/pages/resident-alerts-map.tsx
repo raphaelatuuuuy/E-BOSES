@@ -1436,8 +1436,7 @@ export default function ResidentAlertsMapPage() {
 
   useEffect(() => {
     void load()
-    const id = window.setInterval(() => void load(true), 45000)
-    return () => window.clearInterval(id)
+    return () => {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

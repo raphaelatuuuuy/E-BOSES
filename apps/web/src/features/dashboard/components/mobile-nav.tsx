@@ -8,6 +8,8 @@ import {
   PhoneIcon,
   SearchIcon,
   Settings2Icon,
+  ClipboardListIcon,
+  BellIcon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -19,8 +21,6 @@ type NavItem = {
   label: string
   path: string | null
   icon?: typeof HomeIcon
-  /** Flaticon / public glyph used as CSS mask */
-  iconSrc?: string
 }
 
 const ACTIVE_EMERGENCY = new Set([
@@ -32,30 +32,7 @@ const ACTIVE_EMERGENCY = new Set([
   "arrived",
 ])
 
-function MaskIcon({
-  src,
-  className,
-}: {
-  src: string
-  className?: string
-}) {
-  return (
-    <span
-      className={cn("inline-block shrink-0 bg-current", className)}
-      style={{
-        WebkitMaskImage: `url(${src})`,
-        maskImage: `url(${src})`,
-        WebkitMaskSize: "contain",
-        maskSize: "contain",
-        WebkitMaskRepeat: "no-repeat",
-        maskRepeat: "no-repeat",
-        WebkitMaskPosition: "center",
-        maskPosition: "center",
-      }}
-      aria-hidden
-    />
-  )
-}
+
 
 function SosFab() {
   const [activeEmergency, setActiveEmergency] = useState(false)
@@ -126,11 +103,10 @@ export function MobileNav() {
     { label: "Shift", path: "/dashboard/responders/shift", icon: ClockIcon },
   ]
 
-  /** Latest Flaticon nav glyphs: home · reports · alerts */
   const residentItems: NavItem[] = [
-    { label: "Home", path: "/dashboard/home", iconSrc: "/contents/nav-home.png" },
-    { label: "Reports", path: "/dashboard/reports", iconSrc: "/contents/nav-clipboard.png" },
-    { label: "Alerts", path: "/dashboard/alerts-map", iconSrc: "/contents/nav-alert.png" },
+    { label: "Home", path: "/dashboard/home", icon: HomeIcon },
+    { label: "Reports", path: "/dashboard/reports", icon: ClipboardListIcon },
+    { label: "Alerts", path: "/dashboard/alerts-map", icon: BellIcon },
   ]
 
   const navItems = isResponderRole
@@ -180,41 +156,6 @@ export function MobileNav() {
                       location.pathname.startsWith("/dashboard/concern-classification") ||
                       location.pathname.startsWith("/dashboard/admin")))
                 : false
-
-              if (isResident && item.iconSrc) {
-                return (
-                  <Link
-                    key={item.path}
-                    to={item.path!}
-                    className={cn(
-                      "group flex h-12 w-auto shrink-0 flex-col items-center justify-center gap-0.5 rounded-full px-3.5 transition-colors",
-                      active
-                        ? "text-[#07145f]"
-                        : "text-neutral-500 hover:text-neutral-700",
-                    )}
-                  >
-                    <MaskIcon
-                      src={item.iconSrc}
-                      className={cn(
-                        "size-6 transition-colors",
-                        active
-                          ? "text-[#07145f]"
-                          : "text-neutral-500 group-hover:text-neutral-700",
-                      )}
-                    />
-                    <span
-                      className={cn(
-                        "text-[10px] font-semibold leading-none transition-colors",
-                        active
-                          ? "text-[#07145f]"
-                          : "text-neutral-500 group-hover:text-neutral-700",
-                      )}
-                    >
-                      {item.label}
-                    </span>
-                  </Link>
-                )
-              }
 
               const Icon = item.icon ?? SearchIcon
               return (

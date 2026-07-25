@@ -14,6 +14,9 @@ import {
   SearchIcon,
   SlidersHorizontalIcon,
   XIcon,
+  SendIcon,
+  MessageCircleIcon,
+  BellIcon,
 } from "lucide-react"
 
 import { Skeleton } from "@workspace/ui/components/skeleton"
@@ -467,20 +470,7 @@ function FeedCommentItem({
                   : "cursor-not-allowed text-neutral-300",
               )}
             >
-              <span
-                className="inline-block size-4 bg-current"
-                style={{
-                  WebkitMaskImage: "url(/contents/send-message.png)",
-                  maskImage: "url(/contents/send-message.png)",
-                  WebkitMaskSize: "contain",
-                  maskSize: "contain",
-                  WebkitMaskRepeat: "no-repeat",
-                  maskRepeat: "no-repeat",
-                  WebkitMaskPosition: "center",
-                  maskPosition: "center",
-                }}
-                aria-hidden
-              />
+              <SendIcon className="size-4" />
             </button>
           </div>
         </div>
@@ -700,20 +690,7 @@ function PostCommentsBlock({
                 : "cursor-not-allowed text-neutral-300",
             )}
           >
-            <span
-              className="inline-block size-7 bg-current"
-              style={{
-                WebkitMaskImage: "url(/contents/send-message.png)",
-                maskImage: "url(/contents/send-message.png)",
-                WebkitMaskSize: "contain",
-                maskSize: "contain",
-                WebkitMaskRepeat: "no-repeat",
-                maskRepeat: "no-repeat",
-                WebkitMaskPosition: "center",
-                maskPosition: "center",
-              }}
-              aria-hidden
-            />
+            <SendIcon className="size-7" />
           </button>
         </div>
       </div>
@@ -1477,21 +1454,7 @@ export default function HomePage() {
                           isExpanded ? "opacity-100" : "opacity-70 hover:opacity-100 active:opacity-100",
                         )}
                       >
-                        {/* Flaticon chat 3416046 — comment beside upvote */}
-                        <span
-                          className="inline-block size-6 shrink-0 bg-current"
-                          style={{
-                            WebkitMaskImage: "url(/contents/chat-comment.png)",
-                            maskImage: "url(/contents/chat-comment.png)",
-                            WebkitMaskSize: "contain",
-                            maskSize: "contain",
-                            WebkitMaskRepeat: "no-repeat",
-                            maskRepeat: "no-repeat",
-                            WebkitMaskPosition: "center",
-                            maskPosition: "center",
-                          }}
-                          aria-hidden
-                        />
+                        <MessageCircleIcon className="size-6 shrink-0" />
                         {post.comment_count > 0 ? (
                           <span className="pr-0.5 text-[13px] font-semibold tabular-nums">
                             {post.comment_count}
@@ -1699,21 +1662,7 @@ export default function HomePage() {
             className="flex w-full items-center justify-between rounded-lg border border-red-200 bg-white px-3.5 py-3 text-left transition-colors hover:border-red-300 hover:bg-red-50/40"
           >
             <div className="flex min-w-0 items-center gap-2.5">
-              {/* Same Flaticon alert glyph as sidebar Alerts — red, no circle fill */}
-              <span
-                className="inline-block size-7 shrink-0 bg-red-600"
-                style={{
-                  WebkitMaskImage: "url(/contents/nav-alert.png)",
-                  maskImage: "url(/contents/nav-alert.png)",
-                  WebkitMaskSize: "contain",
-                  maskSize: "contain",
-                  WebkitMaskRepeat: "no-repeat",
-                  maskRepeat: "no-repeat",
-                  WebkitMaskPosition: "center",
-                  maskPosition: "center",
-                }}
-                aria-hidden
-              />
+              <BellIcon className="size-7 shrink-0 text-red-600" />
               <div className="min-w-0">
                 <p className={cn("font-bold text-red-700", FS.railTitle)}>Emergency SOS</p>
                 <p className={cn("text-red-600/75", FS.meta)}>Get help from responders</p>

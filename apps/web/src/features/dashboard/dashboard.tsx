@@ -162,10 +162,15 @@ function DashboardContent() {
               {!hideMobileNav && !isResident ? (
                 <header className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-neutral-100 bg-white px-3">
                   <Link to={shellHome} className="flex min-w-0 items-center gap-2 no-underline">
-                    <img src="/contents/logo.png" alt="" className="size-8 shrink-0 object-contain" />
-                    <span className="truncate text-[18px] font-bold leading-none tracking-tight text-[#ff6a1a]">
-                      E-Boses
-                    </span>
+                    <img src="/contents/logo.png" alt="Boses Marikina Heights" className="size-8 shrink-0 object-contain" />
+                    <div className="flex flex-col">
+                      <span className="truncate text-[18px] font-bold leading-none tracking-tight text-[#ff6a1a]">
+                        Boses
+                      </span>
+                      <span className="text-[9px] font-bold leading-tight tracking-wide text-[#07145f]">
+                        Marikina Heights
+                      </span>
+                    </div>
                   </Link>
                   <div className="flex items-center gap-0.5">
                     <NotificationPopover />

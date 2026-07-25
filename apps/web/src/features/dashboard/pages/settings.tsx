@@ -44,7 +44,7 @@ import { cn } from "@workspace/ui/lib/utils"
 const outlineBtn =
   "inline-flex h-10 items-center rounded-full border border-neutral-300 bg-white px-4 text-[14px] font-semibold text-neutral-700 transition-colors hover:border-[#ff8133] hover:bg-[#ff8133] hover:text-white"
 
-type SettingKey = "push_alerts" | "report_updates" | "community_sharing" | "location_confirmation"
+export type SettingKey = "push_alerts" | "report_updates" | "community_sharing" | "location_confirmation"
 type SettingsPanel = "hub" | "account" | "privacy" | "notifications"
 
 function parsePanel(value: string | null): SettingsPanel {

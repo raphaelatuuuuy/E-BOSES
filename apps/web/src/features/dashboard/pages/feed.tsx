@@ -586,7 +586,9 @@ export default function FeedPage() {
           <aside className="flex flex-col gap-5 xl:sticky xl:top-6 xl:self-start">
             <div className="rounded-2xl border border-[#dfe7f5] bg-white p-5 shadow-sm">
               <div className="flex items-center gap-3">
-                <img src="/contents/trending.png" alt="" className="size-10" />
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#fff1ea] text-[#ff6a1a]">
+                  <TrendingUpIcon className="size-5" />
+                </span>
                 <h3 className="text-lg font-extrabold text-[#07145f]">Trending in<br/>Marikina Heights</h3>
               </div>
               <div className="mt-4 divide-y divide-[#eef3ff]">
@@ -599,7 +601,7 @@ export default function FeedPage() {
                 ))}
                 {concerns.length === 0 ? (
                   <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-[#cbd8ee] bg-white p-4 text-center">
-                    <img src="/contents/share.png" alt="" className="mb-2 h-12 w-auto" aria-hidden="true" />
+                    <ShareIcon className="mb-2 size-10 text-[#2447b3]" />
                     <p className="text-sm font-semibold text-[#68739c]">No trending concerns yet.</p>
                     <p className="mt-1 text-xs text-[#68739c]">Share your concern to start a discussion.</p>
                     <Link
@@ -629,7 +631,9 @@ export default function FeedPage() {
             <div className="rounded-2xl border border-[#dfe7f5] bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <img src="/contents/responders.png" alt="" className="size-10" />
+                  <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#eef3ff] text-[#2447b3]">
+                    <UsersIcon className="size-5" />
+                  </span>
                   <h3 className="text-lg font-extrabold text-[#07145f]">Active Responders</h3>
                 </div>
                 <button type="button" onClick={() => toast.info(`${activeResponders.length} responders are currently on duty.`)} className="text-sm font-extrabold text-[#2447b3] hover:text-[#ff6a1a]">View all</button>

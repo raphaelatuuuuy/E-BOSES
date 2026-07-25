@@ -1178,10 +1178,8 @@ export default function AlertsMapPage() {
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void load(), 0)
-    const interval = window.setInterval(() => void load(), 30000)
     return () => {
       window.clearTimeout(initialLoad)
-      window.clearInterval(interval)
     }
   }, [])
 

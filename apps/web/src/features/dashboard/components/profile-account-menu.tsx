@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { createPortal } from "react-dom"
 import { Link, useNavigate } from "react-router-dom"
-import { ChevronDownIcon, LogOutIcon, PlusCircleIcon } from "lucide-react"
+import { ChevronDownIcon, LogOutIcon, PlusCircleIcon, UserIcon, ClipboardListIcon } from "lucide-react"
 
 import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/components/popover"
 import { cn } from "@workspace/ui/lib/utils"
@@ -28,24 +28,7 @@ function LetterAvatar({
   )
 }
 
-function GlyphIcon({ src, className }: { src: string; className?: string }) {
-  return (
-    <span
-      className={cn("inline-block shrink-0 bg-current", className)}
-      style={{
-        WebkitMaskImage: `url(${src})`,
-        maskImage: `url(${src})`,
-        WebkitMaskSize: "contain",
-        maskSize: "contain",
-        WebkitMaskRepeat: "no-repeat",
-        maskRepeat: "no-repeat",
-        WebkitMaskPosition: "center",
-        maskPosition: "center",
-      }}
-      aria-hidden
-    />
-  )
-}
+
 
 function useIsDesktop() {
   const [isDesktop, setIsDesktop] = useState(() =>
@@ -213,10 +196,7 @@ export function ProfileAccountMenu({
                   onClick={() => closeAndGo("/dashboard/profile")}
                   className="flex min-h-[48px] w-full items-center gap-3.5 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-neutral-50"
                 >
-                  <GlyphIcon
-                    src="/contents/profile.png"
-                    className="size-[22px] text-neutral-700"
-                  />
+                  <UserIcon className="size-[22px] shrink-0 text-neutral-700" />
                   <span className="text-[16px] font-normal text-neutral-900">My profile</span>
                 </button>
 
@@ -225,10 +205,7 @@ export function ProfileAccountMenu({
                   onClick={() => closeAndGo("/dashboard/reports")}
                   className="flex min-h-[48px] w-full items-center gap-3.5 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-neutral-50"
                 >
-                  <GlyphIcon
-                    src="/contents/nav-clipboard.png"
-                    className="size-[22px] text-neutral-700"
-                  />
+                  <ClipboardListIcon className="size-[22px] shrink-0 text-neutral-700" />
                   <span className="text-[16px] font-normal text-neutral-900">Reports</span>
                 </button>
               </nav>

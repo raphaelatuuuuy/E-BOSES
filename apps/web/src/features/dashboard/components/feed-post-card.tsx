@@ -3,7 +3,7 @@
  * Used by Home and Resident Alerts Map expanded panel.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { ArrowBigUpIcon, GlobeIcon } from "lucide-react"
+import { ArrowBigUpIcon, GlobeIcon, SendIcon, MessageCircleIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import type { Concern, ConcernComment, PublicUser } from "@/features/dashboard/api"
@@ -363,20 +363,7 @@ function FeedCommentItem({
                   : "cursor-not-allowed text-neutral-300",
               )}
             >
-              <span
-                className="inline-block size-4 bg-current"
-                style={{
-                  WebkitMaskImage: "url(/contents/send-message.png)",
-                  maskImage: "url(/contents/send-message.png)",
-                  WebkitMaskSize: "contain",
-                  maskSize: "contain",
-                  WebkitMaskRepeat: "no-repeat",
-                  maskRepeat: "no-repeat",
-                  WebkitMaskPosition: "center",
-                  maskPosition: "center",
-                }}
-                aria-hidden
-              />
+              <SendIcon className="size-4" />
             </button>
           </div>
         </div>
@@ -582,20 +569,7 @@ function PostCommentsBlock({
                 : "cursor-not-allowed text-neutral-300",
             )}
           >
-            <span
-              className="inline-block size-7 bg-current"
-              style={{
-                WebkitMaskImage: "url(/contents/send-message.png)",
-                maskImage: "url(/contents/send-message.png)",
-                WebkitMaskSize: "contain",
-                maskSize: "contain",
-                WebkitMaskRepeat: "no-repeat",
-                maskRepeat: "no-repeat",
-                WebkitMaskPosition: "center",
-                maskPosition: "center",
-              }}
-              aria-hidden
-            />
+            <SendIcon className="size-7" />
           </button>
         </div>
       </div>
@@ -784,21 +758,7 @@ export function FeedPostCard({
                 isExpanded ? "opacity-100" : "opacity-70 hover:opacity-100 active:opacity-100",
               )}
             >
-              {/* Flaticon chat 3416046 — comment beside upvote */}
-              <span
-                className="inline-block size-6 shrink-0 bg-current"
-                style={{
-                  WebkitMaskImage: "url(/contents/chat-comment.png)",
-                  maskImage: "url(/contents/chat-comment.png)",
-                  WebkitMaskSize: "contain",
-                  maskSize: "contain",
-                  WebkitMaskRepeat: "no-repeat",
-                  maskRepeat: "no-repeat",
-                  WebkitMaskPosition: "center",
-                  maskPosition: "center",
-                }}
-                aria-hidden
-              />
+              <MessageCircleIcon className="size-6 shrink-0" />
               {post.comment_count > 0 ? (
                 <span className="pr-0.5 text-[13px] font-semibold tabular-nums">
                   {post.comment_count}

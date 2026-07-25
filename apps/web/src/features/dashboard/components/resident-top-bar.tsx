@@ -90,10 +90,15 @@ export function ResidentLogoBar({ homeTo = "/dashboard/home" }: { homeTo?: strin
         to={homeTo}
         className="flex min-w-0 items-center gap-2 rounded-lg px-2.5 no-underline"
       >
-        <img src="/contents/logo.png" alt="" className="size-9 shrink-0 object-contain" />
-        <span className="truncate text-[26px] font-bold leading-none tracking-tight text-[#ff6a1a]">
-          E-Boses
-        </span>
+        <img src="/contents/logo.png" alt="Boses Marikina Heights" className="size-9 shrink-0 object-contain" />
+        <div className="flex flex-col">
+          <span className="truncate text-[26px] font-bold leading-none tracking-tight text-[#ff6a1a]">
+            Boses
+          </span>
+          <span className="text-[11px] font-bold leading-tight tracking-wide text-[#07145f]">
+            Marikina Heights
+          </span>
+        </div>
       </Link>
     </div>
   )

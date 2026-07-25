@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import { ArrowLeftIcon, ChevronRightIcon, XIcon } from "lucide-react"
+import { ArrowLeftIcon, ChevronRightIcon, XIcon, MoreHorizontal, Flag } from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -477,14 +477,7 @@ export function ReportMenuItem({ onReport }: { onReport: () => void }) {
       }}
       className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-neutral-100"
     >
-      <img
-        src="/contents/flag-report.png"
-        alt=""
-        width={22}
-        height={22}
-        className="size-[22px] shrink-0 object-contain"
-        draggable={false}
-      />
+      <Flag className="size-[22px] shrink-0 text-neutral-700" />
       <span className="min-w-0 flex flex-col">
         <span className="text-[14px] font-semibold leading-tight text-neutral-900">
           Report
@@ -615,20 +608,7 @@ export function CommentMoreMenu({
         aria-label="Comment options"
         aria-expanded={open}
       >
-        <span
-          className="inline-block size-3.5 bg-current opacity-70"
-          style={{
-            WebkitMaskImage: "url(/contents/three-dots.png)",
-            maskImage: "url(/contents/three-dots.png)",
-            WebkitMaskSize: "contain",
-            maskSize: "contain",
-            WebkitMaskRepeat: "no-repeat",
-            maskRepeat: "no-repeat",
-            WebkitMaskPosition: "center",
-            maskPosition: "center",
-          }}
-          aria-hidden
-        />
+        <MoreHorizontal className="size-3.5 opacity-70" />
       </button>
       {menu}
     </div>
@@ -738,20 +718,7 @@ export function PostMoreMenu({
         aria-label="More"
         aria-expanded={open}
       >
-        <span
-          className="inline-block size-7 bg-current opacity-55 transition-opacity group-hover:opacity-100"
-          style={{
-            WebkitMaskImage: "url(/contents/three-dots.png)",
-            maskImage: "url(/contents/three-dots.png)",
-            WebkitMaskSize: "contain",
-            maskSize: "contain",
-            WebkitMaskRepeat: "no-repeat",
-            maskRepeat: "no-repeat",
-            WebkitMaskPosition: "center",
-            maskPosition: "center",
-          }}
-          aria-hidden
-        />
+        <MoreHorizontal className="size-7 opacity-55 transition-opacity group-hover:opacity-100" />
       </button>
       {menu}
     </div>

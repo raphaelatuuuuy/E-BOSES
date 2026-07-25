@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom"
-import { ChevronRightIcon } from "lucide-react"
+import { ChevronRightIcon, BellIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { RESIDENT_DESKTOP_MIN_PX } from "@/features/dashboard/components/resident-top-bar"
@@ -101,20 +101,7 @@ export function ResidentSideRail({
           className="flex w-full items-center justify-between rounded-lg border border-red-200 bg-white px-3.5 py-3 text-left transition-colors hover:border-red-300 hover:bg-red-50/40"
         >
           <div className="flex min-w-0 items-center gap-2.5">
-            <span
-              className="inline-block size-7 shrink-0 bg-red-600"
-              style={{
-                WebkitMaskImage: "url(/contents/nav-alert.png)",
-                maskImage: "url(/contents/nav-alert.png)",
-                WebkitMaskSize: "contain",
-                maskSize: "contain",
-                WebkitMaskRepeat: "no-repeat",
-                maskRepeat: "no-repeat",
-                WebkitMaskPosition: "center",
-                maskPosition: "center",
-              }}
-              aria-hidden
-            />
+            <BellIcon className="size-7 shrink-0 text-red-600" />
             <div className="min-w-0">
               <p className="text-[14px] font-bold text-red-700">Emergency SOS</p>
               <p className="text-[12px] text-red-600/75">Get help from responders</p>

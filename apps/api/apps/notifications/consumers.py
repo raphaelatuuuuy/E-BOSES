@@ -130,3 +130,33 @@ class ResidentLiveMapConsumer(AuthenticatedJsonConsumer):
 
     async def resident_live_map_update(self, event):
         await self.send_json(event["payload"])
+
+
+@database_sync_to_async
+def user_is_verified_official(user) -> bool:
+    from apps.accounts.models import AccountRole
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+
+    return user.is_authenticated and user.status == User.Status.VERIFIED and (
+        user.is_staff or user.is_superuser or AccountRole.objects.filter(user=user, name__in=["official", "barangay_official"]).exists()
+    )
+
+
+class VerificationQueueConsumer(AuthenticatedJsonConsumer):
+    async def connect(self):
+        if not await self.authenticate():
+            return
+        if not await user_is_verified_official(self.user):
+            await self.close(code=4403)
+            return
+        self.group_name = "verification_queue"
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, code):
+        if getattr(self, "group_name", None):
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def verification_case_updated(self, event):
+        await self.send_json({"type": "verification.case_updated", "payload": event["payload"]})

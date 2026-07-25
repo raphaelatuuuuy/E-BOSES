@@ -8,7 +8,13 @@ Planned channels:
 
 from django.urls import path
 
-from .consumers import EmergencyTrackingConsumer, NotificationConsumer, OfficialLiveMapConsumer, ResidentLiveMapConsumer
+from .consumers import (
+    EmergencyTrackingConsumer,
+    NotificationConsumer,
+    OfficialLiveMapConsumer,
+    ResidentLiveMapConsumer,
+    VerificationQueueConsumer,
+)
 
 
 websocket_urlpatterns = [
@@ -16,4 +22,5 @@ websocket_urlpatterns = [
     path("ws/emergencies/<int:alert_id>/tracking/", EmergencyTrackingConsumer.as_asgi()),
     path("ws/dashboard/live-map/", OfficialLiveMapConsumer.as_asgi()),
     path("ws/dashboard/resident-live-map/", ResidentLiveMapConsumer.as_asgi()),
+    path("ws/ocr/verification-queue/", VerificationQueueConsumer.as_asgi()),
 ]
