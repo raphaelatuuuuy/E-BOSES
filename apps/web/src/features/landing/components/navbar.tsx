@@ -80,7 +80,11 @@ export function Navbar() {
 
   return (
     <>
-      <header className={`sticky top-0 z-40 w-full border-b transition-[transform,background-color,border-color] duration-200 ${scrolled ? "border-white/10 bg-[#07070b]/70 backdrop-blur-md" : "border-transparent bg-transparent"} ${hidden && !mobileOpen ? "-translate-y-full" : "translate-y-0"}`}>
+      <header className={`sticky top-0 z-40 w-full bg-transparent transition-transform duration-200 ${hidden && !mobileOpen ? "-translate-y-full" : "translate-y-0"}`}>
+        <div
+          aria-hidden
+          className={`pointer-events-none absolute inset-0 -z-10 border-b border-white/10 bg-[#07070b]/70 backdrop-blur-md transition-opacity duration-200 ${scrolled ? "opacity-100" : "opacity-0"}`}
+        />
         <div className="px-5 md:px-10 lg:px-16">
           <div className="mx-auto flex h-20 max-w-7xl items-center justify-between">
             <Link to="/" className="flex shrink-0 items-center rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#020c4e]">
