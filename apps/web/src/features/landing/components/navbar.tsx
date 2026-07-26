@@ -80,7 +80,7 @@ export function Navbar() {
 
   return (
     <>
-      <header className={`sticky top-0 z-40 w-full border-b bg-white transition-[transform,border-color] duration-200 ${scrolled ? "border-gray-200" : "border-transparent"} ${hidden && !mobileOpen ? "-translate-y-full" : "translate-y-0"}`}>
+      <header className={`sticky top-0 z-40 w-full border-b transition-[transform,background-color,border-color] duration-200 ${scrolled ? "border-white/10 bg-[#07070b]/70 backdrop-blur-md" : "border-transparent bg-transparent"} ${hidden && !mobileOpen ? "-translate-y-full" : "translate-y-0"}`}>
         <div className="px-5 md:px-10 lg:px-16">
           <div className="mx-auto flex h-20 max-w-7xl items-center justify-between">
             <Link to="/" className="flex shrink-0 items-center rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#020c4e]">
@@ -89,24 +89,24 @@ export function Navbar() {
 
             <nav aria-label="Primary navigation" className="hidden items-center gap-7 lg:flex">
               {NAV_LINKS.map((link) => (
-                <a key={link.label} href={link.href} className="min-h-11 py-3 text-sm font-medium text-gray-700 transition-colors hover:text-[#c93f00] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#020c4e]">
+                <a key={link.label} href={link.href} className="min-h-11 py-3 text-sm font-medium text-white/70 transition-colors hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#020c4e]">
                   {link.label}
                 </a>
               ))}
             </nav>
 
-            <Link to="/sign-in" className="hidden min-h-11 items-center px-4 text-sm font-semibold text-[#020c4e] underline decoration-[#ff8133] decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#020c4e] lg:inline-flex">
+            <Link to="/sign-in" className="hidden min-h-11 items-center px-4 text-sm font-semibold text-white underline decoration-[#ff8133] decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#020c4e] lg:inline-flex">
               Sign in
             </Link>
 
-            <button ref={menuButtonRef} type="button" onClick={() => setMobileOpen(true)} className="inline-flex size-11 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#020c4e] lg:hidden" aria-label="Open menu" aria-expanded={mobileOpen} aria-controls="mobile-navigation">
+            <button ref={menuButtonRef} type="button" onClick={() => setMobileOpen(true)} className="inline-flex size-11 items-center justify-center rounded-full border border-white/25 text-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#020c4e] lg:hidden" aria-label="Open menu" aria-expanded={mobileOpen} aria-controls="mobile-navigation">
               <List className="size-5" aria-hidden="true" />
             </button>
           </div>
         </div>
       </header>
 
-      <div ref={menuRef} id="mobile-navigation" role="dialog" aria-modal="true" aria-label="Navigation menu" aria-hidden={!mobileOpen} className={`fixed inset-0 z-50 flex flex-col overflow-hidden bg-white transition-opacity duration-200 lg:hidden ${mobileOpen ? "opacity-100" : "pointer-events-none invisible opacity-0"}`}>
+      <div ref={menuRef} id="mobile-navigation" role="dialog" aria-modal="true" aria-label="Navigation menu" aria-hidden={!mobileOpen} className={`fixed inset-0 z-50 flex flex-col overflow-hidden bg-[#07070b] text-white transition-opacity duration-200 lg:hidden ${mobileOpen ? "opacity-100" : "pointer-events-none invisible opacity-0"}`}>
         <img
           src="/contents/marikina-heights.svg"
           alt=""
@@ -117,24 +117,24 @@ export function Navbar() {
           <Link to="/" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#020c4e]">
             <img src="/contents/logo.png" alt="E-Boses" className="h-10 w-auto object-contain" />
           </Link>
-          <button ref={closeButtonRef} type="button" onClick={closeMenu} className="flex size-11 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#020c4e]" aria-label="Close menu" tabIndex={mobileOpen ? 0 : -1}>
+          <button ref={closeButtonRef} type="button" onClick={closeMenu} className="flex size-11 items-center justify-center rounded-full border border-white/25 text-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#020c4e]" aria-label="Close menu" tabIndex={mobileOpen ? 0 : -1}>
             <X className="size-5" aria-hidden="true" />
           </button>
         </div>
 
         <nav aria-label="Mobile navigation" className="relative z-10 flex flex-col px-5 pt-6">
           {NAV_LINKS.map((link) => (
-            <a key={link.label} href={link.href} onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="flex min-h-14 items-center justify-between border-b border-gray-200 py-4 text-xl font-semibold text-[#020c4e] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#020c4e]">
-              {link.label}<ArrowRight className="size-5 text-[#c93f00]" aria-hidden="true" />
+            <a key={link.label} href={link.href} onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="flex min-h-14 items-center justify-between border-b border-white/10 py-4 text-xl font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#020c4e]">
+              {link.label}<ArrowRight className="size-5 text-[#ff5003]" aria-hidden="true" />
             </a>
           ))}
-          <Link to="/sign-in" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="flex min-h-14 items-center justify-between border-b border-gray-200 py-4 text-xl font-semibold text-[#020c4e] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#020c4e]">
-            Sign in<ArrowRight className="size-5 text-[#c93f00]" aria-hidden="true" />
+          <Link to="/sign-in" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="flex min-h-14 items-center justify-between border-b border-white/10 py-4 text-xl font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#020c4e]">
+            Sign in<ArrowRight className="size-5 text-[#ff5003]" aria-hidden="true" />
           </Link>
         </nav>
 
         <div className="relative z-10 mt-auto p-5 pb-8">
-          <Link to="/sign-up" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="flex min-h-12 w-full items-center justify-center bg-[#ff5003] px-6 font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#020c4e]">
+          <Link to="/sign-up" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="flex min-h-12 w-full items-center justify-center bg-[#ff5003] px-6 font-semibold text-white transition-colors hover:bg-[#d94300] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#020c4e]">
             Create an account to report
           </Link>
         </div>
