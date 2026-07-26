@@ -4,14 +4,10 @@ import { toast } from "sonner"
 import {
   BellIcon,
   ChevronLeftIcon,
-  ChevronRightIcon,
-  GlobeIcon,
   Loader2Icon,
   LockIcon,
   LogOutIcon,
   MapPinIcon,
-  MessageCircleIcon,
-  MoreHorizontalIcon,
   SaveIcon,
   SettingsIcon,
   UserIcon,
@@ -28,7 +24,6 @@ import {
   type DashboardSummary,
 } from "@/features/dashboard/api"
 import { updateMe } from "@/features/auth/api"
-import { concernBodyText } from "@/features/dashboard/components/feed-post-card"
 import { ApiError } from "@/lib/api"
 
 type ProfileFormState = {
@@ -68,18 +63,6 @@ function collectApiFieldErrors(error: unknown): Partial<Record<ProfileField, str
 
 function FieldError({ message }: { message?: string }) {
   return message ? <p className="mt-1 text-xs font-semibold text-red-600">{message}</p> : null
-}
-
-function timeAgo(value?: string | null) {
-  if (!value) return ""
-  const diffMs = Date.now() - new Date(value).getTime()
-  const minutes = Math.max(1, Math.floor(diffMs / 60000))
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h`
-  const days = Math.floor(hours / 24)
-  if (days < 7) return `${days}d`
-  return `${Math.floor(days / 7)}w`
 }
 
 function ProfileSkeleton() {
@@ -165,8 +148,6 @@ export default function ProfilePage() {
     fullName[0] ||
     "?"
   ).toUpperCase()
-
-  const joinedLine = `${fullName} joined ${barangay}.`
 
   function handleProfileChange(field: ProfileField, value: string) {
     setProfileForm((current) => ({ ...current, [field]: value }))
@@ -408,110 +389,6 @@ export default function ProfilePage() {
               View reports →
             </button>
           </div>
-        </section>
-
-        {/* Posts */}
-        <section className="mt-7 px-4 pb-6 sm:px-6">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <h2 className="text-[17px] font-bold text-neutral-900">Posts</h2>
-            <button
-              type="button"
-              onClick={() => navigate("/dashboard/reports")}
-              className="rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-[13px] font-semibold text-neutral-800 hover:bg-neutral-50"
-            >
-              See activity
-            </button>
-          </div>
-
-          {/* Joined card — Nextdoor-style intro post */}
-          <article className="mb-3 rounded-2xl border border-neutral-200 bg-white p-4">
-            <div className="flex items-start gap-2.5">
-              <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#c5d0e6] text-[15px] font-bold text-[#2c3a5a]">
-                {letter}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-[15px] font-bold text-neutral-900">{fullName}</p>
-                    <p className="mt-0.5 flex flex-wrap items-center gap-1 text-[13px] text-neutral-500">
-                      <span>{barangay}</span>
-                      <span aria-hidden>·</span>
-                      <span>{memberSince}</span>
-                      <GlobeIcon className="size-3.5" strokeWidth={1.75} />
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-500 hover:bg-neutral-100"
-                    aria-label="More"
-                  >
-                    <MoreHorizontalIcon className="size-5" />
-                  </button>
-                </div>
-                <p className="mt-2 text-[15px] leading-snug text-neutral-800">{joinedLine}</p>
-
-                <button
-                  type="button"
-                  onClick={() => setEditing(true)}
-                  className="mt-3 flex w-full items-center gap-3 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-3 text-left transition-colors hover:bg-neutral-100"
-                >
-                  <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white text-neutral-600 ring-1 ring-neutral-200">
-                    <MessageCircleIcon className="size-5" strokeWidth={1.75} />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[14px] font-semibold text-neutral-900">
-                      Add an intro
-                    </span>
-                    <span className="mt-0.5 block text-[12px] text-neutral-500">
-                      Say hello and introduce yourself
-                    </span>
-                  </span>
-                  <ChevronRightIcon className="size-5 shrink-0 text-neutral-400" />
-                </button>
-              </div>
-            </div>
-          </article>
-
-          {posts.map((post) => (
-            <article
-              key={post.id}
-              className="mb-3 rounded-2xl border border-neutral-200 bg-white p-4"
-            >
-              <div className="flex items-start gap-2.5">
-                <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#c5d0e6] text-[15px] font-bold text-[#2c3a5a]">
-                  {letter}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-[15px] font-bold text-neutral-900">{fullName}</p>
-                      <p className="mt-0.5 flex flex-wrap items-center gap-1 text-[13px] text-neutral-500">
-                        <span>{barangay}</span>
-                        <span aria-hidden>·</span>
-                        <span>{timeAgo(post.created_at)}</span>
-                        <GlobeIcon className="size-3.5" strokeWidth={1.75} />
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => navigate(`/dashboard/reports/${post.public_id || post.id}`)}
-                    className="mt-2 w-full text-left"
-                  >
-                    <p className="line-clamp-4 text-[15px] font-medium leading-relaxed text-neutral-900">
-                      {concernBodyText(post)}
-                    </p>
-                  </button>
-                </div>
-              </div>
-            </article>
-          ))}
-
-          {posts.length === 0 ? (
-            <p className="py-6 text-center text-[14px] text-neutral-500">
-              No community posts yet. Reports you share to the feed will show here.
-            </p>
-          ) : null}
         </section>
       </div>
     </div>

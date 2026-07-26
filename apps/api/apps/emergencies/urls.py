@@ -18,6 +18,7 @@ from .views import (
     EmergencyEscalateOverdueView,
     EmergencyQueueView,
     EmergencyReassignView,
+    EmergencyRouteView,
     ClaimableEmergencyView,
     EmergencyLocationPingView,
     MapDispatchPolicyView,
@@ -54,6 +55,7 @@ urlpatterns = [
     path("chat-attachments/<int:pk>/raw/", EmergencyChatAttachmentView.as_view(), name="emergency-chat-attachment-raw"),
     path("chat-attachments/<int:pk>/preview/", EmergencyChatAttachmentView.as_view(), {"preview": True}, name="emergency-chat-attachment-preview"),
     path("<int:pk>/", EmergencyDetailView.as_view(), name="emergency-detail"),
+    path("<int:pk>/route/", EmergencyRouteView.as_view(), name="emergency-route"),
     path("<int:pk>/chat/", EmergencyChatView.as_view(), name="emergency-chat"),
     path("<int:pk>/assign/", EmergencyAssignView.as_view(), name="emergency-assign"),
     path(

@@ -6,7 +6,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 
 from apps.accounts.services import validate_emergency_media_file, validate_location_pair
 from apps.concerns.serializers import PublicUserSerializer
-from apps.concerns.services import validate_barangay_location
+from apps.geo_services import validate_barangay_location
 
 from .models import (
     EmergencyAlert,

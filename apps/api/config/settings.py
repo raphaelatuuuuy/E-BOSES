@@ -23,7 +23,7 @@ ENVIRONMENT = env("DJANGO_ENV", default="local")
 IS_LOCAL_DEVELOPMENT = ENVIRONMENT == "local"
 
 SECRET_KEY = env("DJANGO_SECRET_KEY", default="local-development-only-secret-key")
-DEBUG = env.bool("DEBUG", default=False)
+DEBUG = env.bool("DEBUG", default=True)
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["*"])
 
 # Application definition

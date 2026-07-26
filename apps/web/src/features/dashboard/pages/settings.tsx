@@ -3,11 +3,8 @@ import {
   BellIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  DownloadIcon,
-  Loader2Icon,
   LockIcon,
   LogOutIcon,
-  PencilIcon,
   UserIcon,
 } from "lucide-react"
 import { useNavigate, useSearchParams } from "react-router-dom"
@@ -19,8 +16,6 @@ import { Skeleton } from "@workspace/ui/components/skeleton"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { useAuthSession } from "@/features/auth/auth-session"
 import {
-  createAccountRequest,
-  getAccountDataExport,
   getResidentSettings,
   listAccountRequests,
   updateResidentSettings,
@@ -42,7 +37,7 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 
 const outlineBtn =
-  "inline-flex h-10 items-center rounded-full border border-neutral-300 bg-white px-4 text-[14px] font-semibold text-neutral-700 transition-colors hover:border-[#ff8133] hover:bg-[#ff8133] hover:text-white"
+  "flex w-full h-10 items-center justify-center rounded-full border border-neutral-300 bg-white px-4 text-[14px] font-semibold text-neutral-700 transition-colors hover:border-[#ff8133] hover:bg-[#ff8133] hover:text-white"
 
 export type SettingKey = "push_alerts" | "report_updates" | "community_sharing" | "location_confirmation"
 type SettingsPanel = "hub" | "account" | "privacy" | "notifications"
@@ -239,8 +234,6 @@ export default function SettingsPage() {
   })
   const [browserBusy, setBrowserBusy] = useState(false)
   const [accountRequests, setAccountRequests] = useState<AccountRequest[]>([])
-  const [savingRequest, setSavingRequest] = useState<AccountRequest["type"] | null>(null)
-  const [downloadingExport, setDownloadingExport] = useState(false)
   const [firstName, setFirstName] = useState("")
   const [lastName, setLastName] = useState("")
   const [middleName, setMiddleName] = useState("")
@@ -364,55 +357,6 @@ export default function SettingsPage() {
     }
   }
 
-  async function handleAccountRequest(type: AccountRequest["type"]) {
-    const existing = accountRequests.find(
-      (request) => request.type === type && ["submitted", "reviewed"].includes(request.status),
-    )
-    if (existing) {
-      toast.info("Request already submitted", {
-        description: `Status: ${existing.status.replace("_", " ")}`,
-      })
-      return
-    }
-    setSavingRequest(type)
-    try {
-      const created = await createAccountRequest({
-        type,
-        note:
-          type === "deletion"
-            ? "Resident requested account deletion from Settings."
-            : "Resident requested an account data export from Settings.",
-      })
-      setAccountRequests((current) => [created, ...current])
-      toast.success(type === "deletion" ? "Deletion request submitted" : "Data export requested")
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not submit the request.")
-    } finally {
-      setSavingRequest(null)
-    }
-  }
-
-  async function handleDownloadExport(requestId: number) {
-    setDownloadingExport(true)
-    try {
-      const payload = await getAccountDataExport(requestId)
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })
-      const url = URL.createObjectURL(blob)
-      const anchor = document.createElement("a")
-      anchor.href = url
-      anchor.download = `e-boses-data-export-${new Date().toISOString().slice(0, 10)}.json`
-      document.body.appendChild(anchor)
-      anchor.click()
-      anchor.remove()
-      URL.revokeObjectURL(url)
-      toast.success("Your information was downloaded")
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not download your information.")
-    } finally {
-      setDownloadingExport(false)
-    }
-  }
-
   const phoneE164 = e164FromLocalPh(phoneLocal)
   const phoneValid = isValidPhMobileE164(phoneE164)
   const phoneDirty =
@@ -455,29 +399,9 @@ export default function SettingsPage() {
           ? "This browser is subscribed for background report and SOS updates."
           : "Subscribe this browser for urgent report and SOS updates."
 
-  const pendingExport = accountRequests.find(
-    (request) =>
-      request.type === "data_export" && ["submitted", "reviewed"].includes(request.status),
-  )
-  const completedExport = accountRequests.find(
-    (request) => request.type === "data_export" && request.status === "completed",
-  )
   const pendingDeletion = accountRequests.find(
     (request) => request.type === "deletion" && ["submitted", "reviewed"].includes(request.status),
   )
-
-  const fullName =
-    `${firstName} ${lastName}`.trim() ||
-    user?.full_name ||
-    "Resident"
-  // Root cause of "Pending": DB default on User.barangay is "Pending" until set.
-  // Capstone area is Marikina Heights — never show placeholder values in UI.
-  const rawBarangay = (user?.barangay || "").trim()
-  const barangay =
-    !rawBarangay || rawBarangay.toLowerCase() === "pending"
-      ? "Marikina Heights"
-      : rawBarangay
-  const letter = (user?.firstName?.[0] || fullName[0] || "?").toUpperCase()
 
   if (!loaded) {
     return (
@@ -639,17 +563,6 @@ export default function SettingsPage() {
                     </div>
                   </FieldShell>
 
-                  <FieldShell label="Password">
-                    <button
-                      type="button"
-                      onClick={() => navigate("/dashboard/settings/change-password")}
-                      className={outlineBtn}
-                    >
-                      Change password
-                    </button>
-                  </FieldShell>
-
-                  <FieldShell label="Mobile number">
                     <div className="space-y-3">
                       <div className="flex items-stretch gap-2.5">
                         <div
@@ -719,109 +632,27 @@ export default function SettingsPage() {
                         </button>
                       ) : null}
                     </div>
-                  </FieldShell>
                 </div>
-              </section>
-
-              {/* Profiles card — Nextdoor layout, white */}
-              <section className="rounded-2xl border border-neutral-200 bg-white px-4 py-4">
-                <h2 className="text-[16px] font-bold leading-none text-neutral-900">Profiles</h2>
-
-                <div className="mt-4 flex items-start gap-3">
-                  {/* Letter avatar only */}
-                  <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-[#c5d0e6] text-[16px] font-bold text-[#2c3a5a]">
-                    {letter}
-                  </span>
-
-                  <div className="min-w-0 flex-1 pt-0.5">
-                    {/* Name + place (stacked like Nextdoor) */}
-                    <p className="text-[15px] font-semibold leading-snug text-neutral-900">
-                      {fullName}
-                    </p>
-                    <p className="mt-0.5 text-[13px] font-normal leading-snug text-neutral-500">
-                      {barangay}
-                    </p>
-
-                    {/* Address + pencil immediately beside the text (not stretched to the edge) */}
-                    <div className="mt-2.5 flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setAddressFlowOpen(true)}
-                        className="max-w-[min(100%,20rem)] min-w-0 text-left"
-                      >
-                        <p className="text-[14px] font-normal leading-[1.35] text-neutral-800">
-                          {displayAddress || (
-                            <span className="text-neutral-400">Add street address</span>
-                          )}
-                        </p>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setAddressFlowOpen(true)}
-                        className="flex size-9 shrink-0 items-center justify-center rounded-full text-neutral-700 hover:bg-neutral-100 hover:text-neutral-950"
-                        aria-label={displayAddress ? "Confirm or edit address" : "Add street address"}
-                      >
-                        <PencilIcon className="size-5" strokeWidth={2} />
-                      </button>
-                    </div>
+                <div className="min-w-0 flex-1">
+                  <div className="mt-3">
+                    <FloatingLabelInput
+                      id="profile-address"
+                      label="Street address"
+                      value={displayAddress}
+                      readOnly
+                      onClick={() => setAddressFlowOpen(true)}
+                    />
                   </div>
                 </div>
-              </section>
-
-              {/* Download your information */}
-              <section className="rounded-2xl border border-neutral-200 bg-white p-4">
-                <h2 className="text-[17px] font-bold text-neutral-900">Download your information</h2>
-                <p className="mt-2 text-[14px] leading-5 text-neutral-600">
-                  You can download a copy of your information on E-Boses. This includes:
-                </p>
-                <ul className="mt-3 list-disc space-y-1.5 pl-5 text-[14px] leading-5 text-neutral-600">
-                  <li>Posts, replies, and other content you&apos;ve created</li>
-                  <li>Account information, like email preferences and profile details</li>
-                  <li>
-                    Information about your activity, like the device types and app versions
-                    you&apos;ve used
-                  </li>
-                </ul>
-
-                <button
-                  type="button"
-                  disabled={Boolean(pendingExport) || savingRequest === "data_export" || downloadingExport}
-                  onClick={() => completedExport && !pendingExport ? void handleDownloadExport(completedExport.id) : void handleAccountRequest("data_export")}
-                  className={cn(
-                    "mt-4 flex h-11 w-full items-center justify-center rounded-full border text-[14px] font-semibold transition-colors",
-                    pendingExport
-                      ? "cursor-not-allowed border-neutral-200 bg-neutral-100 text-neutral-400"
-                      : "border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50",
-                  )}
-                >
-                  {savingRequest === "data_export" || downloadingExport ? (
-                    <Loader2Icon className="size-4 animate-spin" />
-                  ) : pendingExport ? (
-                    "Request submitted"
-                  ) : completedExport ? (
-                    <><DownloadIcon className="mr-2 size-4" />Download JSON export</>
-                  ) : (
-                    "Request my information"
-                  )}
-                </button>
-
-                {pendingExport ? (
-                  <div className="mt-3 flex items-center justify-between gap-3 rounded-2xl bg-neutral-100 px-4 py-3">
-                    <div className="flex min-w-0 items-center gap-2 text-[13px] font-medium text-neutral-700">
-                      <DownloadIcon className="size-4 shrink-0" />
-                      <span>
-                        Your request is{" "}
-                        {pendingExport.status.replace("_", " ")}
-                      </span>
-                    </div>
-                  </div>
-                ) : null}
-                {completedExport && !pendingExport ? (
-                  <div className="mt-3 flex flex-col gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                    <p className="text-[13px] font-semibold text-emerald-800">Your approved export is ready. Downloading it is recorded in your account audit history.</p>
-                    <button type="button" disabled={savingRequest === "data_export"} onClick={() => void handleAccountRequest("data_export")} className="shrink-0 text-[12px] font-bold text-emerald-800 underline underline-offset-2">Request updated copy</button>
-                  </div>
-                ) : null}
+                <div className="pt-4">
+                  <button
+                    type="button"
+                    onClick={() => navigate("/dashboard/settings/change-password")}
+                    className={cn(outlineBtn, "w-full justify-center")}
+                  >
+                    Change password
+                  </button>
+                </div>
               </section>
 
               {/* Log out / deactivate */}

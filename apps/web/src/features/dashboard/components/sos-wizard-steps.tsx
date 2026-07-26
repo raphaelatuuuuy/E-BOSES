@@ -1,4 +1,4 @@
-import { Camera as CameraIcon, Check as CheckIcon, FirstAidKit, Fire, Phone as PhoneIcon, ShieldWarning, Tornado } from "@phosphor-icons/react"
+import { Camera, Check, HeartPulse, Flame, Phone, ShieldAlert, CloudLightning } from "lucide-react"
 import type { CSSProperties } from "react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -12,28 +12,28 @@ const categoryItems = [
   {
     label: "Medical",
     value: "medical" as const,
-    Icon: FirstAidKit,
+    Icon: HeartPulse,
     color: "#ef4444",
     desc: "Injury, illness, rescue",
   },
   {
     label: "Fire",
     value: "fire" as const,
-    Icon: Fire,
+    Icon: Flame,
     color: "#f97316",
     desc: "Building, forest, vehicle",
   },
   {
     label: "Crime",
     value: "crime" as const,
-    Icon: ShieldWarning,
+    Icon: ShieldAlert,
     color: "#8b5cf6",
     desc: "Assault, theft, threat",
   },
   {
     label: "Disaster",
     value: "disaster" as const,
-    Icon: Tornado,
+    Icon: CloudLightning,
     color: "#0ea5e9",
     desc: "Flood, quake, storm",
   },
@@ -69,7 +69,7 @@ export function WizardProgressBar({ step }: { step: WizardStep }) {
                 )}
               >
                 {done ? (
-                  <CheckIcon className="size-3.5" weight="bold" />
+                  <Check className="size-3.5" strokeWidth={3} />
                 ) : (
                   n
                 )}
@@ -147,7 +147,6 @@ export function CategoryStep({
                 <item.Icon
                   className="size-6"
                   style={{ color: item.color }}
-                  weight="fill"
                   aria-hidden="true"
                 />
               </span>
@@ -172,7 +171,7 @@ export function CategoryStep({
                 }
               >
                 {selected ? (
-                  <CheckIcon className="size-3.5" weight="bold" />
+                  <Check className="size-3.5" strokeWidth={3} />
                 ) : null}
               </span>
             </button>
@@ -248,7 +247,7 @@ export function DetailsStepField({
         htmlFor="sos-media-input"
         className="flex h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/10 text-[14px] font-semibold text-white hover:bg-white/15"
       >
-        <CameraIcon className="size-4" />
+        <Camera className="size-4" />
         {mediaFiles.length
           ? `${mediaFiles.length} photo(s) selected`
           : "Add photo"}
@@ -347,7 +346,7 @@ export function ReviewStepView({
               onClick={onSendSmsFallback}
               className="mt-3 inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3.5 text-[13px] font-bold text-[#050e45] hover:bg-white/90"
             >
-              <PhoneIcon className="size-4" />
+              <Phone className="size-4" />
               Open SMS backup
             </a>
           ) : null}

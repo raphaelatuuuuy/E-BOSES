@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Loader2Icon } from "lucide-react"
 import type leaflet from "leaflet"
-
+import { MapPin } from "lucide-react"
 import { cn } from "@workspace/ui/lib/utils"
 import { matchMarikinaHeightsStreet } from "@/features/auth/lib/marikina-heights-streets"
 import { reverseGeocodeToMarikinaStreet } from "@/features/auth/lib/reverse-geocode"
@@ -287,10 +287,9 @@ export function SosLocationStep({
         aria-live="polite"
         aria-atomic="true"
       >
-        <img
-          src="/contents/map-pin-gps.png"
-          alt=""
-          className="size-6 shrink-0 object-contain"
+        <MapPin
+          className="size-6 shrink-0 text-black"
+          strokeWidth={2}
           aria-hidden
         />
         <div className="min-w-0 flex-1">

@@ -80,7 +80,7 @@ from .serializers import (
     ConcernVoteSerializer,
     PublicUserSerializer,
 )
-from .services import ensure_concern_media_preview, user_can_access_concern_media_raw
+from .services import ensure_concern_media_preview, user_can_access_concern_media_raw, validate_barangay_location
 from .tasks import enqueue_concern_ai
 
 
@@ -278,7 +278,6 @@ def create_concern_notification(concern, *, recipient, type, title, body):
 class ConcernMediaCheckView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
-    parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
         media_files = request.FILES.getlist("media")
@@ -367,6 +366,14 @@ class ConcernListCreateView(APIView):
                 {"category": ["This concern category is temporarily unavailable. Choose another category."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        lat = serializer.validated_data.get("latitude")
+        lng = serializer.validated_data.get("longitude")
+        if lat is not None and lng is not None:
+            try:
+                validate_barangay_location(lat, lng)
+            except ValidationError as exc:
+                messages = [str(m) for m in exc.messages] if hasattr(exc, "messages") and exc.messages else [str(exc)]
+                return Response({"location": messages}, status=status.HTTP_400_BAD_REQUEST)
         validated_media = []
         media_hashes = set()
         media_files = request.FILES.getlist("media")

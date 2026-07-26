@@ -30,6 +30,8 @@ from apps.notifications.services import (
     notify_emergency_status,
 )
 
+from apps.geo_services import validate_barangay_location
+
 from .models import (
     EmergencyAlert,
     EmergencyAppeal,
@@ -513,7 +515,7 @@ def create_witness_notifications(alert):
     if not reporter_profile or not reporter_profile.barangay:
         return
     User = get_user_model()
-    fresh_after = timezone.now() - timedelta(minutes=5)
+    fresh_after = timezone.now() - timedelta(minutes=15)
     try:
         radius_meters = int(MapDispatchPolicy.current().witness_radius_meters)
     except Exception:
@@ -724,6 +726,14 @@ class EmergencyCreateView(APIView):
                 },
                 status=status.HTTP_409_CONFLICT,
             )
+        lat = serializer.validated_data.get("latitude")
+        lng = serializer.validated_data.get("longitude")
+        if lat is not None and lng is not None:
+            try:
+                validate_barangay_location(lat, lng)
+            except ValidationError as exc:
+                messages = [str(m) for m in exc.messages] if hasattr(exc, "messages") and exc.messages else [str(exc)]
+                return Response({"location": messages}, status=status.HTTP_400_BAD_REQUEST)
         media_files = []
         media_hashes = set()
         media_warnings = []
@@ -1128,6 +1138,24 @@ class EmergencyDetailView(APIView):
         if not can_view_alert(request.user, alert):
             return Response({"detail": "You do not have permission to view this emergency."}, status=status.HTTP_403_FORBIDDEN)
         return Response(serialize_alert(alert, request))
+
+
+class EmergencyRouteView(APIView):
+    """Return the OSRM route between the primary responder and the incident."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        from apps.live_map import route_for_assignment
+
+        touch_last_seen(request.user)
+        alert = get_object_or_404(EmergencyAlert, pk=pk)
+        if not can_view_alert(request.user, alert):
+            return Response({"detail": "You do not have permission to view this emergency route."}, status=status.HTTP_403_FORBIDDEN)
+        route = route_for_assignment(alert)
+        if route is None:
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(route)
 
 
 class EmergencyChatView(APIView):

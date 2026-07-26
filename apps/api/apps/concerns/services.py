@@ -1,20 +1,8 @@
-from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 
 from apps.accounts.media_services import build_redacted_preview_bytes
-from apps.geo_services import classify_location
-
-
-def validate_barangay_location(latitude, longitude):
-    """
-    Accept pins inside Marikina Heights or within a small edge buffer (~280 m).
-    Reject locations that are far outside the barangay / Marikina City.
-    """
-    if latitude is None or longitude is None:
-        raise ValidationError("Latitude and longitude must be provided together.")
-    result = classify_location(latitude, longitude)
-    if not result.get("accepted"):
-        raise ValidationError("Location must be inside Barangay Marikina Heights.")
+from apps.geo_services import validate_barangay_location  # noqa: F401 — re-export for backward compatibility
+from .models import ConcernAssignment
 
 
 def ensure_concern_media_preview(media):
@@ -44,5 +32,5 @@ def user_can_access_concern_media_raw(user, media):
         return True
     return user.pk == media.concern.reporter_id or media.concern.assignments.filter(
         assignee=user,
-        status="active",
+        status=ConcernAssignment.Status.ACTIVE,
     ).exists()

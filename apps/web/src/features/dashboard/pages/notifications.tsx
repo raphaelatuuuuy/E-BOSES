@@ -9,16 +9,13 @@ import {
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { useAuthSession } from "@/features/auth/auth-session"
 import { useNotifications, type NotificationItem } from "@/features/dashboard/components/notification-context"
-import { ResidentSideRail } from "@/features/dashboard/components/resident-side-rail"
 import {
   ResidentContentGrid,
   RESIDENT_DESKTOP_MIN_PX,
 } from "@/features/dashboard/components/resident-top-bar"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { apiRequest } from "@/lib/api"
-import { parseStoredAddress } from "@/features/dashboard/components/address-confirm-flow"
 import {
   disableBrowserNotifications,
   enableBrowserNotifications,
@@ -83,7 +80,6 @@ function initialNotificationFilter(): Filter {
 export default function NotificationsPage() {
   usePageTitle("Notifications")
   const navigate = useNavigate()
-  const { user } = useAuthSession()
   const { notifications, unreadCount, loading, markAsRead, markAllAsRead, refresh } = useNotifications()
   const [filter, setFilter] = useState<Filter>(initialNotificationFilter)
   const [olderNotifications, setOlderNotifications] = useState<NotificationItem[]>([])
@@ -130,13 +126,6 @@ export default function NotificationsPage() {
       window.removeEventListener("appinstalled", onInstalled)
     }
   }, [])
-
-  const streetLabel = useMemo(() => {
-    const raw = (user?.address ?? "").trim()
-    if (!raw || raw.toLowerCase() === "pending") return null
-    const { street } = parseStoredAddress(raw)
-    return street.trim() || null
-  }, [user?.address])
 
   const allNotifications = useMemo(() => {
     const byId = new Map<number, NotificationItem>()
@@ -504,9 +493,6 @@ export default function NotificationsPage() {
             )}
           </div>
         </div>
-
-        {/* Desktop right rail (same column as Home) */}
-        <ResidentSideRail streetLabel={streetLabel} />
       </ResidentContentGrid>
     </div>
   )

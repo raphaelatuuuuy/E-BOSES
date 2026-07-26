@@ -606,20 +606,6 @@ export default function ResponderMapPage() {
             onSelectConcern={selectConcernFromMap}
           />
         )}
-        <div className="absolute left-3 top-3 z-[650] max-w-[calc(100%-5.5rem)] rounded-2xl border border-neutral-200 bg-white/95 p-3 shadow-lg backdrop-blur sm:left-4 sm:top-4 sm:max-w-md sm:p-4">
-          <p className="text-[11px] font-black uppercase tracking-wide text-[#ff6a1a]">Responder map</p>
-          <div className="mt-1 flex items-center gap-3">
-            <div className="min-w-0 flex-1">
-              <h1 className="truncate text-base font-black text-[#07145f] sm:text-lg">Assigned incidents near you</h1>
-              <p className="mt-0.5 hidden text-xs font-semibold text-neutral-600 sm:block">Your live GPS pin updates automatically while responding.</p>
-            </div>
-            <Button type="button" size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => void locateMe()} aria-label="Recenter on my current location">
-              {busy === "locate" ? <LoaderCircleIcon className="size-4 animate-spin" /> : <LocateFixedIcon className="size-4" />}
-              <span className="hidden sm:inline">Recenter</span>
-            </Button>
-          </div>
-          {error ? <p className="mt-2 text-xs font-bold leading-5 text-red-700">{error}</p> : null}
-        </div>
       </section>
 
       <aside className={cn(

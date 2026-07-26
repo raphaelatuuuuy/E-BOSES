@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -890,6 +891,18 @@ def collect_service_pois(*, force_refresh: bool = False) -> list[dict[str, Any]]
         merged = admin_kept + osm_kept[:room]
         merged.sort(key=_service_poi_rank)
     return merged
+
+
+def validate_barangay_location(latitude, longitude):
+    """
+    Accept pins inside Marikina Heights or within a small edge buffer (~280 m).
+    Reject locations that are far outside the barangay / Marikina City.
+    """
+    if latitude is None or longitude is None:
+        raise ValidationError("Latitude and longitude must be provided together.")
+    result = classify_location(latitude, longitude)
+    if not result.get("accepted"):
+        raise ValidationError("Location must be inside Barangay Marikina Heights.")
 
 
 def map_context_payload() -> dict[str, Any]:

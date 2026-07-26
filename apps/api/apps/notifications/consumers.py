@@ -134,12 +134,10 @@ class ResidentLiveMapConsumer(AuthenticatedJsonConsumer):
 
 @database_sync_to_async
 def user_is_verified_official(user) -> bool:
-    from apps.accounts.models import AccountRole
-    from django.contrib.auth import get_user_model
     User = get_user_model()
 
     return user.is_authenticated and user.status == User.Status.VERIFIED and (
-        user.is_staff or user.is_superuser or AccountRole.objects.filter(user=user, name__in=["official", "barangay_official"]).exists()
+        user.is_staff or user.is_superuser or user.role == User.Role.BARANGAY_OFFICIAL
     )
 
 

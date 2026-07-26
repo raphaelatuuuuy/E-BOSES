@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom"
 import { useEffect, useState } from "react"
 import { useAuthPanelRotation } from "@/features/auth/hooks/use-auth-panel-rotation"
 
@@ -14,10 +15,14 @@ export function AuthSidePanel() {
   return (
     <section className="relative hidden flex-col overflow-hidden lg:flex lg:h-full lg:min-h-screen">
       {/* Brand — top left of carousel (desktop / laptop) */}
-      <div className="absolute left-0 top-0 z-10 flex items-center gap-2 px-8 py-6 md:px-10">
+      <Link
+        to="/"
+        className="absolute left-0 top-0 z-10 flex items-center gap-2 px-8 py-6 md:px-10"
+        aria-label="Boses — back to landing page"
+      >
         <img src="/contents/logo.png" alt="E-Boses" className="h-9 w-auto md:h-10" />
         <span className="font-heading text-xl font-bold text-[#ff8133] md:text-2xl">Boses</span>
-      </div>
+      </Link>
 
       {/* Image area */}
       <div className="relative flex-1 overflow-hidden">

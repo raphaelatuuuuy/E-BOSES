@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { Loader2Icon } from "lucide-react"
-import { useNavigate } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 
 import { usePageTitle } from "@/hooks/use-page-title"
@@ -52,10 +52,14 @@ export default function AccountInactivePage() {
   return (
     <div className="flex min-h-svh flex-col bg-white">
       <header className="border-b border-neutral-200 px-5 py-4 sm:px-8">
-        <div className="mx-auto flex max-w-3xl items-center gap-2">
+        <Link
+          to="/"
+          className="mx-auto flex max-w-3xl items-center gap-2"
+          aria-label="Boses — back to landing page"
+        >
           <img src="/contents/logo.png" alt="" className="h-8 w-auto" />
           <span className="font-heading text-xl font-bold text-[#ff8133]">Boses</span>
-        </div>
+        </Link>
       </header>
 
       <main className="mx-auto w-full max-w-3xl flex-1 px-5 py-10 sm:px-8 sm:py-14">

@@ -3,7 +3,7 @@
  * Used by Home and Resident Alerts Map expanded panel.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { ArrowBigUpIcon, GlobeIcon, SendIcon, MessageCircleIcon } from "lucide-react"
+import { GlobeIcon, SendIcon, MessageCircleIcon, CircleArrowUp } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import type { Concern, ConcernComment, PublicUser } from "@/features/dashboard/api"
@@ -733,7 +733,7 @@ export function FeedPostCard({
                 post.user_vote === 1 && "bg-neutral-200/90 text-neutral-800",
               )}
             >
-              <ArrowBigUpIcon className="size-7 shrink-0 fill-current" strokeWidth={STROKE} />
+              <CircleArrowUp className="size-7 shrink-" strokeWidth={STROKE} />
               {post.vote_count > 0 ? (
                 <span className="pr-0.5 text-[13px] font-semibold tabular-nums">
                   {post.vote_count}

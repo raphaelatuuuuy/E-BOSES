@@ -10,7 +10,7 @@ import {
   UserCircleIcon,
   FileLock2Icon,
   HomeIcon,
-  BellIcon,
+  TriangleAlert,
 } from "lucide-react"
 import { useState } from "react"
 import { cn } from "@workspace/ui/lib/utils"
@@ -29,7 +29,7 @@ interface NavItem {
 /** Lucide-react icons for resident nav: home · alerts · reports */
 const residentNavItems: { label: string; path: string; icon: React.ElementType }[] = [
   { label: "Home", path: "/dashboard/home", icon: HomeIcon },
-  { label: "Alerts", path: "/dashboard/alerts-map", icon: BellIcon },
+  { label: "Alerts", path: "/dashboard/alerts-map", icon: TriangleAlert },
   { label: "My reports", path: "/dashboard/reports", icon: ClipboardListIcon },
 ]
 
@@ -140,7 +140,7 @@ function ResidentSidebar() {
               onClick={() => setCreateOpen(true)}
               className="flex h-11 w-full items-center justify-center rounded-[9999px] bg-[#ff8133] text-[16px] font-semibold text-white transition-colors hover:bg-[#ea6f24] active:scale-[0.99]"
             >
-              Report
+              Submit a Concern
             </button>
           </div>
         </nav>

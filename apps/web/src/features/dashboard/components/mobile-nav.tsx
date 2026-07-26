@@ -9,7 +9,7 @@ import {
   SearchIcon,
   Settings2Icon,
   ClipboardListIcon,
-  BellIcon,
+  TriangleAlert,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -106,7 +106,7 @@ export function MobileNav() {
   const residentItems: NavItem[] = [
     { label: "Home", path: "/dashboard/home", icon: HomeIcon },
     { label: "Reports", path: "/dashboard/reports", icon: ClipboardListIcon },
-    { label: "Alerts", path: "/dashboard/alerts-map", icon: BellIcon },
+    { label: "Alerts", path: "/dashboard/alerts-map", icon: TriangleAlert },
   ]
 
   const navItems = isResponderRole

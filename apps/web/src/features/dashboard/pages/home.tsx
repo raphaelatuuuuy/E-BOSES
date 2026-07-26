@@ -3,20 +3,18 @@ import { Link } from "react-router-dom"
 import { toast } from "sonner"
 import {
   AlertTriangleIcon,
-  ArrowBigUpIcon,
+  CircleArrowUp,
   CalendarDaysIcon,
   ChevronRightIcon,
   FileTextIcon,
   GlobeIcon,
   CheckIcon,
-  ImageIcon,
   PencilIcon,
   SearchIcon,
   SlidersHorizontalIcon,
   XIcon,
   SendIcon,
   MessageCircleIcon,
-  BellIcon,
 } from "lucide-react"
 
 import { Skeleton } from "@workspace/ui/components/skeleton"
@@ -1146,15 +1144,6 @@ export default function HomePage() {
                 >
                   What&apos;s happening in your barangay?
                 </button>
-                {/* Gallery / photo — desktop only; hidden on mobile */}
-                <button
-                  type="button"
-                  onClick={() => setCreateOpen(true)}
-                  className="hidden size-10 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-500 transition-colors hover:bg-neutral-200/70 hover:text-neutral-700 md:flex"
-                  aria-label="Add photo"
-                >
-                  <ImageIcon className="size-6" strokeWidth={1.75} />
-                </button>
                 <button
                   type="button"
                   onClick={() => setCreateOpen(true)}
@@ -1420,8 +1409,8 @@ export default function HomePage() {
                           post.user_vote === 1 && "bg-neutral-200/90 text-neutral-800",
                         )}
                       >
-                        <ArrowBigUpIcon
-                          className="size-7 shrink-0 fill-current"
+                        <CircleArrowUp
+                          className="size-7 shrink-0"
                           strokeWidth={STROKE}
                         />
                         {post.vote_count > 0 ? (
@@ -1655,21 +1644,6 @@ export default function HomePage() {
               <ChevronRightIcon className={cn(RAIL_CHEVRON, "text-neutral-500")} strokeWidth={2} />
             </button>
           </div>
-
-          <button
-            type="button"
-            onClick={() => window.dispatchEvent(new Event("eboses:open-sos"))}
-            className="flex w-full items-center justify-between rounded-lg border border-red-200 bg-white px-3.5 py-3 text-left transition-colors hover:border-red-300 hover:bg-red-50/40"
-          >
-            <div className="flex min-w-0 items-center gap-2.5">
-              <BellIcon className="size-7 shrink-0 text-red-600" />
-              <div className="min-w-0">
-                <p className={cn("font-bold text-red-700", FS.railTitle)}>Emergency SOS</p>
-                <p className={cn("text-red-600/75", FS.meta)}>Get help from responders</p>
-              </div>
-            </div>
-            <ChevronRightIcon className={cn(RAIL_CHEVRON, "text-red-400/70")} strokeWidth={2} />
-          </button>
         </aside>
       </ResidentContentGrid>
 

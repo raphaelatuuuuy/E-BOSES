@@ -2,13 +2,17 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { toast } from "sonner"
 import {
+  Activity,
   ArrowLeftIcon,
   CameraIcon,
   CheckIcon,
+  CloudRainWind,
+  Flame,
   Loader2Icon,
   Maximize2Icon,
   Minimize2Icon,
   PhoneIcon,
+  ShieldAlert,
   XIcon,
 } from "lucide-react"
 // Note: tracking UI lives in EmergencyTrackingSheet (dock-styled)
@@ -67,26 +71,34 @@ const emergencies = [
   {
     label: "Medical",
     value: "medical" as const,
-    img: "/contents/medical.png",
+    icon: Activity,
     desc: "Injury, illness, rescue",
+    iconBg: "bg-emerald-500/20",
+    iconColor: "text-emerald-400",
   },
   {
     label: "Fire",
     value: "fire" as const,
-    img: "/contents/fire.png",
-    desc: "Building, forest, vehicle",
+    icon: Flame,
+    desc: "Building, house, residence",
+    iconBg: "bg-orange-500/20",
+    iconColor: "text-orange-400",
   },
   {
     label: "Crime",
     value: "crime" as const,
-    img: "/contents/crime.png",
+    icon: ShieldAlert,
     desc: "Assault, theft, threat",
+    iconBg: "bg-violet-500/20",
+    iconColor: "text-violet-400",
   },
   {
     label: "Disaster",
     value: "disaster" as const,
-    img: "/contents/disaster.png",
+    icon: CloudRainWind,
     desc: "Flood, quake, storm",
+    iconBg: "bg-blue-500/20",
+    iconColor: "text-blue-400",
   },
 ]
 
@@ -107,9 +119,9 @@ const WIZARD_LABELS = ["Type", "Location", "Details", "Review"] as const
 function isActiveAlert(alert: EmergencyAlert | null) {
   return Boolean(
     alert &&
-    activeEmergencyStatuses.includes(
-      alert.status as (typeof activeEmergencyStatuses)[number]
-    )
+      activeEmergencyStatuses.includes(
+        alert.status as (typeof activeEmergencyStatuses)[number]
+      )
   )
 }
 
@@ -875,6 +887,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
             <div className="space-y-2">
               {emergencies.map((item) => {
                 const selected = emergency === item.value
+                const Icon = item.icon
                 return (
                   <button
                     key={item.value}
@@ -891,10 +904,9 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
                         : "border-white/15 bg-white/5 hover:bg-white/10"
                     )}
                   >
-                    <img
-                      src={item.img}
-                      alt=""
-                      className="size-11 shrink-0 rounded-lg bg-white object-contain p-1"
+                    <Icon
+                      className={cn("size-11 shrink-0 rounded-lg p-2", item.iconBg, item.iconColor)}
+                      strokeWidth={2}
                     />
                     <span className="min-w-0 flex-1">
                       <span className="block text-[15px] font-semibold text-white">
@@ -931,7 +943,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
         {step === "location" ? (
           <div className="flex min-h-[360px] flex-col">
             <p className="mb-3 text-[14px] leading-6 text-white/75">
-              GPS first — drag the map so help goes to the right pin.
+               Drag the map so help goes to the right pin.
             </p>
             <SosLocationStep
               value={location}
@@ -952,7 +964,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
         {step === "details" ? (
           <div className="space-y-4">
             <p className="text-[14px] leading-6 text-white/75">
-              Optional — a photo or note helps responders prepare.
+              A photo or note helps responders prepare.
             </p>
             <input
               ref={fileRef}
@@ -999,7 +1011,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
             <textarea
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="Quick note for responders (optional)"
+              placeholder="Quick note for responders"
               rows={4}
               className="w-full resize-none rounded-xl border border-white/15 bg-black/25 px-3.5 py-3 text-[14px] text-white outline-none placeholder:text-white/40 focus:border-[#ff6a1a]"
             />

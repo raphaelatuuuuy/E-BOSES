@@ -1,4 +1,5 @@
 import { ChevronLeftIcon, LoaderCircleIcon } from "lucide-react"
+import { Link } from "react-router-dom"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -93,12 +94,16 @@ export function SignUpShell({
           /* First step: full top nav with Sign in */
           <>
             <header className="mx-auto flex w-full max-w-[1200px] items-center justify-between px-5 py-4 md:px-8">
-              <div className="flex items-center gap-2">
+              <Link
+                to="/"
+                className="flex items-center gap-2"
+                aria-label="Boses — back to landing page"
+              >
                 <img src="/contents/logo.png" alt="E-Boses" className="h-9 w-auto md:h-10" />
                 <span className="font-heading text-xl font-semibold text-[#ff8133] md:text-2xl">
                   Boses
                 </span>
-              </div>
+              </Link>
               <button
                 type="button"
                 onClick={onSignIn}

@@ -68,6 +68,16 @@ export interface EmergencyEscalation {
   created_at: string
 }
 
+export interface EmergencyRoute {
+  alert_id: number
+  assignment_id: number
+  responder_id: number
+  status: "ok" | "unavailable"
+  distance_meters: number | null
+  eta_seconds: number | null
+  geometry: unknown
+}
+
 export interface EmergencyStatusEvent {
   id: number
   status: EmergencyStatus
@@ -221,6 +231,10 @@ export function endResponderShift(payload: {
 
 export function getEmergency(id: number) {
   return apiRequest<EmergencyAlert>(`/emergencies/${id}/`)
+}
+
+export function getEmergencyRoute(id: number) {
+  return apiRequest<EmergencyRoute>(`/emergencies/${id}/route/`)
 }
 
 export interface EmergencyChatMessage {
