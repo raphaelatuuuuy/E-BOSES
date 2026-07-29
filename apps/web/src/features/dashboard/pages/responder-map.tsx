@@ -1,28 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import {
-  CheckCircleIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
-  LocateFixedIcon,
-  LoaderCircleIcon,
-  MapPinIcon,
-  MinusIcon,
-  PlusIcon,
-  RadioIcon,
-} from "lucide-react"
+import { LoaderCircleIcon, SearchIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 import { useLocation } from "react-router-dom"
 
-import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
+import { Sheet, SheetContent } from "@workspace/ui/components/sheet"
 import { usePageTitle } from "@/hooks/use-page-title"
+import { useAuthSession } from "@/features/auth/auth-session"
+import { MOBILE_NAV_CLEARANCE, useIsDesktop } from "@/features/dashboard/lib/shell"
 import {
+  DISPATCH_PANEL_EVENT,
+  wantsDispatchPanel,
+} from "@/features/dashboard/lib/dispatch-panel"
+import { useResponderUnit } from "@/features/dashboard/hooks/use-responder-unit"
+import { formatElapsed } from "@/features/dashboard/lib/responder-format"
+import {
+  getActiveResponderShift,
   listAssignedEmergencies,
-  markEmergencyArrived,
-  requestEmergencyBackup,
   sendEmergencyLocationPing,
   type EmergencyAlert,
-  type EmergencyStatus,
+  type ResponderShift,
 } from "@/features/dashboard/emergency-api"
 import {
   commentOnConcern,
@@ -31,36 +28,19 @@ import {
   voteConcern,
   type Concern,
 } from "@/features/dashboard/api"
-import { ReportChatPanel } from "@/features/dashboard/components/report-chat-panel"
-import { ConcernConversation } from "@/features/dashboard/components/concern-conversation"
-import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
-import {
-  MapControlButton,
-} from "@/features/dashboard/components/map-weather"
+import { ResponderLeafletMap } from "@/features/dashboard/components/responder/responder-leaflet-map"
+import { IncidentPanel } from "@/features/dashboard/components/responder/incident-panel"
 
-import type leaflet from "leaflet"
-
-const BARANGAY_CENTER: leaflet.LatLngTuple = [14.6507, 121.1133]
 const SELECTED_DISPATCH_KEY = "eboses:responder-dispatch-id"
 
-const statusLabel: Record<EmergencyStatus, string> = {
-  submitted: "Submitted",
-  routed: "Responder routed",
-  acknowledged: "Automatically routed",
-  en_route: "En route",
-  nearby: "Nearby",
-  arrived: "Arrived",
-  resolved: "Resolved",
-  cancelled: "Cancelled",
-}
-
-function validCoord(lat?: string | number | null, lng?: string | number | null) {
-  const latitude = Number(lat)
-  const longitude = Number(lng)
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
-  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null
-  return [latitude, longitude] as leaflet.LatLngTuple
-}
+const ACTIVE_STATUSES = new Set([
+  "submitted",
+  "routed",
+  "acknowledged",
+  "en_route",
+  "nearby",
+  "arrived",
+])
 
 function distanceKm(
   aLat?: string | number | null,
@@ -83,20 +63,6 @@ function distanceKm(
   return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))
 }
 
-function statusClass(status: EmergencyStatus) {
-  if (status === "arrived" || status === "resolved") return "border-emerald-200 bg-emerald-50 text-emerald-700"
-  if (status === "en_route" || status === "nearby") return "border-blue-200 bg-blue-50 text-blue-700"
-  if (status === "acknowledged" || status === "routed") return "border-amber-200 bg-amber-50 text-amber-700"
-  return "border-red-200 bg-red-50 text-red-700"
-}
-
-function markerHtml(kind: "incident" | "responder", active = false) {
-  const color = kind === "incident" ? "#f23b35" : "#145be7"
-  const glyph = kind === "incident" ? "!" : "●"
-  const size = active ? 38 : 30
-  return `<div style="width:${size}px;height:${size}px;border-radius:999px;background:${color};border:4px solid #fff;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;box-shadow:0 8px 22px rgba(15,23,42,.24);font-family:Arial">${glyph}</div>`
-}
-
 function locationFailureMessage(error: unknown) {
   if (error instanceof Error && error.message) return error.message
   const code = typeof error === "object" && error && "code" in error
@@ -108,173 +74,12 @@ function locationFailureMessage(error: unknown) {
   return "Your location could not be read. Check device location access and try again."
 }
 
-function ResponderLeafletMap({
-  alerts,
-  concerns,
-  selectedId,
-  selectedConcernId,
-  userPos,
-  onSelect,
-  onSelectConcern,
-}: {
-  alerts: EmergencyAlert[]
-  concerns: Concern[]
-  selectedId: number | null
-  selectedConcernId: number | null
-  userPos: GeolocationPosition | null
-  onSelect: (id: number) => void
-  onSelectConcern: (id: number) => void
-}) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const mapRef = useRef<leaflet.Map | null>(null)
-  const LRef = useRef<typeof leaflet | null>(null)
-  const layerRef = useRef<leaflet.LayerGroup | null>(null)
-  const routeRef = useRef<leaflet.Polyline | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    let map: leaflet.Map | null = null
-
-    async function init() {
-      const L = await import("leaflet")
-      await import("leaflet/dist/leaflet.css")
-      if (cancelled || !containerRef.current) return
-
-      LRef.current = L
-      map = L.map(containerRef.current, {
-        center: BARANGAY_CENTER,
-        zoom: 15,
-        zoomControl: false,
-        attributionControl: true,
-      })
-      mapRef.current = map
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-        attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
-        maxZoom: 20,
-      }).addTo(map)
-      layerRef.current = L.layerGroup().addTo(map)
-    }
-
-    void init()
-    return () => {
-      cancelled = true
-      if (map) map.remove()
-      mapRef.current = null
-      LRef.current = null
-      layerRef.current = null
-      routeRef.current = null
-    }
-  }, [])
-
-  useEffect(() => {
-    const L = LRef.current
-    const map = mapRef.current
-    const layer = layerRef.current
-    if (!L || !map || !layer) return
-
-    layer.clearLayers()
-    if (routeRef.current) {
-      routeRef.current.remove()
-      routeRef.current = null
-    }
-
-    const bounds: leaflet.LatLngTuple[] = []
-    const selected = alerts.find((alert) => alert.id === selectedId) ?? alerts[0] ?? null
-
-    for (const alert of alerts) {
-      const coord = validCoord(alert.latitude, alert.longitude)
-      if (!coord) continue
-      bounds.push(coord)
-      const icon = L.divIcon({
-        html: markerHtml("incident", alert.id === selected?.id),
-        className: "",
-        iconSize: [38, 38],
-        iconAnchor: [19, 19],
-      })
-      L.marker(coord, { icon })
-        .addTo(layer)
-        .on("click", () => onSelect(alert.id))
-        .bindTooltip(`${alert.type} emergency`, { direction: "top" })
-    }
-
-    for (const concern of concerns) {
-      const coord = validCoord(concern.latitude, concern.longitude)
-      if (!coord) continue
-      bounds.push(coord)
-      L.circleMarker(coord, {
-        radius: concern.id === selectedConcernId ? 11 : 8,
-        color: "#07145f",
-        weight: 3,
-        fillColor: "#ff8133",
-        fillOpacity: 1,
-      })
-        .addTo(layer)
-        .on("click", () => onSelectConcern(concern.id))
-        .bindTooltip(`${concern.title} · community concern`, { direction: "top" })
-    }
-
-    if (userPos) {
-      const coord: leaflet.LatLngTuple = [
-        userPos.coords.latitude,
-        userPos.coords.longitude,
-      ]
-      bounds.push(coord)
-      L.marker(coord, {
-        icon: L.divIcon({
-          html: markerHtml("responder", true),
-          className: "",
-          iconSize: [34, 34],
-          iconAnchor: [17, 17],
-        }),
-      })
-        .addTo(layer)
-        .bindTooltip("Your location", { direction: "top" })
-
-      const selectedCoord = selected ? validCoord(selected.latitude, selected.longitude) : null
-      if (selectedCoord) {
-        routeRef.current = L.polyline([coord, selectedCoord], {
-          color: "#ff6a1a",
-          dashArray: "7 7",
-          weight: 4,
-          opacity: 0.9,
-        }).addTo(map)
-      }
-    }
-
-    if (bounds.length > 1) {
-      map.fitBounds(L.latLngBounds(bounds), { padding: [42, 42], maxZoom: 17 })
-    } else if (bounds.length === 1) {
-      map.setView(bounds[0], 16)
-    } else {
-      map.setView(BARANGAY_CENTER, 15)
-    }
-  }, [alerts, concerns, onSelect, onSelectConcern, selectedConcernId, selectedId, userPos])
-
-  return (
-    <div className="relative h-full min-h-0 overflow-hidden bg-[#eef3fb]">
-      <div ref={containerRef} className="absolute inset-0" aria-label="Responder assignment map" />
-      <div className="absolute right-3 top-3 z-[600] flex flex-col items-end gap-2 sm:right-4 sm:top-4">
-        <div className="grid grid-cols-2 gap-2">
-          <MapControlButton
-            label="Zoom in"
-            icon={<PlusIcon className="size-5" />}
-            onClick={() => mapRef.current?.zoomIn()}
-            showLabel={false}
-          />
-          <MapControlButton
-            label="Zoom out"
-            icon={<MinusIcon className="size-5" />}
-            onClick={() => mapRef.current?.zoomOut()}
-            showLabel={false}
-          />
-        </div>
-      </div>
-    </div>
-  )
-}
-
 export default function ResponderMapPage() {
   usePageTitle("Responder Map")
   const location = useLocation()
+  const { user } = useAuthSession()
+  const isDesktop = useIsDesktop()
+  const viewerId = user?.id ?? null
   const [alerts, setAlerts] = useState<EmergencyAlert[]>([])
   const [concerns, setConcerns] = useState<Concern[]>([])
   const [assignedConcerns, setAssignedConcerns] = useState<Concern[]>([])
@@ -286,9 +91,17 @@ export default function ResponderMapPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [userPos, setUserPos] = useState<GeolocationPosition | null>(null)
   const [loading, setLoading] = useState(true)
-  const [busy, setBusy] = useState("")
+  const [locating, setLocating] = useState(false)
   const [error, setError] = useState("")
-  const [detailsExpanded, setDetailsExpanded] = useState(true)
+  const [mapSearch, setMapSearch] = useState("")
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [activeShift, setActiveShift] = useState<ResponderShift | null>(null)
+  const [now, setNow] = useState(() => Date.now())
+  const unit = useResponderUnit()
+  // On a phone the panel is a sheet the responder opens from the nav; on
+  // desktop it is a docked rail that is always there. Arriving with `?panel=1`
+  // means the responder pressed Dispatch from another screen.
+  const [panelOpen, setPanelOpen] = useState(() => wantsDispatchPanel(window.location.search))
   const autoPingInFlightRef = useRef(false)
   const lastAutoPingRef = useRef<Record<number, number>>({})
   const concernCardRefs = useRef<Record<number, HTMLElement | null>>({})
@@ -313,6 +126,10 @@ export default function ResponderMapPage() {
     ) ?? [],
     [selected],
   )
+  const selectedRouteGeometry = useMemo(() => {
+    const ownAssignment = selectedActiveTeam.find((assignment) => assignment.responder.id === viewerId)
+    return ownAssignment?.route?.geometry ?? selectedActiveTeam[0]?.route?.geometry ?? null
+  }, [selectedActiveTeam, viewerId])
 
   const selectedDistance = useMemo(() => {
     if (!selected || !userPos) return null
@@ -324,7 +141,29 @@ export default function ResponderMapPage() {
     )
   }, [selected, userPos])
 
-  const visibleConcerns = useMemo(() => {
+  const awaitingAckCount = useMemo(() => {
+    if (viewerId == null) return 0
+    return alerts.filter((alert) => alert.status === "routed" && alert.assignments.some(
+      (assignment) => assignment.responder.id === viewerId && assignment.acknowledged_at == null,
+    )).length
+  }, [alerts, viewerId])
+
+  const query = mapSearch.trim().toLowerCase()
+
+  /** Dispatch queue narrowed by the search box. Empty query means everything. */
+  const listedAlerts = useMemo(() => {
+    if (!query) return alerts
+    return alerts.filter((alert) =>
+      [alert.type, alert.address, alert.barangay, alert.note, alert.status.replace(/_/g, " ")]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    )
+  }, [alerts, query])
+
+  /** Community concerns within range, before any search is applied. */
+  const nearbyConcerns = useMemo(() => {
     if (!userPos) return concerns
     return concerns.filter((concern) => {
       const distance = distanceKm(
@@ -337,11 +176,25 @@ export default function ResponderMapPage() {
     })
   }, [concerns, userPos])
 
+  const visibleConcerns = useMemo(() => {
+    if (!query) return nearbyConcerns
+    return nearbyConcerns.filter((concern) =>
+      [concern.title, concern.description, concern.address, concern.barangay]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    )
+  }, [nearbyConcerns, query])
+
+  // The map keeps every pin regardless of the search. Filtering is for reading
+  // the lists; dropping pins would take away the spatial context that is the
+  // whole reason the responder is looking at a map.
   const mapConcerns = useMemo(() => {
     const byId = new Map<number, Concern>()
-    for (const concern of [...visibleConcerns, ...assignedConcerns]) byId.set(concern.id, concern)
+    for (const concern of [...nearbyConcerns, ...assignedConcerns]) byId.set(concern.id, concern)
     return [...byId.values()]
-  }, [visibleConcerns, assignedConcerns])
+  }, [nearbyConcerns, assignedConcerns])
 
   const refresh = useCallback(async () => {
     setError("")
@@ -371,7 +224,45 @@ export default function ResponderMapPage() {
   const selectDispatch = useCallback((alertId: number) => {
     window.localStorage.setItem(SELECTED_DISPATCH_KEY, String(alertId))
     setSelectedId(alertId)
-    setDetailsExpanded(true)
+    // Picking a pin off the map is a request to read it.
+    setPanelOpen(true)
+  }, [])
+
+  // Pressing Dispatch while already on this screen.
+  useEffect(() => {
+    function open() {
+      setPanelOpen(true)
+    }
+    window.addEventListener(DISPATCH_PANEL_EVENT, open)
+    return () => window.removeEventListener(DISPATCH_PANEL_EVENT, open)
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    void getActiveResponderShift()
+      .then((shift) => {
+        if (!cancelled) setActiveShift(shift)
+      })
+      .catch(() => {
+        // The duty readout is context, not the job. A failure here must not
+        // take the map down with it.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const setConcernCardRef = useCallback((id: number, node: HTMLElement | null) => {
+    concernCardRefs.current[id] = node
+  }, [])
+
+  const applyAlertChange = useCallback((next: EmergencyAlert) => {
+    setAlerts((current) => current.map((alert) => (alert.id === next.id ? next : alert)))
   }, [])
 
   useEffect(() => {
@@ -477,6 +368,9 @@ export default function ResponderMapPage() {
     }
   }, [])
 
+  // En-route is display-only in the stepper (C1.4) — this loop is the sole
+  // source of the routed/acknowledged -> en_route/nearby transition. It keeps
+  // publishing every 15s for the life of the dispatch so ETA/route stay live.
   useEffect(() => {
     if (!selected || !userPos || !["routed", "acknowledged", "en_route", "nearby", "arrived"].includes(selected.status)) {
       return
@@ -507,7 +401,7 @@ export default function ResponderMapPage() {
   }, [selected, userPos])
 
   async function locateMe() {
-    setBusy("locate")
+    setLocating(true)
     try {
       const pos = await requestPosition()
       setUserPos(pos)
@@ -517,345 +411,198 @@ export default function ResponderMapPage() {
       setError(message)
       toast.error(message)
     } finally {
-      setBusy("")
+      setLocating(false)
     }
   }
 
-  async function pingSelected() {
-    if (!selected) return
-    setBusy("ping")
-    let pos: GeolocationPosition
-    try {
-      pos = await requestPosition()
-      setUserPos(pos)
-    } catch (positionError) {
-      const message = locationFailureMessage(positionError)
-      setError(message)
-      toast.error(message)
-      setBusy("")
-      return
-    }
-    try {
-      const next = await sendEmergencyLocationPing(selected.id, {
-        latitude: pos.coords.latitude,
-        longitude: pos.coords.longitude,
-        accuracy: pos.coords.accuracy,
-      })
-      lastAutoPingRef.current[selected.id] = Date.now()
-      setAlerts((current) => current.map((alert) => (alert.id === next.id ? next : alert)))
-      setError("")
-      toast.success("GPS sent to dispatch")
-    } catch (error) {
-      const detail = error instanceof Error && error.message ? ` ${error.message}` : ""
-      const message = `GPS was found, but dispatch could not receive the update. Check your connection and try again.${detail}`
-      setError(message)
-      toast.error(message)
-    } finally {
-      setBusy("")
-    }
-  }
-
-  async function arrivedSelected() {
-    if (!selected) return
-    setBusy("arrived")
-    try {
-      const next = await markEmergencyArrived(selected.id)
-      setAlerts((current) => current.map((alert) => (alert.id === next.id ? next : alert)))
-      toast.success("Marked arrived on scene")
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not update arrival.")
-    } finally {
-      setBusy("")
-    }
-  }
-
-  async function requestBackup() {
-    if (!selected) return
-    setBusy("backup")
-    try {
-      const next = await requestEmergencyBackup(selected.id)
-      setAlerts((current) => current.map((alert) => (alert.id === next.id ? next : alert)))
-      const teamSize = next.assignments?.length ?? 0
-      toast.success(
-        teamSize > 1
-          ? `Backup responder routed. ${teamSize} responders are now assigned.`
-          : "Backup request recorded.",
-      )
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not request backup.")
-    } finally {
-      setBusy("")
-    }
-  }
+  const activeCount = useMemo(
+    () => alerts.filter((alert) => ACTIVE_STATUSES.has(alert.status)).length,
+    [alerts],
+  )
 
   return (
-    <div className="relative h-[calc(100svh-3.5rem)] min-h-[500px] overflow-hidden bg-[#eef3fb] md:h-[calc(100svh-4rem)] md:min-h-[560px]">
-      <section className="absolute inset-0">
-        {loading ? (
-          <div className="flex h-full items-center justify-center bg-white">
-            <LoaderCircleIcon className="size-8 animate-spin text-neutral-400" />
+    <div className="flex h-[100svh] min-h-[500px] flex-col overflow-hidden bg-canvas md:h-[100svh] md:min-h-[560px]">
+      {/*
+        Identity, a working search, and live state. The bar previously carried an
+        All-locations dropdown and an ACTIVATE ALERT button that were both inert
+        (responders cannot raise alerts — the API rejects it), and a search box
+        whose value was never read.
+      */}
+      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-rail-line bg-nav-glass px-3 backdrop-blur md:px-4">
+        {!searchOpen ? (
+          <div className="flex min-w-0 flex-1 items-baseline gap-2 sm:flex-initial">
+            <span className="truncate text-sm font-bold text-nav-text-active">
+              {unit.shortName}
+            </span>
+            <span className="shrink-0 text-micro uppercase tracking-wide text-nav-muted">
+              {activeShift ? `On duty ${formatElapsed(activeShift.started_at, now)}` : "Off duty"}
+            </span>
           </div>
-        ) : (
-          <ResponderLeafletMap
-            alerts={alerts}
-            concerns={mapConcerns}
-            selectedId={selected?.id ?? null}
-            selectedConcernId={selectedConcernId}
-            userPos={userPos}
-            onSelect={selectDispatch}
-            onSelectConcern={selectConcernFromMap}
-          />
-        )}
-      </section>
+        ) : null}
 
-      <aside className={cn(
-        "absolute inset-x-0 bottom-0 z-[700] space-y-3 overflow-y-auto rounded-t-3xl border border-neutral-200 bg-[#f8fafc]/98 p-3 shadow-2xl transition-[max-height] duration-200 lg:inset-y-4 lg:right-4 lg:left-auto lg:w-[390px] lg:max-h-none lg:rounded-3xl lg:p-3",
-        detailsExpanded ? "max-h-[56svh]" : "max-h-[76px]",
-      )}>
+        {/* Below sm the field takes the bar over rather than fighting the
+            identity readout for 40px. */}
+        <div className={cn("min-w-0 flex-1 sm:max-w-md", !searchOpen && "hidden sm:block")}>
+          <div className="relative">
+            <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-nav-muted" />
+            <input
+              value={mapSearch}
+              onChange={(event) => setMapSearch(event.target.value)}
+              placeholder="Filter dispatches and nearby reports"
+              aria-label="Filter dispatches and nearby reports"
+              className="h-9 w-full rounded-lg border border-card-line bg-card-raised pl-8 pr-8 text-sm text-foreground placeholder:text-faint-foreground focus:border-ice focus:outline-none"
+            />
+            {mapSearch ? (
+              <button
+                type="button"
+                onClick={() => setMapSearch("")}
+                aria-label="Clear filter"
+                className="absolute right-1.5 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded text-nav-muted hover:text-nav-text-active"
+              >
+                <XIcon className="size-3.5" />
+              </button>
+            ) : null}
+          </div>
+        </div>
+
         <button
           type="button"
-          onClick={() => setDetailsExpanded((current) => !current)}
-          className="sticky top-0 z-10 flex w-full items-center justify-center gap-2 rounded-xl bg-white py-2 text-xs font-black text-[#07145f] shadow-sm lg:hidden"
-          aria-expanded={detailsExpanded}
+          onClick={() => {
+            setSearchOpen((open) => !open)
+            if (searchOpen) setMapSearch("")
+          }}
+          aria-label={searchOpen ? "Close filter" : "Filter dispatches"}
+          aria-expanded={searchOpen}
+          className="flex size-9 shrink-0 items-center justify-center rounded-lg text-nav-muted hover:text-nav-text-active sm:hidden"
         >
-          {detailsExpanded ? <ChevronDownIcon className="size-4" /> : <ChevronUpIcon className="size-4" />}
-          {selected ? `${selected.type} dispatch` : `${alerts.length} active dispatches`}
+          {searchOpen ? <XIcon className="size-4" /> : <SearchIcon className="size-4" />}
         </button>
-          <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-black text-[#07145f]">Selected dispatch</p>
-                <p className="mt-1 text-xs font-semibold text-neutral-500">
-                  {alerts.length} assigned incident{alerts.length === 1 ? "" : "s"}
-                </p>
-              </div>
-              <RadioIcon className="size-5 text-[#ff6a1a]" />
+
+        <span
+          className={cn(
+            "flex shrink-0 items-center gap-1.5 text-micro uppercase tracking-wide",
+            searchOpen && "hidden sm:flex",
+          )}
+        >
+          <span
+            className={cn(
+              "relative flex size-1.5 rounded-full",
+              activeCount > 0 ? "bg-sos text-sos" : "bg-status-closed",
+            )}
+          >
+            {activeCount > 0 ? (
+              <span aria-hidden className="ops-pulse absolute inset-0 rounded-full" />
+            ) : null}
+          </span>
+          <span className={activeCount > 0 ? "text-sos" : "text-nav-muted"}>
+            {activeCount > 0 ? `${activeCount} active` : "All clear"}
+          </span>
+        </span>
+      </div>
+
+      {/* Map + panels */}
+      <div className="relative flex flex-1 min-h-0">
+        <section className="absolute inset-0">
+          {loading ? (
+            <div className="flex h-full items-center justify-center bg-card">
+              <LoaderCircleIcon className="size-8 animate-spin text-nav-muted" />
             </div>
+          ) : (
+            <ResponderLeafletMap
+              alerts={alerts}
+              concerns={mapConcerns}
+              selectedId={selected?.id ?? null}
+              selectedConcernId={selectedConcernId}
+              userPos={userPos}
+              routeGeometry={selectedRouteGeometry}
+              onSelect={selectDispatch}
+              onSelectConcern={selectConcernFromMap}
+              onLocateMe={() => void locateMe()}
+              locating={locating}
+            />
+          )}
+        </section>
 
-            {!selected ? (
-              <div className="mt-4 rounded-2xl border border-dashed border-neutral-200 p-5 text-center">
-                <CheckCircleIcon className="mx-auto size-8 text-emerald-600" />
-                <p className="mt-2 text-sm font-bold text-neutral-900">
-                  No active assignments
-                </p>
-                <p className="mt-1 text-xs text-neutral-500">
-                  New dispatches will appear here.
-                </p>
-              </div>
-            ) : (
-              <div className="mt-4 space-y-3">
-                <div className="rounded-2xl border border-neutral-200 bg-[#fffaf7] p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-[12px] font-black uppercase text-red-600">
-                        {selected.type} emergency
-                      </p>
-                      <h2 className="mt-1 text-lg font-black text-[#07145f]">
-                        {selected.address || selected.barangay}
-                      </h2>
-                    </div>
-                    <span className={cn("rounded-full border px-2.5 py-1 text-[11px] font-black", statusClass(selected.status))}>
-                      {statusLabel[selected.status]}
-                    </span>
-                  </div>
-                  <p className="mt-3 text-sm leading-6 text-neutral-600">
-                    {selected.note || "No note provided."}
-                  </p>
-                  <p className="mt-3 flex items-center gap-1.5 text-xs font-bold text-neutral-500">
-                    <MapPinIcon className="size-3.5" />
-                    {selectedDistance == null
-                      ? "Distance pending GPS"
-                      : `${selectedDistance.toFixed(1)} km away`}
-                  </p>
-                </div>
+        {error ? (
+          <div
+            role="alert"
+            className="absolute left-3 right-3 top-3 z-30 rounded-xl border border-severity-critical bg-popover px-3 py-2 text-xs font-semibold text-severity-critical-ink shadow-sm sm:left-4 sm:right-auto sm:max-w-sm"
+          >
+            {error}
+          </div>
+        ) : null}
 
-                <div className="grid gap-2">
-                  <Button
-                    type="button"
-                    disabled={Boolean(busy)}
-                    onClick={() => void pingSelected()}
-                    className="bg-[#ff6a1a] text-white hover:bg-[#e85f17]"
-                  >
-                    {busy === "ping" ? (
-                      <LoaderCircleIcon className="size-4 animate-spin" />
-                    ) : (
-                      <LocateFixedIcon className="size-4" />
-                    )}
-                    Send GPS · Mark en route
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={Boolean(busy) || !["en_route", "nearby"].includes(selected.status)}
-                    onClick={() => void arrivedSelected()}
-                  >
-                    {busy === "arrived" ? (
-                      <LoaderCircleIcon className="size-4 animate-spin" />
-                    ) : (
-                      <MapPinIcon className="size-4" />
-                    )}
-                    I have arrived on scene
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={Boolean(busy) || ["resolved", "cancelled"].includes(selected.status)}
-                    onClick={() => void requestBackup()}
-                  >
-                    {busy === "backup" ? <LoaderCircleIcon className="size-4 animate-spin" /> : <RadioIcon className="size-4" />}
-                    Request backup
-                  </Button>
-                </div>
-
-                <EmergencyChatPanel
-                  alertId={selected.id}
-                  open
-                  theme="light"
-                  disabled={["resolved", "cancelled"].includes(selected.status)}
-                  participantHint={
-                    selectedActiveTeam.length > 0
-                      ? `Group · resident + ${selectedActiveTeam.length} responder${selectedActiveTeam.length === 1 ? "" : "s"}`
-                      : "Group chat opens after an active responder is assigned"
-                  }
-                  className="min-h-[320px]"
+        {isDesktop ? (
+          <aside className="absolute inset-y-4 right-4 z-30 w-[390px] max-w-[calc(100vw-2rem)] space-y-3 overflow-y-auto rounded-3xl border border-rail-line bg-rail-glass p-3 shadow-2xl backdrop-blur">
+            <IncidentPanel
+              alerts={listedAlerts}
+              selected={selected}
+              selectedDistance={selectedDistance}
+              selectedActiveTeam={selectedActiveTeam}
+              viewerId={viewerId}
+              awaitingAckCount={awaitingAckCount}
+              onClose={null}
+              onChanged={applyAlertChange}
+              onRefresh={refresh}
+              onSelectDispatch={selectDispatch}
+              assignedConcerns={assignedConcerns}
+              assignedChatId={assignedChatId}
+              onToggleAssignedChat={(id) => setAssignedChatId((current) => current === id ? null : id)}
+              onConcernMessageSent={refresh}
+              visibleConcerns={visibleConcerns}
+              selectedConcernId={selectedConcernId}
+              concernBusy={concernBusy}
+              replyOpenId={replyOpenId}
+              replyDraft={replyDraft}
+              onReplyDraftChange={setReplyDraft}
+              onToggleReply={(id) => setReplyOpenId((current) => current === id ? null : id)}
+              onLikeConcern={(concern) => void likeConcern(concern)}
+              onReplyToConcern={(concern) => void replyToConcern(concern)}
+              concernCardRef={setConcernCardRef}
+            />
+          </aside>
+        ) : (
+          <Sheet open={panelOpen} onOpenChange={setPanelOpen} lockScroll={false}>
+            <SheetContent
+              overlayClassName="hidden"
+              aria-label="Dispatch panel"
+              // Rests on top of the nav row rather than behind it, so Map and
+              // Shift stay reachable while a dispatch is open.
+              style={{ bottom: MOBILE_NAV_CLEARANCE }}
+              className="z-20 flex max-h-[58svh] flex-col rounded-t-3xl border-rail-line bg-rail-glass/95 shadow-2xl backdrop-blur"
+            >
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3">
+                <IncidentPanel
+                  alerts={listedAlerts}
+                  selected={selected}
+                  selectedDistance={selectedDistance}
+                  selectedActiveTeam={selectedActiveTeam}
+                  viewerId={viewerId}
+                  awaitingAckCount={awaitingAckCount}
+                  onClose={() => setPanelOpen(false)}
+                  onChanged={applyAlertChange}
+                  onRefresh={refresh}
+                  onSelectDispatch={selectDispatch}
+                  assignedConcerns={assignedConcerns}
+                  assignedChatId={assignedChatId}
+                  onToggleAssignedChat={(id) => setAssignedChatId((current) => current === id ? null : id)}
+                  onConcernMessageSent={refresh}
+                  visibleConcerns={visibleConcerns}
+                  selectedConcernId={selectedConcernId}
+                  concernBusy={concernBusy}
+                  replyOpenId={replyOpenId}
+                  replyDraft={replyDraft}
+                  onReplyDraftChange={setReplyDraft}
+                  onToggleReply={(id) => setReplyOpenId((current) => current === id ? null : id)}
+                  onLikeConcern={(concern) => void likeConcern(concern)}
+                  onReplyToConcern={(concern) => void replyToConcern(concern)}
+                  concernCardRef={setConcernCardRef}
                 />
               </div>
-            )}
-          </section>
-
-          <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-black text-[#07145f]">Assigned concerns</p>
-                <p className="mt-1 text-xs font-semibold text-neutral-500">
-                  Field reports assigned to you by barangay officials.
-                </p>
-              </div>
-              <span className="rounded-full bg-[#eef3ff] px-2.5 py-1 text-xs font-black text-[#07145f]">
-                {assignedConcerns.length}
-              </span>
-            </div>
-            <div className="mt-3 space-y-3">
-              {assignedConcerns.length === 0 ? (
-                <p className="rounded-2xl border border-dashed border-neutral-200 p-4 text-xs font-semibold text-neutral-500">
-                  No active concern assignments.
-                </p>
-              ) : assignedConcerns.map((concern) => (
-                <article key={concern.id} className="rounded-2xl border border-neutral-200 bg-[#f8fafc] p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-black text-[#07145f]">{concern.title}</p>
-                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-600">{concern.description}</p>
-                    </div>
-                    <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[10px] font-black uppercase text-[#43507f] ring-1 ring-neutral-200">
-                      {concern.status.replace(/_/g, " ")}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-[11px] font-bold text-neutral-500">
-                    {concern.address || concern.barangay} · {concern.tracking_id}
-                  </p>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="mt-3"
-                    onClick={() => setAssignedChatId((current) => current === concern.id ? null : concern.id)}
-                  >
-                    {assignedChatId === concern.id ? "Close report chat" : "Open report chat"}
-                  </Button>
-                  {assignedChatId === concern.id ? (
-                    <div className="mt-3 space-y-3">
-                      <ConcernConversation items={concern.conversation ?? []} />
-                      <ReportChatPanel
-                        concernId={concern.id}
-                        open
-                        disabled={false}
-                        showHistory={false}
-                        title="Message this case"
-                        subtitle="Your message is added to the shared case conversation."
-                        onMessageSent={refresh}
-                      />
-                    </div>
-                  ) : null}
-                </article>
-              ))}
-            </div>
-          </section>
-
-          <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-black text-[#07145f]">Nearby community alerts</p>
-                <p className="mt-1 text-xs font-semibold text-neutral-500">Like, respond, or open a nearby thread without leaving the map.</p>
-              </div>
-              <MapPinIcon className="size-5 text-[#ff6a1a]" />
-            </div>
-            <div className="mt-3 space-y-3">
-              {visibleConcerns.length === 0 ? (
-                <p className="rounded-2xl border border-dashed border-neutral-200 p-4 text-xs font-semibold text-neutral-500">No nearby community alerts available.</p>
-              ) : visibleConcerns.map((concern) => (
-                <article
-                  key={concern.id}
-                  ref={(node) => { concernCardRefs.current[concern.id] = node }}
-                  className={cn(
-                    "rounded-2xl border bg-[#f8fafc] p-3 transition-colors",
-                    selectedConcernId === concern.id ? "border-[#ff6a1a] ring-2 ring-[#ff6a1a]/15" : "border-neutral-200",
-                  )}
-                >
-                  <p className="text-sm font-black text-[#07145f]">{concern.title}</p>
-                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-600">{concern.description}</p>
-                  <p className="mt-2 text-[11px] font-bold text-neutral-500">{concern.address || concern.barangay} · {concern.vote_count} support · {concern.comment_count} replies</p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Button type="button" size="sm" variant="outline" disabled={concernBusy === concern.id} onClick={() => void likeConcern(concern)}>
-                      {concern.user_vote === 1 ? "Supported" : "Like"}
-                    </Button>
-                    <Button type="button" size="sm" variant="outline" onClick={() => setReplyOpenId((value) => value === concern.id ? null : concern.id)}>
-                      Respond / Reply
-                    </Button>
-                  </div>
-                  {replyOpenId === concern.id ? (
-                    <div className="mt-3 space-y-2">
-                      <textarea value={replyDraft} onChange={(event) => setReplyDraft(event.target.value)} placeholder="Write a useful response…" rows={2} className="w-full resize-none rounded-xl border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-[#ff6a1a]" />
-                      <Button type="button" size="sm" disabled={concernBusy === concern.id || !replyDraft.trim()} onClick={() => void replyToConcern(concern)} className="bg-[#07145f] text-white hover:bg-[#10227a]">Post response</Button>
-                    </div>
-                  ) : null}
-                </article>
-              ))}
-            </div>
-          </section>
-
-          <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm">
-            <p className="text-sm font-black text-[#07145f]">Dispatch list</p>
-            <div className="mt-3 space-y-2">
-              {alerts.length === 0 ? (
-                <p className="rounded-2xl bg-neutral-50 p-3 text-xs font-semibold text-neutral-500">
-                  No assigned incidents.
-                </p>
-              ) : (
-                alerts.map((alert) => (
-                  <button
-                    key={alert.id}
-                    type="button"
-                    onClick={() => selectDispatch(alert.id)}
-                    className={cn(
-                      "w-full rounded-2xl border p-3 text-left transition-colors",
-                      selected?.id === alert.id
-                        ? "border-[#ff6a1a] bg-[#fff4ed]"
-                        : "border-neutral-200 bg-white hover:border-neutral-300",
-                    )}
-                  >
-                    <p className="truncate text-sm font-black capitalize text-[#07145f]">
-                      {alert.type} emergency
-                    </p>
-                    <p className="mt-1 truncate text-xs font-semibold text-neutral-500">
-                      {alert.address || alert.barangay}
-                    </p>
-                  </button>
-                ))
-              )}
-            </div>
-          </section>
-        </aside>
+            </SheetContent>
+          </Sheet>
+        )}
       </div>
+    </div>
   )
 }

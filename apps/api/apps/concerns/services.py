@@ -7,12 +7,12 @@ from .models import ConcernAssignment
 
 def ensure_concern_media_preview(media):
     preview_name = (media.preview_file.name or "").lower() if media.preview_file else ""
-    if preview_name and "/redacted-v2-" in preview_name and preview_name.endswith(".jpg"):
+    if preview_name and "/redacted-v4-" in preview_name and preview_name.endswith(".jpg"):
         return media.preview_file
     if media.preview_file:
         media.preview_file.delete(save=False)
     media.preview_file.save(
-        f"redacted-v2-{media.pk}.jpg",
+        f"redacted-v4-{media.pk}.jpg",
         ContentFile(build_redacted_preview_bytes(media.file, media.mime_type)),
         save=True,
     )

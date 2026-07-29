@@ -13,6 +13,7 @@ interface OtpVerificationPageProps {
   actionLabel: string
   resendStorageKey: string
   onBack?: () => void
+  onResend?: () => Promise<void> | void
   onSuccess?: (code: string) => void
 }
 
@@ -50,10 +51,13 @@ export default function OtpVerificationPage({
   actionLabel,
   resendStorageKey,
   onBack,
+  onResend,
   onSuccess,
 }: OtpVerificationPageProps) {
   const [resendExpiry, setResendExpiryState] = useState(() => getResendExpiry(resendStorageKey))
   const [secondsRemaining, setSecondsRemaining] = useState(0)
+  const [isResending, setIsResending] = useState(false)
+  const [resendError, setResendError] = useState("")
 
   usePageTitle(title)
 
@@ -73,14 +77,30 @@ export default function OtpVerificationPage({
     return () => window.clearInterval(timer)
   }, [resendExpiry])
 
-  function handleResend() {
-    setResendExpiryState(setResendExpiry(resendStorageKey))
-    toast.success("Code sent", {
-      description: "A new verification code has been sent to your email.",
-    })
+  async function handleResend() {
+    if (isResending || secondsRemaining > 0) return
+
+    setIsResending(true)
+    setResendError("")
+    try {
+      await onResend?.()
+      setResendExpiryState(setResendExpiry(resendStorageKey))
+      toast.success("Code sent", {
+        description: "A new verification code has been sent to your email.",
+      })
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not resend code. Try again later."
+      setResendError(message)
+      toast.error(message)
+    } finally {
+      setIsResending(false)
+    }
   }
 
-  const resendDisabled = secondsRemaining > 0
+  const resendDisabled = secondsRemaining > 0 || isResending
   const resendLabel = resendDisabled
     ? `Resend (${formatSeconds(secondsRemaining)})`
     : "Resend?"
@@ -110,6 +130,11 @@ export default function OtpVerificationPage({
                 resendLabel={resendLabel}
                 onSuccess={onSuccess}
               />
+              {resendError ? (
+                <p className="mt-3 text-center text-sm font-medium text-destructive" role="alert">
+                  {resendError}
+                </p>
+              ) : null}
             </div>
           </div>
         </div>

@@ -166,7 +166,10 @@ export function AddressConfirmFlow({
     setLocationOpen(true)
   }
 
-  async function useCurrentLocation() {
+  // Not a hook: an async click handler. The `use` prefix made the linter
+  // treat it as one (rules-of-hooks fired on the JSX call site) and made
+  // readers do a double-take at `useCurrentLocation()` inside onClick.
+  async function applyCurrentLocation() {
     setLocationOpen(false)
     setLocating(true)
     setOpenList(false)
@@ -532,7 +535,7 @@ export function AddressConfirmFlow({
                     <div className="mt-6 flex flex-col gap-1">
                       <button
                         type="button"
-                        onClick={() => void useCurrentLocation()}
+                        onClick={() => void applyCurrentLocation()}
                         className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-[#ff8133] px-6 text-[15px] font-semibold text-white shadow-sm transition-[transform,colors,filter,box-shadow] duration-150 ease-out hover:bg-[#e6732e] active:scale-[0.96] active:brightness-95 active:shadow-none"
                       >
                         Use current location

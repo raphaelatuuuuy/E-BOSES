@@ -323,7 +323,8 @@ class EmergencyAPITests(APITestCase):
             format="json",
         )
 
-        self.assertEqual(ack_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(ack_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(ack_response.data["status"], EmergencyAlert.Status.ACKNOWLEDGED)
         self.assertEqual(ping_response.status_code, status.HTTP_201_CREATED)
         alert.refresh_from_db()
         self.assertEqual(alert.status, EmergencyAlert.Status.EN_ROUTE)
@@ -499,13 +500,14 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(emergency["responder_location"]["latitude"], "14.6516000")
 
     def test_responder_can_update_duty_location(self):
+        self.responder.responder_unit = get_user_model().ResponderUnit.BHW
+        self.responder.save(update_fields=["responder_unit"])
         self.client.force_authenticate(self.responder)
 
         response = self.client.post(
             "/api/emergencies/duty/",
             {
                 "is_on_duty": True,
-                "responder_unit": get_user_model().ResponderUnit.TANOD,
                 "latitude": "14.6516000",
                 "longitude": "121.1208000",
             },
@@ -515,13 +517,64 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.responder.refresh_from_db()
         self.assertTrue(self.responder.is_on_duty)
-        self.assertEqual(self.responder.responder_unit, get_user_model().ResponderUnit.TANOD)
+        self.assertEqual(self.responder.responder_unit, get_user_model().ResponderUnit.BHW)
         self.assertIsNotNone(self.responder.location_updated_at)
         shift = ResponderShift.objects.get(responder=self.responder, status=ResponderShift.Status.ACTIVE)
-        self.assertEqual(shift.responder_unit, get_user_model().ResponderUnit.TANOD)
+        self.assertEqual(shift.responder_unit, get_user_model().ResponderUnit.BHW)
         self.assertEqual(str(shift.start_latitude), "14.6516000")
         self.assertEqual(str(shift.start_longitude), "121.1208000")
         self.assertTrue(AuditLog.objects.filter(actor=self.responder, action="responder.shift_started").exists())
+
+    def test_responder_cannot_change_own_unit_through_duty_endpoint(self):
+        """Going on duty reports availability; it must not re-badge the responder.
+
+        Honouring `responder_unit` here let a BHW volunteer post `bdrrmo` and
+        start receiving fire dispatches.
+        """
+        User = get_user_model()
+        self.responder.responder_unit = User.ResponderUnit.BHW
+        self.responder.save(update_fields=["responder_unit"])
+        self.client.force_authenticate(self.responder)
+
+        response = self.client.post(
+            "/api/emergencies/duty/",
+            {
+                "is_on_duty": True,
+                "responder_unit": User.ResponderUnit.BDRRMO,
+                "latitude": "14.6516000",
+                "longitude": "121.1208000",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.responder.refresh_from_db()
+        self.assertEqual(self.responder.responder_unit, User.ResponderUnit.BHW)
+        self.assertEqual(response.data["responder_unit"], User.ResponderUnit.BHW)
+        shift = ResponderShift.objects.get(responder=self.responder, status=ResponderShift.Status.ACTIVE)
+        self.assertEqual(shift.responder_unit, User.ResponderUnit.BHW)
+
+    def test_responder_cannot_change_own_unit_by_starting_a_shift(self):
+        """The unit on a shift comes from the official-assigned membership."""
+        User = get_user_model()
+        self.responder.responder_unit = User.ResponderUnit.BHW
+        self.responder.save(update_fields=["responder_unit"])
+        self.client.force_authenticate(self.responder)
+
+        response = self.client.post(
+            "/api/emergencies/shifts/start/",
+            {
+                "responder_unit": User.ResponderUnit.TANOD,
+                "latitude": "14.6516000",
+                "longitude": "121.1208000",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["responder_unit"], User.ResponderUnit.BHW)
+        self.responder.refresh_from_db()
+        self.assertEqual(self.responder.responder_unit, User.ResponderUnit.BHW)
 
     def test_turning_duty_off_closes_the_active_shift(self):
         self.client.force_authenticate(self.responder)
@@ -558,12 +611,13 @@ class EmergencyAPITests(APITestCase):
         self.assertTrue(AuditLog.objects.filter(actor=self.responder, action="responder.shift_ended").exists())
 
     def test_responder_can_start_view_end_and_list_shift(self):
+        self.responder.responder_unit = get_user_model().ResponderUnit.BHW
+        self.responder.save(update_fields=["responder_unit"])
         self.client.force_authenticate(self.responder)
 
         start_response = self.client.post(
             "/api/emergencies/shifts/start/",
             {
-                "responder_unit": get_user_model().ResponderUnit.BHW,
                 "latitude": "14.6516000",
                 "longitude": "121.1208000",
             },
@@ -1072,6 +1126,62 @@ class EmergencyAPITests(APITestCase):
         self.assertIsNotNone(alert.resolved_at)
         self.assertTrue(EmergencyStatusEvent.objects.filter(alert=alert, status=EmergencyAlert.Status.RESOLVED).exists())
 
+    def test_responder_acknowledges_routed_emergency(self):
+        alert = self.create_alert()
+        assignment = EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
+        alert.status = EmergencyAlert.Status.ROUTED
+        alert.save(update_fields=["status", "updated_at"])
+        self.client.force_authenticate(self.responder)
+
+        response = self.client.post(f"/api/emergencies/{alert.pk}/acknowledge/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        alert.refresh_from_db()
+        assignment.refresh_from_db()
+        self.assertEqual(alert.status, EmergencyAlert.Status.ACKNOWLEDGED)
+        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ACKNOWLEDGED)
+        self.assertIsNotNone(assignment.acknowledged_at)
+        self.assertTrue(
+            EmergencyStatusEvent.objects.filter(alert=alert, status=EmergencyAlert.Status.ACKNOWLEDGED).exists()
+        )
+
+    def test_acknowledge_rejects_wrong_state(self):
+        alert = self.create_alert()
+        EmergencyResponderAssignment.objects.create(
+            alert=alert,
+            responder=self.responder,
+            status=EmergencyResponderAssignment.Status.EN_ROUTE,
+        )
+        alert.status = EmergencyAlert.Status.EN_ROUTE
+        alert.save(update_fields=["status", "updated_at"])
+        self.client.force_authenticate(self.responder)
+
+        response = self.client.post(f"/api/emergencies/{alert.pk}/acknowledge/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        alert.refresh_from_db()
+        self.assertEqual(alert.status, EmergencyAlert.Status.EN_ROUTE)
+
+    def test_non_assignee_cannot_acknowledge(self):
+        alert = self.create_alert()
+        EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
+        alert.status = EmergencyAlert.Status.ROUTED
+        alert.save(update_fields=["status", "updated_at"])
+        other_responder = get_user_model().objects.create_user(
+            email="emergency-other-responder@example.com",
+            phone_number="+639360000005",
+            password="pass",
+            role=get_user_model().Role.FIRST_RESPONDER,
+            status=get_user_model().Status.VERIFIED,
+        )
+        self.client.force_authenticate(other_responder)
+
+        response = self.client.post(f"/api/emergencies/{alert.pk}/acknowledge/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        alert.refresh_from_db()
+        self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
+
     def test_resident_cannot_cancel_after_acknowledgement(self):
         alert = self.create_alert()
         assignment = EmergencyResponderAssignment.objects.create(
@@ -1464,11 +1574,30 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.EN_ROUTE)
         self.assertEqual(self.responder.current_latitude, Decimal("14.6516000"))
         self.assertEqual(self.responder.current_longitude, Decimal("121.1208000"))
+        self.assertIsNotNone(assignment.acknowledged_at)
 
         arrived = self.client.post(f"/api/emergencies/{alert.pk}/arrived/", {}, format="json")
         resolved = self.client.post(f"/api/emergencies/{alert.pk}/resolve/", {}, format="json")
         self.assertEqual(arrived.status_code, status.HTTP_200_OK)
         self.assertEqual(resolved.status_code, status.HTTP_200_OK)
+
+    def test_location_ping_auto_acknowledges_unacknowledged_assignment(self):
+        alert = self.direct_alert(status=EmergencyAlert.Status.ROUTED)
+        assignment = EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
+        self.client.force_authenticate(self.responder)
+        self.assertIsNone(assignment.acknowledged_at)
+
+        response = self.client.post(
+            f"/api/emergencies/{alert.pk}/location-pings/",
+            {"latitude": "14.6516000", "longitude": "121.1208000"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        alert.refresh_from_db()
+        assignment.refresh_from_db()
+        self.assertEqual(alert.status, EmergencyAlert.Status.EN_ROUTE)
+        self.assertIsNotNone(assignment.acknowledged_at)
 
     def test_auto_route_is_idempotent_when_retried_for_the_same_alert(self):
         User = get_user_model()

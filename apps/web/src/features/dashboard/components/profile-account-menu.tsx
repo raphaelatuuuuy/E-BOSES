@@ -6,6 +6,7 @@ import { ChevronDownIcon, LogOutIcon, PlusCircleIcon, UserIcon, ClipboardListIco
 import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/components/popover"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { RESIDENT_DESKTOP_MIN_PX } from "@/features/dashboard/components/resident-top-bar"
 
@@ -65,7 +66,7 @@ export function ProfileAccountMenu({
   const displayName = user
     ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "Resident"
     : "Resident"
-  const letter = (user?.firstName?.[0] || displayName[0] || "?").toUpperCase()
+  const letter = initials(user?.full_name || displayName)
 
   async function handleSignOut() {
     setSigningOut(true)
@@ -128,13 +129,7 @@ export function ProfileAccountMenu({
               {displayName}
             </p>
             <p className="mt-1 text-[13px] font-normal text-neutral-500">{placeLabel}</p>
-            <Link
-              to="/dashboard/profile"
-              onClick={() => setOpen(false)}
-              className="mt-4 inline-flex h-9 items-center justify-center rounded-full border-[1.5px] border-solid border-[#d0d0d0] bg-white px-5 text-[14px] font-semibold text-neutral-800 no-underline transition-colors hover:bg-neutral-50"
-            >
-              View profile
-            </Link>
+
           </div>
 
           <div className="border-t-[1.5px] border-solid border-[#d0d0d0]" />

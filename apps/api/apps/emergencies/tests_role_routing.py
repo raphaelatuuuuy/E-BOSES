@@ -1,0 +1,266 @@
+from datetime import timedelta
+
+from django.contrib.auth import get_user_model
+from django.test import override_settings
+from django.utils import timezone
+from rest_framework import status
+from rest_framework.test import APITestCase
+
+from apps.accounts.models import ResidentProfile
+
+from .models import (
+    EmergencyAlert,
+    EmergencyAssignmentLog,
+    EmergencyResponderAssignment,
+    EmergencyTypeRoleMap,
+    ResponderShift,
+)
+
+
+TEST_CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
+    },
+}
+
+
+@override_settings(CHANNEL_LAYERS=TEST_CHANNEL_LAYERS, OSM_ROUTE_URL="")
+class RoleBasedResponderRoutingTests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.resident = User.objects.create_user(
+            email="feat6-resident@example.com",
+            phone_number="+639610000001",
+            password="pass",
+            status=User.Status.VERIFIED,
+        )
+        ResidentProfile.objects.create(
+            user=self.resident,
+            first_name="Maria",
+            last_name="Santos",
+            date_of_birth="1995-01-01",
+            address="Blk 5 Lot 2",
+            barangay="Marikina Heights",
+        )
+        self.official = User.objects.create_user(
+            email="feat6-official@example.com",
+            phone_number="+639610000002",
+            password="pass",
+            role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
+        )
+        self.bhw = self.responder("feat6-bhw@example.com", "+639610000003", User.ResponderUnit.BHW)
+        self.tanod = self.responder("feat6-tanod@example.com", "+639610000004", User.ResponderUnit.TANOD)
+        self.backup_bhw = self.responder("feat6-backup@example.com", "+639610000005", User.ResponderUnit.BHW)
+
+    def responder(self, email, phone, unit):
+        User = get_user_model()
+        user = User.objects.create_user(
+            email=email,
+            phone_number=phone,
+            password="pass",
+            role=User.Role.FIRST_RESPONDER,
+            responder_unit=unit,
+            status=User.Status.VERIFIED,
+            is_on_duty=True,
+            current_latitude="14.6516000",
+            current_longitude="121.1208000",
+            location_updated_at=timezone.now(),
+        )
+        ResidentProfile.objects.create(
+            user=user,
+            first_name=email.split("-", 1)[-1].split("@", 1)[0].title(),
+            last_name="Responder",
+            date_of_birth="1990-01-01",
+            address="Responder Base",
+            barangay="Marikina Heights",
+        )
+        ResponderShift.objects.create(
+            responder=user,
+            responder_unit=unit,
+            status=ResponderShift.Status.ACTIVE,
+            started_at=timezone.now() - timedelta(minutes=10),
+            start_latitude="14.6516000",
+            start_longitude="121.1208000",
+        )
+        return user
+
+    def alert(self, type=EmergencyAlert.Type.MEDICAL, status=EmergencyAlert.Status.SUBMITTED):
+        return EmergencyAlert.objects.create(
+            reporter=self.resident,
+            type=type,
+            note="Emergency near the covered court.",
+            status=status,
+            barangay="Marikina Heights",
+            latitude="14.6515000",
+            longitude="121.1207000",
+            address="Covered court",
+        )
+
+    def test_admin_configures_role_map_and_auto_route_uses_shift_eligible_responder(self):
+        self.client.force_authenticate(self.official)
+        created = self.client.post(
+            "/api/emergencies/role-maps/",
+            {
+                "emergency_type": EmergencyAlert.Type.MEDICAL,
+                "responder_unit": get_user_model().ResponderUnit.TANOD,
+                "priority": 50,
+            },
+            format="json",
+        )
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        self.bhw.is_on_duty = False
+        self.bhw.save(update_fields=["is_on_duty", "updated_at"])
+
+        self.client.force_authenticate(self.resident)
+        response = self.client.post(
+            "/api/emergencies/",
+            {
+                "type": EmergencyAlert.Type.MEDICAL,
+                "note": "Medical emergency configured to tanod for this drill.",
+                "latitude": "14.6507000",
+                "longitude": "121.1133000",
+                "address": "Covered court",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        alert = EmergencyAlert.objects.get(pk=response.data["id"])
+        assignment = alert.assignments.get()
+        self.assertEqual(assignment.responder, self.tanod)
+        self.assertEqual(assignment.source, EmergencyResponderAssignment.Source.AUTO)
+        self.assertEqual(assignment.role_map_id, created.data["id"])
+        self.assertTrue(EmergencyAssignmentLog.objects.filter(alert=alert, action="auto_assigned", responder=self.tanod).exists())
+
+    def test_manual_assignment_and_status_changes_are_logged_and_rbac_guarded(self):
+        alert = self.alert()
+        self.client.force_authenticate(self.official)
+        assigned = self.client.post(
+            f"/api/emergencies/{alert.pk}/assign/",
+            {"responder_ids": [self.bhw.pk]},
+            format="json",
+        )
+        self.assertEqual(assigned.status_code, status.HTTP_200_OK)
+        assignment = alert.assignments.get(responder=self.bhw)
+        self.assertTrue(EmergencyAssignmentLog.objects.filter(alert=alert, assignment=assignment, action="manual_assigned", actor=self.official).exists())
+
+        self.client.force_authenticate(self.tanod)
+        forbidden = self.client.post(
+            f"/api/emergencies/{alert.pk}/assignments/{assignment.pk}/status/",
+            {"status": EmergencyResponderAssignment.Status.ASSISTING, "note": "Trying to act on another responder dispatch."},
+            format="json",
+        )
+        self.assertEqual(forbidden.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(self.bhw)
+        assisting = self.client.post(
+            f"/api/emergencies/{alert.pk}/assignments/{assignment.pk}/status/",
+            {"status": EmergencyResponderAssignment.Status.ASSISTING, "note": "Providing first aid support."},
+            format="json",
+        )
+        self.assertEqual(assisting.status_code, status.HTTP_200_OK)
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ASSISTING)
+        self.assertTrue(EmergencyAssignmentLog.objects.filter(alert=alert, assignment=assignment, action="status_changed", new_status="assisting").exists())
+
+    def test_escalation_adds_supporting_responder_and_decline_keeps_history(self):
+        alert = self.alert(status=EmergencyAlert.Status.ROUTED)
+        old_assignment = EmergencyResponderAssignment.objects.create(
+            alert=alert,
+            responder=self.bhw,
+            status=EmergencyResponderAssignment.Status.ASSIGNED,
+        )
+        EmergencyResponderAssignment.objects.filter(pk=old_assignment.pk).update(
+            assigned_at=timezone.now() - timedelta(minutes=30)
+        )
+        old_assignment.refresh_from_db()
+
+        self.client.force_authenticate(self.official)
+        escalated = self.client.post("/api/emergencies/escalate-overdue/", {"minutes": 5}, format="json")
+        self.assertEqual(escalated.status_code, status.HTTP_200_OK)
+        self.assertEqual(alert.assignments.filter(status=EmergencyResponderAssignment.Status.ASSIGNED).count(), 2)
+        self.assertTrue(EmergencyAssignmentLog.objects.filter(alert=alert, action="escalated").exists())
+
+        self.client.force_authenticate(self.bhw)
+        declined = self.client.post(
+            f"/api/emergencies/{alert.pk}/assignments/{old_assignment.pk}/status/",
+            {"status": EmergencyResponderAssignment.Status.DECLINED, "note": "Responder unavailable for safety reason."},
+            format="json",
+        )
+        self.assertEqual(declined.status_code, status.HTTP_200_OK)
+        old_assignment.refresh_from_db()
+        self.assertEqual(old_assignment.status, EmergencyResponderAssignment.Status.DECLINED)
+        self.assertTrue(EmergencyAssignmentLog.objects.filter(alert=alert, assignment=old_assignment, action="status_changed", new_status="declined").exists())
+
+    @override_settings(SMS_EMERGENCY_WEBHOOK_TOKEN="sms-secret")
+    def test_sms_forwarder_webhook_creates_and_routes_alert(self):
+        self.client.force_authenticate(self.official)
+        role_map = self.client.post(
+            "/api/emergencies/role-maps/",
+            {"emergency_type": EmergencyAlert.Type.MEDICAL, "responder_unit": get_user_model().ResponderUnit.BHW, "priority": 100},
+            format="json",
+        )
+        self.assertEqual(role_map.status_code, status.HTTP_201_CREATED)
+        self.client.force_authenticate(None)
+
+        response = self.client.post(
+            "/api/emergencies/sms-inbound/",
+            {
+                "from": self.resident.phone_number,
+                "body": (
+                    "EBOSES-SOS\n\n"
+                    f"User ID: {self.resident.pk}\n"
+                    "Emergency Type: Medical\n"
+                    "Latitude: 14.6507000\n"
+                    "Longitude: 121.1133000\n"
+                    "Timestamp: 2026-07-29 08:12 PM\n\n"
+                    "Need Immediate Assistance"
+                ),
+            },
+            format="json",
+            HTTP_X_SMS_WEBHOOK_TOKEN="sms-secret",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        alert = EmergencyAlert.objects.get(pk=response.data["id"])
+        self.assertEqual(alert.location_source, "sms")
+        self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
+        self.assertTrue(alert.assignments.filter(responder=self.bhw).exists())
+        self.assertTrue(alert.status_events.filter(note="Submitted via SMS fallback.").exists())
+
+        repeated = self.client.post(
+            "/api/emergencies/sms-inbound/",
+            {
+                "from": self.resident.phone_number,
+                "body": (
+                    "EBOSES-SOS\n\n"
+                    f"User ID: {self.resident.pk}\n"
+                    "Emergency Type: Medical\n"
+                    "Latitude: 14.6507000\n"
+                    "Longitude: 121.1133000\n"
+                    "Timestamp: 2026-07-29 08:13 PM\n\n"
+                    "Need Immediate Assistance"
+                ),
+            },
+            format="json",
+            HTTP_X_SMS_WEBHOOK_TOKEN="sms-secret",
+        )
+        self.assertEqual(repeated.status_code, status.HTTP_200_OK)
+        self.assertTrue(repeated.data["duplicate_suppressed"])
+        self.assertEqual(EmergencyAlert.objects.filter(reporter=self.resident).count(), 1)
+
+    def test_assignment_serializer_exposes_route_and_history(self):
+        alert = self.alert(status=EmergencyAlert.Status.ROUTED)
+        EmergencyResponderAssignment.objects.create(
+            alert=alert,
+            responder=self.bhw,
+            status=EmergencyResponderAssignment.Status.ASSIGNED,
+        )
+        self.client.force_authenticate(self.resident)
+
+        response = self.client.get(f"/api/emergencies/{alert.pk}/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("route", response.data["assignments"][0])
+        self.assertIn("location_history", response.data["assignments"][0])

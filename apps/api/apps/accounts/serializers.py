@@ -142,12 +142,16 @@ class UserSummarySerializer(serializers.ModelSerializer):
     member_since = serializers.SerializerMethodField()
     gender = serializers.SerializerMethodField()
     avatar = serializers.SerializerMethodField()
+    capabilities = serializers.SerializerMethodField()
+    units = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = (
             "id",
             "email",
+            "capabilities",
+            "units",
             "phone_number",
             "role",
             "status",
@@ -177,6 +181,31 @@ class UserSummarySerializer(serializers.ModelSerializer):
 
     def profile(self, obj):
         return getattr(obj, "resident_profile", None)
+
+    def get_capabilities(self, obj):
+        """Resolved capability codes, for hiding nav and disabling actions.
+
+        Presentation only — every gated endpoint enforces the same capability
+        server-side, so a tampered client gains nothing.
+        """
+        from apps.capabilities import capabilities_for
+
+        return sorted(capabilities_for(obj))
+
+    def get_units(self, obj):
+        return [
+            {
+                "id": designation.department_id,
+                "code": designation.department.code,
+                "name": designation.department.name,
+                "short_name": designation.department.short_name,
+                "position": designation.position.name,
+                "position_code": designation.position.code,
+            }
+            for designation in obj.designations.filter(is_active=True)
+            .select_related("department", "position")
+            .order_by("department__sort_order", "department__name")
+        ]
 
     def get_firstName(self, obj):
         profile = self.profile(obj)
@@ -329,6 +358,33 @@ class AccountRequestReviewSerializer(serializers.Serializer):
 
 class UserStatusUpdateSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=User.Status.choices)
+
+class StaffAccountUpdateSerializer(serializers.Serializer):
+    """Role and status changes from the Users screen.
+
+    Role was previously unchangeable anywhere: `ResidentStatusUpdateView` only
+    took status and only for residents, so a resident could never be promoted to
+    responder or official through the UI.
+    """
+
+    role = serializers.ChoiceField(choices=User.Role.choices, required=False)
+    status = serializers.ChoiceField(choices=User.Status.choices, required=False)
+    responder_unit = serializers.ChoiceField(
+        choices=User.ResponderUnit.choices, allow_blank=True, required=False
+    )
+
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError("Nothing to update.")
+        role = attrs.get("role")
+        if role == User.Role.FIRST_RESPONDER:
+            unit = attrs.get("responder_unit") or getattr(self.instance, "responder_unit", "")
+            if not unit:
+                raise serializers.ValidationError(
+                    {"responder_unit": "Choose the unit this responder belongs to."}
+                )
+        return attrs
+
 
 class ResponderUpdateSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=User.Status.choices, required=False)

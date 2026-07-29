@@ -34,11 +34,22 @@ export interface AuthUser {
   member_since?: string
   gender?: string
   avatar?: string
-  responder_unit?: "tanod" | "bhw" | "bdrrmo" | "other" | ""
+  responder_unit?: "tanod" | "bhw" | "bdrrmo" | ""
   is_on_duty?: boolean
   current_latitude?: string | null
   current_longitude?: string | null
   location_updated_at?: string | null
+  /** Resolved capability codes. Presentation only — every gated endpoint
+   *  enforces the same capability server-side. */
+  capabilities?: string[]
+  units?: {
+    id: number
+    code: string
+    name: string
+    short_name: string
+    position: string
+    position_code: string
+  }[]
 }
 
 export interface AuthResponse {

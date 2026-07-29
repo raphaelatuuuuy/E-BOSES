@@ -4,13 +4,6 @@ import { Info, Pencil, Plus, Trash2 } from "lucide-react"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@workspace/ui/components/card"
-import {
   Dialog,
   DialogBody,
   DialogContent,
@@ -53,28 +46,7 @@ export function ProofTypeList(props: {
   const noLiveTypes = !documents.some((doc) => doc.enabled !== false)
 
   return (
-    <div className="mx-auto w-full max-w-[1200px] space-y-6 p-4 md:p-7">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <h1 className={cn("text-2xl font-black md:text-3xl", PROOF_THEME.title)}>
-            ID &amp; Proof Templates
-          </h1>
-          <p className={cn("mt-2 max-w-2xl text-sm font-semibold leading-6", PROOF_THEME.body)}>
-            Choose which IDs and documents residents can submit when signing up. Set up each proof
-            type, then turn on availability when it is ready.
-          </p>
-        </div>
-        <Button
-          type="button"
-          className={cn("shrink-0 font-bold text-white", PROOF_THEME.primaryBg)}
-          onClick={onAdd}
-          disabled={saving}
-        >
-          <Plus className="size-4" />
-          Add proof type
-        </Button>
-      </header>
-
+    <div className="w-full space-y-6">
       {noLiveTypes ? (
         <div
           role="status"
@@ -89,105 +61,113 @@ export function ProofTypeList(props: {
       ) : null}
 
       {documents.length === 0 ? (
-        <Card className={cn(PROOF_THEME.card, "gap-4 py-10")}>
-          <CardHeader className="items-center text-center">
-            <CardTitle className={cn("text-lg font-black", PROOF_THEME.title)}>
+        <div className={cn(PROOF_THEME.card, "flex flex-col items-center gap-4 py-10 text-center")}>
+          <div className="space-y-1">
+            <h3 className={cn("text-lg font-black", PROOF_THEME.title)}>
               No proof types yet
-            </CardTitle>
-            <CardDescription className={cn("font-semibold", PROOF_THEME.body)}>
+            </h3>
+            <p className={cn("font-semibold", PROOF_THEME.body)}>
               Add your first ID or document type for resident sign-up.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex justify-center">
-            <Button
-              type="button"
-              className={cn("font-bold text-white", PROOF_THEME.primaryBg)}
-              onClick={onAdd}
-              disabled={saving}
-            >
-              <Plus className="size-4" />
-              Add your first proof type
-            </Button>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {documents.map((doc) => {
-            const status = deriveProofStatus(doc)
-            const displayName =
-              doc.template_name?.trim() || doc.name?.trim() || "Untitled proof"
-            const available = doc.enabled !== false
-            const sides = doc.required_sides ?? []
-            const needsBoth = sides.includes("front") && sides.includes("back")
-
-            return (
-              <Card
-                key={doc.key}
-                className={cn(PROOF_THEME.card, "gap-0 py-0 transition hover:shadow-md")}
-              >
-                <CardHeader className="gap-3 space-y-0 px-5 pt-5 pb-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <CardTitle
-                      className={cn("line-clamp-2 text-base font-black leading-snug", PROOF_THEME.title)}
-                    >
-                      {displayName}
-                    </CardTitle>
-                    <StatusBadge status={status} />
-                  </div>
-                  <p className={cn("text-xs font-semibold", PROOF_THEME.muted)}>
-                    {needsBoth ? "Front & back required" : "Front only"}
-                    {doc.fields?.length
-                      ? ` · ${doc.fields.length} field${doc.fields.length === 1 ? "" : "s"}`
-                      : ""}
-                  </p>
-                </CardHeader>
-                <CardContent className="space-y-4 px-5 pb-5">
-                  <label className="flex items-center justify-between gap-3 rounded-xl border border-[#dfe7f5] bg-[#f8fafc] px-3 py-2.5">
-                    <span className="min-w-0">
-                      <span className={cn("block text-xs font-black", PROOF_THEME.title)}>
-                        Available on sign-up
-                      </span>
-                      <span className={cn("mt-0.5 block text-[11px] font-semibold", PROOF_THEME.muted)}>
-                        {available
-                          ? "Residents can choose this proof"
-                          : "Hidden until you turn this on"}
-                      </span>
-                    </span>
-                    <Switch
-                      checked={available}
-                      disabled={saving}
-                      onCheckedChange={(enabled) => onToggleAvailable(doc.key, enabled)}
-                    />
-                  </label>
-
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      className={cn("flex-1 font-bold text-white", PROOF_THEME.primaryBg)}
-                      onClick={() => onEdit(doc.key)}
-                      disabled={saving}
-                    >
-                      <Pencil className="size-3.5" />
-                      Edit
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="font-bold text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      onClick={() => setPendingRemoveKey(doc.key)}
-                      disabled={saving || documents.length <= 1}
-                    >
-                      <Trash2 className="size-3.5" />
-                      Remove
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            )
-          })}
+            </p>
+          </div>
+          <Button
+            type="button"
+            className={cn("font-bold text-white", PROOF_THEME.primaryBg)}
+            onClick={onAdd}
+            disabled={saving}
+          >
+            <Plus className="size-4" />
+            Add your first proof type
+          </Button>
         </div>
+      ) : (
+        <table className="w-full">
+            <thead>
+              <tr className="border-b border-card-line">
+                <th className="pb-3 pl-5 pt-4 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                  Proof type
+                </th>
+                <th className="pb-3 pt-4 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                  Details
+                </th>
+                <th className="pb-3 pt-4 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                  Available on sign-up
+                </th>
+                <th className="pb-3 pr-5 pt-4 text-right text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {documents.map((doc) => {
+                const status = deriveProofStatus(doc)
+                const displayName =
+                  doc.template_name?.trim() || doc.name?.trim() || "Untitled proof"
+                const available = doc.enabled !== false
+                const sides = doc.required_sides ?? []
+                const needsBoth = sides.includes("front") && sides.includes("back")
+
+                return (
+                  <tr key={doc.key} className="border-b border-card-line last:border-b-0">
+                    <td className="py-4 pl-5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-black text-[#07145f]">{displayName}</span>
+                        <StatusBadge status={status} />
+                      </div>
+                    </td>
+                    <td className="py-4">
+                      <span className="text-sm font-semibold text-[#68739c]">
+                        {needsBoth ? "Front & back required" : "Front only"}
+                        {doc.fields?.length
+                          ? ` · ${doc.fields.length} field${doc.fields.length === 1 ? "" : "s"}`
+                          : ""}
+                      </span>
+                    </td>
+                    <td className="py-4">
+                      <label className="inline-flex items-center gap-2">
+                        <Switch
+                          checked={available}
+                          disabled={saving}
+                          onCheckedChange={(enabled) => onToggleAvailable(doc.key, enabled)}
+                        />
+                        <span className="text-xs font-semibold text-[#68739c]">
+                          {available
+                            ? "Residents can choose this proof"
+                            : "Hidden until you turn this on"}
+                        </span>
+                      </label>
+                    </td>
+                    <td className="py-4 pr-5">
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="font-bold text-white"
+                          style={{ backgroundColor: "#145be7" }}
+                          onClick={() => onEdit(doc.key)}
+                          disabled={saving}
+                        >
+                          <Pencil className="size-3.5" />
+                          Edit
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="font-bold text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          onClick={() => setPendingRemoveKey(doc.key)}
+                          disabled={saving || documents.length <= 1}
+                        >
+                          <Trash2 className="size-3.5" />
+                          Remove
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
       )}
 
       <Dialog

@@ -722,7 +722,6 @@ export function useOcrTemplateState() {
     if (!selectedDocument) return
     const otherRules = (selectedDocument.rules ?? []).filter((rule) => rule.field_key !== fieldKey)
     const built: OcrRuleDefinition[] = []
-    let order = 0
     // Resident-facing copy: missing OCR value and form mismatch both say "ID mismatched."
     const mismatchMessage = "ID mismatched."
     if (next.required) {
@@ -737,7 +736,7 @@ export function useOcrTemplateState() {
         enabled: true,
         on_failure: "manual_review",
         message: mismatchMessage,
-        order: order++,
+        order: built.length,
       })
     }
     for (const profile of next.matchProfiles) {
@@ -752,7 +751,7 @@ export function useOcrTemplateState() {
         enabled: true,
         on_failure: "manual_review",
         message: mismatchMessage,
-        order: order++,
+        order: built.length,
       })
     }
     if (next.notExpired) {
@@ -766,7 +765,7 @@ export function useOcrTemplateState() {
         threshold: null,
         enabled: true,
         on_failure: "manual_review",
-        order: order++,
+        order: built.length,
       })
     }
     updateSelectedDocument((doc) => ({

@@ -9,6 +9,8 @@ BASE_IMAGE_PROVIDER = "ultralytics"
 BASE_IMAGE_MODEL = "yolov8m.pt"
 BASE_TEXT_PROVIDER = "keyword_baseline"
 BASE_TEXT_MODEL = "multilingual-keyword-v1"
+ROBERTA_TAGALOG_PROVIDER = "roberta_tagalog"
+ALLOWED_NLP_PROVIDERS = {BASE_TEXT_PROVIDER, ROBERTA_TAGALOG_PROVIDER}
 
 
 class MultilingualKeywordClassifier:
@@ -41,7 +43,15 @@ class MultilingualKeywordClassifier:
         else:
             label = f"related_{category}"
         severity = "high" if any(word in text for word in ("sunog", "fire", "aksidente", "accident", "danger", "delikado")) else "medium"
-        return TextClassificationResult(label=label, confidence=confidence, category=category, severity=severity, model_version=BASE_TEXT_MODEL)
+        return TextClassificationResult(
+            label=label,
+            confidence=confidence,
+            category=category,
+            severity=severity,
+            model_version=BASE_TEXT_MODEL,
+            is_suspicious=(label == "suspicious"),
+            is_irrelevant=(label == "needs_review"),
+        )
 
 
 def classification_payload(*, title, description, selected_category, configuration=None):

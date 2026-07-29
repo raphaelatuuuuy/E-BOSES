@@ -1,8 +1,9 @@
 "use client"
 
+import { Bell } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 
-import { BoxBellIcon } from "@/components/box-bell-icon"
+import { cn } from "@workspace/ui/lib/utils"
 import { useNotifications } from "@/features/dashboard/components/notification-context"
 
 /**
@@ -23,7 +24,17 @@ export function NotificationPopover() {
       aria-label="Open notifications"
       aria-current={isNotificationsRoute ? "page" : undefined}
     >
-      <BoxBellIcon sizeClass="size-7" active={isNotificationsRoute} />
+      <span
+        className={cn(
+          "inline-flex size-7 shrink-0 items-center justify-center text-neutral-700 transition-opacity duration-150",
+          isNotificationsRoute
+            ? "opacity-100"
+            : "opacity-55 group-hover:opacity-100 group-focus-visible:opacity-100 group-active:opacity-100",
+        )}
+        aria-hidden="true"
+      >
+        <Bell className="size-full" />
+      </span>
       {unreadCount > 0 ? (
         <span className="absolute -right-0.5 -top-0.5 flex size-4 min-w-4 items-center justify-center rounded-full bg-[#ff6a1a] px-0.5 text-[10px] font-bold text-white">
           {unreadCount > 9 ? "9+" : unreadCount}

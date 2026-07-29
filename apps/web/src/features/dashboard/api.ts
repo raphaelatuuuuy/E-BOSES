@@ -11,7 +11,7 @@ export interface PublicUser {
   initials: string
   role: string
   last_seen_at: string | null
-  responder_unit?: "tanod" | "bhw" | "bdrrmo" | "other" | ""
+  responder_unit?: "tanod" | "bhw" | "bdrrmo" | ""
   is_on_duty?: boolean
   avatar?: string
   /** Street line from residence (e.g. "123 Champaca Street") */
@@ -58,6 +58,10 @@ export interface ConcernStatusEvent {
 
 export interface ConcernAiAssessment {
   status: "pending" | "completed" | "failed" | "not_configured"
+  /** Soft validation gate — true when this concern needs an official ai-review decision. */
+  flagged?: boolean
+  /** Reasons the soft validation gate flagged this concern (string or {reason} entries). */
+  flag_reasons?: unknown[]
   image_objects: unknown[]
   yolo_confidence: number | null
   severity_estimate: string
@@ -198,7 +202,20 @@ export interface Concern {
   reporter: PublicUser
   title: string
   description: string
+  /** Legacy enum kept for compatibility. Prefer `category_ref` for display:
+   *  it is the row officials can rename, route and add to. */
   category: ConcernCategory
+  category_ref: {
+    id: number
+    code: string
+    name: string
+    description: string
+    icon_key: string
+    custom_icon_label: string
+    icon_image_url: string
+  } | null
+  /** The barangay unit handling this concern, or null when nobody routed it. */
+  assigned_department: BarangayUnit | null
   status: ConcernStatus
   address: string
   latitude: string | null
@@ -266,9 +283,25 @@ export interface OfficialRoleSummary extends CommonRoleSummary {
   pending_account_requests: number
 }
 
+/**
+ * The unit a responder belongs to, resolved from the barangay's Units registry
+ * rather than the legacy `responder_unit` enum — so a unit an official created
+ * appears under its real name. Null when nobody has placed them in one yet.
+ */
+export interface ResponderAssignedUnit {
+  code: string
+  name: string
+  short_name: string
+  description: string
+  responds_to_emergencies: boolean
+  emergency_types: string[]
+  legacy_unit: string
+}
+
 export interface ResponderRoleSummary extends CommonRoleSummary {
   is_on_duty: boolean
   responder_unit: PublicUser["responder_unit"]
+  assigned_unit: ResponderAssignedUnit | null
   assigned_active_emergencies: number
   assigned_resolved_emergencies: number
   newly_routed: number
@@ -333,11 +366,17 @@ export function listAssignedConcerns() {
   return apiRequest<Concern[]>("/concerns/assigned/")
 }
 
-export function listManagedConcerns(status?: string, category?: string, search?: string) {
+export function listManagedConcerns(
+  status?: string,
+  category?: string,
+  search?: string,
+  ai?: "flagged" | "cleared" | "pending",
+) {
   const params = new URLSearchParams()
   if (status && status !== "all") params.set("status", status)
   if (category && category !== "all") params.set("category", category)
   if (search?.trim()) params.set("search", search.trim())
+  if (ai) params.set("ai", ai)
   const query = params.toString() ? `?${params.toString()}` : ""
   return apiRequest<Concern[]>(`/concerns/manage/${query}`)
 }
@@ -538,6 +577,63 @@ export function getOfficialDashboardSummary() {
   return apiRequest<OfficialRoleSummary>("/dashboard/official/summary/")
 }
 
+/* ── Barangay units (Department on the API) ─────────────────────────────── */
+
+export interface BarangayUnit {
+  id: number
+  name: string
+  code: string
+  /** Compact form for tables and pins. Falls back to `name` server-side. */
+  short_name: string
+  /** What kinds of concerns this unit takes. */
+  description: string
+  /** Its duty when an emergency is called. */
+  emergency_role: string
+  sort_order: number
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type BarangayUnitDraft = Partial<
+  Pick<
+    BarangayUnit,
+    "name" | "code" | "short_name" | "description" | "emergency_role" | "sort_order" | "is_active"
+  >
+>
+
+/** Result of DELETE — a unit still owning concerns is deactivated, not removed. */
+export interface BarangayUnitDeleteResult {
+  deleted: boolean
+  deactivated: boolean
+  in_use: number
+  detail?: string
+}
+
+export function listBarangayUnits() {
+  return apiRequest<BarangayUnit[]>("/concerns/admin/departments/")
+}
+
+export function createBarangayUnit(draft: BarangayUnitDraft) {
+  return apiRequest<BarangayUnit>("/concerns/admin/departments/", {
+    method: "POST",
+    body: JSON.stringify(draft),
+  })
+}
+
+export function updateBarangayUnit(id: number, draft: BarangayUnitDraft) {
+  return apiRequest<BarangayUnit>(`/concerns/admin/departments/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(draft),
+  })
+}
+
+export function deleteBarangayUnit(id: number) {
+  return apiRequest<BarangayUnitDeleteResult>(`/concerns/admin/departments/${id}/`, {
+    method: "DELETE",
+  })
+}
+
 export function getResponderDashboardSummary() {
   return apiRequest<ResponderRoleSummary>("/dashboard/responder/summary/")
 }
@@ -699,6 +795,9 @@ export interface MapDispatchPolicy {
   out_of_zone_action: "block" | "warn" | "review"
   witness_radius_meters: number
   responder_nearby_radius_meters: number
+  /** SMS fallback destination for residents with no mobile data. Blank
+   *  means the SOS screen offers no SMS option. */
+  emergency_sms_number: string
   updated_at: string | null
 }
 

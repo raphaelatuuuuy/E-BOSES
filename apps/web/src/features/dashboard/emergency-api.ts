@@ -6,7 +6,24 @@ function normalizeCoordinate(value: number | null | undefined) {
   return Number(value.toFixed(6))
 }
 
-export type EmergencyType = "medical" | "fire" | "crime" | "disaster" | "other"
+export type EmergencyType = string
+export type EmergencyCategoryCode = string
+
+export interface EmergencyCategory {
+  id: number
+  code: EmergencyCategoryCode
+  label: string
+  subtext: string
+  icon_key: string
+  custom_icon_label: string
+  icon_image: string
+  icon_image_url: string
+  is_covered: boolean
+  sort_order: number
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
 export type EmergencyStatus =
   | "submitted"
   | "routed"
@@ -15,7 +32,9 @@ export type EmergencyStatus =
   | "nearby"
   | "arrived"
   | "resolved"
+  | "invalid"
   | "cancelled"
+  | "false_alarm"
 
 export interface EmergencyLocationPing {
   id: number
@@ -39,10 +58,14 @@ export interface EmergencyAssignment {
   id: number
   responder: PublicUser
   status: string
+  source: "auto" | "manual" | "escalation" | "claim"
+  status_note: string
   assigned_at: string
   acknowledged_at: string | null
   arrived_at: string | null
   last_location: EmergencyLocationPing | null
+  location_history: EmergencyLocationPing[]
+  route: EmergencyRoute | null
 }
 
 export interface EmergencyAppeal {
@@ -68,6 +91,19 @@ export interface EmergencyEscalation {
   created_at: string
 }
 
+export interface EmergencyAssignmentLog {
+  id: number
+  assignment: number | null
+  responder: PublicUser | null
+  actor: PublicUser | null
+  action: string
+  old_status: string
+  new_status: string
+  note: string
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
 export interface EmergencyRoute {
   alert_id: number
   assignment_id: number
@@ -89,6 +125,7 @@ export interface EmergencyStatusEvent {
 export interface EmergencyAlert {
   id: number
   public_id: string
+  reporter: PublicUser
   reporter_phone: string
   type: EmergencyType
   note: string
@@ -96,17 +133,22 @@ export interface EmergencyAlert {
   barangay: string
   latitude: string
   longitude: string
-  location_source: "gps" | "manual_pin"
+  location_source: "gps" | "manual_pin" | "network" | "sms" | "sms_landmark"
   location_accuracy: number | null
   address: string
   media_warnings: string[]
+  resolution_report: string
+  response_duration_seconds: number | null
+  disposition_reason: string
   media: EmergencyMedia[]
   status_version: number
+  route: EmergencyRoute | null
   current_assignment: EmergencyAssignment | null
   assignments: EmergencyAssignment[]
   status_events: EmergencyStatusEvent[]
   appeals: EmergencyAppeal[]
   escalations: EmergencyEscalation[]
+  assignment_logs: EmergencyAssignmentLog[]
   witness_notification_summary: {
     triggered: boolean
     recipient_count: number
@@ -154,6 +196,10 @@ export function createEmergency(formData: FormData) {
   })
 }
 
+export function listEmergencyCategories() {
+  return apiRequest<EmergencyCategory[]>("/emergencies/categories/")
+}
+
 export function getActiveEmergency() {
   return apiRequest<EmergencyAlert | undefined>("/emergencies/mine/active/")
 }
@@ -170,9 +216,9 @@ export function listAssignedEmergencies() {
   return apiRequest<EmergencyAlert[]>("/emergencies/assigned/")
 }
 
+/** Availability toggle. The unit is server-side only, same as shift start. */
 export function updateEmergencyDuty(payload: {
   is_on_duty: boolean
-  responder_unit?: PublicUser["responder_unit"]
   latitude?: number
   longitude?: number
 }) {
@@ -200,8 +246,13 @@ export function getActiveResponderShift() {
   return apiRequest<ResponderShift | null>("/emergencies/shifts/active/")
 }
 
+/**
+ * Start a shift. There is deliberately no `responder_unit` here: the server
+ * reads the unit from the membership officials assigned and ignores anything a
+ * responder client sends, so offering the field would only imply a choice the
+ * responder does not have.
+ */
 export function startResponderShift(payload: {
-  responder_unit?: PublicUser["responder_unit"]
   latitude: number
   longitude: number
 }) {
@@ -362,6 +413,13 @@ export function sendEmergencyLocationPing(
       longitude: normalizeCoordinate(payload.longitude),
       accuracy: payload.accuracy == null ? payload.accuracy : Number(payload.accuracy.toFixed(2)),
     }),
+  })
+}
+
+export function acknowledgeEmergency(id: number, note = "") {
+  return apiRequest<EmergencyAlert>(`/emergencies/${id}/acknowledge/`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
   })
 }
 

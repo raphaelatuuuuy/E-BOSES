@@ -34,6 +34,8 @@ from .ocr import (
     OCRProviderUnavailable,
 )
 from .ocr_engine import (
+    EasyOCRProvider,
+    FallbackOCRProvider,
     PaddleOCRProvider,
     classify_document_type,
     document_uses_field_regions,
@@ -49,6 +51,7 @@ from .ocr_engine import (
 
 logger = logging.getLogger(__name__)
 PROVIDER = "paddleocr"
+OFFICIAL_OCR_PROVIDER = "easyocr_official"
 ACTIVE_CASE_STATUSES = {
     ResidenceVerificationCase.Status.AWAITING_EMAIL,
     ResidenceVerificationCase.Status.QUEUED,
@@ -339,7 +342,10 @@ def detect_residence_proof(proof_file, *, hint_type: str | None = None, side: st
     except Exception:
         logger.exception("Sign-up detect OCR enhance skipped")
 
-    provider = PaddleOCRProvider()
+    provider = FallbackOCRProvider(
+        primary=PaddleOCRProvider(),
+        fallback_factory=lambda: EasyOCRProvider(gpu=False),
+    )
     try:
         # deskew=False when regions are used so OCR geometry matches Mark Areas boxes.
         response = provider.recognize(
@@ -563,18 +569,18 @@ def create_registration_case(user, proofs, *, configuration, document_type, side
     return case
 
 
-def service_status(*, for_update=False):
+def service_status(*, for_update=False, provider_key=PROVIDER):
     queryset = OCRServiceStatus.objects
     if for_update:
         queryset = queryset.select_for_update()
-    service, _ = queryset.get_or_create(provider=PROVIDER)
+    service, _ = queryset.get_or_create(provider=provider_key)
     return service
 
 
-def circuit_allows_request(*, force=False) -> bool:
+def circuit_allows_request(*, force=False, provider_key=PROVIDER) -> bool:
     if force:
         return True
-    status = service_status()
+    status = service_status(provider_key=provider_key)
     if status.status == OCRServiceStatus.Status.NOT_CONFIGURED:
         return False
     if status.circuit_state != OCRServiceStatus.CircuitState.OPEN:
@@ -587,8 +593,8 @@ def circuit_allows_request(*, force=False) -> bool:
 
 
 @transaction.atomic
-def record_provider_success(*, latency_ms: int, details=None):
-    status = service_status(for_update=True)
+def record_provider_success(*, latency_ms: int, details=None, provider_key=PROVIDER):
+    status = service_status(for_update=True, provider_key=provider_key)
     now = timezone.now()
     status.status = OCRServiceStatus.Status.HEALTHY
     status.circuit_state = OCRServiceStatus.CircuitState.CLOSED
@@ -605,11 +611,12 @@ def record_provider_success(*, latency_ms: int, details=None):
 
 
 @transaction.atomic
-def record_provider_failure(error: Exception):
-    status = service_status(for_update=True)
+def record_provider_failure(error: Exception, *, provider_key=PROVIDER, configured=None):
+    status = service_status(for_update=True, provider_key=provider_key)
     now = timezone.now()
     status.consecutive_failures += 1
-    configured = bool(getattr(settings, "PADDLEOCR_TOKEN", ""))
+    if configured is None:
+        configured = bool(getattr(settings, "PADDLEOCR_TOKEN", ""))
     if not configured:
         status.status = OCRServiceStatus.Status.NOT_CONFIGURED
         status.circuit_state = OCRServiceStatus.CircuitState.OPEN
@@ -707,14 +714,22 @@ def process_verification_case(case_id, *, trigger=VerificationCheck.Trigger.SYST
     case, attempts = prepare_case_attempt(case_id, trigger)
     if not attempts:
         return case
-    provider = provider or PaddleOCRProvider()
-    if not getattr(settings, "PADDLEOCR_TOKEN", ""):
-        error = OCRProviderAuthenticationError("PaddleOCR is not configured.")
-        record_provider_failure(error)
-        return fail_case_attempts(case.pk, attempts, error)
-    if not circuit_allows_request(force=force):
-        error = OCRProviderUnavailable("PaddleOCR circuit is open.")
-        return fail_case_attempts(case.pk, attempts, error)
+    if provider is None:
+        if not circuit_allows_request(force=force):
+            provider = EasyOCRProvider(gpu=False)
+        else:
+            provider = FallbackOCRProvider(
+                primary=PaddleOCRProvider(),
+                fallback_factory=lambda: EasyOCRProvider(gpu=False),
+            )
+    else:
+        if not getattr(settings, "PADDLEOCR_TOKEN", ""):
+            error = OCRProviderAuthenticationError("PaddleOCR is not configured.")
+            record_provider_failure(error)
+            return fail_case_attempts(case.pk, attempts, error)
+        if not circuit_allows_request(force=force):
+            error = OCRProviderUnavailable("PaddleOCR circuit is open.")
+            return fail_case_attempts(case.pk, attempts, error)
 
     all_lines = []
     responses = []
@@ -1173,6 +1188,34 @@ def run_health_canary(*, provider=None):
     )
 
 
+
+def official_service_status(*, for_update=False):
+    return service_status(for_update=for_update, provider_key=OFFICIAL_OCR_PROVIDER)
+
+
+def run_official_health_canary(*, provider=None):
+    provider = provider or EasyOCRProvider(gpu=False)
+    image = Image.new("RGB", (460, 100), "white")
+    ImageDraw.Draw(image).text((18, 38), "E-BOSES OCR HEALTH CHECK", fill="black")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    try:
+        response = provider.recognize(buffer.getvalue(), suffix=".png")
+    except OCRProviderError as exc:
+        return record_provider_failure(exc, provider_key=OFFICIAL_OCR_PROVIDER, configured=True)
+    except Exception:
+        logger.exception("Unexpected EasyOCR official health canary adapter failure")
+        return record_provider_failure(
+            OCRProviderUnavailable("Unexpected official OCR canary failure."),
+            provider_key=OFFICIAL_OCR_PROVIDER,
+            configured=True,
+        )
+    return record_provider_success(
+        latency_ms=response.latency_ms,
+        details={"model": response.model, "probe": "official_synthetic_canary", "line_count": len(response.lines)},
+        provider_key=OFFICIAL_OCR_PROVIDER,
+    )
+
 def process_test_run(test_run_id, *, provider=None, force=False, side: str | None = None):
     with transaction.atomic():
         test_run = OCRTestRun.objects.select_for_update(of=("self",)).select_related(
@@ -1183,12 +1226,10 @@ def process_test_run(test_run_id, *, provider=None, force=False, side: str | Non
         test_run.status = OCRTestRun.Status.PROCESSING
         test_run.started_at = timezone.now()
         test_run.save(update_fields=["status", "started_at", "updated_at"])
-    if not circuit_allows_request(force=force):
-        return fail_test_run(test_run_id, OCRProviderUnavailable("PaddleOCR circuit is open."))
     field_file = test_run.file or (test_run.sample.file if test_run.sample_id else None)
     if not field_file:
         return fail_test_run(test_run_id, OCRProviderError("No test document was provided."))
-    provider = provider or PaddleOCRProvider()
+    provider = provider or EasyOCRProvider(gpu=False)
     # Prefer explicit side arg; fall back to linked sample name (front/back/single).
     test_side = (side or "").strip().lower() or None
     if not test_side and test_run.sample_id:
@@ -1206,6 +1247,7 @@ def process_test_run(test_run_id, *, provider=None, force=False, side: str | Non
         record_provider_success(
             latency_ms=response.latency_ms,
             details={"model": response.model, "probe": "test", "side": test_side, "regions": use_regions},
+            provider_key=OFFICIAL_OCR_PROVIDER,
         )
         profile = getattr(test_run.requested_by, "resident_profile", None)
         if profile is None:
@@ -1222,12 +1264,12 @@ def process_test_run(test_run_id, *, provider=None, force=False, side: str | Non
             page_size=page_size,
         )
     except OCRProviderError as exc:
-        record_provider_failure(exc)
+        record_provider_failure(exc, provider_key=OFFICIAL_OCR_PROVIDER, configured=True)
         return fail_test_run(test_run_id, exc)
     except Exception:
         logger.exception("Unexpected OCR test provider failure for test_run_id=%s", test_run_id)
         safe_error = OCRProviderUnavailable("Unexpected OCR provider adapter failure.")
-        record_provider_failure(safe_error)
+        record_provider_failure(safe_error, provider_key=OFFICIAL_OCR_PROVIDER, configured=True)
         return fail_test_run(test_run_id, safe_error)
     with transaction.atomic():
         test_run = OCRTestRun.objects.select_for_update().get(pk=test_run_id)

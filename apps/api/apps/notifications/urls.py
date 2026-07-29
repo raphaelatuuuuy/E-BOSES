@@ -4,6 +4,9 @@ from .views import (
     BrowserPushPublicKeyView,
     BrowserPushSubscriptionView,
     BrowserPushTestView,
+    NotificationArchiveAllView,
+    NotificationArchiveView,
+    NotificationDeleteView,
     NotificationListView,
     NotificationReadAllView,
     NotificationReadView,
@@ -19,5 +22,8 @@ urlpatterns = [
     path("browser-push/subscriptions/", BrowserPushSubscriptionView.as_view(), name="browser-push-subscriptions"),
     path("browser-push/test/", BrowserPushTestView.as_view(), name="browser-push-test"),
     path("<int:pk>/read/", NotificationReadView.as_view(), name="notification-read"),
+    path("<int:pk>/archive/", NotificationArchiveView.as_view(), name="notification-archive"),
+    path("<int:pk>/", NotificationDeleteView.as_view(), name="notification-delete"),
     path("read-all/", NotificationReadAllView.as_view(), name="notification-read-all"),
+    path("archive-all/", NotificationArchiveAllView.as_view(), name="notification-archive-all"),
 ]

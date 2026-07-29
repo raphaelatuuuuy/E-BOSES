@@ -449,32 +449,14 @@ export default function LocationPickerModal({
 
           {sheetMode !== "expanded" ? (
             <>
-              <div
-                className="pointer-events-none absolute left-1/2 top-1/2 z-[1100] h-0 w-0 overflow-visible"
-                aria-hidden
-              >
-                <img
-                  src="/contents/map-pin-gps.png"
-                  alt=""
-                  width={56}
-                  height={56}
-                  className="absolute left-0 top-0 h-14 w-14 max-w-none object-contain drop-shadow-[0_6px_14px_rgba(0,0,0,0.45)]"
-                  style={{
-                    marginLeft: -28,
-                    marginTop: -(56 + 28),
-                  }}
-                  draggable={false}
-                />
-                <span
-                  className="eboses-pin-pulse absolute left-0 top-0 size-3 rounded-full bg-[#2b7fff]"
-                  style={{
-                    marginLeft: -6,
-                    marginTop: -6,
-                    boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
-                  }}
-                />
-              </div>
-
+              <span
+                className="eboses-pin-pulse absolute left-1/2 top-1/2 size-3 rounded-full bg-[#2b7fff]"
+                style={{
+                  marginLeft: -6,
+                  marginTop: -6,
+                  boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
+                }}
+              />
               <div
                 className={cn(
                   "pointer-events-none absolute inset-x-0 z-[1100] flex flex-col items-center gap-2 px-4",

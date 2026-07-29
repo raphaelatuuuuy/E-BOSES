@@ -1,51 +1,40 @@
 import * as React from "react"
-import { Link, Outlet, useLocation, useNavigate } from "react-router-dom"
+import { Outlet, useLocation, useNavigate } from "react-router-dom"
+
+import { cn } from "@workspace/ui/lib/utils"
 
 import { Sidebar } from "@/features/dashboard/components/sidebar"
 import { SidebarProvider } from "@/features/dashboard/components/sidebar-context"
 import { SOSButton } from "@/features/dashboard/components/sos-button"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { isResponderUser } from "@/features/auth/roles"
 import { MobileNav } from "@/features/dashboard/components/mobile-nav"
+import { StaffMobileHeader } from "@/features/dashboard/components/mobile-header"
 import { ResponderDispatchFab } from "@/features/dashboard/components/responder-dispatch-fab"
 import { useLocationPing } from "@/features/dashboard/hooks/use-location-ping"
 import { NotificationProvider, fetchConcern } from "@/features/dashboard/components/notification-context"
-import { NotificationPopover } from "@/features/dashboard/components/notification-popover"
-import { ProfileAccountMenu } from "@/features/dashboard/components/profile-account-menu"
 import { ReportStatusDialog, statusModeFromReport } from "@/features/dashboard/components/report-status-dialog"
 import { ResidentSearchProvider } from "@/features/dashboard/components/resident-search-context"
 import {
-  OfficialMainTopBar,
   ResidentLogoBar,
   ResidentMainTopBar,
-  RESIDENT_DESKTOP_MIN_PX,
-  RESIDENT_SIDEBAR_MIN,
-  RESIDENT_SIDEBAR_W,
 } from "@/features/dashboard/components/resident-top-bar"
+import {
+  getRouteChrome,
+  useIsDesktop,
+  SHELL_MAX_RESIDENT,
+  SHELL_MAX_STAFF,
+  SIDEBAR_MIN,
+  SIDEBAR_W,
+  SIDEBAR_W_STAFF,
+} from "@/features/dashboard/lib/shell"
 import type { StatusDialogMode } from "@/features/dashboard/components/report-status-dialog"
 import type { Concern } from "@/features/dashboard/api"
-
-const RESIDENT_SHELL_MAX = 1600
-
-function useResidentDesktop() {
-  const [isDesktop, setIsDesktop] = React.useState(() =>
-    typeof window !== "undefined" ? window.innerWidth >= RESIDENT_DESKTOP_MIN_PX : true,
-  )
-
-  React.useEffect(() => {
-    const mq = window.matchMedia(`(min-width: ${RESIDENT_DESKTOP_MIN_PX}px)`)
-    const apply = () => setIsDesktop(mq.matches)
-    apply()
-    mq.addEventListener("change", apply)
-    return () => mq.removeEventListener("change", apply)
-  }, [])
-
-  return isDesktop
-}
 
 function DashboardContent() {
   const navigate = useNavigate()
   const location = useLocation()
-  const isDesktop = useResidentDesktop()
+  const isDesktop = useIsDesktop()
   const { user } = useAuthSession()
   useLocationPing(user)
   const isStaffRole =
@@ -55,19 +44,9 @@ function DashboardContent() {
     user?.is_superuser
   const isResident = !isStaffRole
   const isMobile = !isDesktop
-  const isAlertsMapRoute =
-    location.pathname === "/dashboard/alerts-map" ||
-    location.pathname.endsWith("/alerts-map")
-  const isResponderMapRoute = location.pathname === "/dashboard/responders/map"
-  const isBackChromeRoute =
-    location.pathname.startsWith("/dashboard/settings") ||
-    location.pathname.startsWith("/dashboard/profile") ||
-    location.pathname.startsWith("/dashboard/notifications")
-  const isAccountWizardRoute =
-    location.pathname.startsWith("/dashboard/settings/reverify/") ||
-    location.pathname === "/dashboard/settings/change-password"
-  const hideMobileNav =
-    isMobile && (isBackChromeRoute || isAccountWizardRoute)
+  const chrome = getRouteChrome(location.pathname)
+  const isAccountWizardRoute = chrome.accountWizard
+  const hideMobileNav = isMobile && chrome.hideMobileNav
 
   const [statusDialogOpen, setStatusDialogOpen] = React.useState(false)
   const [statusDialogMode, setStatusDialogMode] = React.useState<StatusDialogMode>("submitted")
@@ -114,13 +93,28 @@ function DashboardContent() {
     />
   ) : null
 
+  // The staff console runs on the light navy/orange palette.
+  //
+  // A dark variant of the same token names lives in globals.css as
+  // `.staff-dark`; applying that class to this wrapper is the entire switch,
+  // because every official/responder screen is written against semantic tokens
+  // (`bg-card`, `border-card-line`, `text-muted-foreground`) rather than
+  // literal colours. Currently applied to responders only; officials stay
+  // light until their screens are migrated off hardcoded light colours.
+  const shellScope = !isResident && user && isResponderUser(user) ? "staff-dark" : undefined
+
+  // Triage routes own their vertical space (see RouteChrome.workspace). Below
+  // the desktop breakpoint they revert to a scrolling column, so the flag only
+  // applies on desktop.
+  const isWorkspaceRoute = chrome.workspace && isDesktop
+
   return (
     <ResidentSearchProvider>
-      <div className="min-h-svh overflow-x-hidden bg-white">
+      <div className={cn("min-h-svh overflow-x-hidden", shellScope, isResident ? "bg-white" : "bg-canvas")}>
         <div
-          className="mx-auto min-h-svh w-full bg-white"
+          className={cn("mx-auto min-h-svh w-full", isResident ? "bg-white" : "bg-canvas")}
           style={{
-            maxWidth: isResident ? RESIDENT_SHELL_MAX : 1800,
+            maxWidth: isResident ? SHELL_MAX_RESIDENT : SHELL_MAX_STAFF,
             minWidth: 0,
           }}
         >
@@ -132,51 +126,59 @@ function DashboardContent() {
             <div
               className="grid h-svh max-h-svh min-h-0 overflow-hidden"
               style={{
-                gridTemplateColumns: `minmax(${RESIDENT_SIDEBAR_MIN}px, min(${RESIDENT_SIDEBAR_W}px, 36vw)) minmax(0, 1fr)`,
+                gridTemplateColumns: isResident
+                  ? `minmax(${SIDEBAR_MIN}px, min(${SIDEBAR_W}px, 36vw)) minmax(0, 1fr)`
+                  : `${SIDEBAR_W_STAFF}px minmax(0, 1fr)`,
               }}
             >
-              <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-neutral-100">
-                <ResidentLogoBar homeTo={shellHome} />
+              <div
+                className={
+                  isResident
+                    ? "flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-neutral-100"
+                    : "flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-nav-bg"
+                }
+              >
+                <ResidentLogoBar homeTo={shellHome} tone={isResident ? "light" : "dark"} />
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                   <Sidebar />
                 </div>
               </div>
 
+              {/* Staff get no top bar: search, bell and avatar all live in the
+                  sidebar now, and an empty 56px strip above every page was
+                  eating vertical room the map and tables need. */}
               <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-                {isResident ? <ResidentMainTopBar /> : <OfficialMainTopBar />}
-                <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-white [scrollbar-width:thin]">
+                {isResident ? <ResidentMainTopBar /> : null}
+                <main
+                  className={cn(
+                    "min-h-0 min-w-0 flex-1 overflow-x-hidden [scrollbar-width:thin]",
+                    isResident ? "bg-white" : "bg-canvas",
+                    // Workspace routes scroll inside their own panes, so the
+                    // shell must not add a second scroll container around them.
+                    isWorkspaceRoute
+                      ? "overflow-hidden"
+                      : "overflow-y-auto overscroll-contain",
+                  )}
+                >
                   <Outlet />
                 </main>
               </div>
             </div>
           ) : (
             <main
-              className={
-                hideMobileNav
-                  ? "flex min-h-svh min-w-0 flex-col overflow-hidden bg-white"
-                  : isResponderMapRoute
-                    ? "flex min-h-svh min-w-0 flex-col overflow-hidden bg-white"
-                  : "flex min-h-svh min-w-0 flex-col overflow-x-hidden bg-white pb-24"
-              }
+              className={cn(
+                "flex min-h-svh min-w-0 flex-col",
+                hideMobileNav || chrome.fullBleedMap ? "overflow-hidden" : "overflow-x-hidden pb-24",
+                // Staff pages are card-on-canvas; residents stay on white.
+                isResident || chrome.fullBleedMap ? "bg-white" : "bg-canvas",
+              )}
             >
-              {!hideMobileNav && !isResident ? (
-                <header className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-neutral-100 bg-white px-3">
-                  <Link to={shellHome} className="flex min-w-0 items-center gap-2 no-underline">
-                    <img src="/contents/logo.png" alt="Boses Marikina Heights" className="size-8 shrink-0 object-contain" />
-                    <div className="flex flex-col">
-                      <span className="truncate text-[18px] font-bold leading-none tracking-tight text-[#ff6a1a]">
-                        Boses
-                      </span>
-                      <span className="text-[9px] font-bold leading-tight tracking-wide text-[#07145f]">
-                        Marikina Heights
-                      </span>
-                    </div>
-                  </Link>
-                  <div className="flex items-center gap-0.5">
-                    <NotificationPopover />
-                    <ProfileAccountMenu placeLabel="Marikina Heights" />
-                  </div>
-                </header>
+              {/* Full-bleed maps carry their own top bar and own the viewport
+                  height, so the shell header stays out of their way. This is
+                  keyed off the map flag rather than `hideMobileNav`, which the
+                  responder map no longer sets. */}
+              {!hideMobileNav && !chrome.fullBleedMap && !isResident ? (
+                <StaffMobileHeader homeTo={shellHome} />
               ) : null}
               <Outlet />
             </main>
@@ -186,7 +188,7 @@ function DashboardContent() {
         {isMobile && !hideMobileNav ? <MobileNav /> : null}
 
         {isResident ? (
-          <SOSButton suppressed={isAlertsMapRoute || isAccountWizardRoute} />
+          <SOSButton suppressed={chrome.fullBleedMap || isAccountWizardRoute} />
         ) : null}
 
         {!isResident ? <ResponderDispatchFab /> : null}

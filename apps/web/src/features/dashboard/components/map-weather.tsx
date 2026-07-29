@@ -182,6 +182,7 @@ export function MapControlButton({
   disabled = false,
   showLabel = true,
   active = false,
+  variant = "light",
   className,
 }: {
   label: string
@@ -191,8 +192,16 @@ export function MapControlButton({
   disabled?: boolean
   showLabel?: boolean
   active?: boolean
+  variant?: "light" | "dark" | "brand"
   className?: string
 }) {
+  const base = "inline-flex h-10 min-w-10 items-center justify-center gap-2 rounded-lg border px-2.5 text-[13px] font-bold shadow-md transition disabled:cursor-not-allowed disabled:opacity-60"
+  const variants = {
+    light: "border-neutral-200 bg-white text-neutral-900 hover:border-[#2447b3]/40 hover:bg-[#f8fbff]",
+    dark: "border-rail-line bg-nav-glass/90 text-foreground backdrop-blur hover:border-ice/40 hover:bg-nav-raised",
+    brand: "border-brand-orange bg-brand-orange-soft text-brand-orange hover:bg-brand-orange/20",
+  }
+  const activeCls = active && variant !== "dark" ? "border-[#ff6a1a] bg-[#fff6f0] text-[#ff6a1a]" : ""
   return (
     <button
       type="button"
@@ -200,11 +209,7 @@ export function MapControlButton({
       aria-label={label}
       onClick={onClick}
       disabled={disabled || loading}
-      className={cn(
-        "inline-flex h-10 min-w-10 items-center justify-center gap-2 rounded-lg border bg-white px-2.5 text-[13px] font-bold text-neutral-900 shadow-md transition hover:border-[#2447b3]/40 hover:bg-[#f8fbff] disabled:cursor-not-allowed disabled:opacity-60",
-        active ? "border-[#ff6a1a] bg-[#fff6f0] text-[#ff6a1a]" : "border-neutral-200",
-        className,
-      )}
+      className={cn(base, variants[variant], activeCls, className)}
     >
       {loading ? <LoaderCircleIcon className="size-4 animate-spin text-neutral-400" /> : icon}
       {showLabel ? <span className="hidden sm:inline">{label}</span> : null}

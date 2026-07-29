@@ -1,48 +1,55 @@
-import { type ReactNode, useState } from "react"
+import { lazy, Suspense, type ReactNode, useState } from "react"
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom"
 import { LoaderCircle } from "lucide-react"
 import { toast } from "sonner"
 
-import AccountInactivePage from "@/features/auth/account-inactive"
-import AccountOtpVerificationPage from "@/features/auth/account-otp-verification"
-import { confirmPasswordReset, verifyPasswordReset } from "@/features/auth/api"
+import { confirmPasswordReset, requestPasswordReset, verifyPasswordReset } from "@/features/auth/api"
 import { AuthSessionProvider, getStatusPath, useAuthSession } from "@/features/auth/auth-session"
 import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
-import ForgotPasswordPage from "@/features/auth/forgot-password"
-import NewPasswordPage from "@/features/auth/new-password"
-import OtpVerificationPage from "@/features/auth/otp-verification"
-import SignInPage from "@/features/auth/sign-in"
-import SignUpPage from "@/features/auth/sign-up"
 import DashboardLayout from "@/features/dashboard/dashboard"
-import AlertsMapPage from "@/features/dashboard/pages/alerts-map"
-import ResidentAlertsMapPage from "@/features/dashboard/pages/resident-alerts-map"
-import OnboardingPage from "@/features/onboarding/onboarding-page"
-import OfficialOnboardingPage from "@/features/onboarding/official-onboarding-page"
-import ResponderOnboardingPage from "@/features/onboarding/responder-onboarding-page"
-import FeedPage from "@/features/dashboard/pages/feed"
-import EmergenciesPage from "@/features/dashboard/pages/emergencies"
-import HomePage from "@/features/dashboard/pages/home"
-import ProfilePage from "@/features/dashboard/pages/profile"
-import ResponderMapPage from "@/features/dashboard/pages/responder-map"
-import ResponderProfilePage from "@/features/dashboard/pages/responder-profile"
-import ResponderShiftPage from "@/features/dashboard/pages/responder-shift"
-import ReportsPage from "@/features/dashboard/pages/reports"
-import SettingsPage from "@/features/dashboard/pages/settings"
-import ChangePasswordPage from "@/features/dashboard/pages/change-password"
-import AccountReverifyNamePage from "@/features/dashboard/pages/account-reverify-name"
-import AccountReverifyPhonePage from "@/features/dashboard/pages/account-reverify-phone"
-import AccountReverifyEmailPage from "@/features/dashboard/pages/account-reverify-email"
-import NotificationsPage from "@/features/dashboard/pages/notifications"
-import EmergencyHistoryPage from "@/features/dashboard/pages/emergency-history"
-import OfficialIdProofWorkspacePage from "@/features/dashboard/pages/official-id-proof-workspace"
-import OcrConfigurationPage from "@/features/ocr/ocr-configuration-page"
-import ConcernClassificationPage from "@/features/classification/concern-classification-page"
-import OfficialUsersPage from "@/features/dashboard/pages/official-users-page"
-import OfficialCommunityContentPage from "@/features/dashboard/pages/official-community-content-page"
-import OfficialMapDispatchPolicyPage from "@/features/dashboard/pages/official-map-dispatch-policy-page"
-import OfficialPrivacyRequestsPage from "@/features/dashboard/pages/official-privacy-requests-page"
-import LandingPage from "@/features/landing/landing-page"
 import { getAccessToken } from "@/lib/api"
+
+const AccountInactivePage = lazy(() => import("@/features/auth/account-inactive"))
+const AccountOtpVerificationPage = lazy(() => import("@/features/auth/account-otp-verification"))
+const ForgotPasswordPage = lazy(() => import("@/features/auth/forgot-password"))
+const NewPasswordPage = lazy(() => import("@/features/auth/new-password"))
+const OtpVerificationPage = lazy(() => import("@/features/auth/otp-verification"))
+const SignInPage = lazy(() => import("@/features/auth/sign-in"))
+const SignUpPage = lazy(() => import("@/features/auth/sign-up"))
+const AlertsMapPage = lazy(() => import("@/features/dashboard/pages/alerts-map"))
+const ResidentAlertsMapPage = lazy(() => import("@/features/dashboard/pages/resident-alerts-map"))
+const OnboardingPage = lazy(() => import("@/features/onboarding/onboarding-page"))
+const OfficialOnboardingPage = lazy(() => import("@/features/onboarding/official-onboarding-page"))
+const ResponderOnboardingPage = lazy(() => import("@/features/onboarding/responder-onboarding-page"))
+const EmergenciesPage = lazy(() => import("@/features/dashboard/pages/emergencies"))
+const HomePage = lazy(() => import("@/features/dashboard/pages/home"))
+const OfficialOverviewPage = lazy(() => import("@/features/dashboard/pages/official-overview"))
+const ProfilePage = lazy(() => import("@/features/dashboard/pages/profile"))
+const ResponderMapPage = lazy(() => import("@/features/dashboard/pages/responder-map"))
+const ResponderProfilePage = lazy(() => import("@/features/dashboard/pages/responder-profile"))
+const ResponderShiftPage = lazy(() => import("@/features/dashboard/pages/responder-shift"))
+const ReportsPage = lazy(() => import("@/features/dashboard/pages/reports"))
+const SettingsPage = lazy(() => import("@/features/dashboard/pages/settings"))
+const OfficialSettingsPage = lazy(() => import("@/features/dashboard/pages/official-settings"))
+const ChangePasswordPage = lazy(() => import("@/features/dashboard/pages/change-password"))
+const AccountReverifyNamePage = lazy(() => import("@/features/dashboard/pages/account-reverify-name"))
+const AccountReverifyPhonePage = lazy(() => import("@/features/dashboard/pages/account-reverify-phone"))
+const AccountReverifyEmailPage = lazy(() => import("@/features/dashboard/pages/account-reverify-email"))
+const NotificationsPage = lazy(() => import("@/features/dashboard/pages/notifications"))
+const EmergencyHistoryPage = lazy(() => import("@/features/dashboard/pages/emergency-history"))
+const OfficialIdProofWorkspacePage = lazy(() => import("@/features/dashboard/pages/official-id-proof-workspace"))
+const OcrConfigurationPage = lazy(() => import("@/features/ocr/ocr-configuration-page"))
+const ConcernClassificationPage = lazy(() => import("@/features/classification/concern-classification-page"))
+const OfficialConfigurationHubPage = lazy(() => import("@/features/dashboard/pages/official-configuration-hub"))
+const OfficialUnitsPage = lazy(() => import("@/features/dashboard/pages/official-units-page"))
+const OfficialRolesPage = lazy(() => import("@/features/dashboard/pages/official-roles-page"))
+const OfficialUsersManagePage = lazy(() => import("@/features/dashboard/pages/official-users-manage-page"))
+const OfficialCategoriesPage = lazy(() => import("@/features/dashboard/pages/official-categories-page"))
+const OfficialDispatchRulesPage = lazy(() => import("@/features/dashboard/pages/official-dispatch-rules-page"))
+const OfficialCommunityContentPage = lazy(() => import("@/features/dashboard/pages/official-community-content-page"))
+const OfficialMapDispatchPolicyPage = lazy(() => import("@/features/dashboard/pages/official-map-dispatch-policy-page"))
+const OfficialPrivacyRequestsPage = lazy(() => import("@/features/dashboard/pages/official-privacy-requests-page"))
+const LandingPage = lazy(() => import("@/features/landing/landing-page"))
 
 function ProtectedDashboard() {
   const { loading, user } = useAuthSession()
@@ -106,7 +113,7 @@ function DashboardIndex() {
   const { user } = useAuthSession()
   const isResponder = isResponderUser(user)
   const isOfficial = isOfficialUser(user)
-  return <Navigate to={isResponder ? "/dashboard/responders/map" : isOfficial ? "/dashboard/alerts-map" : "/dashboard/home"} replace />
+  return <Navigate to={isResponder ? "/dashboard/responders/map" : isOfficial ? "/dashboard/overview" : "/dashboard/home"} replace />
 }
 
 function ResidentRoute({ children }: { children: ReactNode }) {
@@ -159,6 +166,20 @@ function AlertsMapRoute() {
   return <ResidentAlertsMapPage />
 }
 
+function SettingsRoute() {
+  const { user } = useAuthSession()
+  if (user?.role === "resident") return <SettingsPage />
+  if (isOfficialUser(user)) return <OfficialSettingsPage />
+  // Responders have no settings page today — unchanged behavior.
+  return <Navigate to="/dashboard" replace />
+}
+
+function ChangePasswordRoute() {
+  const { user } = useAuthSession()
+  const allowed = user?.role === "resident" || isOfficialUser(user)
+  return allowed ? <ChangePasswordPage /> : <Navigate to="/dashboard" replace />
+}
+
 function EmergencyOpsRoute({ children }: { children: ReactNode }) {
   const { user } = useAuthSession()
   if (isOfficialUser(user)) return children
@@ -208,19 +229,27 @@ function AppRoutes() {
       <Route path="/dashboard" element={<ProtectedDashboard />}>
         <Route index element={<DashboardIndex />} />
         <Route path="home" element={<ResidentRoute><HomePage /></ResidentRoute>} />
-        <Route path="feed" element={<ResidentRoute><FeedPage /></ResidentRoute>} />
+        <Route path="overview" element={<OfficialRoute><OfficialOverviewPage /></OfficialRoute>} />
         <Route path="emergencies" element={<EmergencyOpsRoute><EmergenciesPage /></EmergencyOpsRoute>} />
         <Route path="alerts-map" element={<AlertsMapRoute />} />
         <Route path="admin" element={<OfficialRoute><Navigate to="/dashboard/configuration/users" replace /></OfficialRoute>} />
-        <Route path="verification-queue" element={<OfficialRoute><Navigate to="/dashboard/configuration/id-proof-template?tab=queue" replace /></OfficialRoute>} />
-        <Route path="ocr-templates" element={<OfficialRoute><Navigate to="/dashboard/configuration/id-proof-template?tab=templates" replace /></OfficialRoute>} />
+        <Route path="configuration/verification" element={<OfficialRoute><Navigate to="/dashboard/configuration/id-proof-template" replace /></OfficialRoute>} />
+        <Route path="configuration/zones" element={<OfficialRoute><Navigate to="/dashboard/configuration/map-dispatch" replace /></OfficialRoute>} />
+        <Route path="configuration/privacy" element={<OfficialRoute><Navigate to="/dashboard/configuration/privacy-requests" replace /></OfficialRoute>} />
+        <Route path="verification-queue" element={<OfficialRoute><Navigate to="/dashboard/configuration/id-proof-template" replace /></OfficialRoute>} />
+        <Route path="ocr-templates" element={<OfficialRoute><Navigate to="/dashboard/configuration/id-proof-template" replace /></OfficialRoute>} />
         <Route path="ocr-configuration" element={<OfficialRoute><OcrConfigurationPage /></OfficialRoute>} />
         <Route path="concern-classification" element={<OfficialRoute><Navigate to="/dashboard/configuration/classification" replace /></OfficialRoute>} />
-        <Route path="configuration" element={<OfficialRoute><Navigate to="/dashboard/configuration/id-proof-template" replace /></OfficialRoute>} />
+        <Route path="configuration" element={<OfficialRoute><OfficialConfigurationHubPage /></OfficialRoute>} />
+        <Route path="configuration/units" element={<OfficialRoute><OfficialUnitsPage /></OfficialRoute>} />
+        <Route path="configuration/roles" element={<OfficialRoute><OfficialRolesPage /></OfficialRoute>} />
+        <Route path="configuration/categories" element={<OfficialRoute><OfficialCategoriesPage /></OfficialRoute>} />
+        <Route path="configuration/routing" element={<OfficialRoute><Navigate to="/dashboard/configuration/categories" replace /></OfficialRoute>} />
+        <Route path="configuration/dispatch" element={<OfficialRoute><OfficialDispatchRulesPage /></OfficialRoute>} />
         <Route path="configuration/id-proof-template" element={<OfficialRoute><OfficialIdProofWorkspacePage /></OfficialRoute>} />
         <Route path="configuration/classification" element={<OfficialRoute><ConcernClassificationPage /></OfficialRoute>} />
         <Route path="configuration/map-dispatch" element={<OfficialRoute><OfficialMapDispatchPolicyPage /></OfficialRoute>} />
-        <Route path="configuration/users" element={<OfficialRoute><OfficialUsersPage /></OfficialRoute>} />
+        <Route path="configuration/users" element={<OfficialRoute><OfficialUsersManagePage /></OfficialRoute>} />
         <Route path="configuration/privacy-requests" element={<OfficialRoute><OfficialPrivacyRequestsPage /></OfficialRoute>} />
         <Route path="community-content" element={<OfficialRoute><OfficialCommunityContentPage /></OfficialRoute>} />
         <Route path="responders" element={<ResponderRoute><Navigate to="/dashboard/responders/map" replace /></ResponderRoute>} />
@@ -233,8 +262,8 @@ function AppRoutes() {
         <Route path="notifications" element={<StaffProfileRoute><NotificationsPage /></StaffProfileRoute>} />
         <Route path="emergency-history" element={<ResidentRoute><EmergencyHistoryPage /></ResidentRoute>} />
         <Route path="profile" element={<StaffProfileRoute><ProfilePage /></StaffProfileRoute>} />
-        <Route path="settings" element={<ResidentRoute><SettingsPage /></ResidentRoute>} />
-        <Route path="settings/change-password" element={<ResidentRoute><ChangePasswordPage /></ResidentRoute>} />
+        <Route path="settings" element={<SettingsRoute />} />
+        <Route path="settings/change-password" element={<ChangePasswordRoute />} />
         <Route path="settings/reverify/name" element={<ResidentRoute><AccountReverifyNamePage /></ResidentRoute>} />
         <Route path="settings/reverify/phone" element={<ResidentRoute><AccountReverifyPhonePage /></ResidentRoute>} />
         <Route path="settings/reverify/email" element={<ResidentRoute><AccountReverifyEmailPage /></ResidentRoute>} />
@@ -299,6 +328,13 @@ function AppRoutes() {
           actionLabel="Continue"
           resendStorageKey="eboses-forgot-password-otp-resend-expiry"
           onBack={() => navigate("/forgot-password")}
+          onResend={async () => {
+            const identifier = resetIdentifier || window.sessionStorage.getItem("eboses-reset-identifier") || ""
+            if (!identifier) {
+              throw new Error("Go back and enter your email before requesting another code.")
+            }
+            await requestPasswordReset({ identifier, channel: "email" })
+          }}
           onSuccess={async (code) => {
             try {
               const response = await verifyPasswordReset({
@@ -337,10 +373,20 @@ function AppRoutes() {
   )
 }
 
+function PageLoader() {
+  return (
+    <div className="flex min-h-svh items-center justify-center">
+      <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
+    </div>
+  )
+}
+
 export default function App() {
   return (
     <AuthSessionProvider>
-      <AppRoutes />
+      <Suspense fallback={<PageLoader />}>
+        <AppRoutes />
+      </Suspense>
     </AuthSessionProvider>
   )
 }

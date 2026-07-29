@@ -5,12 +5,15 @@ from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from apps.accounts.services import validate_emergency_media_file, validate_location_pair
+from apps.concerns.models import Department
 from apps.concerns.serializers import PublicUserSerializer
-from apps.geo_services import validate_barangay_location
+from apps.concerns.units import RESPONDER_UNIT_TO_DEPARTMENT, department_for_responder_unit
+from apps.geo_services import validate_emergency_location
 
 from .models import (
     EmergencyAlert,
     EmergencyAppeal,
+    EmergencyCategory,
     EmergencyChatAttachment,
     EmergencyChatMessage,
     EmergencyEscalation,
@@ -19,6 +22,8 @@ from .models import (
     EmergencyMedia,
     EmergencyResponderAssignment,
     EmergencyStatusEvent,
+    EmergencyTypeRoleMap,
+    EmergencyAssignmentLog,
     ResponderShift,
 )
 
@@ -42,6 +47,68 @@ class EmergencyMediaUploadSerializer(serializers.Serializer):
         return validate_emergency_media_file(value)
 
 
+class EmergencyCategorySerializer(serializers.ModelSerializer):
+    icon_image_url = serializers.SerializerMethodField()
+    is_covered = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EmergencyCategory
+        fields = (
+            "id",
+            "code",
+            "label",
+            "subtext",
+            "icon_key",
+            "custom_icon_label",
+            "icon_image",
+            "icon_image_url",
+            "is_covered",
+            "sort_order",
+            "is_active",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "icon_image_url", "is_covered", "created_at", "updated_at")
+
+    def get_icon_image_url(self, obj):
+        if not obj.icon_image:
+            return ""
+        request = self.context.get("request")
+        return request.build_absolute_uri(obj.icon_image.url) if request else obj.icon_image.url
+
+    def get_is_covered(self, obj):
+        return emergency_category_is_covered(obj.code)
+
+    def validate_code(self, value):
+        code = (value or "").strip().lower().replace("-", "_")
+        if not code:
+            raise serializers.ValidationError("Enter a category code.")
+        if not all(char.isalnum() or char == "_" for char in code):
+            raise serializers.ValidationError("Use lowercase letters, numbers, and underscores only.")
+        return code
+
+    def validate_icon_key(self, value):
+        value = (value or "siren").strip().lower()
+        allowed = {
+            "activity", "ambulance", "baby", "badge-alert", "bell", "cloud-rain-wind",
+            "flame", "heart-crack", "home", "map-pin", "pill", "shield-alert",
+            "siren", "stethoscope", "waves", "zap",
+        }
+        if value not in allowed:
+            raise serializers.ValidationError("Choose one of the supported emergency icons.")
+        return value
+
+    def validate_icon_image(self, value):
+        if not value:
+            return value
+        name = value.name.lower()
+        if not name.endswith((".png", ".jpg", ".jpeg", ".webp", ".ico")):
+            raise serializers.ValidationError("Use PNG, JPG, WEBP, or ICO.")
+        if value.size > 512 * 1024:
+            raise serializers.ValidationError("Use an icon image up to 512 KB.")
+        return value
+
+
 class MapDispatchPolicySerializer(serializers.ModelSerializer):
     class Meta:
         model = MapDispatchPolicy
@@ -54,6 +121,7 @@ class MapDispatchPolicySerializer(serializers.ModelSerializer):
             "out_of_zone_action",
             "witness_radius_meters",
             "responder_nearby_radius_meters",
+            "emergency_sms_number",
             "updated_by",
             "updated_at",
         )
@@ -77,17 +145,22 @@ class MapDispatchPolicySerializer(serializers.ModelSerializer):
 
 class EmergencyCreateSerializer(serializers.Serializer):
     client_request_id = serializers.UUIDField(required=False)
-    type = serializers.ChoiceField(choices=EmergencyAlert.Type.choices)
+    type = serializers.CharField(max_length=80)
     note = serializers.CharField(allow_blank=True, required=False)
     latitude = BrowserGPSDecimalField(max_digits=10, decimal_places=7)
     longitude = BrowserGPSDecimalField(max_digits=10, decimal_places=7)
     address = serializers.CharField(max_length=255, allow_blank=True, required=False)
-    location_source = serializers.ChoiceField(choices=("gps", "manual_pin"), default="gps")
+    location_source = serializers.ChoiceField(choices=("gps", "manual_pin", "network", "sms", "sms_landmark"), default="gps")
     location_accuracy = serializers.FloatField(required=False, allow_null=True)
 
     def validate(self, attrs):
+        category = EmergencyCategory.objects.filter(code=attrs.get("type"), is_active=True).first()
+        if not category:
+            raise serializers.ValidationError({"type": ["Choose an active emergency category."]})
+        if not emergency_category_is_covered(category.code):
+            raise serializers.ValidationError({"type": ["This emergency category has no responding unit configured."]})
         try:
-            validate_barangay_location(attrs.get("latitude"), attrs.get("longitude"))
+            validate_emergency_location(attrs.get("latitude"), attrs.get("longitude"))
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc) from exc
         return attrs
@@ -110,14 +183,10 @@ class EmergencyMediaSerializer(serializers.ModelSerializer):
         )
 
     def get_preview_url(self, obj):
-        path = f"/api/emergencies/media/{obj.pk}/preview/"
-        request = self.context.get("request")
-        return request.build_absolute_uri(path) if request else path
+        return f"/api/emergencies/media/{obj.pk}/preview/"
 
     def get_raw_url(self, obj):
-        path = f"/api/emergencies/media/{obj.pk}/raw/"
-        request = self.context.get("request")
-        return request.build_absolute_uri(path) if request else path
+        return f"/api/emergencies/media/{obj.pk}/raw/"
 
 
 class EmergencyStatusEventSerializer(serializers.ModelSerializer):
@@ -134,9 +203,119 @@ class EmergencyLocationPingSerializer(serializers.ModelSerializer):
         fields = ("id", "latitude", "longitude", "accuracy", "created_at")
 
 
+LEGACY_UNIT_BY_DEPARTMENT_CODE = {code: unit for unit, code in RESPONDER_UNIT_TO_DEPARTMENT.items()}
+
+
+def emergency_category_is_covered(code):
+    if not code:
+        return False
+    return EmergencyTypeRoleMap.objects.filter(emergency_type=code, is_active=True, department__isnull=False).exists()
+
+
+class EmergencyTypeRoleMapSerializer(serializers.ModelSerializer):
+    """Routing rows are written by unit (Department); `responder_unit` is legacy.
+
+    Callers may send either. `department` is what dispatch reads, so a payload
+    carrying only the legacy enum is translated rather than accepted as-is —
+    otherwise the row would be saved and then silently ignored when routing.
+    """
+
+    department = serializers.PrimaryKeyRelatedField(
+        queryset=Department.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    department_name = serializers.CharField(source="department.name", read_only=True)
+    department_code = serializers.CharField(source="department.code", read_only=True)
+    # Not required from callers: the model column is non-blank, which would make
+    # DRF demand it, but `to_internal_value` derives it from the department.
+    # Without this override a payload carrying only `department` — which is what
+    # the Dispatch rules screen sends — is rejected before it can be translated.
+    responder_unit = serializers.CharField(required=False, allow_blank=True)
+    emergency_type = serializers.CharField(max_length=80)
+
+    class Meta:
+        model = EmergencyTypeRoleMap
+        fields = (
+            "id",
+            "emergency_type",
+            "department",
+            "department_name",
+            "department_code",
+            "responder_unit",
+            "priority",
+            "requires_shift",
+            "is_active",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "department_name", "department_code", "created_at", "updated_at")
+
+    def to_internal_value(self, data):
+        """Resolve the legacy unit into a department before validators run.
+
+        The `(emergency_type, department)` uniqueness constraint generates a
+        UniqueTogetherValidator, and DRF runs those *before* `validate()`. A
+        payload carrying only `responder_unit` would therefore be rejected as
+        missing `department` before it could be translated, so the translation
+        has to happen here.
+        """
+        attrs = super().to_internal_value(data)
+
+        category_code = attrs.get("emergency_type") or getattr(self.instance, "emergency_type", "")
+        if category_code and not EmergencyCategory.objects.filter(code=category_code, is_active=True).exists():
+            raise serializers.ValidationError({"emergency_type": ["Choose an active emergency category."]})
+
+        department = attrs.get("department") or getattr(self.instance, "department", None)
+        unit = attrs.get("responder_unit") or getattr(self.instance, "responder_unit", "")
+
+        if department is None and unit:
+            department = department_for_responder_unit(unit)
+            if department is None:
+                raise serializers.ValidationError(
+                    {"responder_unit": [f"No barangay unit is mapped to “{unit}”. Choose a unit instead."]}
+                )
+            attrs["department"] = department
+
+        if department is None:
+            raise serializers.ValidationError(
+                {"department": ["Select the unit that answers this emergency type."]}
+            )
+
+        # Keep the legacy column populated so older serializers and the
+        # responder-availability index keep working during the transition.
+        if not unit:
+            attrs["responder_unit"] = LEGACY_UNIT_BY_DEPARTMENT_CODE.get(department.code, "")
+
+        return attrs
+
+
+class EmergencyAssignmentLogSerializer(serializers.ModelSerializer):
+    responder = PublicUserSerializer(read_only=True)
+    actor = PublicUserSerializer(read_only=True)
+
+    class Meta:
+        model = EmergencyAssignmentLog
+        fields = ("id", "assignment", "responder", "actor", "action", "old_status", "new_status", "note", "metadata", "created_at")
+
+
+class EmergencyAssignmentStatusSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=[
+        EmergencyResponderAssignment.Status.ACKNOWLEDGED,
+        EmergencyResponderAssignment.Status.EN_ROUTE,
+        EmergencyResponderAssignment.Status.ARRIVED,
+        EmergencyResponderAssignment.Status.ASSISTING,
+        EmergencyResponderAssignment.Status.RESOLVED,
+        EmergencyResponderAssignment.Status.DECLINED,
+    ])
+    note = serializers.CharField(min_length=5, max_length=255, trim_whitespace=True)
+
+
 class EmergencyResponderAssignmentSerializer(serializers.ModelSerializer):
     responder = PublicUserSerializer(read_only=True)
     last_location = serializers.SerializerMethodField()
+    location_history = serializers.SerializerMethodField()
+    route = serializers.SerializerMethodField()
 
     class Meta:
         model = EmergencyResponderAssignment
@@ -144,17 +323,29 @@ class EmergencyResponderAssignmentSerializer(serializers.ModelSerializer):
             "id",
             "responder",
             "status",
+            "source",
+            "role_map",
+            "status_note",
             "assigned_at",
             "acknowledged_at",
             "arrived_at",
             "last_location",
+            "location_history",
+            "route",
         )
 
     def get_last_location(self, obj):
-        if obj.alert.status in {EmergencyAlert.Status.RESOLVED, EmergencyAlert.Status.CANCELLED}:
-            return None
         ping = obj.location_pings.order_by("-created_at", "-id").first()
         return EmergencyLocationPingSerializer(ping).data if ping else None
+
+    def get_location_history(self, obj):
+        pings = obj.location_pings.order_by("created_at", "id")
+        return EmergencyLocationPingSerializer(pings, many=True).data
+
+    def get_route(self, obj):
+        from apps.live_map import route_for_responder_assignment
+
+        return route_for_responder_assignment(obj.alert, obj)
 
 class EmergencyAppealSerializer(serializers.ModelSerializer):
     appellant = PublicUserSerializer(read_only=True)
@@ -185,8 +376,12 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
     status_events = EmergencyStatusEventSerializer(many=True, read_only=True)
     appeals = EmergencyAppealSerializer(many=True, read_only=True)
     escalations = EmergencyEscalationSerializer(many=True, read_only=True)
+    assignment_logs = EmergencyAssignmentLogSerializer(many=True, read_only=True)
     current_assignment = serializers.SerializerMethodField()
+    route = serializers.SerializerMethodField()
     witness_notification_summary = serializers.SerializerMethodField()
+    response_duration_seconds = serializers.SerializerMethodField()
+    disposition_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = EmergencyAlert
@@ -205,15 +400,20 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
             "location_accuracy",
             "address",
             "media_warnings",
+            "resolution_report",
             "status_version",
             "media",
             "assignments",
             "active_assignments",
             "current_assignment",
+            "route",
             "status_events",
             "appeals",
             "escalations",
+            "assignment_logs",
             "witness_notification_summary",
+            "response_duration_seconds",
+            "disposition_reason",
             "created_at",
             "updated_at",
             "routed_at",
@@ -227,6 +427,7 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
                 EmergencyResponderAssignment.Status.ACKNOWLEDGED,
                 EmergencyResponderAssignment.Status.EN_ROUTE,
                 EmergencyResponderAssignment.Status.ARRIVED,
+                EmergencyResponderAssignment.Status.ASSISTING,
             ]
         ).select_related("responder", "responder__resident_profile").order_by("assigned_at", "id")
 
@@ -238,6 +439,28 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
     def get_current_assignment(self, obj):
         assignment = self._active_assignments(obj).first()
         return EmergencyResponderAssignmentSerializer(assignment, context=self.context).data if assignment else None
+
+    def get_route(self, obj):
+        if obj.route is not None:
+            return obj.route
+        from apps.live_map import route_for_assignment
+
+        return route_for_assignment(obj)
+
+    def get_response_duration_seconds(self, obj):
+        if not obj.resolved_at:
+            return None
+        return int((obj.resolved_at - obj.created_at).total_seconds())
+
+    def get_disposition_reason(self, obj):
+        if obj.status not in {
+            EmergencyAlert.Status.CANCELLED,
+            EmergencyAlert.Status.FALSE_ALARM,
+            EmergencyAlert.Status.INVALID,
+        }:
+            return ""
+        event = obj.status_events.filter(status=obj.status).order_by("-created_at", "-id").first()
+        return event.note if event else obj.resolution_report
 
     def get_witness_notification_summary(self, obj):
         request = self.context.get("request")
@@ -308,9 +531,33 @@ class EmergencyAssignSerializer(serializers.Serializer):
         return attrs
 
 
-class EmergencyReassignSerializer(EmergencyAssignSerializer):
+class EmergencyReassignSerializer(serializers.Serializer):
+    # responder_id is functionally required (enforced in validate() below).
+    # It is declared required=False at the field level so that legacy
+    # clients posting only `responder_ids` don't fail DRF's field-level
+    # validation before validate() gets a chance to backfill it.
+    responder_id = serializers.IntegerField(required=False)
+    responder_ids = serializers.ListField(child=serializers.IntegerField(), required=False, allow_empty=False)
     note = serializers.CharField(min_length=5, max_length=255, trim_whitespace=True)
     status_version = serializers.IntegerField(required=False, min_value=0)
+
+    def validate(self, attrs):
+        # Backward compat: some in-flight clients may still post `responder_ids`
+        # (a list) instead of the single `responder_id`. Accept it during
+        # rollout, but only when it unambiguously identifies one responder.
+        responder_id = attrs.get("responder_id")
+        responder_ids = attrs.pop("responder_ids", None)
+        if responder_id is None:
+            if responder_ids is not None:
+                if len(responder_ids) != 1:
+                    raise serializers.ValidationError(
+                        {"responder_ids": ["Reassignment accepts exactly one responder."]}
+                    )
+                responder_id = responder_ids[0]
+            else:
+                raise serializers.ValidationError({"responder_id": ["This field is required."]})
+        attrs["responder_id"] = responder_id
+        return attrs
 
 
 class EmergencyAssignmentRemoveSerializer(serializers.Serializer):
@@ -342,7 +589,13 @@ class EmergencyLocationPingCreateSerializer(serializers.Serializer):
 
 
 class EmergencyNoteSerializer(serializers.Serializer):
-    note = serializers.CharField(max_length=255, allow_blank=True, required=False)
+    note = serializers.CharField(max_length=2000, allow_blank=True, required=False)
+    status_version = serializers.IntegerField(required=False, min_value=0)
+
+
+class EmergencyDispositionSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=[EmergencyAlert.Status.FALSE_ALARM, EmergencyAlert.Status.INVALID])
+    note = serializers.CharField(min_length=5, max_length=2000, trim_whitespace=True)
     status_version = serializers.IntegerField(required=False, min_value=0)
 
 
@@ -409,7 +662,7 @@ class EmergencyChatCreateSerializer(serializers.Serializer):
         return attrs
 
 
-RESPONDER_UNIT_CHOICES = ("tanod", "bhw", "bdrrmo", "other", "")
+RESPONDER_UNIT_CHOICES = ("tanod", "bhw", "bdrrmo", "")
 
 
 class ResponderShiftSerializer(serializers.ModelSerializer):

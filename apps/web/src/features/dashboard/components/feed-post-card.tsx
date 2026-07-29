@@ -10,12 +10,12 @@ import type { Concern, ConcernComment, PublicUser } from "@/features/dashboard/a
 import {
   collectThreadMentionUsers,
   firstNameOf,
-  MentionTextField,
   mentionToken,
   renderCommentBody,
   toMentionUser,
   type MentionUser,
 } from "@/features/dashboard/components/comment-mentions"
+import { MentionTextField } from "@/features/dashboard/components/mention-text-field"
 import {
   CommentMoreMenu,
   PostMoreMenu,

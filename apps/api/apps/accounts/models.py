@@ -48,7 +48,6 @@ class User(AbstractUser):
         TANOD = "tanod", "Barangay Tanod"
         BHW = "bhw", "Barangay Health Worker"
         BDRRMO = "bdrrmo", "BDRRMO"
-        OTHER = "other", "Other Responder"
 
     class Status(models.TextChoices):
         PENDING_OTP = "pending_otp", "Pending OTP"

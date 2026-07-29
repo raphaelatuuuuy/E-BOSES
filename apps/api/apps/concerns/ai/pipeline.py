@@ -5,26 +5,84 @@ from django.db import transaction
 
 from apps.concerns.models import Concern, ConcernAiAssessment, ConcernClassificationConfiguration
 
+from . import text_classifier
 from .image_detector import ImageDetectorNotConfigured, YoloImageDetector
-from .classification import MultilingualKeywordClassifier
+from .classification import BASE_TEXT_PROVIDER, ROBERTA_TAGALOG_PROVIDER, MultilingualKeywordClassifier
 from .duplicate_detector import find_duplicate_concern
+from .text_classifier import TextClassifierNotConfigured
 
 
 BASE_LABEL_MAPPINGS = {
-    "pothole": Concern.Category.INFRASTRUCTURE,
     "traffic light": Concern.Category.INFRASTRUCTURE,
     "bench": Concern.Category.INFRASTRUCTURE,
     "garbage": Concern.Category.ENVIRONMENT,
     "trash": Concern.Category.ENVIRONMENT,
-    "floodwater": Concern.Category.ENVIRONMENT,
-    "fire": Concern.Category.PUBLIC_SAFETY,
     "knife": Concern.Category.PUBLIC_SAFETY,
     "dog": Concern.Category.PUBLIC_SAFETY,
+    "cat": Concern.Category.PUBLIC_SAFETY,
+    "car": Concern.Category.VEHICLE,
+    "truck": Concern.Category.VEHICLE,
+    "motorcycle": Concern.Category.VEHICLE,
+    "bus": Concern.Category.VEHICLE,
+    "bicycle": Concern.Category.VEHICLE,
+    "person": Concern.Category.OTHERS,
 }
 
 
 class StaleAiRun(RuntimeError):
     """Raised when an expired worker tries to publish over a newer run lease."""
+
+
+# Module-level memo so the (heavy) RoBERTa pipeline is loaded once per process
+# rather than per concern. Keyed by (id(RobertaTagalogClassifier), model_path)
+# so tests that patch the class get a fresh cache slot instead of a stale
+# instance left behind by an earlier test/config.
+_roberta_classifier_cache: dict[tuple[int, str], object] = {}
+
+
+def _get_roberta_classifier(model_path: str):
+    # Looked up via the module (not a direct name import) so tests that patch
+    # apps.concerns.ai.text_classifier.RobertaTagalogClassifier take effect.
+    roberta_cls = text_classifier.RobertaTagalogClassifier
+    cache_key = (id(roberta_cls), model_path)
+    classifier = _roberta_classifier_cache.get(cache_key)
+    if classifier is None:
+        classifier = roberta_cls(model_path)
+        _roberta_classifier_cache[cache_key] = classifier
+    return classifier
+
+
+def _classify_text(config, *, title: str, description: str):
+    """Returns (result, provider_name, fallback_reason|None).
+
+    Uses the fine-tuned Tagalog RoBERTa classifier when configured; falls
+    back to the dependency-free keyword baseline on any failure (model not
+    configured, import error, inference error) so text classification never
+    blocks the AI pipeline.
+    """
+    if config.nlp_provider == ROBERTA_TAGALOG_PROVIDER:
+        model_path = getattr(settings, "EBOSES_NLP_MODEL_PATH", "")
+        if model_path:
+            try:
+                classifier = _get_roberta_classifier(model_path)
+                result = classifier.classify(title=title, description=description)
+                return result, ROBERTA_TAGALOG_PROVIDER, None
+            except TextClassifierNotConfigured as exc:
+                fallback_reason = str(exc)
+            except Exception as exc:
+                fallback_reason = f"roberta_tagalog inference failed: {exc.__class__.__name__}"
+        else:
+            fallback_reason = "EBOSES_NLP_MODEL_PATH is not configured."
+        return (
+            MultilingualKeywordClassifier(config).classify(title=title, description=description),
+            BASE_TEXT_PROVIDER,
+            fallback_reason,
+        )
+    return (
+        MultilingualKeywordClassifier(config).classify(title=title, description=description),
+        BASE_TEXT_PROVIDER,
+        None,
+    )
 
 
 def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -> ConcernAiAssessment:
@@ -49,6 +107,7 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
     }
     image_status = ConcernAiAssessment.Status.COMPLETED
     label_mappings = {**BASE_LABEL_MAPPINGS, **(config.label_mappings or {})}
+    supported_classes = {s.lower() for s in (config.supported_classes or [])}
     try:
         image_result = YoloImageDetector(settings.EBOSES_YOLO_MODEL_PATH).detect(image_paths)
         mapped_objects = [
@@ -57,6 +116,7 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
                 "category": label_mappings.get(str(item.get("label", "")).lower(), ""),
             }
             for item in image_result.objects
+            if not supported_classes or str(item.get("label", "")).lower() in supported_classes
         ]
         image_result = type(image_result)(
             objects=mapped_objects,
@@ -83,17 +143,20 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         }
         image_status = ConcernAiAssessment.Status.FAILED
 
-    text_result = MultilingualKeywordClassifier(config).classify(
+    text_result, text_provider, text_fallback_reason = _classify_text(
+        config,
         title=concern.title,
         description=concern.description,
     )
 
     text_payload = {
         **asdict(text_result),
-        "provider": "keyword_baseline",
+        "provider": text_provider,
         "inference_status": "available",
         "inference_succeeded": True,
     }
+    if text_fallback_reason:
+        text_payload["fallback_reason"] = text_fallback_reason
     image_categories = {
         item.get("category")
         for item in (image_result.objects if image_result else [])
@@ -129,6 +192,14 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         "priority": suggested_priority,
         "duplicate": duplicate_payload,
     }
+    flag_reasons = _flag_reasons(
+        config,
+        label=text_result.label,
+        is_suspicious=text_result.is_suspicious,
+        is_irrelevant=text_result.is_irrelevant,
+        category_match=category_match,
+        possible_duplicate=duplicate_match.possible_duplicate,
+    )
     result_values = {
         "status": image_status,
         "image_objects": image_result.objects if image_result else [],
@@ -144,6 +215,8 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
             possible_duplicate=duplicate_match.possible_duplicate,
         ),
         "model_version": f"yolo:{image_result.model_version if image_result else 'unavailable'};nlp:{text_result.model_version}",
+        "flagged": bool(flag_reasons),
+        "flag_reasons": flag_reasons,
     }
     with transaction.atomic():
         current = ConcernAiAssessment.objects.select_for_update().get(pk=assessment.pk)
@@ -157,7 +230,41 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
             **({"execution": execution} if execution else {}),
         }
         current.save()
+        # Soft gate only: this advisory summary never changes validation_status
+        # or status. AI findings flag reports for official review, they never
+        # auto-reject and never move the concern's real workflow state.
+        summary = (
+            "AI review flagged: " + ", ".join(reason["reason"].replace("_", " ") for reason in flag_reasons)
+            if flag_reasons
+            else "AI checks passed; cleared for official review."
+        )
+        Concern.objects.filter(pk=concern.pk).update(validation_summary=summary)
     return current
+
+
+def _flag_reasons(
+    config,
+    *,
+    label: str,
+    is_suspicious: bool,
+    is_irrelevant: bool,
+    category_match: bool,
+    possible_duplicate: bool,
+) -> list[dict]:
+    # Driven by the classifier-reported `is_suspicious`/`is_irrelevant`
+    # booleans, not by sniffing substrings out of `label` — the label
+    # vocabulary is classifier-specific (keyword baseline vs. RoBERTa), the
+    # flags are not. `label` is kept only for the human-readable payload.
+    reasons: list[dict] = []
+    if config.flag_suspicious and is_suspicious:
+        reasons.append({"reason": "suspicious_text", "label": label})
+    if config.flag_irrelevant and is_irrelevant:
+        reasons.append({"reason": "irrelevant_text", "label": label})
+    if not category_match:
+        reasons.append({"reason": "category_mismatch", "configured_action": config.mismatch_action})
+    if possible_duplicate:
+        reasons.append({"reason": "possible_duplicate"})
+    return reasons
 
 
 def _recommendation(label: str, category_match: bool, *, possible_duplicate: bool = False) -> str:

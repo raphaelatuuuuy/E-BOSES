@@ -36,10 +36,10 @@ from .ocr_runtime import (
     draft_configuration,
     document_type_for_registration,
     published_configuration,
+    official_service_status,
     process_test_run,
     retry_case,
-    run_health_canary,
-    service_status,
+    run_official_health_canary,
 )
 from .services import create_audit_log, validate_uploaded_media_file
 from .permissions import user_has_role_permission
@@ -910,7 +910,7 @@ class OCRHealthView(APIView):
     def get(self, request):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        return Response(_service_payload(service_status()))
+        return Response(_service_payload(official_service_status()))
 
 
 class OCRHealthRecheckView(APIView):
@@ -919,7 +919,7 @@ class OCRHealthRecheckView(APIView):
     def post(self, request):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        result = run_health_canary()
+        result = run_official_health_canary()
         create_audit_log("ocr.health_recheck", actor=request.user, metadata={"status": result.status, "error_code": result.error_code})
         return Response(_service_payload(result))
 

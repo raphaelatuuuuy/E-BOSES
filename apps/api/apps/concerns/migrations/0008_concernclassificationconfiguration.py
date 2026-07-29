@@ -9,11 +9,30 @@ def seed_configuration(apps, schema_editor):
         "suspicious_terms": ["asdf", "qwerty", "test", "testing", "12345"],
         "category_keywords": {
             "infrastructure": ["pothole", "lubak", "kalsada", "streetlight", "ilaw", "kanal", "drainage"],
-            "environment": ["basura", "garbage", "trash", "baha", "flood", "tubig", "pollution", "punong natumba"],
-            "public_safety": ["aksidente", "accident", "sunog", "fire", "away", "crime", "danger", "delikado", "stray dog"],
+            "environment": ["basura", "garbage", "trash", "baha", "tubig", "pollution", "punong natumba"],
+            "public_safety": ["aksidente", "accident", "sunog", "away", "crime", "danger", "delikado", "stray dog"],
+            "vehicle": ["car", "truck", "motorcycle", "bus", "bicycle", "van", "jeep"],
             "others": [],
         },
-        "label_mappings": {"pothole": "infrastructure", "garbage": "environment", "floodwater": "environment", "fire": "public_safety", "dog": "public_safety"},
+        "label_mappings": {
+            "traffic light": "infrastructure",
+            "bench": "infrastructure",
+            "parking meter": "infrastructure",
+            "garbage": "environment",
+            "trash": "environment",
+            "knife": "public_safety",
+            "dog": "public_safety",
+            "cat": "public_safety",
+            "handbag": "others",
+            "backpack": "others",
+            "suitcase": "others",
+            "car": "vehicle",
+            "truck": "vehicle",
+            "motorcycle": "vehicle",
+            "bus": "vehicle",
+            "bicycle": "vehicle",
+            "person": "others",
+        },
     })
 
 

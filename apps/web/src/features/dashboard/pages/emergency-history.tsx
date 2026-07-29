@@ -21,13 +21,13 @@ const activeStatuses: EmergencyStatus[] = [
   "arrived",
 ]
 
-type FilterKey = "all" | "active" | "resolved" | "cancelled"
+type FilterKey = "all" | "active" | "resolved" | "closed"
 
 const filters: { key: FilterKey; label: string }[] = [
   { key: "all", label: "All" },
   { key: "active", label: "Active" },
   { key: "resolved", label: "Resolved" },
-  { key: "cancelled", label: "Cancelled" },
+  { key: "closed", label: "Closed" },
 ]
 
 function statusLabel(status: EmergencyStatus) {
@@ -87,7 +87,7 @@ export default function EmergencyHistoryPage() {
     if (filter === "all") return alerts
     if (filter === "active") return alerts.filter((a) => activeStatuses.includes(a.status))
     if (filter === "resolved") return alerts.filter((a) => a.status === "resolved")
-    return alerts.filter((a) => a.status === "cancelled")
+    return alerts.filter((a) => ["cancelled", "false_alarm", "invalid"].includes(a.status))
   }, [alerts, filter])
 
   function openAlert(alert: EmergencyAlert) {
@@ -98,7 +98,8 @@ export default function EmergencyHistoryPage() {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-white">
       <div className="min-w-0 flex-1 px-4 pb-[calc(7.5rem+env(safe-area-inset-bottom))] pt-4 md:px-6 md:pb-12 md:pt-6 lg:px-8">
-        <div className="w-full max-w-lg md:max-w-xl lg:max-w-2xl">
+        {/* lg: max-width matches lib/shell.ts FEED_MAX (680px) — same column width as the resident feed */}
+        <div className="w-full max-w-lg md:max-w-xl lg:max-w-[680px]">
           <h1 className="text-[20px] font-bold tracking-tight text-neutral-900 sm:text-2xl">Alerts</h1>
           <p className="mt-1 text-sm text-neutral-500">
             Active and past SOS alerts, with location and status.
@@ -111,9 +112,9 @@ export default function EmergencyHistoryPage() {
                 type="button"
                 onClick={() => setFilter(item.key)}
                 className={cn(
-                  "h-9 shrink-0 rounded-full border px-3.5 text-[13px] font-semibold transition-colors",
+                  "min-h-11 shrink-0 rounded-full border px-3.5 text-[13px] font-semibold transition-colors",
                   filter === item.key
-                    ? "border-[#ff6a1a] bg-[#ff6a1a] text-white"
+                    ? "border-brand-orange bg-brand-orange text-white"
                     : "border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-50",
                 )}
               >

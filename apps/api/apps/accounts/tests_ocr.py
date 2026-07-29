@@ -20,15 +20,22 @@ from rest_framework.test import APIClient
 from apps.accounts.models import (
     OCRConfigurationVersion,
     OCRServiceStatus,
+    OCRTestRun,
     ResidenceProof,
     ResidenceVerificationCase,
     ResidentProfile,
     User,
     VerificationCheck,
 )
-from apps.accounts.ocr import OCRProviderUnavailable, ocr_file
+from apps.accounts.ocr import OCRProviderAuthenticationError, OCRProviderUnavailable, OCRResponse, ocr_file
 from apps.accounts.ocr_engine import EngineResult, run_engine
-from apps.accounts.ocr_runtime import decide_case, finalize_case_attempts, process_verification_case
+from apps.accounts.ocr_runtime import (
+    decide_case,
+    detect_residence_proof,
+    finalize_case_attempts,
+    process_test_run,
+    process_verification_case,
+)
 
 TEST_IMAGE = "C:\\Users\\TO GOD BE THE GLORY\\Downloads\\5207cdef-1047-45a1-ab29-b7f0df616458.jpg"
 
@@ -97,6 +104,243 @@ def _png_content():
 
 
 class ConfigurableOCRWorkflowTests(TestCase):
+    def test_easyocr_provider_normalizes_result_lines(self):
+        from apps.accounts.ocr_engine import EasyOCRProvider
+
+        class Reader:
+            def readtext(self, image):
+                return [
+                    (
+                        [[10, 20], [110, 22], [108, 44], [12, 42]],
+                        "Barangay Certificate",
+                        0.8765,
+                    )
+                ]
+
+        provider = EasyOCRProvider(reader=Reader(), gpu=False)
+
+        response = provider.recognize(_png_content(), suffix=".png")
+
+        self.assertEqual(response.model, "easyocr:en:cpu")
+        self.assertEqual(response.job_id, "local-easyocr")
+        self.assertEqual(response.image_width, 420)
+        self.assertEqual(response.image_height, 260)
+        self.assertEqual(
+            response.lines,
+            [
+                {
+                    "text": "Barangay Certificate",
+                    "confidence": 0.8765,
+                    "bbox": [10.0, 20.0, 110.0, 44.0],
+                }
+            ],
+        )
+
+    def test_fallback_provider_uses_paddleocr_when_available(self):
+        from apps.accounts.ocr_engine import FallbackOCRProvider
+
+        class PaddleProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def recognize(self, content, *, suffix, deskew=True):
+                self.calls += 1
+                return OCRResponse(
+                    lines=[{"text": "PADDLE TEXT", "confidence": 0.99}],
+                    job_id="paddle-job",
+                    latency_ms=12,
+                    model="paddleocr",
+                    image_width=420,
+                    image_height=260,
+                )
+
+        class EasyProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def recognize(self, content, *, suffix, deskew=True):
+                self.calls += 1
+                return OCRResponse(
+                    lines=[{"text": "EASY TEXT", "confidence": 0.88}],
+                    job_id="local-easyocr",
+                    latency_ms=25,
+                    model="easyocr:en:cpu",
+                    image_width=420,
+                    image_height=260,
+                )
+
+        paddle = PaddleProvider()
+        easy = EasyProvider()
+        provider = FallbackOCRProvider(primary=paddle, fallback=easy)
+
+        response = provider.recognize(_png_content(), suffix=".png", deskew=False)
+
+        self.assertEqual(response.job_id, "paddle-job")
+        self.assertEqual(response.model, "paddleocr")
+        self.assertEqual(paddle.calls, 1)
+        self.assertEqual(easy.calls, 0)
+
+    def test_fallback_provider_uses_easyocr_when_paddleocr_unavailable(self):
+        from apps.accounts.ocr_engine import FallbackOCRProvider
+
+        class DownPaddleProvider:
+            def recognize(self, content, *, suffix, deskew=True):
+                raise OCRProviderUnavailable("PaddleOCR request timed out.")
+
+        class EasyProvider:
+            def recognize(self, content, *, suffix, deskew=True):
+                return OCRResponse(
+                    lines=[{"text": "EASY TEXT", "confidence": 0.88}],
+                    job_id="local-easyocr",
+                    latency_ms=25,
+                    model="easyocr:en:cpu",
+                    image_width=420,
+                    image_height=260,
+                )
+
+        provider = FallbackOCRProvider(primary=DownPaddleProvider(), fallback=EasyProvider())
+
+        response = provider.recognize(_png_content(), suffix=".png", deskew=False)
+
+        self.assertEqual(response.job_id, "local-easyocr")
+        self.assertEqual(response.model, "easyocr:en:cpu")
+        self.assertEqual(response.lines[0]["text"], "EASY TEXT")
+
+    def test_fallback_provider_uses_easyocr_when_paddleocr_authentication_fails(self):
+        from apps.accounts.ocr_engine import FallbackOCRProvider
+
+        class MisconfiguredPaddleProvider:
+            def recognize(self, content, *, suffix, deskew=True):
+                raise OCRProviderAuthenticationError("PaddleOCR is not configured.")
+
+        class EasyProvider:
+            def recognize(self, content, *, suffix, deskew=True):
+                return OCRResponse(
+                    lines=[{"text": "EASY TEXT", "confidence": 0.88}],
+                    job_id="local-easyocr",
+                    latency_ms=25,
+                    model="easyocr:en:cpu",
+                    image_width=420,
+                    image_height=260,
+                )
+
+        provider = FallbackOCRProvider(primary=MisconfiguredPaddleProvider(), fallback=EasyProvider())
+
+        response = provider.recognize(_png_content(), suffix=".png", deskew=False)
+
+        self.assertEqual(response.job_id, "local-easyocr")
+        self.assertEqual(response.model, "easyocr:en:cpu")
+
+    def test_official_test_run_uses_easyocr_by_default(self):
+        official = User.objects.create_user(
+            email="test-run-official@example.com",
+            password="Str0ng!Pass123",
+            role=User.Role.BARANGAY_OFFICIAL,
+        )
+        configuration = OCRConfigurationVersion.objects.get(status="draft")
+        document_type = configuration.document_types.get(code="barangay_certificate")
+        content = _png_content()
+        test_run = OCRTestRun.objects.create(
+            configuration=configuration,
+            document_type=document_type,
+            requested_by=official,
+            original_filename="certificate.png",
+            mime_type="image/png",
+            file_size=len(content),
+        )
+        test_run.file.save("certificate.png", ContentFile(content), save=True)
+
+        class EasyProvider:
+            def recognize(self, content, *, suffix, deskew=True):
+                return OCRResponse(
+                    lines=[
+                        {"text": "BARANGAY CERTIFICATE", "confidence": 0.98},
+                        {"text": "Resident Name: Juan Dela Cruz", "confidence": 0.98},
+                    ],
+                    job_id="local-easyocr",
+                    latency_ms=17,
+                    model="easyocr:en:cpu",
+                    image_width=420,
+                    image_height=260,
+                )
+
+        with patch("apps.accounts.ocr_runtime.EasyOCRProvider", return_value=EasyProvider()) as provider_class:
+            result = process_test_run(test_run.pk)
+
+        provider_class.assert_called_once_with(gpu=False)
+        self.assertIn(result.status, {OCRTestRun.Status.PASSED, OCRTestRun.Status.WARNING})
+        self.assertEqual(result.provider_job_id, "local-easyocr")
+        service = OCRServiceStatus.objects.get(provider="easyocr_official")
+        self.assertEqual(service.status, OCRServiceStatus.Status.HEALTHY)
+        self.assertEqual(service.latency_ms, 17)
+        self.assertEqual(service.details["model"], "easyocr:en:cpu")
+        self.assertFalse(OCRServiceStatus.objects.filter(provider="paddleocr", latency_ms=17).exists())
+
+    def test_signup_detection_still_uses_paddleocr_provider(self):
+        configuration = OCRConfigurationVersion.objects.get(status="published")
+        document_type = configuration.document_types.get(code="barangay_certificate")
+        content = _png_content()
+
+        class PaddleProvider:
+            def recognize(self, content, *, suffix, deskew=True):
+                return OCRResponse(
+                    lines=[{"text": "BARANGAY CERTIFICATE", "confidence": 0.98}],
+                    job_id="paddle-job",
+                    latency_ms=21,
+                    model="paddleocr",
+                    image_width=420,
+                    image_height=260,
+                )
+
+        with patch("apps.accounts.ocr_runtime.PaddleOCRProvider", return_value=PaddleProvider()) as paddle_class:
+            with patch("apps.accounts.ocr_runtime.EasyOCRProvider") as easy_class:
+                result = detect_residence_proof(
+                    ContentFile(content, name="certificate.png"),
+                    hint_type=document_type.code,
+                )
+
+        paddle_class.assert_called()
+        easy_class.assert_not_called()
+        self.assertIsInstance(result, dict)
+
+    def test_easyocr_failure_only_records_official_provider_status(self):
+        official = User.objects.create_user(
+            email="test-run-failure-official@example.com",
+            password="Str0ng!Pass123",
+            role=User.Role.BARANGAY_OFFICIAL,
+        )
+        configuration = OCRConfigurationVersion.objects.get(status="draft")
+        document_type = configuration.document_types.get(code="barangay_certificate")
+        content = _png_content()
+        test_run = OCRTestRun.objects.create(
+            configuration=configuration,
+            document_type=document_type,
+            requested_by=official,
+            original_filename="certificate.png",
+            mime_type="image/png",
+            file_size=len(content),
+        )
+        test_run.file.save("certificate.png", ContentFile(content), save=True)
+
+        OCRServiceStatus.objects.update_or_create(
+            provider="paddleocr",
+            defaults={"status": OCRServiceStatus.Status.HEALTHY, "latency_ms": 99},
+        )
+
+        class DownEasyProvider:
+            def recognize(self, content, *, suffix, deskew=True):
+                raise OCRProviderUnavailable("EasyOCR failed")
+
+        with patch("apps.accounts.ocr_runtime.EasyOCRProvider", return_value=DownEasyProvider()):
+            result = process_test_run(test_run.pk)
+
+        self.assertEqual(result.status, OCRTestRun.Status.ERROR)
+        self.assertEqual(result.error_code, "provider_unavailable")
+        official_status = OCRServiceStatus.objects.get(provider="easyocr_official")
+        self.assertEqual(official_status.status, OCRServiceStatus.Status.DEGRADED)
+        paddle_status = OCRServiceStatus.objects.get(provider="paddleocr")
+        self.assertEqual(paddle_status.status, OCRServiceStatus.Status.HEALTHY)
+        self.assertEqual(paddle_status.latency_ms, 99)
     def test_duplicate_ocr_identifier_routes_registration_to_manual_review(self):
         configuration = OCRConfigurationVersion.objects.get(status="published")
         document_type = configuration.document_types.get(code="barangay_id")
@@ -344,6 +588,101 @@ class ConfigurableOCRWorkflowTests(TestCase):
         self.assertEqual(result.outcome, "passed")
         self.assertGreaterEqual(result.confidence, 0.8)
         self.assertTrue(all(item["passed"] for item in result.rule_results))
+
+    def test_signup_detection_falls_back_to_easyocr_when_paddleocr_is_unavailable(self):
+        configuration = OCRConfigurationVersion.objects.get(status="published")
+        document_type = configuration.document_types.get(code="barangay_certificate")
+        content = _png_content()
+
+        class DownPaddleProvider:
+            def recognize(self, content, *, suffix, deskew=True):
+                raise OCRProviderUnavailable("provider offline")
+
+        class EasyProvider:
+            def recognize(self, content, *, suffix, deskew=True):
+                return OCRResponse(
+                    lines=[
+                        {"text": "BARANGAY CERTIFICATE", "confidence": 0.98},
+                        {"text": "Resident Name: Juan Dela Cruz", "confidence": 0.98},
+                    ],
+                    job_id="local-easyocr",
+                    latency_ms=25,
+                    model="easyocr:en:cpu",
+                    image_width=420,
+                    image_height=260,
+                )
+
+        with patch("apps.accounts.ocr_runtime.PaddleOCRProvider", return_value=DownPaddleProvider()):
+            with patch("apps.accounts.ocr_runtime.EasyOCRProvider", return_value=EasyProvider()) as easy_class:
+                result = detect_residence_proof(
+                    ContentFile(content, name="certificate.png"),
+                    hint_type=document_type.code,
+                )
+
+        easy_class.assert_called_once_with(gpu=False)
+        self.assertNotEqual(result["reasons"], ["OCR service unavailable."])
+        self.assertEqual(result["document_type"]["code"], document_type.code)
+
+    def test_verification_case_falls_back_to_easyocr_when_default_paddleocr_is_unavailable(self):
+        user = User.objects.create_user(email="fallback-worker@example.com", password="Str0ng!Pass123")
+        ResidentProfile.objects.create(
+            user=user,
+            first_name="Juan",
+            last_name="Dela Cruz",
+            address="123 Sampaguita St, Marikina Heights",
+            date_of_birth=timezone.now().date(),
+        )
+        configuration = OCRConfigurationVersion.objects.get(status="published")
+        document_type = configuration.document_types.get(code="barangay_certificate")
+        content = _png_content()
+        proof = ResidenceProof.objects.create(
+            user=user,
+            document_type=document_type,
+            original_filename="certificate.png",
+            mime_type="image/png",
+            file_size=len(content),
+            sha256_hash="b" * 64,
+        )
+        proof.file.save("certificate.png", ContentFile(content), save=True)
+        case = ResidenceVerificationCase.objects.create(
+            user=user,
+            configuration=configuration,
+            document_type=document_type,
+            status=ResidenceVerificationCase.Status.QUEUED,
+        )
+        proof.case = case
+        proof.save(update_fields=["case"])
+
+        class DownPaddleProvider:
+            def recognize(self, content, *, suffix, deskew=True):
+                raise OCRProviderUnavailable("provider offline")
+
+        class EasyProvider:
+            def recognize(self, content, *, suffix, deskew=True):
+                today = timezone.now().date().strftime("%m/%d/%Y")
+                return OCRResponse(
+                    lines=[
+                        {"text": "BARANGAY CERTIFICATE", "confidence": 0.98},
+                        {"text": "Resident Name: JUAN DELA CRUZ", "confidence": 0.98},
+                        {"text": "Address: 123 Sampaguita St, Marikina Heights", "confidence": 0.98},
+                        {"text": f"Issue Date: {today}", "confidence": 0.98},
+                    ],
+                    job_id="local-easyocr",
+                    latency_ms=25,
+                    model="easyocr:en:cpu",
+                    image_width=420,
+                    image_height=260,
+                )
+
+        with patch.object(settings, "PADDLEOCR_TOKEN", "configured"):
+            with patch("apps.accounts.ocr_runtime.PaddleOCRProvider", return_value=DownPaddleProvider()):
+                with patch("apps.accounts.ocr_runtime.EasyOCRProvider", return_value=EasyProvider()) as easy_class:
+                    result = process_verification_case(case.pk)
+
+        easy_class.assert_called_once_with(gpu=False)
+        latest = result.checks.latest("created_at")
+        self.assertEqual(latest.provider_job_id, "local-easyocr")
+        self.assertNotEqual(result.review_reason, ResidenceVerificationCase.ReviewReason.OCR_UNAVAILABLE)
 
     def test_provider_outage_routes_case_to_manual_review_without_rejecting_user(self):
         user = User.objects.create_user(email="outage@example.com", password="Str0ng!Pass123")

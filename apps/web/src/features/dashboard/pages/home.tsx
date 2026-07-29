@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Link } from "react-router-dom"
 import { toast } from "sonner"
 import {
@@ -11,9 +11,7 @@ import {
   CheckIcon,
   PencilIcon,
   SearchIcon,
-  SlidersHorizontalIcon,
   XIcon,
-  SendIcon,
   MessageCircleIcon,
 } from "lucide-react"
 
@@ -37,70 +35,40 @@ import {
   type Announcement,
   type BarangayEvent,
   type Concern,
-  type ConcernComment,
   type PublicUser,
 } from "@/features/dashboard/api"
-import {
-  collectThreadMentionUsers,
-  firstNameOf,
-  MentionTextField,
-  mentionToken,
-  renderCommentBody,
-  toMentionUser,
-  type MentionUser,
-} from "@/features/dashboard/components/comment-mentions"
+import { mentionToken, toMentionUser } from "@/features/dashboard/components/comment-mentions"
 import { concernBodyText } from "@/features/dashboard/components/feed-post-card"
 import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
 import {
-  CommentMoreMenu,
   PostMoreMenu,
   ReportPostDialog,
 } from "@/features/dashboard/components/report-post-dialog"
+import { PostCommentsBlock } from "@/features/dashboard/components/feed/post-comments"
+import { ComposerCard } from "@/features/dashboard/components/home/composer-card"
+import { HomeRail } from "@/features/dashboard/components/home/home-rail"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
+import {
+  BARANGAY,
+  FS,
+  GET_STARTED_KEY,
+  IC,
+  STROKE,
+  categoryLabel,
+  railLiveMapSrc,
+  streetLabelFromAddress,
+  timeAgo,
+} from "@/features/dashboard/components/home/home-style"
 import { NotificationPopover } from "@/features/dashboard/components/notification-popover"
 import { ProfileAccountMenu } from "@/features/dashboard/components/profile-account-menu"
 import { useResidentSearch } from "@/features/dashboard/components/resident-search-context"
 import {
   ResidentContentGrid,
   RESIDENT_DESKTOP_MIN_PX,
-  RESIDENT_FEED_MAX,
-  RESIDENT_RAIL_W,
 } from "@/features/dashboard/components/resident-top-bar"
 import { RotatingSearchField } from "@/features/dashboard/components/rotating-search-field"
+import { FEED_MAX, RAIL_W } from "@/features/dashboard/lib/shell"
 import { usePageTitle } from "@/hooks/use-page-title"
-
-/** Type scale — bumped larger for readability (shared with sidebar nav sizing) */
-const FS = {
-  logo: "text-[20px]",
-  place: "text-[19px]",
-  search: "text-[16px]",
-  composer: "text-[16px]",
-  chip: "text-[15px]",
-  author: "text-[16px]",
-  meta: "text-[14px]",
-  body: "text-[16px]",
-  railTitle: "text-[16px]",
-  railBody: "text-[15px]",
-  railLink: "text-[13px]",
-  engage: "text-[15px]",
-  label: "text-[12px]",
-  footer: "text-[15px]",
-  /** Sidebar / primary nav + Report CTA */
-  sidebar: "text-[16px]",
-  section: "text-[17px]",
-} as const
-
-const IC = {
-  /** 28px — primary interactive glyphs on Home */
-  md: "size-7",
-  /** 28px — engagement, search, chrome */
-  sm: "size-7",
-  /** 28px — secondary actions */
-  xs: "size-7",
-  /** 16px — tiny meta (globe) */
-  xxs: "size-4",
-} as const
-
-const STROKE = 1.5
 
 const FEED_TABS = [
   { id: "for_you", label: "For you" },
@@ -110,591 +78,6 @@ const FEED_TABS = [
 ] as const
 
 type FeedTab = (typeof FEED_TABS)[number]["id"]
-
-function timeAgo(value: string) {
-  const diffMs = Date.now() - new Date(value).getTime()
-  const minutes = Math.max(1, Math.floor(diffMs / 60000))
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h`
-  const days = Math.floor(hours / 24)
-  if (days < 7) return `${days}d`
-  return `${Math.floor(days / 7)}w`
-}
-
-function categoryLabel(value: string) {
-  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
-}
-
-function UserAvatar({
-  user,
-  size = "md",
-  className,
-}: {
-  user?: PublicUser | null
-  size?: "sm" | "md" | "lg"
-  className?: string
-}) {
-  // Letter-only avatars (no image)
-  const sizeClass =
-    size === "sm"
-      ? "size-9 text-[16px]"
-      : size === "lg"
-        ? "size-11 text-[18px]"
-        : "size-10 text-[17px]"
-
-  const letter = (
-    user?.full_name?.[0] ||
-    user?.initials?.[0] ||
-    "?"
-  ).toUpperCase()
-
-  return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#c5d0e6] font-semibold text-[#2c3a5a]",
-        // sizeClass first so callers can override size; never strip the bg unless explicit
-        sizeClass,
-        className,
-      )}
-    >
-      {letter}
-    </span>
-  )
-}
-
-const GET_STARTED_KEY = "eboses-home-get-started-dismissed"
-const BARANGAY = "Marikina Heights"
-
-/** Match Nextdoor column proportions (shared with top bar search) */
-const FEED_MAX = RESIDENT_FEED_MAX
-const RAIL_W = RESIDENT_RAIL_W
-
-/** Extra-large chevrons on rail action rows (Nextdoor-style) */
-const RAIL_CHEVRON = "size-7 shrink-0"
-
-/** Web Mercator tile helpers for Carto light basemap (same as report location picker). */
-function lon2tile(lon: number, zoom: number) {
-  return Math.floor(((lon + 180) / 360) * 2 ** zoom)
-}
-function lat2tile(lat: number, zoom: number) {
-  const rad = (lat * Math.PI) / 180
-  return Math.floor(
-    ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * 2 ** zoom,
-  )
-}
-
-/** Carto light tile — same basemap as create-report / location picker (no pin). */
-function railLiveMapSrc(lat: number, lng: number, zoom = 16) {
-  const x = lon2tile(lng, zoom)
-  const y = lat2tile(lat, zoom)
-  return `https://a.basemaps.cartocdn.com/light_all/${zoom}/${x}/${y}@2x.png`
-}
-
-/**
- * Prefer the street line under Marikina Heights.
- * Address is typically: "123 Champaca Street, Marikina Heights, Marikina City"
- */
-function streetLabelFromAddress(address?: string | null) {
-  if (!address?.trim()) return null
-  const first = address.split(",")[0]?.trim()
-  if (!first || first.toLowerCase() === "pending") return null
-  return first
-}
-
-function commentPlaceLabel(author: PublicUser) {
-  const street =
-    streetLabelFromAddress(author.street) ||
-    (author.street && author.street.toLowerCase() !== "pending" ? author.street : null)
-  if (street && street.toLowerCase() !== "marikina heights") return street
-  if (author.barangay && author.barangay.toLowerCase() !== "pending") return author.barangay
-  return BARANGAY
-}
-
-/**
- * Nextdoor-style comment + one-level replies only (no reply-to-reply stack).
- * Own comments: ⋯ menu → Edit / Delete.
- */
-function FeedCommentItem({
-  postId,
-  comment,
-  isReply = false,
-  rootCommentId,
-  replyOpenId,
-  replyDraft,
-  onToggleReply,
-  onReplyDraftChange,
-  onSubmitReply,
-  sessionUser,
-  mentionUsers,
-  menuOpenId,
-  onMenuOpenChange,
-  editingId,
-  editDraft,
-  onStartEdit,
-  onEditDraftChange,
-  onCancelEdit,
-  onSaveEdit,
-  onDelete,
-}: {
-  postId: number
-  comment: ConcernComment
-  isReply?: boolean
-  /** Top-level comment id (for attaching replies only once) */
-  rootCommentId: number
-  replyOpenId: number | null
-  replyDraft: string
-  onToggleReply: (comment: ConcernComment) => void
-  onReplyDraftChange: (value: string) => void
-  onSubmitReply: (rootParentId: number) => void
-  sessionUser: PublicUser | null
-  mentionUsers: MentionUser[]
-  menuOpenId: number | null
-  onMenuOpenChange: (id: number | null) => void
-  editingId: number | null
-  editDraft: string
-  onStartEdit: (comment: ConcernComment) => void
-  onEditDraftChange: (value: string) => void
-  onCancelEdit: () => void
-  onSaveEdit: (commentId: number) => void
-  onDelete: (commentId: number) => void
-}) {
-  const isOwn = sessionUser != null && comment.author.id === sessionUser.id
-  // Reply allowed on top-level and nested; still stores under rootCommentId
-  const isReplying = replyOpenId === comment.id
-  const isEditing = editingId === comment.id
-  const menuOpen = menuOpenId === comment.id
-  const place = commentPlaceLabel(comment.author)
-  const [showOriginal, setShowOriginal] = useState(false)
-  const isEdited = Boolean(comment.is_edited)
-  const originalText = (comment.original_body || "").trim()
-
-  // Reset original preview when comment body changes after reload
-  useEffect(() => {
-    const timer = window.setTimeout(() => setShowOriginal(false), 0)
-    return () => window.clearTimeout(timer)
-  }, [comment.id, comment.body, comment.is_edited])
-
-  const hasReplies = !isReply && comment.replies.length > 0
-  const threadRootRef = useRef<HTMLDivElement>(null)
-  const lastReplyAvatarRef = useRef<HTMLDivElement>(null)
-  const [threadBox, setThreadBox] = useState({
-    top: 32,
-    height: 80,
-    left: 15,
-    width: 29,
-  })
-
-  // Always pin the L-curve to the last reply avatar center (from top),
-  // so opening the reply composer below does not slide the elbow away.
-  useLayoutEffect(() => {
-    if (!hasReplies) return
-    function measure() {
-      const rootEl = threadRootRef.current
-      const avEl = lastReplyAvatarRef.current
-      if (!rootEl || !avEl) return
-      const rootRect = rootEl.getBoundingClientRect()
-      const avRect = avEl.getBoundingClientRect()
-      const avCenterY = avRect.top + avRect.height / 2
-      const top = 32
-      const height = Math.max(24, avCenterY - rootRect.top - top)
-      const left = 15
-      const avLeft = avRect.left - rootRect.left
-      const width = Math.max(20, avLeft - left)
-      setThreadBox({ top, height, left, width })
-    }
-    measure()
-    const raf = window.requestAnimationFrame(measure)
-    const rootEl = threadRootRef.current
-    const ro =
-      typeof ResizeObserver !== "undefined" && rootEl
-        ? new ResizeObserver(() => measure())
-        : null
-    if (rootEl && ro) ro.observe(rootEl)
-    window.addEventListener("resize", measure)
-    return () => {
-      window.cancelAnimationFrame(raf)
-      ro?.disconnect()
-      window.removeEventListener("resize", measure)
-    }
-  }, [hasReplies, comment.replies.length, comment.replies.map((r) => r.id).join(",")])
-
-  /** Shared header + body + actions (used for root and nested) */
-  const commentMain = (
-    <>
-      <div className="flex items-start gap-0.5">
-        <div className="min-w-0 flex-1">
-          <p className="m-0 text-[13px] font-normal leading-[1.3] text-neutral-400">
-            <span className="font-bold text-neutral-900">{comment.author.full_name}</span>
-            <span className="mx-1">·</span>
-            <span>{timeAgo(comment.created_at)}</span>
-            {place ? (
-              <>
-                <span className="mx-1">·</span>
-                <span>{place}</span>
-              </>
-            ) : null}
-            {isEdited ? (
-              <>
-                <span className="mx-1">·</span>
-                <button
-                  type="button"
-                  onClick={() => originalText && setShowOriginal((v) => !v)}
-                  className={cn(
-                    "inline p-0 font-medium text-neutral-400 align-baseline",
-                    originalText && "hover:text-neutral-700 hover:underline",
-                  )}
-                  title={originalText ? "View original comment" : undefined}
-                >
-                  (edited)
-                </button>
-              </>
-            ) : null}
-          </p>
-
-          {isEditing ? (
-            <div className="mt-1 space-y-2">
-              <textarea
-                value={editDraft}
-                onChange={(e) => onEditDraftChange(e.target.value.slice(0, 1000))}
-                rows={2}
-                autoFocus
-                className={cn(
-                  "w-full resize-none rounded-xl border border-neutral-200 bg-white px-3 py-2 text-[15px] text-neutral-900 outline-none",
-                  "focus:border-neutral-300 focus:ring-2 focus:ring-neutral-100",
-                )}
-              />
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  disabled={!editDraft.trim()}
-                  onClick={() => onSaveEdit(comment.id)}
-                  className={cn(
-                    "rounded-full px-3.5 py-1.5 text-[13px] font-semibold",
-                    editDraft.trim()
-                      ? "bg-neutral-900 text-white hover:bg-neutral-800"
-                      : "cursor-not-allowed bg-neutral-200 text-neutral-400",
-                  )}
-                >
-                  Save
-                </button>
-                <button
-                  type="button"
-                  onClick={onCancelEdit}
-                  className="rounded-full px-3 py-1.5 text-[13px] font-semibold text-neutral-600 hover:bg-neutral-100"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <p className="m-0 whitespace-pre-wrap break-words text-[15px] font-normal leading-[1.35] text-neutral-800">
-                {renderCommentBody(comment.body)}
-              </p>
-              {isEdited && showOriginal && originalText ? (
-                <div className="mt-1.5 rounded-lg bg-neutral-50 px-2.5 py-1.5 ring-1 ring-neutral-100">
-                  <p className="m-0 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
-                    Original comment
-                  </p>
-                  <p className="m-0 mt-0.5 whitespace-pre-wrap break-words text-[14px] leading-snug text-neutral-600">
-                    {renderCommentBody(originalText)}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setShowOriginal(false)}
-                    className="mt-0.5 text-[12px] font-semibold text-neutral-500 hover:text-neutral-800"
-                  >
-                    Hide original
-                  </button>
-                </div>
-              ) : null}
-            </>
-          )}
-        </div>
-
-        {isOwn ? (
-          <div className="-mt-0.5 shrink-0">
-            <CommentMoreMenu
-              open={menuOpen}
-              onOpenChange={(open) => onMenuOpenChange(open ? comment.id : null)}
-              onEdit={() => onStartEdit(comment)}
-              onDelete={() => onDelete(comment.id)}
-            />
-          </div>
-        ) : null}
-      </div>
-
-      {!isEditing ? (
-        <div className="mt-2 flex flex-wrap items-center gap-3 leading-none">
-          <button
-            type="button"
-            onClick={() => onToggleReply(comment)}
-            className="text-[13px] font-semibold text-neutral-500 transition-colors hover:text-neutral-800"
-          >
-            {isReplying ? "Cancel" : "Reply"}
-          </button>
-          {!isReply && comment.replies.length > 0 ? (
-            <span className="text-[12px] font-medium text-neutral-400">
-              {comment.replies.length}{" "}
-              {comment.replies.length === 1 ? "reply" : "replies"}
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-
-      {isReplying ? (
-        <div className="mt-2 flex items-center gap-2">
-          <UserAvatar user={sessionUser} size="sm" className="!size-7 !text-[12px]" />
-          <div className="relative min-w-0 flex-1">
-            <MentionTextField
-              autoFocus
-              compact
-              value={replyDraft}
-              onChange={onReplyDraftChange}
-              onSubmit={() => onSubmitReply(rootCommentId)}
-              placeholder={`Reply to ${firstNameOf(comment.author.full_name)}…`}
-              localUsers={mentionUsers}
-            />
-            <button
-              type="button"
-              disabled={!replyDraft.trim()}
-              onClick={() => onSubmitReply(rootCommentId)}
-              aria-label="Send reply"
-              className={cn(
-                "absolute right-1 top-1/2 z-10 flex size-7 -translate-y-1/2 items-center justify-center rounded-full transition-colors",
-                replyDraft.trim()
-                  ? "text-neutral-700 hover:bg-neutral-100"
-                  : "cursor-not-allowed text-neutral-300",
-              )}
-            >
-              <SendIcon className="size-4" />
-            </button>
-          </div>
-        </div>
-      ) : null}
-    </>
-  )
-
-  // Nested reply content only (parent draws avatar + thread path)
-  if (isReply) {
-    return <div className="min-w-0 flex-1">{commentMain}</div>
-  }
-
-  /**
-   * Thread style (matches Nextdoor screenshot):
-   *   [Main avatar]
-   *        |
-   *        └──── [Latest reply avatar]
-   * Curve is measured to the last reply avatar so opening the reply
-   * composer does not move the line until a new reply is submitted.
-   */
-  return (
-    <div ref={threadRootRef} className="relative">
-      <div className="flex items-start gap-2.5">
-        <UserAvatar
-          user={comment.author}
-          size="sm"
-          className="relative z-10 !size-8 !text-[13px] leading-none !bg-[#c5d0e6] !text-[#2c3a5a]"
-        />
-        <div className="min-w-0 flex-1">{commentMain}</div>
-      </div>
-
-      {hasReplies ? (
-        <>
-          <div
-            aria-hidden
-            className="pointer-events-none absolute z-0 rounded-bl-[14px] border-b-[1.5px] border-l-[1.5px] border-neutral-300"
-            style={{
-              left: threadBox.left,
-              top: threadBox.top,
-              width: threadBox.width,
-              height: threadBox.height,
-            }}
-          />
-
-          <div className="relative z-[1] space-y-3 pl-10 pt-3">
-            {comment.replies.map((reply, index) => {
-              const isLast = index === comment.replies.length - 1
-              return (
-                <div key={reply.id} className="flex items-start gap-2.5">
-                  <div
-                    ref={isLast ? lastReplyAvatarRef : undefined}
-                    className="shrink-0"
-                  >
-                    <UserAvatar
-                      user={reply.author}
-                      size="sm"
-                      className="!size-8 !text-[13px] leading-none !bg-[#c5d0e6] !text-[#2c3a5a]"
-                    />
-                  </div>
-                  <FeedCommentItem
-                    postId={postId}
-                    comment={reply}
-                    isReply
-                    rootCommentId={rootCommentId}
-                    replyOpenId={replyOpenId}
-                    replyDraft={replyDraft}
-                    onToggleReply={onToggleReply}
-                    onReplyDraftChange={onReplyDraftChange}
-                    onSubmitReply={onSubmitReply}
-                    sessionUser={sessionUser}
-                    mentionUsers={mentionUsers}
-                    menuOpenId={menuOpenId}
-                    onMenuOpenChange={onMenuOpenChange}
-                    editingId={editingId}
-                    editDraft={editDraft}
-                    onStartEdit={onStartEdit}
-                    onEditDraftChange={onEditDraftChange}
-                    onCancelEdit={onCancelEdit}
-                    onSaveEdit={onSaveEdit}
-                    onDelete={onDelete}
-                  />
-                </div>
-              )
-            })}
-          </div>
-        </>
-      ) : null}
-    </div>
-  )
-}
-
-function PostCommentsBlock({
-  post,
-  isExpanded,
-  showAllComments,
-  onToggleShowAll,
-  commentInput,
-  onCommentInputChange,
-  onSubmitTopLevel,
-  replyOpenId,
-  replyDraft,
-  onToggleReply,
-  onReplyDraftChange,
-  onSubmitReply,
-  sessionUser,
-  menuOpenId,
-  onMenuOpenChange,
-  editingId,
-  editDraft,
-  onStartEdit,
-  onEditDraftChange,
-  onCancelEdit,
-  onSaveEdit,
-  onDelete,
-}: {
-  post: Concern
-  isExpanded: boolean
-  showAllComments: boolean
-  onToggleShowAll: () => void
-  commentInput: string
-  onCommentInputChange: (value: string) => void
-  onSubmitTopLevel: () => void
-  replyOpenId: number | null
-  replyDraft: string
-  onToggleReply: (comment: ConcernComment) => void
-  onReplyDraftChange: (value: string) => void
-  onSubmitReply: (parentId: number) => void
-  sessionUser: PublicUser | null
-  menuOpenId: number | null
-  onMenuOpenChange: (id: number | null) => void
-  editingId: number | null
-  editDraft: string
-  onStartEdit: (comment: ConcernComment) => void
-  onEditDraftChange: (value: string) => void
-  onCancelEdit: () => void
-  onSaveEdit: (commentId: number) => void
-  onDelete: (commentId: number) => void
-}) {
-  if (!isExpanded) return null
-
-  const roots = post.comments
-  const hiddenCount = Math.max(0, roots.length - 1)
-  const visibleRoots =
-    showAllComments || roots.length <= 1 ? roots : roots.slice(-1)
-  const mentionUsers = collectThreadMentionUsers(post, sessionUser)
-
-  return (
-    <div className="space-y-3 pt-1">
-      {roots.length > 0 ? (
-        <div className="space-y-3.5">
-          {hiddenCount > 0 && !showAllComments ? (
-            <button
-              type="button"
-              onClick={onToggleShowAll}
-              className="text-[13px] font-semibold text-neutral-600 transition-colors hover:text-neutral-900"
-            >
-              See previous comments ({hiddenCount})
-            </button>
-          ) : null}
-          {showAllComments && roots.length > 1 ? (
-            <button
-              type="button"
-              onClick={onToggleShowAll}
-              className="text-[13px] font-semibold text-neutral-500 transition-colors hover:text-neutral-800"
-            >
-              Show less
-            </button>
-          ) : null}
-
-          {visibleRoots.map((c) => (
-            <FeedCommentItem
-              key={c.id}
-              postId={post.id}
-              comment={c}
-              rootCommentId={c.id}
-              replyOpenId={replyOpenId}
-              replyDraft={replyDraft}
-              onToggleReply={onToggleReply}
-              onReplyDraftChange={onReplyDraftChange}
-              onSubmitReply={onSubmitReply}
-              sessionUser={sessionUser}
-              mentionUsers={mentionUsers}
-              menuOpenId={menuOpenId}
-              onMenuOpenChange={onMenuOpenChange}
-              editingId={editingId}
-              editDraft={editDraft}
-              onStartEdit={onStartEdit}
-              onEditDraftChange={onEditDraftChange}
-              onCancelEdit={onCancelEdit}
-              onSaveEdit={onSaveEdit}
-              onDelete={onDelete}
-            />
-          ))}
-        </div>
-      ) : null}
-
-      <div className="flex items-center gap-2 pt-0.5">
-        <UserAvatar user={sessionUser} size="sm" className="size-8 text-[14px]" />
-        <div className="relative min-w-0 flex-1">
-          <MentionTextField
-            id={`home-comment-${post.id}`}
-            value={commentInput}
-            onChange={onCommentInputChange}
-            onSubmit={onSubmitTopLevel}
-            placeholder="Add a comment"
-            localUsers={mentionUsers}
-          />
-          <button
-            type="button"
-            disabled={!commentInput.trim()}
-            onClick={onSubmitTopLevel}
-            aria-label="Send comment"
-            className={cn(
-              "absolute right-1.5 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full transition-colors",
-              commentInput.trim()
-                ? "text-neutral-700 hover:bg-neutral-100 hover:text-neutral-900"
-                : "cursor-not-allowed text-neutral-300",
-            )}
-          >
-            <SendIcon className="size-7" />
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 export default function HomePage() {
   usePageTitle("Home")
@@ -1133,36 +516,11 @@ export default function HomePage() {
         {/* CENTER feed column */}
         <div className="min-w-0 w-full max-lg:px-3.5">
           {/* Composer — mobile: rounded pill (avatar→Report); filter sits beside outside */}
-          <section className="mb-3 w-full bg-white md:mb-2 md:rounded-lg md:border-[1.5px] md:border-neutral-300 md:px-3.5 md:py-3.5">
-            <div className="flex min-h-11 items-center gap-2.5">
-              <div className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-full border border-neutral-200 bg-neutral-50/80 py-1 pl-1.5 pr-1.5 md:contents">
-                <UserAvatar user={sessionUserAsPublic} size="md" className="size-9 text-[15px] sm:size-10 sm:text-[17px]" />
-                <button
-                  type="button"
-                  onClick={() => setCreateOpen(true)}
-                  className="min-h-9 min-w-0 flex-1 rounded-full bg-transparent px-2 py-2 text-left text-[11px] font-normal leading-snug text-neutral-600 transition-colors hover:text-neutral-800 sm:px-3 sm:text-[13px] md:min-h-10 md:bg-neutral-100 md:px-4 md:hover:bg-neutral-200/70"
-                >
-                  What&apos;s happening in your barangay?
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCreateOpen(true)}
-                  className="h-9 shrink-0 rounded-full bg-[#ff6a1a] px-3.5 text-[13px] font-semibold text-white transition-colors hover:bg-[#e85f12] active:scale-[0.98] sm:h-10 sm:px-5 sm:text-[14px]"
-                >
-                  Report
-                </button>
-              </div>
-              {/* Filter — mobile only; outside the report pill, still beside it */}
-              <button
-                type="button"
-                onClick={() => setFeedFilterOpen(true)}
-                className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-600 hover:bg-neutral-100/70 md:hidden"
-                aria-label="Filter feed"
-              >
-                <SlidersHorizontalIcon className="size-5" strokeWidth={2} />
-              </button>
-            </div>
-          </section>
+          <ComposerCard
+            user={sessionUserAsPublic}
+            onOpenComposer={() => setCreateOpen(true)}
+            onOpenFilter={() => setFeedFilterOpen(true)}
+          />
 
           {/* Desktop: inline chips only */}
           <div className="mb-3 hidden flex-wrap items-center gap-1.5 md:flex">
@@ -1175,10 +533,10 @@ export default function HomePage() {
                   onClick={() => setFeedTab(tab.id)}
                   className={cn(
                     "h-8 rounded-sm border-2 px-3.5 text-[13px] font-semibold transition-colors outline-none",
-                    "focus-visible:border-[#07145f] focus-visible:text-[#07145f]",
+                    "focus-visible:border-brand-navy focus-visible:text-brand-navy",
                     active
-                      ? "border-[#07145f] bg-white text-[#07145f]"
-                      : "border-[#d0d0d0] bg-white text-neutral-600 hover:border-[#07145f] hover:bg-neutral-50 hover:text-[#07145f]",
+                      ? "border-brand-navy bg-white text-brand-navy"
+                      : "border-[#d0d0d0] bg-white text-neutral-600 hover:border-brand-navy hover:bg-neutral-50 hover:text-brand-navy",
                   )}
                 >
                   {tab.label}
@@ -1228,7 +586,7 @@ export default function HomePage() {
 
           {events.length > 0 ? (
             <section className="resident-mobile-only mb-3 rounded-2xl border border-neutral-200 bg-white p-3.5 md:mb-3 md:rounded-lg">
-              <div className="flex items-center gap-2 text-[#07145f]">
+              <div className="flex items-center gap-2 text-brand-navy">
                 <CalendarDaysIcon className="size-7" strokeWidth={STROKE} />
                 <h2 className="text-[16px] font-bold">Today in your barangay</h2>
               </div>
@@ -1237,7 +595,7 @@ export default function HomePage() {
                   <div key={event.id} className="py-3 first:pt-0 last:pb-0">
                     <p className="text-[15px] font-bold text-neutral-900">{event.title}</p>
                     <p className="mt-1 text-[14px] leading-5 text-neutral-600">{event.detail}</p>
-                    <p className="mt-1 text-[13px] font-medium text-[#07145f]">
+                    <p className="mt-1 text-[13px] font-medium text-brand-navy">
                       {new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit" }).format(new Date(event.starts_at))}
                     </p>
                   </div>
@@ -1304,7 +662,7 @@ export default function HomePage() {
                             ? "bg-red-50 text-red-700"
                             : announcement.urgency === "important"
                               ? "bg-amber-50 text-amber-700"
-                              : "bg-[#fff1ea] text-[#ff6a1a]",
+                              : "bg-[#fff1ea] text-brand-orange",
                           FS.label,
                         )}
                       >
@@ -1376,11 +734,13 @@ export default function HomePage() {
                           onReport={() => setReportDialogPostId(post.id)}
                         />
                       </div>
-
-                      <p className={cn("mt-2 leading-relaxed text-neutral-900", FS.body)}>
-                        {concernBodyText(post)}
-                      </p>
                     </div>
+                  </div>
+
+                  <div className="px-3.5 pt-2">
+                    <p className={cn("leading-relaxed text-neutral-900", FS.body)}>
+                      {concernBodyText(post)}
+                    </p>
                   </div>
 
                   {/* Media — edge-to-edge; slight line above the image */}
@@ -1526,125 +886,14 @@ export default function HomePage() {
         </div>
 
         {/* RIGHT RAIL — sticky while feed scrolls */}
-        <aside className="resident-home-rail sticky top-3 flex w-full min-w-0 flex-col gap-2.5 self-start">
-          <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-            <Link
-              to="/dashboard/alerts-map"
-              className="flex min-w-0 items-center gap-3 px-3.5 py-3 no-underline transition-colors hover:bg-neutral-50"
-            >
-              <span
-                className="rail-live-dot"
-                title={hasOngoingAlerts ? "Ongoing alerts in your barangay" : "Live in your barangay"}
-                aria-hidden
-              >
-                <span className="rail-live-dot__map">
-                  <img src={railMapSrc} alt="" loading="lazy" decoding="async" />
-                </span>
-                <span className="rail-live-dot__status-wrap">
-                  <span
-                    className={cn(
-                      "rail-live-dot__ring",
-                      hasOngoingAlerts && "rail-live-dot__ring--alert",
-                    )}
-                  />
-                  <span
-                    className={cn(
-                      "rail-live-dot__ring rail-live-dot__ring--delay",
-                      hasOngoingAlerts && "rail-live-dot__ring--alert",
-                    )}
-                  />
-                  <span
-                    className={cn(
-                      "rail-live-dot__status",
-                      hasOngoingAlerts && "rail-live-dot__status--alert",
-                    )}
-                  />
-                </span>
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className={cn("truncate font-semibold leading-snug text-neutral-900", FS.railTitle)}>
-                  {BARANGAY}
-                </p>
-                {hasOngoingAlerts ? (
-                  <p className={cn("mt-0.5 truncate font-semibold leading-snug text-red-600", FS.meta)}>
-                    {barangayActiveEmergencies} ongoing alert
-                    {barangayActiveEmergencies === 1 ? "" : "s"}
-                  </p>
-                ) : streetLabel ? (
-                  <p className={cn("mt-0.5 truncate font-normal leading-snug text-neutral-500", FS.meta)}>
-                    {streetLabel}
-                  </p>
-                ) : null}
-              </div>
-            </Link>
-            <Link
-              to="/dashboard/alerts-map"
-              className={cn(
-                "flex items-center justify-between border-t border-neutral-200 px-3.5 py-2.5 font-semibold no-underline transition-colors",
-                hasOngoingAlerts
-                  ? "text-red-600 hover:bg-red-50 hover:text-red-700"
-                  : "text-neutral-500 hover:bg-neutral-50 hover:text-neutral-700",
-                FS.railLink,
-              )}
-            >
-              <span>{hasOngoingAlerts ? "See all ongoing alerts" : "See all alerts"}</span>
-              <ChevronRightIcon
-                className={cn(RAIL_CHEVRON, hasOngoingAlerts ? "text-red-600" : "text-neutral-500")}
-                strokeWidth={2}
-              />
-            </Link>
-          </div>
-
-          {events.length > 0 ? (
-            <section className="overflow-hidden rounded-lg border border-neutral-200 bg-white p-3.5">
-              <div className="flex items-center gap-2 text-[#07145f]">
-                <CalendarDaysIcon className="size-7" strokeWidth={STROKE} />
-                <h2 className={cn("font-bold", FS.railTitle)}>Today</h2>
-              </div>
-              <div className="mt-2 divide-y divide-neutral-200">
-                {events.slice(0, 3).map((event) => (
-                  <div key={event.id} className="py-2.5 first:pt-1 last:pb-0">
-                    <p className={cn("font-bold text-neutral-900", FS.railBody)}>{event.title}</p>
-                    <p className={cn("mt-0.5 text-neutral-500", FS.meta)}>
-                      {new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit" }).format(new Date(event.starts_at))}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : null}
-
-          <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-            <div className="border-b border-neutral-200 p-3">
-              <div className="aspect-[16/10] w-full overflow-hidden rounded-lg bg-[#e8f0fa]">
-                <img
-                  src="/contents/marikina-area-2.png"
-                  alt="Marikina City landmark"
-                  className="h-full w-full object-cover"
-                />
-              </div>
-            </div>
-            <div className="px-3.5 py-3">
-              <p className={cn("font-bold text-neutral-900", FS.railTitle)}>
-                Report a local concern
-              </p>
-              <p className={cn("mt-1 leading-relaxed text-neutral-600", FS.railBody)}>
-                Share issues with neighbors and barangay officials so they can take action.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setCreateOpen(true)}
-              className={cn(
-                "flex w-full items-center justify-between border-t border-neutral-200 px-3.5 py-2.5 text-left font-semibold text-neutral-500 transition-colors hover:bg-neutral-50 hover:text-neutral-700",
-                FS.railLink,
-              )}
-            >
-              <span>Create a report</span>
-              <ChevronRightIcon className={cn(RAIL_CHEVRON, "text-neutral-500")} strokeWidth={2} />
-            </button>
-          </div>
-        </aside>
+        <HomeRail
+          hasOngoingAlerts={hasOngoingAlerts}
+          barangayActiveEmergencies={barangayActiveEmergencies}
+          railMapSrc={railMapSrc}
+          streetLabel={streetLabel}
+          events={events}
+          onCreateReport={() => setCreateOpen(true)}
+        />
       </ResidentContentGrid>
 
       {/* Mobile feed filter sheet — Nextdoor “Filter by” layout, E-Boses white */}

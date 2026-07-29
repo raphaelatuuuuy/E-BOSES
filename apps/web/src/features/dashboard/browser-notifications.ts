@@ -1,6 +1,11 @@
 import { apiRequest } from "@/lib/api"
 import type { NotificationItem } from "@/features/dashboard/components/notification-context"
-import { getLastServiceWorkerError, registerAppServiceWorker, ensureServiceWorkerActive } from "@/lib/pwa"
+import {
+  ensureServiceWorkerActive,
+  getLastServiceWorkerError,
+  registerAppServiceWorker,
+  unregisterStaleServiceWorker,
+} from "@/lib/pwa"
 
 function urlBase64ToUint8Array(value: string) {
   const cleaned = value.trim().replace(/^["']|["']$/g, "")
@@ -20,7 +25,13 @@ function urlBase64ToUint8Array(value: string) {
     return bytes
   } catch (error) {
     if (error instanceof Error && error.message.includes("65-byte")) throw error
-    throw new Error("Invalid Web Push public key. Regenerate keys with npx web-push generate-vapid-keys and restart Django.")
+    // `cause` preserves the underlying failure (usually an atob DOMException on
+    // malformed base64). Without it the real reason was discarded and every
+    // decode failure looked identical in logs.
+    throw new Error(
+      "Invalid Web Push public key. Regenerate keys with npx web-push generate-vapid-keys and restart Django.",
+      { cause: error },
+    )
   }
 }
 
@@ -29,13 +40,6 @@ function buffersMatch(left: ArrayBuffer | null, right: Uint8Array) {
   const leftBytes = new Uint8Array(left)
   if (leftBytes.length !== right.length) return false
   return leftBytes.every((value, index) => value === right[index])
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
-  ])
 }
 
 export function browserNotificationsSupported() {
@@ -89,7 +93,8 @@ export async function getBrowserNotificationState(): Promise<BrowserNotification
     publicKey = response.publicKey
     config = response.config
   } catch {
-    publicKey = ""
+    // Leave publicKey as its initial "" — the server has no key configured, or
+    // the request failed. Re-assigning it here made the initialiser dead code.
   }
   return {
     supported: true,
@@ -139,11 +144,49 @@ export async function enableBrowserNotifications() {
     await existingSubscription.unsubscribe().catch(() => undefined)
   }
 
+  const subscribe = async (serviceWorker: ServiceWorkerRegistration) => serviceWorker.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey,
+  })
+
+  const recoverPushState = async () => {
+    await existingSubscription?.unsubscribe().catch(() => undefined)
+    await unregisterStaleServiceWorker().catch(() => undefined)
+    const freshRegistration = await registerNotificationWorker()
+    if (!freshRegistration) return null
+    return subscribe(freshRegistration)
+  }
+
   const subscription = await registration.pushManager.getSubscription()
-    ?? await (await ensureServiceWorkerActive())?.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey,
-      })
+    ?? await (async () => {
+      try {
+        const serviceWorker = await ensureServiceWorkerActive()
+        if (!serviceWorker) return null
+        return await subscribe(serviceWorker)
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        const isPushServiceError = detail.toLowerCase().includes("push service") || (error instanceof DOMException && error.name === "AbortError")
+        if (isPushServiceError) {
+          try {
+            const recovered = await recoverPushState()
+            if (recovered) return recovered
+          } catch {
+            // Fall through to the original browser-facing error below.
+          }
+          throw new Error(
+            "Browser push service registration failed. The app tried to recover stale push state, but the browser still rejected push registration. On this machine, check Edge notification permission, disable adblock/VPN/privacy tools temporarily, and retry on a fresh tab.",
+            { cause: error },
+          )
+        }
+        throw new Error(
+          `Browser push subscription failed: ${detail || "unknown error"}. Reload the page and try again on a trusted HTTPS origin.`,
+          { cause: error },
+        )
+      }
+    })()
+  if (!subscription) {
+    throw new Error("Could not subscribe to push notifications. Reload the page and try Enable push again.")
+  }
   await apiRequest("/notifications/browser-push/subscriptions/", {
     method: "POST",
     body: JSON.stringify(subscription.toJSON()),

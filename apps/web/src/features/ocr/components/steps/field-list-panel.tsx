@@ -1,4 +1,4 @@
-import { MagnifyingGlass as Search } from "@phosphor-icons/react"
+import { Search } from "lucide-react"
 
 import { Input } from "@workspace/ui/components/input"
 import { cn } from "@workspace/ui/lib/utils"

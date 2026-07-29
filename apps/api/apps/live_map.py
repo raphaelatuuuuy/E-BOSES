@@ -207,7 +207,7 @@ def assignment_last_location(assignment):
 
 def emergency_payload(alert):
     assignments = list(alert.assignments.filter(
-        status__in=["assigned", "acknowledged", "en_route", "arrived"]
+        status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting"]
     ).select_related("responder", "responder__resident_profile").order_by("assigned_at", "id"))
     assignment_payloads = [
         {
@@ -236,10 +236,7 @@ def emergency_payload(alert):
     }
 
 
-def route_for_assignment(alert):
-    assignment = alert.assignments.filter(
-        status__in=["assigned", "acknowledged", "en_route", "arrived"]
-    ).select_related("responder").order_by("assigned_at", "id").first()
+def route_for_responder_assignment(alert, assignment):
     if not assignment:
         return None
     origin = assignment_last_location(assignment)
@@ -253,7 +250,7 @@ def route_for_assignment(alert):
     )
     cached = cache.get(cache_key)
     if cached:
-        return cached
+        return {**cached, "assignment_id": assignment.pk, "responder_id": assignment.responder_id}
     route = {
         "alert_id": alert.pk,
         "assignment_id": assignment.pk,
@@ -287,6 +284,20 @@ def route_for_assignment(alert):
     return route
 
 
+def route_for_assignment(alert):
+    assignment = alert.assignments.filter(
+        status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting"]
+    ).select_related("responder").order_by("assigned_at", "id").first()
+    return route_for_responder_assignment(alert, assignment)
+
+
+def routes_for_alert(alert):
+    assignments = alert.assignments.filter(
+        status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting", "resolved"]
+    ).select_related("responder").prefetch_related("location_pings").order_by("assigned_at", "id")
+    return [route for route in (route_for_responder_assignment(alert, item) for item in assignments) if route]
+
+
 def live_map_snapshot():
     from apps.geo_services import dispatch_policy_payload
 
@@ -313,7 +324,7 @@ def live_map_snapshot():
         .prefetch_related("assignments__responder", "assignments__responder__resident_profile", "assignments__location_pings")
     )
     emergencies = [emergency_payload(alert) for alert in alerts]
-    routes = [route for route in (route_for_assignment(alert) for alert in alerts) if route]
+    routes = [route for alert in alerts for route in routes_for_alert(alert)]
     return {
         "map": {
             "provider": "OpenStreetMap",
@@ -331,7 +342,14 @@ def live_map_snapshot():
             "concerns": len([item for item in concerns if item["status"] in CONCERN_ACTIVE]),
             "emergencies": len(emergencies),
             "residents": User.objects.filter(role=User.Role.RESIDENT, status=User.Status.VERIFIED).count(),
-            "responders": User.objects.filter(role=User.Role.FIRST_RESPONDER, status=User.Status.VERIFIED).count(),
+            # On duty only. This used to count every verified responder, so the
+            # overview reported a full roster as "on duty" even at 3am with
+            # nobody on shift. Matches dashboard_views.responders_on_duty.
+            "responders": User.objects.filter(
+                role=User.Role.FIRST_RESPONDER,
+                status=User.Status.VERIFIED,
+                is_on_duty=True,
+            ).count(),
             "officials": User.objects.filter(role=User.Role.BARANGAY_OFFICIAL, status=User.Status.VERIFIED).count(),
         },
         "generated_at": timezone.now(),
@@ -419,7 +437,7 @@ def resident_emergency_payload(alert, request=None):
     if request and getattr(request, "user", None) and request.user.is_authenticated and alert.reporter_id == request.user.pk:
         assignment = (
             alert.assignments.filter(
-                status__in=["assigned", "acknowledged", "en_route", "arrived"]
+                status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting"]
             )
             .select_related("responder")
             .prefetch_related("location_pings")
@@ -576,9 +594,16 @@ class LocationMapContextView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from apps.emergencies.models import MapDispatchPolicy
         from apps.geo_services import map_context_payload
 
-        return Response(map_context_payload())
+        payload = map_context_payload()
+        policy = MapDispatchPolicy.current()
+        # The SOS screen needs this to offer an SMS fallback when the resident
+        # has no data. Serving it here keeps it barangay-configurable instead of
+        # frozen into the build.
+        payload["emergency_sms_number"] = policy.emergency_sms_number
+        return Response(payload)
 
 
 class LocationValidateView(APIView):

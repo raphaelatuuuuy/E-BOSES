@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { AlertTriangleIcon, ChevronUpIcon, LoaderCircleIcon } from "lucide-react"
+import { AlertTriangleIcon, LoaderCircleIcon } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 
 import { isResponderUser } from "@/features/auth/roles"
@@ -9,27 +9,25 @@ import {
   type EmergencyAlert,
 } from "@/features/dashboard/emergency-api"
 import { cn } from "@workspace/ui/lib/utils"
+import {
+  announceDispatchPanel,
+  DISPATCH_PANEL_PARAM,
+} from "@/features/dashboard/lib/dispatch-panel"
+import { useIsDesktop } from "@/features/dashboard/lib/shell"
 
 const ACTIVE_STATUSES = new Set(["submitted", "routed", "acknowledged", "en_route", "nearby", "arrived"])
 const SELECTED_KEY = "eboses:responder-dispatch-id"
+const RESPONDER_MAP_PATH = "/dashboard/responders/map"
 
-export function ResponderDispatchFab() {
-  const { user } = useAuthSession()
-  const location = useLocation()
-  const navigate = useNavigate()
+/**
+ * Assigned dispatches, polled. Shared by the nav button and anything else that
+ * needs the live count without owning a second poll loop.
+ */
+function useAssignedDispatches(enabled: boolean) {
   const [alerts, setAlerts] = useState<EmergencyAlert[]>([])
-  const [expanded, setExpanded] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState("")
   const hadActiveRef = useRef(false)
-
-  const activeAlerts = useMemo(
-    () => alerts.filter((alert) => ACTIVE_STATUSES.has(alert.status)),
-    [alerts],
-  )
-  const persistedId = Number(window.localStorage.getItem(SELECTED_KEY))
-  const current = activeAlerts.find((alert) => alert.id === persistedId) ?? activeAlerts[0] ?? null
-  const isOnMap = location.pathname === "/dashboard/responders/map"
 
   const load = useCallback(async () => {
     try {
@@ -37,18 +35,21 @@ export function ResponderDispatchFab() {
       const hasActive = next.some((alert) => ACTIVE_STATUSES.has(alert.status))
       setAlerts(next)
       setLoadError("")
-      if (hasActive && !hadActiveRef.current) setExpanded(true)
+      // A newly arrived dispatch opens the panel if the responder is already on
+      // the map. It deliberately does not navigate them there from Shift or
+      // Profile: yanking someone off the screen they chose is worse than the
+      // button going red with a count, which is what happens instead.
+      if (hasActive && !hadActiveRef.current) announceDispatchPanel()
       hadActiveRef.current = hasActive
     } catch {
       setLoadError("Dispatch could not refresh. Showing the last known assignment.")
-      setExpanded(true)
     } finally {
       setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    if (!isResponderUser(user)) return
+    if (!enabled) return
     const initial = window.setTimeout(() => void load(), 0)
     const timer = window.setInterval(() => void load(), 30000)
     const refresh = () => void load()
@@ -64,58 +65,100 @@ export function ResponderDispatchFab() {
       window.removeEventListener("online", refresh)
       window.removeEventListener("focus", refresh)
     }
-  }, [load, user])
+  }, [enabled, load])
 
-  if (!isResponderUser(user)) return null
+  const activeAlerts = useMemo(
+    () => alerts.filter((alert) => ACTIVE_STATUSES.has(alert.status)),
+    [alerts],
+  )
 
-  function openDispatch(id?: number) {
-    if (id) window.localStorage.setItem(SELECTED_KEY, String(id))
-    navigate(id ? `/dashboard/responders/map?alert=${id}` : "/dashboard/responders/map")
+  return { activeAlerts, loading, loadError }
+}
+
+/**
+ * The Dispatch control.
+ *
+ * Rides inside the mobile nav row beside the Map/Shift pill, the way the
+ * resident's SOS button rides beside theirs. Pressing it opens the dispatch
+ * panel rather than expanding a preview card, so there is one place a dispatch
+ * is ever read.
+ */
+export function ResponderDispatchButton({ className }: { className?: string }) {
+  const { user } = useAuthSession()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const isResponder = isResponderUser(user)
+  const { activeAlerts, loading, loadError } = useAssignedDispatches(isResponder)
+
+  if (!isResponder) return null
+
+  const count = activeAlerts.length
+  const live = count > 0
+
+  function open() {
+    const persistedId = Number(window.localStorage.getItem(SELECTED_KEY))
+    const current =
+      activeAlerts.find((alert) => alert.id === persistedId) ?? activeAlerts[0] ?? null
+    if (current) window.localStorage.setItem(SELECTED_KEY, String(current.id))
+
+    if (location.pathname === RESPONDER_MAP_PATH) {
+      announceDispatchPanel()
+      return
+    }
+
+    const params = new URLSearchParams({ [DISPATCH_PANEL_PARAM]: "1" })
+    if (current) params.set("alert", String(current.id))
+    navigate(`${RESPONDER_MAP_PATH}?${params.toString()}`)
   }
 
   return (
-    <div className="pointer-events-none fixed bottom-24 right-4 z-[700] sm:bottom-7 sm:right-7">
-      <div className="pointer-events-auto flex flex-col items-end gap-2">
-        {expanded && current ? (
-          <button
-            type="button"
-            onClick={() => openDispatch(current.id)}
-            className="flex w-[min(21rem,calc(100vw-2rem))] items-center gap-3 rounded-2xl border border-red-200 bg-white p-3 text-left shadow-[0_14px_40px_rgba(15,23,42,.18)]"
-          >
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600">
-              <AlertTriangleIcon className="size-5" />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-[11px] font-black uppercase tracking-wide text-red-600">Ongoing dispatch</span>
-              <span className="mt-0.5 block truncate text-sm font-black text-[#07145f]">{current.address || current.barangay}</span>
-              <span className="mt-0.5 block text-xs font-semibold text-neutral-500">{current.type} · {current.status.replace(/_/g, " ")}</span>
-            </span>
-            <ChevronUpIcon className="size-4 shrink-0 text-neutral-400" />
-          </button>
-        ) : null}
+    <button
+      type="button"
+      onClick={open}
+      aria-label={live ? `Open dispatch, ${count} active` : "Open dispatch"}
+      className={cn(
+        "flex h-[3.75rem] shrink-0 items-center gap-2 rounded-full px-4 text-sm font-bold transition-transform active:scale-[0.98]",
+        live
+          ? "bg-sos text-white shadow-glow-red ops-glow-pulse"
+          : "border border-rail-line bg-nav-raised text-nav-text",
+        className,
+      )}
+    >
+      {loading ? (
+        <LoaderCircleIcon className="size-5 shrink-0 animate-spin" />
+      ) : (
+        <AlertTriangleIcon className="size-5 shrink-0" />
+      )}
+      <span className="leading-none">Dispatch</span>
+      {live ? (
+        <span className="tabular-nums leading-none opacity-80">{count}</span>
+      ) : null}
+      {loadError ? <span className="sr-only">{loadError}</span> : null}
+    </button>
+  )
+}
 
-        {expanded && loadError ? (
-          <div role="status" className="w-[min(21rem,calc(100vw-2rem))] rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-5 text-amber-900 shadow-sm">
-            {loadError}
-          </div>
-        ) : null}
+/**
+ * Desktop floating version. Absent on the map itself, where the dispatch panel
+ * is already docked to the right and a button to open it would be noise.
+ *
+ * Gated on the desktop hook rather than a `hidden lg:block` class: the button
+ * owns a polling loop, and hiding it with CSS would still mount it alongside the
+ * one in the mobile nav, giving two pollers and two auto-open requests.
+ */
+export function ResponderDispatchFab() {
+  const { user } = useAuthSession()
+  const location = useLocation()
+  const isDesktop = useIsDesktop()
 
-        <button
-          type="button"
-          onClick={() => (current ? setExpanded((value) => !value) : openDispatch())}
-          aria-label={current ? "Open ongoing dispatch" : "Open dispatch"}
-          aria-describedby={loadError ? "responder-dispatch-refresh-error" : undefined}
-          className={cn(
-            "flex h-14 items-center gap-2 rounded-full px-5 text-sm font-black text-white shadow-[0_10px_30px_rgba(15,23,42,.2)] transition-transform hover:-translate-y-0.5",
-            current ? "bg-[#f23b35]" : "bg-neutral-400",
-            isOnMap && current && "ring-4 ring-red-100",
-          )}
-        >
-          {loading ? <LoaderCircleIcon className="size-5 animate-spin" /> : <AlertTriangleIcon className="size-5" />}
-          <span>Dispatch</span>
-          {current ? <span className="rounded-full bg-white/20 px-2 py-0.5 text-xs">{activeAlerts.length}</span> : null}
-        </button>
-        {loadError ? <span id="responder-dispatch-refresh-error" className="sr-only">{loadError}</span> : null}
+  if (!isDesktop) return null
+  if (!isResponderUser(user)) return null
+  if (location.pathname === RESPONDER_MAP_PATH) return null
+
+  return (
+    <div className="pointer-events-none fixed bottom-7 right-7 z-40">
+      <div className="pointer-events-auto">
+        <ResponderDispatchButton />
       </div>
     </div>
   )

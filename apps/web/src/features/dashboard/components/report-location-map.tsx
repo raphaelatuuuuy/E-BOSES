@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import { MapPinIcon } from "lucide-react"
 import type leaflet from "leaflet"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -10,6 +11,7 @@ import { reverseGeocodeToMarikinaStreet } from "@/features/auth/lib/reverse-geoc
 type ReportLocationMapProps = {
   latitude: number | string | null | undefined
   longitude: number | string | null | undefined
+  streetAddress?: string | null
   className?: string
   heightClassName?: string
 }
@@ -208,15 +210,19 @@ export function useReportStreetAddress(opts: {
 export function ReportLocationMap({
   latitude,
   longitude,
+  streetAddress,
   className,
   heightClassName = "h-52 sm:h-56",
 }: ReportLocationMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
+  const resizeObserverRef = useRef<ResizeObserver | null>(null)
 
   const lat = Number(latitude)
   const lng = Number(longitude)
   const valid = Number.isFinite(lat) && Number.isFinite(lng)
+
+  const streetLabel = streetAddress ? streetFromStoredAddress(streetAddress) : null
 
   useEffect(() => {
     if (!valid || !containerRef.current) return
@@ -241,7 +247,7 @@ export function ReportLocationMap({
 
       map = L.map(containerRef.current, {
         center: [lat, lng],
-        zoom: 17,
+        zoom: 18,
         zoomControl: false,
         attributionControl: false,
         dragging: true,
@@ -259,39 +265,75 @@ export function ReportLocationMap({
         className: "eboses-report-map-tiles",
       }).addTo(map)
 
-      const pinIcon = L.divIcon({
-        className: "eboses-report-pin",
-        html: `
-          <div style="position:relative;width:18px;height:18px;margin-left:-9px;margin-top:-9px;">
-            <span style="
-              position:absolute;inset:0;border-radius:999px;
-              background:rgba(43,127,255,.22);
-            "></span>
-            <span style="
-              position:absolute;left:50%;top:50%;width:12px;height:12px;
-              margin-left:-6px;margin-top:-6px;border-radius:999px;
-              background:#2b7fff;border:2.5px solid #fff;
-              box-shadow:0 2px 8px rgba(37,99,235,.45);
-            "></span>
-          </div>
-        `,
-        iconSize: [0, 0],
-        iconAnchor: [0, 0],
-      })
+      function createPinIcon(streetAddress?: string | null) {
+        const hasLabel = Boolean(streetAddress)
+        const iconSize: [number, number] = hasLabel ? [18, 34] : [18, 18]
+        const iconAnchor: [number, number] = hasLabel ? [9, 34] : [9, 9]
+        const labelHtml = hasLabel
+          ? `<span style="
+              position:absolute;left:50%;bottom:100%;transform:translateX(-50%);
+              margin-bottom:6px;white-space:nowrap;max-width:200px;
+              background:rgba(255,255,255,.95);color:#171717;
+              font-size:11px;font-weight:600;line-height:1.3;
+              padding:3px 8px;border-radius:6px;
+              box-shadow:0 2px 8px rgba(0,0,0,.12);
+              pointer-events:none;
+            ">${streetAddress}</span>`
+          : ""
+        return L.divIcon({
+          className: "eboses-report-pin",
+          html: `
+            <div style="position:relative;width:${iconSize[0]}px;height:${iconSize[1]}px;">
+              ${labelHtml}
+              <span style="
+                position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+                width:18px;height:18px;border-radius:999px;
+                background:rgba(43,127,255,.22);
+              "></span>
+              <span style="
+                position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+                width:12px;height:12px;
+                border-radius:999px;
+                background:#2b7fff;border:2.5px solid #fff;
+                box-shadow:0 2px 8px rgba(37,99,235,.45);
+              "></span>
+            </div>
+          `,
+          iconSize,
+          iconAnchor,
+        })
+      }
 
-      L.marker([lat, lng], { icon: pinIcon, interactive: false }).addTo(map)
+      L.marker([lat, lng], { icon: createPinIcon(streetLabel), interactive: false }).addTo(map)
 
       mapRef.current = map
+      resizeObserverRef.current?.disconnect()
+      resizeObserverRef.current = new ResizeObserver(() => {
+        if (!mapRef.current) return
+        requestAnimationFrame(() => {
+          if (!mapRef.current) return
+          mapRef.current.invalidateSize()
+          mapRef.current.setView([lat, lng], 18, { animate: false })
+        })
+      })
+      resizeObserverRef.current.observe(containerRef.current)
       requestAnimationFrame(() => {
         map?.invalidateSize()
-        map?.setView([lat, lng], 17, { animate: false })
+        map?.setView([lat, lng], 18, { animate: false })
       })
+      window.setTimeout(() => {
+        if (!mapRef.current) return
+        mapRef.current.invalidateSize()
+        mapRef.current.setView([lat, lng], 18, { animate: false })
+      }, 150)
     }
 
     void init()
 
     return () => {
       cancelled = true
+      resizeObserverRef.current?.disconnect()
+      resizeObserverRef.current = null
       try {
         map?.off()
         map?.remove()
@@ -374,15 +416,14 @@ export function ReportLocationAddress({
 
   return (
     <div className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3.5 py-3">
-      <img
-        src="/contents/map-pin-gps.png"
-        alt=""
-        className="size-6 shrink-0 object-contain"
-        aria-hidden
-      />
+      <MapPinIcon className="size-6 shrink-0 text-neutral-500" />
       <p className="min-w-0 truncate text-[15px] font-medium leading-snug text-neutral-900">
         {street}
       </p>
     </div>
   )
 }
+
+
+
+

@@ -4,20 +4,33 @@ import { NotificationPopover } from "@/features/dashboard/components/notificatio
 import { ProfileAccountMenu } from "@/features/dashboard/components/profile-account-menu"
 import { useResidentSearch } from "@/features/dashboard/components/resident-search-context"
 import { RotatingSearchField } from "@/features/dashboard/components/rotating-search-field"
+import {
+  CONTENT_GAP,
+  CONTENT_MAX,
+  DESKTOP_MIN_PX,
+  FEED_MAX,
+  LAYOUT_MIN,
+  RAIL_W,
+  SEARCH_MAX,
+  SIDEBAR_MIN,
+  SIDEBAR_W,
+} from "@/features/dashboard/lib/shell"
 
-/** Layout tokens — MUST match home body grid */
-export const RESIDENT_FEED_MAX = 680
-/** Preferred (max) sidebar width at full size */
-export const RESIDENT_SIDEBAR_W = 360
-/** Floor when zooming / narrow CSS viewport — keep nav readable without eating the main pane */
-export const RESIDENT_SIDEBAR_MIN = 220
-export const RESIDENT_RAIL_W = 288
-export const RESIDENT_SEARCH_MAX = 480
-export const RESIDENT_CONTENT_GAP = 24
-export const RESIDENT_CONTENT_MAX = RESIDENT_FEED_MAX + RESIDENT_CONTENT_GAP + RESIDENT_RAIL_W
-/** Soft shell min at preferred sizes (not forced — see dashboard zoom min) */
-export const RESIDENT_LAYOUT_MIN = RESIDENT_SIDEBAR_W + RESIDENT_CONTENT_MAX
-export const RESIDENT_DESKTOP_MIN_PX = 1024
+/**
+ * Layout constants moved to `lib/shell.ts` (single source of truth for the
+ * dashboard shell). Re-exported here under their historical `RESIDENT_*`
+ * names so existing consumers (home.tsx, notifications.tsx,
+ * profile-account-menu.tsx, resident-alerts-map.tsx) keep working unchanged.
+ */
+export const RESIDENT_FEED_MAX = FEED_MAX
+export const RESIDENT_SIDEBAR_W = SIDEBAR_W
+export const RESIDENT_SIDEBAR_MIN = SIDEBAR_MIN
+export const RESIDENT_RAIL_W = RAIL_W
+export const RESIDENT_SEARCH_MAX = SEARCH_MAX
+export const RESIDENT_CONTENT_GAP = CONTENT_GAP
+export const RESIDENT_CONTENT_MAX = CONTENT_MAX
+export const RESIDENT_LAYOUT_MIN = LAYOUT_MIN
+export const RESIDENT_DESKTOP_MIN_PX = DESKTOP_MIN_PX
 
 /**
  * Shared feed|rail grid for home body (composer + rail cards).
@@ -83,7 +96,41 @@ export function ResidentMainTopBar() {
 }
 
 /** Logo block — same horizontal inset as sidebar nav buttons */
-export function ResidentLogoBar({ homeTo = "/dashboard/home" }: { homeTo?: string }) {
+export function ResidentLogoBar({
+  homeTo = "/dashboard/home",
+  tone = "light",
+}: {
+  homeTo?: string
+  /** `dark` renders on the navy staff rail; `light` on the white resident shell. */
+  tone?: "light" | "dark"
+}) {
+  // Navy staff panel — same lockup as the light shell, recoloured for the dark
+  // surface (ref 8 "AeuxGlobal": mark + wordmark, white on near-black).
+  if (tone === "dark") {
+    return (
+      <div className="flex h-16 shrink-0 items-center px-3">
+        <Link
+          to={homeTo}
+          className="flex min-w-0 items-center gap-2.5 rounded-xl px-2 py-1.5 no-underline transition-colors hover:bg-nav-raised"
+        >
+          <img
+            src="/contents/logo.png"
+            alt="Boses Marikina Heights"
+            className="size-8 shrink-0 object-contain"
+          />
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate text-[19px] font-bold leading-none tracking-tight text-brand-orange">
+              Boses
+            </span>
+            <span className="mt-0.5 truncate text-[10px] font-semibold leading-tight tracking-wide text-nav-muted">
+              Marikina Heights
+            </span>
+          </span>
+        </Link>
+      </div>
+    )
+  }
+
   return (
     <div className="flex h-14 shrink-0 items-center px-3">
       <Link
@@ -91,11 +138,11 @@ export function ResidentLogoBar({ homeTo = "/dashboard/home" }: { homeTo?: strin
         className="flex min-w-0 items-center gap-2 rounded-lg px-2.5 no-underline"
       >
         <img src="/contents/logo.png" alt="Boses Marikina Heights" className="size-9 shrink-0 object-contain" />
-        <div className="flex flex-col">
-          <span className="truncate text-[26px] font-bold leading-none tracking-tight text-[#ff6a1a]">
+        <div className="flex min-w-0 flex-col">
+          <span className="truncate text-[26px] font-bold leading-none tracking-tight text-brand-orange">
             Boses
           </span>
-          <span className="text-[11px] font-bold leading-tight tracking-wide text-[#07145f]">
+          <span className="truncate text-[11px] font-bold leading-tight tracking-wide text-brand-navy">
             Marikina Heights
           </span>
         </div>

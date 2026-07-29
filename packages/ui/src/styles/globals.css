@@ -122,6 +122,314 @@
   --civic-link: #1f6c98;
   --civic-primary-strong: #ff5003;
   --radius: 0.75rem;
+
+  /* Shell chrome tokens (brand hexes used across dashboard shell/nav) */
+  --color-brand-navy: #07145f;
+  --color-brand-orange: #ff6a1a;
+  --color-brand-orange-strong: #ea6f24;
+  --color-brand-orange-soft: #fff4ed;
+  --color-sos: #f23b35;
+  --color-sos-bright: #ff625a;
+  --color-shell-border: #f5f5f5;
+
+  /* ── Staff navigation rail (dark navy) ─────────────────────────────
+     Deep navy derived from --color-brand-navy. The rail is the only
+     dark surface in the staff shell; content stays on --color-canvas. */
+  --color-nav-bg: #050d33;
+  --color-nav-raised: #0a1650;
+  --color-nav-active: #142465;
+  --color-nav-border: rgba(255, 255, 255, 0.09);
+  --color-nav-text: rgba(255, 255, 255, 0.74);
+  --color-nav-text-active: #ffffff;
+  --color-nav-muted: rgba(255, 255, 255, 0.46);
+
+  /* ── Content canvas ───────────────────────────────────────────────
+     Cards sit on this; gives white cards definition without shadows. */
+  --color-canvas: #f6f7f9;
+  --color-card-line: #e7e9ee;
+
+  /* ── Bento accent surfaces ────────────────────────────────────────
+     `ink` is the near-black hero/map card; `tint` is the soft navy
+     card that breaks up a run of white panels. */
+  --color-ink: #0b1020;
+  --color-ink-raised: #161d33;
+  --color-ink-line: rgba(255, 255, 255, 0.1);
+  --color-tint: #eef1fa;
+
+  /* ── Data visualisation ───────────────────────────────────────────
+     Ordered categorical ramp. 1-2 carry the brand; 5 = resolved/good,
+     6 = emergency/bad. Never reorder — charts index into this. */
+  --color-chart-1: #ff5003;
+  --color-chart-2: #07145f;
+  --color-chart-3: #1f6c98;
+  --color-chart-4: #f2a03d;
+  --color-chart-5: #2f9e78;
+  --color-chart-6: #f23b35;
+  --color-chart-track: #e8eaef;
+  --color-chart-grid: #eef0f4;
+
+  /* ── Severity ─────────────────────────────────────────────────────
+     Derived from the chart ramp so a severity badge and a chart segment
+     for the same record agree. Severity is NEVER encoded by colour
+     alone: records pair these with a fixed-weight rule and an uppercase
+     label, so meaning survives colour blindness, greyscale and glare.
+     `-surface` is the tint behind a badge; `-ink` is text on that tint,
+     held at AA contrast against it. */
+  --color-severity-critical: #f23b35;
+  --color-severity-critical-surface: #fdecec;
+  --color-severity-critical-ink: #8f1410;
+  --color-severity-high: #ea6f24;
+  --color-severity-high-surface: #fff1e6;
+  --color-severity-high-ink: #8a3908;
+  --color-severity-moderate: #f2a03d;
+  --color-severity-moderate-surface: #fdf3e3;
+  --color-severity-moderate-ink: #7a4b06;
+  --color-severity-low: #1f6c98;
+  --color-severity-low-surface: #eaf2f8;
+  --color-severity-low-ink: #14455f;
+
+  /* ── Status groups ────────────────────────────────────────────────
+     Eight emergency statuses and seven concern statuses collapse into
+     three groups. The group drives colour and sort order; the specific
+     status still prints as the label. An official scanning a queue needs
+     "does this need me?" answered before "what exact state is it in". */
+  --color-status-open: #f23b35;
+  --color-status-open-surface: #fdecec;
+  --color-status-open-ink: #8f1410;
+  --color-status-active: #1f6c98;
+  --color-status-active-surface: #eaf2f8;
+  --color-status-active-ink: #14455f;
+  --color-status-closed: #2f9e78;
+  --color-status-closed-surface: #e8f5f0;
+  --color-status-closed-ink: #17513d;
+
+  /* ── Ops console additions ────────────────────────────────────────
+     Light-mode values. The staff console overrides every one of these
+     in `.staff-dark` below; they are defined here so the utilities
+     exist and so any shared component rendered on a light surface
+     (resident pages, landing) still resolves. */
+
+  /* Fourth surface step — nested panel, hover, active row. */
+  --color-card-raised: #f2f4f8;
+  /* Divider between resizable panes; heavier than a card hairline. */
+  --color-card-line-strong: #d4d9e4;
+
+  /* Text ramp. `subtle` is the floor for anything load-bearing;
+     `faint` is disabled/placeholder ONLY and never carries meaning. */
+  --color-subtle-foreground: #6b7280;
+  --color-faint-foreground: #9ca3af;
+
+  /* COLD accent — "the system is observing": live telemetry, routes,
+     timers, en-route states. Pairs with brand orange, which means
+     "a human must act". Never use ice for a button.
+
+     Deliberately the same blue as --color-severity-low and
+     --color-status-active rather than a new hue: on the light palette
+     the console should read navy + orange + this one blue, not navy +
+     orange + a teal nobody else uses. */
+  --color-ice: #1f6c98;
+  --color-ice-soft: rgba(31, 108, 152, 0.1);
+  --color-ice-dim: #5f8fa3;
+
+  /* Text colour for filled-orange controls.
+     NOTE: white on #ff6a1a is 2.86:1 and fails WCAG AA outright — no
+     orange in the brand passes AA with white at normal text size
+     (even the darker #ff5003 only reaches 3.28:1). White is kept here
+     because it is the established brand appearance; switching this to
+     #0a0a0a raises it to 6.91:1 and is a one-line change if wanted. */
+  --color-brand-orange-ink: #ffffff;
+
+  /* Overlay elevation. Tinted with the brand navy rather than neutral
+     black — a pure-black shadow on a navy-and-white palette reads grey
+     and cheap. Dark surfaces override this with a black shadow plus an
+     inset top highlight, which is what separates a floating panel from
+     a flat one when there is no light to cast. */
+  --shadow-overlay: 0 20px 40px -12px rgba(2, 12, 78, 0.18),
+    0 2px 8px rgba(2, 12, 78, 0.06);
+
+  /* ── Map pins ─────────────────────────────────────────────────────
+     Deliberately NOT theme-scoped. The staff basemap is inverted to
+     navy on every palette (`.eboses-map-dark`), so pins are drawn
+     against a dark ground even on the light theme — routing them
+     through the page accents would sink the responder pin into the
+     tiles. Bright enough to stay legible over inverted street tiles. */
+  --color-map-incident: #ff5a52;
+  --color-map-responder: #4dc4ff;
+  --color-map-trail: #2f7fa6;
+  /* A route nobody is travelling any more: stopped and out of the way. The
+     colour change is the point — a still blue dashed line still looks like a
+     live route that happens to have paused. */
+  --color-map-route-idle: #78849f;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   STAFF OPS CONSOLE — dark scope
+   ══════════════════════════════════════════════════════════════════
+   Applied by dashboard.tsx to the staff shell wrapper, NOT to :root.
+   Two reasons it is scoped to a subtree rather than being a global
+   dark-mode flip:
+
+   1. Residents and the landing page stay light. They share components
+      with staff, so a global flip would drag them along.
+   2. `ThemeProvider` (main.tsx) already owns the `.dark` class on the
+      root element. Defining these on a descendant means the two never
+      fight — the nearer scope simply wins for its subtree.
+
+   Because these redefine the SAME semantic token names the light
+   theme uses, every component already written against `bg-card`,
+   `border-card-line`, `text-muted-foreground` etc. inverts with no
+   edit. Only components that hardcoded hex or raw Tailwind palette
+   classes need migrating.
+
+   Contrast figures below are measured against --color-canvas.
+   ══════════════════════════════════════════════════════════════════ */
+.staff-dark {
+  /* ── Surfaces: a five-step ladder ────────────────────────────────
+     On dark, elevation is surface lightness + a hairline, NEVER a
+     shadow — drop shadows do not read against a dark ground. The one
+     exception is overlays (see --shadow-overlay). Note the rail sits
+     *below* the canvas rather than above it, so the content plane
+     reads as floating over the chrome. */
+  --color-nav-bg: #050914;
+  --color-nav-raised: #0e1424;
+  --color-nav-active: rgba(255, 255, 255, 0.06);
+  --color-nav-border: rgba(255, 255, 255, 0.07);
+  --color-nav-text: #9ba6be;
+  --color-nav-text-active: #f2f5fa;
+  --color-nav-muted: #78849f;
+
+  --color-canvas: #070b18;
+  --card: #0e1424;
+  --color-card-raised: #151c2e;
+  --color-card-line: rgba(255, 255, 255, 0.07);
+  --color-card-line-strong: rgba(255, 255, 255, 0.13);
+
+  --background: #070b18;
+  --popover: #151c2e;
+  --secondary: #151c2e;
+  --muted: #151c2e;
+
+  /* Ink/tint were the light theme's "dark accent" surfaces. On a dark
+     ground they invert roles: ink becomes the deepest well, tint the
+     raised panel. Kept so existing `bg-ink` / `bg-tint` consumers do
+     not break. */
+  --color-ink: #050914;
+  --color-ink-raised: #151c2e;
+  --color-ink-line: rgba(255, 255, 255, 0.07);
+  --color-tint: #151c2e;
+
+  /* ── Text ramp, with measured contrast on #070b18 ────────────────
+     foreground 18.0:1 · muted 8.1:1 · subtle 5.3:1
+     `subtle` was originally #6b7794, which computes to 4.40:1 and
+     fails AA for the 10.5px uppercase micro labels it is used on.
+     #78849f clears it at 5.25:1. Do not darken it again.
+     `faint` is 2.9:1 — disabled and placeholder text only. */
+  --foreground: #f2f5fa;
+  --card-foreground: #f2f5fa;
+  --popover-foreground: #f2f5fa;
+  --secondary-foreground: #f2f5fa;
+  --civic-heading: #f2f5fa;
+  --muted-foreground: #9ba6be;
+  --color-subtle-foreground: #78849f;
+  --color-faint-foreground: #4a5570;
+
+  --border: rgba(255, 255, 255, 0.07);
+  --input: rgba(255, 255, 255, 0.13);
+
+  /* ── Accents ─────────────────────────────────────────────────────
+     WARM = act · press · focus · you
+     COLD = live · track · measure · it
+     The split is semantic, not decorative: an official learns the
+     console in seconds because orange always means "you do something"
+     and ice always means "the system is reporting". */
+  --color-brand-orange: #ff6a1a;
+  --color-brand-orange-strong: #ff8133;
+  --color-brand-orange-soft: rgba(255, 106, 26, 0.12);
+  --color-brand-orange-ink: #0a0a0a;
+  --primary: #ff6a1a;
+  --primary-foreground: #0a0a0a;
+  --accent: #ff6a1a;
+  --accent-foreground: #0a0a0a;
+  --ring: #ff6a1a;
+
+  --color-ice: #4de1ff; /* 12.7:1 */
+  --color-ice-soft: rgba(77, 225, 255, 0.12);
+  --color-ice-dim: #2a8da6;
+
+  --color-brand-navy: #f2f5fa;
+  --civic-link: #4de1ff;
+  --color-sos: #ff4d45;
+  --color-sos-bright: #ff625a;
+  --destructive: #ff4d45;
+
+  /* ── Severity ────────────────────────────────────────────────────
+      The light ramp's `-ink` values are dark-on-light and invert wrong,
+      so the whole ramp is restated rather than filtered. Surfaces are
+      translucent so a severity tint composites correctly over ANY of
+      the five surface steps instead of only over --card.
+
+      The light theme's rule still holds and is not negotiable: severity
+      is never encoded by colour alone. Every severity badge pairs these
+      with a fixed-weight bar and an uppercase label so meaning survives
+      colour blindness, greyscale and glare. */
+  --color-severity-critical: #ff4d45; /* 6.0:1 */
+  --color-severity-critical-surface: rgba(255, 77, 69, 0.13);
+  --color-severity-critical-ink: #ffb3ae;
+  --color-severity-high: #ff8a3d;
+  --color-severity-high-surface: rgba(255, 138, 61, 0.13);
+  --color-severity-high-ink: #ffcfa8;
+  --color-severity-moderate: #ffc24d;
+  --color-severity-moderate-surface: rgba(255, 194, 77, 0.12);
+  --color-severity-moderate-ink: #ffe3a8;
+  --color-severity-low: #5aa9db;
+  --color-severity-low-surface: rgba(90, 169, 219, 0.13);
+  --color-severity-low-ink: #b3d9f0;
+
+  /* ── Responder map chrome ────────────────────────────────────────
+      Glass surfaces, glow shadows, and rail lines for the dark
+      operations-center map screen. */
+  --color-nav-glass: rgba(5, 9, 20, 0.82);
+  --color-rail-glass: rgba(5, 9, 20, 0.78);
+  --color-map-overlay: rgba(5, 9, 20, 0.65);
+  --color-rail-line: rgba(255, 255, 255, 0.08);
+  --shadow-glow-red: 0 0 18px rgba(242, 59, 53, 0.35);
+  --shadow-glow-orange: 0 0 14px rgba(255, 106, 26, 0.25);
+
+  /* ── Status groups ───────────────────────────────────────────────
+     `active` moves from the light theme's blue to ice, folding
+     "live / in progress" into the cold semantic so the warm/cold rule
+     holds without exception across the console. */
+  --color-status-open: #ff4d45;
+  --color-status-open-surface: rgba(255, 77, 69, 0.13);
+  --color-status-open-ink: #ffb3ae;
+  --color-status-active: #4de1ff;
+  --color-status-active-surface: rgba(77, 225, 255, 0.12);
+  --color-status-active-ink: #b8eeff;
+  --color-status-closed: #3ed598;
+  --color-status-closed-surface: rgba(62, 213, 152, 0.12);
+  --color-status-closed-ink: #a8ecd0;
+
+  /* ── Data visualisation ──────────────────────────────────────────
+     Re-ramped for luminance separation on a dark ground. Order is
+     load-bearing — charts index into this by position. */
+  --color-chart-1: #ff6a1a;
+  --color-chart-2: #4de1ff;
+  --color-chart-3: #8b7bff;
+  --color-chart-4: #ffc24d;
+  --color-chart-5: #3ed598;
+  --color-chart-6: #ff4d45;
+  --color-chart-track: rgba(255, 255, 255, 0.06);
+  --color-chart-grid: rgba(255, 255, 255, 0.045);
+
+  --color-shell-border: rgba(255, 255, 255, 0.07);
+  --civic-panel: #151c2e;
+
+  /* On a dark ground there is no light to cast, so elevation comes from
+     the inset top highlight rather than the drop shadow. */
+  --shadow-overlay: 0 24px 48px -12px rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+
+  color-scheme: dark;
 }
 
 .dark {
@@ -164,10 +472,140 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-brand-navy: var(--color-brand-navy);
+  --color-brand-orange: var(--color-brand-orange);
+  --color-brand-orange-strong: var(--color-brand-orange-strong);
+  --color-brand-orange-soft: var(--color-brand-orange-soft);
+  --color-sos: var(--color-sos);
+  --color-sos-bright: var(--color-sos-bright);
+  --color-shell-border: var(--color-shell-border);
+  --color-nav-bg: var(--color-nav-bg);
+  --color-nav-raised: var(--color-nav-raised);
+  --color-nav-active: var(--color-nav-active);
+  --color-nav-border: var(--color-nav-border);
+  --color-nav-text: var(--color-nav-text);
+  --color-nav-text-active: var(--color-nav-text-active);
+  --color-nav-muted: var(--color-nav-muted);
+  --color-canvas: var(--color-canvas);
+  --color-card-line: var(--color-card-line);
+  --color-ink: var(--color-ink);
+  --color-ink-raised: var(--color-ink-raised);
+  --color-ink-line: var(--color-ink-line);
+  --color-tint: var(--color-tint);
+  --color-chart-1: var(--color-chart-1);
+  --color-chart-2: var(--color-chart-2);
+  --color-chart-3: var(--color-chart-3);
+  --color-chart-4: var(--color-chart-4);
+  --color-chart-5: var(--color-chart-5);
+  --color-chart-6: var(--color-chart-6);
+  --color-chart-track: var(--color-chart-track);
+  --color-chart-grid: var(--color-chart-grid);
+  --color-severity-critical: var(--color-severity-critical);
+  --color-severity-critical-surface: var(--color-severity-critical-surface);
+  --color-severity-critical-ink: var(--color-severity-critical-ink);
+  --color-severity-high: var(--color-severity-high);
+  --color-severity-high-surface: var(--color-severity-high-surface);
+  --color-severity-high-ink: var(--color-severity-high-ink);
+  --color-severity-moderate: var(--color-severity-moderate);
+  --color-severity-moderate-surface: var(--color-severity-moderate-surface);
+  --color-severity-moderate-ink: var(--color-severity-moderate-ink);
+  --color-severity-low: var(--color-severity-low);
+  --color-severity-low-surface: var(--color-severity-low-surface);
+  --color-severity-low-ink: var(--color-severity-low-ink);
+  --color-status-open: var(--color-status-open);
+  --color-status-open-surface: var(--color-status-open-surface);
+  --color-status-open-ink: var(--color-status-open-ink);
+  --color-status-active: var(--color-status-active);
+  --color-status-active-surface: var(--color-status-active-surface);
+  --color-status-active-ink: var(--color-status-active-ink);
+  --color-status-closed: var(--color-status-closed);
+  --color-status-closed-surface: var(--color-status-closed-surface);
+  --color-status-closed-ink: var(--color-status-closed-ink);
+
+  /* Ops console additions. Declared with var() indirection like every
+     token above, so `.staff-dark` re-scopes them without Tailwind
+     needing to know a second theme exists. */
+  --color-card-raised: var(--color-card-raised);
+  --color-card-line-strong: var(--color-card-line-strong);
+  --color-subtle-foreground: var(--color-subtle-foreground);
+  --color-faint-foreground: var(--color-faint-foreground);
+  --color-ice: var(--color-ice);
+  --color-ice-soft: var(--color-ice-soft);
+  --color-ice-dim: var(--color-ice-dim);
+  --color-brand-orange-ink: var(--color-brand-orange-ink);
+  --color-nav-glass: var(--color-nav-glass);
+  --color-rail-glass: var(--color-rail-glass);
+  --color-map-overlay: var(--color-map-overlay);
+  --color-rail-line: var(--color-rail-line);
+  --shadow-glow-red: var(--shadow-glow-red);
+  --shadow-glow-orange: var(--shadow-glow-orange);
+
+  /* ── Type scale ───────────────────────────────────────────────────
+     Seven steps, each with a weight baked in. This exists to end the
+     `font-black` + `font-extrabold` + `font-bold` pileup in the concern
+     and emergency views: when everything is emphasised, nothing is.
+
+     Two rules the components enforce:
+       · at most two weights visible in any one component
+       · at most one uppercase `micro` run per panel
+
+     `numeric` is tabular so timers and counts do not reflow as digits
+     tick — the single most visible cheapness tell in an ops console. */
+  --text-display: 2.5rem;
+  --text-display--line-height: 1;
+  --text-display--font-weight: 600;
+  --text-display--letter-spacing: -0.022em;
+
+  --text-title: 1.25rem;
+  --text-title--line-height: 1.3;
+  --text-title--font-weight: 600;
+  --text-title--letter-spacing: -0.014em;
+
+  --text-heading: 0.9375rem;
+  --text-heading--line-height: 1.4;
+  --text-heading--font-weight: 600;
+  --text-heading--letter-spacing: -0.006em;
+
+  --text-body: 0.84375rem;
+  --text-body--line-height: 1.55;
+  --text-body--font-weight: 450;
+
+  --text-label: 0.75rem;
+  --text-label--line-height: 1.3;
+  --text-label--font-weight: 550;
+
+  --text-micro: 0.65625rem;
+  --text-micro--line-height: 1.2;
+  --text-micro--font-weight: 600;
+  --text-micro--letter-spacing: 0.08em;
+
+  --text-numeric: 0.8125rem;
+  --text-numeric--line-height: 1.2;
+  --text-numeric--font-weight: 500;
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
+  /* Three radii, replacing the md/lg/xl/2xl/3xl/full mix that currently
+     appears within single views. Panel for surfaces, control for
+     interactive elements, pill for badges and chips. */
+  --radius-panel: 14px;
+  --radius-control: 10px;
+  --radius-pill: 999px;
+
+  /* Motion. Only two things in the console animate unprompted — the
+     live status pulse and en-route route dashes. Everything else moves
+     only in response to input. */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-micro: 120ms;
+  --duration-panel: 200ms;
+  --duration-overlay: 320ms;
+
+  /* Overlays only. Declared with var() indirection like the colour
+     tokens so each palette supplies its own elevation. */
+  --shadow-overlay: var(--shadow-overlay);
   --font-sans:
     "Saans", "Mulish", -apple-system, BlinkMacSystemFont, "Segoe UI",
     Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -181,6 +619,7 @@
   --animate-marquee: marquee 20s linear infinite;
   --animate-blink: blink 1s ease-in-out infinite;
   --animate-gradient-shift: gradientShift 8s ease infinite;
+  --animate-sos-fab-blink: sosFabBlink 1.4s ease-in-out infinite;
 }
 
 @keyframes gradientShift {
@@ -226,6 +665,11 @@
   to { transform: scale(1.08) translateX(-1%); }
 }
 
+@keyframes sosFabBlink {
+  0%, 100% { box-shadow: 0 6px 20px rgba(242, 59, 53, 0.38); transform: scale(1); }
+  50% { box-shadow: 0 8px 26px rgba(242, 59, 53, 0.5), 0 0 0 10px rgba(242, 59, 53, 0.1); transform: scale(1.04); }
+}
+
 @keyframes fadeSlideUp {
   from {
     opacity: 0;
@@ -267,6 +711,135 @@
   }
 }
 
+/* Live-map pins (Leaflet divIcon). The pulse marks an active emergency only —
+   if every pin moved, the movement would stop meaning "someone needs help".
+   The reduced-motion block above already stops the ripple. */
+.eboses-pin__wrap {
+  position: relative;
+  display: flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+}
+.eboses-pin__dot {
+  position: relative;
+  width: 13px;
+  height: 13px;
+  border-radius: 9999px;
+  border: 2.5px solid #fff;
+  box-shadow: 0 1px 4px rgb(7 20 95 / 0.35);
+}
+.eboses-pin__pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  opacity: 0.55;
+  animation: eboses-pin-pulse 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@keyframes eboses-pin-pulse {
+  0% {
+    transform: scale(0.55);
+    opacity: 0.6;
+  }
+  70%,
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+/* ── Alert map: dark operations theme ─────────────────────────────────────
+   The basemap is a light raster tile inverted and re-tinted in CSS rather
+   than a second tile subscription: it keeps street labels legible, costs no
+   extra requests, and stays on our navy instead of a generic grey. */
+.eboses-map-dark .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(190deg) brightness(0.92) contrast(0.9) saturate(0.55);
+}
+.eboses-map-dark.leaflet-container {
+  background: #050d33;
+}
+.eboses-map-dark .leaflet-control-attribution {
+  background: rgb(5 13 51 / 0.7);
+  color: rgb(255 255 255 / 0.45);
+}
+.eboses-map-dark .leaflet-control-attribution a {
+  color: rgb(255 255 255 / 0.55);
+}
+/* Leaflet's default zoom control is white-on-white against the dark
+   basemap, which is the one surface that stays dark on the light
+   palette. */
+.eboses-map-dark .leaflet-bar a {
+  background: #0a1650;
+  color: #ffffff;
+  border-bottom-color: rgb(255 255 255 / 0.12);
+}
+.eboses-map-dark .leaflet-bar a:hover {
+  background: #142465;
+  color: #ffffff;
+}
+
+/* Tooltips on the dark basemap */
+.eboses-map-dark .leaflet-tooltip {
+  background: rgba(5, 9, 20, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #f2f5fa;
+  font-family: "Saans", sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+}
+.eboses-map-dark .leaflet-tooltip::before {
+  border-top-color: rgba(5, 9, 20, 0.9);
+}
+
+/* Incident pins: a core plus a bloom, so a cluster reads as intensity. */
+.eboses-map-pin {
+  position: relative;
+  display: flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+}
+.eboses-map-pin__glow {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: radial-gradient(circle, var(--pin) 0%, transparent 68%);
+  opacity: 0.42;
+}
+.eboses-map-pin__core {
+  position: relative;
+  width: var(--core);
+  height: var(--core);
+  border-radius: 9999px;
+  background: var(--pin);
+  box-shadow:
+    0 0 0 1.5px rgb(255 255 255 / 0.85),
+    0 0 12px var(--pin);
+}
+.eboses-map-pin__ring {
+  position: absolute;
+  inset: 2px;
+  border-radius: 9999px;
+  border: 1.5px solid var(--pin);
+  animation: eboses-map-ping 1.9s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@keyframes eboses-map-ping {
+  0% {
+    transform: scale(0.4);
+    opacity: 0.9;
+  }
+  70%,
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
 /* Hide scrollbar */
 .scrollbar-hide {
   -ms-overflow-style: none;
@@ -274,6 +847,138 @@
 }
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
+}
+
+/* ── Ops workspace ────────────────────────────────────────────────────
+   Support styles for the OpsWorkspace primitive. Everything here is
+   presentation the primitive cannot express in utility classes. */
+
+/* Independently scrolling pane. The default scrollbar is a heavy slab
+   that reads as a UI element; this makes it recede until hovered.
+
+   Drawn from tokens rather than a literal colour so the thumb stays
+   visible on either palette — hardcoded white here would be invisible
+   on the light canvas, and hardcoded grey would disappear on a dark
+   one. */
+.ops-pane {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-card-line-strong) transparent;
+}
+.ops-pane::-webkit-scrollbar {
+  width: 10px;
+}
+.ops-pane::-webkit-scrollbar-track {
+  background: transparent;
+}
+.ops-pane::-webkit-scrollbar-thumb {
+  background-color: var(--color-card-line-strong);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+.ops-pane:hover::-webkit-scrollbar-thumb {
+  background-color: var(--color-subtle-foreground);
+}
+
+/* Signals "there is more below" without depending on a scrollbar being
+   visible. Applied to the pane's inner wrapper, not the scroller, so it
+   does not clip the sticky header. */
+.ops-pane-fade {
+  mask-image: linear-gradient(to top, transparent 0, black 24px);
+  -webkit-mask-image: linear-gradient(to top, transparent 0, black 24px);
+}
+
+/* Resize divider. The 1px line is decoration; the ~9px hit area is the
+   actual control. Widening the visible line on hover/drag is the only
+   feedback — no cursor tricks, no colour change on the panes. */
+.ops-divider {
+  position: relative;
+  flex: none;
+  width: 9px;
+  margin-inline: -4px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 10;
+  background: transparent;
+}
+.ops-divider::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 4px;
+  width: 1px;
+  background: var(--color-card-line-strong);
+  transition: width var(--duration-micro) var(--ease-out-expo),
+    background-color var(--duration-micro) var(--ease-out-expo);
+}
+.ops-divider:hover::after,
+.ops-divider[data-dragging="true"]::after,
+.ops-divider:focus-visible::after {
+  width: 3px;
+  left: 3px;
+  background: var(--color-ice);
+}
+.ops-divider:focus-visible {
+  outline: none;
+}
+/* While dragging, kill text selection and pointer noise across the app. */
+body[data-ops-resizing="true"] {
+  cursor: col-resize;
+  user-select: none;
+}
+body[data-ops-resizing="true"] iframe,
+body[data-ops-resizing="true"] .leaflet-container {
+  pointer-events: none;
+}
+
+/* The second of the two permitted unprompted motions: a responder's
+   projected route crawls toward the incident. Direction carries the
+   meaning — a still dashed line would just be a line. The reduced-motion
+   block above already stops it. */
+@keyframes opsRouteDash {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+.ops-route-dash {
+  animation: opsRouteDash 1.1s linear infinite;
+}
+
+/* The live pulse. This and the en-route route dash are the ONLY two
+   things in the console that animate without user input — that scarcity
+   is what makes the pulse mean "someone needs help" instead of
+   meaning "this is a website". */
+@keyframes opsPulse {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.75;
+  }
+  70%,
+  100% {
+    transform: scale(2.1);
+    opacity: 0;
+  }
+}
+
+/* Subtle glow pulse for active emergency FAB / lockdown banner.
+   Scoped to the ops console so residents never see it. */
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 0 12px rgba(242, 59, 53, 0.25); }
+  50% { box-shadow: 0 0 22px rgba(242, 59, 53, 0.45); }
+}
+.staff-dark .ops-glow-pulse {
+  animation: glowPulse 2.2s ease-in-out infinite;
+}
+.ops-pulse::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: currentColor;
+  animation: opsPulse 2s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
 
 /* Sonner toast layout — respect data-x-position from sonner */

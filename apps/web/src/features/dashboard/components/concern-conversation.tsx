@@ -12,6 +12,10 @@ import {
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Bubble, BubbleContent } from "@/components/ui/bubble"
+import { Message, MessageAvatar, MessageContent, MessageFooter } from "@/components/ui/message"
+import { useAuthSession } from "@/features/auth/auth-session"
 import type { ConcernConversationItem, ConcernStatus, PublicUser } from "@/features/dashboard/api"
 import { AuthenticatedMediaImage, openAuthenticatedMedia } from "@/features/dashboard/components/authenticated-media"
 
@@ -31,6 +35,9 @@ function roleLabel(user?: PublicUser | null) {
   if (user.role === "barangay_official") return "Official"
   if (user.role === "first_responder") return "Responder"
   return user.role?.replace(/_/g, " ") || "User"
+}
+function initialsFor(user?: PublicUser | null) {
+  return (user?.initials || user?.full_name?.split(/\s+/).map((part) => part[0]).join("") || "U").slice(0, 2).toUpperCase()
 }
 
 function metadataString(item: ConcernConversationItem, key: string) {
@@ -93,6 +100,8 @@ export function ConcernConversation({
   onStatusClick?: (status: ConcernStatus) => void
   className?: string
 }) {
+  const { user } = useAuthSession()
+
   if (items.length === 0) {
     return (
       <div className={cn("rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-5 py-8 text-center", className)}>
@@ -104,13 +113,70 @@ export function ConcernConversation({
   }
 
   return (
-    <div className={cn("rounded-xl border border-neutral-200 bg-white px-4 py-5 sm:px-5", className)}>
+    <div className={cn("", className)}>
       <ol className="space-y-0" aria-label="Case conversation, oldest to newest">
         {items.map((item, index) => {
           const { label, Icon, tone } = itemPresentation(item)
           const isLast = index === items.length - 1
           const actorName = item.actor?.full_name || "E-Boses"
           const clickableStatus = item.kind === "status" && Boolean(item.status) && Boolean(onStatusClick)
+          const visibleAttachments = item.attachments.filter((attachment) => attachment.authenticity_status === "clear")
+          if (item.kind === "chat" && !item.body && visibleAttachments.length === 0) return null
+          if (item.kind === "chat") {
+            const mine = user?.id != null && item.actor?.id === user.id
+            const footer = [mine ? "You" : actorName, !mine ? roleLabel(item.actor) : "", formatConversationTime(item.created_at)].filter(Boolean).join(" · ")
+            return (
+              <li key={item.id} className="py-2">
+                <Message align={mine ? "end" : "start"}>
+                  <MessageAvatar>
+                    <Avatar>                      <AvatarFallback>{initialsFor(item.actor)}</AvatarFallback>
+                    </Avatar>
+                  </MessageAvatar>
+                  <MessageContent className={mine ? "items-end" : "items-start"}>
+                    <Bubble variant={mine ? "default" : "muted"}>
+                      <BubbleContent>
+                        {item.body ? <p>{item.body}</p> : null}
+                        {visibleAttachments.length ? (
+                          <div className={cn(item.body && "mt-2", "grid gap-2")}>
+                            {visibleAttachments.map((attachment) => (
+                              <button
+                                key={attachment.id}
+                                type="button"
+                                onClick={() => void openAuthenticatedMedia(attachment.raw_url, attachment.original_filename)}
+                                className="overflow-hidden rounded-xl border border-current/15 bg-white/10 text-left"
+                              >
+                                {attachment.kind === "image" ? (
+                                  <AuthenticatedMediaImage src={attachment.raw_url} alt={attachment.original_filename} className="max-h-44 w-full object-cover" />
+                                ) : (
+                                  <span className="flex min-h-20 items-center justify-center gap-2 px-3 text-xs font-bold">
+                                    <VideoIcon className="size-5" /> Open video
+                                  </span>
+                                )}
+                                <span className="flex items-start gap-2 px-3 py-2 text-[11px] font-semibold opacity-80">
+                                  {attachment.kind === "image" ? <FileImageIcon className="mt-0.5 size-3.5 shrink-0" /> : <VideoIcon className="mt-0.5 size-3.5 shrink-0" />}
+                                  <span className="min-w-0">
+                                    <span className="block truncate">{attachment.original_filename}</span>
+                                    <span className="mt-0.5 block text-[10px] leading-4 opacity-75">
+                                      {attachment.authenticity_status === "clear"
+                                        ? "No obvious edit detected"
+                                        : attachment.authenticity_status === "flagged"
+                                          ? "Potential editing signals"
+                                          : "Authenticity review required"}
+                                    </span>
+                                  </span>
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                      </BubbleContent>
+                    </Bubble>
+                    <MessageFooter className={mine ? "text-right" : "text-left"}>{footer}</MessageFooter>
+                  </MessageContent>
+                </Message>
+              </li>
+            )
+          }
           return (
             <li key={item.id} className="relative flex gap-3 sm:gap-4">
               <div className="flex shrink-0 flex-col items-center">
@@ -147,32 +213,30 @@ export function ConcernConversation({
                   <time dateTime={item.created_at}>{formatConversationTime(item.created_at)}</time>
                 </p>
                 {item.body ? <p className="mt-2 whitespace-pre-wrap text-[13px] leading-5 text-neutral-700">{item.body}</p> : null}
-                {item.attachments.length ? (
+                {visibleAttachments.length ? (
                   <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    {item.attachments.map((attachment) => (
+                    {visibleAttachments.map((attachment) => (
                       <div key={attachment.id} className="overflow-hidden rounded-lg border border-neutral-200 bg-neutral-50">
-                        {attachment.kind === "image" ? (
-                          <button type="button" onClick={() => void openAuthenticatedMedia(attachment.raw_url, attachment.original_filename)} className="block w-full text-left">
-                            <AuthenticatedMediaImage src={attachment.raw_url} alt={attachment.original_filename} className="max-h-48 w-full object-cover" />
-                          </button>
-                        ) : (
-                          <button type="button" onClick={() => void openAuthenticatedMedia(attachment.raw_url, attachment.original_filename)} className="flex min-h-24 w-full items-center justify-center gap-2 px-3 text-xs font-bold text-neutral-700 hover:bg-white">
-                            <VideoIcon className="size-5" /> Open video
-                          </button>
-                        )}
-                        <div className="flex items-start gap-2 px-3 py-2">
-                          {attachment.kind === "image" ? <FileImageIcon className="mt-0.5 size-3.5 shrink-0" /> : <VideoIcon className="mt-0.5 size-3.5 shrink-0" />}
-                          <div className="min-w-0">
-                            <p className="truncate text-[11px] font-semibold text-neutral-700">{attachment.original_filename}</p>
-                            <p className="mt-0.5 text-[10px] leading-4 text-neutral-500">
-                              {attachment.authenticity_status === "clear"
-                                ? "No obvious edit detected"
-                                : attachment.authenticity_status === "flagged"
-                                  ? "Potential editing signals · manual review needed"
-                                  : "Authenticity review required"}
-                            </p>
-                          </div>
-                        </div>
+                        {attachment.authenticity_status === "clear" ? (
+                          <>
+                            {attachment.kind === "image" ? (
+                              <button type="button" onClick={() => void openAuthenticatedMedia(attachment.raw_url, attachment.original_filename)} className="block w-full text-left">
+                                <AuthenticatedMediaImage src={attachment.raw_url} alt={attachment.original_filename} className="max-h-48 w-full object-cover" />
+                              </button>
+                            ) : (
+                              <button type="button" onClick={() => void openAuthenticatedMedia(attachment.raw_url, attachment.original_filename)} className="flex min-h-24 w-full items-center justify-center gap-2 px-3 text-xs font-bold text-neutral-700 hover:bg-white">
+                                <VideoIcon className="size-5" /> Open video
+                              </button>
+                            )}
+                            <div className="flex items-start gap-2 px-3 py-2">
+                              {attachment.kind === "image" ? <FileImageIcon className="mt-0.5 size-3.5 shrink-0" /> : <VideoIcon className="mt-0.5 size-3.5 shrink-0" />}
+                              <div className="min-w-0">
+                                <p className="truncate text-[11px] font-semibold text-neutral-700">{attachment.original_filename}</p>
+                                <p className="mt-0.5 text-[10px] leading-4 text-neutral-500">No obvious edit detected</p>
+                              </div>
+                            </div>
+                          </>
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -185,3 +249,11 @@ export function ConcernConversation({
     </div>
   )
 }
+
+
+
+
+
+
+
+

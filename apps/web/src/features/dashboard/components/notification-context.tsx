@@ -9,6 +9,7 @@ export interface NotificationItem {
   title: string
   body: string
   is_read: boolean
+  is_archived?: boolean
   created_at: string
   concern_id: number | null
   concern_public_id: string | null
@@ -59,7 +60,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   async function fetchAll() {
     try {
       const [list, countRes] = await Promise.all([
-        apiRequest<NotificationItem[]>("/notifications/"),
+        apiRequest<NotificationItem[]>("/notifications/?include_archived=true"),
         apiRequest<{ count: number }>("/notifications/unread-count/"),
       ])
       setNotifications(list ?? [])

@@ -59,27 +59,45 @@ export type ReportValidationResult = {
 }
 
 export function getConcernClassificationConfig() {
-  return apiRequest<any>("/concerns/classification/").then(normalizeConfig)
+  return apiRequest<RawJson>("/concerns/classification/").then(normalizeConfig)
 }
 
 export function saveConcernClassificationConfig(config: ConcernClassificationConfig) {
-  return apiRequest<any>("/concerns/classification/", {
+  return apiRequest<RawJson>("/concerns/classification/", {
     method: "PATCH",
     body: JSON.stringify(config),
   }).then(normalizeConfig)
 }
 
 export function resetConcernClassificationConfig() {
-  return apiRequest<any>("/concerns/classification/reset/", { method: "POST" }).then(normalizeConfig)
+  return apiRequest<RawJson>("/concerns/classification/reset/", { method: "POST" }).then(normalizeConfig)
 }
 
-function normalizeConfig(raw: any): ConcernClassificationConfig {
+/**
+ * Unnormalised JSON straight off the wire.
+ *
+ * Every use of this type is a value that has NOT been validated yet — it is the
+ * input to the `normalize*` functions below, whose entire job is to turn it into
+ * the typed shapes this module exports. Nothing outside those functions should
+ * ever hold a RawJson.
+ *
+ * Deliberately `any` rather than `unknown`: the normalisers walk deep, optional,
+ * server-defined structures, and threading `unknown` through them would mean a
+ * type guard per property read for no added safety — the runtime `??` and
+ * `Array.isArray` fallbacks already do that work. Confining the escape hatch to
+ * one named, documented alias is the point; the twenty scattered inline `any`s
+ * this replaced said nothing about why they were there.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type RawJson = any
+
+function normalizeConfig(raw: RawJson): ConcernClassificationConfig {
   return {
     ...raw,
     label_mappings: raw?.label_mappings ?? {},
     category_keywords: raw?.category_keywords ?? {},
     mapping_targets: raw?.mapping_targets ?? [],
-    categories: (raw?.categories ?? []).map((category: any) => ({
+    categories: (raw?.categories ?? []).map((category: RawJson) => ({
       key: category.key ?? category.code,
       label: category.label ?? category.name,
       enabled: category.enabled !== false,

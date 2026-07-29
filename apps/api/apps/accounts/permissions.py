@@ -13,6 +13,7 @@ ROLE_PERMISSIONS = {
     },
     User.Role.FIRST_RESPONDER: {
         "concerns.view_assigned",
+        "concerns.update_assigned",
         "emergencies.respond",
         "emergencies.update_assigned",
         "profile.view_own",

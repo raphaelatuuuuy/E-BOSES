@@ -9,21 +9,33 @@ from apps.accounts.services import validate_concern_media_file
 from .models import (
     Announcement,
     BarangayEvent,
+    ChatMessageRead,
+    ChatTypingIndicator,
     Concern,
     ConcernAppeal,
     ConcernAssignment,
     ConcernAiAssessment,
+    ConcernCategory,
     ConcernChatMessage,
     ConcernChatAttachment,
     ConcernClarification,
     ConcernComment,
+    ConcernFormField,
+    ConcernFormValue,
     ConcernOfficialRemark,
     ConcernResolutionEvidence,
+    ConcernTimelineEntry,
     ContentFlag,
     ConcernMedia,
     ConcernStatusEvent,
+    Department,
+    DepartmentChatMessage,
+    DepartmentChatThread,
+    Designation,
+    Position,
+    RoutingRule,
 )
-from .services import validate_barangay_location
+from apps.geo_services import validate_report_location
 
 
 class ConcernMediaUploadSerializer(serializers.Serializer):
@@ -65,7 +77,7 @@ class PublicUserSerializer(serializers.ModelSerializer):
             first_name = profile.first_name.strip()
             last_initial = profile.last_name.strip()[:1]
             return f"{first_name} {last_initial}.".strip() if last_initial else first_name
-        return "E-Boses user"
+        return (obj.email.split("@", 1)[0] or "E-Boses user").replace(".", " ")
 
     def get_initials(self, obj):
         profile = getattr(obj, "resident_profile", None)
@@ -117,6 +129,188 @@ class PublicUserSerializer(serializers.ModelSerializer):
             return prefix
         return ""
 
+class DepartmentSerializer(serializers.ModelSerializer):
+    member_count = serializers.SerializerMethodField()
+
+    def get_member_count(self, obj):
+        return obj.designations.filter(is_active=True).count()
+
+    class Meta:
+        model = Department
+        fields = (
+            "id",
+            "name",
+            "code",
+            "short_name",
+            "description",
+            "emergency_role",
+            "sort_order",
+            "is_active",
+            # Emergency dispatch reads these; the Units screen edits them.
+            "responds_to_emergencies",
+            "emergency_types",
+            "contact_number",
+            "member_count",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "member_count", "created_at", "updated_at")
+
+    def validate_emergency_types(self, value):
+        from apps.emergencies.models import EmergencyCategory
+
+        allowed = set(EmergencyCategory.objects.filter(is_active=True).values_list("code", flat=True))
+        invalid = [item for item in value if item not in allowed]
+        if invalid:
+            raise serializers.ValidationError(
+                f"Unknown emergency type(s): {', '.join(sorted(invalid))}."
+            )
+        return value
+
+    def validate(self, attrs):
+        responds = attrs.get(
+            "responds_to_emergencies",
+            getattr(self.instance, "responds_to_emergencies", False),
+        )
+        types = attrs.get("emergency_types", getattr(self.instance, "emergency_types", None)) or []
+        if responds and not types:
+            raise serializers.ValidationError(
+                {
+                    "emergency_types": [
+                        "Choose at least one emergency type, or this unit will never be dispatched to."
+                    ]
+                }
+            )
+        return attrs
+
+
+class PositionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Position
+        fields = ("id", "name", "code", "permissions", "is_active", "created_at", "updated_at")
+        read_only_fields = ("id", "created_at", "updated_at")
+
+
+class DesignationSerializer(serializers.ModelSerializer):
+    user_detail = PublicUserSerializer(source="user", read_only=True)
+    department_detail = DepartmentSerializer(source="department", read_only=True)
+    position_detail = PositionSerializer(source="position", read_only=True)
+
+    class Meta:
+        model = Designation
+        fields = ("id", "user", "department", "position", "title", "is_active", "user_detail", "department_detail", "position_detail", "created_at", "updated_at")
+        read_only_fields = ("id", "created_at", "updated_at")
+
+
+class ConcernFormFieldSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ConcernFormField
+        fields = ("id", "category", "field_key", "label", "field_type", "is_required", "options", "sort_order", "is_active", "created_at", "updated_at")
+        read_only_fields = ("id", "created_at", "updated_at")
+
+
+class ConcernCategorySerializer(serializers.ModelSerializer):
+    department_detail = DepartmentSerializer(source="department", read_only=True)
+    form_fields = ConcernFormFieldSerializer(many=True, read_only=True)
+    icon_image_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ConcernCategory
+        fields = ("id", "name", "code", "description", "icon_key", "custom_icon_label", "icon_image", "icon_image_url", "department", "department_detail", "is_active", "form_fields", "created_at", "updated_at")
+        read_only_fields = ("id", "icon_image_url", "created_at", "updated_at")
+
+    def get_icon_image_url(self, obj):
+        if not obj.icon_image:
+            return ""
+        request = self.context.get("request")
+        return request.build_absolute_uri(obj.icon_image.url) if request else obj.icon_image.url
+
+    def validate_icon_key(self, value):
+        value = (value or "tag").strip().lower()
+        allowed = {
+            "tag", "wrench", "leaf", "shield-alert", "trash", "lightbulb",
+            "road", "droplets", "home", "map-pin", "paw-print", "megaphone",
+        }
+        if value not in allowed:
+            raise serializers.ValidationError("Choose one of the supported concern icons.")
+        return value
+
+    def validate_icon_image(self, value):
+        if not value:
+            return value
+        name = value.name.lower()
+        if not name.endswith((".png", ".jpg", ".jpeg", ".webp", ".ico")):
+            raise serializers.ValidationError("Use PNG, JPG, WEBP, or ICO.")
+        if value.size > 512 * 1024:
+            raise serializers.ValidationError("Use an icon image up to 512 KB.")
+        return value
+
+
+class RoutingRuleSerializer(serializers.ModelSerializer):
+    category_detail = ConcernCategorySerializer(source="category", read_only=True)
+    department_detail = DepartmentSerializer(source="department", read_only=True)
+
+    class Meta:
+        model = RoutingRule
+        fields = ("id", "name", "category", "department", "priority", "is_active", "category_detail", "department_detail", "created_at", "updated_at")
+        read_only_fields = ("id", "created_at", "updated_at")
+
+
+class ConcernFormValueSerializer(serializers.ModelSerializer):
+    field_key = serializers.CharField(source="field.field_key", read_only=True)
+    label = serializers.CharField(source="field.label", read_only=True)
+
+    class Meta:
+        model = ConcernFormValue
+        fields = ("id", "field", "field_key", "label", "value", "created_at", "updated_at")
+        read_only_fields = ("id", "created_at", "updated_at")
+
+
+class ConcernTimelineEntrySerializer(serializers.ModelSerializer):
+    actor = PublicUserSerializer(read_only=True)
+
+    class Meta:
+        model = ConcernTimelineEntry
+        fields = ("id", "event_type", "status", "message", "actor", "visible_to_resident", "is_custom", "metadata", "created_at")
+        read_only_fields = ("id", "actor", "created_at")
+
+
+class ConcernTimelineEntryCreateSerializer(serializers.Serializer):
+    event_type = serializers.ChoiceField(choices=ConcernTimelineEntry.EventType.choices, default=ConcernTimelineEntry.EventType.CUSTOM)
+    status = serializers.CharField(max_length=32, allow_blank=True, required=False)
+    message = serializers.CharField(max_length=2000)
+    visible_to_resident = serializers.BooleanField(default=True, required=False)
+    is_custom = serializers.BooleanField(default=True, required=False)
+    metadata = serializers.JSONField(default=dict, required=False)
+
+
+class ChatReadSerializer(serializers.Serializer):
+    last_read_message_id = serializers.IntegerField(min_value=1)
+
+
+class ChatTypingSerializer(serializers.Serializer):
+    is_typing = serializers.BooleanField()
+
+
+class DepartmentChatThreadSerializer(serializers.ModelSerializer):
+    department_detail = DepartmentSerializer(source="department", read_only=True)
+    created_by = PublicUserSerializer(read_only=True)
+
+    class Meta:
+        model = DepartmentChatThread
+        fields = ("id", "department", "department_detail", "title", "created_by", "created_at", "updated_at")
+        read_only_fields = ("id", "created_by", "created_at", "updated_at")
+
+
+class DepartmentChatMessageSerializer(serializers.ModelSerializer):
+    sender = PublicUserSerializer(read_only=True)
+
+    class Meta:
+        model = DepartmentChatMessage
+        fields = ("id", "thread", "sender", "body", "created_at")
+        read_only_fields = ("id", "sender", "created_at")
+
+
 
 class ConcernMediaSerializer(serializers.ModelSerializer):
     preview_url = serializers.SerializerMethodField()
@@ -138,15 +332,13 @@ class ConcernMediaSerializer(serializers.ModelSerializer):
 
     def get_preview_url(self, obj):
         path = f"/api/concerns/media/{obj.pk}/preview/"
-        request = self.context.get("request")
-        return request.build_absolute_uri(path) if request else path
+        return path
 
     def get_raw_url(self, obj):
         if self.context.get("privacy_safe"):
             return ""
         path = f"/api/concerns/media/{obj.pk}/raw/"
-        request = self.context.get("request")
-        return request.build_absolute_uri(path) if request else path
+        return path
 
 
 class ConcernResolutionEvidenceSerializer(serializers.ModelSerializer):
@@ -225,6 +417,8 @@ class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
             "recommendation",
             "explanation",
             "model_version",
+            "flagged",
+            "flag_reasons",
             "possible_duplicate",
             "duplicate_similarity",
             "duplicate_distance_meters",
@@ -310,10 +504,11 @@ class ContentFlagReviewSerializer(serializers.Serializer):
 class ConcernAssignmentSerializer(serializers.ModelSerializer):
     assignee = PublicUserSerializer(read_only=True)
     assigned_by = PublicUserSerializer(read_only=True)
+    department = DepartmentSerializer(read_only=True)
 
     class Meta:
         model = ConcernAssignment
-        fields = ("id", "assignee", "assigned_by", "office", "note", "status", "created_at", "updated_at")
+        fields = ("id", "assignee", "assigned_by", "department", "office", "note", "status", "created_at", "updated_at")
 
 class ConcernClarificationSerializer(serializers.ModelSerializer):
     requested_by = PublicUserSerializer(read_only=True)
@@ -347,6 +542,7 @@ class ConcernOfficialRemarkSerializer(serializers.ModelSerializer):
 
 class ConcernAssignSerializer(serializers.Serializer):
     assignee_id = serializers.IntegerField(required=False, allow_null=True)
+    department_id = serializers.IntegerField(required=False, allow_null=True)
     office = serializers.CharField(max_length=120, allow_blank=True, required=False)
     note = serializers.CharField(max_length=255, allow_blank=True, required=False)
 
@@ -428,6 +624,10 @@ class ConcernSerializer(serializers.ModelSerializer):
     comments = serializers.SerializerMethodField()
     ai_assessment = ConcernAiAssessmentSerializer(read_only=True)
     assignments = serializers.SerializerMethodField()
+    category_ref = ConcernCategorySerializer(read_only=True)
+    assigned_department = DepartmentSerializer(read_only=True)
+    form_values = serializers.SerializerMethodField()
+    timeline = serializers.SerializerMethodField()
     clarifications = serializers.SerializerMethodField()
     appeals = serializers.SerializerMethodField()
     official_remarks = serializers.SerializerMethodField()
@@ -436,6 +636,9 @@ class ConcernSerializer(serializers.ModelSerializer):
     vote_count = serializers.IntegerField(read_only=True, default=0)
     comment_count = serializers.IntegerField(read_only=True, default=0)
     priority_score = serializers.IntegerField(read_only=True, default=0)
+    # Severity band, derived from the AI assessment. Exposed so clients can
+    # show it without recomputing, and so API ordering and UI ordering agree.
+    severity = serializers.CharField(read_only=True, default="low")
     user_vote = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
@@ -452,6 +655,10 @@ class ConcernSerializer(serializers.ModelSerializer):
             "title",
             "description",
             "category",
+            "category_ref",
+            "assigned_department",
+            "form_values",
+            "timeline",
             "status",
             "address",
             "latitude",
@@ -474,6 +681,7 @@ class ConcernSerializer(serializers.ModelSerializer):
             "vote_count",
             "comment_count",
             "priority_score",
+            "severity",
             "user_vote",
             "created_at",
             "updated_at",
@@ -561,6 +769,18 @@ class ConcernSerializer(serializers.ModelSerializer):
     def get_comments(self, obj):
         comments = obj.comments.filter(parent__isnull=True).select_related("author", "author__resident_profile")
         return ConcernCommentSerializer(comments, many=True, context=self.context).data
+
+    def get_form_values(self, obj):
+        if not self._can_view_case(obj):
+            return []
+        return ConcernFormValueSerializer(obj.form_values.select_related("field"), many=True, context=self.context).data
+
+    def get_timeline(self, obj):
+        queryset = obj.timeline_entries.select_related("actor", "actor__resident_profile")
+        is_official, is_owner, is_assignee = self._viewer_roles(obj)
+        if not (is_official or is_owner or is_assignee):
+            queryset = queryset.filter(visible_to_resident=True)
+        return ConcernTimelineEntrySerializer(queryset, many=True, context=self.context).data
 
     def get_assignments(self, obj):
         if not self._can_view_case(obj):
@@ -779,7 +999,9 @@ class ConcernCreateSerializer(serializers.Serializer):
     client_request_id = serializers.UUIDField(required=False)
     title = serializers.CharField(max_length=160)
     description = serializers.CharField(min_length=20, max_length=4000)
-    category = serializers.ChoiceField(choices=Concern.Category.choices)
+    category = serializers.ChoiceField(choices=Concern.Category.choices, required=False)
+    category_id = serializers.IntegerField(required=False)
+    dynamic_fields = serializers.JSONField(required=False, default=dict)
     visibility = serializers.ChoiceField(choices=Concern.Visibility.choices, default=Concern.Visibility.COMMUNITY)
     address = serializers.CharField(max_length=255)
     latitude = serializers.DecimalField(max_digits=10, decimal_places=7)
@@ -803,8 +1025,17 @@ class ConcernCreateSerializer(serializers.Serializer):
         return text[:255]
 
     def validate(self, attrs):
+        if not attrs.get("category") and not attrs.get("category_id"):
+            raise serializers.ValidationError({"category": "Choose a concern category."})
+        dynamic_fields = attrs.get("dynamic_fields")
+        if isinstance(dynamic_fields, str):
+            import json
+            try:
+                attrs["dynamic_fields"] = json.loads(dynamic_fields or "{}")
+            except ValueError as exc:
+                raise serializers.ValidationError({"dynamic_fields": "Enter valid JSON."}) from exc
         try:
-            validate_barangay_location(attrs.get("latitude"), attrs.get("longitude"))
+            attrs["_location_review"] = validate_report_location(attrs.get("latitude"), attrs.get("longitude"))
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc) from exc
         return attrs

@@ -1,11 +1,11 @@
 import {
-  CaretDown as ChevronDown,
-  CaretUp as ChevronUp,
+  ChevronDown,
+  ChevronUp,
   Check,
-  DotsSixVertical as GripVertical,
+  GripVertical,
   Pencil,
-  Trash,
-} from "@phosphor-icons/react"
+  Trash2 as Trash,
+} from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"

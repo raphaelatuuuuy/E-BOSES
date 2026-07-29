@@ -1,8 +1,8 @@
 import { type RefObject } from "react"
 import {
-  CloudArrowUp,
-  Trash,
-} from "@phosphor-icons/react"
+  CloudUpload as CloudArrowUp,
+  Trash2 as Trash,
+} from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"

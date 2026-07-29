@@ -62,7 +62,7 @@ function enhanceCanvas(ctx: CanvasRenderingContext2D, width: number, height: num
   for (let i = 0; i < data.length; i += 4) {
     for (let c = 0; c < 3; c += 1) {
       const v = data[i + c]!
-      let out = factor * (v - 128) + 128 + brightness
+      const out = factor * (v - 128) + 128 + brightness
       data[i + c] = Math.max(0, Math.min(255, out))
     }
   }

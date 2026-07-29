@@ -247,6 +247,16 @@ def acceptance_zone_result(latitude: float, longitude: float) -> dict[str, Any]:
     }
 
 
+def is_inside_barangay_boundary(latitude: float, longitude: float) -> bool:
+    lat = float(latitude)
+    lng = float(longitude)
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        return False
+    geometry = get_active_boundary_geometry()
+    in_poly = point_in_geojson(lng, lat, geometry)
+    return bool(in_poly is True or (in_poly is None and point_in_bbox(lat, lng, MARIKINA_HEIGHTS_BOUNDS)))
+
+
 def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
     """
     Returns acceptance classification for a pin:
@@ -903,6 +913,37 @@ def validate_barangay_location(latitude, longitude):
     result = classify_location(latitude, longitude)
     if not result.get("accepted"):
         raise ValidationError("Location must be inside Barangay Marikina Heights.")
+
+
+def validate_emergency_location(latitude, longitude):
+    if latitude is None or longitude is None:
+        raise ValidationError("Latitude and longitude must be provided together.")
+    if not is_inside_barangay_boundary(latitude, longitude):
+        raise ValidationError("Emergency location must be inside Barangay Marikina Heights.")
+    if not acceptance_zone_result(latitude, longitude).get("within"):
+        raise ValidationError("Emergency location must be inside the official acceptance zone.")
+
+
+def validate_report_location(latitude, longitude):
+    if latitude is None or longitude is None:
+        raise ValidationError("Latitude and longitude must be provided together.")
+    if not is_inside_barangay_boundary(latitude, longitude):
+        raise ValidationError("Location must be inside Barangay Marikina Heights.")
+    zone = acceptance_zone_result(latitude, longitude)
+    if zone.get("within"):
+        return {"action": "accept", "summary": "Required report checks passed. Advanced analysis is pending."}
+    action = zone.get("action") or dispatch_policy_payload().get("out_of_zone_action") or "review"
+    if action == "block":
+        raise ValidationError("Location must be inside the official acceptance zone.")
+    if action == "warn":
+        return {
+            "action": "warn",
+            "summary": "Location is inside the barangay but outside the official acceptance zone.",
+        }
+    return {
+        "action": "review",
+        "summary": "Location is outside the official acceptance zone and needs official review.",
+    }
 
 
 def map_context_payload() -> dict[str, Any]:

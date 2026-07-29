@@ -25,6 +25,7 @@ import {
   type EmergencyStatus,
 } from "@/features/dashboard/emergency-api"
 import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
+import { applyRouteMotion, routeLineStyle } from "@/features/dashboard/lib/route-line"
 import {
   AuthenticatedMediaImage,
   openAuthenticatedMedia,
@@ -48,15 +49,13 @@ const statusLabels: Record<EmergencyStatus, string> = {
   nearby: "Nearby",
   arrived: "On scene",
   resolved: "Resolved",
+  invalid: "Invalid",
   cancelled: "Cancelled",
+  false_alarm: "False alarm",
 }
 
-/** Unit aligned to SOS category (matches backend auto-route). */
-function unitForEmergencyType(type: string) {
-  if (type === "medical") return "BHW"
-  if (type === "crime") return "Barangay Tanod"
-  if (type === "fire" || type === "disaster") return "BDRRMO"
-  return "on-duty responder"
+function assignedUnit(alert: EmergencyAlert) {
+  return alert.current_assignment?.responder.responder_unit || "configured response unit"
 }
 
 /**
@@ -80,9 +79,9 @@ const PIPELINE: Array<{
     status: "routed",
     label: "Responder assigned",
     defaultNote: (alert) =>
-      `Auto-routed to the nearest on-duty ${unitForEmergencyType(alert.type)} for this ${alert.type} case.`,
+      `Auto-routed using the official dispatch rule for this ${alert.type.replace(/_/g, " ")} case.`,
     pendingHint: (alert) =>
-      `Finding nearest on-duty ${unitForEmergencyType(alert.type)} for this case…`,
+      `Finding the nearest on-duty responder from the configured response unit for this ${alert.type.replace(/_/g, " ")} case...`,
   },
   {
     status: "en_route",
@@ -147,20 +146,24 @@ function buildStatusTimeline(alert: EmergencyAlert): TimelineRow[] {
 
   let currentIdx = pipelineIndex(alert.status)
   if (alert.status === "cancelled") {
-    // Mark progress up to last non-cancelled event
-    const last = [...events].reverse().find((e) => e.status !== "cancelled")
+    // Mark progress up to last non-cancelled/non-false_alarm event
+    const last = [...events].reverse().find((e) => e.status !== "cancelled" && e.status !== "false_alarm")
     currentIdx = last ? Math.max(0, pipelineIndex(last.status)) : 0
   }
 
   const rows: TimelineRow[] = PIPELINE.map((step, index) => {
     const hit = byStatus.get(step.status)
-    let state: TimelineRow["state"] = "pending"
+    // No initialiser: the branch chain below ends in an `else`, so every path
+    // assigns and a default here would be dead.
+    let state: TimelineRow["state"]
 
     if (alert.status === "resolved") {
       state = "done"
     } else if (alert.status === "cancelled") {
       if (index <= Math.max(0, currentIdx)) state = "done"
-      else state = "pending"
+      else state = "pending";
+    } else if (alert.status === "false_alarm") {
+      state = "done"
     } else if (currentIdx < 0) {
       state = index === 0 ? "current" : "pending"
     } else if (index < currentIdx) {
@@ -222,18 +225,20 @@ function buildStatusTimeline(alert: EmergencyAlert): TimelineRow[] {
 }
 
 function statusText(alert: EmergencyAlert) {
-  const unit = unitForEmergencyType(alert.type)
+  const unit = assignedUnit(alert)
   if (alert.status === "submitted") {
-    return `Finding nearest on-duty ${unit} for this ${alert.type} case…`
+    return `Finding nearest on-duty responder from the configured unit for this ${alert.type.replace(/_/g, " ")} case.`
   }
   if (alert.status === "routed") {
-    return `Assigned to on-duty ${unit} for this ${alert.type} case.`
+    return `Assigned through the official dispatch rule. Unit: ${unit}.`
   }
   if (alert.status === "acknowledged") return "Responder routed; location updates will appear when travel begins."
   if (alert.status === "en_route") return "Responder is on the way."
   if (alert.status === "nearby") return "Responder is near your location."
   if (alert.status === "arrived") return "Responder has arrived."
   if (alert.status === "resolved") return "Emergency has been resolved."
+  if (alert.status === "false_alarm") return "This alert was marked as a false alarm."
+  if (alert.status === "invalid") return "This alert was marked invalid after review."
   return "Emergency was cancelled."
 }
 
@@ -241,11 +246,16 @@ function headline(alert: EmergencyAlert) {
   if (["en_route", "nearby", "arrived"].includes(alert.status)) return "Help is on the way"
   if (alert.status === "resolved") return "Emergency resolved"
   if (alert.status === "cancelled") return "Alert closed"
+  if (alert.status === "false_alarm") return "False alarm"
+  if (alert.status === "invalid") return "Invalid alert"
   return "Emergency active"
 }
-
 function formatTime(value: string) {
   return new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit" }).format(new Date(value))
+}
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(new Date(value))
 }
 
 function distanceMeters(from: { lat: number; lng: number }, to: { lat: number; lng: number }) {
@@ -296,11 +306,12 @@ function EmergencyTrackingMap({
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
   const leafletRef = useRef<typeof leaflet | null>(null)
-  const responderMarkerRef = useRef<leaflet.Marker | null>(null)
-  const routeRef = useRef<leaflet.Polyline | null>(null)
-  const accuracyRef = useRef<leaflet.Circle | null>(null)
+  const responderMarkerRefs = useRef<Map<number, leaflet.Marker>>(new Map())
+  const routeRefs = useRef<Map<number, leaflet.Polyline>>(new Map())
+  const accuracyRefs = useRef<Map<number, leaflet.Circle>>(new Map())
   const [mapReady, setMapReady] = useState(0)
-  const lastLocation = alert.current_assignment?.last_location
+  const isLive = activeStatuses.includes(alert.status)
+  const resident: leaflet.LatLngTuple = [Number(alert.latitude), Number(alert.longitude)]
 
   useEffect(() => {
     let cancelled = false
@@ -309,7 +320,6 @@ function EmergencyTrackingMap({
       const L = await import("leaflet")
       await import("leaflet/dist/leaflet.css")
       if (cancelled || !containerRef.current) return
-      const resident: leaflet.LatLngTuple = [Number(alert.latitude), Number(alert.longitude)]
       leafletRef.current = L
       const map = L.map(containerRef.current, {
         center: resident,
@@ -343,9 +353,12 @@ function EmergencyTrackingMap({
       mapRef.current?.remove()
       mapRef.current = null
       leafletRef.current = null
-      responderMarkerRef.current = null
-      routeRef.current = null
-      accuracyRef.current = null
+      responderMarkerRefs.current.forEach((marker) => marker.remove())
+      responderMarkerRefs.current.clear()
+      routeRefs.current.forEach((polyline) => polyline.remove())
+      routeRefs.current.clear()
+      accuracyRefs.current.forEach((circle) => circle.remove())
+      accuracyRefs.current.clear()
     }
   }, [alert.id, alert.latitude, alert.longitude])
 
@@ -357,47 +370,157 @@ function EmergencyTrackingMap({
   useEffect(() => {
     const map = mapRef.current
     const L = leafletRef.current
-    if (!map || !L || !lastLocation) return
-    const resident: leaflet.LatLngTuple = [Number(alert.latitude), Number(alert.longitude)]
-    const responder: leaflet.LatLngTuple = [
-      Number(lastLocation.latitude),
-      Number(lastLocation.longitude),
-    ]
-    const responderIcon = L.divIcon({
-      className: "",
-      html: `<div style="width:22px;height:22px;border-radius:999px;background:#07145f;border:3px solid white;box-shadow:0 4px 10px rgba(7,20,95,.35)"></div>`,
-      iconSize: [22, 22],
-      iconAnchor: [11, 11],
-    })
-    if (responderMarkerRef.current) responderMarkerRef.current.setLatLng(responder)
-    else responderMarkerRef.current = L.marker(responder, { icon: responderIcon }).addTo(map)
-    if (routeRef.current) routeRef.current.setLatLngs([responder, resident])
-    else
-      routeRef.current = L.polyline([responder, resident], {
-        color: "#ff6a1a",
-        opacity: 0.9,
-        weight: 4,
-      }).addTo(map)
-    const accuracy = Math.max(0, lastLocation.accuracy ?? 0)
-    if (accuracyRef.current) {
-      accuracyRef.current.setLatLng(responder)
-      accuracyRef.current.setRadius(accuracy)
-    } else if (accuracy > 0) {
-      accuracyRef.current = L.circle(responder, {
-        radius: accuracy,
-        color: "#07145f",
-        fillColor: "#07145f",
-        fillOpacity: 0.08,
-        weight: 1,
-      }).addTo(map)
+    if (!map || !L) return
+
+    const assignments = alert.assignments ?? []
+    const activeAssignments = isLive
+      ? assignments.filter((a) =>
+          ["assigned", "acknowledged", "en_route", "arrived", "assisting"].includes(a.status),
+        )
+      : assignments
+
+    for (const assignment of activeAssignments) {
+      const lastLocation = assignment.last_location
+      if (!lastLocation) continue
+      const responderLatLng: leaflet.LatLngTuple = [
+        Number(lastLocation.latitude),
+        Number(lastLocation.longitude),
+      ]
+      const responderIcon = L.divIcon({
+        className: "",
+        html: `<div style="width:22px;height:22px;border-radius:999px;background:#07145f;border:3px solid white;box-shadow:0 4px 10px rgba(7,20,95,.35)"></div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
+      })
+      const existingMarker = responderMarkerRefs.current.get(assignment.id)
+      if (existingMarker) existingMarker.setLatLng(responderLatLng)
+      else {
+        const marker = L.marker(responderLatLng, { icon: responderIcon }).addTo(map)
+        responderMarkerRefs.current.set(assignment.id, marker)
+      }
+
+      const routeGeometry = assignment.route?.geometry as { coordinates?: number[][] } | null
+      const routeCoords = routeGeometry?.coordinates?.map((c) => [c[1], c[0]] as leaflet.LatLngTuple) ?? []
+      const historyCoords = assignment.location_history?.map((ping) => [Number(ping.latitude), Number(ping.longitude)] as leaflet.LatLngTuple) ?? []
+      const lineCoords = routeCoords.length ? routeCoords : historyCoords.length > 1 ? historyCoords : []
+      const existingRoute = routeRefs.current.get(assignment.id)
+      // Road geometry when routing succeeded, otherwise the responder's own
+      // breadcrumb — the latter is an approximation and is drawn as one.
+      const routeStyle = routeLineStyle({
+        live: isLive,
+        approximate: routeCoords.length === 0,
+        weight: routeCoords.length ? 4 : 3,
+      })
+      if (lineCoords.length) {
+        if (existingRoute) {
+          existingRoute.setLatLngs(lineCoords)
+          // Restyle on update too: an incident resolving mid-session has to
+          // stop the crawl, not just freeze the coordinates.
+          existingRoute.setStyle(routeStyle)
+          applyRouteMotion(existingRoute, isLive)
+        } else {
+          const polyline = L.polyline(lineCoords, routeStyle).addTo(map)
+          applyRouteMotion(polyline, isLive)
+          routeRefs.current.set(assignment.id, polyline)
+        }
+      } else if (existingRoute) {
+        existingRoute.remove()
+        routeRefs.current.delete(assignment.id)
+      }
+
+      const accuracy = Math.max(0, lastLocation.accuracy ?? 0)
+      const existingAccuracy = accuracyRefs.current.get(assignment.id)
+      if (existingAccuracy) {
+        existingAccuracy.setLatLng(responderLatLng)
+        existingAccuracy.setRadius(accuracy)
+      } else if (accuracy > 0) {
+        const circle = L.circle(responderLatLng, {
+          radius: accuracy,
+          color: "#07145f",
+          fillColor: "#07145f",
+          fillOpacity: 0.08,
+          weight: 1,
+        }).addTo(map)
+        accuracyRefs.current.set(assignment.id, circle)
+      }
     }
-    map.fitBounds(L.latLngBounds([resident, responder]), { padding: [44, 44], maxZoom: 17 })
+
+    const routeGeometry = alert.route?.geometry as { coordinates?: number[][] } | null | undefined
+    const hasRouteGeometry = Boolean(routeGeometry?.coordinates?.length)
+
+    for (const assignment of activeAssignments) {
+      const lastLocation = assignment.last_location
+      if (!lastLocation) continue
+      const responderLatLng: leaflet.LatLngTuple = [
+        Number(lastLocation.latitude),
+        Number(lastLocation.longitude),
+      ]
+      const responderIcon = L.divIcon({
+        className: "",
+        html: `<div style="width:22px;height:22px;border-radius:999px;background:#07145f;border:3px solid white;box-shadow:0 4px 10px rgba(7,20,95,.35)"></div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
+      })
+      const existingMarker = responderMarkerRefs.current.get(assignment.id)
+      if (existingMarker) existingMarker.setLatLng(responderLatLng)
+      else {
+        const marker = L.marker(responderLatLng, { icon: responderIcon }).addTo(map)
+        responderMarkerRefs.current.set(assignment.id, marker)
+      }
+
+      const accuracy = Math.max(0, lastLocation.accuracy ?? 0)
+      const existingAccuracy = accuracyRefs.current.get(assignment.id)
+      if (existingAccuracy) {
+        existingAccuracy.setLatLng(responderLatLng)
+        existingAccuracy.setRadius(accuracy)
+      } else if (accuracy > 0) {
+        const circle = L.circle(responderLatLng, {
+          radius: accuracy,
+          color: "#07145f",
+          fillColor: "#07145f",
+          fillOpacity: 0.08,
+          weight: 1,
+        }).addTo(map)
+        accuracyRefs.current.set(assignment.id, circle)
+      }
+    }
+
+    if (hasRouteGeometry && routeGeometry) {
+      const coords = routeGeometry.coordinates?.map((c: number[]) => [c[1], c[0]] as leaflet.LatLngTuple)
+      if (coords && coords.length > 0) {
+        routeRefs.current.forEach((polyline, key) => {
+          if (key !== -1) {
+            polyline.remove()
+            routeRefs.current.delete(key)
+          }
+        })
+        const routePolyline = L.polyline(
+          coords,
+          routeLineStyle({ live: isLive, weight: isLive ? 4 : 3 }),
+        ).addTo(map)
+        applyRouteMotion(routePolyline, isLive)
+        routeRefs.current.set(-1, routePolyline)
+        const bounds = L.latLngBounds(coords)
+        map.fitBounds(bounds, { padding: [44, 44], maxZoom: 17 })
+      }
+    } else {
+      routeRefs.current.forEach((polyline, key) => {
+        if (key !== -1) {
+          polyline.remove()
+          routeRefs.current.delete(key)
+        }
+      })
+      if (!isLive && activeAssignments.length === 0) {
+        map.fitBounds(L.latLngBounds([resident]), { padding: [44, 44], maxZoom: 17 })
+      }
+    }
   }, [
+    alert.id,
     alert.latitude,
     alert.longitude,
-    lastLocation?.latitude,
-    lastLocation?.longitude,
-    lastLocation?.accuracy,
+    alert.assignments,
+    alert.route,
+    isLive,
     mapReady,
   ])
 
@@ -411,6 +534,7 @@ function DetailsColumn({
   locationIsStale,
   lastLocation,
   responder,
+  allAssignments,
   canAppeal,
   appealReason,
   setAppealReason,
@@ -434,6 +558,7 @@ function DetailsColumn({
       ? R
       : null
     : null
+  allAssignments: EmergencyAlert["assignments"]
   canAppeal: boolean
   appealReason: string
   setAppealReason: (v: string) => void
@@ -443,6 +568,7 @@ function DetailsColumn({
   chatOpen: boolean
   chatMessage: EmergencyChatMessage | null
 }) {
+  const isLive = activeStatuses.includes(alert.status)
   return (
     <div className="space-y-3 pb-2">
       <div className="rounded-xl border border-white/10 bg-white/10 p-4 text-white">
@@ -452,11 +578,13 @@ function DetailsColumn({
           </span>
           <div className="min-w-0">
             <p className="text-[14px] font-semibold">{statusText(alert)}</p>
-            <p className="mt-1 text-[12px] text-white/70">
-              {distance !== null
-                ? `${formatDistance(distance)} · ${formatEta(distance)}`
-                : alert.address || alert.barangay}
-            </p>
+<p className="mt-1 text-[12px] text-white/70">
+               {!isLive && alert.route?.geometry
+                 ? "Road-based route persisted from OSRM"
+                 : distance !== null
+                   ? `${formatDistance(distance)} · ${formatEta(distance)}`
+                   : alert.address || alert.barangay}
+             </p>
             <p className="mt-1 text-[11px] text-white/50">
               {connectionState === "live"
                 ? "Live updates"
@@ -469,29 +597,50 @@ function DetailsColumn({
         </div>
       </div>
 
-      <div className="rounded-xl border border-white/10 bg-white/10 p-4 text-white">
+<div className="rounded-xl border border-white/10 bg-white/10 p-4 text-white">
         <div className="flex items-start gap-3">
           <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-white">
             <ShieldCheckIcon className="size-4" />
           </span>
           <div className="min-w-0">
-            <p className="text-[14px] font-semibold">
-              {responder && typeof responder === "object" && "full_name" in responder
-                ? String((responder as { full_name: string }).full_name)
-                : "Responder not assigned yet"}
-            </p>
-            <p className="mt-1 text-[12px] text-white/70">
-              {responder && typeof responder === "object" && "role" in responder
-                ? `${String((responder as { role: string }).role).replace(/_/g, " ")}${
-                    lastLocation && typeof lastLocation === "object" && lastLocation && "created_at" in lastLocation
-                      ? ` · GPS ${formatTime(String((lastLocation as { created_at: string }).created_at))}`
-                      : ""
-                  }`
-                : "Barangay routing is pending."}
-            </p>
+            {isLive ? (
+              <>
+                <p className="text-[14px] font-semibold">
+                  {responder && typeof responder === "object" && "full_name" in responder
+                    ? String((responder as { full_name: string }).full_name)
+                    : "Responder not assigned yet"}
+                </p>
+                <p className="mt-1 text-[12px] text-white/70">
+                  {responder && typeof responder === "object" && "role" in responder
+                    ? `${String((responder as { role: string }).role).replace(/_/g, " ")}${
+                        lastLocation && typeof lastLocation === "object" && lastLocation && "created_at" in lastLocation
+                          ? ` · GPS ${formatTime(String((lastLocation as { created_at: string }).created_at))}`
+                          : ""
+                      }`
+                    : "Barangay routing is pending."}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-[14px] font-semibold">Assigned responders</p>
+                <p className="mt-1 text-[12px] text-white/70">
+                  {allAssignments && allAssignments.length > 0
+                    ? allAssignments
+                        .map((a) => {
+                          const name = a.responder && typeof a.responder === "object" && "full_name" in a.responder
+                            ? String((a.responder as { full_name: string }).full_name)
+                            : "Unknown"
+                          const hasGps = Boolean(a.last_location)
+                          return `${name}${hasGps ? " · GPS available" : " · No GPS"}`
+                        })
+                        .join(" · ")
+                    : "No responders assigned"}
+                </p>
+              </>
+            )}
           </div>
         </div>
-      </div>
+</div>
 
       <div className="rounded-xl border border-white/10 bg-white/10 p-4">
         <div className="flex items-center justify-between gap-2">
@@ -597,6 +746,7 @@ function DetailsColumn({
           disabled={alert.status === "cancelled" || alert.status === "resolved"}
           incomingMessage={chatMessage}
           realtime={false}
+          scrollable={false}
           participantHint={
             alert.assignments?.length
               ? `Group · you + ${alert.assignments.length} responder${alert.assignments.length === 1 ? "" : "s"}`
@@ -698,7 +848,9 @@ export function EmergencyTrackingSheet({
   const [cancelOpen, setCancelOpen] = useState(false)
   const [cancelReason, setCancelReason] = useState("")
   const [cancelBusy, setCancelBusy] = useState(false)
-  const [connectionState, setConnectionState] = useState<"connecting" | "live" | "degraded">("connecting")
+  const [connectionState, setConnectionState] = useState<"connecting" | "live" | "degraded">(
+    initialAlert && activeStatuses.includes(initialAlert.status) ? "connecting" : "live"
+  )
   const [chatMessage, setChatMessage] = useState<EmergencyChatMessage | null>(null)
 
   useEffect(() => {
@@ -806,8 +958,14 @@ export function EmergencyTrackingSheet({
 
   if (!open || !alert || typeof document === "undefined") return null
 
-  const responder = alert.current_assignment?.responder ?? null
-  const lastLocation = alert.current_assignment?.last_location ?? null
+  const isLive = activeStatuses.includes(alert.status)
+  const responder =
+    isLive
+      ? alert.current_assignment?.responder ?? null
+      : alert.assignments?.[0]?.responder ?? null
+  const lastLocation = isLive
+    ? alert.current_assignment?.last_location ?? null
+    : alert.assignments?.[0]?.last_location ?? null
   const distance =
     lastLocation
       ? distanceMeters(
@@ -821,7 +979,6 @@ export function EmergencyTrackingSheet({
   )
   const canAppeal = Boolean(alert && ["resolved", "cancelled"].includes(alert.status) && !pendingAppeal)
   const appealHistory = alert.appeals ?? []
-  const isLive = activeStatuses.includes(alert.status)
   const canCancel = ["submitted", "routed"].includes(alert.status)
 
   async function submitCancellation() {
@@ -862,35 +1019,56 @@ export function EmergencyTrackingSheet({
   const streetLine = alert.address?.trim() || alert.barangay || "Your pin"
   const mapOverlay = (
     <>
-      <div className="pointer-events-none absolute left-3 top-3 z-[500] flex max-w-[min(100%,280px)] flex-col gap-1.5">
-        {isLive ? (
-          <span className="w-fit rounded-full bg-red-600 px-2.5 py-1 text-[10px] font-bold tracking-wide text-white uppercase shadow-md">
-            Live · Alert
-          </span>
-        ) : null}
-        <span className="rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-semibold text-neutral-900 shadow-md">
-          You · {streetLine}
+<div className="pointer-events-none absolute left-3 top-3 z-[500] flex max-w-[min(100%,280px)] flex-col gap-1.5">
+      {isLive ? (
+        <span className="w-fit rounded-full bg-red-600 px-2.5 py-1 text-[10px] font-bold tracking-wide text-white uppercase shadow-md">
+          Live · Alert
         </span>
-        {distance !== null ? (
-          <span className="w-fit rounded-full bg-[#07145f] px-2.5 py-1 text-[11px] font-semibold text-white shadow-md">
-            {formatDistance(distance)} · {formatEta(distance)}
-          </span>
-        ) : null}
-      </div>
-      <div className="pointer-events-none absolute bottom-3 left-3 right-3 z-[500] flex flex-wrap gap-1.5">
-        <span className="rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-semibold text-neutral-800 shadow-md">
-          {connectionState === "live" ? "Live GPS" : connectionState === "connecting" ? "Connecting" : "Polling"}
+      ) : alert.status === "resolved" ? (
+        <span className="w-fit rounded-full bg-emerald-600 px-2.5 py-1 text-[10px] font-bold tracking-wide text-white uppercase shadow-md">
+          Resolved
         </span>
-        {lastLocation ? (
+      ) : alert.status === "cancelled" ? (
+        <span className="w-fit rounded-full bg-neutral-600 px-2.5 py-1 text-[10px] font-bold tracking-wide text-white uppercase shadow-md">
+          Closed
+        </span>
+      ) : null}
+      {!isLive && alert.route?.geometry ? (
+        <span className="w-fit rounded-full bg-neutral-400/80 px-2.5 py-1 text-[11px] font-semibold text-neutral-800 shadow-md">
+          Route taken
+        </span>
+      ) : distance !== null && !isLive ? (
+        <span className="w-fit rounded-full bg-[#07145f] px-2.5 py-1 text-[11px] font-semibold text-white shadow-md">
+          {formatDistance(distance)} · {formatEta(distance)}
+        </span>
+      ) : null}
+    </div>
+    <div className="pointer-events-none absolute right-3 top-3 z-[500]">
+      <span className="rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-semibold text-neutral-900 shadow-md">
+        You · {streetLine}
+      </span>
+    </div>
+<div className="pointer-events-none absolute bottom-3 left-3 right-3 z-[500] flex flex-wrap gap-1.5">
+        {isLive && (
+          <span className="rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-semibold text-neutral-800 shadow-md">
+            {connectionState === "live"
+              ? "Live GPS"
+              : connectionState === "connecting"
+                ? "Connecting"
+                : "Polling"}
+          </span>
+        )}
+        {isLive && lastLocation ? (
           <span className="rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-semibold text-neutral-800 shadow-md">
             Responder {formatTime(lastLocation.created_at)}
             {locationIsStale ? " · stale" : ""}
           </span>
-        ) : (
-          <span className="rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-semibold text-neutral-600 shadow-md">
-            Waiting for responder GPS
+        ) : null}
+        {!isLive && lastLocation ? (
+          <span className="rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-semibold text-neutral-800 shadow-md">
+            Last GPS {formatDate(lastLocation.created_at)} {formatTime(lastLocation.created_at)}
           </span>
-        )}
+        ) : null}
       </div>
     </>
   )
@@ -903,6 +1081,7 @@ export function EmergencyTrackingSheet({
       locationIsStale={locationIsStale}
       lastLocation={lastLocation}
       responder={responder}
+      allAssignments={alert.assignments ?? []}
       canAppeal={canAppeal}
       appealReason={appealReason}
       setAppealReason={setAppealReason}
@@ -948,17 +1127,7 @@ export function EmergencyTrackingSheet({
         {/* Red urgency header */}
         <header className="flex shrink-0 items-center gap-2 bg-gradient-to-r from-[#c41212] via-[#e11d2e] to-[#b91c1c] px-3 py-3 sm:px-4">
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              {isLive ? (
-                <span className="rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-bold tracking-wide uppercase">
-                  Live
-                </span>
-              ) : null}
-              <h2 className="truncate text-[15px] font-bold sm:text-base">{headline(alert)}</h2>
-            </div>
-            <p className="mt-0.5 truncate text-[12px] text-white/85">
-              {alert.public_id || `Alert #${alert.id}`} · {statusLabels[alert.status]}
-            </p>
+            <h2 className="truncate text-[15px] font-bold sm:text-base">{headline(alert)}</h2>
           </div>
           {isDesktop ? (
             <button

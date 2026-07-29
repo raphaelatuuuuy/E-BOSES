@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
+import { toast } from "sonner"
 import {
   AlertTriangleIcon,
+  ArchiveIcon,
   BellIcon,
   ChevronLeftIcon,
   FileTextIcon,
   MegaphoneIcon,
+  Trash2Icon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -22,9 +25,8 @@ import {
   getBrowserNotificationState,
   type BrowserNotificationState,
 } from "@/features/dashboard/browser-notifications"
-import { appInstalledStandalone } from "@/lib/pwa"
 
-type Filter = "all" | "unread" | "reports" | "emergencies" | "announcements"
+type Filter = "all" | "unread" | "reports" | "emergencies" | "announcements" | "archived"
 
 const filters: Array<{ value: Filter; label: string }> = [
   { value: "all", label: "All" },
@@ -32,9 +34,13 @@ const filters: Array<{ value: Filter; label: string }> = [
   { value: "reports", label: "Reports" },
   { value: "emergencies", label: "Emergencies" },
   { value: "announcements", label: "Announcements" },
+  { value: "archived", label: "Archived" },
 ]
 
+const MAX_VISIBLE_NOTIFICATIONS = 50
+
 function typeGroup(item: NotificationItem): Exclude<Filter, "all" | "unread"> {
+  if (item.is_archived) return "archived"
   if (item.category === "announcement") return "announcements"
   if (item.category === "emergency") return "emergencies"
   if (item.emergency_id || item.type.startsWith("emergency") || item.type === "witness_alert") {
@@ -73,7 +79,7 @@ function relativeTime(value: string) {
 function initialNotificationFilter(): Filter {
   if (typeof window === "undefined") return "all"
   const type = new URLSearchParams(window.location.search).get("type")
-  if (type === "announcements" || type === "emergencies" || type === "reports" || type === "unread") return type
+  if (type === "announcements" || type === "emergencies" || type === "reports" || type === "unread" || type === "archived") return type
   return "all"
 }
 
@@ -93,10 +99,6 @@ export default function NotificationsPage() {
     subscribed: false,
   })
   const [browserBusy, setBrowserBusy] = useState(false)
-  const [testPushBusy, setTestPushBusy] = useState(false)
-  const [testPushResult, setTestPushResult] = useState<string | null>(null)
-  const [installPrompt, setInstallPrompt] = useState<Event | null>(null)
-  const [installedStandalone, setInstalledStandalone] = useState(appInstalledStandalone())
 
   useEffect(() => {
     // Retry a few times — the SW may still be activating on fresh page load.
@@ -110,20 +112,8 @@ export default function NotificationsPage() {
       }
       setBrowserState(await getBrowserNotificationState().catch(() => browserState))
     })()
-    return () => { cancelled = true }
-    function onBeforeInstallPrompt(event: Event) {
-      event.preventDefault()
-      setInstallPrompt(event)
-    }
-    function onInstalled() {
-      setInstalledStandalone(true)
-      setInstallPrompt(null)
-    }
-    window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt)
-    window.addEventListener("appinstalled", onInstalled)
     return () => {
-      window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt)
-      window.removeEventListener("appinstalled", onInstalled)
+      cancelled = true
     }
   }, [])
 
@@ -137,14 +127,21 @@ export default function NotificationsPage() {
 
   const visible = useMemo(
     () =>
-      allNotifications.filter((item) => {
-        if (filter === "all") return true
-        if (filter === "unread") return !item.is_read
-        return typeGroup(item) === filter
-      }),
+      allNotifications
+        .filter((item) => {
+          if (filter === "all") return !item.is_archived
+          if (filter === "unread") return !item.is_read && !item.is_archived
+          if (filter === "archived") return item.is_archived
+          return typeGroup(item) === filter
+        })
+        .slice(0, MAX_VISIBLE_NOTIFICATIONS),
     [filter, allNotifications],
   )
 
+  const hasArchivableReadNotifications = useMemo(
+    () => allNotifications.some((item) => item.is_read && !item.is_archived),
+    [allNotifications],
+  )
   async function openNotification(item: NotificationItem) {
     if (!item.is_read) {
       await markAsRead(item.id)
@@ -153,14 +150,16 @@ export default function NotificationsPage() {
       )
     }
     if (item.safety_limited || item.type === "witness_alert") return
-    if (item.action_url) {
-      navigate(item.action_url)
+    if (item.emergency_id) {
+      window.dispatchEvent(
+        new CustomEvent("eboses:open-emergency-tracking", {
+          detail: { emergencyId: item.emergency_id },
+        }),
+      )
       return
     }
-    if (item.emergency_id) {
-      navigate(
-        `/dashboard/emergency-history?alert=${item.emergency_public_id || item.emergency_id}`,
-      )
+    if (item.action_url) {
+      navigate(item.action_url)
       return
     }
     if (item.concern_id) {
@@ -184,80 +183,60 @@ export default function NotificationsPage() {
     }
   }
 
+  async function archiveNotification(id: number) {
+    try {
+      await apiRequest(`/notifications/${id}/archive/`, { method: "PATCH" })
+      await refresh()
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function unarchiveNotification(id: number) {
+    try {
+      await apiRequest(`/notifications/${id}/archive/`, { method: "PATCH" })
+      await refresh()
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function deleteNotification(id: number) {
+    if (!window.confirm("Are you sure you want to delete this notification?")) return
+    try {
+      await apiRequest(`/notifications/${id}/`, { method: "DELETE" })
+      await refresh()
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function archiveAllRead() {
+    try {
+      await apiRequest("/notifications/archive-all/", { method: "POST" })
+      await refresh()
+    } catch {
+      /* ignore */
+    }
+  }
+
   async function toggleBrowserPush() {
     setBrowserBusy(true)
-    setTestPushResult(null)
     try {
       if (browserState.subscribed) await disableBrowserNotifications()
       else await enableBrowserNotifications()
       const nextState = await getBrowserNotificationState()
       setBrowserState(nextState)
-      setTestPushResult(
-        nextState.subscribed
-          ? "Push enabled for this browser. Click Send test to verify closed-tab delivery."
-          : "Push disabled for this browser.",
-      )
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not update browser push."
-      setTestPushResult(message)
+      // The message was previously computed and then discarded, so enabling
+      // push could fail — blocked permission, unsupported browser, expired
+      // subscription — and the toggle would just quietly snap back with no
+      // explanation. Surfacing it is the whole point of catching it.
+      toast.error(error instanceof Error ? error.message : "Could not update browser push.")
       setBrowserState(await getBrowserNotificationState().catch(() => browserState))
     } finally {
       setBrowserBusy(false)
     }
-  }
-
-  async function sendTestPush() {
-    setTestPushBusy(true)
-    setTestPushResult(null)
-    try {
-      const result = await apiRequest<{
-        push_result?: {
-          status?: string
-          failure_count?: number
-          failure_details?: Array<{ status_code?: number | null; reason?: string; message?: string; type?: string; push_service?: string }>
-          push_services?: string[]
-          config?: {
-            key_pair_valid?: boolean | null
-            subject_valid?: boolean
-          }
-        }
-        active_subscriptions?: number
-      }>("/notifications/browser-push/test/", { method: "POST" })
-      const status = result.push_result?.status || "unknown"
-      const subscriptions = result.active_subscriptions ?? 0
-      const failures = result.push_result?.failure_count ?? 0
-      const failure = result.push_result?.failure_details?.[0]
-      const pushService = failure?.push_service || result.push_result?.push_services?.[0] || ""
-      const failureText = failure
-        ? ` ${failure.status_code ? `${failure.status_code} ` : ""}${failure.reason || failure.type || ""}${pushService ? ` · ${pushService}` : ""}${failure.message ? ` — ${failure.message}` : ""}`.trim()
-        : ""
-      const configText =
-        result.push_result?.config?.key_pair_valid === false
-          ? " VAPID key pair is invalid/mismatched."
-          : result.push_result?.config?.subject_valid === false
-            ? " VAPID subject is invalid."
-            : ""
-      setTestPushResult(
-        status === "delivered" || status === "partial"
-          ? `Server sent push: ${status}${failures ? ` (${failures} failed)` : ""}. If no desktop popup appears, check Windows/browser notification settings.`
-          : `Push not shown because server returned: ${status}${failureText ? ` (${failureText})` : ""}. Active subscriptions: ${subscriptions}.${configText}`,
-      )
-      setBrowserState(await getBrowserNotificationState())
-      await refresh()
-    } catch (error) {
-      setTestPushResult(error instanceof Error ? error.message : "Could not send test notification.")
-    } finally {
-      setTestPushBusy(false)
-    }
-  }
-
-  async function installApp() {
-    const prompt = installPrompt as (Event & { prompt?: () => Promise<void>; userChoice?: Promise<{ outcome: string }> }) | null
-    if (!prompt?.prompt) return
-    await prompt.prompt()
-    await prompt.userChoice?.catch(() => null)
-    setInstalledStandalone(appInstalledStandalone())
-    setInstallPrompt(null)
   }
 
   function goBack() {
@@ -293,34 +272,42 @@ export default function NotificationsPage() {
                 Notifications
               </h1>
               {unreadCount ? (
-                <span className="rounded-full bg-[#ff6a1a] px-2 py-0.5 text-xs font-bold text-white">
+                <span className="rounded-full bg-brand-orange px-2 py-0.5 text-xs font-bold text-white">
                   {unreadCount}
                 </span>
               ) : null}
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                void markAllAsRead().then(() => {
-                  setOlderNotifications((current) =>
+              <button
+                type="button"
+                onClick={() => {
+                  void markAllAsRead().then(() => {
+                    setOlderNotifications((current) =>
                     current.map((item) => ({ ...item, is_read: true })),
                   )
-                })
-              }}
-              disabled={!unreadCount}
-              className="inline-flex min-h-10 shrink-0 items-center rounded-lg px-2 text-sm font-semibold text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900 disabled:cursor-not-allowed disabled:opacity-40 sm:px-3"
-            >
-              Mark all read
-            </button>
+                  })
+                }}
+                disabled={!unreadCount}
+                className="inline-flex min-h-11 shrink-0 items-center rounded-lg px-2 text-sm font-semibold text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900 disabled:cursor-not-allowed disabled:opacity-40 sm:px-3"
+              >
+                Mark all read
+              </button>
+              <button
+                type="button"
+                onClick={() => void archiveAllRead()}
+                disabled={!hasArchivableReadNotifications}
+                className="inline-flex min-h-11 shrink-0 items-center rounded-lg px-2 text-sm font-semibold text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900 disabled:cursor-not-allowed disabled:opacity-40 sm:px-3"
+              >
+                Archive all read
+              </button>
           </header>
 
           <div className="w-full" aria-label="Notification filters">
             <div className="mb-2 rounded-2xl border border-[#ffd8c2] bg-[#fff7f2] p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <p className="text-[15px] font-bold text-neutral-900">Install E-Boses and enable background alerts</p>
+                <div className="min-w-0 pb-4 sm:pb-5">
+                  <p className="text-[15px] font-bold text-neutral-900">Stay connected to alerts</p>
                   <p className="mt-1 text-[13px] leading-5 text-neutral-600">
-                    Push notifications work even when the browser tab is closed after this device is subscribed.
+                    Enable push to get timely updates, even when the tab is closed.
                   </p>
                   {!browserState.serverConfigured ? (
                     <p className="mt-1 text-[12px] font-semibold text-amber-700">Server Web Push keys are not configured yet.</p>
@@ -341,33 +328,12 @@ export default function NotificationsPage() {
                     type="button"
                     disabled={browserBusy || !browserState.supported || browserState.permission === "denied" || !browserState.serverConfigured}
                     onClick={() => void toggleBrowserPush()}
-                    className="h-10 rounded-full bg-[#ff6a1a] px-4 text-[13px] font-bold text-white hover:bg-[#e85f17] disabled:cursor-not-allowed disabled:opacity-50"
+                    className="h-11 rounded-full bg-brand-orange px-4 text-[13px] font-bold text-white hover:bg-[#e85f17] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {browserBusy ? "Working" : browserState.subscribed ? "Disable push" : "Enable push"}
                   </button>
-                  <button
-                    type="button"
-                    disabled={testPushBusy || !browserState.supported || browserState.permission !== "granted" || !browserState.serverConfigured || !browserState.subscribed}
-                    onClick={() => void sendTestPush()}
-                    className="h-10 rounded-full border border-[#ff6a1a] bg-white px-4 text-[13px] font-bold text-[#ff6a1a] hover:bg-[#fff0e8] disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400 disabled:opacity-60"
-                  >
-                    {testPushBusy ? "Sending" : "Send test"}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={installedStandalone || !installPrompt}
-                    onClick={() => void installApp()}
-                    className="h-10 rounded-full border border-neutral-300 bg-white px-4 text-[13px] font-bold text-neutral-800 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {installedStandalone ? "Installed" : installPrompt ? "Install app" : "Add to home screen"}
-                  </button>
                 </div>
               </div>
-              {testPushResult ? (
-                <p className="mt-3 rounded-xl border border-[#ffd8c2] bg-white px-3 py-2 text-[12px] font-semibold leading-5 text-neutral-700">
-                  {testPushResult}
-                </p>
-              ) : null}
             </div>
             <div className="scrollbar-hide flex w-full gap-2 overflow-x-auto overscroll-x-contain py-3 [-webkit-overflow-scrolling:touch]">
               {filters.map((item) => (
@@ -377,9 +343,9 @@ export default function NotificationsPage() {
                   onClick={() => setFilter(item.value)}
                   aria-pressed={filter === item.value}
                   className={cn(
-                    "min-h-9 shrink-0 rounded-full border px-3.5 text-[13px] font-semibold transition-colors",
+                    "min-h-11 shrink-0 rounded-full border px-3.5 text-[13px] font-semibold transition-colors",
                     filter === item.value
-                      ? "border-[#ff6a1a] bg-[#ff6a1a] text-white"
+                      ? "border-brand-orange bg-brand-orange text-white"
                       : "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:bg-neutral-50",
                   )}
                 >
@@ -399,12 +365,11 @@ export default function NotificationsPage() {
             ) : visible.length ? (
               <div className="divide-y divide-neutral-100">
                 {visible.map((item) => (
-                  <button
+                  <div
                     key={item.id}
-                    type="button"
                     onClick={() => void openNotification(item)}
                     className={cn(
-                      "flex w-full gap-3.5 px-4 py-4 text-left transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#ff6a1a]",
+                      "flex w-full gap-3.5 px-4 py-4 text-left transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-orange",
                       !item.is_read && "bg-[#fff8f3]",
                     )}
                   >
@@ -449,23 +414,64 @@ export default function NotificationsPage() {
                             {item.safety_guidance || "Stay clear of the area and do not intervene."}
                           </span>
                           <span className="mt-1.5 block text-[11px] leading-4 text-red-800/70">
-                            For privacy, the reporter’s identity, exact location, and media are not shared.
+                            For privacy, the reporter's identity, exact location, and media are not shared.
                           </span>
                         </span>
                       ) : null}
                       {item.action_label && !item.safety_limited ? (
-                        <span className="mt-2 block text-[12px] font-bold text-[#ff6a1a]">
+                        <span className="mt-2 block text-[12px] font-bold text-brand-orange">
                           {item.action_label}
                         </span>
                       ) : null}
                     </span>
                     {!item.is_read ? (
                       <span
-                        className="mt-2 size-2 shrink-0 rounded-full bg-[#ff6a1a]"
+                        className="mt-2 size-2 shrink-0 rounded-full bg-brand-orange"
                         aria-label="Unread"
                       />
                     ) : null}
-                  </button>
+                    <div className="flex shrink-0 flex-col gap-1">
+                      {item.is_archived ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void unarchiveNotification(item.id)
+                          }}
+                          className="flex size-8 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
+                          aria-label="Unarchive notification"
+                          title="Unarchive"
+                        >
+                          <ArchiveIcon className="size-4" />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void archiveNotification(item.id)
+                          }}
+                          className="flex size-8 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
+                          aria-label="Archive notification"
+                          title="Archive"
+                        >
+                          <ArchiveIcon className="size-4" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void deleteNotification(item.id)
+                        }}
+                        className="flex size-8 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-red-600"
+                        aria-label="Delete notification"
+                        title="Delete"
+                      >
+                        <Trash2Icon className="size-4" />
+                      </button>
+                     </div>
+                  </div>
                 ))}
                 {hasMore ? (
                   <div className="flex justify-center px-4 py-4">
@@ -473,7 +479,7 @@ export default function NotificationsPage() {
                       type="button"
                       onClick={() => void loadMore()}
                       disabled={loadingMore}
-                      className="min-h-10 rounded-full border border-neutral-200 px-5 text-[13px] font-semibold text-neutral-700 transition-colors hover:border-neutral-300 hover:bg-neutral-50 disabled:opacity-60"
+                      className="min-h-11 rounded-full border border-neutral-200 px-5 text-[13px] font-semibold text-neutral-700 transition-colors hover:border-neutral-300 hover:bg-neutral-50 disabled:opacity-60"
                     >
                       {loadingMore ? "Loading…" : "Load older notifications"}
                     </button>

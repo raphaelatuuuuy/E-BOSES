@@ -100,6 +100,7 @@ class NotificationSerializer(serializers.ModelSerializer):
             "title",
             "body",
             "is_read",
+            "is_archived",
             "created_at",
             "concern_id",
             "concern_public_id",

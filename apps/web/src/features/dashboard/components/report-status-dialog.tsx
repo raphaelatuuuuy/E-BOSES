@@ -16,6 +16,7 @@ import {
   DialogFooter,
   DialogTitle,
 } from "@/features/dashboard/components/dialog"
+import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
 import type { Concern, ConcernStatus, ConcernStatusEvent, PublicUser } from "@/features/dashboard/api"
 
 export type StatusDialogMode = "submitted" | "assigned" | "rejected" | "resolved"
@@ -436,7 +437,7 @@ export function ReportStatusDialog({
             <div className="mt-3 grid grid-cols-2 gap-2.5">
               {report.media.map((media) =>
                 media.mime_type?.startsWith("image/") ? (
-                  <img
+                  <AuthenticatedMediaImage
                     key={media.id}
                     src={media.preview_url}
                     alt={media.original_filename}

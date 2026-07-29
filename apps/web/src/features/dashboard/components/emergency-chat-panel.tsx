@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Loader2Icon, PaperclipIcon, SendIcon, UsersIcon, XIcon } from "lucide-react"
+import { DownloadIcon, Loader2Icon, PaperclipIcon, SendIcon, UsersIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Bubble, BubbleContent } from "@/components/ui/bubble"
+import { Message, MessageAvatar, MessageContent, MessageFooter } from "@/components/ui/message"
 import { websocketTicket, websocketUrl } from "@/lib/api"
 import { useAuthSession } from "@/features/auth/auth-session"
-import type { PublicUser } from "@/features/dashboard/api"
-import { FeedUserAvatar } from "@/features/dashboard/components/feed-post-card"
+import { checkConcernMedia, type PublicUser } from "@/features/dashboard/api"
 import { AuthenticatedMediaImage, openAuthenticatedMedia } from "@/features/dashboard/components/authenticated-media"
 import {
   listEmergencyChat,
@@ -25,7 +27,6 @@ function unitLabel(unit?: string) {
   if (unit === "tanod") return "Tanod"
   if (unit === "bhw") return "BHW"
   if (unit === "bdrrmo") return "BDRRMO"
-  if (unit === "other") return "Responder"
   return ""
 }
 
@@ -38,29 +39,35 @@ function roleLabel(user?: PublicUser | null) {
   if (user.role === "barangay_official") return "Official"
   return user.role?.replace(/_/g, " ") || ""
 }
+function initialsFor(user?: PublicUser | null) {
+  return (user?.initials || user?.full_name?.split(/\s+/).map((part) => part[0]).join("") || "U").slice(0, 2).toUpperCase()
+}
 
 export function EmergencyChatPanel({
-  alertId,
-  open,
-  disabled,
-  incomingMessage,
-  participantHint,
-  realtime = true,
-  theme = "dark",
-  className,
-}: {
-  alertId: number
-  open: boolean
-  /** When true, hide input (e.g. cancelled) */
-  disabled?: boolean
-  /** Real-time message from websocket parent */
-  incomingMessage?: EmergencyChatMessage | null
-  /** e.g. "2 responders in this room" */
-  participantHint?: string
-  /** Disable when a parent tracking socket already supplies incomingMessage. */
-  realtime?: boolean
-  /** dark = resident SOS dock; light = responder/official ops */
-  theme?: "dark" | "light"
+   alertId,
+   open,
+   disabled,
+   incomingMessage,
+   participantHint,
+   realtime = true,
+   theme = "dark",
+   scrollable = true,
+   className,
+ }: {
+   alertId: number
+   open: boolean
+   /** When true, hide input (e.g. cancelled) */
+   disabled?: boolean
+   /** Real-time message from websocket parent */
+   incomingMessage?: EmergencyChatMessage | null
+   /** e.g. "2 responders in this room" */
+   participantHint?: string
+   /** Disable when a parent tracking socket already supplies incomingMessage. */
+   realtime?: boolean
+   /** dark = resident SOS dock; light = responder/official ops */
+   theme?: "dark" | "light"
+   /** When false, remove scroll constraints (for SOS dialog context). */
+  scrollable?: boolean
   className?: string
 }) {
   const { user } = useAuthSession()
@@ -71,6 +78,7 @@ export function EmergencyChatPanel({
   const [connectionState, setConnectionState] = useState<"connecting" | "live" | "polling">("connecting")
   const [sending, setSending] = useState(false)
   const [attachment, setAttachment] = useState<File | null>(null)
+  const [previewMedia, setPreviewMedia] = useState<{ src: string; filename: string } | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const isDark = theme === "dark"
   const userId = user?.id
@@ -220,10 +228,30 @@ export function EmergencyChatPanel({
     }
   }
 
+  async function chooseAttachment(file: File | null) {
+    if (!file) return
+    if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
+      toast.error("Attach an image or video only.")
+      return
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      toast.error("Media must be 25 MB or smaller.")
+      return
+    }
+    try {
+      const checkData = new FormData()
+      checkData.append("media", file)
+      await checkConcernMedia(checkData)
+      setAttachment(file)
+    } catch (error) {
+      setAttachment(null)
+      toast.error(error instanceof Error ? error.message : "This media failed authenticity checks and cannot be sent.")
+    }
+  }
   return (
     <div
       className={cn(
-        "flex min-h-[280px] flex-col rounded-xl border",
+        "flex max-h-[400px] flex-col overflow-hidden rounded-xl border",
         isDark ? "border-white/10 bg-white/10" : "border-slate-200 bg-white",
         className,
       )}
@@ -264,7 +292,7 @@ export function EmergencyChatPanel({
         ) : null}
       </div>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
+       <div className={cn("min-h-0 flex-1 space-y-3 px-3 py-3", scrollable && "overflow-y-auto max-h-[400px]")}>
         {loadError && messages.length === 0 && !loading ? (
           <div className="py-6 text-center">
             <p className={cn("text-[12px]", isDark ? "text-red-200" : "text-red-600")}>{loadError}</p>
@@ -286,86 +314,67 @@ export function EmergencyChatPanel({
           const mine = isMine(msg)
           const name = msg.sender?.full_name || "User"
           const role = roleLabel(msg.sender)
+          const footer = [mine ? "You" : name, !mine && role ? role : "", formatChatTime(msg.created_at)].filter(Boolean).join(" · ")
+          if (!msg.body && msg.attachment && msg.attachment.authenticity !== "clear") return null
           return (
-            <div
-              key={msg.id}
-              className={cn("flex gap-2", mine ? "flex-row-reverse" : "flex-row")}
-            >
-              <FeedUserAvatar user={msg.sender} size="sm" className="!size-8 !text-[13px]" />
-              <div className={cn("min-w-0 max-w-[78%]", mine ? "items-end" : "items-start")}>
-                <div
-                  className={cn(
-                    "mb-1 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 px-0.5",
-                    mine ? "justify-end" : "justify-start",
-                  )}
+            <Message key={msg.id} align={mine ? "end" : "start"}>
+              <MessageAvatar>
+                <Avatar className={isDark ? "bg-white/15" : undefined}>                  <AvatarFallback className={isDark ? "bg-white/20 text-white" : undefined}>{initialsFor(msg.sender)}</AvatarFallback>
+                </Avatar>
+              </MessageAvatar>
+              <MessageContent className={mine ? "items-end" : "items-start"}>
+                <Bubble
+                  variant={mine ? "default" : "muted"}
+                  className={!mine && isDark ? "border-white/10 bg-white text-neutral-900" : undefined}
                 >
-                  <span
-                    className={cn(
-                      "text-[12px] font-semibold",
-                      isDark ? "text-white" : "text-[#07145f]",
-                    )}
-                  >
-                    {mine ? "You" : name}
-                  </span>
-                  {role && !mine ? (
-                    <span
-                      className={cn(
-                        "rounded-full px-1.5 py-px text-[10px] font-medium",
-                        isDark
-                          ? "bg-white/15 text-white/70"
-                          : "bg-[#eaf0ff] text-[#07145f]",
-                      )}
-                    >
-                      {role}
-                    </span>
-                  ) : null}
-                  <span
-                    className={cn(
-                      "text-[10px] tabular-nums",
-                      isDark ? "text-white/40" : "text-slate-400",
-                    )}
-                  >
-                    {formatChatTime(msg.created_at)}
-                  </span>
-                </div>
-                <div
-                  className={cn(
-                    "rounded-2xl px-3 py-2 text-[13px] leading-5 shadow-sm",
-                    mine
-                      ? "rounded-br-md bg-[#ff6a1a] text-white"
-                      : isDark
-                        ? "rounded-bl-md bg-white text-neutral-900"
-                        : "rounded-bl-md border border-slate-100 bg-[#f4f6fb] text-[#1a2340]",
-                  )}
-                >
-                  {msg.body ? <p>{msg.body}</p> : null}
-                  {msg.attachment ? (
-                    <div className="mt-2 space-y-1">
-                      {msg.attachment.media_type === "image" && msg.attachment.preview_url ? (
-                        <AuthenticatedMediaImage
-                          src={msg.attachment.preview_url}
-                          alt={msg.attachment.original_filename}
-                          className="max-h-40 max-w-full rounded-lg object-cover"
-                        />
-                      ) : (
-                        <button
-                          type="button"
-                          className="text-left text-[12px] underline"
-                          onClick={() => void openAuthenticatedMedia(msg.attachment!.raw_url, msg.attachment!.original_filename)}
-                        >
-                          Open {msg.attachment.original_filename}
-                        </button>
-                      )}
-                      <p className="text-[10px] opacity-70">Media review: {msg.attachment.authenticity}</p>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </div>
+                  <BubbleContent>
+                    {msg.body ? <p>{msg.body}</p> : null}
+                    {msg.attachment && msg.attachment.authenticity === "clear" ? (
+                      <div className="mt-2 space-y-1">
+                        {msg.attachment.media_type === "image" && msg.attachment.preview_url ? (
+                          <button
+                            type="button"
+                            onClick={() => setPreviewMedia({ src: msg.attachment!.preview_url || msg.attachment!.raw_url, filename: msg.attachment!.original_filename })}
+                            className="block overflow-hidden rounded-lg text-left"
+                          >
+                            <AuthenticatedMediaImage
+                              src={msg.attachment.preview_url}
+                              alt={msg.attachment.original_filename}
+                              className="max-h-40 max-w-full object-cover"
+                            />
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="text-left text-[12px] underline"
+                            onClick={() => void openAuthenticatedMedia(msg.attachment!.raw_url, msg.attachment!.original_filename)}
+                          >
+                            Open {msg.attachment.original_filename}
+                          </button>
+                        )}
+                        <p className="text-[10px] opacity-70">Media review: {msg.attachment.authenticity}</p>
+                      </div>
+                    ) : null}
+                  </BubbleContent>
+                </Bubble>
+                <MessageFooter className={cn(mine ? "text-right" : "text-left", isDark && "text-white/40")}>{footer}</MessageFooter>
+              </MessageContent>
+            </Message>
           )
         })}
         <div ref={bottomRef} />
       </div>
+      {previewMedia ? (
+        <div className="fixed inset-0 z-[260] flex items-center justify-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Emergency chat image preview" onClick={() => setPreviewMedia(null)}>
+          <div className="flex max-h-[90vh] max-w-[92vw] flex-col items-center gap-3" onClick={(event) => event.stopPropagation()}>
+            <AuthenticatedMediaImage src={previewMedia.src} alt={previewMedia.filename} className="max-h-[78vh] max-w-[90vw] rounded-xl object-contain" />
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => void openAuthenticatedMedia(previewMedia.src, previewMedia.filename)} className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white hover:bg-white/20"><DownloadIcon className="size-4" />Download</button>
+              <button type="button" onClick={() => setPreviewMedia(null)} className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white hover:bg-white/20"><XIcon className="size-4" />Close</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {!disabled ? (
         <div
@@ -398,19 +407,8 @@ export function EmergencyChatPanel({
             accept="image/*,video/mp4,video/webm,video/quicktime"
             className="sr-only"
             onChange={(event) => {
-              const file = event.target.files?.[0] ?? null
-              if (!file) return
-              if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
-                toast.error("Attach an image or video only.")
-                event.currentTarget.value = ""
-                return
-              }
-              if (file.size > 25 * 1024 * 1024) {
-                toast.error("Media must be 25 MB or smaller.")
-                event.currentTarget.value = ""
-                return
-              }
-              setAttachment(file)
+              void chooseAttachment(event.target.files?.[0] ?? null)
+              event.currentTarget.value = ""
             }}
           />
           <label
@@ -453,3 +451,13 @@ export function EmergencyChatPanel({
     </div>
   )
 }
+
+
+
+
+
+
+
+
+
+

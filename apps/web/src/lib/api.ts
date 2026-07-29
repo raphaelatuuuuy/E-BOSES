@@ -5,6 +5,7 @@ const CSRF_COOKIE_NAME = "csrftoken"
 
 let accessToken: string | null = null
 let refreshPromise: Promise<SessionResponse | null> | null = null
+const STORAGE_KEY = "eboses_access_token"
 
 export class ApiError extends Error {
   status: number
@@ -69,15 +70,20 @@ function isUnsafeMethod(method: string) {
 }
 
 export function getAccessToken() {
+  if (!accessToken) {
+    try { accessToken = sessionStorage.getItem(STORAGE_KEY) } catch { /* noop */ }
+  }
   return accessToken
 }
 
 export function setAuthTokens(access: string) {
   accessToken = access
+  try { sessionStorage.setItem(STORAGE_KEY, access) } catch { /* noop */ }
 }
 
 export function clearAuthTokens() {
   accessToken = null
+  try { sessionStorage.removeItem(STORAGE_KEY) } catch { /* noop */ }
 }
 
 export async function ensureCsrfCookie() {

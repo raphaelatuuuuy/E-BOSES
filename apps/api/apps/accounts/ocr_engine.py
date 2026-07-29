@@ -8,15 +8,17 @@ or unbounded regular expressions.
 from __future__ import annotations
 
 import re
+import time
+from io import BytesIO
 import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from statistics import fmean
-from typing import Protocol
+from typing import Callable, Protocol
 
-from .ocr import OCRResponse, ocr_bytes_with_metadata
+from .ocr import OCRProviderError, OCRProviderUnavailable, OCRResponse, ocr_bytes_with_metadata
 
 
 DATE_PATTERN = re.compile(
@@ -37,9 +39,117 @@ class OCRProvider(Protocol):
     def recognize(self, content: bytes, *, suffix: str) -> OCRResponse: ...
 
 
+_EASYOCR_READER = None
+
+
+def _easyocr_reader(*, gpu=False, languages=None):
+    global _EASYOCR_READER
+    if _EASYOCR_READER is None:
+        try:
+            import easyocr
+        except Exception as exc:
+            raise OCRProviderUnavailable("EasyOCR is not installed.") from exc
+        _EASYOCR_READER = easyocr.Reader(languages or ["en"], gpu=gpu)
+    return _EASYOCR_READER
+
+
+class EasyOCRProvider:
+    def __init__(self, *, reader=None, gpu=False, languages=None):
+        self.reader = reader
+        self.gpu = bool(gpu)
+        self.languages = list(languages or ["en"])
+
+    @property
+    def model(self) -> str:
+        device = "gpu" if self.gpu else "cpu"
+        return f"easyocr:{'-'.join(self.languages)}:{device}"
+
+    def recognize(self, content: bytes, *, suffix: str, deskew: bool = True) -> OCRResponse:
+        started = time.monotonic()
+        try:
+            from PIL import Image
+            import numpy as np
+
+            with Image.open(BytesIO(content)) as image:
+                rgb = image.convert("RGB")
+                image_width, image_height = rgb.size
+                array = np.array(rgb)
+        except Exception as exc:
+            raise OCRProviderUnavailable("EasyOCR could not read the image.") from exc
+
+        reader = self.reader or _easyocr_reader(gpu=self.gpu, languages=self.languages)
+        try:
+            raw_results = reader.readtext(array)
+        except Exception as exc:
+            raise OCRProviderUnavailable("EasyOCR recognition failed.") from exc
+
+        lines = []
+        for item in raw_results or []:
+            if not isinstance(item, (list, tuple)) or len(item) < 3:
+                continue
+            box, text, confidence = item[0], item[1], item[2]
+            text = str(text or "").strip()
+            if not text:
+                continue
+            lines.append({
+                "text": text,
+                "confidence": float(confidence or 0.0),
+                "bbox": _easyocr_bbox(box),
+            })
+        return OCRResponse(
+            lines=lines,
+            job_id="local-easyocr",
+            latency_ms=int((time.monotonic() - started) * 1000),
+            model=self.model,
+            image_width=image_width,
+            image_height=image_height,
+        )
+
+
+def _easyocr_bbox(box) -> list[float]:
+    points = []
+    for point in box or []:
+        if isinstance(point, (list, tuple)) and len(point) >= 2:
+            try:
+                points.append((float(point[0]), float(point[1])))
+            except (TypeError, ValueError):
+                continue
+    if not points:
+        return []
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return [min(xs), min(ys), max(xs), max(ys)]
+
 class PaddleOCRProvider:
     def recognize(self, content: bytes, *, suffix: str, deskew: bool = True) -> OCRResponse:
         return ocr_bytes_with_metadata(content, suffix=suffix, deskew=deskew)
+
+
+class FallbackOCRProvider:
+    """Try hosted PaddleOCR first, then local EasyOCR for provider failures."""
+
+    def __init__(
+        self,
+        *,
+        primary: OCRProvider | None = None,
+        fallback: OCRProvider | None = None,
+        fallback_factory: Callable[[], OCRProvider] | None = None,
+    ):
+        self.primary = primary or PaddleOCRProvider()
+        self._fallback = fallback
+        self._fallback_factory = fallback_factory or (lambda: EasyOCRProvider(gpu=False))
+
+    @property
+    def fallback(self) -> OCRProvider:
+        if self._fallback is None:
+            self._fallback = self._fallback_factory()
+        return self._fallback
+
+    def recognize(self, content: bytes, *, suffix: str, deskew: bool = True) -> OCRResponse:
+        try:
+            return self.primary.recognize(content, suffix=suffix, deskew=deskew)
+        except OCRProviderError:
+            return self.fallback.recognize(content, suffix=suffix, deskew=deskew)
 
 
 def document_uses_field_regions(document_type) -> bool:

@@ -313,8 +313,8 @@ export function RulesStep(props: {
                       className={cn(
                         "flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-xs font-semibold transition",
                         active
-                          ? "border-[#145be7] bg-blue-50 text-[#07145f]"
-                          : "border-[#dfe7f5] text-[#07145f] hover:bg-[#f8fafc]",
+                          ? "border-[#145be7] bg-blue-50 text-brand-navy"
+                          : "border-[#dfe7f5] text-brand-navy hover:bg-[#f8fafc]",
                       )}
                     >
                       <input

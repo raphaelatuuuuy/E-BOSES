@@ -4,7 +4,7 @@ from django.db import migrations, models
 def seed_enabled_categories(apps, schema_editor):
     Config = apps.get_model("concerns", "ConcernClassificationConfiguration")
     Config.objects.filter(enabled_categories=[]).update(
-        enabled_categories=["infrastructure", "environment", "public_safety", "others"]
+        enabled_categories=["infrastructure", "environment", "public_safety", "vehicle", "others"]
     )
 
 

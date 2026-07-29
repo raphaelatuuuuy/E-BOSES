@@ -18,6 +18,8 @@ from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.capabilities import MANAGE_USERS, capability_denied, user_has_capability
+from apps.concerns.units import sync_responder_designation
 from apps.emergencies.selectors import active_responder_shift_for_update
 
 from .models import AccountRequest, AuditLog, OTPChallenge, ResidenceProof, ResidentSettings
@@ -49,6 +51,7 @@ from .serializers import (
     ResidentSettingsSerializer,
     ResponderUpdateSerializer,
     SensitiveAccessAuditSerializer,
+    StaffAccountUpdateSerializer,
     UserStatusUpdateSerializer,
     UserProfileUpdateSerializer,
     UserSummarySerializer,
@@ -563,7 +566,6 @@ class MeView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         create_audit_log("profile.updated", actor=request.user, target_user=request.user, metadata={"fields": sorted(serializer.validated_data.keys())}, request_meta=request_meta(request))
-        request.user.refresh_from_db()
         return Response(UserSummarySerializer(request.user).data)
 
 
@@ -1109,6 +1111,53 @@ class ResidentDirectoryView(APIView):
         return Response(UserSummarySerializer(queryset.order_by("-date_joined"), many=True).data)
 
 
+class StaffDirectoryView(APIView):
+    """Every account, for the Users configuration screen.
+
+    The existing directories are role-specific (residents here, responders
+    there), which is why officials had no single place to see and manage
+    accounts. This one spans roles and carries each person's unit designations,
+    since assigning a unit and position is what actually grants capabilities.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        if not can_manage_accounts(request.user) or not user_has_capability(
+            request.user, MANAGE_USERS
+        ):
+            return capability_denied(MANAGE_USERS)
+
+        User = get_user_model()
+        queryset = (
+            User.objects.all()
+            .select_related("resident_profile")
+            .prefetch_related("designations__department", "designations__position")
+        )
+
+        role = request.query_params.get("role")
+        if role and role != "all":
+            queryset = queryset.filter(role=role)
+
+        account_status = request.query_params.get("status")
+        if account_status and account_status != "all":
+            queryset = queryset.filter(status=account_status)
+
+        search = (request.query_params.get("search") or "").strip()
+        if search:
+            queryset = (
+                queryset.filter(email__icontains=search)
+                | queryset.filter(phone_number__icontains=search)
+                | queryset.filter(resident_profile__first_name__icontains=search)
+                | queryset.filter(resident_profile__last_name__icontains=search)
+            )
+
+        return Response(
+            UserSummarySerializer(queryset.distinct().order_by("-date_joined"), many=True).data
+        )
+
+
 class ResidentMentionSearchView(APIView):
     """
     Lightweight mention directory for any authenticated user.
@@ -1165,6 +1214,70 @@ class ResidentStatusUpdateView(APIView):
         resident.save(update_fields=["status", "updated_at"])
         create_audit_log("account.resident_status_updated", actor=request.user, target_user=resident, metadata={"status": resident.status}, request_meta=request_meta(request))
         return Response(UserSummarySerializer(resident).data)
+
+class StaffAccountUpdateView(APIView):
+    """Change a person's role, status and unit from the Users screen."""
+
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_manage_accounts(request.user) or not user_has_capability(
+            request.user, MANAGE_USERS
+        ):
+            return capability_denied(MANAGE_USERS)
+
+        User = get_user_model()
+        target = get_object_or_404(User, pk=pk)
+
+        # Only a system administrator may mint another official, matching the
+        # rule already enforced on account creation.
+        if (
+            request.data.get("role") == User.Role.BARANGAY_OFFICIAL
+            and target.role != User.Role.BARANGAY_OFFICIAL
+            and not (request.user.is_staff or request.user.is_superuser)
+        ):
+            return Response(
+                {"role": ["Only a system administrator can promote someone to official."]},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if target.pk == request.user.pk and "role" in request.data:
+            # Losing your own role mid-session is unrecoverable from the UI.
+            return Response(
+                {"role": ["You cannot change your own role."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = StaffAccountUpdateSerializer(data=request.data)
+        serializer.instance = target
+        serializer.is_valid(raise_exception=True)
+
+        fields = []
+        for field, value in serializer.validated_data.items():
+            setattr(target, field, value)
+            fields.append(field)
+
+        # A resident or official has no responder unit; leaving a stale one would
+        # keep them in dispatch candidate queries.
+        if target.role != User.Role.FIRST_RESPONDER and target.responder_unit:
+            target.responder_unit = ""
+            fields.append("responder_unit")
+
+        target.save(update_fields=[*dict.fromkeys(fields), "updated_at"])
+
+        if target.role == User.Role.FIRST_RESPONDER:
+            sync_responder_designation(target)
+
+        create_audit_log(
+            "account.staff_updated",
+            actor=request.user,
+            target_user=target,
+            metadata={"fields": fields},
+            request_meta=request_meta(request),
+        )
+        return Response(UserSummarySerializer(target).data)
+
 
 class ResponderDirectoryView(APIView):
     permission_classes = [IsAuthenticated]
@@ -1238,6 +1351,10 @@ class ResponderUpdateView(APIView):
         if fields:
             fields = list(dict.fromkeys(fields))
             responder.save(update_fields=[*fields, "updated_at"])
+            if "responder_unit" in fields:
+                # Keep unit membership in step with the enum, or the responder
+                # would keep being dispatched for their previous unit.
+                sync_responder_designation(responder)
             create_audit_log("account.responder_updated", actor=request.user, target_user=responder, metadata={"fields": fields}, request_meta=request_meta(request))
         return Response(UserSummarySerializer(responder).data)
 
@@ -1313,6 +1430,9 @@ class AdminCreateUserView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
         user = serializer.save()
+        # Dispatch finds responders through Designation, so a responder created
+        # with only `responder_unit` set would never be routed to.
+        sync_responder_designation(user)
         create_audit_log("admin.user_created", actor=request.user, target_user=user, metadata={"role": user.role}, request_meta=request_meta(request))
         return Response(UserSummarySerializer(user).data, status=status.HTTP_201_CREATED)
 

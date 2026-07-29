@@ -88,7 +88,7 @@ export default defineConfig(({ mode }) => {
         ? hasMkcert
           ? { cert: fs.readFileSync(mkcertCert), key: fs.readFileSync(mkcertKey) }
           : {}
-        : false,
+        : undefined,
       // Same-origin proxy avoids mixed-content blocks when the UI is HTTPS
       // and Django is still plain HTTP on :8000.
       proxy: {
@@ -118,7 +118,7 @@ export default defineConfig(({ mode }) => {
         ? hasMkcert
           ? { cert: fs.readFileSync(mkcertCert), key: fs.readFileSync(mkcertKey) }
           : {}
-        : false,
+        : undefined,
       proxy: {
         "/api": {
           target: apiProxyTarget,
@@ -138,5 +138,26 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          // Function form, not the object form: rolldown (the bundler behind
+          // Vite 8 here) only accepts a function, and the object form fails the
+          // build with "manualChunks is not a function".
+          manualChunks(id: string) {
+            if (!id.includes("node_modules") && !id.includes("packages/ui")) return
+            if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom)[\\/]/.test(id)) {
+              return "react-vendor"
+            }
+            if (/[\\/]node_modules[\\/]leaflet[\\/]/.test(id)) return "leaflet"
+            if (id.includes("packages/ui")) return "ui-vendor"
+            return
+          },
+        },
+      },
+      chunkSizeWarningLimit: 300,
+    },
   }
 })
+
+

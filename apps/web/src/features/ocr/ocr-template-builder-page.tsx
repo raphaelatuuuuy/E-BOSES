@@ -1,28 +1,25 @@
-import { useState } from "react"
+import { forwardRef, useImperativeHandle, useState } from "react"
 import { ArrowLeft, LoaderCircle } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { usePageTitle } from "@/hooks/use-page-title"
-import { ProofSetupWizard } from "@/features/ocr/components/proof-setup-wizard"
+import { ProofEditorSection } from "@/features/ocr/components/proof-editor-section"
 import { ProofTypeList } from "@/features/ocr/components/proof-type-list"
 import { MarkAreasStep } from "@/features/ocr/components/steps/mark-areas-step"
 import { ProofDetailsStep } from "@/features/ocr/components/steps/proof-details-step"
 import { RulesStep } from "@/features/ocr/components/steps/rules-step"
 import { TrySampleStep } from "@/features/ocr/components/steps/try-sample-step"
 import { PROOF_THEME } from "@/features/ocr/components/proof-theme"
-import {
-  useOcrTemplateState,
-  type WizardStepId,
-} from "@/features/ocr/hooks/use-ocr-template-state"
+import { useOcrTemplateState } from "@/features/ocr/hooks/use-ocr-template-state"
 
-export default function OcrTemplateBuilderPage() {
-  usePageTitle("ID & Proof Templates")
-  const [view, setView] = useState<"list" | "wizard">("list")
-  const [step, setStep] = useState<WizardStepId>(1)
+const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, Record<string, never>>(
+  function OcrTemplateBuilderPage(_props, ref) {
+    usePageTitle("ID & Proof Templates")
+    const [view, setView] = useState<"list" | "wizard">("list")
 
-  const {
+    const {
     configuration,
     loading,
     saving,
@@ -82,6 +79,13 @@ export default function OcrTemplateBuilderPage() {
     selectedDetected,
   } = useOcrTemplateState()
 
+  useImperativeHandle(ref, () => ({
+    startAddProofType() {
+      void addDocumentType()
+      setView("wizard")
+    },
+  }))
+
   const missingSamples = missingRequiredSampleSides(selectedDocument)
   const missingSampleLabels = missingSamples.map((side) =>
     side === "front" ? "Front" : side === "back" ? "Back" : "Sample",
@@ -89,7 +93,10 @@ export default function OcrTemplateBuilderPage() {
 
   async function backToList() {
     await persistWizardExit()
-    setStep(1)
+    // `setStep(1)` used to live here. It referenced state that no longer
+    // exists — the wizard became a set of always-rendered accordion sections
+    // (ProofEditorSection), so there is no step cursor to reset. As written it
+    // was a ReferenceError on every use of this button.
     setView("list")
   }
 
@@ -127,7 +134,6 @@ export default function OcrTemplateBuilderPage() {
           saving={saving}
           onAdd={() => {
             void addDocumentType()
-            setStep(1)
             setView("wizard")
           }}
           onEdit={(docKey) => {
@@ -135,7 +141,6 @@ export default function OcrTemplateBuilderPage() {
             const doc = configuration.document_types.find((item) => item.key === docKey)
             setSelectedFieldKey(doc?.fields[0]?.key ?? "")
             setTestResult(null)
-            setStep(1)
             setView("wizard")
           }}
           onRemove={(docKey) => {
@@ -166,34 +171,70 @@ export default function OcrTemplateBuilderPage() {
     )
   }
 
+  const sampleCount = countSamplePhotos(selectedDocument)
+  const markedFields = selectedDocument.fields.filter((field) => field.extraction_hints?.region).length
+  const availableOnSignup = selectedDocument.enabled !== false
+  // OcrDocumentType has no `label` — this page was reading a property that does
+  // not exist, so the heading and all three section "done" checks silently
+  // evaluated undefined: the proof name never displayed and step one never
+  // showed as complete. Same precedence the proof list uses.
+  const proofDisplayName = selectedDocument.template_name?.trim() || selectedDocument.name?.trim() || ""
+
   return (
-    <div className={cn("flex min-h-full flex-col", PROOF_THEME.bg)}>
-      <ProofSetupWizard
-        document={selectedDocument}
-        step={step}
-        saving={saving}
-        onStepChange={setStep}
-        onBackToList={() => {
-          void backToList()
-        }}
-        onDone={() => {
-          void backToList()
-        }}
-        availableEnabled={selectedDocument.enabled !== false}
-        onToggleAvailable={(enabled) => {
-          if (enabled && !validateRequiredSamples(selectedDocument)) return
-          void setProofAvailableOnSignup(selectedDocument.key, enabled)
-        }}
-        missingSampleSides={missingSampleLabels}
-        onValidateBeforeNext={(fromStep) => {
-          if (fromStep === 2) return validateRequiredSamples(selectedDocument)
-          return true
-        }}
-      >
-        {step === 1 ? (
+    <div className="flex min-h-full flex-col">
+      <div className="space-y-4 p-4 md:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <button
+              type="button"
+              onClick={() => void backToList()}
+              className="inline-flex items-center gap-1.5 text-xs font-bold text-muted-foreground transition hover:text-foreground"
+            >
+              <ArrowLeft className="size-3.5" />
+              All proof types
+            </button>
+            <h2 className="mt-2 font-heading text-xl font-bold text-foreground">
+              {proofDisplayName || "New proof type"}
+            </h2>
+            <p className="mt-1 text-sm font-medium text-muted-foreground">
+              Set this up once. Residents pick from the types you switch on here.
+            </p>
+          </div>
+
+          {/* The switch that actually matters, kept visible rather than buried
+              on the wizard's last step. */}
+          <label className="flex items-center gap-3 rounded-2xl border border-card-line bg-card px-4 py-3">
+            <input
+              type="checkbox"
+              checked={availableOnSignup}
+              onChange={(event) => {
+                if (event.target.checked && !validateRequiredSamples(selectedDocument)) return
+                void setProofAvailableOnSignup(selectedDocument.key, event.target.checked)
+              }}
+              className="size-4 accent-brand-orange"
+            />
+            <span>
+              <span className="block text-sm font-bold text-foreground">Offer this at sign-up</span>
+              <span className="block text-xs font-medium text-muted-foreground">
+                {missingSampleLabels.length
+                  ? `Add a ${missingSampleLabels.join(" and ")} sample first`
+                  : "Residents can use this proof type"}
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <ProofEditorSection
+          index={1}
+          title="Name and photo sides"
+          hint="What this proof is called, and whether it needs a front, back or one photo."
+          done={Boolean(proofDisplayName)}
+          doneLabel={`${proofDisplayName} · ${sampleCount} sample photo${sampleCount === 1 ? "" : "s"}`}
+          defaultOpen={!proofDisplayName}
+        >
           <ProofDetailsStep
             document={selectedDocument}
-            samplePhotoCount={countSamplePhotos(selectedDocument)}
+            samplePhotoCount={sampleCount}
             onChange={(patch) => {
               updateSelectedDocument((doc) => ({ ...doc, ...patch }))
             }}
@@ -202,9 +243,16 @@ export default function OcrTemplateBuilderPage() {
             }}
             onChangeCaptureMode={(mode) => changeCaptureMode(mode)}
           />
-        ) : null}
+        </ProofEditorSection>
 
-        {step === 2 ? (
+        <ProofEditorSection
+          index={2}
+          title="Mark where the details are"
+          hint="Upload a sample photo, then draw a box around each detail to read."
+          done={markedFields > 0 && missingSampleLabels.length === 0}
+          doneLabel={`${markedFields} area${markedFields === 1 ? "" : "s"} marked`}
+          defaultOpen={Boolean(proofDisplayName) && markedFields === 0}
+        >
           <MarkAreasStep
             document={selectedDocument}
             fields={fields}
@@ -237,9 +285,15 @@ export default function OcrTemplateBuilderPage() {
             sampleInputRef={sampleInputRef}
             sampleUploadSideRef={sampleUploadSideRef}
           />
-        ) : null}
+        </ProofEditorSection>
 
-        {step === 3 ? (
+        <ProofEditorSection
+          index={3}
+          title="Checks for each detail"
+          hint="What counts as a valid value — required, expiry date, name match."
+          done={markedFields > 0}
+          doneLabel="Adjust how strictly each detail is checked"
+        >
           <RulesStep
             document={selectedDocument}
             fields={sortedCanvasFields}
@@ -254,9 +308,15 @@ export default function OcrTemplateBuilderPage() {
             fieldHasNotExpired={fieldHasNotExpired}
             selectedDetected={selectedDetected}
           />
-        ) : null}
+        </ProofEditorSection>
 
-        {step === 4 ? (
+        <ProofEditorSection
+          index={4}
+          title="Try it on a real photo"
+          hint="Check that the right details are read before residents use this."
+          done={Boolean(testResult)}
+          doneLabel="Last test run — try another any time"
+        >
           <TrySampleStep
             documentKey={selectedDocument.key}
             testRunning={testRunning}
@@ -277,8 +337,24 @@ export default function OcrTemplateBuilderPage() {
               void runTestFromSample(side)
             }}
           />
-        ) : null}
-      </ProofSetupWizard>
+        </ProofEditorSection>
+
+        <div className="flex flex-wrap items-center gap-3 pt-1">
+          <Button
+            type="button"
+            onClick={() => void backToList()}
+            disabled={saving}
+            className="rounded-xl bg-brand-orange text-white hover:bg-brand-orange-strong"
+          >
+            {saving ? "Saving…" : "Done"}
+          </Button>
+          <span className="text-xs font-medium text-muted-foreground">
+            Changes save as you make them.
+          </span>
+        </div>
+      </div>
     </div>
   )
-}
+})
+
+export default OcrTemplateBuilderPage

@@ -22,7 +22,6 @@
     "@react-three/fiber": "^9.6.1",
     "@shadergradient/react": "^2.4.20",
     "@workspace/ui": "*",
-    "boxicons": "^2.1.4",
     "dayjs": "^1.11.21",
     "gsap": "^3.15.0",
     "lucide-react": "^0.561.0",

@@ -342,7 +342,7 @@ export default function ProfilePage() {
                 type="button"
                 onClick={() => void handleProfileSubmit()}
                 disabled={savingProfile}
-                className="mt-3 inline-flex h-10 items-center gap-2 rounded-full bg-[#ff6a1a] px-4 text-sm font-semibold text-white hover:bg-[#e85f17] disabled:opacity-60"
+                className="mt-3 inline-flex h-10 items-center gap-2 rounded-full bg-brand-orange px-4 text-sm font-semibold text-white hover:bg-[#e85f17] disabled:opacity-60"
               >
                 {savingProfile ? (
                   <Loader2Icon className="size-4 animate-spin" />

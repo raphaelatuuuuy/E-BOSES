@@ -2,7 +2,6 @@ import os
 import tempfile
 from datetime import timedelta
 from difflib import SequenceMatcher
-
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Count
@@ -16,15 +15,17 @@ from rest_framework.views import APIView
 from apps.accounts.permissions import HasRolePermission
 from apps.accounts.services import validate_concern_media_file
 from apps.concerns.ai.classification import (
+    ALLOWED_NLP_PROVIDERS,
     BASE_IMAGE_MODEL,
     BASE_IMAGE_PROVIDER,
     BASE_TEXT_MODEL,
-    BASE_TEXT_PROVIDER,
+    ROBERTA_TAGALOG_PROVIDER,
     classification_payload,
 )
 from apps.concerns.ai.image_detector import ImageDetectorNotConfigured, YOLOV8_COCO_CLASSES, YoloImageDetector
-from apps.concerns.models import Concern, ConcernAiAssessment, ConcernClassificationConfiguration
-from apps.emergencies.models import EmergencyAlert
+from apps.concerns.models import Concern, ConcernAiAssessment, ConcernCategory, ConcernClassificationConfiguration
+from apps.emergencies.models import EmergencyCategory
+from apps.capabilities import CONFIGURE_CLASSIFICATION, HasCapability
 
 
 class ClassificationConfigurationSerializer(serializers.ModelSerializer):
@@ -51,17 +52,31 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "updated_by", "updated_at")
 
     def _categories_payload(self, obj):
-        labels = dict(Concern.Category.choices)
+        categories = list(ConcernCategory.objects.filter(is_active=True).order_by("name"))
+        if not categories:
+            labels = dict(Concern.Category.choices)
+            return [
+                {
+                    "key": code,
+                    "label": labels[code],
+                    "enabled": code in (obj.enabled_categories or Concern.Category.values),
+                    "detected_labels": [
+                        label for label, category in obj.label_mappings.items() if category == code
+                    ],
+                }
+                for code in Concern.Category.values
+            ]
+        enabled_codes = set(obj.enabled_categories or [])
         return [
             {
-                "key": code,
-                "label": labels[code],
-                "enabled": code in (obj.enabled_categories or Concern.Category.values),
+                "key": category.code,
+                "label": category.name,
+                "enabled": category.code in enabled_codes or not enabled_codes,
                 "detected_labels": [
-                    label for label, category in obj.label_mappings.items() if category == code
+                    label for label, mapped_category in obj.label_mappings.items() if mapped_category == category.code
                 ],
             }
-            for code in Concern.Category.values
+            for category in categories
         ]
 
     def to_representation(self, instance):
@@ -83,7 +98,9 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
             instance.enabled_categories = enabled
         validated_data["image_provider"] = BASE_IMAGE_PROVIDER
         validated_data["image_model"] = BASE_IMAGE_MODEL
-        validated_data["nlp_provider"] = BASE_TEXT_PROVIDER
+        # nlp_provider is intentionally NOT forced here: `validate()` already
+        # restricts it to ALLOWED_NLP_PROVIDERS, so a validated choice
+        # (keyword_baseline or roberta_tagalog) is preserved.
         validated_data["nlp_model"] = BASE_TEXT_MODEL
         return super().update(instance, validated_data)
 
@@ -105,15 +122,24 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
         return bool(model_path and os.path.exists(model_path))
 
     def get_text_available(self, obj):
+        if obj.nlp_provider == ROBERTA_TAGALOG_PROVIDER:
+            model_path = getattr(settings, "EBOSES_NLP_MODEL_PATH", "")
+            return bool(model_path and os.path.exists(model_path))
         return True
 
     def get_supported_classes(self, obj):
-        return YOLOV8_COCO_CLASSES
+        return obj.supported_classes if obj.supported_classes else YOLOV8_COCO_CLASSES
 
     def get_mapping_targets(self, obj):
         return [
-            *[{"key": code, "label": label, "group": "concern"} for code, label in Concern.Category.choices],
-            *[{"key": f"emergency:{code}", "label": label, "group": "emergency"} for code, label in EmergencyAlert.Type.choices],
+            *[
+                {"key": category.code, "label": category.name, "group": "concern"}
+                for category in ConcernCategory.objects.filter(is_active=True).order_by("name")
+            ],
+            *[
+                {"key": f"emergency:{category.code}", "label": category.label, "group": "emergency"}
+                for category in EmergencyCategory.objects.filter(is_active=True).order_by("sort_order", "label")
+            ],
         ]
 
     def validate(self, attrs):
@@ -126,8 +152,8 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
             errors["image_provider"] = f"The base image provider must remain {BASE_IMAGE_PROVIDER}."
         if "image_model" in attrs and attrs["image_model"] != BASE_IMAGE_MODEL:
             errors["image_model"] = f"The current base detector must remain {BASE_IMAGE_MODEL}."
-        if "nlp_provider" in attrs and attrs["nlp_provider"] != BASE_TEXT_PROVIDER:
-            errors["nlp_provider"] = f"The base text provider must remain {BASE_TEXT_PROVIDER}."
+        if "nlp_provider" in attrs and attrs["nlp_provider"] not in ALLOWED_NLP_PROVIDERS:
+            errors["nlp_provider"] = f"nlp_provider must be one of {sorted(ALLOWED_NLP_PROVIDERS)}."
         if "nlp_model" in attrs and attrs["nlp_model"] != BASE_TEXT_MODEL:
             errors["text_model"] = f"The current base text checker must remain {BASE_TEXT_MODEL}."
         if errors:
@@ -136,8 +162,9 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
 
 
 class OfficialClassificationView(APIView):
-    permission_classes = [IsAuthenticated, HasRolePermission]
+    permission_classes = [IsAuthenticated, HasRolePermission, HasCapability]
     required_permission = "concerns.manage"
+    required_capability = CONFIGURE_CLASSIFICATION
     parser_classes = [JSONParser]
 
     def get(self, request):
@@ -152,8 +179,9 @@ class OfficialClassificationView(APIView):
 
 
 class OfficialClassificationStatsView(APIView):
-    permission_classes = [IsAuthenticated, HasRolePermission]
+    permission_classes = [IsAuthenticated, HasRolePermission, HasCapability]
     required_permission = "concerns.manage"
+    required_capability = CONFIGURE_CLASSIFICATION
 
     def get(self, request):
         since = timezone.now() - timedelta(days=30)
@@ -173,8 +201,9 @@ class OfficialClassificationStatsView(APIView):
 
 
 class OfficialClassificationResetView(APIView):
-    permission_classes = [IsAuthenticated, HasRolePermission]
+    permission_classes = [IsAuthenticated, HasRolePermission, HasCapability]
     required_permission = "concerns.manage"
+    required_capability = CONFIGURE_CLASSIFICATION
 
     def post(self, request):
         ConcernClassificationConfiguration.objects.filter(pk=1).delete()
@@ -185,8 +214,9 @@ class OfficialClassificationResetView(APIView):
 
 
 class OfficialClassificationTextTestView(APIView):
-    permission_classes = [IsAuthenticated, HasRolePermission]
+    permission_classes = [IsAuthenticated, HasRolePermission, HasCapability]
     required_permission = "concerns.manage"
+    required_capability = CONFIGURE_CLASSIFICATION
 
     def post(self, request):
         title = str(request.data.get("title", ""))[:160]
@@ -219,8 +249,9 @@ class OfficialClassificationTextTestView(APIView):
 
 
 class OfficialClassificationImageTestView(APIView):
-    permission_classes = [IsAuthenticated, HasRolePermission]
+    permission_classes = [IsAuthenticated, HasRolePermission, HasCapability]
     required_permission = "concerns.manage"
+    required_capability = CONFIGURE_CLASSIFICATION
     parser_classes = [MultiPartParser]
 
     def post(self, request):

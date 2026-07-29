@@ -8,6 +8,7 @@ from apps.accounts.models import AccountRequest
 from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated
 from apps.accounts.views import touch_last_seen
 from apps.concerns.models import Announcement, BarangayEvent, Concern, ConcernAppeal, ContentFlag
+from apps.concerns.units import assigned_unit_for
 from apps.emergencies.models import EmergencyAlert, EmergencyAppeal, EmergencyResponderAssignment
 from apps.notifications.models import Notification
 
@@ -100,6 +101,11 @@ class ResponderDashboardSummaryView(APIView):
             **common_counts(request.user),
             "is_on_duty": request.user.is_on_duty,
             "responder_unit": request.user.responder_unit,
+            # The unit as the barangay configured it in the Units screen. The
+            # responder screens show this rather than the legacy enum, so a unit
+            # an official created appears under its real name. None means nobody
+            # has placed this responder in a unit yet.
+            "assigned_unit": assigned_unit_for(request.user),
             "assigned_active_emergencies": assigned.filter(alert__status__in=EMERGENCY_ACTIVE).count(),
             "assigned_resolved_emergencies": assigned.filter(alert__status=EmergencyAlert.Status.RESOLVED).count(),
             "newly_routed": newly_routed,

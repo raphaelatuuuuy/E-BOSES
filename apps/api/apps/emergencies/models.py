@@ -48,6 +48,11 @@ class MapDispatchPolicy(models.Model):
     )
     witness_radius_meters = models.PositiveIntegerField(default=250)
     responder_nearby_radius_meters = models.PositiveIntegerField(default=100)
+    # SMS fallback for residents with no mobile data. Held here rather than in a
+    # build-time env var so a barangay can change the number without rebuilding
+    # and redeploying the app. Blank means the SOS screen offers no SMS option,
+    # which is the honest default until a barangay has a number to publish.
+    emergency_sms_number = models.CharField(max_length=16, blank=True)
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -76,6 +81,7 @@ class MapDispatchPolicy(models.Model):
             "out_of_zone_action": self.out_of_zone_action,
             "witness_radius_meters": int(self.witness_radius_meters),
             "responder_nearby_radius_meters": int(self.responder_nearby_radius_meters),
+            "emergency_sms_number": self.emergency_sms_number,
             "updated_at": self.updated_at,
         }
 
@@ -172,13 +178,35 @@ class MapServicePoi(models.Model):
         return self.get_poi_type_display()
 
 
+class EmergencyCategory(models.Model):
+    code = models.SlugField(max_length=80, unique=True)
+    label = models.CharField(max_length=80)
+    subtext = models.CharField(max_length=160, blank=True)
+    icon_key = models.CharField(max_length=48, default="siren")
+    custom_icon_label = models.CharField(max_length=8, blank=True)
+    icon_image = models.FileField(storage=PublicMediaStorage(), upload_to="emergency-category-icons/", blank=True)
+    sort_order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["sort_order", "label"]
+        indexes = [models.Index(fields=["is_active", "sort_order"], name="emerg_cat_active_order")]
+
+    def __str__(self):
+        return self.label
+
+
 class EmergencyAlert(models.Model):
     class Type(models.TextChoices):
         MEDICAL = "medical", "Medical"
         FIRE = "fire", "Fire"
         CRIME = "crime", "Crime"
         DISASTER = "disaster", "Disaster"
-        OTHER = "other", "Other"
+        CHILD_PROTECTION = "child_protection", "Child Protection"
+        DOMESTIC_VIOLENCE = "domestic_violence", "Domestic Violence"
+        DRUG_RELATED = "drug_related", "Drug-Related Incident"
 
     class Status(models.TextChoices):
         SUBMITTED = "submitted", "Submitted"
@@ -188,6 +216,8 @@ class EmergencyAlert(models.Model):
         NEARBY = "nearby", "Nearby"
         ARRIVED = "arrived", "Arrived"
         RESOLVED = "resolved", "Resolved"
+        FALSE_ALARM = "false_alarm", "False Alarm"
+        INVALID = "invalid", "Invalid"
         CANCELLED = "cancelled", "Cancelled"
 
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
@@ -203,11 +233,13 @@ class EmergencyAlert(models.Model):
     location_accuracy = models.FloatField(null=True, blank=True)
     address = models.CharField(max_length=255, blank=True)
     media_warnings = models.JSONField(default=list, blank=True)
+    resolution_report = models.TextField(blank=True)
     status_version = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     routed_at = models.DateTimeField(null=True, blank=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
+    route = models.JSONField(null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at"]
@@ -240,22 +272,89 @@ class EmergencyMedia(models.Model):
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
 
+class EmergencyTypeRoleMap(models.Model):
+    """Routes an emergency type to the unit that answers it.
+
+    `department` is the source of truth. `responder_unit` is the legacy closed
+    enum it replaced: it is still written so older serializers and the
+    `accounts_resp_avail` index keep working, but nothing reads it for routing.
+    It is dropped once the transition release ships.
+    """
+
+    emergency_type = models.CharField(max_length=80)
+    department = models.ForeignKey(
+        "concerns.Department",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="emergency_role_maps",
+    )
+    responder_unit = models.CharField(max_length=24)
+    priority = models.PositiveSmallIntegerField(default=0)
+    requires_shift = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-priority", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["emergency_type", "department"],
+                condition=models.Q(department__isnull=False),
+                name="emerg_role_map_type_dept_uniq",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["emergency_type", "is_active", "-priority"], name="emerg_role_map_lookup"),
+            models.Index(fields=["department", "is_active"], name="emerg_role_map_dept"),
+        ]
+
+
+class EmergencyAssignmentLog(models.Model):
+    alert = models.ForeignKey(EmergencyAlert, on_delete=models.CASCADE, related_name="assignment_logs")
+    assignment = models.ForeignKey("EmergencyResponderAssignment", null=True, blank=True, on_delete=models.SET_NULL, related_name="logs")
+    responder = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="emergency_assignment_logs")
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="emergency_assignment_actions")
+    action = models.CharField(max_length=40)
+    old_status = models.CharField(max_length=32, blank=True)
+    new_status = models.CharField(max_length=32, blank=True)
+    note = models.CharField(max_length=255, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [models.Index(fields=["alert", "created_at"], name="emerg_assign_log_lookup")]
+
+
 class EmergencyResponderAssignment(models.Model):
     class Status(models.TextChoices):
         ASSIGNED = "assigned", "Assigned"
         ACKNOWLEDGED = "acknowledged", "Acknowledged"
         EN_ROUTE = "en_route", "En Route"
         ARRIVED = "arrived", "Arrived"
+        ASSISTING = "assisting", "Assisting"
         RESOLVED = "resolved", "Resolved"
+        DECLINED = "declined", "Declined"
         ESCALATED = "escalated", "Escalated"
         CANCELLED = "cancelled", "Cancelled"
 
+    class Source(models.TextChoices):
+        AUTO = "auto", "Auto route"
+        MANUAL = "manual", "Manual assignment"
+        ESCALATION = "escalation", "Escalation"
+        CLAIM = "claim", "Responder claim"
+
     alert = models.ForeignKey(EmergencyAlert, on_delete=models.CASCADE, related_name="assignments")
     responder = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="emergency_assignments")
+    role_map = models.ForeignKey("EmergencyTypeRoleMap", null=True, blank=True, on_delete=models.SET_NULL, related_name="assignments")
+    source = models.CharField(max_length=16, choices=Source.choices, default=Source.MANUAL)
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.ASSIGNED)
     assigned_at = models.DateTimeField(auto_now_add=True)
     acknowledged_at = models.DateTimeField(null=True, blank=True)
     arrived_at = models.DateTimeField(null=True, blank=True)
+    status_note = models.CharField(max_length=255, blank=True)
 
     class Meta:
         constraints = [

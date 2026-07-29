@@ -5,12 +5,12 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentSettings
-from apps.concerns.models import Concern, ConcernStatusEvent
+from apps.concerns.models import Concern
 from apps.emergencies.models import EmergencyAlert, WitnessNotification
 
 from .models import BrowserPushSubscription, Notification
 from .selectors import notification_queryset
-from .services import broadcast_notification
+from .services import broadcast_notification, notify_status_change
 from .tickets import consume_websocket_ticket
 
 
@@ -27,13 +27,10 @@ class NotificationPreferenceTests(TestCase):
             reporter=user,
             title="Broken streetlight",
             description="Streetlight near the corner is out.",
+            status=Concern.Status.IN_PROGRESS,
         )
 
-        ConcernStatusEvent.objects.create(
-            concern=concern,
-            status=Concern.Status.IN_PROGRESS,
-            note="Responder assigned.",
-        )
+        notify_status_change(concern)
 
         self.assertTrue(Notification.objects.filter(recipient=user, concern=concern).exists())
 
@@ -48,13 +45,10 @@ class NotificationPreferenceTests(TestCase):
             reporter=user,
             title="Drainage concern",
             description="Drainage is blocked.",
+            status=Concern.Status.IN_PROGRESS,
         )
 
-        ConcernStatusEvent.objects.create(
-            concern=concern,
-            status=Concern.Status.IN_PROGRESS,
-            note="Responder assigned.",
-        )
+        notify_status_change(concern)
 
         self.assertTrue(Notification.objects.filter(recipient=user, concern=concern).exists())
 

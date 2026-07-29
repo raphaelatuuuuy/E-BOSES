@@ -310,6 +310,7 @@ EMAIL_OTP_PROVIDER = env("EMAIL_OTP_PROVIDER", default="development" if IS_LOCAL
 SMS_OTP_PROVIDER = env("SMS_OTP_PROVIDER", default="development" if IS_LOCAL_DEVELOPMENT else "disabled")
 SMS_OTP_WEBHOOK_URL = env("SMS_OTP_WEBHOOK_URL", default="")
 SMS_OTP_WEBHOOK_TOKEN = env("SMS_OTP_WEBHOOK_TOKEN", default="")
+SMS_EMERGENCY_WEBHOOK_TOKEN = env("SMS_EMERGENCY_WEBHOOK_TOKEN", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@localhost")
 WEB_PUSH_PUBLIC_KEY = env("WEB_PUSH_PUBLIC_KEY", default="")
 WEB_PUSH_PRIVATE_KEY = env("WEB_PUSH_PRIVATE_KEY", default="")

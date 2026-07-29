@@ -15,6 +15,7 @@ class Concern(models.Model):
         INFRASTRUCTURE = "infrastructure", "Infrastructure"
         ENVIRONMENT = "environment", "Environment"
         PUBLIC_SAFETY = "public_safety", "Public Safety"
+        VEHICLE = "vehicle", "Vehicle"
         OTHERS = "others", "Others"
 
     class Status(models.TextChoices):
@@ -35,6 +36,20 @@ class Concern(models.Model):
     client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
     tracking_number = models.CharField(max_length=32, null=True, blank=True, unique=True)
     reporter = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="concerns")
+    category_ref = models.ForeignKey(
+        "ConcernCategory",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="concerns",
+    )
+    assigned_department = models.ForeignKey(
+        "Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="concerns",
+    )
     title = models.CharField(max_length=160)
     description = models.TextField(blank=True)
     category = models.CharField(max_length=32, choices=Category.choices, default=Category.OTHERS)
@@ -92,6 +107,180 @@ class ConcernMedia(models.Model):
     validation_status = models.CharField(max_length=16, default="accepted")
     validation_detail = models.CharField(max_length=255, blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
+
+
+class Department(models.Model):
+    """A barangay unit, desk or standing committee that can own a concern.
+
+    `short_name` exists because the full names are long ("Barangay Council for
+    the Protection of Children") and tables and map pins need something that
+    fits. `emergency_role` is separate from `description` because a unit's
+    day-to-day scope and its duty during an emergency are different questions,
+    and officials look them up at different moments.
+    """
+
+    name = models.CharField(max_length=120, unique=True)
+    code = models.SlugField(max_length=80, unique=True)
+    short_name = models.CharField(max_length=48, blank=True)
+    description = models.CharField(max_length=255, blank=True)
+    emergency_role = models.CharField(max_length=255, blank=True)
+    sort_order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    # Emergency dispatch reads these. Before this existed, dispatch routed on the
+    # closed User.responder_unit enum, so a unit created here could never receive
+    # an alert. `emergency_types` holds EmergencyAlert.Type values; it is JSON
+    # rather than a join table because it is a small closed set read on every
+    # dispatch.
+    responds_to_emergencies = models.BooleanField(default=False)
+    emergency_types = models.JSONField(default=list, blank=True)
+    # Escalation target today (city hotline handoff); the SMS fallback in a later
+    # phase sends here too.
+    contact_number = models.CharField(max_length=16, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        # A blank short name would render as an empty table cell, so fall back
+        # to the full name rather than showing nothing.
+        if not self.short_name:
+            self.short_name = self.name[:48]
+        super().save(*args, **kwargs)
+
+
+class Position(models.Model):
+    name = models.CharField(max_length=120, unique=True)
+    code = models.SlugField(max_length=80, unique=True)
+    permissions = models.JSONField(default=list, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class Designation(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="designations")
+    department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name="designations")
+    position = models.ForeignKey(Position, on_delete=models.PROTECT, related_name="designations")
+    title = models.CharField(max_length=160, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["department__name", "position__name", "user_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "department", "position"],
+                condition=models.Q(is_active=True),
+                name="concerns_unique_active_designation",
+            ),
+        ]
+
+
+class ConcernCategory(models.Model):
+    name = models.CharField(max_length=120, unique=True)
+    code = models.SlugField(max_length=80, unique=True)
+    description = models.CharField(max_length=255, blank=True)
+    icon_key = models.CharField(max_length=48, default="tag")
+    custom_icon_label = models.CharField(max_length=8, blank=True)
+    icon_image = models.FileField(storage=PublicMediaStorage(), upload_to="concern-category-icons/", blank=True)
+    department = models.ForeignKey(Department, null=True, blank=True, on_delete=models.SET_NULL, related_name="categories")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class ConcernFormField(models.Model):
+    class FieldType(models.TextChoices):
+        TEXT = "text", "Text"
+        TEXTAREA = "textarea", "Textarea"
+        SELECT = "select", "Select"
+        NUMBER = "number", "Number"
+        DATE = "date", "Date"
+        BOOLEAN = "boolean", "Boolean"
+
+    category = models.ForeignKey(ConcernCategory, on_delete=models.CASCADE, related_name="form_fields")
+    field_key = models.SlugField(max_length=80)
+    label = models.CharField(max_length=120)
+    field_type = models.CharField(max_length=24, choices=FieldType.choices, default=FieldType.TEXT)
+    is_required = models.BooleanField(default=False)
+    options = models.JSONField(default=list, blank=True)
+    sort_order = models.PositiveSmallIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["sort_order", "id"]
+        constraints = [models.UniqueConstraint(fields=["category", "field_key"], name="concerns_category_field_key_uniq")]
+
+
+class ConcernFormValue(models.Model):
+    concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="form_values")
+    field = models.ForeignKey(ConcernFormField, on_delete=models.CASCADE, related_name="values")
+    value = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["concern", "field"], name="concerns_form_value_uniq")]
+
+
+class RoutingRule(models.Model):
+    name = models.CharField(max_length=120)
+    category = models.ForeignKey(ConcernCategory, on_delete=models.CASCADE, related_name="routing_rules")
+    department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name="routing_rules")
+    priority = models.PositiveSmallIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-priority", "id"]
+        indexes = [models.Index(fields=["category", "is_active", "-priority"], name="concerns_route_lookup")]
+
+
+class ConcernTimelineEntry(models.Model):
+    class EventType(models.TextChoices):
+        SUBMITTED = "submitted", "Submitted"
+        STATUS_CHANGE = "status_change", "Status change"
+        ASSIGNMENT = "assignment", "Assignment"
+        CLARIFICATION = "clarification", "Clarification"
+        APPEAL = "appeal", "Appeal"
+        RESOLUTION = "resolution", "Resolution"
+        CUSTOM = "custom", "Custom"
+        CHAT = "chat", "Chat"
+
+    concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="timeline_entries")
+    event_type = models.CharField(max_length=32, choices=EventType.choices)
+    status = models.CharField(max_length=32, blank=True)
+    message = models.TextField()
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="concern_timeline_entries")
+    visible_to_resident = models.BooleanField(default=True)
+    is_custom = models.BooleanField(default=False)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [models.Index(fields=["concern", "created_at"], name="concerns_timeline_lookup")]
 
 
 class ConcernResolutionEvidence(models.Model):
@@ -254,6 +443,8 @@ class ConcernAiAssessment(models.Model):
     explanation = models.TextField(blank=True)
     model_version = models.CharField(max_length=80, blank=True)
     raw_result = models.JSONField(default=dict, blank=True)
+    flagged = models.BooleanField(default=False)
+    flag_reasons = models.JSONField(default=list, blank=True)
     official_decision = models.CharField(max_length=24, choices=OfficialDecision.choices, blank=True)
     official_reason = models.TextField(blank=True)
     official_reviewer = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="ai_assessment_reviews")
@@ -291,6 +482,7 @@ class ConcernClassificationConfiguration(models.Model):
     suspicious_terms = models.JSONField(default=list, blank=True)
     category_keywords = models.JSONField(default=dict, blank=True)
     label_mappings = models.JSONField(default=dict, blank=True)
+    supported_classes = models.JSONField(default=list, blank=True)
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="classification_config_updates")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -302,15 +494,47 @@ class ConcernClassificationConfiguration(models.Model):
             "suspicious_terms": ["asdf", "qwerty", "test", "testing", "12345"],
             "category_keywords": {
                 "infrastructure": ["pothole", "lubak", "kalsada", "streetlight", "ilaw", "kanal", "drainage"],
-                "environment": ["basura", "garbage", "trash", "baha", "flood", "tubig", "pollution", "punong natumba"],
-                "public_safety": ["aksidente", "accident", "sunog", "fire", "away", "crime", "danger", "delikado", "stray dog"],
+                "environment": ["basura", "garbage", "trash", "baha", "tubig", "pollution", "punong natumba"],
+                "public_safety": ["aksidente", "accident", "sunog", "away", "crime", "danger", "delikado", "stray dog"],
+                "vehicle": ["car", "truck", "motorcycle", "bus", "bicycle", "van", "jeep"],
                 "others": [],
             },
             "label_mappings": {
-                "pothole": "infrastructure", "traffic light": "infrastructure", "bench": "infrastructure",
-                "garbage": "environment", "trash": "environment", "floodwater": "environment",
-                "fire": "public_safety", "knife": "public_safety", "dog": "public_safety",
+                "traffic light": "infrastructure",
+                "bench": "infrastructure",
+                "parking meter": "infrastructure",
+                "garbage": "environment",
+                "trash": "environment",
+                "knife": "public_safety",
+                "dog": "public_safety",
+                "cat": "public_safety",
+                "handbag": "others",
+                "backpack": "others",
+                "suitcase": "others",
+                "car": "vehicle",
+                "truck": "vehicle",
+                "motorcycle": "vehicle",
+                "bus": "vehicle",
+                "bicycle": "vehicle",
+                "person": "others",
             },
+            "supported_classes": [
+                "person",
+                "bicycle",
+                "car",
+                "motorcycle",
+                "bus",
+                "truck",
+                "bench",
+                "parking meter",
+                "traffic light",
+                "knife",
+                "dog",
+                "cat",
+                "handbag",
+                "backpack",
+                "suitcase",
+            ],
         }
         obj, _ = cls.objects.get_or_create(pk=1, defaults=defaults)
         return obj
@@ -323,6 +547,7 @@ class ConcernAssignment(models.Model):
 
     concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="assignments")
     assignee = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="assigned_concerns")
+    department = models.ForeignKey(Department, null=True, blank=True, on_delete=models.SET_NULL, related_name="concern_assignments")
     assigned_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="concern_assignments_made")
     office = models.CharField(max_length=120, blank=True)
     note = models.CharField(max_length=255, blank=True)
@@ -431,3 +656,45 @@ class ConcernChatAttachment(models.Model):
 
     class Meta:
         ordering = ["created_at", "id"]
+
+
+class ChatMessageRead(models.Model):
+    message = models.ForeignKey(ConcernChatMessage, on_delete=models.CASCADE, related_name="reads")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="concern_chat_reads")
+    read_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["message", "user"], name="concerns_chat_read_uniq")]
+        indexes = [models.Index(fields=["user", "read_at"], name="concerns_chat_read_user")]
+
+
+class ChatTypingIndicator(models.Model):
+    concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="typing_indicators")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="concern_typing_indicators")
+    is_typing = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["concern", "user"], name="concerns_typing_uniq")]
+
+
+class DepartmentChatThread(models.Model):
+    department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name="chat_threads")
+    title = models.CharField(max_length=160)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="created_department_chat_threads")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+
+class DepartmentChatMessage(models.Model):
+    thread = models.ForeignKey(DepartmentChatThread, on_delete=models.CASCADE, related_name="messages")
+    sender = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="department_chat_messages")
+    body = models.TextField(max_length=2000)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [models.Index(fields=["thread", "created_at"], name="dept_chat_thread_created")]

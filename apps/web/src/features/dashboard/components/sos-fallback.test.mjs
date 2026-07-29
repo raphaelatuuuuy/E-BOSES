@@ -3,6 +3,7 @@ import test from "node:test"
 
 import {
   buildEmergencySmsHref,
+  buildEmergencySmsMessage,
   buildPinnedCoordinateAddress,
   isSosLocationReady,
 } from "./sos-fallback.ts"
@@ -21,6 +22,20 @@ test("buildEmergencySmsHref rejects unsafe or incomplete SMS configuration", () 
   assert.equal(buildEmergencySmsHref("0917;open-app", "Emergency"), "")
   assert.equal(buildEmergencySmsHref("123", "Emergency"), "")
   assert.equal(buildEmergencySmsHref("09171234567", "   "), "")
+})
+
+test("buildEmergencySmsMessage creates parser-friendly fallback SMS", () => {
+  assert.equal(
+    buildEmergencySmsMessage({
+      userId: 1034,
+      emergencyType: "Medical",
+      latitude: 14.6091,
+      longitude: 121.0855,
+      timestamp: new Date("2026-07-29T20:12:00+08:00"),
+      note: "Need Immediate Assistance",
+    }).includes("EBOSES-SOS\n\nUser ID: 1034\nEmergency Type: Medical\nLatitude: 14.6091000\nLongitude: 121.0855000"),
+    true,
+  )
 })
 
 test("buildPinnedCoordinateAddress keeps a usable, honest location when geocoding is unavailable", () => {

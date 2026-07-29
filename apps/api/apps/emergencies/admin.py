@@ -2,6 +2,7 @@ from django.contrib import admin
 
 from .models import (
     EmergencyAlert,
+    EmergencyCategory,
     EmergencyAppeal,
     EmergencyChatMessage,
     EmergencyEscalation,
@@ -17,6 +18,7 @@ from .models import (
 
 
 admin.site.register(EmergencyAlert)
+admin.site.register(EmergencyCategory)
 admin.site.register(EmergencyAppeal)
 admin.site.register(EmergencyChatMessage)
 admin.site.register(EmergencyEscalation)

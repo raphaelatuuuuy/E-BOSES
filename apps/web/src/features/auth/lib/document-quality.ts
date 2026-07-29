@@ -323,15 +323,18 @@ export class DocumentQualityAnalyzer {
     let sum = 0
     let sumSq = 0
     let brightCount = 0
-    let veryDark = 0
 
+    // `brightCount` feeds glarePct below. A parallel `veryDark` counter was
+    // tallied here and never read by anything — the underexposure check it was
+    // presumably meant to feed does not exist. Dropped rather than left in:
+    // this loop runs over every pixel of every camera frame, so an unused
+    // compare-and-increment is paid continuously while the capture UI is open.
     for (let i = 0, p = 0; i < data.length; i += 4, p++) {
       const g = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
       gray[p] = g
       sum += g
       sumSq += g * g
       if (g >= 245) brightCount++
-      if (g < 28) veryDark++
     }
 
     const mean = sum / pixels
@@ -762,10 +765,11 @@ function buildResult(
     checks.documentDetected === "warn" ||
     (s.document >= 40 && s.minSide >= SIDE_WEAK)
 
-  let phase: CaptureGuidePhase = "searching"
-  if (readyForCapture) phase = "ready"
-  else if (aligning) phase = "aligning"
-  else phase = "searching"
+  const phase: CaptureGuidePhase = readyForCapture
+    ? "ready"
+    : aligning
+      ? "aligning"
+      : "searching"
 
   let warning: DocumentQualityResult["warning"] = null
   if (checks.documentDetected === "fail") {
@@ -821,9 +825,11 @@ function buildResult(
     }
   }
 
-  let guideTitle = "Place your document inside the frame"
-  let guideSubtitle = "Searching for document"
-  let frameColor: DocumentQualityResult["frameColor"] = "blue"
+  // Declared without initialisers: the branch chain below is exhaustive, so
+  // any default here is dead and only invites the two copies drifting apart.
+  let guideTitle: string
+  let guideSubtitle: string
+  let frameColor: DocumentQualityResult["frameColor"]
 
   if (phase === "searching") {
     guideTitle = "Place your document inside the frame"

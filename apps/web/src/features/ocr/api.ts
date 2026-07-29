@@ -429,11 +429,29 @@ function normalizeRequiredSides(document: {
   return ["single"]
 }
 
-function normalizeConfiguration(raw: any): OcrConfiguration {
+/**
+ * Unnormalised JSON straight off the wire.
+ *
+ * Every use of this type is a value that has NOT been validated yet — it is the
+ * input to the `normalize*` functions below, whose entire job is to turn it into
+ * the typed shapes this module exports. Nothing outside those functions should
+ * ever hold a RawJson.
+ *
+ * Deliberately `any` rather than `unknown`: the normalisers walk deep, optional,
+ * server-defined structures, and threading `unknown` through them would mean a
+ * type guard per property read for no added safety — the runtime `??` and
+ * `Array.isArray` fallbacks already do that work. Confining the escape hatch to
+ * one named, documented alias is the point; the twenty scattered inline `any`s
+ * this replaced said nothing about why they were there.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type RawJson = any
+
+function normalizeConfiguration(raw: RawJson): OcrConfiguration {
   const settings = raw?.settings ?? {}
   const topLevelRules = raw?.rules ?? []
-  const documentTypes = (raw?.document_types ?? []).map((document: any) => {
-    const fields = (document.fields ?? []).map((field: any) => {
+  const documentTypes = (raw?.document_types ?? []).map((document: RawJson) => {
+    const fields = (document.fields ?? []).map((field: RawJson) => {
       const hints =
         field.extraction_hints && typeof field.extraction_hints === "object"
           ? { ...field.extraction_hints }
@@ -457,7 +475,7 @@ function normalizeConfiguration(raw: any): OcrConfiguration {
         extraction_hints: hints,
       }
     })
-    const fieldById = new Map(fields.map((field: any) => [field.id, field.key]))
+    const fieldById = new Map(fields.map((field: RawJson) => [field.id, field.key]))
     return ({
     ...document,
     key: document.key ?? document.code,
@@ -489,7 +507,7 @@ function normalizeConfiguration(raw: any): OcrConfiguration {
     sample_url: document.sample_url ?? null,
     sample_original_filename: document.sample_original_filename || "",
     samples: Array.isArray(document.samples)
-      ? document.samples.map((sample: any) => ({
+      ? document.samples.map((sample: RawJson) => ({
           side: (sample.side || "single") as ProofSide,
           label: sample.label || String(sample.side || "single"),
           url: sample.url || "",
@@ -511,12 +529,12 @@ function normalizeConfiguration(raw: any): OcrConfiguration {
     fields,
     rules: ([
       ...(document.rules ?? []),
-      ...topLevelRules.filter((rule: any) =>
+      ...topLevelRules.filter((rule: RawJson) =>
         rule.document_type_id === document.id ||
         rule.document_type === document.code ||
         rule.document_type === document.key,
       ),
-    ]).map((rule: any) => ({
+    ]).map((rule: RawJson) => ({
       ...rule,
       key: rule.key ?? rule.code,
       name: rule.name ?? rule.code ?? "Validation rule",
@@ -728,18 +746,18 @@ export function getMyResidenceVerification() {
 }
 
 export function getOcrDraft() {
-  return apiRequest<any>("/auth/ocr/config/draft/").then(normalizeConfiguration)
+  return apiRequest<RawJson>("/auth/ocr/config/draft/").then(normalizeConfiguration)
 }
 
 export function saveOcrDraft(configuration: OcrConfiguration) {
-  return apiRequest<any>("/auth/ocr/config/draft/", {
+  return apiRequest<RawJson>("/auth/ocr/config/draft/", {
     method: "PATCH",
     body: JSON.stringify(serializeConfiguration(configuration)),
   }).then(normalizeConfiguration)
 }
 
 export function publishOcrDraft(revision: number) {
-  return apiRequest<any>("/auth/ocr/config/publish/", {
+  return apiRequest<RawJson>("/auth/ocr/config/publish/", {
     method: "POST",
     body: JSON.stringify({ revision }),
   }).then((payload) => ({
@@ -749,14 +767,14 @@ export function publishOcrDraft(revision: number) {
 }
 
 export function resetOcrDraft(revision?: number) {
-  return apiRequest<any>("/auth/ocr/config/reset-defaults/", {
+  return apiRequest<RawJson>("/auth/ocr/config/reset-defaults/", {
     method: "POST",
     body: JSON.stringify({ revision }),
   }).then(normalizeConfiguration)
 }
 
 export function getOcrServiceHealth() {
-  return apiRequest<any>("/auth/ocr/health/").then((health) => ({
+  return apiRequest<RawJson>("/auth/ocr/health/").then((health) => ({
     ...health,
     configured: health.configured ?? health.status !== "not_configured",
     message: health.message ?? health.error_message,
@@ -764,7 +782,7 @@ export function getOcrServiceHealth() {
 }
 
 export function recheckOcrServiceHealth() {
-  return apiRequest<any>("/auth/ocr/health/recheck/", { method: "POST" }).then((health) => ({
+  return apiRequest<RawJson>("/auth/ocr/health/recheck/", { method: "POST" }).then((health) => ({
     ...health,
     configured: health.configured ?? health.status !== "not_configured",
     message: health.message ?? health.error_message,
@@ -805,7 +823,7 @@ export function uploadTemplateSample(
   const formData = new FormData()
   formData.append("file", file)
   formData.append("side", side)
-  return apiRequest<any>(`/auth/ocr/document-types/${encodeURIComponent(documentType)}/sample/`, {
+  return apiRequest<RawJson>(`/auth/ocr/document-types/${encodeURIComponent(documentType)}/sample/`, {
     method: "POST",
     body: formData,
   }).then((document) => ({
@@ -820,7 +838,7 @@ export function deleteTemplateSample(
   documentType: string,
   side: ProofSide | "front" | "back" | "single" = "single",
 ) {
-  return apiRequest<any>(
+  return apiRequest<RawJson>(
     `/auth/ocr/document-types/${encodeURIComponent(documentType)}/sample/?side=${encodeURIComponent(side)}`,
     { method: "DELETE" },
   ).then((document) => ({

@@ -35,3 +35,6 @@ opencv-python-headless>=4.8,<5
 
 # Concern classification (downloads are pinned during setup/deployment)
 ultralytics>=8.4,<9
+
+# Official OCR template testing
+easyocr>=1.7,<2

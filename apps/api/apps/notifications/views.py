@@ -25,7 +25,10 @@ class NotificationListView(APIView):
 
     def get(self, request):
         unread_only = request.query_params.get("unread_only", "").lower() in ("true", "1")
+        include_archived = request.query_params.get("include_archived", "").lower() in ("true", "1")
         qs = Notification.objects.filter(recipient=request.user).select_related("recipient", "concern", "emergency")
+        if not include_archived:
+            qs = qs.filter(is_archived=False)
         if unread_only:
             qs = qs.filter(is_read=False)
         notification_type = request.query_params.get("type", "").strip()
@@ -33,7 +36,7 @@ class NotificationListView(APIView):
             qs = qs.filter(type=notification_type)
         try:
             page = max(1, int(request.query_params.get("page", 1)))
-            page_size = min(100, max(1, int(request.query_params.get("page_size", 20))))
+            page_size = min(50, max(1, int(request.query_params.get("page_size", 20))))
         except (TypeError, ValueError):
             return Response(
                 {"detail": "Page and page size must be whole numbers."},
@@ -74,6 +77,37 @@ class NotificationReadAllView(APIView):
         Notification.objects.filter(recipient=request.user, is_read=False).update(is_read=True)
         mark_witness_notifications_read(request.user)
         return Response({"detail": "All notifications marked as read."})
+
+
+class NotificationArchiveView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        notification = Notification.objects.filter(pk=pk, recipient=request.user).first()
+        if not notification:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        notification.is_archived = True
+        notification.save(update_fields=["is_archived"])
+        return Response(NotificationSerializer(notification).data)
+
+
+class NotificationDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk):
+        notification = Notification.objects.filter(pk=pk, recipient=request.user).first()
+        if not notification:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        notification.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class NotificationArchiveAllView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        count = Notification.objects.filter(recipient=request.user, is_read=True, is_archived=False).update(is_archived=True)
+        return Response({"detail": f"{count} notifications archived."})
 
 
 class BrowserPushTestView(APIView):

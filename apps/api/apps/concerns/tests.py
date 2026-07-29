@@ -115,7 +115,7 @@ class PrivateMediaAccessTests(APITestCase):
         self.assertTrue(preview.startswith(b"\xff\xd8"))
         self.assertNotEqual(preview, png_bytes())
         self.media.refresh_from_db()
-        self.assertIn("redacted-v2-", self.media.preview_file.name)
+        self.assertIn("redacted-v4-", self.media.preview_file.name)
 
     def test_public_cannot_access_private_concern_media_preview(self):
         self.concern.visibility = Concern.Visibility.PRIVATE
@@ -190,7 +190,7 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(concern.ai_assessment.status, ConcernAiAssessment.Status.PENDING)
         self.assertEqual(response.data["ai_assessment"]["status"], ConcernAiAssessment.Status.PENDING)
         self.assertRegex(response.data["tracking_id"], r"^RPT-\d{4}-\d{6}$")
-        self.assertEqual(response.data["validation_status"], "accepted")
+        self.assertEqual(response.data["validation_status"], "pending")
         enqueue.assert_called_once_with(concern.pk)
 
     def test_unverified_account_cannot_access_resident_dashboard_apis(self):
@@ -796,6 +796,44 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(event.note, "Maintenance work has started.")
         self.assertEqual(event.actor, official)
 
+    def test_status_update_creates_exactly_one_notification_for_reporter(self):
+        User = get_user_model()
+        official = User.objects.create_user(
+            email="official-status-dedupe@example.com",
+            phone_number="+639100000106",
+            password="pass",
+            role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
+        )
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Needs a single notification",
+            status=Concern.Status.SUBMITTED,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+            update_text="Submitted for barangay review.",
+        )
+        self.client.force_authenticate(official)
+
+        response = self.client.post(
+            f"/api/concerns/{concern.pk}/status/",
+            {
+                "status": Concern.Status.UNDER_REVIEW,
+                "note": "Official review has started.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(concern.status_events.count(), 1)
+        self.assertEqual(
+            Notification.objects.filter(
+                recipient=self.resident,
+                concern=concern,
+                type=Notification.Type.UNDER_REVIEW,
+            ).count(),
+            1,
+        )
+
     def test_barangay_official_can_move_submitted_report_to_under_review(self):
         User = get_user_model()
         official = User.objects.create_user(
@@ -1087,6 +1125,132 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(assessment.official_decision, "related")
         self.assertEqual(assessment.official_reviewer_id, self.official.pk)
         self.assertTrue(AuditLog.objects.filter(action="concern.ai_assessment_reviewed", actor=self.official).exists())
+
+    @override_settings(EBOSES_YOLO_MODEL_PATH="")
+    def test_ai_pipeline_category_mismatch_flags_for_review_without_touching_validation_gate(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Blocked drainage report",
+            description="Maraming basura at trash sa kanal, tambak na garbage malapit sa amin.",
+            category=Concern.Category.INFRASTRUCTURE,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+            status=Concern.Status.SUBMITTED,
+        )
+
+        assessment = process_concern_ai(concern.pk)
+
+        self.assertFalse(assessment.category_match)
+        self.assertTrue(assessment.flagged)
+        reason_codes = {entry["reason"] for entry in assessment.flag_reasons}
+        self.assertIn("category_mismatch", reason_codes)
+        mismatch_entry = next(entry for entry in assessment.flag_reasons if entry["reason"] == "category_mismatch")
+        self.assertEqual(mismatch_entry["configured_action"], ConcernClassificationConfiguration.current().mismatch_action)
+
+        concern.refresh_from_db()
+        # Soft gate: the AI never moves the real workflow state, only the
+        # advisory summary text changes.
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.ACCEPTED)
+        self.assertEqual(concern.status, Concern.Status.SUBMITTED)
+        self.assertIn("flagged", concern.validation_summary.lower())
+
+    @override_settings(EBOSES_YOLO_MODEL_PATH="")
+    def test_ai_pipeline_clean_run_is_not_flagged(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Baradong kanal sa kalsada",
+            description="May baradong kanal at lubak sa aming kalsada, kailangan pong ayusin agad.",
+            category=Concern.Category.INFRASTRUCTURE,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+
+        assessment = process_concern_ai(concern.pk)
+
+        self.assertTrue(assessment.category_match)
+        self.assertFalse(assessment.flagged)
+        self.assertEqual(assessment.flag_reasons, [])
+        concern.refresh_from_db()
+        self.assertEqual(concern.validation_summary, "AI checks passed; cleared for official review.")
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.ACCEPTED)
+
+    @override_settings(EBOSES_YOLO_MODEL_PATH="")
+    def test_flagged_completion_notifies_each_verified_official_once(self):
+        from apps.concerns.tasks import process_concern_ai_task
+
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Blocked drainage report",
+            description="Maraming basura at trash sa kanal, tambak na garbage malapit sa amin.",
+            category=Concern.Category.INFRASTRUCTURE,
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            process_concern_ai_task.apply(args=[concern.pk]).get()
+
+        concern.ai_assessment.refresh_from_db()
+        self.assertTrue(concern.ai_assessment.flagged)
+        notifications = Notification.objects.filter(
+            type="concern_ai_flagged",
+            recipient=self.official,
+            concern=concern,
+        )
+        self.assertEqual(notifications.count(), 1)
+
+    @override_settings(EBOSES_YOLO_MODEL_PATH="")
+    def test_managed_concern_list_ai_flagged_filter_excludes_after_official_decision(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Blocked drainage report",
+            description="Maraming basura at trash sa kanal, tambak na garbage malapit sa amin.",
+            category=Concern.Category.INFRASTRUCTURE,
+        )
+        process_concern_ai(concern.pk)
+        concern.ai_assessment.refresh_from_db()
+        self.assertTrue(concern.ai_assessment.flagged)
+
+        self.client.force_authenticate(self.official)
+        flagged_response = self.client.get("/api/concerns/manage/?ai=flagged")
+        self.assertEqual(flagged_response.status_code, status.HTTP_200_OK)
+        self.assertIn(concern.pk, [item["id"] for item in flagged_response.data])
+
+        review_response = self.client.post(
+            f"/api/concerns/{concern.pk}/ai-review/",
+            {"decision": "needs_review", "reason": "Needs a second look from the barangay office."},
+            format="json",
+        )
+        self.assertEqual(review_response.status_code, status.HTTP_200_OK)
+
+        excluded_response = self.client.get("/api/concerns/manage/?ai=flagged")
+        self.assertEqual(excluded_response.status_code, status.HTTP_200_OK)
+        self.assertNotIn(concern.pk, [item["id"] for item in excluded_response.data])
+
+    @override_settings(EBOSES_YOLO_MODEL_PATH="")
+    def test_ai_review_related_decision_clears_flag_but_keeps_flag_reasons(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Blocked drainage report",
+            description="Maraming basura at trash sa kanal, tambak na garbage malapit sa amin.",
+            category=Concern.Category.INFRASTRUCTURE,
+        )
+        process_concern_ai(concern.pk)
+        concern.ai_assessment.refresh_from_db()
+        self.assertTrue(concern.ai_assessment.flagged)
+        original_reasons = concern.ai_assessment.flag_reasons
+
+        self.client.force_authenticate(self.official)
+        response = self.client.post(
+            f"/api/concerns/{concern.pk}/ai-review/",
+            {"decision": "related", "reason": "Confirmed with the resident; this report is legitimate."},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        concern.ai_assessment.refresh_from_db()
+        self.assertFalse(concern.ai_assessment.flagged)
+        self.assertEqual(concern.ai_assessment.flag_reasons, original_reasons)
+        self.assertEqual(concern.ai_assessment.official_decision, "related")
+        # Clearing the flag never touches the concern's real workflow state.
+        concern.refresh_from_db()
+        self.assertEqual(concern.status, Concern.Status.SUBMITTED)
 
     def test_resident_account_request_and_sos_setting_are_persisted(self):
         self.client.force_authenticate(self.resident)
@@ -1488,6 +1652,13 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(appeal.status, ConcernAppeal.Status.APPROVED)
         self.assertEqual(concern.status, Concern.Status.SUBMITTED)
         self.assertTrue(Notification.objects.filter(recipient=self.resident, type=Notification.Type.APPEAL_APPROVED).exists())
+        # Approving an appeal reopens the concern to `submitted`, but the reporter should
+        # receive exactly one `appeal_approved` notification for this action -- not a second,
+        # generic status-change notification. (That post_save signal was removed in Task 0.5;
+        # notifications are now created explicitly per action.)
+        resident_notifications = Notification.objects.filter(recipient=self.resident, concern=concern)
+        self.assertEqual(resident_notifications.count(), 1)
+        self.assertEqual(resident_notifications.get().type, Notification.Type.APPEAL_APPROVED)
 
 
 class ConcernChatAttachmentAPITests(APITestCase):
@@ -1581,3 +1752,165 @@ class ConcernChatAttachmentAPITests(APITestCase):
         self.client.force_authenticate(self.other)
         response = self.client.get(f"/api/concerns/chat-media/{attachment.pk}/")
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class AssignedResponderStatusProgressionAPITests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.resident = User.objects.create_user(
+            email="progress-resident@example.com",
+            phone_number="+639100000801",
+            password="pass",
+            status=User.Status.VERIFIED,
+        )
+        self.responder = User.objects.create_user(
+            email="progress-responder@example.com",
+            phone_number="+639100000802",
+            password="pass",
+            role=User.Role.FIRST_RESPONDER,
+            status=User.Status.VERIFIED,
+        )
+        self.other_responder = User.objects.create_user(
+            email="progress-other-responder@example.com",
+            phone_number="+639100000803",
+            password="pass",
+            role=User.Role.FIRST_RESPONDER,
+            status=User.Status.VERIFIED,
+        )
+
+    def test_assigned_responder_can_move_assigned_to_in_progress(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Assigned pothole",
+            status=Concern.Status.ASSIGNED,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        ConcernAssignment.objects.create(
+            concern=concern,
+            assignee=self.responder,
+            status=ConcernAssignment.Status.ACTIVE,
+        )
+        self.client.force_authenticate(self.responder)
+
+        response = self.client.post(
+            f"/api/concerns/{concern.pk}/status/",
+            {"status": Concern.Status.IN_PROGRESS, "note": "Responder is now on site."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        concern.refresh_from_db()
+        self.assertEqual(concern.status, Concern.Status.IN_PROGRESS)
+
+    def test_assigned_responder_resolve_requires_evidence_then_succeeds_with_it(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Assigned drainage",
+            status=Concern.Status.IN_PROGRESS,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        ConcernAssignment.objects.create(
+            concern=concern,
+            assignee=self.responder,
+            status=ConcernAssignment.Status.ACTIVE,
+        )
+        self.client.force_authenticate(self.responder)
+
+        missing_evidence = self.client.post(
+            f"/api/concerns/{concern.pk}/status/",
+            {
+                "status": Concern.Status.RESOLVED,
+                "note": "Drainage clearing was completed today.",
+                "status_version": concern.status_version,
+            },
+            format="json",
+        )
+        self.assertEqual(missing_evidence.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("resolution_evidence", missing_evidence.data)
+
+        resolved = self.client.post(
+            f"/api/concerns/{concern.pk}/status/",
+            {
+                "status": Concern.Status.RESOLVED,
+                "note": "Drainage clearing was completed today.",
+                "status_version": concern.status_version,
+                "resolution_evidence": png_upload("completed-drainage.png"),
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(resolved.status_code, status.HTTP_200_OK)
+        concern.refresh_from_db()
+        self.assertEqual(concern.status, Concern.Status.RESOLVED)
+
+    def test_assigned_responder_cannot_reject(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Assigned noise complaint",
+            status=Concern.Status.ASSIGNED,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        ConcernAssignment.objects.create(
+            concern=concern,
+            assignee=self.responder,
+            status=ConcernAssignment.Status.ACTIVE,
+        )
+        self.client.force_authenticate(self.responder)
+
+        response = self.client.post(
+            f"/api/concerns/{concern.pk}/status/",
+            {"status": Concern.Status.REJECTED, "note": "This is not a valid complaint."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        concern.refresh_from_db()
+        self.assertEqual(concern.status, Concern.Status.ASSIGNED)
+
+    def test_non_assigned_responder_cannot_progress_someone_elses_concern(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Assigned to a different responder",
+            status=Concern.Status.ASSIGNED,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        ConcernAssignment.objects.create(
+            concern=concern,
+            assignee=self.responder,
+            status=ConcernAssignment.Status.ACTIVE,
+        )
+        self.client.force_authenticate(self.other_responder)
+
+        response = self.client.post(
+            f"/api/concerns/{concern.pk}/status/",
+            {"status": Concern.Status.IN_PROGRESS, "note": "Trying to take over this job."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        concern.refresh_from_db()
+        self.assertEqual(concern.status, Concern.Status.ASSIGNED)
+
+    def test_responder_with_cancelled_assignment_cannot_progress(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Reassigned pothole",
+            status=Concern.Status.ASSIGNED,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        ConcernAssignment.objects.create(
+            concern=concern,
+            assignee=self.responder,
+            status=ConcernAssignment.Status.CANCELLED,
+        )
+        self.client.force_authenticate(self.responder)
+
+        response = self.client.post(
+            f"/api/concerns/{concern.pk}/status/",
+            {"status": Concern.Status.IN_PROGRESS, "note": "No longer my assignment."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        concern.refresh_from_db()
+        self.assertEqual(concern.status, Concern.Status.ASSIGNED)

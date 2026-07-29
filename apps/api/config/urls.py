@@ -14,6 +14,7 @@ from apps.concerns.views import (
     BarangayEventManageListCreateView,
     BarangayEventTodayView,
 )
+from apps.config_summary import ConfigurationSummaryView
 from apps.dashboard_views import OfficialDashboardSummaryView, ResidentDashboardSummaryView, ResponderDashboardSummaryView
 from apps.live_map import (
     LocationMapContextView,
@@ -36,6 +37,7 @@ urlpatterns = [
     path("api/barangay-events/manage/", BarangayEventManageListCreateView.as_view(), name="barangay-event-manage"),
     path("api/barangay-events/manage/<int:pk>/", BarangayEventManageDetailView.as_view(), name="barangay-event-manage-detail"),
     path("api/responders/active/", ActiveResponderListView.as_view(), name="active-responders"),
+    path("api/config/summary/", ConfigurationSummaryView.as_view(), name="config-summary"),
     path("api/emergencies/", include("apps.emergencies.urls")),
     path("api/notifications/", include("apps.notifications.urls")),
     path("api/dashboard/resident/summary/", ResidentDashboardSummaryView.as_view(), name="dashboard-resident-summary"),

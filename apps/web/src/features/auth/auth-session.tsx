@@ -2,7 +2,7 @@
 import * as React from "react"
 
 import { getMe, type AuthUser, type UserStatus } from "@/features/auth/api"
-import { clearAuthTokens, getAccessToken, logoutSession, refreshSession, setAuthTokens } from "@/lib/api"
+import { ApiError, clearAuthTokens, getAccessToken, logoutSession, refreshSession, setAuthTokens } from "@/lib/api"
 
 interface AuthSessionContextValue {
   user: AuthUser | null
@@ -60,7 +60,11 @@ export function AuthSessionProvider({ children }: { children: React.ReactNode })
       const nextUser = await getMe()
       setUser(nextUser)
       return nextUser
-    } catch {
+    } catch (error) {
+      // 5xx / network errors — transient, don't wipe the session
+      if (error instanceof ApiError && error.status >= 500) {
+        return null
+      }
       clearSession()
       return null
     } finally {

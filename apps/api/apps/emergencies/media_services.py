@@ -6,7 +6,8 @@ from django.core.files.base import ContentFile
 
 from apps.accounts.media_forensics import analyze_video_authenticity, check_media_authenticity
 from apps.accounts.media_services import build_redacted_preview_bytes
-from apps.accounts.services import phash_file, scan_uploaded_file, validate_emergency_media_file
+from apps.accounts.services import scan_uploaded_file, validate_emergency_media_file
+from apps.media_utils import phash_file
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 VIDEO_MIME_BY_EXTENSION = {
@@ -111,12 +112,12 @@ def validate_chat_attachment(uploaded_file):
 
 def ensure_emergency_media_preview(media):
     preview_name = (media.preview_file.name or "").lower() if media.preview_file else ""
-    if preview_name and "/redacted-v2-" in preview_name and preview_name.endswith(".jpg"):
+    if preview_name and "/redacted-v3-" in preview_name and preview_name.endswith(".jpg"):
         return media.preview_file
     if media.preview_file:
         media.preview_file.delete(save=False)
     media.preview_file.save(
-        f"redacted-v2-{media.pk}.jpg",
+        f"redacted-v3-{media.pk}.jpg",
         ContentFile(build_redacted_preview_bytes(media.file, media.mime_type)),
         save=True,
     )
