@@ -21,44 +21,36 @@ import { useAuthSession } from "@/features/auth/auth-session"
 import {
   checkConcernMedia,
   createConcern,
+  precheckConcern,
   type Concern,
-  type ConcernCategory,
   type ConcernVisibility,
 } from "@/features/dashboard/api"
 import { Dialog, DialogBody } from "@/features/dashboard/components/dialog"
 import { ReportStatusDialog, statusModeFromReport } from "@/features/dashboard/components/report-status-dialog"
 import { ApiError } from "@/lib/api"
+import { useCategoryOptions } from "@/features/dashboard/lib/concern-categories"
 
 const LocationPickerModal = lazy(() => import("@/features/dashboard/components/location-picker"))
 
-const concernConfig = [
-  {
-    label: "Infrastructure",
-    value: "infrastructure" as ConcernCategory,
-    desc: "Roads, utilities, buildings",
-    icon: TrafficConeIcon,
-  },
-  {
-    label: "Environment",
-    value: "environment" as ConcernCategory,
-    desc: "Pollution, waste, nature",
-    icon: LeafIcon,
-  },
-  {
-    label: "Public Safety",
-    value: "public_safety" as ConcernCategory,
-    desc: "Safety risks, suspicious activity",
-    icon: ShieldCheckIcon,
-  },
-  {
-    label: "Others",
-    value: "others" as ConcernCategory,
-    desc: "Any other concern",
-    icon: CircleEllipsisIcon,
-  },
-] as const
+/** Icons per known category code; anything an official adds later falls back to
+ *  a neutral icon rather than rendering blank. */
+const CATEGORY_ICONS: Record<string, typeof TrafficConeIcon> = {
+  infrastructure: TrafficConeIcon,
+  environment: LeafIcon,
+  public_safety: ShieldCheckIcon,
+  others: CircleEllipsisIcon,
+}
 
-const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/jpg"]
+interface ConcernOption {
+  label: string
+  value: string
+  desc: string
+  icon: typeof TrafficConeIcon
+  customIconLabel?: string
+  iconImageUrl?: string
+}
+
+const ALLOWED_TYPES = ["image/png", "image/jpeg"]
 const ACCEPT_STRING = ".png,.jpg,.jpeg," + ALLOWED_TYPES.join(",")
 const MAX_FILE_SIZE = 2 * 1024 * 1024
 const MAX_FILES = 5
@@ -175,6 +167,17 @@ export function CreateReportDialog({
 } = {}) {
   const navigate = useNavigate()
   const { user } = useAuthSession()
+  // Categories come from Configuration, so adding or renaming one there
+  // changes this form without a code change.
+  const { categories: categoryOptions } = useCategoryOptions()
+  const concernConfig: ConcernOption[] = categoryOptions.map((category) => ({
+    label: category.name,
+    value: category.code,
+    desc: category.description || category.department?.name || "",
+    icon: CATEGORY_ICONS[category.code] ?? CircleEllipsisIcon,
+    customIconLabel: category.custom_icon_label,
+    iconImageUrl: category.icon_image_url,
+  }))
   const [internalOpen, setInternalOpen] = useState(false)
   const open = controlledOpen ?? internalOpen
   const setOpen = (value: boolean) => {
@@ -203,6 +206,7 @@ export function CreateReportDialog({
   const [isCheckingMedia, setIsCheckingMedia] = useState(false)
   const [submittedReport, setSubmittedReport] = useState<Concern | null>(null)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const [precheckNotice, setPrecheckNotice] = useState("")
   const [draftRestored, setDraftRestored] = useState(false)
   /** Confirm sheet when leaving with a draft */
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false)
@@ -393,7 +397,7 @@ export function CreateReportDialog({
       (text.startsWith("[") && text.endsWith("]")) ||
       (text.startsWith("('") && text.endsWith("')"))
     ) {
-      text = text.replace(/^[\[(]+|[)\]]+$/g, "").trim()
+      text = text.replace(/^[[(]+|[)\]]+$/g, "").trim()
     }
     text = text.replace(/^['"]+|['"]+$/g, "").trim()
     return text || "This photo could not be validated."
@@ -505,6 +509,31 @@ export function CreateReportDialog({
 
     setIsSubmitting(true)
     try {
+      const precheckData = new FormData()
+      precheckData.append("title", title)
+      precheckData.append("description", description.trim())
+      precheckData.append("category", concernConfig.find((c) => c.label === concern)?.value ?? "others")
+      if (locationPin) {
+        precheckData.append("latitude", locationPin.lat.toFixed(7))
+        precheckData.append("longitude", locationPin.lng.toFixed(7))
+      }
+      if (mediaFiles[0]) precheckData.append("media", mediaFiles[0])
+      const precheck = await precheckConcern(precheckData)
+      const previousNotice = precheckNotice
+      setPrecheckNotice(precheck.message || "")
+      if (!precheck.can_submit || (precheck.needs_revision && precheck.message !== previousNotice)) {
+        setFieldErrors((current) => ({
+          ...current,
+          ...precheck.field_errors,
+          precheck: precheck.can_submit ? `${precheck.message} Press Report again to continue.` : precheck.message,
+        }))
+        setIsSubmitting(false)
+        return
+      }
+      setFieldErrors((current) => {
+        const { precheck: _, ...rest } = current
+        return rest
+      })
       const report = await createConcern(formData)
       await deleteDraft()
       setSubmittedReport(report)
@@ -668,83 +697,80 @@ export function CreateReportDialog({
                     el.style.height = "auto"
                     el.style.height = `${Math.min(Math.max(el.scrollHeight, 72), 220)}px`
                   }}
-                  placeholder="What's happening in your barangay?"
-                  className="max-h-[220px] min-h-[72px] w-full resize-none overflow-y-auto border-0 bg-transparent text-[17px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400"
-                />
+                   placeholder="What's happening in your barangay?"
+                   className="max-h-[220px] min-h-[72px] w-full resize-none overflow-y-auto border-0 bg-transparent text-[17px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400"
+                  />
 
-                {hasMedia ? (
-                  <div className="mt-3 flex flex-wrap gap-2.5">
-                    {mediaFiles.map((file, index) => {
-                      const url = previewUrls[index]
-                      return (
-                        <div
-                          key={`${file.name}-${index}`}
-                          className="relative h-[148px] w-[148px] overflow-hidden rounded-2xl bg-neutral-100 shadow-sm ring-1 ring-black/5 sm:h-[168px] sm:w-[168px]"
+                  <div>
+                    <div className="mt-3 flex flex-wrap gap-2.5 min-h-[168px]">
+                      {hasMedia
+                        ? mediaFiles.map((file, index) => {
+                            const url = previewUrls[index]
+                            return (
+                              <div
+                                key={`${file.name}-${index}`}
+                                className="relative h-[148px] w-[148px] overflow-hidden rounded-2xl bg-neutral-100 shadow-sm ring-1 ring-black/5 sm:h-[168px] sm:w-[168px]"
+                              >
+                                <button
+                                  type="button"
+                                  className="block h-full w-full"
+                                  onClick={() => setPreviewUrl(url)}
+                                >
+                                  <img src={url} alt="" className="h-full w-full object-cover" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setMediaFiles((prev) => prev.filter((_, i) => i !== index))
+                                  }
+                                  className="absolute right-2 top-2 flex size-8 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-[2px] transition-colors hover:bg-black/75"
+                                  aria-label="Remove photo"
+                                >
+                                  <XIcon className="size-4" strokeWidth={2.25} />
+                                </button>
+                              </div>
+                            )
+                          })
+                        : null}
+                    </div>
+
+                    {locationPin && address ? (
+                      <div className="mt-3 flex items-center gap-3 rounded-md border border-neutral-300 bg-white px-3.5 py-2.5">
+                        <button
+                          type="button"
+                          onClick={() => setLocationOpen(true)}
+                          className="flex min-w-0 flex-1 items-center gap-3 text-left"
                         >
-                          <button
-                            type="button"
-                            className="block h-full w-full"
-                            onClick={() => setPreviewUrl(url)}
-                          >
-                            <img src={url} alt="" className="h-full w-full object-cover" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setMediaFiles((prev) => prev.filter((_, i) => i !== index))
-                            }
-                            className="absolute right-2 top-2 flex size-8 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-[2px] transition-colors hover:bg-black/75"
-                            aria-label="Remove photo"
-                          >
-                            <XIcon className="size-4" strokeWidth={2.25} />
-                          </button>
-                        </div>
-                      )
-                    })}
-                  </div>
-                ) : null}
-
-                {locationPin && address ? (
-                  <div className="mt-3 flex items-center gap-3 rounded-md border border-neutral-300 bg-white px-3.5 py-2.5">
-                    <button
-                      type="button"
-                      onClick={() => setLocationOpen(true)}
-                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                    >
-                      <img
-                        src="/contents/map-pin-gps.png"
-                        alt=""
-                        className="size-5 shrink-0 object-contain"
-                        aria-hidden
-                      />
-                      <span className="min-w-0">
-                        <span className="block truncate text-[14px] font-semibold leading-tight text-neutral-900">
-                          {addressPrimary || address}
-                        </span>
-                        {addressSecondary ? (
-                          <span className="mt-0.5 block truncate text-[12px] leading-snug text-neutral-500">
-                            {addressSecondary}
+                          <MapPinIcon className="size-5 shrink-0 text-black" />
+                          <span className="min-w-0">
+                            <span className="block truncate text-[14px] font-semibold leading-tight text-neutral-900">
+                              {addressPrimary || address}
+                            </span>
+                            {addressSecondary ? (
+                              <span className="mt-0.5 block truncate text-[12px] leading-snug text-neutral-500">
+                                {addressSecondary}
+                              </span>
+                            ) : null}
                           </span>
-                        ) : null}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setLocationPin(null)
-                        setAddress("")
-                        setAddressPrimary("")
-                        setAddressSecondary("")
-                      }}
-                      className="flex size-10 shrink-0 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800"
-                      aria-label="Remove location"
-                    >
-                      <XIcon className="size-6" strokeWidth={1.75} />
-                    </button>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLocationPin(null)
+                            setAddress("")
+                            setAddressPrimary("")
+                            setAddressSecondary("")
+                          }}
+                          className="flex size-10 shrink-0 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800"
+                          aria-label="Remove location"
+                        >
+                          <XIcon className="size-6" strokeWidth={1.75} />
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
 
-                {(() => {
+                  {(() => {
                   const messages = [
                     fieldErrors.description,
                     fieldErrors.concern,
@@ -752,6 +778,7 @@ export function CreateReportDialog({
                       ? fieldErrors.media.split("\n").map((m) => m.trim()).filter(Boolean)
                       : []),
                     fieldErrors.address,
+                    fieldErrors.precheck,
                   ].filter((msg): msg is string => Boolean(msg && msg.trim()))
                   if (messages.length === 0) return null
                   return (
@@ -765,6 +792,11 @@ export function CreateReportDialog({
                     </ul>
                   )
                 })()}
+                {precheckNotice ? (
+                  <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium leading-relaxed text-amber-900">
+                    {precheckNotice}
+                  </p>
+                ) : null}
               </div>
 
               {/* Bottom chrome: toolbar always first; categories expand below it on mobile */}
@@ -848,7 +880,13 @@ export function CreateReportDialog({
                               selected ? "bg-neutral-100" : "bg-transparent hover:bg-neutral-100",
                             )}
                           >
-                            <Icon className="size-5 shrink-0 text-neutral-600" strokeWidth={1.75} />
+                            {item.iconImageUrl ? (
+                              <img src={item.iconImageUrl} alt="" className="size-8 shrink-0 rounded-lg object-cover" />
+                            ) : item.customIconLabel ? (
+                              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-xs font-black text-neutral-700">{item.customIconLabel}</span>
+                            ) : (
+                              <Icon className="size-5 shrink-0 text-neutral-600" strokeWidth={1.75} />
+                            )}
                             <span className="min-w-0">
                               <span className="block text-[14px] font-semibold">{item.label}</span>
                               <span className="mt-0.5 block text-[12px] text-neutral-500">
@@ -895,7 +933,13 @@ export function CreateReportDialog({
                             selected ? "bg-neutral-100" : "bg-transparent hover:bg-neutral-100",
                           )}
                         >
-                          <Icon className="size-5 shrink-0 text-neutral-600" strokeWidth={1.75} />
+                          {item.iconImageUrl ? (
+                            <img src={item.iconImageUrl} alt="" className="size-8 shrink-0 rounded-lg object-cover" />
+                          ) : item.customIconLabel ? (
+                            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-xs font-black text-neutral-700">{item.customIconLabel}</span>
+                          ) : (
+                            <Icon className="size-5 shrink-0 text-neutral-600" strokeWidth={1.75} />
+                          )}
                           <span className="min-w-0">
                             <span className="block text-[14px] font-semibold">{item.label}</span>
                             <span className="mt-0.5 block text-[12px] text-neutral-500">

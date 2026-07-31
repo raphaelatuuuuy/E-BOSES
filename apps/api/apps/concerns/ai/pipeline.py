@@ -5,10 +5,10 @@ from django.db import transaction
 
 from apps.concerns.models import Concern, ConcernAiAssessment, ConcernClassificationConfiguration
 
-from . import text_classifier
 from .image_detector import ImageDetectorNotConfigured, YoloImageDetector
-from .classification import BASE_TEXT_PROVIDER, ROBERTA_TAGALOG_PROVIDER, MultilingualKeywordClassifier
+from .classification import BASE_TEXT_MODEL
 from .duplicate_detector import find_duplicate_concern
+from .ollama_text_classifier import OllamaTextClassifier, display_label_for, image_bytes_for_ollama, payload_from_result, safe_needs_review
 from .text_classifier import TextClassifierNotConfigured
 
 
@@ -33,56 +33,27 @@ class StaleAiRun(RuntimeError):
     """Raised when an expired worker tries to publish over a newer run lease."""
 
 
-# Module-level memo so the (heavy) RoBERTa pipeline is loaded once per process
-# rather than per concern. Keyed by (id(RobertaTagalogClassifier), model_path)
-# so tests that patch the class get a fresh cache slot instead of a stale
-# instance left behind by an earlier test/config.
-_roberta_classifier_cache: dict[tuple[int, str], object] = {}
-
-
-def _get_roberta_classifier(model_path: str):
-    # Looked up via the module (not a direct name import) so tests that patch
-    # apps.concerns.ai.text_classifier.RobertaTagalogClassifier take effect.
-    roberta_cls = text_classifier.RobertaTagalogClassifier
-    cache_key = (id(roberta_cls), model_path)
-    classifier = _roberta_classifier_cache.get(cache_key)
-    if classifier is None:
-        classifier = roberta_cls(model_path)
-        _roberta_classifier_cache[cache_key] = classifier
-    return classifier
-
-
-def _classify_text(config, *, title: str, description: str):
+def _classify_text(config, *, title: str, description: str, selected_category: str, image_objects: list[dict], image_data: str | None = None, image_mime_type: str = ""):
     """Returns (result, provider_name, fallback_reason|None).
 
-    Uses the fine-tuned Tagalog RoBERTa classifier when configured; falls
-    back to the dependency-free keyword baseline on any failure (model not
-    configured, import error, inference error) so text classification never
-    blocks the AI pipeline.
+    Ollama is advisory only. If it is unavailable, reports go to official
+    review instead of falling back to hidden keyword rules.
     """
-    if config.nlp_provider == ROBERTA_TAGALOG_PROVIDER:
-        model_path = getattr(settings, "EBOSES_NLP_MODEL_PATH", "")
-        if model_path:
-            try:
-                classifier = _get_roberta_classifier(model_path)
-                result = classifier.classify(title=title, description=description)
-                return result, ROBERTA_TAGALOG_PROVIDER, None
-            except TextClassifierNotConfigured as exc:
-                fallback_reason = str(exc)
-            except Exception as exc:
-                fallback_reason = f"roberta_tagalog inference failed: {exc.__class__.__name__}"
-        else:
-            fallback_reason = "EBOSES_NLP_MODEL_PATH is not configured."
-        return (
-            MultilingualKeywordClassifier(config).classify(title=title, description=description),
-            BASE_TEXT_PROVIDER,
-            fallback_reason,
+    try:
+        result = OllamaTextClassifier(configuration=config).classify(
+            title=title,
+            description=description,
+            selected_category=selected_category,
+            image_objects=image_objects,
+            image_data=image_data,
+            image_mime_type=image_mime_type,
         )
-    return (
-        MultilingualKeywordClassifier(config).classify(title=title, description=description),
-        BASE_TEXT_PROVIDER,
-        None,
-    )
+        return result, config.nlp_provider, None
+    except TextClassifierNotConfigured as exc:
+        return safe_needs_review(model_version=BASE_TEXT_MODEL, reason=str(exc), image_objects=image_objects), config.nlp_provider, str(exc)
+    except Exception as exc:
+        reason = f"Ollama text classification failed: {exc.__class__.__name__}"
+        return safe_needs_review(model_version=BASE_TEXT_MODEL, reason=reason, image_objects=image_objects), config.nlp_provider, reason
 
 
 def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -> ConcernAiAssessment:
@@ -98,6 +69,15 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         for media in concern.media.all()
         if media.mime_type.startswith("image/") and hasattr(media.file, "path")
     ]
+    image_data = None
+    image_mime_type = ""
+    first_image_media = next((media for media in concern.media.all() if media.mime_type.startswith("image/") and hasattr(media.file, "path")), None)
+    if first_image_media:
+        try:
+            with open(first_image_media.file.path, "rb") as image_file:
+                image_data, image_mime_type = image_bytes_for_ollama(image_file.read())
+        except OSError:
+            image_data = None
     image_result = None
     image_payload = {
         "inference_status": "unavailable",
@@ -109,10 +89,15 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
     label_mappings = {**BASE_LABEL_MAPPINGS, **(config.label_mappings or {})}
     supported_classes = {s.lower() for s in (config.supported_classes or [])}
     try:
-        image_result = YoloImageDetector(settings.EBOSES_YOLO_MODEL_PATH).detect(image_paths)
+        image_result = YoloImageDetector(settings.EBOSES_YOLO_MODEL_PATH).detect(
+            image_paths,
+            supported_classes=config.supported_classes,
+            confidence_threshold=config.image_confidence_threshold,
+        )
         mapped_objects = [
             {
                 **item,
+                "display_label": display_label_for(item.get("label", "")),
                 "category": label_mappings.get(str(item.get("label", "")).lower(), ""),
             }
             for item in image_result.objects
@@ -147,6 +132,10 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         config,
         title=concern.title,
         description=concern.description,
+        selected_category=concern.category,
+        image_objects=image_result.objects if image_result else [],
+        image_data=image_data,
+        image_mime_type=image_mime_type,
     )
 
     text_payload = {
@@ -162,7 +151,7 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         for item in (image_result.objects if image_result else [])
         if item.get("category")
     }
-    text_match = bool(text_result.category) and text_result.category == concern.category
+    text_match = bool(text_result.details.get("selected_category_match")) or (bool(text_result.category) and text_result.category == concern.category)
     image_match = not image_categories or concern.category in image_categories
     category_match = text_match and image_match
     suggested_category = text_result.category or next(iter(image_categories), "")
@@ -174,7 +163,9 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
     duplicate_match = find_duplicate_concern(
         concern,
         enabled=config.duplicate_detection_enabled,
-        threshold=config.duplicate_threshold,
+        threshold=getattr(config, "report_duplicate_similarity_threshold", config.duplicate_threshold),
+        lookback_days=getattr(config, "report_duplicate_lookback_days", 180),
+        distance_meters=getattr(config, "report_duplicate_distance_meters", 1000),
     )
     duplicate_payload = duplicate_match.as_payload(
         enabled=config.duplicate_detection_enabled,

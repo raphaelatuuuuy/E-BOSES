@@ -20,6 +20,7 @@ from apps.emergencies.models import EmergencyAlert, EmergencyResponderAssignment
 from apps.notifications.models import Notification
 from apps.concerns.ai import process_concern_ai
 from apps.concerns.ai.image_detector import ImageDetectionResult
+from apps.concerns.ai.text_classifier import TextClassificationResult
 from apps.geo_services import classify_location
 
 from .models import Announcement, BarangayEvent, Concern, ConcernAiAssessment, ConcernAppeal, ConcernAssignment, ConcernChatAttachment, ConcernClassificationConfiguration, ConcernClarification, ConcernComment, ConcernMedia, ConcernOfficialRemark, ConcernResolutionEvidence, ConcernStatusEvent, ConcernVote, ContentFlag
@@ -318,7 +319,7 @@ class ResidentDashboardAPITests(APITestCase):
 
         self.assertFalse(Concern.objects.filter(title="Should not create").exists())
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="", EBOSES_NLP_MODEL_PATH="")
+    @override_settings(EBOSES_YOLO_MODEL_PATH="", OLLAMA_API_KEY="")
     def test_ai_command_marks_pending_assessment_not_configured(self):
         concern = Concern.objects.create(
             reporter=self.resident,
@@ -336,7 +337,7 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertIn("Concern", output.getvalue())
         self.assertIn("review", concern.ai_assessment.recommendation.lower())
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="", EBOSES_NLP_MODEL_PATH="")
+    @override_settings(EBOSES_YOLO_MODEL_PATH="", OLLAMA_API_KEY="test-key")
     def test_concern_ai_task_runs_base_text_assessment_without_external_model(self):
         from apps.concerns.tasks import process_concern_ai_task
 
@@ -348,15 +349,25 @@ class ResidentDashboardAPITests(APITestCase):
         )
         ConcernAiAssessment.objects.create(concern=concern, status=ConcernAiAssessment.Status.PENDING)
 
-        task_result = process_concern_ai_task.apply(args=[concern.pk]).get()
+        fake_result = TextClassificationResult(
+            label="related_environment",
+            confidence=0.88,
+            category=Concern.Category.ENVIRONMENT,
+            severity="medium",
+            model_version="gemma4:cloud",
+            details={"relevance": "VALID"},
+        )
+        with patch("apps.concerns.ai.pipeline.OllamaTextClassifier") as classifier:
+            classifier.return_value.classify.return_value = fake_result
+            task_result = process_concern_ai_task.apply(args=[concern.pk]).get()
 
         concern.ai_assessment.refresh_from_db()
         self.assertEqual(task_result["concern_id"], concern.pk)
         self.assertEqual(concern.ai_assessment.nlp_validity, "related_environment")
         self.assertTrue(concern.ai_assessment.raw_result["text"]["inference_succeeded"])
-        self.assertEqual(concern.ai_assessment.raw_result["text"]["model_version"], "multilingual-keyword-v1")
+        self.assertEqual(concern.ai_assessment.raw_result["text"]["model_version"], "gemma4:cloud")
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="configured.pt", EBOSES_NLP_MODEL_PATH="configured-nlp")
+    @override_settings(EBOSES_YOLO_MODEL_PATH="configured.pt", OLLAMA_API_KEY="test-key")
     def test_ai_pipeline_stores_completed_assessment(self):
         concern = Concern.objects.create(
             reporter=self.resident,
@@ -364,23 +375,31 @@ class ResidentDashboardAPITests(APITestCase):
             description="Baradong kanal sa gilid ng kalsada.",
             category=Concern.Category.INFRASTRUCTURE,
         )
-        with patch("apps.concerns.ai.pipeline.YoloImageDetector") as detector, patch("apps.concerns.ai.text_classifier.RobertaTagalogClassifier") as classifier:
+        fake_result = TextClassificationResult(
+            label="related_infrastructure",
+            confidence=0.9,
+            category=Concern.Category.INFRASTRUCTURE,
+            severity="medium",
+            model_version="gemma4:cloud",
+            details={"relevance": "VALID"},
+        )
+        with patch("apps.concerns.ai.pipeline.YoloImageDetector") as detector, patch("apps.concerns.ai.pipeline.OllamaTextClassifier") as classifier:
             detector.return_value.detect.return_value = ImageDetectionResult(
                 objects=[{"label": "drainage", "confidence": 0.91}],
                 confidence=0.91,
                 model_version="fake-yolo",
             )
+            classifier.return_value.classify.return_value = fake_result
 
             assessment = process_concern_ai(concern.id)
 
         self.assertEqual(assessment.status, ConcernAiAssessment.Status.COMPLETED)
-        classifier.assert_not_called()
         self.assertEqual(assessment.nlp_validity, "related_infrastructure")
         self.assertTrue(assessment.category_match)
         self.assertIn("fake-yolo", assessment.model_version)
-        self.assertIn("nlp:multilingual-keyword-v1", assessment.model_version)
+        self.assertIn("nlp:gemma4:cloud", assessment.model_version)
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="", EBOSES_NLP_MODEL_PATH="configured-nlp")
+    @override_settings(EBOSES_YOLO_MODEL_PATH="", OLLAMA_API_KEY="test-key")
     def test_ai_pipeline_uses_base_keyword_text_even_when_nlp_path_is_set(self):
         concern = Concern.objects.create(
             reporter=self.resident,
@@ -389,15 +408,23 @@ class ResidentDashboardAPITests(APITestCase):
             category=Concern.Category.ENVIRONMENT,
         )
 
-        with patch("apps.concerns.ai.text_classifier.RobertaTagalogClassifier") as classifier:
+        fake_result = TextClassificationResult(
+            label="related_environment",
+            confidence=0.87,
+            category=Concern.Category.ENVIRONMENT,
+            severity="medium",
+            model_version="gemma4:cloud",
+            details={"relevance": "VALID"},
+        )
+        with patch("apps.concerns.ai.pipeline.OllamaTextClassifier") as classifier:
+            classifier.return_value.classify.return_value = fake_result
             assessment = process_concern_ai(concern.id)
 
-        classifier.assert_not_called()
         self.assertEqual(assessment.status, ConcernAiAssessment.Status.NOT_CONFIGURED)
         self.assertEqual(assessment.nlp_validity, "related_environment")
-        self.assertEqual(assessment.raw_result["text"]["model_version"], "multilingual-keyword-v1")
+        self.assertEqual(assessment.raw_result["text"]["model_version"], "gemma4:cloud")
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="configured.pt", EBOSES_NLP_MODEL_PATH="configured-nlp")
+    @override_settings(EBOSES_YOLO_MODEL_PATH="configured.pt", OLLAMA_API_KEY="")
     def test_ai_pipeline_image_failure_completes_with_base_text_review(self):
         concern = Concern.objects.create(reporter=self.resident, title="AI failure", category=Concern.Category.OTHERS)
         with patch("apps.concerns.ai.pipeline.YoloImageDetector") as detector:

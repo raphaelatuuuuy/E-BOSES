@@ -58,6 +58,8 @@ PASSWORD_RESET_MAX_AGE_SECONDS = 15 * 60
 
 ALLOWED_PROOF_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 ALLOWED_PROOF_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+ALLOWED_CONCERN_MEDIA_MIME_TYPES = {"image/jpeg", "image/png"}
+ALLOWED_CONCERN_MEDIA_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 # Phone gallery photos are often larger than 2MB; client compresses when possible.
 MAX_PROOF_FILE_SIZE = 10 * 1024 * 1024
 MAX_CHAT_ATTACHMENT_SIZE = 25 * 1024 * 1024
@@ -163,8 +165,8 @@ RESIDENCE_PROOF_UPLOAD_PROFILE = UploadValidationProfile(
 )
 CONCERN_MEDIA_UPLOAD_PROFILE = UploadValidationProfile(
     label="Report attachment",
-    allowed_mime_types=frozenset(ALLOWED_PROOF_MIME_TYPES),
-    allowed_extensions=frozenset(ALLOWED_PROOF_EXTENSIONS),
+    allowed_mime_types=frozenset(ALLOWED_CONCERN_MEDIA_MIME_TYPES),
+    allowed_extensions=frozenset(ALLOWED_CONCERN_MEDIA_EXTENSIONS),
     max_size=MAX_PROOF_FILE_SIZE,
 )
 EMERGENCY_MEDIA_UPLOAD_PROFILE = UploadValidationProfile(
@@ -343,7 +345,8 @@ def validate_uploaded_media_file(
         )
     extension = _extension(uploaded_file)
     if extension not in profile.allowed_extensions:
-        raise ValidationError(f"{profile.label} files must be JPG, JPEG, PNG, or WebP.")
+        formats = "JPG, JPEG, or PNG" if profile is CONCERN_MEDIA_UPLOAD_PROFILE else "JPG, JPEG, PNG, or WebP"
+        raise ValidationError(f"{profile.label} files must be {formats}.")
     content = _read_upload(uploaded_file)
     detected_mime_type = detect_file_signature(content)
     expected_mime_type = _EXTENSION_MIME_TYPES.get(extension)
@@ -351,7 +354,8 @@ def validate_uploaded_media_file(
         getattr(uploaded_file, "content_type", "") or mimetypes.guess_type(uploaded_file.name)[0] or ""
     ).lower()
     if detected_mime_type not in profile.allowed_mime_types:
-        raise ValidationError(f"{profile.label} files must be valid JPG, JPEG, PNG, or WebP files.")
+        formats = "JPG, JPEG, or PNG" if profile is CONCERN_MEDIA_UPLOAD_PROFILE else "JPG, JPEG, PNG, or WebP"
+        raise ValidationError(f"{profile.label} files must be valid {formats} files.")
     # Allow empty claimed MIME (common for gallery picks); only reject hard mismatches.
     if expected_mime_type and detected_mime_type != expected_mime_type:
         raise ValidationError("Uploaded file content does not match its extension or MIME type.")

@@ -346,6 +346,28 @@ export function createConcern(formData: FormData) {
   })
 }
 
+export interface ConcernPrecheckResult {
+  can_submit: boolean
+  needs_revision: boolean
+  field_errors: Record<string, string>
+  message: string
+  suggested_category: string
+  photo_feedback: string
+  result?: {
+    classification?: string
+    evidence_relationship?: string
+    recommended_action?: string
+    short_explanation?: string
+  }
+}
+
+export function precheckConcern(formData: FormData) {
+  return apiRequest<ConcernPrecheckResult>("/concerns/classification/precheck/", {
+    method: "POST",
+    body: formData,
+  })
+}
+
 export function checkConcernMedia(formData: FormData) {
   return apiRequest<{ files: Array<{ name: string; status: "accepted" }> }>("/concerns/media/check/", {
     method: "POST",

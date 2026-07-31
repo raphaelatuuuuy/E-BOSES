@@ -321,8 +321,14 @@ _yolo_model_path = env(
     default=str(BASE_DIR / "model_weights" / "yolov8m.pt"),
 )
 EBOSES_YOLO_MODEL_PATH = str((BASE_DIR.parent.parent / _yolo_model_path).resolve()) if _yolo_model_path and not Path(_yolo_model_path).is_absolute() else _yolo_model_path
-_nlp_model_path = env("EBOSES_NLP_MODEL_PATH", default="")
-EBOSES_NLP_MODEL_PATH = str((BASE_DIR.parent.parent / _nlp_model_path).resolve()) if _nlp_model_path and not Path(_nlp_model_path).is_absolute() else _nlp_model_path
+OLLAMA_API_KEY = env("OLLAMA_API_KEY", default="")
+OLLAMA_HOST = env("OLLAMA_HOST", default="https://ollama.com")
+OLLAMA_TEXT_MODEL = env("OLLAMA_TEXT_MODEL", default="gemma4:31b")
+OLLAMA_TIMEOUT_SECONDS = env.int("OLLAMA_TIMEOUT_SECONDS", default=120)
+OLLAMA_ENABLE_IMAGE_ANALYSIS = env.bool("OLLAMA_ENABLE_IMAGE_ANALYSIS", default=True)
+OLLAMA_IMAGE_MAX_SIDE = env.int("OLLAMA_IMAGE_MAX_SIDE", default=1024)
+OLLAMA_IMAGE_JPEG_QUALITY = env.int("OLLAMA_IMAGE_JPEG_QUALITY", default=85)
+OLLAMA_IMAGE_MAX_BYTES = env.int("OLLAMA_IMAGE_MAX_BYTES", default=0)
 
 # PaddleOCR
 PADDLEOCR_TOKEN = env("PADDLEOCR_TOKEN", default="")

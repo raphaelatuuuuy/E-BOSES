@@ -30,10 +30,10 @@ export interface StrictnessPreset {
 export const STRICTNESS_PRESETS: StrictnessPreset[] = [
   {
     key: "lenient",
-    label: "Let most through",
-    summary: "Only obviously empty or fake reports get held back.",
+    label: "Light review",
+    summary: "Only hold reports that are clearly empty, spam, or unrelated.",
     consequence:
-      "Fewer reports wait for review, but more weak ones reach your queue.",
+      "Residents get fewer interruptions, but officials may review more weak reports later.",
     image_confidence_threshold: 0.55,
     text_relevance_threshold: 0.5,
     duplicate_similarity_threshold: 0.92,
@@ -41,10 +41,10 @@ export const STRICTNESS_PRESETS: StrictnessPreset[] = [
   },
   {
     key: "balanced",
-    label: "Balanced",
-    summary: "Hold back reports the system is unsure about.",
+    label: "Standard review",
+    summary: "Ask for clarification when text, category, or photo does not clearly line up.",
     consequence:
-      "Most genuine reports pass straight through; unclear ones wait for an official.",
+      "Most valid reports continue, while unclear ones get checked first.",
     image_confidence_threshold: 0.7,
     text_relevance_threshold: 0.65,
     duplicate_similarity_threshold: 0.85,
@@ -52,10 +52,10 @@ export const STRICTNESS_PRESETS: StrictnessPreset[] = [
   },
   {
     key: "strict",
-    label: "Check carefully",
-    summary: "Hold back anything that is not a clear match.",
+    label: "Careful review",
+    summary: "Ask for clearer details when the report is incomplete or evidence does not match.",
     consequence:
-      "Very few weak reports slip through, but officials review more of them.",
+      "Residents may correct more reports before submitting, reducing weak reports in the queue.",
     image_confidence_threshold: 0.85,
     text_relevance_threshold: 0.8,
     duplicate_similarity_threshold: 0.78,

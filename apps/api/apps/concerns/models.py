@@ -65,6 +65,9 @@ class Concern(models.Model):
     address = models.CharField(max_length=255, blank=True)
     latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
     longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    report_fingerprint = models.CharField(max_length=64, blank=True, db_index=True)
+    report_text_fingerprint = models.CharField(max_length=64, blank=True, db_index=True)
+    report_location_bucket = models.CharField(max_length=48, blank=True, db_index=True)
     location_source = models.CharField(max_length=32, blank=True, default="")
     location_accuracy = models.FloatField(null=True, blank=True)
     barangay = models.CharField(max_length=120, default="Marikina Heights")
@@ -453,6 +456,25 @@ class ConcernAiAssessment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+DEFAULT_SUPPORTED_YOLO_CLASSES = [
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "bus",
+    "truck",
+    "bench",
+    "parking meter",
+    "traffic light",
+    "knife",
+    "dog",
+    "cat",
+    "handbag",
+    "backpack",
+    "suitcase",
+]
+
+
 class ConcernClassificationConfiguration(models.Model):
     """Published settings used by the concern AI adapters.
 
@@ -465,13 +487,24 @@ class ConcernClassificationConfiguration(models.Model):
         REJECT = "reject", "Reject automatically"
         RESUBMIT = "request_resubmission", "Request resubmission"
 
+    class ReportDuplicateAction(models.TextChoices):
+        WARN = "warn", "Warn resident"
+        BLOCK = "block", "Block submission"
+        OFFICIAL_REVIEW = "official_review", "Submit but flag for official review"
+
     image_provider = models.CharField(max_length=32, default="ultralytics")
     image_model = models.CharField(max_length=80, default="yolov8m.pt")
-    nlp_provider = models.CharField(max_length=32, default="keyword_baseline")
-    nlp_model = models.CharField(max_length=120, default="multilingual-keyword-v1")
+    nlp_provider = models.CharField(max_length=32, default="ollama_cloud")
+    nlp_model = models.CharField(max_length=120, default="gemma4:31b")
     image_confidence_threshold = models.FloatField(default=0.70)
     relevance_threshold = models.FloatField(default=0.65)
     duplicate_threshold = models.FloatField(default=0.85)
+    report_duplicate_detection_enabled = models.BooleanField(default=True)
+    report_duplicate_action = models.CharField(max_length=24, choices=ReportDuplicateAction.choices, default=ReportDuplicateAction.WARN)
+    report_duplicate_lookback_days = models.PositiveIntegerField(default=180)
+    report_duplicate_distance_meters = models.PositiveIntegerField(default=100)
+    report_duplicate_similarity_threshold = models.FloatField(default=0.88)
+    report_duplicate_location_precision = models.PositiveSmallIntegerField(default=4)
     minimum_description_length = models.PositiveSmallIntegerField(default=20)
     mismatch_action = models.CharField(max_length=32, choices=MismatchAction.choices, default=MismatchAction.REVIEW)
     duplicate_detection_enabled = models.BooleanField(default=True)
@@ -487,6 +520,7 @@ class ConcernClassificationConfiguration(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+
     @classmethod
     def current(cls):
         defaults = {
@@ -499,6 +533,8 @@ class ConcernClassificationConfiguration(models.Model):
                 "vehicle": ["car", "truck", "motorcycle", "bus", "bicycle", "van", "jeep"],
                 "others": [],
             },
+            "nlp_provider": "ollama_cloud",
+            "nlp_model": "gemma4:31b",
             "label_mappings": {
                 "traffic light": "infrastructure",
                 "bench": "infrastructure",
@@ -518,23 +554,7 @@ class ConcernClassificationConfiguration(models.Model):
                 "bicycle": "vehicle",
                 "person": "others",
             },
-            "supported_classes": [
-                "person",
-                "bicycle",
-                "car",
-                "motorcycle",
-                "bus",
-                "truck",
-                "bench",
-                "parking meter",
-                "traffic light",
-                "knife",
-                "dog",
-                "cat",
-                "handbag",
-                "backpack",
-                "suitcase",
-            ],
+            "supported_classes": DEFAULT_SUPPORTED_YOLO_CLASSES,
         }
         obj, _ = cls.objects.get_or_create(pk=1, defaults=defaults)
         return obj

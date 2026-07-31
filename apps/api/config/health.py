@@ -40,7 +40,7 @@ def health_check(request):
         ),
         "ai_configured": bool(
             getattr(settings, "EBOSES_YOLO_MODEL_PATH", "")
-            and getattr(settings, "EBOSES_NLP_MODEL_PATH", "")
+            and getattr(settings, "OLLAMA_API_KEY", "")
         ),
         "ocr": ocr_status,
         "ocr_configured": bool(getattr(settings, "PADDLEOCR_TOKEN", "")),

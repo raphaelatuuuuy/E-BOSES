@@ -2,12 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   BrainCircuitIcon,
   CheckCircle2Icon,
-  ChevronDownIcon,
   LoaderCircleIcon,
-  PlusIcon,
-  RotateCcwIcon,
   SaveIcon,
-  SlidersHorizontalIcon,
   TestTube2Icon,
   TriangleAlertIcon,
   UploadCloudIcon,
@@ -21,12 +17,9 @@ import { ConfigShell } from "@/features/dashboard/components/config/config-shell
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import {
   getConcernClassificationConfig,
-  resetConcernClassificationConfig,
   saveConcernClassificationConfig,
-  testConcernImage,
-  testConcernReport,
+  testConcernSubmission,
   type ConcernClassificationConfig,
-  type ImageClassificationResult,
   type ReportValidationResult,
 } from "./api"
 import {
@@ -45,9 +38,7 @@ import {
  * the model, not of the person doing barangay work.
  *
  * It now leads with three plain choices about how strict checking should be and
- * says what each means for the official's day. The underlying numbers stay
- * reachable behind an "Advanced" disclosure, so they remain auditable for the
- * capstone write-up without being the first thing anyone meets.
+ * says what each means for the official's day.
  *
  * By default, only 15 supported COCO classes are kept in the detection filter
  * (person, bicycle, car, motorcycle, bus, truck, bench, parking meter, traffic
@@ -58,7 +49,7 @@ import {
 const defaults: ConcernClassificationConfig = {
   revision: 0,
   image_model: "yolov8m.pt",
-  text_model: "multilingual-keyword-v1",
+  text_model: "gemma4:31b",
   image_confidence_threshold: 0.7,
   text_relevance_threshold: 0.65,
   duplicate_similarity_threshold: 0.85,
@@ -66,6 +57,12 @@ const defaults: ConcernClassificationConfig = {
   mismatch_action: "manual_review",
   flag_suspicious: true,
   flag_duplicates: true,
+  report_duplicate_detection_enabled: true,
+  report_duplicate_action: "warn",
+  report_duplicate_lookback_days: 180,
+  report_duplicate_distance_meters: 100,
+  report_duplicate_similarity_threshold: 0.88,
+  report_duplicate_location_precision: 4,
   flag_irrelevant: true,
   notify_reviewer: true,
   suspicious_terms: ["test", "testing", "asdf", "qwerty", "12345"],
@@ -110,10 +107,6 @@ const defaults: ConcernClassificationConfig = {
   categories: [],
 }
 
-function percent(value: number | null | undefined) {
-  return value == null ? "Not measured yet" : `${Math.round(value * 100)}%`
-}
-
 function Card({
   title,
   hint,
@@ -141,7 +134,7 @@ function ResultRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between gap-3 border-b border-card-line pb-2 text-sm last:border-0">
       <span className="font-medium text-muted-foreground">{label}</span>
       <span className="text-right font-bold capitalize text-foreground">
-        {value.replace(/_/g, " ")}
+        {displayValue(value)}
       </span>
     </div>
   )
@@ -159,9 +152,46 @@ function Outcome({ value }: { value: string }) {
       )}
     >
       {good ? <CheckCircle2Icon className="size-5" /> : <TriangleAlertIcon className="size-5" />}
-      {value.replace(/_/g, " ")}
+      {displayValue(value)}
     </div>
   )
+}
+
+function Pill({ children }: { children: ReactNode }) {
+  return (
+    <span className="rounded-full border border-card-line bg-canvas px-2.5 py-1 text-xs font-bold capitalize text-foreground">
+      {children}
+    </span>
+  )
+}
+
+function readable(value: string | null | undefined) {
+  return value ? value.replace(/_/g, " ") : "Not provided"
+}
+
+function displayValue(value: string | null | undefined) {
+  const normalized = readable(value)
+  const labels: Record<string, string> = {
+    "needs review": "Needs official review",
+    "supports report": "Text and photo match",
+    "partially supports report": "Photo partly supports the report",
+    "contradicts report": "Text and photo may not match",
+    "no useful image evidence": "Photo does not confirm the report",
+    "image unavailable": "No photo evidence checked",
+    "accept with privacy review": "Review privacy before public display",
+    "manual review": "Needs official review",
+    "request more information": "Ask resident for more details",
+    "reject as irrelevant": "Not enough relevant report information",
+    "low information text": "Description needs more detail",
+    "image review limited": "Photo review unavailable",
+    profanity: "Contains strong language",
+  }
+  return labels[normalized] ?? normalized
+}
+
+function categoryLabel(config: ConcernClassificationConfig, key: string | null | undefined) {
+  if (!key) return "Not clear"
+  return config.categories.find((category) => category.key === key)?.label ?? readable(key)
 }
 
 export default function ConcernClassificationPage() {
@@ -169,9 +199,6 @@ export default function ConcernClassificationPage() {
   const [config, setConfig] = useState<ConcernClassificationConfig>(defaults)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState("")
-  const [advanced, setAdvanced] = useState(false)
-
-  const [term, setTerm] = useState("")
   const [mappingLabel, setMappingLabel] = useState("")
   const [mappingCategory, setMappingCategory] = useState("")
 
@@ -185,7 +212,6 @@ export default function ConcernClassificationPage() {
     if (!imagePreview) return
     return () => URL.revokeObjectURL(imagePreview)
   }, [imagePreview])
-  const [imageResult, setImageResult] = useState<ImageClassificationResult | null>(null)
   const [description, setDescription] = useState("")
   const [reportResult, setReportResult] = useState<ReportValidationResult | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
@@ -238,39 +264,20 @@ export default function ConcernClassificationPage() {
     }
   }
 
-  async function reset() {
-    setBusy("reset")
-    try {
-      setConfig(await resetConcernClassificationConfig())
-      toast.success("Recommended settings restored")
-    } catch (error) {
-      toast.error(describeApiError(error, "Could not restore the settings."))
-    } finally {
-      setBusy("")
-    }
-  }
-
-  async function runImageTest() {
-    if (!imageFile) return
-    setBusy("image")
-    setImageResult(null)
-    try {
-      setImageResult(await testConcernImage(imageFile, selectedCategory))
-    } catch (error) {
-      toast.error(describeApiError(error, "The photo could not be checked."))
-    } finally {
-      setBusy("")
-    }
-  }
-
-  async function runReportTest() {
+  async function runSubmissionTest() {
     if (!description.trim()) return
-    setBusy("report")
+    setBusy("submission")
     setReportResult(null)
     try {
-      setReportResult(await testConcernReport(selectedCategory, description.trim()))
+      setReportResult(
+        await testConcernSubmission({
+          file: imageFile,
+          category: selectedCategory,
+          description: description.trim(),
+        }),
+      )
     } catch (error) {
-      toast.error(describeApiError(error, "The written report could not be checked."))
+      toast.error(describeApiError(error, "The sample report could not be checked."))
     } finally {
       setBusy("")
     }
@@ -392,51 +399,57 @@ export default function ConcernClassificationPage() {
         </Card>
 
         <Card
-          title="Words that mark a report as junk"
-          hint="A report containing any of these is held for review. It is never turned down on this alone."
+          title="Unsafe or bad-faith content"
+          hint="The model checks the report meaning for spam, harassment, threats, sexual content, profanity, fake reports, and irrelevant messages. It no longer depends on a fixed word list."
         >
-          <div className="flex flex-wrap gap-2">
-            {config.suspicious_terms.map((word) => (
-              <button
-                key={word}
-                type="button"
-                onClick={() =>
-                  update(
-                    "suspicious_terms",
-                    config.suspicious_terms.filter((item) => item !== word),
-                  )
-                }
-                className="rounded-full bg-severity-critical-surface px-3 py-1.5 text-xs font-bold text-severity-critical-ink"
-                aria-label={`Remove ${word}`}
-              >
-                {word} ×
-              </button>
-            ))}
-            {config.suspicious_terms.length === 0 ? (
-              <p className="text-xs font-medium text-muted-foreground">Nothing added yet.</p>
-            ) : null}
-          </div>
-          <div className="mt-3 flex gap-2">
-            <input
-              value={term}
-              onChange={(event) => setTerm(event.target.value)}
-              placeholder="Add a word"
-              className="h-10 min-w-0 flex-1 rounded-xl border border-card-line bg-card px-3 text-sm font-medium text-foreground outline-none focus:border-brand-orange"
-            />
-            <Button
-              variant="outline"
-              onClick={() => {
-                const next = term.trim().toLowerCase()
-                if (next && !config.suspicious_terms.includes(next)) {
-                  update("suspicious_terms", [...config.suspicious_terms, next])
-                }
-                setTerm("")
-              }}
-            >
-              <PlusIcon className="size-4" /> Add
-            </Button>
-          </div>
+          <p className="rounded-xl bg-tint p-3 text-xs font-medium leading-relaxed text-foreground">
+            Flagged content waits for official review. E-Boses does not automatically reject reports or emergencies from this check alone.
+          </p>
         </Card>
+      </div>
+
+      <Card
+        title="Similar report handling"
+        hint="These checks compare a resident's text, category, and pinned location with recent reports. Duplicate photos are still blocked separately."
+      >
+        <div className="grid gap-2 md:grid-cols-3">
+          {[
+            ["warn", "Warn resident", "Tell residents a similar report may exist, but let them continue."],
+            ["block", "Block repeated reports", "Stop reports that match an existing nearby report."],
+            ["official_review", "Allow but flag", "Let residents submit, then show the warning to officials."],
+          ].map(([value, label, hint]) => {
+            const active = (config.report_duplicate_action ?? "warn") === value
+            return (
+              <button
+                key={value}
+                type="button"
+                onClick={() => update("report_duplicate_action", value as ConcernClassificationConfig["report_duplicate_action"])}
+                className={cn(
+                  "rounded-xl border p-3 text-left transition",
+                  active ? "border-brand-orange bg-brand-orange-soft" : "border-card-line bg-canvas hover:border-brand-orange/40",
+                )}
+              >
+                <span className="block text-sm font-bold text-foreground">{label}</span>
+                <span className="mt-1 block text-xs font-medium leading-relaxed text-muted-foreground">{hint}</span>
+              </button>
+            )
+          })}
+        </div>
+        <label className="mt-3 flex items-center gap-2 text-sm font-semibold text-foreground">
+          <input
+            type="checkbox"
+            checked={config.report_duplicate_detection_enabled !== false}
+            onChange={(event) => update("report_duplicate_detection_enabled", event.target.checked)}
+          />
+          Check for similar reports near the pinned location
+        </label>
+      </Card>
+
+      <div className="grid gap-2 rounded-2xl border border-card-line bg-card p-3 text-xs font-bold text-foreground sm:grid-cols-4">
+        <span>1. Text meaning</span>
+        <span>2. Photo evidence</span>
+        <span>3. Similar reports</span>
+        <span>4. Privacy review</span>
       </div>
 
       <Card
@@ -527,7 +540,7 @@ export default function ConcernClassificationPage() {
               setMappingLabel("")
             }}
           >
-            <PlusIcon className="size-4" /> Add
+            Add
           </Button>
         </div>
       </Card>
@@ -535,8 +548,11 @@ export default function ConcernClassificationPage() {
       {/* The fastest way to understand a setting is to watch it decide on a
           real example, so the testers sit beside the settings rather than
           behind a separate tab. */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Try a photo" hint="See what the system would decide, without filing anything.">
+      <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+        <Card
+          title="Test a sample report"
+          hint="Use one resident-style description and an optional photo. Nothing is filed."
+        >
           <label className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
             Filed under
           </label>
@@ -555,11 +571,11 @@ export default function ConcernClassificationPage() {
           <input
             ref={fileRef}
             type="file"
-            accept="image/jpeg,image/png,image/webp"
+            accept="image/jpeg,image/png"
             className="hidden"
             onChange={(event) => {
               setImageFile(event.target.files?.[0] ?? null)
-              setImageResult(null)
+              setReportResult(null)
             }}
           />
           <button
@@ -577,70 +593,83 @@ export default function ConcernClassificationPage() {
               <>
                 <UploadCloudIcon className="size-7 text-brand-orange" />
                 <span className="mt-2 text-sm font-bold text-foreground">Choose a photo</span>
-                <span className="text-xs font-medium text-muted-foreground">JPG, PNG or WebP</span>
+                <span className="text-xs font-medium text-muted-foreground">JPG or PNG</span>
               </>
             )}
           </button>
-          <Button
-            onClick={() => void runImageTest()}
-            disabled={!imageFile || Boolean(busy)}
-            className="mt-3 w-full rounded-xl bg-brand-navy text-white hover:bg-brand-navy/90"
-          >
-            <TestTube2Icon className="size-4" />
-            {busy === "image" ? "Checking…" : "Check this photo"}
-          </Button>
 
-          {imageResult ? (
-            <div className="mt-4 space-y-2">
-              {imageResult.annotated_image ? (
-                <img
-                  src={imageResult.annotated_image}
-                  alt="The photo with what the system recognised marked on it"
-                  className="max-h-56 w-full rounded-xl border border-card-line bg-ink object-contain"
-                />
-              ) : null}
-              <ResultRow label="Recognised as" value={imageResult.detected_label || "Nothing"} />
-              <ResultRow
-                label="Would file under"
-                value={imageResult.detected_category || "No matching category"}
-              />
-              <ResultRow label="How sure" value={percent(imageResult.confidence)} />
-              <Outcome value={imageResult.outcome} />
-              <p className="text-xs font-medium leading-relaxed text-muted-foreground">
-                {imageResult.message}
-              </p>
-            </div>
-          ) : null}
-        </Card>
-
-        <Card title="Try a description" hint="Paste something a resident might write.">
+          <div className="mt-3 flex flex-wrap gap-2">
+            {[
+              ["Vehicle sample", "May sasakyang nakaharang sa driveway sa Rosal Street mula kaninang umaga. Hindi makalabas ang residente."],
+              ["Trash sample", "May tambak na basura sa gilid ng Sampaguita Street malapit sa covered court. Mabaho na ito at dinadapuan ng langaw."],
+              ["Safety sample", "May asong pagala-gala sa daan at muntik nang makakagat ng bata sa may playground."],
+            ].map(([label, sample]) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => {
+                  setDescription(sample)
+                  setReportResult(null)
+                }}
+                className="rounded-full border border-card-line bg-canvas px-3 py-1 text-xs font-bold text-foreground hover:border-brand-orange"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <textarea
             value={description}
             onChange={(event) => {
               setDescription(event.target.value)
               setReportResult(null)
             }}
-            placeholder="Maraming nakatambak na basura sa Sampaguita Street malapit sa covered court."
-            className="min-h-32 w-full rounded-xl border border-card-line bg-card p-3 text-sm font-medium text-foreground outline-none focus:border-brand-orange"
+            placeholder="Describe what happened, where it is, and what needs attention."
+            className="mt-3 min-h-32 w-full rounded-xl border border-card-line bg-card p-3 text-sm font-medium text-foreground outline-none focus:border-brand-orange"
           />
           <div className="mt-1 text-right text-xs font-medium text-muted-foreground">
             {description.length} characters · {config.minimum_description_length} needed
           </div>
           <Button
-            onClick={() => void runReportTest()}
+            onClick={() => void runSubmissionTest()}
             disabled={!description.trim() || Boolean(busy)}
-            className="mt-2 w-full rounded-xl bg-brand-navy text-white hover:bg-brand-navy/90"
+            className="mt-3 w-full rounded-xl bg-brand-navy text-white hover:bg-brand-navy/90"
           >
             <TestTube2Icon className="size-4" />
-            {busy === "report" ? "Checking…" : "Check this description"}
+            {busy === "submission" ? "Checking…" : description.trim() ? "Check this sample" : "Enter a description first"}
           </Button>
+        </Card>
 
+        <Card title="Sample result" hint="This is advisory. Officials still decide what happens next.">
           {reportResult ? (
             <div className="mt-4 space-y-2">
-              <ResultRow label="Reads as" value={reportResult.classification} />
-              <ResultRow label="How sure" value={percent(reportResult.confidence)} />
+              {reportResult.image?.annotated_image ? (
+                <img
+                  src={reportResult.image.annotated_image}
+                  alt="The photo with what the system recognised marked on it"
+                  className="max-h-56 w-full rounded-xl border border-card-line bg-ink object-contain"
+                />
+              ) : null}
+              {reportResult.image_review_limited ? (
+                <div className="rounded-xl border border-severity-moderate-ink/20 bg-severity-moderate-surface p-3 text-xs font-medium leading-relaxed text-severity-moderate-ink">
+                  <span className="block font-bold">Photo review unavailable</span>
+                  {reportResult.image_review_message || "The result used the description and recognized photo items instead."}
+                </div>
+              ) : null}
+              <Outcome value={reportResult.outcome} />
+              <ResultRow label="Report text" value={categoryLabel(config, reportResult.primary_category)} />
+              <ResultRow label="Filed under" value={categoryLabel(config, selectedCategory)} />
               <ResultRow
-                label="Matches the category"
+                label="Photo evidence"
+                value={
+                  reportResult.visual_summary ||
+                  reportResult.photo_assessment ||
+                  reportResult.recognized_photo_items?.join(", ") ||
+                  reportResult.image?.detected_label ||
+                  "Not clear"
+                }
+              />
+              <ResultRow
+                label="Text and category"
                 value={
                   reportResult.category_match == null
                     ? "Could not tell"
@@ -650,153 +679,38 @@ export default function ConcernClassificationPage() {
                 }
               />
               <ResultRow
-                label="Already reported"
-                value={reportResult.duplicate ? "Looks like a duplicate" : "No match found"}
+                label="Evidence check"
+                value={reportResult.evidence_relationship || "Not clear"}
               />
-              <Outcome value={reportResult.outcome} />
               <p className="rounded-xl bg-tint p-3 text-xs font-medium leading-relaxed text-foreground">
                 {reportResult.explanation}
               </p>
+              {reportResult.mismatch_reason ? (
+                <p className="text-xs font-medium leading-relaxed text-muted-foreground">
+                  {reportResult.mismatch_reason}
+                </p>
+              ) : null}
+
+              <div className="flex flex-wrap gap-2 pt-1">
+                {reportResult.privacy_sensitive_information_detected ? <Pill>Privacy review</Pill> : null}
+                {reportResult.urgent_attention ? <Pill>Urgent attention</Pill> : null}
+                {reportResult.ai_result_uncertain ? <Pill>AI uncertain</Pill> : null}
+                {reportResult.duplicate ? <Pill>Possible duplicate</Pill> : null}
+                {(reportResult.recognized_photo_items?.length ? reportResult.recognized_photo_items : reportResult.image?.detected_label ? [reportResult.image.detected_label] : []).map((item) => (
+                  <Pill key={item}>Photo: {readable(item)}</Pill>
+                ))}
+                {reportResult.image_flags?.map((flag) => <Pill key={flag}>{readable(flag)}</Pill>)}
+                {reportResult.content_flags?.map((flag) => <Pill key={flag}>{readable(flag)}</Pill>)}
+              </div>
+              <ResultRow label="Official action" value={reportResult.recommended_action || "Needs official review"} />
             </div>
-          ) : null}
+          ) : (
+            <div className="rounded-xl bg-tint p-3 text-xs font-medium leading-relaxed text-foreground">
+              The result will show category fit, photo evidence, similar-report warnings, privacy notes, and the action the AI recommends for review.
+            </div>
+          )}
         </Card>
       </div>
-
-      {/* The raw numbers stay reachable — the capstone write-up has to cite them
-          — but they are not the first thing anyone meets. */}
-      <section className="overflow-hidden rounded-2xl border border-card-line bg-card">
-        <button
-          type="button"
-          onClick={() => setAdvanced((value) => !value)}
-          aria-expanded={advanced}
-          className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-tint"
-        >
-          <SlidersHorizontalIcon className="size-4 text-muted-foreground" aria-hidden />
-          <span className="text-sm font-bold text-foreground">Advanced settings</span>
-          <span className="hidden text-xs font-medium text-muted-foreground sm:inline">
-            fine-tune the exact numbers behind the choices above
-          </span>
-          <ChevronDownIcon
-            aria-hidden
-            className={cn(
-              "ml-auto size-4 text-muted-foreground transition-transform",
-              advanced ? "" : "-rotate-90",
-            )}
-          />
-        </button>
-
-        {advanced ? (
-          <div className="space-y-4 border-t border-card-line p-4">
-            <div className="grid gap-4 md:grid-cols-2">
-              {(
-                [
-                  [
-                    "image_confidence_threshold",
-                    "How sure about the photo",
-                    "The system must be at least this sure it recognised the photo. Higher means more photos get sent to you as “unclear”.",
-                  ],
-                  [
-                    "text_relevance_threshold",
-                    "How well the words must fit",
-                    "How closely the description must match the chosen category. Higher means more reports get sent to you as “off-topic”.",
-                  ],
-                  [
-                    "duplicate_similarity_threshold",
-                    "How alike counts as the same issue",
-                    "Two nearby reports this similar are flagged as one issue. Lower catches more duplicates but may join unrelated reports.",
-                  ],
-                ] as const
-              ).map(([key, label, hint]) => (
-                <label key={key} className="block rounded-xl border border-card-line bg-canvas p-3">
-                  <span className="flex items-center justify-between text-xs font-bold text-foreground">
-                    {label}
-                    <span className="tabular-nums text-brand-navy">
-                      {Math.round(config[key] * 100)}%
-                    </span>
-                  </span>
-                  <input
-                    type="range"
-                    min={0.3}
-                    max={0.95}
-                    step={0.01}
-                    value={config[key]}
-                    onChange={(event) => update(key, Number(event.target.value))}
-                    className="mt-2 w-full accent-brand-orange"
-                  />
-                  <span className="mt-1 block text-[11px] font-medium leading-relaxed text-muted-foreground">
-                    {hint}
-                  </span>
-                </label>
-              ))}
-
-              <label className="block rounded-xl border border-card-line bg-canvas p-3">
-                <span className="flex items-center justify-between text-xs font-bold text-foreground">
-                  Shortest description allowed
-                  <span className="tabular-nums text-brand-navy">
-                    {config.minimum_description_length}
-                  </span>
-                </span>
-                <input
-                  type="range"
-                  min={10}
-                  max={150}
-                  step={5}
-                  value={config.minimum_description_length}
-                  onChange={(event) =>
-                    update("minimum_description_length", Number(event.target.value))
-                  }
-                  className="mt-2 w-full accent-brand-orange"
-                />
-                <span className="mt-1 block text-[11px] font-medium leading-relaxed text-muted-foreground">
-                  Shorter reports are held for review.
-                </span>
-              </label>
-            </div>
-
-            <div className="grid gap-2 sm:grid-cols-2">
-              {(
-                [
-                  ["flag_suspicious", "Hold reports that look like junk"],
-                  ["flag_duplicates", "Hold reports that look like duplicates"],
-                  ["flag_irrelevant", "Hold reports that look off-topic"],
-                  ["notify_reviewer", "Notify an official when something is held"],
-                ] as const
-              ).map(([key, label]) => (
-                <label
-                  key={key}
-                  className="flex items-start gap-2 rounded-xl border border-card-line bg-canvas p-3 text-xs font-semibold text-foreground"
-                >
-                  <input
-                    type="checkbox"
-                    checked={Boolean(config[key])}
-                    onChange={(event) => update(key, event.target.checked)}
-                    className="mt-0.5 size-4 accent-brand-orange"
-                  />
-                  {label}
-                </label>
-              ))}
-            </div>
-
-            <dl className="grid gap-2 rounded-xl bg-tint p-3 text-xs sm:grid-cols-2">
-              <div>
-                <dt className="font-bold text-muted-foreground">Photo model</dt>
-                <dd className="font-semibold text-foreground">
-                  {config.image_model}
-                  {config.image_available === false ? " · unavailable" : ""}
-                </dd>
-              </div>
-              <div>
-                <dt className="font-bold text-muted-foreground">Text model</dt>
-                <dd className="font-semibold text-foreground">{config.text_model}</dd>
-              </div>
-            </dl>
-
-            <Button variant="outline" onClick={() => void reset()} disabled={Boolean(busy)}>
-              <RotateCcwIcon className="size-4" /> Restore recommended settings
-            </Button>
-          </div>
-        ) : null}
-      </section>
 
       <div className="sticky bottom-0 z-30 -mx-4 border-t border-card-line bg-canvas/95 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur md:hidden">
         <Button

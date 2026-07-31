@@ -40,6 +40,7 @@ from apps.media_utils import (
 )
 from apps.accounts.views import request_meta, touch_last_seen
 from apps.notifications.services import create_user_notification, notify_status_change
+from apps.concerns.ai.duplicate_detector import report_fingerprints
 
 from .models import (
     Announcement,
@@ -508,6 +509,26 @@ class ConcernListCreateView(APIView):
             media_hashes.add(media_hash)
             current_phashes.append((media_phash, media_phash_blocks))
             validated_media.append((uploaded_file, validated_file, media_hash, media_phash, media_phash_blocks))
+        duplicate_config = ConcernClassificationConfiguration.current()
+        fingerprints = report_fingerprints(
+            barangay=getattr(getattr(request.user, "resident_profile", None), "barangay", "") or "Marikina Heights",
+            category=selected_category,
+            title=serializer.validated_data["title"],
+            description=serializer.validated_data.get("description", ""),
+            latitude=serializer.validated_data.get("latitude"),
+            longitude=serializer.validated_data.get("longitude"),
+            precision=duplicate_config.report_duplicate_location_precision,
+        )
+        if duplicate_config.report_duplicate_detection_enabled and duplicate_config.report_duplicate_action == ConcernClassificationConfiguration.ReportDuplicateAction.BLOCK:
+            duplicate_exists = bool(
+                fingerprints["report_fingerprint"]
+                and Concern.objects.filter(report_fingerprint=fingerprints["report_fingerprint"]).exclude(status=Concern.Status.REJECTED).exists()
+            )
+            if duplicate_exists:
+                return Response(
+                    {"description": ["A similar report already exists near this location. Add new details only if this is a different issue."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         concern = Concern.objects.create(
             client_request_id=client_request_id,
             reporter=request.user,
@@ -520,6 +541,9 @@ class ConcernListCreateView(APIView):
             address=serializer.validated_data.get("address", ""),
             latitude=serializer.validated_data.get("latitude"),
             longitude=serializer.validated_data.get("longitude"),
+            report_fingerprint=fingerprints["report_fingerprint"],
+            report_text_fingerprint=fingerprints["report_text_fingerprint"],
+            report_location_bucket=fingerprints["report_location_bucket"],
             location_source=serializer.validated_data.get("location_source", ""),
             location_accuracy=serializer.validated_data.get("location_accuracy"),
             barangay=getattr(getattr(request.user, "resident_profile", None), "barangay", "") or "Marikina Heights",

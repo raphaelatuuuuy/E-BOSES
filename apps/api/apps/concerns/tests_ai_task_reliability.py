@@ -32,7 +32,7 @@ class ConcernAiTaskReliabilityTests(TestCase):
     @override_settings(EBOSES_YOLO_MODEL_PATH="")
     def test_uncaught_pipeline_failure_is_persisted_as_retryable_run_evidence(self):
         with patch(
-            "apps.concerns.ai.pipeline.MultilingualKeywordClassifier.classify",
+            "apps.concerns.ai.process_concern_ai",
             side_effect=RuntimeError("simulated NLP crash"),
         ):
             with self.assertRaisesRegex(RuntimeError, "simulated NLP crash"):
@@ -51,7 +51,7 @@ class ConcernAiTaskReliabilityTests(TestCase):
     @override_settings(EBOSES_YOLO_MODEL_PATH="")
     def test_later_success_records_recovery_without_losing_failure_evidence(self):
         with patch(
-            "apps.concerns.ai.pipeline.MultilingualKeywordClassifier.classify",
+            "apps.concerns.ai.process_concern_ai",
             side_effect=RuntimeError("simulated NLP crash"),
         ):
             with self.assertRaises(RuntimeError):

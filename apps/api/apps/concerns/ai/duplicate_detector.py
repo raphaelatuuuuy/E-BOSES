@@ -1,3 +1,4 @@
+import hashlib
 import re
 from dataclasses import dataclass
 from datetime import timedelta
@@ -27,6 +28,7 @@ class DuplicateMatch:
     distance_meters: int | None = None
     matched_concern_id: int | None = None
     matched_tracking_id: str | None = None
+    match_type: str = ""
 
     def as_payload(self, *, enabled: bool, threshold: float) -> dict:
         return {
@@ -37,10 +39,34 @@ class DuplicateMatch:
             "distance_meters": self.distance_meters,
             "matched_concern_id": self.matched_concern_id,
             "matched_tracking_id": self.matched_tracking_id,
+            "match_type": self.match_type,
         }
 
 
-def find_duplicate_concern(concern: Concern, *, enabled: bool, threshold: float) -> DuplicateMatch:
+def report_location_bucket(latitude, longitude, *, precision: int = 4) -> str:
+    if latitude is None or longitude is None:
+        return ""
+    return f"{round(float(latitude), precision):.{precision}f},{round(float(longitude), precision):.{precision}f}"
+
+
+def normalized_report_text(*, title: str, description: str) -> str:
+    tokens = _tokens(f"{title} {description}")
+    return " ".join(sorted(set(tokens)))
+
+
+def report_fingerprints(*, barangay: str, category: str, title: str, description: str, latitude=None, longitude=None, precision: int = 4) -> dict:
+    text = normalized_report_text(title=title, description=description)
+    text_source = f"{category}|{text}"
+    bucket = report_location_bucket(latitude, longitude, precision=precision)
+    full_source = f"{barangay}|{text_source}|{bucket}"
+    return {
+        "report_text_fingerprint": hashlib.sha256(text_source.encode("utf-8")).hexdigest() if text else "",
+        "report_location_bucket": bucket,
+        "report_fingerprint": hashlib.sha256(full_source.encode("utf-8")).hexdigest() if text and bucket else "",
+    }
+
+
+def find_duplicate_concern(concern: Concern, *, enabled: bool, threshold: float, lookback_days: int = LOOKBACK_DAYS, distance_meters: int = MAX_NEARBY_DISTANCE_METERS) -> DuplicateMatch:
     if not enabled or concern.latitude is None or concern.longitude is None:
         return DuplicateMatch(possible_duplicate=False)
 
@@ -49,11 +75,24 @@ def find_duplicate_concern(concern: Concern, *, enabled: bool, threshold: float)
         return DuplicateMatch(possible_duplicate=False)
 
     safe_threshold = min(1.0, max(0.0, float(threshold)))
+    if concern.report_fingerprint:
+        exact = Concern.objects.filter(report_fingerprint=concern.report_fingerprint).exclude(pk=concern.pk).exclude(status=Concern.Status.REJECTED).order_by("-created_at").first()
+        if exact:
+            return DuplicateMatch(True, 1.0, 0, exact.pk, exact.tracking_id, "exact_fingerprint")
+    if concern.report_text_fingerprint and concern.report_location_bucket:
+        same_text = Concern.objects.filter(
+            barangay=concern.barangay,
+            category=concern.category,
+            report_text_fingerprint=concern.report_text_fingerprint,
+            report_location_bucket=concern.report_location_bucket,
+        ).exclude(pk=concern.pk).exclude(status=Concern.Status.REJECTED).order_by("-created_at").first()
+        if same_text:
+            return DuplicateMatch(True, 1.0, None, same_text.pk, same_text.tracking_id, "same_text_nearby")
     candidates = (
         Concern.objects.filter(
             barangay=concern.barangay,
             category=concern.category,
-            created_at__gte=timezone.now() - timedelta(days=LOOKBACK_DAYS),
+            created_at__gte=timezone.now() - timedelta(days=max(1, int(lookback_days))),
         )
         .exclude(pk=concern.pk)
         .exclude(status=Concern.Status.REJECTED)
@@ -70,7 +109,7 @@ def find_duplicate_concern(concern: Concern, *, enabled: bool, threshold: float)
             float(candidate.latitude),
             float(candidate.longitude),
         )
-        if distance > MAX_NEARBY_DISTANCE_METERS:
+        if distance > max(1, int(distance_meters)):
             continue
         similarity = _similarity(source_tokens, _tokens(f"{candidate.title} {candidate.description}"))
         if similarity < safe_threshold:
@@ -87,6 +126,7 @@ def find_duplicate_concern(concern: Concern, *, enabled: bool, threshold: float)
         distance_meters=round(distance),
         matched_concern_id=candidate.pk,
         matched_tracking_id=candidate.tracking_id,
+        match_type="similar_text_nearby",
     )
 
 

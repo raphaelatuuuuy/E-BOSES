@@ -20,6 +20,12 @@ export type ConcernClassificationConfig = {
   mismatch_action: "manual_review" | "request_resubmission" | "reject"
   flag_suspicious: boolean
   flag_duplicates: boolean
+  report_duplicate_detection_enabled?: boolean
+  report_duplicate_action?: "warn" | "block" | "official_review"
+  report_duplicate_lookback_days?: number
+  report_duplicate_distance_meters?: number
+  report_duplicate_similarity_threshold?: number
+  report_duplicate_location_precision?: number
   flag_irrelevant: boolean
   notify_reviewer: boolean
   suspicious_terms: string[]
@@ -45,17 +51,38 @@ export type ImageClassificationResult = {
   outcome: "match" | "mismatch" | "needs_review"
   message?: string
   annotated_image?: string
-  objects?: Array<{ label: string; confidence: number; category?: string; bbox?: number[] }>
+  objects?: Array<{ label: string; display_label?: string; confidence: number; category?: string; bbox?: number[] }>
 }
 
 export type ReportValidationResult = {
-  classification: "related" | "irrelevant" | "suspicious"
+  classification: "related" | "irrelevant" | "suspicious" | "needs_review"
   confidence: number
   category_match: boolean | null
   duplicate: boolean
   duplicate_similarity?: number | null
   outcome: "approved" | "flagged" | "needs_review"
   explanation?: string
+  relevance?: "VALID" | "UNCLEAR" | "IRRELEVANT"
+  primary_category?: string
+  possible_categories?: string[]
+  content_flags?: string[]
+  image_flags?: string[]
+  text_assessment?: string
+  photo_assessment?: string
+  recognized_photo_items?: string[]
+  visual_summary?: string
+  mismatch_reason?: string
+  image_review_limited?: boolean
+  image_review_message?: string
+  privacy_sensitive_information_detected?: boolean
+  disturbing_content_detected?: boolean
+  urgent_attention?: boolean
+  evidence_relationship?: "supports_report" | "partially_supports_report" | "contradicts_report" | "no_useful_image_evidence" | "image_unavailable" | string
+  severity?: "low" | "medium" | "high"
+  ai_result_uncertain?: boolean
+  recommended_action?: string
+  public_media_treatment?: string
+  image?: ImageClassificationResult & { available?: boolean; objects?: ImageClassificationResult["objects"] }
 }
 
 export function getConcernClassificationConfig() {
@@ -118,4 +145,13 @@ export function testConcernReport(category: string, description: string) {
     method: "POST",
     body: JSON.stringify({ category, description }),
   })
+}
+
+export function testConcernSubmission(input: { file?: File | null; category: string; title?: string; description: string }) {
+  const body = new FormData()
+  body.append("category", input.category)
+  body.append("title", input.title || "Sample report")
+  body.append("description", input.description)
+  if (input.file) body.append("file", input.file)
+  return apiRequest<ReportValidationResult>("/concerns/classification/test-submission/", { method: "POST", body })
 }
