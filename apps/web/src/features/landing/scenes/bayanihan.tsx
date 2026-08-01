@@ -110,7 +110,7 @@ export function Bayanihan() {
       ref={root}
       id="impact"
       className="relative scroll-mt-24 overflow-hidden py-28 md:py-36"
-      style={{ background: "linear-gradient(180deg, #07070b 0%, #100b08 45%, #07070b 100%)" }}
+      style={{ background: "#00001C" }}
     >
       {/* Faint grid texture so the section is not plain */}
       <div
@@ -118,7 +118,7 @@ export function Bayanihan() {
         className="pointer-events-none absolute inset-0"
         style={{
           backgroundImage:
-            "linear-gradient(rgba(245,242,236,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(245,242,236,0.02) 1px, transparent 1px)",
+            "linear-gradient(rgba(234, 241, 255, 0.02) 2px, transparent 2px), linear-gradient(90deg, rgba(234, 241, 255, 0.02) 2px, transparent 2px)",
           backgroundSize: "72px 72px",
         }}
       />
@@ -158,8 +158,8 @@ export function Bayanihan() {
                 {/* Huge ghost index, alternating sides on md+ */}
                 <span
                   aria-hidden
-                  className="block shrink-0 select-none font-mono text-[clamp(5.5rem,12vw,9rem)] font-bold leading-none text-white/[0.05] md:px-8"
-                  style={{ WebkitTextStroke: "1px rgba(245,242,236,0.14)" }}
+                  className="block shrink-0 select-none font-mono text-[clamp(5.5rem,12vw,9rem)] font-bold leading-none text-white/[0.09] md:px-8"
+                  style={{ WebkitTextStroke: "1px rgba(221, 228, 242, 0.48)" }}
                 >
                   0{i + 1}
                 </span>

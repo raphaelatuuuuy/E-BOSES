@@ -60,7 +60,13 @@ export function Problem() {
             gsap.set(el, { strokeDasharray: len, strokeDashoffset: len })
           })
           gsap
-            .timeline({ scrollTrigger: { trigger: ".problem-logbook", start: "top 80%" } })
+            .timeline({
+              scrollTrigger: {
+                trigger: ".problem-logbook",
+                start: "top 80%",
+                toggleActions: "play none none reverse",
+              },
+            })
             .to(strokes, { strokeDashoffset: 0, duration: 1.2, ease: "power2.out", stagger: 0.045 })
             .from(".logbook-caption", { opacity: 0, duration: 0.6, ease: "none" }, "-=0.7")
             .from(".problem-slip", { opacity: 0, y: 18, duration: 0.7, ease: "power2.out", stagger: 0.12 }, "-=0.8")

@@ -88,7 +88,8 @@ export function Navbar() {
         <div className="px-5 md:px-10 lg:px-16">
           <div className="mx-auto flex h-20 max-w-7xl items-center justify-between">
             <Link to="/" className="flex shrink-0 items-center rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#020c4e]">
-              <img src="/contents/logo.png" alt="E-Boses" className="h-10 w-auto object-contain md:h-12" />
+              <img src="/contents/logo.png" alt="E-Boses" className="h-10 w-auto object-contain" />
+              <span className="text-lg font-bold text-[#ff8133] px-2">Boses</span>
             </Link>
 
             <nav aria-label="Primary navigation" className="hidden items-center gap-7 lg:flex">

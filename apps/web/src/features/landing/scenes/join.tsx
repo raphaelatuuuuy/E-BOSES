@@ -41,11 +41,11 @@ export function Join() {
   )
 
   return (
-    <section ref={root} className="relative overflow-hidden py-32 md:py-44">
+    <section ref={root} className="relative overflow-hidden pb-24 pt-8 md:pb-32 md:pt-12">
       <ParticleField count={80} className="opacity-70" />
 
-      <div className="join-copy relative z-10 mx-auto max-w-4xl px-5 text-center md:px-10">
-        <h2 className="font-heading text-[clamp(2.5rem,7vw,5.5rem)] font-bold leading-[1.05] tracking-[-0.02em] text-[#f5f2ec]">
+      <div className="join-copy relative z-10 mx-auto flex max-w-4xl flex-col items-center px-5 text-center md:px-10">
+        <h2 className="relative z-10 font-heading text-[clamp(2.5rem,7vw,5.5rem)] font-bold leading-[1.05] tracking-[-0.02em] text-[#f5f2ec]">
           Be the{" "}
           <span className="bg-linear-to-r from-[#ff5003] to-[#ff8133] bg-clip-text text-transparent">
             Voice
@@ -58,13 +58,25 @@ export function Join() {
           </span>
           .
         </h2>
-        <div className="mt-9 flex flex-wrap items-center justify-center gap-5">
+        <div className="relative z-10 mt-9 flex flex-wrap items-center justify-center gap-5">
           <Link
             to="/sign-up"
-            className="inline-flex min-h-13 items-center gap-3 bg-[#ff5003] px-8 text-lg font-semibold text-white transition-colors hover:bg-[#d94300] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
+            className="relative z-10 inline-flex min-h-13 items-center gap-3 rounded-full bg-[#ff5003] px-8 text-lg font-semibold text-white transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#d94300] hover:shadow-[0_4px_16px_rgba(255,80,3,0.45)] active:translate-y-0 active:shadow-[0_4px_14px_rgba(255,80,3,0.35)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white motion-reduce:transition-none motion-reduce:hover:translate-y-0"
           >
             Get started <ArrowRight aria-hidden className="size-5" />
           </Link>
+        </div>
+        <div
+          aria-hidden
+          className="pointer-events-none relative z-0 -mt-10 w-[min(34vw,720px)] max-w-none select-none md:-mt-14"
+          style={{ aspectRatio: "4764 / 5008" }}
+        >
+          <img
+            src="/contents/IMG_3092.png"
+            alt=""
+            className="absolute inset-0 h-full w-full select-none"
+            style={{ transform: "translateX(-6%)" }}
+          />
         </div>
       </div>
     </section>
