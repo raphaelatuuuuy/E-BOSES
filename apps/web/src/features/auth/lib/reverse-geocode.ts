@@ -56,17 +56,19 @@ export async function reverseGeocodeToMarikinaStreet(
   latitude: number,
   longitude: number,
 ): Promise<ReverseGeocodeResult> {
+  // Routed through our own API. Calling Nominatim from the browser cannot set a
+  // User-Agent, so it throttles the barangay's whole public IP to 429 - and a
+  // 429 carries no CORS headers, which surfaces as a misleading CORS error.
+  // The server identifies itself, caches for 30 days and paces requests.
   const params = new URLSearchParams({
-    format: "jsonv2",
     lat: String(latitude),
-    lon: String(longitude),
+    lng: String(longitude),
     zoom: "18",
-    addressdetails: "1",
   })
 
   let response: Response
   try {
-    response = await fetch(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`, {
+    response = await fetch(`/api/locations/geocode/reverse/?${params.toString()}`, {
       headers: {
         Accept: "application/json",
       },
@@ -90,7 +92,16 @@ export async function reverseGeocodeToMarikinaStreet(
     }
   }
 
-  const data = (await response.json()) as NominatimResponse
+  const envelope = (await response.json()) as { ok?: boolean; result?: NominatimResponse | null }
+  const data = envelope.result ?? {}
+  if (!envelope.ok || !envelope.result) {
+    return {
+      ok: false,
+      street: null,
+      displayName: "",
+      message: "Street lookup is unavailable. Your exact pinned coordinates can still be sent.",
+    }
+  }
   const displayName = data.display_name ?? ""
   const address = data.address
 

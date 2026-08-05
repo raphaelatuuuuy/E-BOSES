@@ -79,9 +79,12 @@ from .services import (
 
 
 def request_meta(request):
+    # Tolerates None so background paths that have no HTTP request — SMS
+    # ingestion, Celery escalation — can share the same audit helpers.
+    meta = getattr(request, "META", None) or {}
     return {
-        "ip_address": request.META.get("REMOTE_ADDR"),
-        "user_agent": request.META.get("HTTP_USER_AGENT", ""),
+        "ip_address": meta.get("REMOTE_ADDR"),
+        "user_agent": meta.get("HTTP_USER_AGENT", ""),
     }
 
 
@@ -208,34 +211,43 @@ class PhoneOTPRequestView(APIView):
     throttle_scope = "otp"
 
     def post(self, request):
-        from django.conf import settings as django_settings
-
-        from .services import OTPDeliveryError
+        from .services import (
+            OTP_EXPIRY_MINUTES,
+            OTP_RESEND_COOLDOWN_SECONDS,
+            OTPDeliveryError,
+            OTPRateLimited,
+        )
 
         serializer = PhoneOTPRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         phone_number = serializer.validated_data["phone_number"]
         try:
-            _challenge, code = create_phone_otp_challenge(phone_number)
+            create_phone_otp_challenge(phone_number)
+        except OTPRateLimited as exc:
+            return Response(
+                {"detail": str(exc), "retry_after": exc.retry_after},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
         except OTPDeliveryError as exc:
+            # Never fall through to "verified" when the gateway is down.
             return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception:
             logger = __import__("logging").getLogger(__name__)
-            logger.exception("Phone OTP request failed for %s", phone_number)
+            logger.exception("Phone OTP request failed")
             return Response(
                 {"detail": "We could not send the SMS code. Please try again in a moment."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        # Local dev: return the code so you can finish sign-up without a real SMS gateway.
-        if getattr(django_settings, "IS_LOCAL_DEVELOPMENT", False) or django_settings.DEBUG:
-            return Response(
-                {
-                    "detail": "Code sent (development mode — check the API console).",
-                    "debug_code": code,
-                },
-                status=status.HTTP_200_OK,
-            )
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        # The code itself is never returned. In local development it is printed
+        # to the API console by the console SMS driver.
+        return Response(
+            {
+                "detail": "Code sent.",
+                "expires_in": OTP_EXPIRY_MINUTES * 60,
+                "retry_after": OTP_RESEND_COOLDOWN_SECONDS,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class PhoneOTPVerifyView(APIView):
@@ -284,10 +296,7 @@ class EmailOTPRequestView(APIView):
             )
         if getattr(django_settings, "IS_LOCAL_DEVELOPMENT", False) or django_settings.DEBUG:
             return Response(
-                {
-                    "detail": "Code sent (development mode — check the API console).",
-                    "debug_code": code,
-                },
+                {"detail": "Code sent. Check the API console in development."},
                 status=status.HTTP_200_OK,
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -411,16 +420,20 @@ class ResidenceProofDetectView(APIView):
         try:
             # When two files are uploaded, run side-aware extract on each and merge.
             if len(proof_files) >= 2:
-                front_result = detect_residence_proof(
-                    proof_files[0],
-                    hint_type=(request.data.get("proof_type") or "").strip() or None,
-                    side="front",
-                )
-                back_result = detect_residence_proof(
-                    proof_files[1],
-                    hint_type=(request.data.get("proof_type") or "").strip() or None,
-                    side="back",
-                )
+                from concurrent.futures import ThreadPoolExecutor
+
+                hint_type = (request.data.get("proof_type") or "").strip() or None
+
+                def detect_side(index: int, side: str) -> dict:
+                    return detect_residence_proof(proof_files[index], hint_type=hint_type, side=side)
+
+                # PaddleOCR is an I/O-bound HTTP poll, so the two sides can run
+                # concurrently instead of front-then-back (~2x faster).
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    front_future = executor.submit(detect_side, 0, "front")
+                    back_future = executor.submit(detect_side, 1, "back")
+                    front_result = front_future.result()
+                    back_result = back_future.result()
                 from .ocr_engine import merge_extracted_fields
 
                 merged_fields = merge_extracted_fields(
@@ -778,7 +791,7 @@ class AccountPhoneChangeRequestView(APIView):
             )
         if getattr(django_settings, "IS_LOCAL_DEVELOPMENT", False) or django_settings.DEBUG:
             return Response(
-                {"detail": "Code sent (development mode).", "debug_code": code},
+                {"detail": "Code sent. Check the API console in development."},
                 status=status.HTTP_200_OK,
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -852,7 +865,7 @@ class AccountEmailChangeRequestView(APIView):
             )
         if getattr(django_settings, "IS_LOCAL_DEVELOPMENT", False) or django_settings.DEBUG:
             return Response(
-                {"detail": "Code sent (development mode).", "debug_code": code},
+                {"detail": "Code sent. Check the API console in development."},
                 status=status.HTTP_200_OK,
             )
         return Response(status=status.HTTP_204_NO_CONTENT)

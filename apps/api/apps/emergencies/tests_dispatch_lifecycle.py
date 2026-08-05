@@ -1,0 +1,352 @@
+"""Acknowledgment timeout, backup, transfer and the unable-to-respond path."""
+
+from datetime import timedelta
+
+from django.contrib.auth import get_user_model
+from django.test import override_settings
+from django.utils import timezone
+from rest_framework import status
+from rest_framework.test import APITestCase
+
+from apps.accounts.models import ResidentProfile
+from apps.concerns.models import Department
+
+from .models import (
+    EmergencyAlert,
+    EmergencyResponderAssignment,
+    EmergencyTypeRoleMap,
+    ResponderShift,
+)
+from .views import escalate_overdue_assignments
+
+TEST_CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+
+
+@override_settings(
+    CHANNEL_LAYERS=TEST_CHANNEL_LAYERS,
+    OSM_ROUTE_URL="",
+    OUTBOUND_SMS_DRIVER="disabled",
+    CELERY_TASK_ALWAYS_EAGER=True,
+)
+class DispatchLifecycleTests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.resident = self._user("lc-resident@example.com", "+639471000001", "Maria", "Santos")
+        self.first = self._responder("lc-first@example.com", "+639471000002", "Juan")
+        self.second = self._responder("lc-second@example.com", "+639471000003", "Pedro")
+        self.official = self._user(
+            "lc-official@example.com",
+            "+639471000004",
+            "Ana",
+            "Official",
+            role=User.Role.BARANGAY_OFFICIAL,
+            is_staff=True,
+        )
+
+    def _user(self, email, phone, first, last, **extra):
+        User = get_user_model()
+        user = User.objects.create_user(
+            email=email, phone_number=phone, password="pass", status=User.Status.VERIFIED, **extra
+        )
+        ResidentProfile.objects.create(
+            user=user,
+            first_name=first,
+            last_name=last,
+            date_of_birth="1990-01-01",
+            address="Somewhere",
+            barangay="Marikina Heights",
+        )
+        return user
+
+    def _responder(self, email, phone, first):
+        User = get_user_model()
+        user = self._user(
+            email,
+            phone,
+            first,
+            "Responder",
+            role=User.Role.FIRST_RESPONDER,
+            responder_unit=User.ResponderUnit.BDRRMO,
+            is_on_duty=True,
+            current_latitude="14.6516000",
+            current_longitude="121.1208000",
+            location_updated_at=timezone.now(),
+        )
+        ResponderShift.objects.create(
+            responder=user,
+            responder_unit=User.ResponderUnit.BDRRMO,
+            status=ResponderShift.Status.ACTIVE,
+            started_at=timezone.now() - timedelta(minutes=5),
+        )
+        return user
+
+    def alert_with_assignment(self, responder=None, assigned_ago_seconds=0):
+        alert = EmergencyAlert.objects.create(
+            reporter=self.resident,
+            type="fire",
+            note="Smoke on the second floor.",
+            latitude="14.6507000",
+            longitude="121.1133000",
+            address="Champaca Street",
+            reported_area="Champaca Street",
+            barangay="Marikina Heights",
+            status=EmergencyAlert.Status.ROUTED,
+        )
+        assignment = EmergencyResponderAssignment.objects.create(
+            alert=alert,
+            responder=responder or self.first,
+            status=EmergencyResponderAssignment.Status.ASSIGNED,
+            source=EmergencyResponderAssignment.Source.AUTO,
+        )
+        if assigned_ago_seconds:
+            EmergencyResponderAssignment.objects.filter(pk=assignment.pk).update(
+                assigned_at=timezone.now() - timedelta(seconds=assigned_ago_seconds)
+            )
+            assignment.refresh_from_db()
+        return alert, assignment
+
+    # -- routing configuration -------------------------------------------
+
+    def test_timeout_comes_from_the_routing_rule_not_a_global_constant(self):
+        from .views import acknowledgment_timeout_for
+
+        alert, _ = self.alert_with_assignment()
+        rule = EmergencyTypeRoleMap.objects.filter(emergency_type="fire").first()
+        self.assertIsNotNone(rule)
+        self.assertEqual(acknowledgment_timeout_for(alert), rule.acknowledgment_timeout_seconds)
+
+    def test_every_seeded_category_has_a_support_and_escalation_unit(self):
+        for rule in EmergencyTypeRoleMap.objects.filter(emergency_type__in=["fire", "medical", "crime", "flood"]):
+            self.assertIsNotNone(rule.supporting_department, rule.emergency_type)
+            self.assertIsNotNone(rule.escalation_department, rule.emergency_type)
+            self.assertGreater(rule.acknowledgment_timeout_seconds, 0)
+
+    # -- acknowledgment timeout ------------------------------------------
+
+    def test_an_acknowledged_assignment_is_left_alone(self):
+        alert, assignment = self.alert_with_assignment(assigned_ago_seconds=600)
+        assignment.status = EmergencyResponderAssignment.Status.EN_ROUTE
+        assignment.acknowledged_at = timezone.now()
+        assignment.save(update_fields=["status", "acknowledged_at"])
+
+        self.assertEqual(escalate_overdue_assignments(), [])
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.EN_ROUTE)
+
+    def test_a_fresh_assignment_is_not_escalated_early(self):
+        self.alert_with_assignment(assigned_ago_seconds=5)
+        self.assertEqual(escalate_overdue_assignments(), [])
+
+    def test_timeout_reassigns_to_the_next_responder(self):
+        alert, assignment = self.alert_with_assignment(assigned_ago_seconds=600)
+
+        escalations = escalate_overdue_assignments()
+
+        self.assertEqual(len(escalations), 1)
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ESCALATED)
+        self.assertTrue(
+            alert.assignments.filter(
+                responder=self.second, status=EmergencyResponderAssignment.Status.ASSIGNED
+            ).exists()
+        )
+        self.assertTrue(
+            alert.assignment_logs.filter(action="acknowledgment_timeout").exists()
+        )
+        self.assertTrue(alert.assignment_logs.filter(action="reassigned_after_timeout").exists())
+
+    def test_timeout_with_nobody_left_marks_escalation_required_not_resolved(self):
+        self.second.is_on_duty = False
+        self.second.save(update_fields=["is_on_duty"])
+        alert, _ = self.alert_with_assignment(assigned_ago_seconds=600)
+
+        escalate_overdue_assignments()
+
+        alert.refresh_from_db()
+        self.assertEqual(alert.status, EmergencyAlert.Status.ESCALATION_REQUIRED)
+        self.assertIn(alert.status, __import__("apps.emergencies.views", fromlist=["x"]).ACTIVE_STATUSES)
+
+    def test_the_original_assignment_stays_in_the_audit_history(self):
+        alert, assignment = self.alert_with_assignment(assigned_ago_seconds=600)
+        escalate_overdue_assignments()
+        self.assertTrue(alert.assignments.filter(pk=assignment.pk, responder=self.first).exists())
+        self.assertTrue(alert.escalations.filter(previous_assignment=assignment).exists())
+
+    # -- responder actions over HTTP -------------------------------------
+
+    def test_respond_moves_the_alert_to_en_route(self):
+        alert, _ = self.alert_with_assignment()
+        self.client.force_authenticate(self.first)
+
+        response = self.client.post(f"/api/emergencies/{alert.pk}/respond/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        alert.refresh_from_db()
+        self.assertEqual(alert.status, EmergencyAlert.Status.EN_ROUTE)
+
+    def test_respond_is_refused_for_an_unassigned_responder(self):
+        alert, _ = self.alert_with_assignment()
+        self.client.force_authenticate(self.second)
+        response = self.client.post(f"/api/emergencies/{alert.pk}/respond/", {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unable_requires_a_reason(self):
+        alert, _ = self.alert_with_assignment()
+        self.client.force_authenticate(self.first)
+        response = self.client.post(f"/api/emergencies/{alert.pk}/unable/", {"reason": ""}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_unable_with_a_reason_assigns_the_next_responder(self):
+        alert, assignment = self.alert_with_assignment()
+        self.client.force_authenticate(self.first)
+
+        response = self.client.post(
+            f"/api/emergencies/{alert.pk}/unable/",
+            {"reason": "Already at another incident"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.DECLINED)
+        self.assertTrue(alert.assignments.filter(responder=self.second).exists())
+
+    # -- backup ----------------------------------------------------------
+
+    def test_backup_requires_a_valid_type_and_reason(self):
+        alert, _ = self.alert_with_assignment()
+        self.client.force_authenticate(self.first)
+
+        bad_type = self.client.post(
+            f"/api/emergencies/{alert.pk}/request-backup/",
+            {"backup_type": "spaceship", "reason": "need help", "urgency": "high"},
+            format="json",
+        )
+        self.assertEqual(bad_type.status_code, status.HTTP_400_BAD_REQUEST)
+
+        no_reason = self.client.post(
+            f"/api/emergencies/{alert.pk}/request-backup/",
+            {"backup_type": "medical", "reason": "", "urgency": "high"},
+            format="json",
+        )
+        self.assertEqual(no_reason.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_backup_assigns_a_support_responder_and_keeps_the_original(self):
+        alert, assignment = self.alert_with_assignment()
+        self.client.force_authenticate(self.first)
+
+        response = self.client.post(
+            f"/api/emergencies/{alert.pk}/request-backup/",
+            {"backup_type": "medical", "reason": "Two casualties inside", "urgency": "immediate"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        alert.refresh_from_db()
+        self.assertEqual(alert.status, EmergencyAlert.Status.BACKUP_ASSIGNED)
+        self.assertTrue(alert.assignments.filter(responder=self.second).exists())
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ASSIGNED)
+
+    def test_backup_with_nobody_free_still_records_the_request(self):
+        self.second.is_on_duty = False
+        self.second.save(update_fields=["is_on_duty"])
+        alert, _ = self.alert_with_assignment()
+        self.client.force_authenticate(self.first)
+
+        response = self.client.post(
+            f"/api/emergencies/{alert.pk}/request-backup/",
+            {"backup_type": "fire", "reason": "Fire is spreading", "urgency": "immediate"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        alert.refresh_from_db()
+        self.assertEqual(alert.status, EmergencyAlert.Status.BACKUP_REQUESTED)
+        self.assertTrue(alert.escalations.exists())
+
+    # -- transfer --------------------------------------------------------
+
+    def test_transfer_requires_an_official(self):
+        alert, _ = self.alert_with_assignment()
+        self.client.force_authenticate(self.first)
+        response = self.client.post(
+            f"/api/emergencies/{alert.pk}/transfer/",
+            {"department_code": "bpso-tanod", "reason": "Better handled by tanod"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_transfer_requires_a_reason(self):
+        alert, _ = self.alert_with_assignment()
+        self.client.force_authenticate(self.official)
+        response = self.client.post(
+            f"/api/emergencies/{alert.pk}/transfer/",
+            {"department_code": "bpso-tanod", "reason": "no"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_transfer_moves_the_incident_and_is_audited(self):
+        alert, assignment = self.alert_with_assignment()
+        self.client.force_authenticate(self.official)
+
+        response = self.client.post(
+            f"/api/emergencies/{alert.pk}/transfer/",
+            {"department_code": "bpso-tanod", "reason": "Crowd control needed on scene"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.CANCELLED)
+        self.assertTrue(alert.assignment_logs.filter(action="transferred", actor=self.official).exists())
+        self.assertTrue(alert.escalations.exists())
+
+    def test_transfer_to_an_unknown_unit_is_refused(self):
+        alert, _ = self.alert_with_assignment()
+        self.client.force_authenticate(self.official)
+        response = self.client.post(
+            f"/api/emergencies/{alert.pk}/transfer/",
+            {"department_code": "does-not-exist", "reason": "Wrong unit assigned"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # -- status vocabulary ------------------------------------------------
+
+    def test_new_statuses_are_all_treated_as_active(self):
+        from .views import ACTIVE_STATUSES
+
+        for value in (
+            EmergencyAlert.Status.ROUTING,
+            EmergencyAlert.Status.AWAITING_ACKNOWLEDGMENT,
+            EmergencyAlert.Status.BACKUP_REQUESTED,
+            EmergencyAlert.Status.BACKUP_ASSIGNED,
+            EmergencyAlert.Status.IN_PROGRESS,
+            EmergencyAlert.Status.TRANSFER_REQUIRED,
+            EmergencyAlert.Status.ESCALATION_REQUIRED,
+        ):
+            self.assertIn(value, ACTIVE_STATUSES)
+
+    def test_closed_statuses_are_not_active(self):
+        from .views import ACTIVE_STATUSES
+
+        for value in (
+            EmergencyAlert.Status.RESOLVED,
+            EmergencyAlert.Status.CLOSED,
+            EmergencyAlert.Status.CANCELLED,
+            EmergencyAlert.Status.FALSE_ALARM,
+        ):
+            self.assertNotIn(value, ACTIVE_STATUSES)
+
+    def test_every_status_has_a_human_label(self):
+        for value, label in EmergencyAlert.Status.choices:
+            self.assertNotEqual(value, label)
+            self.assertNotIn("_", label)
+
+
+class DepartmentSeedTests(APITestCase):
+    def test_the_units_the_routing_table_references_exist(self):
+        for code in ("bpso-tanod", "bhw", "bdrrmo", "bcpc", "vawc-desk"):
+            self.assertTrue(Department.objects.filter(code=code).exists(), code)

@@ -7,7 +7,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@workspace/ui/comp
 import { useAuthSession } from "@/features/auth/auth-session"
 import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import { getActiveEmergency } from "@/features/dashboard/emergency-api"
-import { ResponderDispatchButton } from "@/features/dashboard/components/responder-dispatch-fab"
+import { useAssignedDispatches } from "@/features/dashboard/hooks/use-assigned-dispatches"
 import { getRoleNav } from "@/features/dashboard/lib/navigation"
 
 const ACTIVE_EMERGENCY = new Set([
@@ -69,6 +69,85 @@ function SosFab() {
   )
 }
 
+/**
+ * The responder's bottom bar.
+ *
+ * A flush, full-width dark bar with four equal tabs — the reference layout —
+ * replacing the floating two-item pill that had the Dispatch button hanging
+ * off its side. The active tab is a filled orange block with the icon over its
+ * label, and Dispatch turns red and carries its live count when something is
+ * assigned, which is how urgency survives folding that button into the bar.
+ *
+ * Filled-orange text is `brand-orange-ink` (near-black): white on #ff6a1a is
+ * 2.86:1 and fails AA. See globals.css.
+ */
+function ResponderBar() {
+  const location = useLocation()
+  const navItems = getRoleNav("responder").mobileItems
+  const { activeAlerts } = useAssignedDispatches(true)
+  const liveCount = activeAlerts.length
+
+  return (
+    <nav
+      aria-label="Primary"
+      className="pointer-events-auto flex h-16 w-full items-stretch gap-1 border-t border-nav-border bg-nav-bg px-2 pb-[env(safe-area-inset-bottom)]"
+    >
+      {navItems.map((item) => {
+        const active = item.isActive(location.pathname)
+        const Icon = item.icon
+        const isDispatch = item.key === "dispatch"
+        const alarm = isDispatch && liveCount > 0
+        // Dispatch keeps its red identity in both active and idle-alarm states;
+        // it never turns brand-orange, which would let it get lost in the row.
+        const activeClass = isDispatch
+          ? "bg-sos/20 text-sos ring-1 ring-sos/40"
+          : "bg-nav-raised text-nav-text-active"
+        const alarmClass = "animate-sos-glow-blink bg-sos/15 text-sos"
+
+        return (
+          <Link
+            key={item.key}
+            to={item.to}
+            aria-current={active ? "page" : undefined}
+            aria-label={
+              alarm ? `${item.label}, ${liveCount} active` : item.label
+            }
+            className={cn(
+              "relative my-2 flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-2xl transition-colors",
+              active
+                ? activeClass
+                : alarm
+                  ? alarmClass
+                  : "text-nav-muted active:bg-nav-raised",
+            )}
+          >
+            <span className="relative">
+              <Icon
+                className="size-5"
+                strokeWidth={active || alarm ? 2.2 : 1.8}
+                fill="none"
+              />
+              {alarm && !active ? (
+                <span className="absolute -right-2 -top-1.5 flex size-4 min-w-4 items-center justify-center rounded-full bg-sos px-1 text-[10px] font-black leading-none text-white tabular-nums">
+                  {liveCount > 9 ? "9+" : liveCount}
+                </span>
+              ) : null}
+            </span>
+            <span
+              className={cn(
+                "max-w-full truncate text-[10.5px] leading-none",
+                active || alarm ? "font-bold" : "font-medium",
+              )}
+            >
+              {item.label}
+            </span>
+          </Link>
+        )
+      })}
+    </nav>
+  )
+}
+
 export function MobileNav() {
   const location = useLocation()
   const { user } = useAuthSession()
@@ -83,27 +162,30 @@ export function MobileNav() {
   const more = nav.more
   const moreActive = more ? more.isActive(location.pathname) : false
 
+  // The responder bar is flush to the viewport floor and full width, so it
+  // does not share the floating-pill container the other two roles use.
+  if (isResponderRole) {
+    return (
+      <div className="fixed bottom-0 left-0 right-0 z-30 lg:hidden">
+        <ResponderBar />
+      </div>
+    )
+  }
+
   return (
     <>
       <div className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 lg:hidden">
         <div className="pointer-events-none flex items-end justify-center gap-3 px-4 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))]">
           {/*
-            Resident and responder size the pill to its content so an action
-            button sits beside it on the same line — SOS for the resident,
-            Dispatch for the responder. The official's four tabs need the width,
-            so theirs stays a full bar.
-
-            The responder shell runs on the dark ops palette, so their pill wears
-            the rail tokens; the resident and official shells stay light.
+            The resident sizes the pill to its content so the SOS button sits
+            beside it on the same line. The official's four tabs need the
+            width, so theirs stays a full bar.
           */}
           <nav
             className={cn(
               "pointer-events-auto flex h-[3.75rem] items-center gap-1 rounded-full px-2",
-              isResponderRole
-                ? "w-auto shrink-0 border border-rail-line bg-nav-glass shadow-2xl backdrop-blur"
-                : "border-2 border-neutral-300/90 bg-[#eef0f4] shadow-[0_10px_32px_rgba(15,23,42,0.18)]",
-              !isResponderRole &&
-                (isResident ? "w-auto shrink-0" : "w-full max-w-lg justify-evenly gap-0.5 px-1.5"),
+              "border-2 border-neutral-300/90 bg-[#eef0f4] shadow-[0_10px_32px_rgba(15,23,42,0.18)]",
+              isResident ? "w-auto shrink-0" : "w-full max-w-lg justify-evenly gap-0.5 px-1.5",
             )}
             aria-label="Primary"
           >
@@ -117,16 +199,10 @@ export function MobileNav() {
                   aria-current={active ? "page" : undefined}
                   className={cn(
                     "group flex h-12 flex-col items-center justify-center gap-0.5 rounded-full transition-colors",
-                    isResident || isResponderRole
-                      ? "w-auto shrink-0 px-4"
-                      : "min-w-0 flex-1 px-1",
-                    isResponderRole
-                      ? active
-                        ? "text-brand-orange"
-                        : "text-nav-muted hover:text-nav-text-active"
-                      : active
-                        ? "text-brand-navy"
-                        : "text-neutral-500 hover:text-neutral-700",
+                    isResident ? "w-auto shrink-0 px-4" : "min-w-0 flex-1 px-1",
+                    active
+                      ? "text-brand-navy"
+                      : "text-neutral-500 hover:text-neutral-700",
                   )}
                 >
                   <Icon className="size-5" />
@@ -153,11 +229,6 @@ export function MobileNav() {
           </nav>
 
           {isResident ? <SosFab /> : null}
-          {isResponderRole ? (
-            <div className="pointer-events-auto">
-              <ResponderDispatchButton />
-            </div>
-          ) : null}
         </div>
       </div>
 

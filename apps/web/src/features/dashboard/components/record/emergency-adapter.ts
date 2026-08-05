@@ -28,7 +28,7 @@ const TYPE_LABEL: Record<string, string> = {
 
 /** Lifecycle in the order responders actually move through it. */
 const TRACK: { key: string; label: string; reached: string[] }[] = [
-  { key: "submitted", label: "Received", reached: ["submitted", "routed", "acknowledged", "en_route", "nearby", "arrived", "resolved"] },
+  { key: "submitted", label: "Received", reached: ["submitted", "routing", "routed", "awaiting_acknowledgment", "acknowledged", "en_route", "nearby", "arrived", "resident_safe", "backup_requested", "backup_assigned", "in_progress", "transfer_required", "escalation_required", "resolved", "closed"] },
   { key: "routed", label: "Routed", reached: ["routed", "acknowledged", "en_route", "nearby", "arrived", "resolved"] },
   { key: "acknowledged", label: "Acknowledged", reached: ["acknowledged", "en_route", "nearby", "arrived", "resolved"] },
   { key: "en_route", label: "En route", reached: ["en_route", "nearby", "arrived", "resolved"] },

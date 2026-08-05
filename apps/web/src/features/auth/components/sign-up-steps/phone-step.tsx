@@ -32,6 +32,8 @@ interface PhoneStepProps {
 }
 
 const OTP_LENGTH = 6
+/** Matches OTP_EXPIRY_MINUTES in apps/api/apps/accounts/services.py. */
+const OTP_EXPIRY_SECONDS = 5 * 60
 
 const primaryBtnClass =
   "inline-flex h-12 min-w-[10rem] items-center justify-center gap-2 rounded-full bg-[#ff8133] px-8 text-base font-semibold text-white shadow-none transition-[transform,colors,filter] duration-150 ease-out hover:bg-[#e6732e] active:scale-[0.96] active:brightness-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100"
@@ -111,10 +113,18 @@ function toE164PhMobile(raw: string): string {
   return digits ? `+63${digits}` : ""
 }
 
-function formatDisplayPhone(e164: string): string {
+/** `+63 9•• ••• 4821` — enough to recognise, not enough to read over a shoulder. */
+function maskDisplayPhone(e164: string): string {
   const local = toLocalPhMobile(e164)
-  if (!local) return "your number"
-  return `+63 ${local}`
+  if (local.length < 4) return "your number"
+  return `+63 9•• ••• ${local.slice(-4)}`
+}
+
+function formatCountdown(totalSeconds: number): string {
+  const safe = Math.max(0, Math.floor(totalSeconds))
+  const minutes = Math.floor(safe / 60)
+  const seconds = safe % 60
+  return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
 }
 
 export function PhoneStep({
@@ -144,6 +154,18 @@ export function PhoneStep({
   const invalid = Boolean(errors.phoneNumber)
   const sendDisabled = busy || !phoneValid || onCooldown || phoneOtpVerified
 
+  // Server expiry is 5 minutes; the countdown starts when the code is sent.
+  const [secondsLeft, setSecondsLeft] = React.useState(OTP_EXPIRY_SECONDS)
+  React.useEffect(() => {
+    if (!phoneOtpSent || phoneOtpVerified) return
+    setSecondsLeft(OTP_EXPIRY_SECONDS)
+    const timer = window.setInterval(() => {
+      setSecondsLeft((current) => (current <= 0 ? 0 : current - 1))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [phoneOtpSent, phoneOtpVerified, phoneOtpCooldownSeconds])
+  const codeExpired = secondsLeft <= 0
+
   // After a successful verify, move on automatically.
   React.useEffect(() => {
     if (phoneOtpVerified) onContinue()
@@ -172,9 +194,14 @@ export function PhoneStep({
     return (
       <div className="flex flex-1 flex-col pt-2">
         <h1 className="text-[1.5rem] font-semibold leading-snug tracking-tight text-[#0f172a] md:text-[1.75rem]">
-          Sent to {formatDisplayPhone(values.phoneNumber)}! Enter the code you will receive
-          shortly.
+          Phone number verification
         </h1>
+        <p className="mt-2 text-sm text-neutral-600">
+          We sent a six-digit registration code to{" "}
+          <span className="font-semibold tabular-nums text-neutral-900">
+            {maskDisplayPhone(values.phoneNumber)}
+          </span>
+        </p>
 
         <div className="mt-8" ref={otpContainerRef}>
           <InputOTP
@@ -207,17 +234,37 @@ export function PhoneStep({
           ) : null}
         </div>
 
+        <p className="mt-3 text-sm text-neutral-600" aria-live="polite">
+          {codeExpired ? (
+            <span className="font-medium text-destructive">
+              Code expired. Request a new one.
+            </span>
+          ) : (
+            <>Code expires in <span className="tabular-nums">{formatCountdown(secondsLeft)}</span></>
+          )}
+        </p>
+
+        <p className="mt-1 text-sm text-neutral-500" aria-live="polite">
+          {isSendingPhoneOtp
+            ? "Sending code…"
+            : isVerifyingPhoneOtp
+              ? "Checking your code…"
+              : "Didn't receive the code?"}
+        </p>
+
         <button
           type="button"
           disabled={busy || onCooldown}
           onClick={onSendOtp}
-          className="mt-5 inline-flex items-center gap-2 self-start text-sm font-medium text-neutral-800 transition-colors hover:text-black disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-2 inline-flex items-center gap-2 self-start text-sm font-medium text-neutral-800 transition-colors hover:text-black disabled:cursor-not-allowed disabled:opacity-60"
         >
           <RotateCw
             className={cn("size-4 shrink-0", isSendingPhoneOtp && "animate-spin")}
             aria-hidden="true"
           />
-          {onCooldown ? `Resend code (${phoneOtpCooldownSeconds}s)` : "Resend code"}
+          {onCooldown
+            ? `Resend available in ${phoneOtpCooldownSeconds} seconds`
+            : "Resend code"}
         </button>
 
         <div className="mt-10 flex items-center justify-end gap-5">
@@ -231,7 +278,7 @@ export function PhoneStep({
           </button>
           <Button
             type="button"
-            disabled={busy || !phoneCodeComplete}
+            disabled={busy || !phoneCodeComplete || codeExpired}
             onClick={onVerifyOtp}
             className="h-11 min-w-[7.5rem] rounded-full bg-[#ff8133] px-8 text-base font-semibold text-white shadow-none hover:bg-[#e6732e] active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-50"
           >

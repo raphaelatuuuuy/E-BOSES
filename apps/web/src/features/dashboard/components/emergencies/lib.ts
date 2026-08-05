@@ -10,16 +10,25 @@ export type ResponderUnit = NonNullable<PublicUser["responder_unit"]>
 // (the responder-side POST /emergencies/{id}/acknowledge/ sets it); it shares the
 // "routed" visual step below and gets its own label + amber color.
 export const statusLabel: Record<EmergencyStatus, string> = {
-  submitted: "Submitted",
-  routed: "Routed",
-  acknowledged: "Responder routed",
-  en_route: "En route",
-  nearby: "Nearby",
-  arrived: "Arrived",
+  submitted: "Emergency received",
+  routing: "Finding available responder",
+  routed: "Responder assigned",
+  awaiting_acknowledgment: "Awaiting responder",
+  acknowledged: "Responder confirmed",
+  en_route: "Responder en route",
+  nearby: "Responder nearby",
+  arrived: "Responder at scene",
+  resident_safe: "Resident reported safe",
+  backup_requested: "Backup requested",
+  backup_assigned: "Backup assigned",
+  in_progress: "Response in progress",
+  transfer_required: "Transfer required",
+  escalation_required: "Escalation required",
   resolved: "Resolved",
   false_alarm: "False alarm",
   invalid: "Invalid",
   cancelled: "Cancelled",
+  closed: "Closed",
 }
 
 export const unitLabel: Record<ResponderUnit, string> = {
@@ -30,6 +39,27 @@ export const unitLabel: Record<ResponderUnit, string> = {
 }
 
 export const statusSteps: EmergencyStatus[] = ["submitted", "routed", "en_route", "arrived", "resolved"]
+
+/**
+ * Statuses that mean the incident is finished. Everything else counts as live.
+ *
+ * Defined by exclusion on purpose: the active list used to be spelled out in
+ * six different files, and when new statuses were added every one of them went
+ * stale at once - emergencies disappeared from the resident map and from
+ * history because an unrecognised status was treated as closed. Failing towards
+ * "still showing" is the safe direction for an emergency.
+ */
+export const closedEmergencyStatuses: EmergencyStatus[] = [
+  "resolved",
+  "false_alarm",
+  "invalid",
+  "cancelled",
+  "closed",
+]
+
+export function isEmergencyActive(status: EmergencyStatus | string) {
+  return !closedEmergencyStatuses.includes(status as EmergencyStatus)
+}
 
 /**
  * Date + time for incident records. The year is printed whenever the record is
@@ -50,11 +80,15 @@ export function formatTime(value: string) {
 }
 
 export function statusClass(status: EmergencyStatus) {
-  if (status === "submitted") return "border-severity-critical/40 bg-severity-critical-surface text-severity-critical-ink"
-  if (status === "routed" || status === "acknowledged") return "border-severity-moderate/40 bg-severity-moderate-surface text-severity-moderate-ink"
-  if (status === "en_route" || status === "nearby") return "border-status-active/40 bg-status-active-surface text-status-active-ink"
-  if (status === "arrived" || status === "resolved") return "border-status-closed/40 bg-status-closed-surface text-status-closed-ink"
-  if (status === "false_alarm" || status === "invalid") return "border-severity-critical/40 bg-severity-critical-surface text-severity-critical-ink"
+  const critical: EmergencyStatus[] = ["submitted", "routing", "escalation_required", "transfer_required", "false_alarm", "invalid"]
+  const waiting: EmergencyStatus[] = ["routed", "awaiting_acknowledgment", "acknowledged", "backup_requested"]
+  const moving: EmergencyStatus[] = ["en_route", "nearby", "backup_assigned", "in_progress"]
+  const done: EmergencyStatus[] = ["arrived", "resolved", "closed", "resident_safe"]
+
+  if (critical.includes(status)) return "border-severity-critical/40 bg-severity-critical-surface text-severity-critical-ink"
+  if (waiting.includes(status)) return "border-severity-moderate/40 bg-severity-moderate-surface text-severity-moderate-ink"
+  if (moving.includes(status)) return "border-status-active/40 bg-status-active-surface text-status-active-ink"
+  if (done.includes(status)) return "border-status-closed/40 bg-status-closed-surface text-status-closed-ink"
   return "border-card-line bg-card-raised text-muted-foreground"
 }
 

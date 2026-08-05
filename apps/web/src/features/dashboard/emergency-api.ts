@@ -24,17 +24,63 @@ export interface EmergencyCategory {
   created_at: string
   updated_at: string
 }
+export function respondToEmergency(id: number, note = "") {
+  return apiRequest<EmergencyAlert>(`/emergencies/${id}/respond/`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
+  })
+}
+
+export function unableToRespond(id: number, reason: string) {
+  return apiRequest<EmergencyAlert>(`/emergencies/${id}/unable/`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  })
+}
+
+export function transferEmergency(id: number, departmentCode: string, reason: string) {
+  return apiRequest<EmergencyAlert>(`/emergencies/${id}/transfer/`, {
+    method: "POST",
+    body: JSON.stringify({ department_code: departmentCode, reason }),
+  })
+}
+
+export function requestEmergencyBackup(
+  id: number,
+  payload: { backup_type: string; reason: string; urgency: string },
+) {
+  return apiRequest<EmergencyAlert>(`/emergencies/${id}/request-backup/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function revealReporterContact(id: number) {
+  return apiRequest<{ phone_number: string; alert_id: number }>(
+    `/emergencies/${id}/reporter-contact/`,
+  )
+}
+
 export type EmergencyStatus =
   | "submitted"
+  | "routing"
   | "routed"
+  | "awaiting_acknowledgment"
   | "acknowledged"
   | "en_route"
   | "nearby"
   | "arrived"
+  | "resident_safe"
+  | "backup_requested"
+  | "backup_assigned"
+  | "in_progress"
+  | "transfer_required"
+  | "escalation_required"
   | "resolved"
   | "invalid"
   | "cancelled"
   | "false_alarm"
+  | "closed"
 
 export interface EmergencyLocationPing {
   id: number
@@ -117,6 +163,8 @@ export interface EmergencyRoute {
 export interface EmergencyStatusEvent {
   id: number
   status: EmergencyStatus
+  event_key: string
+  label: string
   note: string
   actor: PublicUser | null
   created_at: string
@@ -136,6 +184,15 @@ export interface EmergencyAlert {
   location_source: "gps" | "manual_pin" | "network" | "sms" | "sms_landmark"
   location_accuracy: number | null
   address: string
+  reported_area: string
+  resolved_location: string
+  display_location: string
+  reverse_geocoding_status: "success" | "failed" | "skipped" | "pending"
+  location_confidence: "confirmed" | "reported" | "unknown" | "outside_area"
+  reporter_verification: "account" | "registered" | "unverified" | "needs_review"
+  triage: Record<string, string>
+  category_needs_confirmation: boolean
+  unresolved_fields: string[]
   media_warnings: string[]
   resolution_report: string
   response_duration_seconds: number | null
@@ -363,13 +420,6 @@ export function removeEmergencyAssignment(
   return apiRequest<EmergencyAlert>(`/emergencies/${id}/assignments/${assignmentId}/remove/`, {
     method: "POST",
     body: JSON.stringify(payload),
-  })
-}
-
-export function requestEmergencyBackup(id: number) {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/request-backup/`, {
-    method: "POST",
-    body: JSON.stringify({}),
   })
 }
 

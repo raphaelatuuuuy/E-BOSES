@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react"
-import { LocateFixedIcon, MinusIcon, PlusIcon } from "lucide-react"
+import { LoaderCircleIcon, LocateFixedIcon, MinusIcon, PlusIcon } from "lucide-react"
 
-import { MapControlButton } from "@/features/dashboard/components/map-weather"
+import { cn } from "@workspace/ui/lib/utils"
 import { isActiveEmergency } from "@/features/dashboard/components/alerts-map/lib"
 import { applyRouteMotion, routeLineStyle } from "@/features/dashboard/lib/route-line"
 import type { Concern } from "@/features/dashboard/api"
@@ -12,6 +12,7 @@ import type leaflet from "leaflet"
 const BARANGAY_CENTER: leaflet.LatLngTuple = [14.6507, 121.1133]
 
 function validCoord(lat?: string | number | null, lng?: string | number | null) {
+  if (lat == null || lng == null || lat === "" || lng === "") return null
   const latitude = Number(lat)
   const longitude = Number(lng)
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
@@ -28,6 +29,39 @@ function markerHtml(kind: "incident" | "responder", active = false) {
   const glyph = kind === "incident" ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`
     : `<svg width="14" height="14" viewBox="0 0 24 24" fill="#fff" stroke="none"><circle cx="12" cy="12" r="7"/></svg>`
   return `<div style="width:${size}px;height:${size}px;border-radius:999px;background:${color};display:flex;align-items:center;justify-content:center;color:#fff;${glow};backdrop-filter:blur(2px)">${glyph}</div>`
+}
+
+/**
+ * One segment of the joined map control stack.
+ *
+ * Replaces `MapControlButton` here specifically because that component carries
+ * its own rounded border and glass background — three of them stacked gives
+ * three floating objects, which is exactly the crowding this consolidation
+ * removes. These are flat segments; the container owns the shape.
+ */
+function MapStackButton({
+  label,
+  onClick,
+  loading = false,
+  children,
+}: {
+  label: string
+  onClick?: () => void
+  loading?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={loading}
+      aria-label={label}
+      title={label}
+      className="flex size-11 items-center justify-center text-nav-text transition-colors hover:bg-white/5 hover:text-nav-text-active disabled:opacity-60"
+    >
+      {loading ? <LoaderCircleIcon className="size-5 animate-spin" /> : children}
+    </button>
+  )
 }
 
 function routeLine(geometry: unknown) {
@@ -59,6 +93,8 @@ export function ResponderLeafletMap({
   onSelectConcern,
   onLocateMe,
   locating = false,
+  className,
+  overlay,
 }: {
   alerts: EmergencyAlert[]
   concerns: Concern[]
@@ -70,6 +106,10 @@ export function ResponderLeafletMap({
   onSelectConcern: (id: number) => void
   onLocateMe: () => void
   locating?: boolean
+  /** Lets the caller round the map off when it renders inside a card. */
+  className?: string
+  /** Rendered above the map, right edge — the dispatch page's control rail. */
+  overlay?: React.ReactNode
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
@@ -136,11 +176,18 @@ export function ResponderLeafletMap({
       const coord = validCoord(alert.latitude, alert.longitude)
       if (!coord) continue
       bounds.push(coord)
+      // The marker's div grows when selected (40px vs 32px), and the icon
+      // geometry must match that exact size — the old call hard-coded
+      // 38px/19px, so the selected pin's 40px div overflowed its hit-box and
+      // anchored 1px off-centre, which pushed the pin's tip onto the wrong
+      // point on the map.
+      const selectedPin = alert.id === selected?.id
+      const pinSize = selectedPin ? 40 : 32
       const icon = L.divIcon({
-        html: markerHtml("incident", alert.id === selected?.id),
+        html: markerHtml("incident", selectedPin),
         className: "",
-        iconSize: [38, 38],
-        iconAnchor: [19, 19],
+        iconSize: [pinSize, pinSize],
+        iconAnchor: [pinSize / 2, pinSize / 2],
       })
       L.marker(coord, { icon })
         .addTo(layer)
@@ -172,10 +219,13 @@ export function ResponderLeafletMap({
       bounds.push(coord)
       L.marker(coord, {
         icon: L.divIcon({
+          // markerHtml("responder", true) renders a 40px dot, so the icon
+          // geometry must match — it used to declare 34px/17px and the dot
+          // overflowed its hit-box and anchored off-centre.
           html: markerHtml("responder", true),
           className: "",
-          iconSize: [34, 34],
-          iconAnchor: [17, 17],
+          iconSize: [40, 40],
+          iconAnchor: [20, 20],
         }),
       })
         .addTo(layer)
@@ -213,34 +263,42 @@ export function ResponderLeafletMap({
   }, [alerts, concerns, onSelect, onSelectConcern, routeGeometry, selectedConcernId, selectedId, userPos])
 
   return (
-    <div className="relative h-full min-h-0 overflow-hidden bg-slate-100">
+    <div className={cn("responder-map-scope relative isolate z-0 h-full min-h-0 overflow-hidden bg-ink", className)}>
       <div ref={containerRef} className="absolute inset-0" aria-label="Responder assignment map" />
-      <div className="absolute right-3 top-3 z-[600] flex flex-col items-end gap-2 sm:right-4 sm:top-4">
-        <MapControlButton
-          label="My location"
-          icon={<LocateFixedIcon className="size-5" />}
-          onClick={onLocateMe}
-          loading={locating}
-          showLabel={false}
-          variant="dark"
-        />
-        <div className="grid grid-cols-2 gap-2">
-          <MapControlButton
-            label="Zoom in"
-            icon={<PlusIcon className="size-5" />}
-            onClick={() => mapRef.current?.zoomIn()}
-            showLabel={false}
-            variant="dark"
-          />
-          <MapControlButton
-            label="Zoom out"
-            icon={<MinusIcon className="size-5" />}
-            onClick={() => mapRef.current?.zoomOut()}
-            showLabel={false}
-            variant="dark"
-          />
+
+      {/* One control object, not three.
+          Locate, zoom-in and zoom-out used to float as a lone pill plus a
+          two-up grid, which together with the queue rail put four separate
+          clusters over a map that is often only 360px tall — the crowding the
+          user reported. They are now a single joined stack with hairline
+          dividers: same three actions, one thing to look at.
+
+          Bottom-right below `sm`: on a phone held one-handed the top corners
+          are the hardest place to reach, and these are the controls a
+          responder uses while moving. */}
+      <div className="absolute bottom-3 right-3 z-[600] flex flex-col items-end gap-2 sm:bottom-auto sm:right-4 sm:top-4">
+        <div className="flex flex-col overflow-hidden rounded-2xl border border-rail-line bg-nav-glass backdrop-blur">
+          <MapStackButton
+            label="My location"
+            onClick={onLocateMe}
+            loading={locating}
+          >
+            <LocateFixedIcon className="size-5" />
+          </MapStackButton>
+          <span aria-hidden className="h-px bg-rail-line" />
+          <MapStackButton label="Zoom in" onClick={() => mapRef.current?.zoomIn()}>
+            <PlusIcon className="size-5" />
+          </MapStackButton>
+          <span aria-hidden className="h-px bg-rail-line" />
+          <MapStackButton label="Zoom out" onClick={() => mapRef.current?.zoomOut()}>
+            <MinusIcon className="size-5" />
+          </MapStackButton>
         </div>
       </div>
+
+      {overlay ? (
+        <div className="absolute right-3 top-3 z-[600] sm:right-4 sm:top-auto sm:bottom-4">{overlay}</div>
+      ) : null}
     </div>
   )
 }

@@ -10,7 +10,7 @@ import { AuthenticatedMediaImage, openAuthenticatedMedia } from "@/features/dash
 import { OpsTabs } from "@/features/dashboard/components/workspace/ops-tabs"
 import type { EmergencyAlert } from "@/features/dashboard/emergency-api"
 import type leaflet from "leaflet"
-import { formatTime, responderName, statusLabel, unitLabel } from "./lib"
+import { emergencyTone, formatTime, responderName, statusClass, statusLabel, unitLabel } from "./lib"
 
 function coord(lat?: string | number | null, lng?: string | number | null) {
   const latitude = Number(lat)
@@ -315,7 +315,10 @@ function IncidentChronology({ alert }: { alert: EmergencyAlert }) {
       rows.push({
         key: `status-${event.id}`,
         at: event.created_at,
-        title: statusLabel[event.status] ?? event.status,
+        // event.label describes what happened. Falling back to the status
+        // label is what made five different events all read "Emergency
+        // received" - the alert's status had not changed between them.
+        title: event.label || statusLabel[event.status] || "Update",
         detail: event.note || "Status updated.",
       })
     }
@@ -410,6 +413,81 @@ function EmergencyMediaGrid({ media }: { media: EmergencyAlert["media"] }) {
   )
 }
 
+const VERIFICATION_LABELS: Record<string, string> = {
+  account: "Signed-in account",
+  registered: "Registered mobile number",
+  unverified: "Mobile number not verified",
+  needs_review: "Account match requires review",
+}
+
+function verificationLabel(value?: string | null) {
+  return VERIFICATION_LABELS[value ?? ""] ?? "Reporter identity unconfirmed"
+}
+
+/**
+ * Category, status and readable location first — the three things an official
+ * needs before anything else. Raw coordinates sit behind a disclosure so the
+ * page reads as an incident, not a database row.
+ */
+function IncidentHeader({ alert }: { alert: EmergencyAlert }) {
+  const [showCoordinates, setShowCoordinates] = useState(false)
+  const location = alert.display_location || alert.resolved_location || alert.reported_area || alert.address || alert.barangay
+  const unresolved = alert.unresolved_fields ?? []
+
+  return (
+    <section className="rounded-panel border border-card-line bg-card p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-heading text-foreground">{emergencyTone(alert.type)}</h2>
+        <span className={cn("rounded-pill border px-2.5 py-1 text-[11px] font-semibold", statusClass(alert.status))}>
+          {statusLabel[alert.status]}
+        </span>
+        {alert.category_needs_confirmation ? (
+          <span className="rounded-pill bg-severity-moderate-surface px-2.5 py-1 text-[11px] font-semibold text-severity-moderate-ink">
+            Category needs confirmation
+          </span>
+        ) : null}
+      </div>
+
+      <p className="mt-2 text-body text-muted-foreground">{alert.note || "No further detail was provided."}</p>
+
+      <div className="mt-3 flex flex-wrap items-baseline gap-2">
+        <MapPinIcon className="size-4 shrink-0 text-brand-orange" aria-hidden />
+        <span className="text-sm font-semibold text-brand-navy">{location}</span>
+        {alert.location_confidence && alert.location_confidence !== "confirmed" ? (
+          <span className="rounded-pill bg-severity-moderate-surface px-2 py-0.5 text-[10px] font-semibold uppercase text-severity-moderate-ink">
+            {alert.location_confidence === "outside_area" ? "Outside service area" : "Needs confirmation"}
+          </span>
+        ) : null}
+      </div>
+
+      {alert.latitude && alert.longitude ? (
+        <button
+          type="button"
+          onClick={() => setShowCoordinates((current) => !current)}
+          className="mt-2 text-[11px] font-semibold text-brand-orange underline"
+        >
+          {showCoordinates ? "Hide coordinates" : "Show coordinates"}
+        </button>
+      ) : null}
+      {showCoordinates ? (
+        <p className="mt-1 text-[11px] tabular-nums text-subtle-foreground">
+          {alert.latitude}, {alert.longitude}
+        </p>
+      ) : null}
+
+      {unresolved.length ? (
+        <p className="mt-3 rounded-control bg-severity-moderate-surface px-3 py-2 text-[11px] font-semibold text-severity-moderate-ink">
+          Needs review: {unresolved.join(", ")}
+        </p>
+      ) : null}
+
+      <p className="mt-3 text-[11px] font-semibold text-subtle-foreground">
+        Received {formatTime(alert.created_at)}
+      </p>
+    </section>
+  )
+}
+
 export function IncidentBoard({ alert }: { alert: EmergencyAlert | null }) {
   const [recordTab, setRecordTab] = useState("details")
 
@@ -433,11 +511,28 @@ export function IncidentBoard({ alert }: { alert: EmergencyAlert | null }) {
 
   const detailsContent = (
     <div className="space-y-4">
+      <IncidentHeader alert={alert} />
+
       <IncidentMap alert={alert} />
 
       <div className="rounded-panel border border-card-line bg-card p-4">
         <p className="text-micro uppercase text-subtle-foreground">Reported by</p>
         <p className="mt-1.5 text-heading text-foreground">{alert.reporter.full_name}</p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="rounded-pill bg-card-raised px-2.5 py-1 text-[11px] font-semibold text-brand-navy">
+            {verificationLabel(alert.reporter_verification)}
+          </span>
+          {alert.reporter_phone ? (
+            <span className="rounded-pill bg-card-raised px-2.5 py-1 text-[11px] font-semibold tabular-nums text-brand-navy">
+              {alert.reporter_phone}
+            </span>
+          ) : null}
+          {alert.location_source === "sms" ? (
+            <span className="rounded-pill bg-severity-moderate-surface px-2.5 py-1 text-[11px] font-semibold text-severity-moderate-ink">
+              Offline emergency message
+            </span>
+          ) : null}
+        </div>
       </div>
 
       <ResponsePanel alert={alert} team={activeTeam} />

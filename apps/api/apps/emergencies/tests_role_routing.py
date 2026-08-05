@@ -127,8 +127,9 @@ class RoleBasedResponderRoutingTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         alert = EmergencyAlert.objects.get(pk=response.data["id"])
-        assignment = alert.assignments.get()
-        self.assertEqual(assignment.responder, self.tanod)
+        # Dispatch assigns one responder per unit that answers the type, and
+        # medical now has a seeded default route as well as this new one.
+        assignment = alert.assignments.get(responder=self.tanod)
         self.assertEqual(assignment.source, EmergencyResponderAssignment.Source.AUTO)
         self.assertEqual(assignment.role_map_id, created.data["id"])
         self.assertTrue(EmergencyAssignmentLog.objects.filter(alert=alert, action="auto_assigned", responder=self.tanod).exists())
@@ -179,8 +180,13 @@ class RoleBasedResponderRoutingTests(APITestCase):
         self.client.force_authenticate(self.official)
         escalated = self.client.post("/api/emergencies/escalate-overdue/", {"minutes": 5}, format="json")
         self.assertEqual(escalated.status_code, status.HTTP_200_OK)
-        self.assertEqual(alert.assignments.filter(status=EmergencyResponderAssignment.Status.ASSIGNED).count(), 2)
-        self.assertTrue(EmergencyAssignmentLog.objects.filter(alert=alert, action="escalated").exists())
+        # Timeout now replaces the silent responder: one live assignment for
+        # the replacement, and the original kept in history as escalated.
+        self.assertEqual(alert.assignments.filter(status=EmergencyResponderAssignment.Status.ASSIGNED).count(), 1)
+        old_assignment.refresh_from_db()
+        self.assertEqual(old_assignment.status, EmergencyResponderAssignment.Status.ESCALATED)
+        self.assertTrue(EmergencyAssignmentLog.objects.filter(alert=alert, action="acknowledgment_timeout").exists())
+        self.assertTrue(EmergencyAssignmentLog.objects.filter(alert=alert, action="reassigned_after_timeout").exists())
 
         self.client.force_authenticate(self.bhw)
         declined = self.client.post(
@@ -192,63 +198,65 @@ class RoleBasedResponderRoutingTests(APITestCase):
         old_assignment.refresh_from_db()
         self.assertEqual(old_assignment.status, EmergencyResponderAssignment.Status.DECLINED)
         self.assertTrue(EmergencyAssignmentLog.objects.filter(alert=alert, assignment=old_assignment, action="status_changed", new_status="declined").exists())
+        self.assertTrue(alert.escalations.filter(previous_assignment=old_assignment).exists())
 
     @override_settings(SMS_EMERGENCY_WEBHOOK_TOKEN="sms-secret")
     def test_sms_forwarder_webhook_creates_and_routes_alert(self):
-        self.client.force_authenticate(self.official)
-        role_map = self.client.post(
-            "/api/emergencies/role-maps/",
-            {"emergency_type": EmergencyAlert.Type.MEDICAL, "responder_unit": get_user_model().ResponderUnit.BHW, "priority": 100},
-            format="json",
-        )
-        self.assertEqual(role_map.status_code, status.HTTP_201_CREATED)
-        self.client.force_authenticate(None)
+        """The readable message format, end to end through the legacy URL.
 
+        The old assertion drove the EBOSES-SOS / User ID / Latitude / Timestamp
+        body that the redesign removed. What matters now is that a plain
+        sentence a resident could have typed themselves still creates a routed
+        alert, and that a repeat does not create a second one.
+        """
+        message = (
+            "I need immediate help. This is a Medical Emergency near the covered "
+            "court in Marikina Heights. Please send assistance.\n"
+            "LOC:14.6507000,121.1133000"
+        )
         response = self.client.post(
             "/api/emergencies/sms-inbound/",
-            {
-                "from": self.resident.phone_number,
-                "body": (
-                    "EBOSES-SOS\n\n"
-                    f"User ID: {self.resident.pk}\n"
-                    "Emergency Type: Medical\n"
-                    "Latitude: 14.6507000\n"
-                    "Longitude: 121.1133000\n"
-                    "Timestamp: 2026-07-29 08:12 PM\n\n"
-                    "Need Immediate Assistance"
-                ),
-            },
+            {"from": self.resident.phone_number, "msg": message},
             format="json",
             HTTP_X_SMS_WEBHOOK_TOKEN="sms-secret",
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        alert = EmergencyAlert.objects.get(pk=response.data["id"])
+        alert = EmergencyAlert.objects.get(pk=response.data["emergency_id"])
+        self.assertEqual(alert.type, EmergencyAlert.Type.MEDICAL)
         self.assertEqual(alert.location_source, "sms")
         self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
         self.assertTrue(alert.assignments.filter(responder=self.bhw).exists())
-        self.assertTrue(alert.status_events.filter(note="Submitted via SMS fallback.").exists())
+        self.assertIn("covered court", alert.reported_area)
+        # Wording now comes from apps.emergencies.vocabulary so the SMS reply,
+        # the timeline heading and the note all say the same thing.
+        intake = alert.status_events.get(event_key="received_sms")
+        self.assertEqual(intake.label, "Emergency received")
 
         repeated = self.client.post(
             "/api/emergencies/sms-inbound/",
-            {
-                "from": self.resident.phone_number,
-                "body": (
-                    "EBOSES-SOS\n\n"
-                    f"User ID: {self.resident.pk}\n"
-                    "Emergency Type: Medical\n"
-                    "Latitude: 14.6507000\n"
-                    "Longitude: 121.1133000\n"
-                    "Timestamp: 2026-07-29 08:13 PM\n\n"
-                    "Need Immediate Assistance"
-                ),
-            },
+            {"from": self.resident.phone_number, "msg": message + " again"},
             format="json",
             HTTP_X_SMS_WEBHOOK_TOKEN="sms-secret",
         )
         self.assertEqual(repeated.status_code, status.HTTP_200_OK)
-        self.assertTrue(repeated.data["duplicate_suppressed"])
+        self.assertTrue(repeated.data["duplicate"])
         self.assertEqual(EmergencyAlert.objects.filter(reporter=self.resident).count(), 1)
+
+    def test_duplicate_dispatch_rule_is_refused_with_a_readable_message(self):
+        """A default routing table ships with the app, so this WILL happen."""
+        self.client.force_authenticate(self.official)
+        payload = {
+            "emergency_type": EmergencyAlert.Type.MEDICAL,
+            "responder_unit": get_user_model().ResponderUnit.BHW,
+            "priority": 100,
+        }
+        first = self.client.post("/api/emergencies/role-maps/", payload, format="json")
+        self.assertIn(first.status_code, {status.HTTP_201_CREATED, status.HTTP_409_CONFLICT})
+
+        second = self.client.post("/api/emergencies/role-maps/", payload, format="json")
+        self.assertEqual(second.status_code, status.HTTP_409_CONFLICT)
+        self.assertIn("already routes", second.data["detail"])
 
     def test_assignment_serializer_exposes_route_and_history(self):
         alert = self.alert(status=EmergencyAlert.Status.ROUTED)

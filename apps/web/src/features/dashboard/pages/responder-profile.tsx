@@ -1,11 +1,18 @@
 import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
-import { LogOut, Mail, MapPinned, Phone, ShieldCheck } from "lucide-react"
+import {
+  CalendarCheckIcon,
+  IdCardIcon,
+  LogOut,
+  Mail,
+  MapPinned,
+  Phone,
+  ShieldCheck,
+  TimerIcon,
+} from "lucide-react"
 
-import { Button } from "@workspace/ui/components/button"
 import { Skeleton } from "@workspace/ui/components/skeleton"
-import { cn } from "@workspace/ui/lib/utils"
 
 import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
@@ -15,6 +22,12 @@ import {
   listResponderShifts,
   type ResponderShift,
 } from "@/features/dashboard/emergency-api"
+import {
+  MetricTile,
+  Pane,
+  State,
+} from "@/features/dashboard/components/responder/dispatch-surface"
+import { MOBILE_BAR_CLEARANCE } from "@/features/dashboard/lib/shell"
 import { formatDuration } from "@/features/dashboard/lib/responder-format"
 import { usePageTitle } from "@/hooks/use-page-title"
 
@@ -38,24 +51,13 @@ function Detail({
   value: string
 }) {
   return (
-    <div className="flex items-start gap-3 px-4 py-3">
-      <Icon className="mt-0.5 size-4 shrink-0 text-nav-muted" />
+    <li className="flex items-start gap-3 px-5 py-4">
+      <Icon className="mt-0.5 size-4 shrink-0 text-subtle-foreground" />
       <div className="min-w-0">
-        <p className="text-micro uppercase tracking-wide text-nav-muted">{label}</p>
-        <p className="mt-0.5 break-words text-sm font-semibold text-foreground">{value}</p>
+        <p className="text-micro uppercase tracking-wide text-subtle-foreground">{label}</p>
+        <p className="mt-0.5 break-words text-heading text-foreground">{value}</p>
       </div>
-    </div>
-  )
-}
-
-function Total({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0 px-4 py-4">
-      <p className="text-micro uppercase tracking-wide text-nav-muted">{label}</p>
-      <p className="mt-1.5 truncate text-2xl font-bold leading-none tabular-nums text-foreground">
-        {value}
-      </p>
-    </div>
+    </li>
   )
 }
 
@@ -103,19 +105,22 @@ export default function ResponderProfilePage() {
   if (!loaded) {
     return (
       <main className="min-h-full bg-canvas p-4 md:p-6">
-        <div className="mx-auto max-w-3xl space-y-4">
-          <Skeleton className="h-40 rounded-2xl" />
-          <Skeleton className="h-24 rounded-2xl" />
-          <Skeleton className="h-48 rounded-2xl" />
+        <div className="mx-auto max-w-3xl space-y-3">
+          <Skeleton className="h-48 rounded-3xl" />
+          <Skeleton className="h-28 rounded-3xl" />
+          <Skeleton className="h-56 rounded-3xl" />
         </div>
       </main>
     )
   }
 
   return (
-    <main className="min-h-full bg-canvas p-4 pb-[calc(7rem+env(safe-area-inset-bottom))] md:p-6 md:pb-8">
-      <div className="mx-auto flex max-w-3xl flex-col gap-4">
-        <section className="rounded-2xl border border-card-line bg-card p-5 md:p-6">
+    <main
+      className="min-h-full bg-canvas p-4 md:p-6"
+      style={{ paddingBottom: `calc(${MOBILE_BAR_CLEARANCE} + 1.5rem)` }}
+    >
+      <div className="mx-auto flex max-w-3xl flex-col gap-3">
+        <section className="rounded-3xl border border-card-line bg-card p-5 md:p-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
             <span
               aria-hidden
@@ -124,39 +129,28 @@ export default function ResponderProfilePage() {
               {initials(fullName, "R")}
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-micro uppercase tracking-wide text-nav-muted">First responder</p>
-              <h1 className="mt-1 truncate text-2xl font-bold leading-tight text-foreground">
+              <p className="text-micro uppercase tracking-wide text-subtle-foreground">
+                First responder
+              </p>
+              <h1 className="mt-1 truncate text-[22px] font-bold leading-tight tracking-tight text-foreground">
                 {fullName}
               </h1>
-              <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-semibold">
-                <span className="inline-flex items-center gap-1.5">
-                  <span
-                    className={cn(
-                      "relative flex size-1.5 shrink-0 rounded-full",
-                      onDuty ? "bg-status-closed text-status-closed" : "bg-subtle-foreground",
-                    )}
-                    aria-hidden
-                  >
-                    {onDuty ? <span className="ops-pulse absolute inset-0 rounded-full" /> : null}
-                  </span>
-                  <span
-                    className={cn(
-                      "uppercase tracking-wide",
-                      onDuty ? "text-status-closed" : "text-subtle-foreground",
-                    )}
-                  >
-                    {onDuty ? "On duty" : "Off duty"}
-                  </span>
-                </span>
-                <span className="text-subtle-foreground">{unit.name}</span>
+              <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                <State
+                  label={onDuty ? "On duty" : "Off duty"}
+                  tone={onDuty ? "settled" : "idle"}
+                />
+                <span className="text-body text-subtle-foreground">{unit.name}</span>
               </p>
             </div>
           </div>
 
-          <div className="mt-5 rounded-xl bg-card-raised px-4 py-3">
-            <p className="text-micro uppercase tracking-wide text-nav-muted">Response unit</p>
-            <p className="mt-1 text-sm font-bold text-foreground">{unit.name}</p>
-            <p className="mt-1 text-xs leading-5 text-subtle-foreground">
+          <div className="mt-5 rounded-2xl border border-card-line bg-card-raised px-4 py-3.5">
+            <p className="text-micro uppercase tracking-wide text-subtle-foreground">
+              Response unit
+            </p>
+            <p className="mt-1 text-heading text-foreground">{unit.name}</p>
+            <p className="mt-1 text-body leading-6 text-subtle-foreground">
               {unit.assigned
                 ? "Set by your barangay. Contact an official if this is wrong."
                 : "No unit yet. A barangay official assigns this before you can be dispatched."}
@@ -164,17 +158,29 @@ export default function ResponderProfilePage() {
           </div>
         </section>
 
-        <section className="grid grid-cols-3 divide-x divide-card-line overflow-hidden rounded-2xl border border-card-line bg-card">
-          <Total label="Shifts served" value={String(completed.length)} />
-          <Total label="Time on duty" value={formatDuration(totalSeconds)} />
-          <Total label="Resolved" value={String(totalResolved)} />
+        <section aria-label="Career totals" className="grid grid-cols-3 gap-3">
+          <MetricTile
+            icon={CalendarCheckIcon}
+            value={String(completed.length)}
+            label="Shifts served"
+            tone="ice"
+          />
+          <MetricTile
+            icon={TimerIcon}
+            value={formatDuration(totalSeconds)}
+            label="Time on duty"
+            tone="warm"
+          />
+          <MetricTile
+            icon={ShieldCheck}
+            value={String(totalResolved)}
+            label="Resolved"
+            tone="settled"
+          />
         </section>
 
-        <section className="overflow-hidden rounded-2xl border border-card-line bg-card">
-          <h2 className="px-4 pb-1 pt-4 text-micro uppercase tracking-wide text-nav-muted">
-            Account details
-          </h2>
-          <div className="divide-y divide-card-line border-t border-card-line">
+        <Pane title="Account details" icon={IdCardIcon} padded={false} className="min-h-0">
+          <ul className="divide-y divide-card-line">
             <Detail icon={Mail} label="Email" value={user?.email || "Not recorded"} />
             <Detail icon={Phone} label="Phone" value={user?.phone_number || "Not recorded"} />
             <Detail icon={MapPinned} label="Barangay" value={user?.barangay || "Not recorded"} />
@@ -183,18 +189,20 @@ export default function ResponderProfilePage() {
               label="Account status"
               value={user?.status === "verified" ? "Verified" : user?.status || "Not recorded"}
             />
-          </div>
-        </section>
+          </ul>
+        </Pane>
 
-        <Button
+        {/* Not `variant="outline"`: on this palette that resolves to
+            `bg-background`, which is darker than the card, and hovers to solid
+            orange — the same two problems the End shift button had. */}
+        <button
           type="button"
-          variant="outline"
-          className="h-11 justify-center border-severity-critical/40 text-sos hover:bg-status-open-surface"
           onClick={() => void signOut().finally(() => navigate("/sign-in"))}
+          className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-card-line-strong bg-card-raised px-5 text-sm font-bold text-foreground transition-colors hover:border-sos/60 hover:bg-sos/15 hover:text-sos"
         >
           <LogOut className="size-4" />
           Sign out
-        </Button>
+        </button>
       </div>
     </main>
   )

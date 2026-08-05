@@ -312,9 +312,31 @@ class DepartmentChatMessageSerializer(serializers.ModelSerializer):
 
 
 
+class ConcernMediaRedactionSerializer(serializers.Serializer):
+    """One blur box, in normalised 0..1 coordinates.
+
+    Normalised because the official draws on a scaled preview and the blur is
+    applied to a different-sized render. Bounds are enforced here rather than in
+    the view so a malformed box can never reach the renderer.
+    """
+
+    x = serializers.FloatField(min_value=0, max_value=1)
+    y = serializers.FloatField(min_value=0, max_value=1)
+    width = serializers.FloatField(min_value=0.005, max_value=1)
+    height = serializers.FloatField(min_value=0.005, max_value=1)
+    label = serializers.CharField(max_length=64, required=False, allow_blank=True, default="")
+
+    def validate(self, attrs):
+        if attrs["x"] + attrs["width"] > 1.001 or attrs["y"] + attrs["height"] > 1.001:
+            raise serializers.ValidationError("The area must stay inside the photo.")
+        return attrs
+
+
 class ConcernMediaSerializer(serializers.ModelSerializer):
     preview_url = serializers.SerializerMethodField()
     raw_url = serializers.SerializerMethodField()
+    redactions = serializers.SerializerMethodField()
+    privacy_detected_classes = serializers.SerializerMethodField()
 
     class Meta:
         model = ConcernMedia
@@ -327,8 +349,22 @@ class ConcernMediaSerializer(serializers.ModelSerializer):
             "raw_url",
             "validation_status",
             "validation_detail",
+            "privacy_state",
+            "public_visible",
+            "privacy_detected_classes",
+            "redactions",
             "uploaded_at",
         )
+
+    def get_privacy_detected_classes(self, obj):
+        """What was actually blurred — "face", "license plate".
+
+        Class names only, never coordinates. Withheld on the public feed: a
+        passer-by has no reason to be told which photos contain a face.
+        """
+        if self.context.get("privacy_safe"):
+            return []
+        return list(obj.privacy_detected_classes or [])
 
     def get_preview_url(self, obj):
         path = f"/api/concerns/media/{obj.pk}/preview/"
@@ -339,6 +375,32 @@ class ConcernMediaSerializer(serializers.ModelSerializer):
             return ""
         path = f"/api/concerns/media/{obj.pk}/raw/"
         return path
+
+    def get_redactions(self, obj):
+        """Official-drawn boxes only, and only for officials.
+
+        Residents have no use for them, and publishing the coordinates of a
+        redaction to the people it is hiding information from would defeat it.
+        SAM3 regions are never exposed at all — those are mask coordinates,
+        which the official interface must not show either.
+        """
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return []
+        if not (getattr(user, "is_staff", False) or getattr(user, "role", "") == "barangay_official"):
+            return []
+        return [
+            {
+                "id": row.id,
+                "x": row.x,
+                "y": row.y,
+                "width": row.width,
+                "height": row.height,
+            }
+            for row in obj.redactions.all()
+            if row.source == "official"
+        ]
 
 
 class ConcernResolutionEvidenceSerializer(serializers.ModelSerializer):
@@ -404,19 +466,36 @@ class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
     duplicate_distance_meters = serializers.SerializerMethodField()
     duplicate_match = serializers.SerializerMethodField()
 
+    text_assessment = serializers.SerializerMethodField()
+    photo_assessment = serializers.SerializerMethodField()
+    possible_categories = serializers.SerializerMethodField()
+    suggested_category = serializers.SerializerMethodField()
+
     class Meta:
         model = ConcernAiAssessment
+        # `raw_result` is deliberately absent. It carries the provider name, the
+        # fallback reason, and Gemma's unedited output — none of which belongs in
+        # an official's browser. Everything the UI needs is a named field.
         fields = (
             "status",
-            "image_objects",
-            "yolo_confidence",
+            "detected_objects",
             "severity_estimate",
             "nlp_validity",
             "nlp_confidence",
             "category_match",
+            "image_review_succeeded",
+            "evidence_relationship",
+            "privacy_scan_required",
+            "suspected_sensitive_classes",
+            "urgent_attention",
+            "missing_information",
+            "recommended_action",
             "recommendation",
             "explanation",
-            "model_version",
+            "text_assessment",
+            "photo_assessment",
+            "possible_categories",
+            "suggested_category",
             "flagged",
             "flag_reasons",
             "possible_duplicate",
@@ -429,6 +508,21 @@ class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
             "official_reviewed_at",
             "updated_at",
         )
+
+    def _review(self, obj):
+        return (obj.raw_result or {}).get("review") or {}
+
+    def get_text_assessment(self, obj):
+        return self._review(obj).get("text_assessment") or ""
+
+    def get_photo_assessment(self, obj):
+        return self._review(obj).get("photo_assessment") or ""
+
+    def get_possible_categories(self, obj):
+        return self._review(obj).get("possible_categories") or []
+
+    def get_suggested_category(self, obj):
+        return (obj.raw_result or {}).get("suggested_category") or ""
 
     def _duplicate_payload(self, obj):
         return (obj.raw_result or {}).get("duplicate") or {}
@@ -1051,13 +1145,38 @@ class ConcernCommentCreateSerializer(serializers.Serializer):
 
 
 class ConcernStatusUpdateSerializer(serializers.Serializer):
+    """One official decision, saved as one request.
+
+    `category`, `department_id` and `internal_note` are optional companions to
+    the status change rather than three separate endpoints, so pressing "Save
+    update" produces one atomic change and one audit entry. Before this, a
+    report filed under the wrong category could never be re-filed: routing ran
+    once at submission and there was no way to correct it.
+
+    `applied_ai_suggestion` records only that the official pressed Apply
+    Suggestion beforehand. It changes nothing about what is saved — it is there
+    so the audit log can distinguish an accepted recommendation from an
+    independent decision that happened to agree with one.
+    """
+
     status = serializers.ChoiceField(choices=Concern.Status.choices)
     note = serializers.CharField(max_length=255, allow_blank=True, required=False)
     status_version = serializers.IntegerField(min_value=0, required=False)
+    category = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    department_id = serializers.IntegerField(required=False, allow_null=True)
+    internal_note = serializers.CharField(max_length=2000, required=False, allow_blank=True)
+    applied_ai_suggestion = serializers.BooleanField(required=False, default=False)
 
     def validate_status(self, value):
         if value == Concern.Status.SUBMITTED:
             raise serializers.ValidationError("Use a progress, resolved, rejected, or appealed status.")
+        return value
+
+    def validate_category(self, value):
+        if not value:
+            return ""
+        if not ConcernCategory.objects.filter(code=value, is_active=True).exists() and value not in Concern.Category.values:
+            raise serializers.ValidationError("Choose a category the barangay currently uses.")
         return value
 
 

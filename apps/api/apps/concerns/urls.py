@@ -23,7 +23,9 @@ from .views import (
     ConcernListCreateView,
     ConcernMediaCheckView,
     ConcernMediaPreviewView,
+    ConcernMediaPrivacyReprocessView,
     ConcernMediaRawView,
+    ConcernMediaRedactionView,
     ConcernOfficialRemarkCreateView,
     ConcernResolutionEvidenceRawView,
     ConcernAiReviewView,
@@ -49,7 +51,6 @@ from .views import (
     RoutingRuleListCreateView,
 )
 from .classification_api import (
-    OfficialClassificationImageTestView,
     OfficialClassificationResetView,
     OfficialClassificationSubmissionTestView,
     OfficialClassificationStatsView,
@@ -78,7 +79,6 @@ urlpatterns = [
     path("classification/stats/", OfficialClassificationStatsView.as_view(), name="classification-stats"),
     path("classification/reset/", OfficialClassificationResetView.as_view(), name="classification-reset"),
     path("classification/test-text/", OfficialClassificationTextTestView.as_view(), name="classification-test-text"),
-    path("classification/test-image/", OfficialClassificationImageTestView.as_view(), name="classification-test-image"),
     path("classification/test-submission/", OfficialClassificationSubmissionTestView.as_view(), name="classification-test-submission"),
     path("classification/precheck/", ResidentConcernPrecheckView.as_view(), name="classification-precheck"),
     path("", ConcernListCreateView.as_view(), name="concern-create"),
@@ -117,6 +117,17 @@ urlpatterns = [
     path("<int:pk>/flags/", ContentFlagCreateView.as_view(), name="content-flag-create"),
     path("media/<int:pk>/raw/", ConcernMediaRawView.as_view(), name="concern-media-raw"),
     path("media/<int:pk>/preview/", ConcernMediaPreviewView.as_view(), name="concern-media-preview"),
+    path("media/<int:pk>/redactions/", ConcernMediaRedactionView.as_view(), name="concern-media-redactions"),
+    path(
+        "media/<int:pk>/redactions/<int:redaction_id>/",
+        ConcernMediaRedactionView.as_view(),
+        name="concern-media-redaction-detail",
+    ),
+    path(
+        "media/<int:pk>/privacy/reprocess/",
+        ConcernMediaPrivacyReprocessView.as_view(),
+        name="concern-media-privacy-reprocess",
+    ),
     path(
         "resolution-evidence/<int:pk>/raw/",
         ConcernResolutionEvidenceRawView.as_view(),

@@ -10,15 +10,13 @@ import {
 } from "@/features/dashboard/emergency-api"
 import { EmergencyTrackingSheet } from "@/features/dashboard/components/emergency-tracking-sheet"
 import { SosWizard } from "@/features/dashboard/components/sos/sos-wizard"
-
-const activeEmergencyStatuses = [
-  "submitted",
-  "routed",
-  "acknowledged",
-  "en_route",
-  "nearby",
-  "arrived",
-] as const
+import {
+  DutyHoursDialog,
+  type DutyHours,
+  type Hotline,
+} from "@/features/dashboard/components/sos/duty-hours-dialog"
+import { apiRequest } from "@/lib/api"
+import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
 
 type SosPlacement = "inline" | "sidebar" | "compact"
 
@@ -31,12 +29,10 @@ function normalizeSosPlacement(value: string | null): SosPlacement {
 }
 
 function isActiveAlert(alert: EmergencyAlert | null) {
-  return Boolean(
-    alert &&
-      activeEmergencyStatuses.includes(
-        alert.status as (typeof activeEmergencyStatuses)[number]
-      )
-  )
+  // Shared list: an inline copy here went stale when statuses were added, so
+  // the button stopped recognising a live emergency and let the resident file
+  // a second one.
+  return Boolean(alert && isEmergencyActive(alert.status))
 }
 
 /**
@@ -54,6 +50,29 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
   const [trackingAlert, setTrackingAlert] = useState<EmergencyAlert | null>(
     null
   )
+  const [dutyHours, setDutyHours] = useState<DutyHours | null>(null)
+  const [hotlines, setHotlines] = useState<Hotline[]>([])
+  const [dutyDialogOpen, setDutyDialogOpen] = useState(false)
+
+  // Advisory only. A failed fetch must never stop a resident sending SOS,
+  // so the button stays fully enabled when this never resolves.
+  useEffect(() => {
+    let cancelled = false
+    void apiRequest<{ duty_hours?: DutyHours; hotlines?: Hotline[] }>(
+      "/locations/map-context/"
+    )
+      .then((context) => {
+        if (cancelled) return
+        setDutyHours(context.duty_hours ?? null)
+        setHotlines(context.hotlines ?? [])
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const offDuty = dutyHours ? !dutyHours.within_duty_hours : false
 
   useEffect(() => {
     async function loadActive() {
@@ -98,6 +117,12 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
   const handleSosRef = useRef(() => {})
   const suppressedRef = useRef(suppressed)
 
+  function openWizard() {
+    setDutyDialogOpen(false)
+    setShellMode("wizard")
+    setShellOpen(true)
+  }
+
   async function handleSosButtonClick() {
     if (isActiveAlert(trackingAlert)) {
       setShellMode("tracking")
@@ -113,11 +138,14 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
         setShellOpen(true)
         return
       }
-      setShellMode("wizard")
-      setShellOpen(true)
+      // Off-hours: advise the hotlines first, but never block the report.
+      if (offDuty && hotlines.length) {
+        setDutyDialogOpen(true)
+        return
+      }
+      openWizard()
     } catch {
-      setShellMode("wizard")
-      setShellOpen(true)
+      openWizard()
     } finally {
       setCheckingActive(false)
     }
@@ -187,9 +215,11 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
           disabled={checkingActive}
           className={cn(
             "group flex items-center gap-2 rounded-full bg-gradient-to-b from-sos-bright to-sos py-2 pr-4 pl-2 text-white shadow-[0_10px_24px_rgba(248,69,63,0.28)] transition-all hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98] disabled:cursor-wait disabled:opacity-80",
+            // Amber, never disabled: the button always sends.
+            offDuty && "from-amber-400 to-amber-500",
             hasActiveEmergency && "sos-glow"
           )}
-          aria-label="SOS"
+          aria-label={offDuty ? "SOS (outside barangay duty hours)" : "SOS"}
         >
           <span className="flex size-10 shrink-0 items-center justify-center rounded-full">
             {checkingActive ? (
@@ -205,6 +235,14 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
           </span>
         </button>
       </div>
+
+      <DutyHoursDialog
+        open={dutyDialogOpen}
+        hotlines={hotlines}
+        dutyHours={dutyHours}
+        onSendAnyway={openWizard}
+        onClose={() => setDutyDialogOpen(false)}
+      />
 
       <SosWizard
         open={!suppressed && shellOpen && shellMode === "wizard"}

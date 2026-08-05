@@ -620,6 +620,7 @@
   --animate-blink: blink 1s ease-in-out infinite;
   --animate-gradient-shift: gradientShift 8s ease infinite;
   --animate-sos-fab-blink: sosFabBlink 1.4s ease-in-out infinite;
+  --animate-sos-glow-blink: sosGlowBlink 1.4s ease-in-out infinite;
 }
 
 @keyframes gradientShift {
@@ -668,6 +669,14 @@
 @keyframes sosFabBlink {
   0%, 100% { box-shadow: 0 6px 20px rgba(242, 59, 53, 0.38); transform: scale(1); }
   50% { box-shadow: 0 8px 26px rgba(242, 59, 53, 0.5), 0 0 0 10px rgba(242, 59, 53, 0.1); transform: scale(1.04); }
+}
+
+/* Blink for wide, rectangular Dispatch controls (sidebar row / mobile tab).
+   The fab version above scales, which looks right on a circle but janky on a
+   full-width button — so this one pulses the red glow only. */
+@keyframes sosGlowBlink {
+  0%, 100% { box-shadow: 0 2px 10px rgba(242, 59, 53, 0.35); }
+  50% { box-shadow: 0 2px 18px rgba(242, 59, 53, 0.6), 0 0 0 8px rgba(242, 59, 53, 0.08); }
 }
 
 @keyframes fadeSlideUp {
@@ -853,34 +862,103 @@
    Support styles for the OpsWorkspace primitive. Everything here is
    presentation the primitive cannot express in utility classes. */
 
-/* Independently scrolling pane. The default scrollbar is a heavy slab
-   that reads as a UI element; this makes it recede until hovered.
+/* Independently scrolling pane.
 
-   Drawn from tokens rather than a literal colour so the thumb stays
-   visible on either palette — hardcoded white here would be invisible
-   on the light canvas, and hardcoded grey would disappear on a dark
-   one. */
+   The scrollbar is hidden outright rather than styled thin. On the ops
+   console every pane scrolls, so a visible track on each one drew four
+   grey slabs down a screen whose whole job is a map and an incident —
+   they read as UI furniture and stole horizontal room from the
+   narrowest column. Scrolling itself is untouched: wheel, trackpad,
+   touch, keyboard (the panes stay focusable) and programmatic
+   scrollIntoView all behave exactly as before.
+
+   The `.ops-pane-fade` mask below is what tells a responder there is
+   more content, which is why removing the visual track costs nothing. */
 .ops-pane {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-card-line-strong) transparent;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 .ops-pane::-webkit-scrollbar {
-  width: 10px;
+  width: 0;
+  height: 0;
+  display: none;
 }
-.ops-pane::-webkit-scrollbar-track {
+
+/* Same treatment for every other scroller inside the dark ops shell —
+   the sidebar nav, the queue sheet, the comms list — so no single
+   screen shows a track while its neighbours do. */
+.staff-dark ::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+.staff-dark * {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+/* ── Resizable split handle ───────────────────────────────────────────
+   The grab strip between two ops panes. It is 11px of hit area with a
+   1px line painted down the middle, so the target clears the pointer
+   floor without a fat gutter appearing in the layout. */
+.ops-resizer {
+  position: relative;
+  flex: none;
   background: transparent;
+  touch-action: none;
 }
-.ops-pane::-webkit-scrollbar-thumb {
-  background-color: var(--color-card-line-strong);
-  border-radius: 999px;
-  border: 3px solid transparent;
-  background-clip: content-box;
+.ops-resizer::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  background: var(--color-card-line);
+  transition: background-color 120ms ease;
 }
-.ops-pane:hover::-webkit-scrollbar-thumb {
-  background-color: var(--color-subtle-foreground);
+.ops-resizer[data-orientation="vertical"] {
+  width: 11px;
+  cursor: col-resize;
+}
+.ops-resizer[data-orientation="vertical"]::before {
+  width: 1px;
+}
+.ops-resizer[data-orientation="horizontal"] {
+  height: 11px;
+  cursor: row-resize;
+}
+.ops-resizer[data-orientation="horizontal"]::before {
+  height: 1px;
+}
+.ops-resizer:hover::before,
+.ops-resizer[data-dragging="true"]::before,
+.ops-resizer:focus-visible::before {
+  background: var(--color-brand-orange);
+}
+.ops-resizer[data-orientation="vertical"]:hover::before,
+.ops-resizer[data-orientation="vertical"][data-dragging="true"]::before {
+  width: 2px;
+}
+.ops-resizer[data-orientation="horizontal"]:hover::before,
+.ops-resizer[data-orientation="horizontal"][data-dragging="true"]::before {
+  height: 2px;
+}
+.ops-resizer:focus-visible {
+  outline: none;
+}
+/* While a drag is live the pointer must not turn into a text caret as it
+   crosses labels, and nothing underneath may take the selection. */
+body[data-ops-resizing="vertical"],
+body[data-ops-resizing="horizontal"] {
+  user-select: none;
+}
+body[data-ops-resizing="vertical"] * {
+  cursor: col-resize !important;
+}
+body[data-ops-resizing="horizontal"] * {
+  cursor: row-resize !important;
 }
 
 /* Signals "there is more below" without depending on a scrollbar being
@@ -934,6 +1012,15 @@ body[data-ops-resizing="true"] .leaflet-container {
   pointer-events: none;
 }
 
+/* Leaflet's internal panes run up to z-index 700; without an explicit clamp
+   they will punch through sibling cards (notification dropdowns, sticky
+   action bars, toasts) whenever the surrounding container is stacked at
+   `auto`. Scoping this to `.responder-map-scope` keeps it local to the
+   dispatch console — resident/official maps keep their existing behaviour. */
+.responder-map-scope .leaflet-container {
+  z-index: 0 !important;
+}
+
 /* The second of the two permitted unprompted motions: a responder's
    projected route crawls toward the incident. Direction carries the
    meaning — a still dashed line would just be a line. The reduced-motion
@@ -979,6 +1066,30 @@ body[data-ops-resizing="true"] .leaflet-container {
   border-radius: 999px;
   background: currentColor;
   animation: opsPulse 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* The three ops animations run without user input and run forever, which
+   is exactly the pattern that triggers vestibular symptoms. Under
+   reduced-motion each one degrades to the *steady* form of the same
+   signal rather than disappearing — a responder who has asked for less
+   motion still has to be able to tell a live dispatch from a closed one,
+   so the meaning is carried by a static ring, a fixed glow and a solid
+   route line instead of by movement. */
+@media (prefers-reduced-motion: reduce) {
+  .ops-pulse::before {
+    animation: none;
+    transform: scale(1.55);
+    opacity: 0.28;
+  }
+
+  .staff-dark .ops-glow-pulse {
+    animation: none;
+    box-shadow: 0 0 18px rgba(242, 59, 53, 0.35);
+  }
+
+  .ops-route-dash {
+    animation: none;
+  }
 }
 
 /* Sonner toast layout — respect data-x-position from sonner */

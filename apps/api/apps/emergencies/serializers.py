@@ -122,6 +122,9 @@ class MapDispatchPolicySerializer(serializers.ModelSerializer):
             "witness_radius_meters",
             "responder_nearby_radius_meters",
             "emergency_sms_number",
+            "duty_hours_start",
+            "duty_hours_end",
+            "hotlines",
             "updated_by",
             "updated_at",
         )
@@ -147,11 +150,16 @@ class EmergencyCreateSerializer(serializers.Serializer):
     client_request_id = serializers.UUIDField(required=False)
     type = serializers.CharField(max_length=80)
     note = serializers.CharField(allow_blank=True, required=False)
-    latitude = BrowserGPSDecimalField(max_digits=10, decimal_places=7)
-    longitude = BrowserGPSDecimalField(max_digits=10, decimal_places=7)
+    # Optional since the SMS fallback: an emergency can arrive with a readable
+    # area and no GPS fix. The web SOS wizard still requires a confirmed pin
+    # before it will submit, so this does not loosen the in-app flow.
+    latitude = BrowserGPSDecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
+    longitude = BrowserGPSDecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
     address = serializers.CharField(max_length=255, allow_blank=True, required=False)
+    reported_area = serializers.CharField(max_length=255, allow_blank=True, required=False)
     location_source = serializers.ChoiceField(choices=("gps", "manual_pin", "network", "sms", "sms_landmark"), default="gps")
     location_accuracy = serializers.FloatField(required=False, allow_null=True)
+    triage = serializers.JSONField(required=False)
 
     def validate(self, attrs):
         category = EmergencyCategory.objects.filter(code=attrs.get("type"), is_active=True).first()
@@ -159,8 +167,24 @@ class EmergencyCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError({"type": ["Choose an active emergency category."]})
         if not emergency_category_is_covered(category.code):
             raise serializers.ValidationError({"type": ["This emergency category has no responding unit configured."]})
+
+        latitude = attrs.get("latitude")
+        longitude = attrs.get("longitude")
+        if (latitude is None) != (longitude is None):
+            raise serializers.ValidationError(
+                {"location": ["Latitude and longitude must be provided together."]}
+            )
+        if latitude is None:
+            # No pin: require *something* a responder can navigate by, rather
+            # than accepting an emergency nobody can find.
+            if not (attrs.get("reported_area") or attrs.get("address") or "").strip():
+                raise serializers.ValidationError(
+                    {"location": ["Provide a map location or describe the area."]}
+                )
+            return attrs
+
         try:
-            validate_emergency_location(attrs.get("latitude"), attrs.get("longitude"))
+            validate_emergency_location(latitude, longitude)
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc) from exc
         return attrs
@@ -194,7 +218,7 @@ class EmergencyStatusEventSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = EmergencyStatusEvent
-        fields = ("id", "status", "note", "actor", "created_at")
+        fields = ("id", "status", "event_key", "label", "note", "actor", "created_at")
 
 
 class EmergencyLocationPingSerializer(serializers.ModelSerializer):
@@ -369,7 +393,12 @@ class EmergencyEscalationSerializer(serializers.ModelSerializer):
 
 class EmergencyAlertSerializer(serializers.ModelSerializer):
     reporter = PublicUserSerializer(read_only=True)
-    reporter_phone = serializers.CharField(source="reporter.phone_number", read_only=True)
+    # Masked for every reader. The full number is available only from
+    # GET /api/emergencies/{pk}/reporter-contact/, which checks the caller is
+    # actually working this incident and writes an audit row. Before this, any
+    # viewer of an alert received the resident's complete mobile number.
+    reporter_phone = serializers.SerializerMethodField()
+    display_location = serializers.SerializerMethodField()
     media = EmergencyMediaSerializer(many=True, read_only=True)
     assignments = EmergencyResponderAssignmentSerializer(many=True, read_only=True)
     active_assignments = serializers.SerializerMethodField()
@@ -399,6 +428,15 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
             "location_source",
             "location_accuracy",
             "address",
+            "reported_area",
+            "resolved_location",
+            "display_location",
+            "reverse_geocoding_status",
+            "location_confidence",
+            "reporter_verification",
+            "triage",
+            "category_needs_confirmation",
+            "unresolved_fields",
             "media_warnings",
             "resolution_report",
             "status_version",
@@ -419,6 +457,17 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
             "routed_at",
             "resolved_at",
         )
+
+    def get_reporter_phone(self, obj):
+        from apps.sms.normalize import mask_ph_mobile
+
+        number = (obj.reporter_contact_number or "").strip() or getattr(obj.reporter, "phone_number", "")
+        return mask_ph_mobile(number) if number else ""
+
+    def get_display_location(self, obj):
+        from .location_services import display_location
+
+        return display_location(obj)
 
     def _active_assignments(self, obj):
         return obj.assignments.filter(

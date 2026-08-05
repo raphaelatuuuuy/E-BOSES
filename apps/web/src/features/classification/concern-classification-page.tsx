@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   BrainCircuitIcon,
-  CheckCircle2Icon,
   LoaderCircleIcon,
   SaveIcon,
   TestTube2Icon,
-  TriangleAlertIcon,
   UploadCloudIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -21,6 +19,7 @@ import {
   testConcernSubmission,
   type ConcernClassificationConfig,
   type ReportValidationResult,
+  type ServiceStatus,
 } from "./api"
 import {
   applyStrictness,
@@ -34,23 +33,19 @@ import {
  *
  * This screen used to ask officials to set an "image confidence threshold" and a
  * "relevance threshold" as decimals, beside a list of 80 COCO class names and a
- * "category mapping" table keyed on raw YOLO labels. That is the vocabulary of
- * the model, not of the person doing barangay work.
+ * "category mapping" table whose rows read `car → public safety`. That is the
+ * vocabulary of a model, not of the person doing barangay work — and the mapping
+ * itself was fiction, since COCO's classes have nothing to do with barangay
+ * concerns. It is gone: the review model looks at the photo and names what it
+ * sees, so there is no table to maintain.
  *
- * It now leads with three plain choices about how strict checking should be and
- * says what each means for the official's day.
- *
- * By default, only 15 supported COCO classes are kept in the detection filter
- * (person, bicycle, car, motorcycle, bus, truck, bench, parking meter, traffic
- * light, knife, dog, cat, handbag, backpack, suitcase). The full list of 80 is
- * still available in the API; the filter is applied in the AI pipeline.
+ * What replaces it is an explanation of what the review actually does, and a
+ * plain statement of whether each service is currently working.
  */
 
 const defaults: ConcernClassificationConfig = {
   revision: 0,
-  image_model: "yolov8m.pt",
   text_model: "gemma4:31b",
-  image_confidence_threshold: 0.7,
   text_relevance_threshold: 0.65,
   duplicate_similarity_threshold: 0.85,
   minimum_description_length: 20,
@@ -66,45 +61,35 @@ const defaults: ConcernClassificationConfig = {
   flag_irrelevant: true,
   notify_reviewer: true,
   suspicious_terms: ["test", "testing", "asdf", "qwerty", "12345"],
-  supported_classes: [
-    "person",
-    "bicycle",
-    "car",
-    "motorcycle",
-    "bus",
-    "truck",
-    "bench",
-    "parking meter",
-    "traffic light",
-    "knife",
-    "dog",
-    "cat",
-    "handbag",
-    "backpack",
-    "suitcase",
-  ],
-  label_mappings: {
-    "traffic light": "infrastructure",
-    "bench": "infrastructure",
-    "parking meter": "infrastructure",
-    "garbage": "environment",
-    "trash": "environment",
-    "knife": "public_safety",
-    "dog": "public_safety",
-    "cat": "public_safety",
-    "handbag": "others",
-    "backpack": "others",
-    "suitcase": "others",
-    "car": "vehicle",
-    "truck": "vehicle",
-    "motorcycle": "vehicle",
-    "bus": "vehicle",
-    "bicycle": "vehicle",
-    "person": "others",
-  },
   category_keywords: {},
-  mapping_targets: [],
   categories: [],
+}
+
+const SERVICE_STATUS_COPY: Record<string, { label: string; tone: string }> = {
+  available: { label: "Available", tone: "bg-status-closed-surface text-status-closed-ink" },
+  limited: { label: "Limited", tone: "bg-severity-moderate-surface text-severity-moderate-ink" },
+  unavailable: { label: "Unavailable", tone: "bg-severity-critical-surface text-severity-critical-ink" },
+}
+
+function ServiceRow({
+  title,
+  detail,
+  status,
+}: {
+  title: string
+  detail: string
+  status: ServiceStatus | undefined
+}) {
+  const copy = SERVICE_STATUS_COPY[status?.status ?? "unavailable"] ?? SERVICE_STATUS_COPY.unavailable
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-card-line bg-canvas px-3 py-2.5">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-bold text-foreground">{title}</p>
+        <p className="mt-0.5 text-xs font-medium text-muted-foreground">{detail}</p>
+      </div>
+      <span className={cn("shrink-0 rounded-full px-2.5 py-1 text-xs font-bold", copy.tone)}>{copy.label}</span>
+    </div>
+  )
 }
 
 function Card({
@@ -129,41 +114,73 @@ function Card({
   )
 }
 
-function ResultRow({ label, value }: { label: string; value: string }) {
+
+/**
+ * Badges, not a verdict.
+ *
+ * This used to be a single banner reading "Approved" or "Flagged". It was
+ * wrong twice over: the spec forbids ever presenting the review as Approved,
+ * Rejected or a Final Decision, and in practice a sample whose own findings
+ * said "the photo shows a person's face and does not show any garbage",
+ * "text and photo may not match" and "review the report manually" was crowned
+ * with a green Approved. These say what was noticed and nothing more.
+ */
+function ResultBadges({ result }: { result: ReportValidationResult }) {
+  const badges: { label: string; tone: "good" | "warn" | "alert" | "neutral" }[] = []
+  if (result.evidence_relationship === "supports_report") badges.push({ label: "Supports report", tone: "good" })
+  if (result.evidence_relationship === "partially_supports_report") badges.push({ label: "Supports report in part", tone: "neutral" })
+  if (result.evidence_relationship === "contradicts_report") badges.push({ label: "Possible mismatch", tone: "warn" })
+  if (result.evidence_relationship === "no_useful_image_evidence") badges.push({ label: "Photo evidence inconclusive", tone: "warn" })
+  if (result.evidence_relationship === "image_review_failed") badges.push({ label: "Photo review unavailable", tone: "warn" })
+  if (result.evidence_relationship === "image_unavailable") badges.push({ label: "Text-only report", tone: "neutral" })
+  if (result.urgent_attention) badges.push({ label: "Urgent attention", tone: "alert" })
+  if (result.category_match === false) badges.push({ label: "Needs review", tone: "warn" })
+  if (result.duplicate) badges.push({ label: "Possible duplicate", tone: "warn" })
+
+  if (!badges.length) return null
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-card-line pb-2 text-sm last:border-0">
-      <span className="font-medium text-muted-foreground">{label}</span>
-      <span className="text-right font-bold capitalize text-foreground">
-        {displayValue(value)}
-      </span>
+    <div className="flex flex-wrap gap-1.5">
+      {badges.map((badge) => (
+        <span
+          key={badge.label}
+          className={cn(
+            "rounded-full px-2.5 py-1 text-[11px] font-bold",
+            badge.tone === "good" && "bg-status-closed-surface text-status-closed-ink",
+            badge.tone === "warn" && "bg-severity-moderate-surface text-severity-moderate-ink",
+            badge.tone === "alert" && "bg-severity-critical-surface text-severity-critical-ink",
+            badge.tone === "neutral" && "bg-canvas text-muted-foreground",
+          )}
+        >
+          {badge.label}
+        </span>
+      ))}
     </div>
   )
 }
 
-function Outcome({ value }: { value: string }) {
-  const good = value === "match" || value === "approved"
+/** Mirrors the Privacy Protection wording in the official Review Assistant. */
+const SAMPLE_PRIVACY_COPY: Record<string, string> = {
+  unchecked:
+    "The image could not be checked automatically for sensitive details. Manual privacy review is required.",
+  not_required:
+    "No sensitive details requiring automatic protection were identified during the initial review.",
+  protected: "Sensitive details were protected before public display.",
+  sensitive_review_required:
+    "Possible sensitive visual content was found. The image should remain restricted until an authorized official reviews it.",
+  no_match_found:
+    "No matching sensitive region was confirmed. Manual review may still be required.",
+  not_configured:
+    "Automatic privacy protection is not switched on, so the image would stay restricted pending review.",
+  failed:
+    "Automatic privacy protection could not be completed. The original image remains restricted pending review.",
+}
+
+function SectionLabel({ children }: { children: ReactNode }) {
   return (
-    <div
-      className={cn(
-        "flex items-center justify-center gap-2 rounded-xl p-3 text-sm font-bold capitalize",
-        good
-          ? "bg-status-closed-surface text-status-closed-ink"
-          : "bg-severity-moderate-surface text-severity-moderate-ink",
-      )}
-    >
-      {good ? <CheckCircle2Icon className="size-5" /> : <TriangleAlertIcon className="size-5" />}
-      {displayValue(value)}
-    </div>
+    <p className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{children}</p>
   )
 }
 
-function Pill({ children }: { children: ReactNode }) {
-  return (
-    <span className="rounded-full border border-card-line bg-canvas px-2.5 py-1 text-xs font-bold capitalize text-foreground">
-      {children}
-    </span>
-  )
-}
 
 function readable(value: string | null | undefined) {
   return value ? value.replace(/_/g, " ") : "Not provided"
@@ -177,14 +194,14 @@ function displayValue(value: string | null | undefined) {
     "partially supports report": "Photo partly supports the report",
     "contradicts report": "Text and photo may not match",
     "no useful image evidence": "Photo does not confirm the report",
-    "image unavailable": "No photo evidence checked",
-    "accept with privacy review": "Review privacy before public display",
-    "manual review": "Needs official review",
-    "request more information": "Ask resident for more details",
-    "reject as irrelevant": "Not enough relevant report information",
-    "low information text": "Description needs more detail",
-    "image review limited": "Photo review unavailable",
-    profanity: "Contains strong language",
+    "image unavailable": "No photo was submitted",
+    "image review failed": "Photo could not be reviewed automatically",
+    accept: "Accept and continue processing",
+    "accept with privacy review": "Continue using the protected image",
+    "manual review": "Review the report manually",
+    "request more information": "Request additional details",
+    "escalate as emergency": "Notify the appropriate emergency personnel",
+    "reject as irrelevant": "Review as a potentially unrelated submission",
   }
   return labels[normalized] ?? normalized
 }
@@ -199,8 +216,6 @@ export default function ConcernClassificationPage() {
   const [config, setConfig] = useState<ConcernClassificationConfig>(defaults)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState("")
-  const [mappingLabel, setMappingLabel] = useState("")
-  const [mappingCategory, setMappingCategory] = useState("")
 
   const [selectedCategory, setSelectedCategory] = useState("infrastructure")
   const [imageFile, setImageFile] = useState<File | null>(null)
@@ -224,10 +239,6 @@ export default function ConcernClassificationPage() {
         setConfig(next)
         const first = next.categories.find((category) => category.enabled)
         if (first) setSelectedCategory(first.key)
-        const firstTarget = next.mapping_targets?.find((target) => target.group === "concern")
-        if (firstTarget) setMappingCategory(firstTarget.key)
-        const firstClass = next.supported_classes?.[0]
-        if (firstClass) setMappingLabel(firstClass)
       })
       .catch((error) => toast.error(describeApiError(error, "Could not load these settings.")))
       .finally(() => {
@@ -445,105 +456,50 @@ export default function ConcernClassificationPage() {
         </label>
       </Card>
 
-      <div className="grid gap-2 rounded-2xl border border-card-line bg-card p-3 text-xs font-bold text-foreground sm:grid-cols-4">
-        <span>1. Text meaning</span>
-        <span>2. Photo evidence</span>
-        <span>3. Similar reports</span>
-        <span>4. Privacy review</span>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card
+          title="How AI reviews reports"
+          hint="The review assistant looks at each report before it reaches your queue."
+        >
+          <ul className="space-y-1.5">
+            {[
+              "The resident's description",
+              "The uploaded photo",
+              "The selected category",
+              "Possible urgency",
+              "Missing information",
+              "Possible privacy-sensitive content",
+            ].map((item) => (
+              <li key={item} className="flex gap-2 text-sm font-medium text-foreground">
+                <span aria-hidden className="mt-2 size-1 shrink-0 rounded-full bg-muted-foreground" />
+                {item}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 rounded-xl bg-tint p-3 text-xs font-medium leading-relaxed text-foreground">
+            The assistant recommends a category and a next step. Authorized officials make the final decision.
+          </p>
+        </Card>
+
+        <Card title="Service status" hint="Whether each part of the review is working right now.">
+          <div className="space-y-2">
+            <ServiceRow
+              title="Report review"
+              detail="Text and photo analysis"
+              status={config.services?.report_review}
+            />
+            <ServiceRow
+              title="Media protection"
+              detail="Face and license-plate protection, sensitive-content review"
+              status={config.services?.media_protection}
+            />
+          </div>
+          <p className="mt-3 text-xs font-medium leading-relaxed text-muted-foreground">
+            When something is unavailable, reports still arrive normally — they simply wait for your review instead
+            of being checked first.
+          </p>
+        </Card>
       </div>
-
-      <Card
-        title="What the system files things under"
-        hint="When a photo shows the thing on the left, the report is filed under the category on the right."
-      >
-        <div className="grid max-h-56 gap-2 overflow-y-auto sm:grid-cols-2">
-          {Object.entries(config.label_mappings).map(([label, category]) => (
-            <div
-              key={label}
-              className="flex items-center gap-2 rounded-xl border border-card-line bg-canvas px-3 py-2 text-xs"
-            >
-              <span className="font-bold capitalize text-foreground">{label}</span>
-              <span className="text-muted-foreground">→</span>
-              <span className="font-bold capitalize text-brand-navy">
-                {category.replace(/_/g, " ")}
-              </span>
-              <button
-                type="button"
-                aria-label={`Remove ${label}`}
-                onClick={() => {
-                  const next = { ...config.label_mappings }
-                  delete next[label]
-                  update("label_mappings", next)
-                }}
-                className="ml-auto font-bold text-severity-critical-ink"
-              >
-                ×
-              </button>
-            </div>
-          ))}
-          {Object.keys(config.label_mappings).length === 0 ? (
-            <p className="text-xs font-medium text-muted-foreground">Nothing set up yet.</p>
-          ) : null}
-        </div>
-
-        <div className="mt-3 flex flex-wrap gap-2">
-          <select
-            value={mappingLabel}
-            onChange={(event) => setMappingLabel(event.target.value)}
-            className="h-10 min-w-48 flex-1 rounded-xl border border-card-line bg-card px-3 text-sm font-semibold text-foreground outline-none focus:border-brand-orange"
-          >
-            <option value="">Choose a supported class</option>
-            {(config.supported_classes ?? [])
-              .filter((label) => !Object.prototype.hasOwnProperty.call(config.label_mappings, label))
-              .map((label) => (
-                <option key={label} value={label}>
-                  {label}
-                </option>
-              ))}
-          </select>
-          <select
-            value={mappingCategory}
-            onChange={(event) => setMappingCategory(event.target.value)}
-            className="h-10 rounded-xl border border-card-line bg-card px-3 text-sm font-semibold text-foreground outline-none focus:border-brand-orange"
-          >
-            <option value="" disabled>
-              Choose a category
-            </option>
-            {config.mapping_targets?.length
-              ? ["concern", "emergency"].map((group) => (
-                  <optgroup
-                    key={group}
-                    label={group === "concern" ? "Concern categories" : "Emergency types"}
-                  >
-                    {config.mapping_targets
-                      ?.filter((target) => target.group === group)
-                      .map((target) => (
-                        <option key={target.key} value={target.key}>
-                          {target.label}
-                        </option>
-                      ))}
-                  </optgroup>
-                ))
-              : config.categories.map((category) => (
-                  <option key={category.key} value={category.key}>
-                    {category.label}
-                  </option>
-                ))}
-          </select>
-          <Button
-            variant="outline"
-            onClick={() => {
-              const label = mappingLabel.trim().toLowerCase()
-              if (label && mappingCategory) {
-                update("label_mappings", { ...config.label_mappings, [label]: mappingCategory })
-              }
-              setMappingLabel("")
-            }}
-          >
-            Add
-          </Button>
-        </div>
-      </Card>
 
       {/* The fastest way to understand a setting is to watch it decide on a
           real example, so the testers sit beside the settings rather than
@@ -639,74 +595,164 @@ export default function ConcernClassificationPage() {
           </Button>
         </Card>
 
-        <Card title="Sample result" hint="This is advisory. Officials still decide what happens next.">
+        <Card
+          title="Sample result"
+          hint="Laid out the way officials see it on a real report, so what you check here is what they will read."
+        >
           {reportResult ? (
-            <div className="mt-4 space-y-2">
-              {reportResult.image?.annotated_image ? (
-                <img
-                  src={reportResult.image.annotated_image}
-                  alt="The photo with what the system recognised marked on it"
-                  className="max-h-56 w-full rounded-xl border border-card-line bg-ink object-contain"
-                />
-              ) : null}
-              {reportResult.image_review_limited ? (
-                <div className="rounded-xl border border-severity-moderate-ink/20 bg-severity-moderate-surface p-3 text-xs font-medium leading-relaxed text-severity-moderate-ink">
-                  <span className="block font-bold">Photo review unavailable</span>
-                  {reportResult.image_review_message || "The result used the description and recognized photo items instead."}
+            <div className="space-y-4">
+              {/* The photo under discussion, shown next to the protected copy
+                  when one was produced. Reading "sensitive details were
+                  protected" with no image to look at is not something an
+                  official can verify. */}
+              {imagePreview ? (
+                <div className={cn("grid gap-2", reportResult.privacy?.protected_image && "grid-cols-2")}>
+                  <figure>
+                    <img
+                      src={imagePreview}
+                      alt="The sample photo as submitted"
+                      className="max-h-48 w-full rounded-xl border border-card-line object-contain"
+                    />
+                    <figcaption className="mt-1 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                      {reportResult.privacy?.protected_image ? "As submitted" : "Sample photo"}
+                    </figcaption>
+                  </figure>
+                  {reportResult.privacy?.protected_image ? (
+                    <figure>
+                      <img
+                        src={reportResult.privacy.protected_image}
+                        alt="The sample photo with sensitive areas blurred"
+                        className="max-h-48 w-full rounded-xl border border-status-closed/40 object-contain"
+                      />
+                      <figcaption className="mt-1 text-[11px] font-bold uppercase tracking-wide text-status-closed-ink">
+                        What residents would see
+                      </figcaption>
+                    </figure>
+                  ) : null}
                 </div>
               ) : null}
-              <Outcome value={reportResult.outcome} />
-              <ResultRow label="Report text" value={categoryLabel(config, reportResult.primary_category)} />
-              <ResultRow label="Filed under" value={categoryLabel(config, selectedCategory)} />
-              <ResultRow
-                label="Photo evidence"
-                value={
-                  reportResult.visual_summary ||
-                  reportResult.photo_assessment ||
-                  reportResult.recognized_photo_items?.join(", ") ||
-                  reportResult.image?.detected_label ||
-                  "Not clear"
-                }
-              />
-              <ResultRow
-                label="Text and category"
-                value={
-                  reportResult.category_match == null
-                    ? "Could not tell"
-                    : reportResult.category_match
-                      ? "Yes"
-                      : "No"
-                }
-              />
-              <ResultRow
-                label="Evidence check"
-                value={reportResult.evidence_relationship || "Not clear"}
-              />
-              <p className="rounded-xl bg-tint p-3 text-xs font-medium leading-relaxed text-foreground">
-                {reportResult.explanation}
-              </p>
-              {reportResult.mismatch_reason ? (
-                <p className="text-xs font-medium leading-relaxed text-muted-foreground">
-                  {reportResult.mismatch_reason}
-                </p>
+
+              <ResultBadges result={reportResult} />
+
+              {/* Uploaded but unreadable is not the same as not uploaded — and
+                  it is not the same as unprotected either. Describing the photo
+                  and scanning it for faces are two different systems, so saying
+                  only "could not be reviewed" next to a visibly blurred face
+                  read as a contradiction. */}
+              {reportResult.image_uploaded && reportResult.image_review_succeeded === false ? (
+                <div className="rounded-xl border border-severity-moderate-ink/20 bg-severity-moderate-surface p-3 text-xs font-medium leading-relaxed text-severity-moderate-ink">
+                  <span className="block font-bold">Photo could not be described</span>
+                  The description below was written from the text alone.
+                  {reportResult.privacy?.state === "protected"
+                    ? " The photo was still scanned for faces and plates, and what it found was blurred."
+                    : reportResult.privacy?.state === "no_match_found"
+                      ? " The photo was still scanned for faces and plates; none were found."
+                      : " Try again — this fails intermittently."}
+                </div>
               ) : null}
 
-              <div className="flex flex-wrap gap-2 pt-1">
-                {reportResult.privacy_sensitive_information_detected ? <Pill>Privacy review</Pill> : null}
-                {reportResult.urgent_attention ? <Pill>Urgent attention</Pill> : null}
-                {reportResult.ai_result_uncertain ? <Pill>AI uncertain</Pill> : null}
-                {reportResult.duplicate ? <Pill>Possible duplicate</Pill> : null}
-                {(reportResult.recognized_photo_items?.length ? reportResult.recognized_photo_items : reportResult.image?.detected_label ? [reportResult.image.detected_label] : []).map((item) => (
-                  <Pill key={item}>Photo: {readable(item)}</Pill>
-                ))}
-                {reportResult.image_flags?.map((flag) => <Pill key={flag}>{readable(flag)}</Pill>)}
-                {reportResult.content_flags?.map((flag) => <Pill key={flag}>{readable(flag)}</Pill>)}
+              {reportResult.explanation ? (
+                <p className="text-sm font-medium leading-relaxed text-foreground">{reportResult.explanation}</p>
+              ) : null}
+
+              <div>
+                <SectionLabel>What was found</SectionLabel>
+                <ul className="mt-1.5 space-y-1">
+                  {[
+                    reportResult.text_assessment,
+                    reportResult.category_match === true
+                      ? "The selected category matches the concern."
+                      : reportResult.category_match === false
+                        ? `The report reads more like ${categoryLabel(config, reportResult.primary_category)} than ${categoryLabel(config, selectedCategory)}.`
+                        : "",
+                    reportResult.image_uploaded
+                      ? displayValue(reportResult.evidence_relationship)
+                      : "No photo was submitted.",
+                    reportResult.urgent_attention
+                      ? "This may describe immediate danger."
+                      : "No immediate danger was identified.",
+                    reportResult.duplicate ? "A very similar report was filed recently." : "",
+                  ]
+                    .filter(Boolean)
+                    .map((line) => (
+                      <li key={line as string} className="flex gap-2 text-sm font-medium leading-relaxed text-foreground">
+                        <span aria-hidden className="mt-2 size-1 shrink-0 rounded-full bg-muted-foreground" />
+                        <span className="min-w-0 break-words">{line}</span>
+                      </li>
+                    ))}
+                </ul>
               </div>
-              <ResultRow label="Official action" value={reportResult.recommended_action || "Needs official review"} />
+
+              {reportResult.detected_objects?.length ? (
+                <div>
+                  <SectionLabel>Observed in the photo</SectionLabel>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {reportResult.detected_objects.map((item) => (
+                      <span
+                        key={item}
+                        className="rounded-full bg-canvas px-2.5 py-1 text-xs font-bold capitalize text-foreground"
+                      >
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {reportResult.image_uploaded ? (
+                <div>
+                  <SectionLabel>Privacy protection</SectionLabel>
+                  <p className="mt-1.5 text-sm font-medium leading-relaxed text-foreground">
+                    {SAMPLE_PRIVACY_COPY[reportResult.privacy?.state ?? "unchecked"]}
+                  </p>
+                  {reportResult.privacy?.detected_classes?.length ? (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {reportResult.privacy.detected_classes.map((item) => (
+                        <span
+                          key={item}
+                          className="rounded-full bg-status-closed-surface px-2.5 py-1 text-xs font-bold capitalize text-status-closed-ink"
+                        >
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {reportResult.privacy?.protected_image ? (
+                    <p className="mt-1.5 text-[11px] font-medium text-muted-foreground">
+                      The blurred copy is shown above. Nothing was saved.
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {reportResult.missing_information?.length ? (
+                <div>
+                  <SectionLabel>Additional information needed</SectionLabel>
+                  <ul className="mt-1.5 space-y-1">
+                    {reportResult.missing_information.map((item) => (
+                      <li key={item} className="text-sm font-medium text-foreground">
+                        · {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              <div>
+                <SectionLabel>Recommended next step</SectionLabel>
+                <p className="mt-1.5 text-sm font-bold text-foreground">
+                  {displayValue(reportResult.recommended_action || "manual_review")}
+                </p>
+              </div>
+
+              <p className="rounded-xl bg-tint p-3 text-xs font-medium leading-relaxed text-foreground">
+                This review is advisory. Authorized officials make the final decision.
+              </p>
             </div>
           ) : (
             <div className="rounded-xl bg-tint p-3 text-xs font-medium leading-relaxed text-foreground">
-              The result will show category fit, photo evidence, similar-report warnings, privacy notes, and the action the AI recommends for review.
+              The result will show category fit, photo evidence, similar-report warnings, privacy notes and — when a
+              face or plate is found — the actual blurred image residents would see.
             </div>
           )}
         </Card>

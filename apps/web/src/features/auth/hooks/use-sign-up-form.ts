@@ -585,20 +585,15 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
       const result = await requestRegistrationPhoneOtp({ phone_number: values.phoneNumber })
       setPhoneOtpSent(true)
       setPhoneOtpVerified(false)
-      setPhoneOtpResendAvailableAt(Date.now() + PHONE_OTP_RESEND_COOLDOWN_SECONDS * 1000)
-      // Start cooldown immediately so the UI shows 30s without waiting for the interval tick.
-      setPhoneOtpCooldownSeconds(PHONE_OTP_RESEND_COOLDOWN_SECONDS)
+      // The server owns the cooldown; it rejects an early resend with 429.
+      const cooldown =
+        result && typeof result === "object" && typeof result.retry_after === "number"
+          ? result.retry_after
+          : PHONE_OTP_RESEND_COOLDOWN_SECONDS
+      setPhoneOtpResendAvailableAt(Date.now() + cooldown * 1000)
+      setPhoneOtpCooldownSeconds(cooldown)
       setFieldError("phoneNumber", undefined)
       setFieldError("phoneOtpCode", undefined)
-
-      // Local/dev only: silently prefill when the API returns debug_code (no SMS gateway).
-      const debugCode =
-        result && typeof result === "object" && "debug_code" in result
-          ? String((result as { debug_code?: string }).debug_code || "")
-          : ""
-      if (debugCode) {
-        handleChange("phoneOtpCode", debugCode)
-      }
 
       toast("A 6-digit code was sent to your number.", {
         toasterId: "center",
@@ -623,6 +618,11 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
           fieldMessage = phoneErr
         } else if (typeof data.detail === "string") {
           fieldMessage = data.detail
+        }
+        // 429: the server is enforcing the resend cooldown or an hourly cap.
+        if (typeof data.retry_after === "number" && data.retry_after > 0) {
+          setPhoneOtpResendAvailableAt(Date.now() + data.retry_after * 1000)
+          setPhoneOtpCooldownSeconds(data.retry_after)
         }
       }
       setFieldError("phoneNumber", fieldMessage)

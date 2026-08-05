@@ -11,15 +11,7 @@ import {
   type EmergencyStatus,
 } from "@/features/dashboard/emergency-api"
 import { usePageTitle } from "@/hooks/use-page-title"
-
-const activeStatuses: EmergencyStatus[] = [
-  "submitted",
-  "routed",
-  "acknowledged",
-  "en_route",
-  "nearby",
-  "arrived",
-]
+import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
 
 type FilterKey = "all" | "active" | "resolved" | "closed"
 
@@ -30,12 +22,34 @@ const filters: { key: FilterKey; label: string }[] = [
   { key: "closed", label: "Closed" },
 ]
 
+const statusLabels: Record<EmergencyStatus, string> = {
+  submitted: "Alert sent",
+  routing: "Finding help",
+  routed: "Responder assigned",
+  awaiting_acknowledgment: "Awaiting help",
+  acknowledged: "Responder on the way",
+  en_route: "On the way",
+  nearby: "Nearby",
+  arrived: "On scene",
+  resident_safe: "Resident safe",
+  backup_requested: "Additional help requested",
+  backup_assigned: "Additional help on the way",
+  in_progress: "In progress",
+  transfer_required: "Transferring",
+  escalation_required: "Escalated for further help",
+  resolved: "Resolved",
+  closed: "Closed",
+  invalid: "Invalid",
+  cancelled: "Cancelled",
+  false_alarm: "False alarm",
+}
+
 function statusLabel(status: EmergencyStatus) {
-  return status.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())
+  return statusLabels[status] || status.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
 function statusChip(status: EmergencyStatus) {
-  if (activeStatuses.includes(status)) return "border-neutral-200 bg-neutral-100 text-neutral-800"
+  if (isEmergencyActive(status)) return "border-neutral-200 bg-neutral-100 text-neutral-800"
   if (status === "resolved") return "border-neutral-200 bg-neutral-50 text-neutral-600"
   return "border-neutral-200 bg-neutral-50 text-neutral-500"
 }
@@ -85,8 +99,8 @@ export default function EmergencyHistoryPage() {
 
   const visible = useMemo(() => {
     if (filter === "all") return alerts
-    if (filter === "active") return alerts.filter((a) => activeStatuses.includes(a.status))
-    if (filter === "resolved") return alerts.filter((a) => a.status === "resolved")
+    if (filter === "active") return alerts.filter((a) => isEmergencyActive(a.status))
+    if (filter === "resolved") return alerts.filter((a) => a.status === "resolved" || a.status === "closed")
     return alerts.filter((a) => ["cancelled", "false_alarm", "invalid"].includes(a.status))
   }, [alerts, filter])
 

@@ -10,6 +10,7 @@ import DashboardLayout from "@/features/dashboard/dashboard"
 import { getAccessToken } from "@/lib/api"
 
 const AccountInactivePage = lazy(() => import("@/features/auth/account-inactive"))
+const AccountPendingPage = lazy(() => import("@/features/auth/account-pending"))
 const AccountOtpVerificationPage = lazy(() => import("@/features/auth/account-otp-verification"))
 const ForgotPasswordPage = lazy(() => import("@/features/auth/forgot-password"))
 const NewPasswordPage = lazy(() => import("@/features/auth/new-password"))
@@ -25,9 +26,10 @@ const EmergenciesPage = lazy(() => import("@/features/dashboard/pages/emergencie
 const HomePage = lazy(() => import("@/features/dashboard/pages/home"))
 const OfficialOverviewPage = lazy(() => import("@/features/dashboard/pages/official-overview"))
 const ProfilePage = lazy(() => import("@/features/dashboard/pages/profile"))
-const ResponderMapPage = lazy(() => import("@/features/dashboard/pages/responder-map"))
+const ResponderDispatchPage = lazy(() => import("@/features/dashboard/pages/responder-dispatch"))
 const ResponderProfilePage = lazy(() => import("@/features/dashboard/pages/responder-profile"))
 const ResponderShiftPage = lazy(() => import("@/features/dashboard/pages/responder-shift"))
+const ResponderNotificationsPage = lazy(() => import("@/features/dashboard/pages/responder-notifications"))
 const ReportsPage = lazy(() => import("@/features/dashboard/pages/reports"))
 const SettingsPage = lazy(() => import("@/features/dashboard/pages/settings"))
 const OfficialSettingsPage = lazy(() => import("@/features/dashboard/pages/official-settings"))
@@ -113,7 +115,7 @@ function DashboardIndex() {
   const { user } = useAuthSession()
   const isResponder = isResponderUser(user)
   const isOfficial = isOfficialUser(user)
-  return <Navigate to={isResponder ? "/dashboard/responders/map" : isOfficial ? "/dashboard/overview" : "/dashboard/home"} replace />
+  return <Navigate to={isResponder ? "/dashboard/responders/dispatch" : isOfficial ? "/dashboard/overview" : "/dashboard/home"} replace />
 }
 
 function ResidentRoute({ children }: { children: ReactNode }) {
@@ -159,7 +161,7 @@ function AlertsMapRoute() {
     )
   }
   if (!user) return <Navigate to="/sign-in" replace />
-  if (isResponderUser(user)) return <Navigate to="/dashboard/responders/map" replace />
+  if (isResponderUser(user)) return <Navigate to="/dashboard/responders/dispatch" replace />
   const isOfficial = isOfficialUser(user)
   if (isOfficial) return <AlertsMapPage />
   // Only residents get the public alerts map; responders own a separate operational map.
@@ -183,7 +185,7 @@ function ChangePasswordRoute() {
 function EmergencyOpsRoute({ children }: { children: ReactNode }) {
   const { user } = useAuthSession()
   if (isOfficialUser(user)) return children
-  if (isResponderUser(user)) return <Navigate to="/dashboard/responders/map" replace />
+  if (isResponderUser(user)) return <Navigate to="/dashboard/responders/dispatch" replace />
   return <Navigate to="/dashboard" replace />
 }
 
@@ -212,6 +214,33 @@ function AccountInactiveGate() {
   }
 
   return <AccountInactivePage />
+}
+
+function AccountPendingGate() {
+  const { loading, user } = useAuthSession()
+
+  if (loading && !user) {
+    return (
+      <div className="flex min-h-svh items-center justify-center">
+        <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <Navigate to="/sign-in" replace />
+  }
+
+  if (user.status !== "pending_verification") {
+    return (
+      <Navigate
+        to={getStatusPath(user.status, { isOnboarded: user.is_onboarded })}
+        replace
+      />
+    )
+  }
+
+  return <AccountPendingPage />
 }
 
 function AppRoutes() {
@@ -252,11 +281,12 @@ function AppRoutes() {
         <Route path="configuration/users" element={<OfficialRoute><OfficialUsersManagePage /></OfficialRoute>} />
         <Route path="configuration/privacy-requests" element={<OfficialRoute><OfficialPrivacyRequestsPage /></OfficialRoute>} />
         <Route path="community-content" element={<OfficialRoute><OfficialCommunityContentPage /></OfficialRoute>} />
-        <Route path="responders" element={<ResponderRoute><Navigate to="/dashboard/responders/map" replace /></ResponderRoute>} />
-        <Route path="responders/dispatch" element={<ResponderRoute><Navigate to="/dashboard/responders/map" replace /></ResponderRoute>} />
-        <Route path="responders/map" element={<ResponderRoute><ResponderMapPage /></ResponderRoute>} />
+        <Route path="responders" element={<ResponderRoute><Navigate to="/dashboard/responders/dispatch" replace /></ResponderRoute>} />
+        <Route path="responders/dispatch" element={<ResponderRoute><ResponderDispatchPage /></ResponderRoute>} />
+        <Route path="responders/map" element={<Navigate to="/dashboard/responders/dispatch" replace />} />
         <Route path="responders/shift" element={<ResponderRoute><ResponderShiftPage /></ResponderRoute>} />
         <Route path="responders/profile" element={<ResponderRoute><ResponderProfilePage /></ResponderRoute>} />
+        <Route path="responders/notifications" element={<ResponderRoute><ResponderNotificationsPage /></ResponderRoute>} />
         <Route path="reports" element={<ConcernWorkspaceRoute />} />
         <Route path="reports/:reportId" element={<ConcernWorkspaceRoute />} />
         <Route path="notifications" element={<StaffProfileRoute><NotificationsPage /></StaffProfileRoute>} />
@@ -272,8 +302,8 @@ function AppRoutes() {
       {/* Onboarding */}
       <Route path="/onboarding" element={<ProtectedOnboarding />} />
 
-      {/* Legacy account-pending URL → continue into app flow */}
-      <Route path="/account-pending" element={<Navigate to="/onboarding" replace />} />
+      {/* Verification pending — waiting-for-approval screen */}
+      <Route path="/account-pending" element={<AccountPendingGate />} />
 
       {/* Self-deactivated / suspended — reactivate */}
       <Route path="/account-inactive" element={<AccountInactiveGate />} />

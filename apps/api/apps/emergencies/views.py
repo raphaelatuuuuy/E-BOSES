@@ -1,5 +1,4 @@
 from datetime import timedelta
-import json
 from math import asin, cos, radians, sin, sqrt
 import re
 
@@ -7,7 +6,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
-from django.http import FileResponse, QueryDict
+from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -88,6 +87,8 @@ from .serializers import (
     ResponderShiftStartSerializer,
     emergency_category_is_covered,
 )
+from . import responder_actions, vocabulary
+from .location_services import classify_location_confidence, schedule_location_resolution
 from .media_services import (
     ensure_chat_attachment_preview,
     ensure_emergency_media_preview,
@@ -98,11 +99,21 @@ from .media_services import (
 
 ACTIVE_STATUSES = {
     EmergencyAlert.Status.SUBMITTED,
+    EmergencyAlert.Status.ROUTING,
     EmergencyAlert.Status.ROUTED,
+    EmergencyAlert.Status.AWAITING_ACKNOWLEDGMENT,
     EmergencyAlert.Status.ACKNOWLEDGED,
     EmergencyAlert.Status.EN_ROUTE,
     EmergencyAlert.Status.NEARBY,
     EmergencyAlert.Status.ARRIVED,
+    # Still active: the resident says they are safe, but a responder has not
+    # confirmed it yet.
+    EmergencyAlert.Status.RESIDENT_SAFE,
+    EmergencyAlert.Status.BACKUP_REQUESTED,
+    EmergencyAlert.Status.BACKUP_ASSIGNED,
+    EmergencyAlert.Status.IN_PROGRESS,
+    EmergencyAlert.Status.TRANSFER_REQUIRED,
+    EmergencyAlert.Status.ESCALATION_REQUIRED,
 }
 
 ACTIVE_ASSIGNMENT_STATUSES = {
@@ -114,8 +125,6 @@ ACTIVE_ASSIGNMENT_STATUSES = {
 
 
 LEGACY_EMERGENCY_TYPE_CODES = {value for value, _ in EmergencyAlert.Type.choices}
-
-SMS_SOS_FIELD_PATTERN = re.compile(r"^\s*([^:\n]+):\s*(.*?)\s*$", re.MULTILINE)
 
 # Map SOS category → first-responder units that handle that case
 # Legacy User.responder_unit enum -> Department.code. Transitional; removed with
@@ -240,11 +249,28 @@ def can_view_alert(user, alert):
     )
 
 
-def create_status_event(alert, status_value, actor=None, note=""):
+def create_status_event(alert, status_value, actor=None, note="", event_key=""):
+    """Record what happened, in the same words the resident is told by SMS.
+
+    `event_key` looks the wording up in apps.emergencies.vocabulary so the
+    timeline heading describes the event rather than repeating the alert's
+    current status - which is why five different events all used to read
+    "Emergency received".
+    """
+    # Fall back to the event that matches the status, so an entry recorded
+    # without an explicit key still says what happened.
+    key = event_key or vocabulary.key_for_status(str(status_value))
+    label = ""
+    if key:
+        label, described = vocabulary.describe(key, note)
+        note = described
+    event_key = key
     return EmergencyStatusEvent.objects.create(
         alert=alert,
         status=status_value,
-        note=note,
+        event_key=event_key,
+        label=label,
+        note=note[:255],
         actor=actor,
     )
 
@@ -271,6 +297,11 @@ def post_responder_chat(alert, sender, body: str):
 
 
 def location_distance_score(alert, responder):
+    # An SMS emergency can arrive with a readable area but no GPS fix. Ranking
+    # then falls back to workload and duty status; distance simply drops out
+    # rather than the whole assignment failing.
+    if alert.latitude is None or alert.longitude is None:
+        return None
     if responder.current_latitude is None or responder.current_longitude is None:
         return None
     return distance_meters(
@@ -482,79 +513,161 @@ def find_backup_responder(alert):
     return responders[0] if responders else None
 
 
-def escalate_overdue_assignments(*, minutes, triggered_by=None, audit_request_meta=None):
-    cutoff = timezone.now() - timedelta(minutes=minutes)
-    assignment_ids = list(
+def acknowledgment_timeout_for(alert):
+    """Seconds an assignment may sit unacknowledged, from the routing rule."""
+    role_map = (
+        EmergencyTypeRoleMap.objects.filter(emergency_type=alert.type, is_active=True)
+        .order_by("-priority", "id")
+        .first()
+    )
+    if role_map and role_map.acknowledgment_timeout_seconds:
+        return int(role_map.acknowledgment_timeout_seconds)
+    return int(getattr(settings, "EMERGENCY_ACK_TIMEOUT_SECONDS", 300))
+
+
+def escalate_overdue_assignments(*, minutes=None, seconds=None, triggered_by=None, audit_request_meta=None):
+    """Reassign or escalate assignments nobody has acknowledged.
+
+    Previously this only bolted a backup responder onto the alert and left the
+    silent responder assigned, so an emergency could sit with someone who was
+    never coming. Now the unacknowledged assignment is closed out, the next
+    eligible responder is assigned, and only when nobody is left does the alert
+    move to ESCALATION_REQUIRED for an official to pick up.
+
+    The per-category timeout from EmergencyTypeRoleMap wins; `minutes`/`seconds`
+    act as a floor for callers that want to force a sweep.
+    """
+    now = timezone.now()
+    floor_seconds = seconds if seconds is not None else (int(minutes) * 60 if minutes is not None else 0)
+
+    candidates = (
         EmergencyResponderAssignment.objects.filter(
             status=EmergencyResponderAssignment.Status.ASSIGNED,
-            assigned_at__lte=cutoff,
             alert__status__in=ACTIVE_STATUSES,
-            escalations__isnull=True,
-        ).values_list("pk", flat=True)
+        )
+        .select_related("alert")
+        .order_by("assigned_at", "id")
     )
+
     escalations = []
-    for assignment_id in assignment_ids:
+    for assignment_id in list(candidates.values_list("pk", flat=True)):
         with transaction.atomic():
             assignment = (
                 EmergencyResponderAssignment.objects
                 .select_for_update()
                 .select_related("alert", "alert__reporter", "responder")
-                .get(pk=assignment_id)
+                .filter(pk=assignment_id)
+                .first()
             )
-            if assignment.status != EmergencyResponderAssignment.Status.ASSIGNED or assignment.escalations.exists():
+            if not assignment or assignment.status != EmergencyResponderAssignment.Status.ASSIGNED:
                 continue
+
             alert = EmergencyAlert.objects.select_for_update().get(pk=assignment.alert_id)
             if alert.status not in ACTIVE_STATUSES:
                 continue
-            backup = find_backup_responder(alert)
-            reason = f"Additional responder requested after {minutes} minutes without response progress."
-            if backup:
-                backup_assignment, _ = EmergencyResponderAssignment.objects.get_or_create(
-                    alert=alert,
-                    responder=backup,
-                    defaults={"status": EmergencyResponderAssignment.Status.ASSIGNED, "source": EmergencyResponderAssignment.Source.ESCALATION},
+
+            timeout = max(acknowledgment_timeout_for(alert), floor_seconds)
+            waited = (now - assignment.assigned_at).total_seconds()
+            if waited < timeout:
+                continue
+
+            escalations.append(
+                _reassign_unacknowledged(
+                    alert,
+                    assignment,
+                    waited=waited,
+                    triggered_by=triggered_by,
+                    audit_request_meta=audit_request_meta,
                 )
-                alert.status = EmergencyAlert.Status.ROUTED
-                alert.status_version += 1
-                alert.save(update_fields=["status", "status_version", "updated_at"])
-                create_emergency_notification(
-                    alert=alert,
-                    recipient=backup,
-                    type="emergency_escalated",
-                    title=f"Backup requested for {alert.type} emergency",
-                    body="You were added to support the active response.",
-                )
-            escalation = EmergencyEscalation.objects.create(
-                alert=alert,
-                previous_assignment=assignment,
-                escalated_to=backup,
-                triggered_by=triggered_by,
-                reason=reason,
             )
-            create_status_event(alert, EmergencyAlert.Status.ROUTED, triggered_by, f"Backup: {reason}")
-            create_emergency_notification(
-                alert=alert,
-                recipient=alert.reporter,
-                type="emergency_escalated",
-                title="Backup response requested",
-                body="Barangay added another responder while the original response remains active.",
-            )
-            create_audit_log(
-                "emergency.escalated",
-                actor=triggered_by,
-                target_user=alert.reporter,
-                metadata={
-                    "alert_id": alert.pk,
-                    "assignment_id": assignment.pk,
-                    "backup_id": getattr(backup, "pk", None),
-                    "automatic": triggered_by is None,
-                },
-                request_meta=audit_request_meta or {},
-            )
-            if backup:
-                log_assignment_action(alert=alert, assignment=backup_assignment, responder=backup, actor=triggered_by, action="escalated", new_status=backup_assignment.status, note=escalation.reason)
-            escalations.append(escalation)
-    return escalations
+    return [item for item in escalations if item]
+
+
+def _reassign_unacknowledged(alert, assignment, *, waited, triggered_by, audit_request_meta):
+    original = assignment.responder
+    assignment.status = EmergencyResponderAssignment.Status.ESCALATED
+    assignment.status_note = f"No acknowledgement after {int(waited)}s."
+    assignment.save(update_fields=["status", "status_note"])
+    log_assignment_action(
+        alert=alert,
+        assignment=assignment,
+        responder=original,
+        actor=triggered_by,
+        action="acknowledgment_timeout",
+        new_status=assignment.status,
+        note=assignment.status_note,
+        metadata={"waited_seconds": int(waited)},
+    )
+
+    assigned_ids = list(alert.assignments.values_list("responder_id", flat=True))
+    replacements = find_auto_responders(alert, limit=1, exclude_ids=assigned_ids)
+    replacement = replacements[0] if replacements else None
+
+    reason = f"Responder did not acknowledge within {int(waited)} seconds."
+    escalation = EmergencyEscalation.objects.create(
+        alert=alert,
+        previous_assignment=assignment,
+        escalated_to=replacement,
+        triggered_by=triggered_by,
+        reason=reason,
+    )
+
+    if replacement:
+        role_map = role_map_for_departments(alert.type, responder_department_ids(replacement))
+        new_assignment = EmergencyResponderAssignment.objects.create(
+            alert=alert,
+            responder=replacement,
+            role_map=role_map,
+            source=EmergencyResponderAssignment.Source.ESCALATION,
+            status=EmergencyResponderAssignment.Status.ASSIGNED,
+        )
+        log_assignment_action(
+            alert=alert,
+            assignment=new_assignment,
+            responder=replacement,
+            actor=triggered_by,
+            action="reassigned_after_timeout",
+            new_status=new_assignment.status,
+            note=reason,
+        )
+        apply_routing_effects(alert, replacement, None, actor=triggered_by, audit_action="emergency.reassigned")
+    elif not alert.assignments.filter(status__in=[
+        EmergencyResponderAssignment.Status.ASSIGNED,
+        EmergencyResponderAssignment.Status.ACKNOWLEDGED,
+        EmergencyResponderAssignment.Status.EN_ROUTE,
+        EmergencyResponderAssignment.Status.ARRIVED,
+        EmergencyResponderAssignment.Status.ASSISTING,
+    ]).exists():
+        # Nobody left to try. Keep the alert active and visible rather than
+        # letting it sit silently against a responder who never replied.
+        alert.status = EmergencyAlert.Status.ESCALATION_REQUIRED
+        alert.status_version += 1
+        alert.save(update_fields=["status", "status_version", "updated_at"])
+        create_status_event(alert, alert.status, triggered_by, note=reason, event_key="no_responder")
+        notify_officials_no_responder(alert)
+
+    create_emergency_notification(
+        alert=alert,
+        recipient=alert.reporter,
+        type="emergency_escalated",
+        title="Still arranging your responder",
+        body="The barangay is assigning another responder to your emergency.",
+    )
+    create_audit_log(
+        "emergency.acknowledgment_timeout",
+        actor=triggered_by,
+        target_user=alert.reporter,
+        metadata={
+            "alert_id": alert.pk,
+            "assignment_id": assignment.pk,
+            "original_responder_id": getattr(original, "pk", None),
+            "replacement_id": getattr(replacement, "pk", None),
+            "waited_seconds": int(waited),
+            "automatic": triggered_by is None,
+        },
+        request_meta=audit_request_meta or {},
+    )
+    return escalation
 
 
 def notify_officials_no_responder(alert):
@@ -581,6 +694,12 @@ def notify_officials_no_responder(alert):
                 f"emergency in {barangay}."
             ),
         )
+    try:
+        from apps.sms.notify import notify_officials_no_responder as sms_notify
+
+        sms_notify(alert, unit_name=unit_names)
+    except Exception:
+        pass
 
 
 def notify_standby_responders(alert, *, assigned_ids=None):
@@ -623,7 +742,7 @@ def apply_routing_effects(alert, responder, request, *, actor=None, audit_action
     alert.routed_at = timezone.now()
     alert.status_version += 1
     alert.save(update_fields=["status", "routed_at", "status_version", "updated_at"])
-    create_status_event(alert, EmergencyAlert.Status.ROUTED, actor, "Responder routed")
+    create_status_event(alert, EmergencyAlert.Status.ROUTED, actor, event_key="responder_assigned")
     notify_emergency_status(alert, type=EmergencyAlert.Status.ROUTED, body="Responder routed")
     unit = responder_display_unit(responder)
     create_emergency_notification(
@@ -645,6 +764,12 @@ def apply_routing_effects(alert, responder, request, *, actor=None, audit_action
         metadata={"alert_id": alert.pk, "responder_id": responder.pk, "emergency_type": alert.type},
         request_meta=request_meta(request),
     )
+    try:
+        from apps.sms.notify import notify_responder_assigned
+
+        notify_responder_assigned(alert, responder)
+    except Exception:
+        pass
 
 
 def auto_route_alert(alert, request):
@@ -691,6 +816,10 @@ def auto_route_alert(alert, request):
         return first
 
 def create_witness_notifications(alert):
+    # Warning neighbours is a proximity feature; with no pin there is no
+    # proximity to compute and nobody should be alerted at random.
+    if alert.latitude is None or alert.longitude is None:
+        return
     reporter_profile = getattr(alert.reporter, "resident_profile", None)
     if not reporter_profile or not reporter_profile.barangay:
         return
@@ -740,48 +869,8 @@ def create_witness_notifications(alert):
             delivery.save(update_fields=["in_app_delivered_at"])
 
 
-def parse_emergency_sms_body(body):
-    text = (body or "").strip()
-    marker = re.sub(r"[^A-Z]", "", text.upper())
-    if "EBOSESSOS" not in marker:
-        return None
-    fields = {key.strip().lower(): value.strip() for key, value in SMS_SOS_FIELD_PATTERN.findall(text)}
-    note_lines = [line.strip() for line in text.splitlines() if line.strip()]
-    known_prefixes = {"eboses-sos", "e-boses sos", "user id", "emergency type", "latitude", "longitude", "timestamp"}
-    notes = [line for line in note_lines if line.split(":", 1)[0].strip().lower() not in known_prefixes]
-    return {
-        "client_request_id": (
-            fields.get("request id")
-            or fields.get("request_id")
-            or fields.get("client request id")
-            or fields.get("client_request_id")
-            or ""
-        ),
-        "user_id": fields.get("user id") or fields.get("userid") or fields.get("user"),
-        "type": (fields.get("emergency type") or fields.get("type") or "").strip().lower(),
-        "latitude": fields.get("latitude") or fields.get("lat"),
-        "longitude": fields.get("longitude") or fields.get("lng") or fields.get("lon"),
-        "timestamp": fields.get("timestamp") or "",
-        "note": "\n".join(notes[-3:]).strip(),
-    }
-
-
 def normalize_category_text(value):
     return re.sub(r"[^a-z0-9]+", "_", (value or "").strip().lower()).strip("_")
-
-
-def user_for_sms_payload(payload):
-    User = get_user_model()
-    user_id = str(payload.get("user_id") or "").strip()
-    if user_id.isdigit():
-        user = User.objects.filter(pk=int(user_id), status=User.Status.VERIFIED).first()
-        if user:
-            return user
-    sender = str(payload.get("from") or "").strip()
-    if not sender:
-        return None
-    compact = sender.replace(" ", "").replace("-", "")
-    return User.objects.filter(phone_number__in=[sender, compact], status=User.Status.VERIFIED).first()
 
 
 def active_alert_for_reporter(reporter):
@@ -790,21 +879,6 @@ def active_alert_for_reporter(reporter):
         .order_by("-created_at", "-id")
         .first()
     )
-
-
-def sms_webhook_payload(request):
-    raw = request.body.decode(request.encoding or "utf-8", errors="replace").strip()
-    if not raw:
-        return {}
-    try:
-        data = json.loads(raw)
-        return data if isinstance(data, dict) else {"body": raw}
-    except json.JSONDecodeError:
-        pass
-    form = QueryDict(raw)
-    if any(key in form for key in ("body", "message", "from", "sender")):
-        return {key: form.get(key, "") for key in form.keys()}
-    return {"body": raw}
 
 
 def serialize_alert(alert, request):
@@ -1001,18 +1075,27 @@ class EmergencyCreateView(APIView):
             reporter=request.user,
             type=serializer.validated_data["type"],
             note=serializer.validated_data.get("note", ""),
-            latitude=serializer.validated_data["latitude"],
-            longitude=serializer.validated_data["longitude"],
+            latitude=serializer.validated_data.get("latitude"),
+            longitude=serializer.validated_data.get("longitude"),
             location_source=serializer.validated_data.get("location_source", "gps"),
             location_accuracy=serializer.validated_data.get("location_accuracy"),
             address=serializer.validated_data.get("address", ""),
+            reported_area=serializer.validated_data.get("reported_area", ""),
+            triage=serializer.validated_data.get("triage") or {},
+            reporter_contact_number=getattr(request.user, "phone_number", "") or "",
             media_warnings=media_warnings,
             barangay=getattr(profile, "barangay", "") or "Marikina Heights",
         )
-        create_status_event(alert, EmergencyAlert.Status.SUBMITTED, request.user, "Emergency alert submitted.")
+        alert.location_confidence = classify_location_confidence(alert)
+        alert.save(update_fields=["location_confidence"])
+        create_status_event(alert, EmergencyAlert.Status.SUBMITTED, request.user, event_key="received_app")
         notify_emergency_status(alert, type=EmergencyAlert.Status.SUBMITTED, body="Your emergency alert was submitted.")
         auto_route_alert(alert, request)
         create_witness_notifications(alert)
+        # After routing on purpose: a street name is worth having, but never at
+        # the cost of delaying dispatch.
+        if alert.latitude is not None and alert.longitude is not None:
+            schedule_location_resolution(alert)
         for uploaded_file, validated_file, media_hash, media_phash in media_files:
             EmergencyMedia.objects.create(
                 alert=alert,
@@ -1037,104 +1120,22 @@ class EmergencyCreateView(APIView):
 
 
 class EmergencySmsInboundView(APIView):
+    """Deprecated alias for ``POST /api/sms/inbound/``.
+
+    Kept so a handset already configured against the old URL keeps working
+    through the transition. All parsing, sender matching and routing now live
+    in `apps.sms`; this only forwards. Point SMS Forwarder at the new path and
+    this can be deleted.
+    """
+
     permission_classes = [AllowAny]
+    authentication_classes = []
     parser_classes = [JSONParser, FormParser]
 
-    @transaction.atomic
     def post(self, request):
-        expected = getattr(settings, "SMS_EMERGENCY_WEBHOOK_TOKEN", "")
-        supplied = request.headers.get("X-SMS-Webhook-Token", "").strip()
-        if not expected or supplied != expected:
-            return Response({"detail": "Invalid SMS webhook token."}, status=status.HTTP_403_FORBIDDEN)
+        from apps.sms.views import SmsInboundView
 
-        payload = sms_webhook_payload(request)
-        raw_body = payload.get("body") or payload.get("message") or ""
-        parsed = parse_emergency_sms_body(raw_body)
-        if not parsed:
-            return Response({"detail": "SMS body is not an E-Boses SOS message."}, status=status.HTTP_400_BAD_REQUEST)
-
-        sender = payload.get("from") or payload.get("sender")
-        reporter = user_for_sms_payload({**parsed, "from": sender})
-        if not reporter:
-            return Response({"detail": "No verified resident matched this SMS."}, status=status.HTTP_404_NOT_FOUND)
-
-        client_request_id = (parsed.get("client_request_id") or "").strip()
-        if client_request_id:
-            existing = EmergencyAlert.objects.filter(
-                reporter=reporter,
-                client_request_id=client_request_id,
-            ).first()
-            if existing:
-                return Response(
-                    {"id": existing.pk, "emergency": serialize_alert(existing, request), "duplicate_suppressed": True},
-                    status=status.HTTP_200_OK,
-                )
-        active_alert = active_alert_for_reporter(reporter)
-        if active_alert:
-            return Response(
-                {"id": active_alert.pk, "emergency": serialize_alert(active_alert, request), "duplicate_suppressed": True},
-                status=status.HTTP_200_OK,
-            )
-
-        emergency_type = normalize_category_text(parsed["type"])
-        category_aliases = {
-            normalize_category_text(category.label): category.code
-            for category in EmergencyCategory.objects.filter(is_active=True)
-        }
-        aliases = {
-            **category_aliases,
-            "violence": "crime",
-            "flood": "disaster",
-            "medical emergency": "medical",
-            "child protection": "child_protection",
-            "domestic violence": "domestic_violence",
-            "drug related": "drug_related",
-            "drug-related": "drug_related",
-        }
-        emergency_type = aliases.get(emergency_type, emergency_type)
-        if not EmergencyCategory.objects.filter(code=emergency_type, is_active=True).exists():
-            return Response({"detail": "SMS emergency type is not configured."}, status=status.HTTP_400_BAD_REQUEST)
-
-        serializer = EmergencyCreateSerializer(
-            data={
-                **({"client_request_id": client_request_id} if client_request_id else {}),
-                "type": emergency_type,
-                "note": parsed["note"] or "Need immediate assistance",
-                "latitude": parsed["latitude"],
-                "longitude": parsed["longitude"],
-                "location_source": "sms",
-                "address": "SMS fallback coordinates",
-            }
-        )
-        serializer.is_valid(raise_exception=True)
-
-        profile = getattr(reporter, "resident_profile", None)
-        alert = EmergencyAlert.objects.create(
-            client_request_id=serializer.validated_data.get("client_request_id"),
-            reporter=reporter,
-            type=serializer.validated_data["type"],
-            note=serializer.validated_data.get("note", ""),
-            latitude=serializer.validated_data["latitude"],
-            longitude=serializer.validated_data["longitude"],
-            location_source="sms",
-            address=serializer.validated_data.get("address", ""),
-            barangay=getattr(profile, "barangay", "") or "Marikina Heights",
-        )
-        create_status_event(alert, EmergencyAlert.Status.SUBMITTED, reporter, "Submitted via SMS fallback.")
-        notify_emergency_status(alert, type=EmergencyAlert.Status.SUBMITTED, body="Your emergency alert was received by SMS fallback.")
-        auto_route_alert(alert, request)
-        create_witness_notifications(alert)
-        create_audit_log(
-            "emergency.sms_created",
-            actor=None,
-            target_user=reporter,
-            metadata={"alert_id": alert.pk, "sender": sender or ""},
-            request_meta=request_meta(request),
-        )
-        from apps.live_map import emergency_payload, route_for_assignment
-        from apps.notifications.services import broadcast_live_map_event
-        transaction.on_commit(lambda: broadcast_live_map_event("emergency.created", {"emergency": emergency_payload(alert), "route": route_for_assignment(alert)}))
-        return Response({"id": alert.pk, "emergency": serialize_alert(alert, request)}, status=status.HTTP_201_CREATED)
+        return SmsInboundView.as_view()(request._request)
 
 
 class MapDispatchPolicyView(APIView):
@@ -1563,7 +1564,27 @@ class EmergencyTypeRoleMapListCreateView(APIView):
             return capability_denied(CONFIGURE_DISPATCH)
         serializer = EmergencyTypeRoleMapSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-        role_map = serializer.save()
+        try:
+            # Savepoint: without it the failed INSERT poisons the surrounding
+            # atomic block and the recovery query below cannot run.
+            with transaction.atomic():
+                role_map = serializer.save()
+        except IntegrityError:
+            # (emergency_type, department) is unique. Since a default routing
+            # table is seeded on install, an official re-adding a rule that
+            # already exists is a normal mistake and deserves a readable
+            # message rather than a 500.
+            existing = EmergencyTypeRoleMap.objects.filter(
+                emergency_type=serializer.validated_data.get("emergency_type"),
+                department=serializer.validated_data.get("department"),
+            ).first()
+            return Response(
+                {
+                    "detail": "A dispatch rule already routes this emergency type to that unit.",
+                    "existing_rule_id": getattr(existing, "pk", None),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         return Response(EmergencyTypeRoleMapSerializer(role_map, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
@@ -1657,6 +1678,45 @@ class EmergencyDetailView(APIView):
         if not can_view_alert(request.user, alert):
             return Response({"detail": "You do not have permission to view this emergency."}, status=status.HTTP_403_FORBIDDEN)
         return Response(serialize_alert(alert, request))
+
+
+class EmergencyReporterContactView(APIView):
+    """Reveal the reporter's full mobile number, once, with an audit trail.
+
+    Every other surface shows it masked. Only someone actually working the
+    incident can unmask it: an assigned responder, or an official who can
+    manage emergencies. The reveal is logged with the caller and the alert so
+    the barangay can answer "who looked up this resident's number".
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        touch_last_seen(request.user)
+        alert = get_object_or_404(EmergencyAlert.objects.select_related("reporter"), pk=pk)
+
+        is_assigned = alert.assignments.filter(
+            responder=request.user,
+            status__in=ACTIVE_ASSIGNMENT_STATUSES,
+        ).exists()
+        if not (is_assigned or can_manage_emergencies(request.user)):
+            return Response(
+                {"detail": "Only an assigned responder or an official can reveal the reporter's number."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        number = (alert.reporter_contact_number or "").strip() or getattr(alert.reporter, "phone_number", "")
+        if not number:
+            return Response({"detail": "No contact number is on file for this emergency."}, status=status.HTTP_404_NOT_FOUND)
+
+        create_audit_log(
+            "emergency.contact_revealed",
+            actor=request.user,
+            target_user=alert.reporter,
+            metadata={"alert_id": alert.pk, "assigned_responder": is_assigned},
+            request_meta=request_meta(request),
+        )
+        return Response({"phone_number": number, "alert_id": alert.pk})
 
 
 class EmergencyRouteView(APIView):
@@ -2220,61 +2280,231 @@ class EmergencyReassignView(APIView):
 
 
 class EmergencyBackupView(APIView):
+    """Structured backup request: what kind of support, why, how urgent."""
+
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
+        touch_last_seen(request.user)
+        alert = get_object_or_404(EmergencyAlert, pk=pk)
+        if alert.status not in ACTIVE_STATUSES:
+            return Response(
+                {"detail": "Backup cannot be requested for a closed emergency."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        backup_type = (request.data.get("backup_type") or "other").strip().lower()
+        urgency = (request.data.get("urgency") or "high").strip().lower()
+        reason = (request.data.get("reason") or "").strip()
+
+        if backup_type not in responder_actions.BACKUP_TYPES:
+            return Response(
+                {"backup_type": [f"Choose one of: {', '.join(responder_actions.BACKUP_TYPES)}."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if urgency not in responder_actions.URGENCY_LEVELS:
+            return Response(
+                {"urgency": [f"Choose one of: {', '.join(responder_actions.URGENCY_LEVELS)}."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        actor = request.user
+        if not responder_actions.open_assignment_for(alert, actor):
+            if not can_manage_emergencies(actor):
+                return Response(
+                    {"detail": "You cannot request backup for this emergency."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
         try:
-            with transaction.atomic():
-                alert = EmergencyAlert.objects.select_for_update().get(pk=pk)
-                if alert.status not in ACTIVE_STATUSES:
-                    return Response({"detail": "Backup cannot be requested for a closed emergency."}, status=status.HTTP_409_CONFLICT)
-                assignments = alert.assignments.select_for_update().filter(
-                    status__in=["assigned", "acknowledged", "en_route", "arrived"]
-                ).order_by("assigned_at", "id")
-                assignment = assignments.filter(responder=request.user).first()
-                if not assignment and can_manage_emergencies(request.user):
-                    assignment = assignments.first()
-                if not assignment:
-                    return Response({"detail": "You cannot request backup for this emergency."}, status=status.HTTP_403_FORBIDDEN)
-                repeated = alert.escalations.filter(
-                    previous_assignment=assignment,
-                    triggered_by=request.user,
-                    reason="Backup requested.",
-                ).exists()
-                if repeated:
-                    return Response(serialize_alert(alert, request))
-                backup = find_backup_responder(alert)
-                if not backup:
-                    return Response({"detail": "No other eligible responder is available."}, status=status.HTTP_409_CONFLICT)
-                backup_assignment = EmergencyResponderAssignment.objects.create(alert=alert, responder=backup, source=EmergencyResponderAssignment.Source.ESCALATION)
-                EmergencyEscalation.objects.create(alert=alert, previous_assignment=assignment, escalated_to=backup, triggered_by=request.user, reason="Backup requested.")
-                log_assignment_action(alert=alert, assignment=backup_assignment, responder=backup, actor=request.user, action="escalated", new_status=backup_assignment.status, note="Backup requested.")
-                create_status_event(alert, EmergencyAlert.Status.ROUTED, request.user, "Backup responder routed.")
-                create_emergency_notification(
-                    alert=alert,
-                    recipient=backup,
-                    type="emergency_escalated",
-                    title="Backup requested",
-                    body="You were added to support an active emergency response.",
+            backup = responder_actions.request_backup(
+                alert,
+                actor,
+                backup_type=backup_type,
+                reason=reason,
+                urgency=urgency,
+                source="api",
+            )
+        except responder_actions.ActionError as exc:
+            return Response({"reason": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+
+        alert.status = (
+            EmergencyAlert.Status.BACKUP_ASSIGNED if backup else EmergencyAlert.Status.BACKUP_REQUESTED
+        )
+        alert.status_version += 1
+        alert.save(update_fields=["status", "status_version", "updated_at"])
+        create_status_event(
+            alert,
+            alert.status,
+            actor,
+            f"{responder_actions.BACKUP_TYPES[backup_type]} ({responder_actions.URGENCY_LEVELS[urgency]} priority) has been requested to support you.",
+        )
+        create_emergency_notification(
+            alert=alert,
+            recipient=alert.reporter,
+            type="emergency_escalated",
+            title="Backup responder requested",
+            body="Another responder is being added to support your emergency.",
+        )
+        transaction.on_commit(lambda: broadcast_emergency_update(alert))
+        return Response(serialize_alert(alert, request))
+
+
+class EmergencyRespondView(APIView):
+    """Responder confirms the assignment. No official approval is involved."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        alert = get_object_or_404(EmergencyAlert, pk=pk)
+        try:
+            responder_actions.acknowledge(
+                alert,
+                request.user,
+                note=(request.data.get("note") or "").strip(),
+                source="api",
+            )
+        except responder_actions.ActionError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        transaction.on_commit(lambda: broadcast_emergency_update(alert))
+        return Response(serialize_alert(alert, request))
+
+
+class EmergencyUnableView(APIView):
+    """Unable to Respond. Requires a reason and reassigns immediately."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        alert = get_object_or_404(EmergencyAlert, pk=pk)
+        try:
+            responder_actions.decline(
+                alert,
+                request.user,
+                reason=(request.data.get("reason") or "").strip(),
+                source="api",
+            )
+        except responder_actions.ActionError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        transaction.on_commit(lambda: broadcast_emergency_update(alert))
+        return Response(serialize_alert(alert, request))
+
+
+class EmergencyTransferView(APIView):
+    """Official moves an emergency to another unit."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_manage_emergencies(request.user):
+            return Response(
+                {"detail": "Only an official can transfer an emergency to another unit."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        alert = get_object_or_404(EmergencyAlert, pk=pk)
+        reason = (request.data.get("reason") or "").strip()
+        if len(reason) < 5:
+            return Response(
+                {"reason": ["Add a brief operational reason for the transfer."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        department = None
+        department_code = (request.data.get("department_code") or "").strip()
+        if department_code:
+            matches = active_departments_by_codes([department_code])
+            department = matches[0] if matches else None
+            if not department:
+                return Response(
+                    {"department_code": ["That unit does not exist or is inactive."]},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
-                create_emergency_notification(
+
+        with transaction.atomic():
+            transferred_out_ids = []
+            for assignment in alert.assignments.filter(status__in=ACTIVE_ASSIGNMENT_STATUSES):
+                transferred_out_ids.append(assignment.responder_id)
+                assignment.status = EmergencyResponderAssignment.Status.CANCELLED
+                assignment.status_note = f"Transferred: {reason[:200]}"
+                assignment.save(update_fields=["status", "status_note"])
+                log_assignment_action(
                     alert=alert,
-                    recipient=alert.reporter,
-                    type="emergency_escalated",
-                    title="Backup responder routed",
-                    body="Another responder was added to support your emergency.",
-                )
-                post_responder_chat(alert, backup, "Backup responder joined this emergency.")
-                create_audit_log(
-                    "emergency.backup_requested",
+                    assignment=assignment,
+                    responder=assignment.responder,
                     actor=request.user,
-                    target_user=alert.reporter,
-                    metadata={"alert_id": alert.pk, "backup_id": backup.pk, "assignment_id": assignment.pk},
-                    request_meta=request_meta(request),
+                    action="transferred",
+                    new_status=assignment.status,
+                    note=reason[:255],
                 )
-                transaction.on_commit(lambda: broadcast_emergency_update(alert))
-        except (EmergencyAlert.DoesNotExist, IntegrityError):
-            return Response({"detail": "Backup assignment conflicted with another update."}, status=status.HTTP_409_CONFLICT)
+
+            alert.status = EmergencyAlert.Status.TRANSFER_REQUIRED
+            alert.status_version += 1
+            alert.save(update_fields=["status", "status_version", "updated_at"])
+            create_status_event(alert, alert.status, request.user, reason[:255])
+            EmergencyEscalation.objects.create(
+                alert=alert,
+                triggered_by=request.user,
+                reason=f"Transferred to {department.name if department else 'another unit'}: {reason[:150]}",
+            )
+
+            # Never hand the incident back to the responder it was just taken
+            # from — that would silently undo the transfer.
+            responder = None
+            if department:
+                candidates = _rank_responders(
+                    alert,
+                    [
+                        user
+                        for user in _on_duty_unit_candidates(alert, exclude_ids=transferred_out_ids)
+                        if department.pk in responder_department_ids(user)
+                    ],
+                )
+                responder = candidates[0] if candidates else None
+            else:
+                responders = find_auto_responders(alert, limit=1, exclude_ids=transferred_out_ids)
+                responder = responders[0] if responders else None
+
+            if responder:
+                # A responder whose assignment was just cancelled by this
+                # transfer can legitimately be picked again; (alert, responder)
+                # is unique, so reuse the row rather than inserting a second.
+                assignment, _created = EmergencyResponderAssignment.objects.update_or_create(
+                    alert=alert,
+                    responder=responder,
+                    defaults={
+                        "source": EmergencyResponderAssignment.Source.MANUAL,
+                        "status": EmergencyResponderAssignment.Status.ASSIGNED,
+                        "status_note": reason[:255],
+                    },
+                )
+                log_assignment_action(
+                    alert=alert,
+                    assignment=assignment,
+                    responder=responder,
+                    actor=request.user,
+                    action="assigned_after_transfer",
+                    new_status=assignment.status,
+                    note=reason[:255],
+                )
+                apply_routing_effects(alert, responder, request, actor=request.user, audit_action="emergency.transferred")
+            else:
+                notify_officials_no_responder(alert)
+
+        create_audit_log(
+            "emergency.transferred",
+            actor=request.user,
+            target_user=alert.reporter,
+            metadata={
+                "alert_id": alert.pk,
+                "department_code": department_code,
+                "responder_id": getattr(responder, "pk", None),
+            },
+            request_meta=request_meta(request),
+        )
+        transaction.on_commit(lambda: broadcast_emergency_update(alert))
         return Response(serialize_alert(alert, request))
 
 
@@ -2534,13 +2764,19 @@ class EmergencyLocationPingView(APIView):
                 nearby_distance = int(MapDispatchPolicy.current().responder_nearby_radius_meters)
             except Exception:
                 nearby_distance = int(getattr(settings, "EMERGENCY_NEARBY_DISTANCE_METERS", 100))
-            distance = distance_meters(
-                alert.latitude,
-                alert.longitude,
-                serializer.validated_data["latitude"],
-                serializer.validated_data["longitude"],
+            # With no incident pin there is no "nearby" to detect; the ping is
+            # still recorded and broadcast, the status just does not advance.
+            distance = (
+                distance_meters(
+                    alert.latitude,
+                    alert.longitude,
+                    serializer.validated_data["latitude"],
+                    serializer.validated_data["longitude"],
+                )
+                if alert.latitude is not None and alert.longitude is not None
+                else None
             )
-            if alert.status == EmergencyAlert.Status.EN_ROUTE and distance <= nearby_distance:
+            if alert.status == EmergencyAlert.Status.EN_ROUTE and distance is not None and distance <= nearby_distance:
                 alert.status = EmergencyAlert.Status.NEARBY
                 alert.status_version += 1
                 alert.save(update_fields=["status", "status_version", "updated_at"])

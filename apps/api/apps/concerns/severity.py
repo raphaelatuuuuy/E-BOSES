@@ -6,8 +6,15 @@ served by the API should not disagree about what comes first.
 
 The important property is that **severity and priority are different things**.
 
-Severity is objective: it comes from the YOLOv8 damage score, adjusted by NLP
-relevance and floored by category. It never reads vote or comment counts.
+Severity is objective: it comes from the review model's severity judgement,
+floored by category. It never reads vote or comment counts.
+
+It used to come from the YOLOv8 damage score — the mean confidence of the
+objects a detector found in the photo. That was never a measure of how bad
+something was; a crisp photo of a bench scored higher than a blurry photo of a
+collapsed wall. With YOLO gone, severity reads what Gemma actually assessed
+(low / medium / high over the text *and* the image) plus its urgent-attention
+flag, which is the only signal that should be able to reach the top band.
 
 Priority orders records and does include community support, because civic
 engagement here is defined as residents contributing to prioritisation. But
@@ -38,6 +45,15 @@ CATEGORY_BASELINE = {
 AGE_SATURATION_HOURS = 72
 SUPPORT_SATURATION_VOTES = 25
 
+# Gemma reports three levels; the queue shows four. `critical` is reserved for
+# urgent_attention, so the top band means "someone may be in danger right now"
+# rather than "the model picked the highest of three options".
+SEVERITY_ESTIMATE_LEVEL = {
+    "low": 0,
+    "medium": 1,
+    "high": 2,
+}
+
 # Priority is stored as one integer so existing "sort by priority_score desc"
 # callers keep working. The severity band is multiplied into the high digits, so
 # ordering by the single number still compares band first and only breaks ties
@@ -57,15 +73,15 @@ def severity_level(concern) -> tuple[int, bool]:
     assessment = getattr(concern, "ai_assessment", None)
 
     completed = bool(assessment) and getattr(assessment, "status", "") == "completed"
-    damage = getattr(assessment, "yolo_confidence", None) if completed else None
+    estimate = str(getattr(assessment, "severity_estimate", "") or "").lower() if completed else ""
 
-    if damage is None:
+    if estimate not in SEVERITY_ESTIMATE_LEVEL:
         return baseline, False
 
-    score = max(0.0, min(1.0, float(damage)))
-    # Quartiles: [0,.25) low, [.25,.5) moderate, [.5,.75) high, [.75,1] critical.
-    level = min(3, int(score * 4))
-    level = max(level, baseline)
+    if getattr(assessment, "urgent_attention", False):
+        return 3, True
+
+    level = max(SEVERITY_ESTIMATE_LEVEL[estimate], baseline)
 
     relevance = getattr(assessment, "nlp_confidence", None)
     if relevance is not None:

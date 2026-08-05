@@ -86,5 +86,5 @@ apps/api/
 - Keep Django views thin: validate request data, call a service, and serialize the response.
 - Put business/domain logic in `services.py` modules; if an app grows, split that file into a `services/` package by workflow.
 - Put reusable list/detail query logic in `selectors.py` so viewsets do not accumulate filtering rules.
-- Put external integrations behind Protocol-style adapters in `adapters.py` before wiring concrete providers. Current adapter seams cover SMS, email, OCR, YOLO/object detection, NLP classification, private/media storage, maps/routing, push notifications, and WebSocket notifications.
+- Put external integrations behind Protocol-style adapters in `adapters.py` before wiring concrete providers. Current adapter seams cover SMS, email, OCR, NLP classification, privacy segmentation, private/media storage, maps/routing, push notifications, and WebSocket notifications.
 - Avoid direct cross-app model imports from views. Use the owning app's services/selectors instead; `apps.accounts.tests_architecture` codifies the current import-boundary convention.

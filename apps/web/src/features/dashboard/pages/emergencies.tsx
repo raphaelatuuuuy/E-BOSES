@@ -36,7 +36,8 @@ import {
 } from "@/features/dashboard/components/record/emergency-adapter"
 import { IncidentBoard } from "@/features/dashboard/components/emergencies/incident-board"
 import { DispatchPanel } from "@/features/dashboard/components/emergencies/dispatch-panel"
-import { DutyPanel, ResponderActions } from "@/features/dashboard/components/emergencies/responder-panels"
+import { DutyPanel } from "@/features/dashboard/components/emergencies/responder-panels"
+import { ResponderActions } from "@/features/dashboard/components/emergencies/responder-actions"
 import {
   OpsWorkspace,
   OpsPaneHeader,

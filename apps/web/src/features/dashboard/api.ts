@@ -25,6 +25,28 @@ export interface ActiveResponder extends PublicUser {
   location_updated_at?: string | null
 }
 
+/**
+ * Where a photo is in the privacy pipeline. Only `not_required` and `protected`
+ * are publicly displayable; the rest mean the protected copy is restricted to
+ * authorized officials.
+ */
+export type ConcernMediaPrivacyState =
+  | "not_required"
+  | "queued"
+  | "processing"
+  | "protected"
+  | "sensitive_review_required"
+  | "no_match_found"
+  | "failed_restricted"
+
+export interface ConcernMediaRedaction {
+  id: number
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export interface ConcernMedia {
   id: number
   original_filename: string
@@ -34,6 +56,12 @@ export interface ConcernMedia {
   raw_url: string
   validation_status: "accepted" | "rejected" | "pending"
   validation_detail: string
+  privacy_state: ConcernMediaPrivacyState
+  public_visible: boolean
+  /** What was blurred ("human face", "license plate"). Never coordinates. */
+  privacy_detected_classes: string[]
+  /** Official-drawn blur boxes. Empty for anyone who is not an official. */
+  redactions: ConcernMediaRedaction[]
   uploaded_at: string
 }
 
@@ -56,21 +84,52 @@ export interface ConcernStatusEvent {
   created_at: string
 }
 
+export type ConcernEvidenceRelationship =
+  | "supports_report"
+  | "partially_supports_report"
+  | "contradicts_report"
+  | "no_useful_image_evidence"
+  | "image_unavailable"
+  | "image_review_failed"
+
+export type ConcernRecommendedAction =
+  | "accept"
+  | "accept_with_privacy_review"
+  | "manual_review"
+  | "request_more_information"
+  | "escalate_as_emergency"
+  | "reject_as_irrelevant"
+
 export interface ConcernAiAssessment {
   status: "pending" | "completed" | "failed" | "not_configured"
   /** Soft validation gate — true when this concern needs an official ai-review decision. */
   flagged?: boolean
   /** Reasons the soft validation gate flagged this concern (string or {reason} entries). */
   flag_reasons?: unknown[]
-  image_objects: unknown[]
-  yolo_confidence: number | null
+  /** Plain-language object names seen in the photo. Empty when none was read. */
+  detected_objects: string[]
   severity_estimate: string
   nlp_validity: string
   nlp_confidence: number | null
   category_match: boolean | null
+  /**
+   * `null` when no photo was submitted, `false` when one was submitted but
+   * could not be reviewed. The distinction is what keeps "No photo was
+   * submitted" off a report that has one.
+   */
+  image_review_succeeded: boolean | null
+  evidence_relationship: ConcernEvidenceRelationship | ""
+  privacy_scan_required: boolean
+  suspected_sensitive_classes: string[]
+  urgent_attention: boolean
+  missing_information: string[]
+  recommended_action: ConcernRecommendedAction | ""
   recommendation: string
   explanation: string
-  model_version: string
+  text_assessment: string
+  photo_assessment: string
+  possible_categories: string[]
+  suggested_category: string
   possible_duplicate: boolean
   duplicate_similarity: number | null
   duplicate_distance_meters: number | null
@@ -425,15 +484,36 @@ export function getConcern(id: number | string) {
   return apiRequest<Concern>(path)
 }
 
-export function updateConcernStatus(
-  id: number,
-  payload: { status: ConcernStatus; note?: string; status_version?: number; resolution_evidence?: File[] },
-) {
+/**
+ * One "Save Update" is one request.
+ *
+ * Category, unit and internal note are optional and travel with the status
+ * change rather than as three follow-up calls, so an official's decision lands
+ * as a single atomic change with a single audit trail. `applied_ai_suggestion`
+ * records only that the official pressed Apply Suggestion before saving — the
+ * suggestion itself never saves anything.
+ */
+export interface ConcernStatusUpdatePayload {
+  status: ConcernStatus
+  note?: string
+  status_version?: number
+  resolution_evidence?: File[]
+  category?: string
+  department_id?: number | null
+  internal_note?: string
+  applied_ai_suggestion?: boolean
+}
+
+export function updateConcernStatus(id: number, payload: ConcernStatusUpdatePayload) {
   if (payload.resolution_evidence?.length) {
     const body = new FormData()
     body.append("status", payload.status)
     if (payload.note != null) body.append("note", payload.note)
     if (payload.status_version != null) body.append("status_version", String(payload.status_version))
+    if (payload.category) body.append("category", payload.category)
+    if (payload.department_id != null) body.append("department_id", String(payload.department_id))
+    if (payload.internal_note) body.append("internal_note", payload.internal_note)
+    if (payload.applied_ai_suggestion) body.append("applied_ai_suggestion", "true")
     for (const file of payload.resolution_evidence) body.append("resolution_evidence", file)
     return apiRequest<Concern>(`/concerns/${id}/status/`, {
       method: "POST",
@@ -446,7 +526,34 @@ export function updateConcernStatus(
       status: payload.status,
       note: payload.note,
       status_version: payload.status_version,
+      category: payload.category,
+      department_id: payload.department_id,
+      internal_note: payload.internal_note,
+      applied_ai_suggestion: payload.applied_ai_suggestion,
     }),
+  })
+}
+
+/** Blur one or more areas an official picked out of a photo. */
+export function addConcernMediaRedactions(
+  mediaId: number,
+  regions: Array<{ x: number; y: number; width: number; height: number; label?: string }>,
+) {
+  return apiRequest<ConcernMedia>(`/concerns/media/${mediaId}/redactions/`, {
+    method: "POST",
+    body: JSON.stringify(regions),
+  })
+}
+
+export function removeConcernMediaRedaction(mediaId: number, redactionId: number) {
+  return apiRequest<ConcernMedia>(`/concerns/media/${mediaId}/redactions/${redactionId}/`, {
+    method: "DELETE",
+  })
+}
+
+export function reprocessConcernMediaPrivacy(mediaId: number) {
+  return apiRequest<ConcernMedia>(`/concerns/media/${mediaId}/privacy/reprocess/`, {
+    method: "POST",
   })
 }
 

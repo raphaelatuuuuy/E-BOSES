@@ -98,8 +98,27 @@ class Concern(models.Model):
 
 
 class ConcernMedia(models.Model):
+    class PrivacyState(models.TextChoices):
+        """Where this image is in the Gemma → SAM3 → OpenCV privacy pipeline.
+
+        Only NOT_REQUIRED and PROTECTED are safe-to-publish terminal states.
+        Everything else means the public copy must not be served, which is what
+        `public_visible` enforces — the two are set together so a half-finished
+        run can never leak the original.
+        """
+
+        NOT_REQUIRED = "not_required", "No privacy scan required"
+        QUEUED = "queued", "Queued for privacy processing"
+        PROCESSING = "processing", "Privacy processing running"
+        PROTECTED = "protected", "Protected copy created"
+        SENSITIVE_REVIEW_REQUIRED = "sensitive_review_required", "Sensitive media, review required"
+        NO_MATCH_FOUND = "no_match_found", "No matching sensitive region confirmed"
+        FAILED_RESTRICTED = "failed_restricted", "Privacy processing failed, media restricted"
+
     concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="media")
     file = models.FileField(storage=PrivateMediaStorage(), upload_to="raw/concern-media/%Y/%m/")
+    # The protected, public-facing copy. Never a byte-for-byte copy of `file`:
+    # every write path re-encodes and strips EXIF, and blur is baked in.
     preview_file = models.FileField(storage=PublicMediaStorage(), upload_to="previews/concern-media/%Y/%m/", blank=True)
     original_filename = models.CharField(max_length=255)
     mime_type = models.CharField(max_length=120, blank=True)
@@ -109,7 +128,46 @@ class ConcernMedia(models.Model):
     phash_blocks = models.JSONField(default=list, blank=True)
     validation_status = models.CharField(max_length=16, default="accepted")
     validation_detail = models.CharField(max_length=255, blank=True)
+    privacy_state = models.CharField(max_length=32, choices=PrivacyState.choices, default=PrivacyState.NOT_REQUIRED)
+    privacy_requested_classes = models.JSONField(default=list, blank=True)
+    privacy_detected_classes = models.JSONField(default=list, blank=True)
+    # Normalised 0..1 boxes actually blurred into the protected copy. Kept so a
+    # re-render reproduces the same redactions without calling SAM3 again.
+    privacy_regions = models.JSONField(default=list, blank=True)
+    privacy_cache_key = models.CharField(max_length=64, blank=True)
+    # Developer-only. Never serialized to the official interface.
+    privacy_failure = models.JSONField(default=dict, blank=True)
+    privacy_processed_at = models.DateTimeField(null=True, blank=True)
+    # Fail closed: an image is only publicly displayable once a privacy run has
+    # explicitly cleared it.
+    public_visible = models.BooleanField(default=False)
     uploaded_at = models.DateTimeField(auto_now_add=True)
+
+
+class ConcernMediaRedaction(models.Model):
+    """One blurred region on a concern photo, from SAM3 or from an official.
+
+    Officials can add regions the automatic scan missed, so the protected copy
+    is always re-rendered from SAM3 regions *plus* official regions. Coordinates
+    are normalised 0..1 so they survive the preview resize.
+    """
+
+    class Source(models.TextChoices):
+        SAM3 = "sam3", "Automatic scan"
+        OFFICIAL = "official", "Added by an official"
+
+    media = models.ForeignKey(ConcernMedia, on_delete=models.CASCADE, related_name="redactions")
+    x = models.FloatField()
+    y = models.FloatField()
+    width = models.FloatField()
+    height = models.FloatField()
+    label = models.CharField(max_length=64, blank=True)
+    source = models.CharField(max_length=16, choices=Source.choices, default=Source.SAM3)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="concern_media_redactions")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
 
 
 class Department(models.Model):
@@ -436,12 +494,27 @@ class ConcernAiAssessment(models.Model):
 
     concern = models.OneToOneField(Concern, on_delete=models.CASCADE, related_name="ai_assessment")
     status = models.CharField(max_length=24, choices=Status.choices, default=Status.NOT_CONFIGURED)
-    image_objects = models.JSONField(default=list, blank=True)
-    yolo_confidence = models.FloatField(null=True, blank=True)
+    # Plain-language object names Gemma reports seeing in the photo. Free text,
+    # not a fixed class vocabulary — there is no detector taxonomy any more.
+    detected_objects = models.JSONField(default=list, blank=True)
     severity_estimate = models.CharField(max_length=32, blank=True)
     nlp_validity = models.CharField(max_length=32, blank=True)
     nlp_confidence = models.FloatField(null=True, blank=True)
     category_match = models.BooleanField(null=True, blank=True)
+    # Photo/privacy state, stored as columns rather than dug out of raw_result:
+    # the official UI and the privacy task both branch on these, and a JSON path
+    # lookup is not something either should depend on.
+    #
+    # `image_review_succeeded` is None when no image was submitted at all, which
+    # is what keeps "no photo" and "photo we could not read" distinguishable.
+    image_review_succeeded = models.BooleanField(null=True, blank=True)
+    evidence_relationship = models.CharField(max_length=32, blank=True)
+    privacy_scan_required = models.BooleanField(default=False)
+    privacy_scan_reasons = models.JSONField(default=list, blank=True)
+    suspected_sensitive_classes = models.JSONField(default=list, blank=True)
+    urgent_attention = models.BooleanField(default=False)
+    missing_information = models.JSONField(default=list, blank=True)
+    recommended_action = models.CharField(max_length=32, blank=True)
     recommendation = models.CharField(max_length=120, blank=True)
     explanation = models.TextField(blank=True)
     model_version = models.CharField(max_length=80, blank=True)
@@ -456,30 +529,17 @@ class ConcernAiAssessment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
-DEFAULT_SUPPORTED_YOLO_CLASSES = [
-    "person",
-    "bicycle",
-    "car",
-    "motorcycle",
-    "bus",
-    "truck",
-    "bench",
-    "parking meter",
-    "traffic light",
-    "knife",
-    "dog",
-    "cat",
-    "handbag",
-    "backpack",
-    "suitcase",
-]
-
-
 class ConcernClassificationConfiguration(models.Model):
     """Published settings used by the concern AI adapters.
 
-    Kept as one row so a future trained Tagalog RoBERTa or hosted detector can
-    replace the baseline adapters without changing the official-facing API.
+    Kept as one row so a future model can replace the current one without
+    changing the official-facing API.
+
+    The object-detection settings this row used to hold (`image_provider`,
+    `image_model`, `image_confidence_threshold`, `label_mappings`,
+    `supported_classes`) are gone with YOLO. Gemma reads the photo directly and
+    names what it sees, so there is no class vocabulary to filter and no
+    label→category table for officials to maintain.
     """
 
     class MismatchAction(models.TextChoices):
@@ -492,11 +552,8 @@ class ConcernClassificationConfiguration(models.Model):
         BLOCK = "block", "Block submission"
         OFFICIAL_REVIEW = "official_review", "Submit but flag for official review"
 
-    image_provider = models.CharField(max_length=32, default="ultralytics")
-    image_model = models.CharField(max_length=80, default="yolov8m.pt")
     nlp_provider = models.CharField(max_length=32, default="ollama_cloud")
     nlp_model = models.CharField(max_length=120, default="gemma4:31b")
-    image_confidence_threshold = models.FloatField(default=0.70)
     relevance_threshold = models.FloatField(default=0.65)
     duplicate_threshold = models.FloatField(default=0.85)
     report_duplicate_detection_enabled = models.BooleanField(default=True)
@@ -514,8 +571,6 @@ class ConcernClassificationConfiguration(models.Model):
     enabled_categories = models.JSONField(default=list, blank=True)
     suspicious_terms = models.JSONField(default=list, blank=True)
     category_keywords = models.JSONField(default=dict, blank=True)
-    label_mappings = models.JSONField(default=dict, blank=True)
-    supported_classes = models.JSONField(default=list, blank=True)
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="classification_config_updates")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -535,26 +590,6 @@ class ConcernClassificationConfiguration(models.Model):
             },
             "nlp_provider": "ollama_cloud",
             "nlp_model": "gemma4:31b",
-            "label_mappings": {
-                "traffic light": "infrastructure",
-                "bench": "infrastructure",
-                "parking meter": "infrastructure",
-                "garbage": "environment",
-                "trash": "environment",
-                "knife": "public_safety",
-                "dog": "public_safety",
-                "cat": "public_safety",
-                "handbag": "others",
-                "backpack": "others",
-                "suitcase": "others",
-                "car": "vehicle",
-                "truck": "vehicle",
-                "motorcycle": "vehicle",
-                "bus": "vehicle",
-                "bicycle": "vehicle",
-                "person": "others",
-            },
-            "supported_classes": DEFAULT_SUPPORTED_YOLO_CLASSES,
         }
         obj, _ = cls.objects.get_or_create(pk=1, defaults=defaults)
         return obj

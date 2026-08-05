@@ -67,9 +67,9 @@ export function concernValidation(value: string | null | undefined): PlainTerm {
 /* ── Automatic checks (formerly "AI assessment") ───────────────────────── */
 
 /**
- * The system runs an automatic first-pass check on photos and descriptions.
- * Officials do not need to know it is YOLO or a text classifier — only whether
- * the check finished and whether it wants a second look.
+ * The system runs an automatic first-pass review of the description and the
+ * photo. Officials do not need to know which model does it — only whether the
+ * review finished and whether it wants a second look.
  */
 export const AUTO_CHECK_STATUS: Record<string, PlainTerm> = {
   pending: {
@@ -108,17 +108,196 @@ export const FLAG_REASON: Record<string, PlainTerm> = {
     help: "The written description does not seem to describe the chosen category.",
   },
   category_mismatch: {
-    label: "Photo doesn't match category",
-    help: "What the photo shows looks different from the category the resident picked.",
+    label: "Category may be wrong",
+    help: "The report does not look like the category the resident picked. Change it if you agree.",
   },
   possible_duplicate: {
     label: "Possibly already reported",
     help: "A very similar report was filed nearby. Check before creating duplicate work.",
   },
+  urgent_attention: {
+    label: "May need urgent attention",
+    help: "The report describes possible immediate danger. Open it before the rest of the queue.",
+  },
 }
 
 export function flagReason(value: string | null | undefined): PlainTerm {
   return lookup(FLAG_REASON, value)
+}
+
+/* ── What the review assistant suggests ────────────────────────────────── */
+
+/**
+ * The next step the assistant recommends, in words that name an action an
+ * official can take. These are suggestions: nothing here is a decision, and the
+ * UI must never render them as Approved, Rejected, or Final Decision.
+ */
+export const RECOMMENDED_ACTION: Record<string, PlainTerm> = {
+  accept: {
+    label: "Accept and continue processing",
+    help: "Nothing looks wrong with this report. Move it along as usual.",
+  },
+  accept_with_privacy_review: {
+    label: "Continue using the protected image",
+    help: "The report is fine. Show the protected copy of the photo, not the original.",
+  },
+  manual_review: {
+    label: "Review the report manually",
+    help: "Something did not line up. Read it yourself before deciding.",
+  },
+  request_more_information: {
+    label: "Request additional details",
+    help: "Message the resident for what is missing before acting.",
+  },
+  escalate_as_emergency: {
+    label: "Notify the appropriate emergency personnel",
+    help: "This may describe immediate danger. Do not leave it in the queue.",
+  },
+  reject_as_irrelevant: {
+    label: "Review as a potentially unrelated submission",
+    help: "This may not be a barangay concern. Check before turning it down.",
+  },
+}
+
+export function recommendedAction(value: string | null | undefined): PlainTerm {
+  return lookup(RECOMMENDED_ACTION, value)
+}
+
+/* ── Photo and privacy state ───────────────────────────────────────────── */
+
+/**
+ * What happened to the photo, as one message.
+ *
+ * These are mutually exclusive by construction — `photoStateOf` below picks
+ * exactly one — which is what prevents the screen from ever showing "No photo
+ * was submitted" beside a thumbnail, or "the photo supports the report" beside
+ * "photo review unavailable".
+ */
+export type PhotoState =
+  | "none"
+  | "pending"
+  | "review_failed"
+  | "inconclusive"
+  | "supports"
+  | "partially_supports"
+  | "mismatch"
+
+export const PHOTO_STATE: Record<PhotoState, PlainTerm> = {
+  none: { label: "No photo was submitted." },
+  pending: { label: "Photo review is in progress." },
+  review_failed: {
+    label: "A photo was uploaded, but automatic review was unavailable. Please review it manually.",
+  },
+  inconclusive: {
+    label: "The photo does not provide enough visible evidence to confirm the report.",
+  },
+  supports: { label: "The photo supports the report." },
+  partially_supports: { label: "The photo supports part of the report." },
+  mismatch: { label: "The photo may not match the description." },
+}
+
+/** Short badge wording for the same states, for chips beside a heading. */
+export const PHOTO_STATE_BADGE: Record<PhotoState, string> = {
+  none: "Text-Only Report",
+  pending: "Photo Review in Progress",
+  review_failed: "Photo Review Unavailable",
+  inconclusive: "Photo Evidence Inconclusive",
+  supports: "Supports Report",
+  partially_supports: "Supports Report in Part",
+  mismatch: "Possible Mismatch",
+}
+
+/**
+ * Decide the photo state from the three facts that determine it, in priority
+ * order. Taking one path through this function — rather than reading several
+ * booleans at the point of display — is what makes contradictory states
+ * unrepresentable.
+ */
+export function photoStateOf(input: {
+  hasPhoto: boolean
+  assessmentStatus: string | null | undefined
+  imageReviewSucceeded: boolean | null | undefined
+  evidenceRelationship: string | null | undefined
+}): PhotoState {
+  if (!input.hasPhoto) return "none"
+  if (input.imageReviewSucceeded === false) return "review_failed"
+  if (input.assessmentStatus === "pending" || input.imageReviewSucceeded == null) return "pending"
+  switch (input.evidenceRelationship) {
+    case "supports_report":
+      return "supports"
+    case "partially_supports_report":
+      return "partially_supports"
+    case "contradicts_report":
+      return "mismatch"
+    case "image_review_failed":
+      return "review_failed"
+    default:
+      return "inconclusive"
+  }
+}
+
+/**
+ * What was done about privacy, per photo.
+ *
+ * Note what none of these say: that an image is safe. The automatic check only
+ * ever looked for three things, and only when the review model asked it to, so
+ * "nothing was found" is the strongest claim available.
+ */
+export const PRIVACY_STATE: Record<string, PlainTerm> = {
+  not_required: {
+    label: "No sensitive details requiring automatic protection were identified during the initial review.",
+    help: "The photo can be shown publicly. Blur anything else you notice.",
+  },
+  queued: { label: "Privacy check is queued.", help: "The photo is not public until this finishes." },
+  processing: { label: "Privacy check is in progress.", help: "The photo is not public until this finishes." },
+  protected: {
+    label: "Sensitive details were protected before public display.",
+    help: "The public sees the blurred copy. You can still open the original.",
+  },
+  sensitive_review_required: {
+    label: "Possible sensitive visual content was found. The image should remain restricted until an authorized official reviews it.",
+    help: "Not shown publicly. Open it yourself and decide.",
+  },
+  no_match_found: {
+    label: "No matching sensitive region was confirmed. Manual review may still be required.",
+    help: "Not shown publicly yet. Blur anything you can see, or release it.",
+  },
+  failed_restricted: {
+    label: "Automatic privacy protection could not be completed. The original image remains restricted pending review.",
+    help: "Not shown publicly. Blur it yourself or try the check again.",
+  },
+}
+
+export function privacyState(value: string | null | undefined): PlainTerm {
+  return lookup(PRIVACY_STATE, value)
+}
+
+/** Short badge wording for privacy state. */
+export const PRIVACY_STATE_BADGE: Record<string, string> = {
+  not_required: "Privacy Check Not Required",
+  queued: "Privacy Check in Progress",
+  processing: "Privacy Check in Progress",
+  protected: "Privacy Protected",
+  sensitive_review_required: "Sensitive Media",
+  no_match_found: "Needs Review",
+  failed_restricted: "Sensitive Media",
+}
+
+/**
+ * The message shown when a photo exists but Gemma never managed to look at it.
+ * Kept separate from PRIVACY_STATE because it is a statement about the review,
+ * not about the pipeline that follows it.
+ */
+export const PRIVACY_UNCHECKED =
+  "The image could not be checked automatically for sensitive details. Manual privacy review is required."
+
+/** Object names Gemma reported, title-cased for display. */
+export function observedObjectLabel(value: string): string {
+  return value
+    .trim()
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ")
 }
 
 /**

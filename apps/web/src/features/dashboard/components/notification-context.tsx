@@ -56,6 +56,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const [loading, setLoading] = React.useState(true)
   const [connectionState, setConnectionState] = React.useState<"connecting" | "live" | "degraded">("connecting")
   const socketLiveRef = React.useRef(false)
+  const lastBrowserNotifRef = React.useRef(0)
 
   async function fetchAll() {
     try {
@@ -154,7 +155,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           })
           if (!payload.is_read) {
             setUnreadCount((prev) => prev + 1)
-            void showBrowserNotification(payload)
+            const nowTs = Date.now()
+            if (nowTs - lastBrowserNotifRef.current >= 1000) {
+              lastBrowserNotifRef.current = nowTs
+              void showBrowserNotification(payload)
+            }
           }
           if (payload.concern_id) {
             window.dispatchEvent(

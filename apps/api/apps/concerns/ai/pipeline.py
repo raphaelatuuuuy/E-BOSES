@@ -1,59 +1,161 @@
-from dataclasses import asdict
+"""Run the automatic review for one concern.
 
-from django.conf import settings
+Order of operations, and why:
+
+1. **Gemma** reads the title, description, selected category and — when one
+   decoded — the photo. It produces the whole assessment in a single call,
+   including whether the photo *might* contain something privacy-sensitive.
+2. **The SAM3 gate** (`should_run_sam3`) decides whether a privacy scan is
+   warranted. It is deliberately conservative: all four conditions must hold, so
+   a report with no photo, a photo nobody could read, or a suspicion Gemma did
+   not name in the allowed vocabulary never reaches Roboflow.
+3. **Media state** is written for every image, then the privacy task is queued
+   on commit. Anything not cleared here stays non-public.
+
+The soft-gate contract from the previous version is unchanged: this function
+flags reports for official attention and never touches `validation_status`,
+`status`, or any resident-visible workflow state.
+"""
+
+import logging
+
 from django.db import transaction
 
-from apps.concerns.models import Concern, ConcernAiAssessment, ConcernClassificationConfiguration
+from apps.concerns.models import (
+    Concern,
+    ConcernAiAssessment,
+    ConcernClassificationConfiguration,
+    ConcernMedia,
+)
 
-from .image_detector import ImageDetectorNotConfigured, YoloImageDetector
 from .classification import BASE_TEXT_MODEL
 from .duplicate_detector import find_duplicate_concern
-from .ollama_text_classifier import OllamaTextClassifier, display_label_for, image_bytes_for_ollama, payload_from_result, safe_needs_review
+from .gemma_analyzer import CORE_SENSITIVE_CLASSES, GemmaAnalyzer, safe_needs_review, sensitive_classes_from
+from .image_prep import prepare_image_for_gemma
 from .text_classifier import TextClassifierNotConfigured
 
 
-BASE_LABEL_MAPPINGS = {
-    "traffic light": Concern.Category.INFRASTRUCTURE,
-    "bench": Concern.Category.INFRASTRUCTURE,
-    "garbage": Concern.Category.ENVIRONMENT,
-    "trash": Concern.Category.ENVIRONMENT,
-    "knife": Concern.Category.PUBLIC_SAFETY,
-    "dog": Concern.Category.PUBLIC_SAFETY,
-    "cat": Concern.Category.PUBLIC_SAFETY,
-    "car": Concern.Category.VEHICLE,
-    "truck": Concern.Category.VEHICLE,
-    "motorcycle": Concern.Category.VEHICLE,
-    "bus": Concern.Category.VEHICLE,
-    "bicycle": Concern.Category.VEHICLE,
-    "person": Concern.Category.OTHERS,
-}
+logger = logging.getLogger(__name__)
 
 
 class StaleAiRun(RuntimeError):
     """Raised when an expired worker tries to publish over a newer run lease."""
 
 
-def _classify_text(config, *, title: str, description: str, selected_category: str, image_objects: list[dict], image_data: str | None = None, image_mime_type: str = ""):
-    """Returns (result, provider_name, fallback_reason|None).
+def sam3_classes_for(gemma_result: dict) -> list[str]:
+    """The classes SAM3 will be asked to segment.
 
-    Ollama is advisory only. If it is unavailable, reports go to official
-    review instead of falling back to hidden keyword rules.
+    Gemma names these itself rather than choosing from a fixed list — SAM3 is
+    open-vocabulary, so restricting it to three terms wasted the thing it is
+    good at. `sensitive_classes_from` is what keeps them usable: short concrete
+    nouns only, no abstractions a segmenter cannot find.
+    """
+    return sensitive_classes_from(gemma_result.get("suspected_sensitive_classes") or [])
+
+
+def should_run_sam3(*, image_uploaded: bool, gemma_image_review_succeeded: bool, gemma_result: dict) -> bool:
+    return (
+        image_uploaded
+        and gemma_image_review_succeeded
+        and gemma_result.get("privacy_scan_required") is True
+        and bool(sam3_classes_for(gemma_result))
+    )
+
+
+# What SAM3 looks for when Gemma could not read the photo and so named nothing.
+# The three that are always worth checking on a civic report.
+FALLBACK_PROTECTIVE_CLASSES = list(CORE_SENSITIVE_CLASSES)
+
+
+def privacy_classes_for(gemma_result: dict, *, image_uploaded: bool, gemma_image_review_succeeded: bool) -> list[str]:
+    """The classes SAM3 should segment for this photo.
+
+    Gemma normally decides, and when it has read the image its judgement is
+    used as-is. But Ollama Cloud returns an intermittent 500 on image requests,
+    and the first version of this treated that as "no scan needed" — clearing
+    the class list so SAM3 never ran. A photo containing a face was then
+    published unblurred purely because a *different* model had a bad call.
+
+    SAM3 does not need Gemma to find a face. When the image review failed we
+    still scan for the two things we can always protect. Blurring a face that
+    did not need it costs nothing; publishing one that did is the failure this
+    whole pipeline exists to prevent.
+    """
+    if not image_uploaded:
+        return []
+    if gemma_image_review_succeeded:
+        return sam3_classes_for(gemma_result) if gemma_result.get("privacy_scan_required") is True else []
+    return list(FALLBACK_PROTECTIVE_CLASSES)
+
+
+def _run_gemma(config, *, title, description, selected_category, image):
+    """Returns (result, run_status, fallback_reason|None).
+
+    Gemma is advisory. When it is unavailable the report goes to official review
+    rather than falling back to hidden keyword rules.
+
+    The status is decided here, at the point where we know *why* the call did
+    not produce a result, rather than inferred later from the wording of an
+    error message:
+
+    * NOT_CONFIGURED — no API key, or the client library is absent. Nothing is
+      broken; automatic review is simply switched off.
+    * FAILED — a configured model that we could not get an answer out of.
+    * COMPLETED — we have a result, even if its image half failed.
     """
     try:
-        result = OllamaTextClassifier(configuration=config).classify(
+        result = GemmaAnalyzer(configuration=config).analyze(
             title=title,
             description=description,
             selected_category=selected_category,
-            image_objects=image_objects,
-            image_data=image_data,
-            image_mime_type=image_mime_type,
+            image=image,
         )
-        return result, config.nlp_provider, None
+        return result, ConcernAiAssessment.Status.COMPLETED, None
     except TextClassifierNotConfigured as exc:
-        return safe_needs_review(model_version=BASE_TEXT_MODEL, reason=str(exc), image_objects=image_objects), config.nlp_provider, str(exc)
+        return (
+            safe_needs_review(
+                model_version=BASE_TEXT_MODEL,
+                reason="Automatic review is not switched on, so this report needs a manual look.",
+                image_attached=image is not None,
+            ),
+            ConcernAiAssessment.Status.NOT_CONFIGURED,
+            str(exc),
+        )
     except Exception as exc:
-        reason = f"Ollama text classification failed: {exc.__class__.__name__}"
-        return safe_needs_review(model_version=BASE_TEXT_MODEL, reason=reason, image_objects=image_objects), config.nlp_provider, reason
+        reason = f"Gemma analysis failed: {exc.__class__.__name__}"
+        logger.warning("Concern AI analysis failed: %s", reason)
+        return (
+            safe_needs_review(
+                model_version=BASE_TEXT_MODEL,
+                reason="The automatic review could not run, so this report needs a manual look.",
+                image_attached=image is not None,
+            ),
+            ConcernAiAssessment.Status.FAILED,
+            reason,
+        )
+
+
+def _first_image_media(concern) -> ConcernMedia | None:
+    return next(
+        (
+            media
+            for media in concern.media.all()
+            if media.mime_type.startswith("image/") and hasattr(media.file, "path")
+        ),
+        None,
+    )
+
+
+def _prepare_first_image(media):
+    if media is None:
+        return None
+    try:
+        with open(media.file.path, "rb") as handle:
+            raw = handle.read()
+    except OSError:
+        logger.warning("Concern media %s could not be read from disk for review.", media.pk)
+        return None
+    return prepare_image_for_gemma(raw, filename=media.original_filename, mime_type=media.mime_type)
 
 
 def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -> ConcernAiAssessment:
@@ -64,102 +166,42 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
     )
 
     config = ConcernClassificationConfiguration.current()
-    image_paths = [
-        media.file.path
-        for media in concern.media.all()
-        if media.mime_type.startswith("image/") and hasattr(media.file, "path")
-    ]
-    image_data = None
-    image_mime_type = ""
-    first_image_media = next((media for media in concern.media.all() if media.mime_type.startswith("image/") and hasattr(media.file, "path")), None)
-    if first_image_media:
-        try:
-            with open(first_image_media.file.path, "rb") as image_file:
-                image_data, image_mime_type = image_bytes_for_ollama(image_file.read())
-        except OSError:
-            image_data = None
-    image_result = None
-    image_payload = {
-        "inference_status": "unavailable",
-        "inference_succeeded": False,
-        "available": False,
-        "model": getattr(config, "image_model", ""),
-    }
-    image_status = ConcernAiAssessment.Status.COMPLETED
-    label_mappings = {**BASE_LABEL_MAPPINGS, **(config.label_mappings or {})}
-    supported_classes = {s.lower() for s in (config.supported_classes or [])}
-    try:
-        image_result = YoloImageDetector(settings.EBOSES_YOLO_MODEL_PATH).detect(
-            image_paths,
-            supported_classes=config.supported_classes,
-            confidence_threshold=config.image_confidence_threshold,
-        )
-        mapped_objects = [
-            {
-                **item,
-                "display_label": display_label_for(item.get("label", "")),
-                "category": label_mappings.get(str(item.get("label", "")).lower(), ""),
-            }
-            for item in image_result.objects
-            if not supported_classes or str(item.get("label", "")).lower() in supported_classes
-        ]
-        image_result = type(image_result)(
-            objects=mapped_objects,
-            confidence=image_result.confidence,
-            model_version=image_result.model_version,
-            annotated_image=image_result.annotated_image,
-        )
-        image_payload = {
-            "inference_status": "available",
-            "inference_succeeded": True,
-            "available": True,
-            "model": image_result.model_version,
-        }
-    except ImageDetectorNotConfigured as exc:
-        image_payload.update({"notice": str(exc)})
-        image_status = ConcernAiAssessment.Status.NOT_CONFIGURED
-    except Exception as exc:
-        image_payload = {
-            "notice": "Image classification failed safely. Continue manual official review.",
-            "error": exc.__class__.__name__,
-            "inference_status": "failed",
-            "inference_succeeded": False,
-            "available": False,
-        }
-        image_status = ConcernAiAssessment.Status.FAILED
+    image_media_list = [media for media in concern.media.all() if media.mime_type.startswith("image/")]
+    image_uploaded = bool(image_media_list)
+    first_image_media = _first_image_media(concern)
+    prepared_image = _prepare_first_image(first_image_media)
 
-    text_result, text_provider, text_fallback_reason = _classify_text(
+    # A photo that exists but could not be decoded is a failed review, not an
+    # absent one. Recording it here is what keeps "no photo was submitted" off
+    # the screen for a report that has one.
+    prepare_failed = image_uploaded and prepared_image is None
+
+    gemma_result, run_status, fallback_reason = _run_gemma(
         config,
         title=concern.title,
         description=concern.description,
         selected_category=concern.category,
-        image_objects=image_result.objects if image_result else [],
-        image_data=image_data,
-        image_mime_type=image_mime_type,
+        image=prepared_image,
     )
+    details = gemma_result.details or {}
 
-    text_payload = {
-        **asdict(text_result),
-        "provider": text_provider,
-        "inference_status": "available",
-        "inference_succeeded": True,
-    }
-    if text_fallback_reason:
-        text_payload["fallback_reason"] = text_fallback_reason
-    image_categories = {
-        item.get("category")
-        for item in (image_result.objects if image_result else [])
-        if item.get("category")
-    }
-    text_match = bool(text_result.details.get("selected_category_match")) or (bool(text_result.category) and text_result.category == concern.category)
-    image_match = not image_categories or concern.category in image_categories
-    category_match = text_match and image_match
-    suggested_category = text_result.category or next(iter(image_categories), "")
-    suggested_priority = _priority_guidance(
-        severity=text_result.severity,
-        category_match=category_match,
-        image_confidence=image_result.confidence if image_result else None,
+    image_review_succeeded = details.get("image_review_succeeded")
+    if prepare_failed:
+        image_review_succeeded = False
+    if not image_uploaded:
+        image_review_succeeded = None
+
+    evidence_relationship = details.get("evidence_relationship") or "image_unavailable"
+    if prepare_failed:
+        evidence_relationship = "image_review_failed"
+
+    sam3_classes = privacy_classes_for(
+        details,
+        image_uploaded=image_uploaded,
+        gemma_image_review_succeeded=image_review_succeeded is True,
     )
+    run_sam3 = bool(sam3_classes)
+
     duplicate_match = find_duplicate_concern(
         concern,
         enabled=config.duplicate_detection_enabled,
@@ -171,44 +213,72 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         enabled=config.duplicate_detection_enabled,
         threshold=config.duplicate_threshold,
     )
+
+    category_match = details.get("selected_category_match")
+    if category_match is None:
+        category_match = bool(gemma_result.category) and gemma_result.category == concern.category
+
+    recommended_action = details.get("recommended_action") or "manual_review"
     recommendation = _recommendation(
-        text_result.label,
-        category_match,
+        recommended_action,
+        category_match=bool(category_match),
         possible_duplicate=duplicate_match.possible_duplicate,
     )
+
     analysis_result = {
-        "image": ({**asdict(image_result), **image_payload} if image_result else image_payload),
-        "text": text_payload,
-        "suggested_category": suggested_category,
-        "priority": suggested_priority,
+        "review": {
+            **details,
+            "provider": config.nlp_provider,
+            "model_version": gemma_result.model_version,
+        },
+        "photo": {
+            "image_uploaded": image_uploaded,
+            "image_count": len(image_media_list),
+            "image_review_succeeded": image_review_succeeded,
+            "evidence_relationship": evidence_relationship,
+            "sam3_triggered": run_sam3,
+            "sam3_requested_classes": sam3_classes if run_sam3 else [],
+        },
+        "suggested_category": gemma_result.category,
         "duplicate": duplicate_payload,
     }
+    if fallback_reason:
+        # Developer-only. Serializers never expose `raw_result` to officials.
+        analysis_result["review"]["fallback_reason"] = fallback_reason
+
     flag_reasons = _flag_reasons(
         config,
-        label=text_result.label,
-        is_suspicious=text_result.is_suspicious,
-        is_irrelevant=text_result.is_irrelevant,
-        category_match=category_match,
+        is_suspicious=gemma_result.is_suspicious,
+        is_irrelevant=gemma_result.is_irrelevant,
+        label=gemma_result.label,
+        category_match=bool(category_match),
         possible_duplicate=duplicate_match.possible_duplicate,
+        urgent_attention=bool(details.get("urgent_attention")),
     )
+
     result_values = {
-        "status": image_status,
-        "image_objects": image_result.objects if image_result else [],
-        "yolo_confidence": image_result.confidence if image_result else None,
-        "severity_estimate": text_result.severity,
-        "nlp_validity": text_result.label,
-        "nlp_confidence": text_result.confidence,
-        "category_match": category_match,
+        "status": run_status,
+        "detected_objects": details.get("detected_objects") or [],
+        "severity_estimate": gemma_result.severity,
+        "nlp_validity": gemma_result.label,
+        "nlp_confidence": gemma_result.confidence,
+        "category_match": bool(category_match),
+        "image_review_succeeded": image_review_succeeded,
+        "evidence_relationship": evidence_relationship,
+        "privacy_scan_required": bool(details.get("privacy_scan_required")),
+        "privacy_scan_reasons": details.get("privacy_scan_reasons") or [],
+        "suspected_sensitive_classes": sam3_classes,
+        "urgent_attention": bool(details.get("urgent_attention")),
+        "missing_information": details.get("missing_information") or [],
+        "recommended_action": recommended_action,
         "recommendation": recommendation,
-        "explanation": _explanation(
-            text_result.label,
-            category_match,
-            possible_duplicate=duplicate_match.possible_duplicate,
-        ),
-        "model_version": f"yolo:{image_result.model_version if image_result else 'unavailable'};nlp:{text_result.model_version}",
+        "explanation": details.get("short_explanation") or "",
+        "model_version": f"gemma:{gemma_result.model_version}",
         "flagged": bool(flag_reasons),
         "flag_reasons": flag_reasons,
     }
+
+    media_to_queue: list[int] = []
     with transaction.atomic():
         current = ConcernAiAssessment.objects.select_for_update().get(pk=assessment.pk)
         execution = dict((current.raw_result or {}).get("execution") or {})
@@ -221,6 +291,14 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
             **({"execution": execution} if execution else {}),
         }
         current.save()
+
+        media_to_queue = _stage_media_privacy(
+            image_media_list,
+            run_sam3=run_sam3,
+            sam3_classes=sam3_classes,
+            image_review_succeeded=image_review_succeeded,
+        )
+
         # Soft gate only: this advisory summary never changes validation_status
         # or status. AI findings flag reports for official review, they never
         # auto-reject and never move the concern's real workflow state.
@@ -230,22 +308,70 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
             else "AI checks passed; cleared for official review."
         )
         Concern.objects.filter(pk=concern.pk).update(validation_summary=summary)
+
+        if media_to_queue:
+            from apps.concerns.tasks import enqueue_concern_media_privacy
+
+            for media_id in media_to_queue:
+                transaction.on_commit(
+                    lambda media_id=media_id: enqueue_concern_media_privacy(media_id)
+                )
     return current
+
+
+def _stage_media_privacy(image_media, *, run_sam3: bool, sam3_classes: list[str], image_review_succeeded) -> list[int]:
+    """Write each image's starting privacy state. Returns the ids to queue.
+
+    Three outcomes, and only the first one ever queues Roboflow work:
+
+    * Gemma asked for a scan → QUEUED, and the privacy task takes it from there.
+    * Gemma read the image and asked for nothing → NOT_REQUIRED, publicly
+      displayable. This is the honest state: nothing was found, which is not the
+      same as a guarantee that nothing is there.
+    * Gemma never managed to read the image → FAILED_RESTRICTED. The original
+      stays restricted and a person has to look at it. We do not guess.
+    """
+    queued: list[int] = []
+    for media in image_media:
+        if run_sam3 or sam3_classes:
+            media.privacy_state = ConcernMedia.PrivacyState.QUEUED
+            media.privacy_requested_classes = list(sam3_classes)
+            media.public_visible = False
+            media.privacy_failure = {}
+            queued.append(media.pk)
+        elif image_review_succeeded is True:
+            media.privacy_state = ConcernMedia.PrivacyState.NOT_REQUIRED
+            media.privacy_requested_classes = []
+            media.public_visible = True
+            media.privacy_failure = {}
+        else:
+            media.privacy_state = ConcernMedia.PrivacyState.FAILED_RESTRICTED
+            media.privacy_requested_classes = []
+            media.public_visible = False
+            media.privacy_failure = {"reason": "gemma_image_review_failed"}
+        media.save(
+            update_fields=[
+                "privacy_state",
+                "privacy_requested_classes",
+                "public_visible",
+                "privacy_failure",
+            ]
+        )
+    return queued
 
 
 def _flag_reasons(
     config,
     *,
-    label: str,
     is_suspicious: bool,
     is_irrelevant: bool,
+    label: str,
     category_match: bool,
     possible_duplicate: bool,
+    urgent_attention: bool,
 ) -> list[dict]:
-    # Driven by the classifier-reported `is_suspicious`/`is_irrelevant`
-    # booleans, not by sniffing substrings out of `label` — the label
-    # vocabulary is classifier-specific (keyword baseline vs. RoBERTa), the
-    # flags are not. `label` is kept only for the human-readable payload.
+    # Driven by the analyzer-reported booleans, not by sniffing substrings out
+    # of `label` — `label` is kept only for the human-readable payload.
     reasons: list[dict] = []
     if config.flag_suspicious and is_suspicious:
         reasons.append({"reason": "suspicious_text", "label": label})
@@ -255,32 +381,30 @@ def _flag_reasons(
         reasons.append({"reason": "category_mismatch", "configured_action": config.mismatch_action})
     if possible_duplicate:
         reasons.append({"reason": "possible_duplicate"})
+    if urgent_attention:
+        reasons.append({"reason": "urgent_attention"})
     return reasons
 
 
-def _recommendation(label: str, category_match: bool, *, possible_duplicate: bool = False) -> str:
+def _recommendation(action: str, *, category_match: bool, possible_duplicate: bool) -> str:
+    """One short line for the queue list. The full wording lives in the UI.
+
+    Duplicates and emergencies outrank the model's own suggestion because both
+    change what the official should open next, not just how they should judge
+    this one report.
+    """
+    if action == "escalate_as_emergency":
+        return "Possible emergency; notify the appropriate personnel."
     if possible_duplicate:
         return "Possible duplicate; compare the nearby report before routing."
-    if "irrelevant" in label or "fake" in label or "suspicious" in label:
-        return "Review carefully; possible irrelevant or suspicious report."
+    if action == "reject_as_irrelevant":
+        return "Review as a potentially unrelated submission."
+    if action == "request_more_information":
+        return "Request additional details from the resident."
+    if action == "accept_with_privacy_review":
+        return "Continue using the protected image."
     if not category_match:
-        return "Review category mismatch before assigning."
-    return "Likely valid; proceed with official review."
-
-
-def _explanation(label: str, category_match: bool, *, possible_duplicate: bool = False) -> str:
-    if possible_duplicate:
-        return "A similar report in the same category and barangay was found within 1 km. An official must decide whether to combine them."
-    if not category_match:
-        return f"NLP label `{label}` does not clearly match the submitted category."
-    return f"NLP label `{label}` and submitted category are consistent enough for human review."
-
-
-def _priority_guidance(*, severity: str, category_match: bool, image_confidence: float | None) -> dict:
-    if not category_match:
-        return {"level": "review", "reason": "Image/text evidence does not conclusively match the selected category."}
-    if severity == "high":
-        return {"level": "high", "reason": "Text baseline contains high-severity safety language."}
-    if image_confidence is not None and image_confidence >= 0.85:
-        return {"level": "standard", "reason": "Mapped image evidence is strong; official priority review remains required."}
-    return {"level": "standard", "reason": "Evidence supports the selected category without a high-severity signal."}
+        return "Review the category before assigning."
+    if action == "accept":
+        return "Likely valid; proceed with official review."
+    return "Review this report manually."

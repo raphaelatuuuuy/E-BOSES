@@ -19,8 +19,8 @@ from apps.accounts.services import sha256_file
 from apps.emergencies.models import EmergencyAlert, EmergencyResponderAssignment
 from apps.notifications.models import Notification
 from apps.concerns.ai import process_concern_ai
-from apps.concerns.ai.image_detector import ImageDetectionResult
 from apps.concerns.ai.text_classifier import TextClassificationResult
+from apps.concerns.ai_fixtures import gemma_result
 from apps.geo_services import classify_location
 
 from .models import Announcement, BarangayEvent, Concern, ConcernAiAssessment, ConcernAppeal, ConcernAssignment, ConcernChatAttachment, ConcernClassificationConfiguration, ConcernClarification, ConcernComment, ConcernMedia, ConcernOfficialRemark, ConcernResolutionEvidence, ConcernStatusEvent, ConcernVote, ContentFlag
@@ -107,16 +107,47 @@ class PrivateMediaAccessTests(APITestCase):
             ).exists()
         )
 
-    def test_public_can_access_community_image_concern_media_preview(self):
+    def test_public_can_access_a_privacy_cleared_community_image_preview(self):
+        # A privacy run cleared this image, which is the only thing that ever
+        # sets `public_visible`. Without it the preview is not served publicly.
+        self.media.privacy_state = ConcernMedia.PrivacyState.PROTECTED
+        self.media.public_visible = True
+        self.media.save(update_fields=["privacy_state", "public_visible"])
+
         response = self.client.get(f"/api/concerns/media/{self.media.pk}/preview/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response["Content-Type"], "image/jpeg")
         preview = b"".join(response.streaming_content)
         self.assertTrue(preview.startswith(b"\xff\xd8"))
+        # Never the original bytes, whatever else happens.
         self.assertNotEqual(preview, png_bytes())
-        self.media.refresh_from_db()
-        self.assertIn("redacted-v4-", self.media.preview_file.name)
+
+    def test_public_cannot_access_a_preview_no_privacy_run_has_cleared(self):
+        """Fail closed.
+
+        Previously any image on an accepted community concern was served to
+        anyone, because the concern's own visibility was the only gate. A photo
+        whose privacy processing failed, or never ran at all, was published
+        exactly like one that had been checked.
+        """
+        self.media.privacy_state = ConcernMedia.PrivacyState.FAILED_RESTRICTED
+        self.media.public_visible = False
+        self.media.save(update_fields=["privacy_state", "public_visible"])
+
+        response = self.client.get(f"/api/concerns/media/{self.media.pk}/preview/")
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_official_can_still_view_a_restricted_preview(self):
+        self.media.privacy_state = ConcernMedia.PrivacyState.SENSITIVE_REVIEW_REQUIRED
+        self.media.public_visible = False
+        self.media.save(update_fields=["privacy_state", "public_visible"])
+        self.client.force_authenticate(self.staff)
+
+        response = self.client.get(f"/api/concerns/media/{self.media.pk}/preview/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     def test_public_cannot_access_private_concern_media_preview(self):
         self.concern.visibility = Concern.Visibility.PRIVATE
@@ -129,7 +160,9 @@ class PrivateMediaAccessTests(APITestCase):
     def test_non_image_preview_does_not_leak_uploaded_filename(self):
         self.media.file = SimpleUploadedFile("secret-evidence.pdf", b"not image data", content_type="application/pdf")
         self.media.mime_type = "application/pdf"
-        self.media.save(update_fields=["file", "mime_type"])
+        self.media.privacy_state = ConcernMedia.PrivacyState.PROTECTED
+        self.media.public_visible = True
+        self.media.save(update_fields=["file", "mime_type", "privacy_state", "public_visible"])
 
         response = self.client.get(f"/api/concerns/media/{self.media.pk}/preview/")
         body = b"".join(response.streaming_content)
@@ -319,7 +352,7 @@ class ResidentDashboardAPITests(APITestCase):
 
         self.assertFalse(Concern.objects.filter(title="Should not create").exists())
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="", OLLAMA_API_KEY="")
+    @override_settings(OLLAMA_API_KEY="")
     def test_ai_command_marks_pending_assessment_not_configured(self):
         concern = Concern.objects.create(
             reporter=self.resident,
@@ -337,7 +370,7 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertIn("Concern", output.getvalue())
         self.assertIn("review", concern.ai_assessment.recommendation.lower())
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="", OLLAMA_API_KEY="test-key")
+    @override_settings(OLLAMA_API_KEY="test-key")
     def test_concern_ai_task_runs_base_text_assessment_without_external_model(self):
         from apps.concerns.tasks import process_concern_ai_task
 
@@ -357,17 +390,17 @@ class ResidentDashboardAPITests(APITestCase):
             model_version="gemma4:cloud",
             details={"relevance": "VALID"},
         )
-        with patch("apps.concerns.ai.pipeline.OllamaTextClassifier") as classifier:
-            classifier.return_value.classify.return_value = fake_result
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.return_value = fake_result
             task_result = process_concern_ai_task.apply(args=[concern.pk]).get()
 
         concern.ai_assessment.refresh_from_db()
         self.assertEqual(task_result["concern_id"], concern.pk)
         self.assertEqual(concern.ai_assessment.nlp_validity, "related_environment")
-        self.assertTrue(concern.ai_assessment.raw_result["text"]["inference_succeeded"])
-        self.assertEqual(concern.ai_assessment.raw_result["text"]["model_version"], "gemma4:cloud")
+        self.assertEqual(concern.ai_assessment.raw_result["review"]["model_version"], "gemma4:cloud")
+        self.assertEqual(concern.ai_assessment.status, ConcernAiAssessment.Status.COMPLETED)
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="configured.pt", OLLAMA_API_KEY="test-key")
+    @override_settings(OLLAMA_API_KEY="test-key")
     def test_ai_pipeline_stores_completed_assessment(self):
         concern = Concern.objects.create(
             reporter=self.resident,
@@ -383,24 +416,18 @@ class ResidentDashboardAPITests(APITestCase):
             model_version="gemma4:cloud",
             details={"relevance": "VALID"},
         )
-        with patch("apps.concerns.ai.pipeline.YoloImageDetector") as detector, patch("apps.concerns.ai.pipeline.OllamaTextClassifier") as classifier:
-            detector.return_value.detect.return_value = ImageDetectionResult(
-                objects=[{"label": "drainage", "confidence": 0.91}],
-                confidence=0.91,
-                model_version="fake-yolo",
-            )
-            classifier.return_value.classify.return_value = fake_result
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.return_value = fake_result
 
             assessment = process_concern_ai(concern.id)
 
         self.assertEqual(assessment.status, ConcernAiAssessment.Status.COMPLETED)
         self.assertEqual(assessment.nlp_validity, "related_infrastructure")
         self.assertTrue(assessment.category_match)
-        self.assertIn("fake-yolo", assessment.model_version)
-        self.assertIn("nlp:gemma4:cloud", assessment.model_version)
+        self.assertEqual(assessment.model_version, "gemma:gemma4:cloud")
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="", OLLAMA_API_KEY="test-key")
-    def test_ai_pipeline_uses_base_keyword_text_even_when_nlp_path_is_set(self):
+    @override_settings(OLLAMA_API_KEY="test-key")
+    def test_ai_pipeline_completes_a_text_only_report(self):
         concern = Concern.objects.create(
             reporter=self.resident,
             title="Tambak na basura",
@@ -416,25 +443,33 @@ class ResidentDashboardAPITests(APITestCase):
             model_version="gemma4:cloud",
             details={"relevance": "VALID"},
         )
-        with patch("apps.concerns.ai.pipeline.OllamaTextClassifier") as classifier:
-            classifier.return_value.classify.return_value = fake_result
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.return_value = fake_result
             assessment = process_concern_ai(concern.id)
+
+        self.assertEqual(assessment.status, ConcernAiAssessment.Status.COMPLETED)
+        self.assertEqual(assessment.nlp_validity, "related_environment")
+        # No photo, so "the image review failed" must not be claimed either.
+        self.assertIsNone(assessment.image_review_succeeded)
+        self.assertEqual(assessment.evidence_relationship, "image_unavailable")
+
+    @override_settings(OLLAMA_API_KEY="")
+    def test_ai_pipeline_without_an_api_key_is_not_configured_not_failed(self):
+        """No key is "switched off", not "broken" — and the report still stands."""
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="AI unavailable",
+            description="May malaking lubak sa kalsada malapit sa barangay hall.",
+            category=Concern.Category.OTHERS,
+        )
+
+        assessment = process_concern_ai(concern.id)
 
         self.assertEqual(assessment.status, ConcernAiAssessment.Status.NOT_CONFIGURED)
-        self.assertEqual(assessment.nlp_validity, "related_environment")
-        self.assertEqual(assessment.raw_result["text"]["model_version"], "gemma4:cloud")
-
-    @override_settings(EBOSES_YOLO_MODEL_PATH="configured.pt", OLLAMA_API_KEY="")
-    def test_ai_pipeline_image_failure_completes_with_base_text_review(self):
-        concern = Concern.objects.create(reporter=self.resident, title="AI failure", category=Concern.Category.OTHERS)
-        with patch("apps.concerns.ai.pipeline.YoloImageDetector") as detector:
-            detector.return_value.detect.side_effect = RuntimeError("model crashed")
-
-            assessment = process_concern_ai(concern.id)
-
-        self.assertEqual(assessment.status, ConcernAiAssessment.Status.FAILED)
-        self.assertEqual(assessment.raw_result["image"]["error"], "RuntimeError")
+        self.assertEqual(assessment.recommended_action, "manual_review")
         self.assertIn("review", assessment.recommendation.lower())
+        concern.refresh_from_db()
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.PENDING)
 
     def test_duplicate_concern_media_is_rejected_without_creating_report(self):
         response = self.client.post(
@@ -994,8 +1029,8 @@ class PhaseOneFoundationAPITests(APITestCase):
             is_on_duty=True,
         )
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="configured.pt")
-    def test_ai_pipeline_passes_stored_image_to_yolo_and_persists_category_mapping(self):
+    @override_settings(OLLAMA_API_KEY="test-key")
+    def test_ai_pipeline_sends_the_stored_photo_to_gemma_and_records_what_it_saw(self):
         concern = Concern.objects.create(
             reporter=self.resident,
             title="Broken traffic light",
@@ -1011,27 +1046,28 @@ class PhaseOneFoundationAPITests(APITestCase):
             file_size=media.size,
         )
 
-        def infer(paths, **kwargs):
-            self.assertEqual(len(paths), 1)
-            self.assertTrue(Path(paths[0]).exists())
-            return ImageDetectionResult(
-                objects=[{"label": "traffic light", "confidence": 0.93}],
-                confidence=0.93,
-                model_version="yolov8m.pt",
+        def analyze(*, title, description, selected_category, image):
+            # The photo must reach Gemma normalised, not as raw upload bytes.
+            self.assertIsNotNone(image)
+            self.assertEqual(image.mime_type, "image/jpeg")
+            return gemma_result(
+                category=Concern.Category.INFRASTRUCTURE,
+                detected_objects=["traffic light", "road"],
+                evidence_relationship="supports_report",
+                image_review_succeeded=True,
             )
 
-        with patch("apps.concerns.ai.pipeline.YoloImageDetector") as detector:
-            detector.return_value.detect.side_effect = infer
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.side_effect = analyze
             assessment = process_concern_ai(concern.pk)
 
         self.assertEqual(assessment.status, ConcernAiAssessment.Status.COMPLETED)
-        self.assertEqual(assessment.image_objects[0]["category"], Concern.Category.INFRASTRUCTURE)
-        self.assertEqual(assessment.raw_result["image"]["inference_status"], "available")
-        self.assertEqual(assessment.raw_result["text"]["inference_status"], "available")
-        self.assertIn("priority", assessment.raw_result)
+        self.assertEqual(assessment.detected_objects, ["traffic light", "road"])
+        self.assertTrue(assessment.image_review_succeeded)
+        self.assertEqual(assessment.evidence_relationship, "supports_report")
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="")
-    def test_ai_pipeline_marks_image_inference_unavailable_without_claiming_completion(self):
+    @override_settings(OLLAMA_API_KEY="test-key")
+    def test_text_only_report_records_no_photo_rather_than_a_failed_one(self):
         concern = Concern.objects.create(
             reporter=self.resident,
             title="Broken streetlight",
@@ -1039,14 +1075,19 @@ class PhaseOneFoundationAPITests(APITestCase):
             category=Concern.Category.INFRASTRUCTURE,
         )
 
-        assessment = process_concern_ai(concern.pk)
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.return_value = gemma_result(
+                category=Concern.Category.INFRASTRUCTURE,
+            )
+            assessment = process_concern_ai(concern.pk)
 
-        self.assertEqual(assessment.status, ConcernAiAssessment.Status.NOT_CONFIGURED)
-        self.assertEqual(assessment.raw_result["image"]["inference_status"], "unavailable")
-        self.assertFalse(assessment.raw_result["image"]["inference_succeeded"])
-        self.assertTrue(assessment.raw_result["text"]["inference_succeeded"])
+        self.assertEqual(assessment.status, ConcernAiAssessment.Status.COMPLETED)
+        self.assertIsNone(assessment.image_review_succeeded)
+        self.assertEqual(assessment.evidence_relationship, "image_unavailable")
+        self.assertEqual(assessment.raw_result["photo"]["image_uploaded"], False)
+        self.assertFalse(assessment.raw_result["photo"]["sam3_triggered"])
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="")
+    @override_settings(OLLAMA_API_KEY="test-key")
     def test_ai_pipeline_flags_similar_nearby_report_using_published_threshold(self):
         existing = Concern.objects.create(
             reporter=self.resident,
@@ -1082,7 +1123,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertLess(duplicate["distance_meters"], 100)
         self.assertIn("Possible duplicate", assessment.recommendation)
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="")
+    @override_settings(OLLAMA_API_KEY="test-key")
     def test_duplicate_match_identity_is_visible_to_official_but_hidden_from_resident(self):
         matched = Concern.objects.create(
             reporter=self.resident,
@@ -1153,7 +1194,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(assessment.official_reviewer_id, self.official.pk)
         self.assertTrue(AuditLog.objects.filter(action="concern.ai_assessment_reviewed", actor=self.official).exists())
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="")
+    @override_settings(OLLAMA_API_KEY="test-key")
     def test_ai_pipeline_category_mismatch_flags_for_review_without_touching_validation_gate(self):
         concern = Concern.objects.create(
             reporter=self.resident,
@@ -1180,7 +1221,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(concern.status, Concern.Status.SUBMITTED)
         self.assertIn("flagged", concern.validation_summary.lower())
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="")
+    @override_settings(OLLAMA_API_KEY="test-key")
     def test_ai_pipeline_clean_run_is_not_flagged(self):
         concern = Concern.objects.create(
             reporter=self.resident,
@@ -1190,7 +1231,11 @@ class PhaseOneFoundationAPITests(APITestCase):
             validation_status=Concern.ValidationStatus.ACCEPTED,
         )
 
-        assessment = process_concern_ai(concern.pk)
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.return_value = gemma_result(
+                category=Concern.Category.INFRASTRUCTURE,
+            )
+            assessment = process_concern_ai(concern.pk)
 
         self.assertTrue(assessment.category_match)
         self.assertFalse(assessment.flagged)
@@ -1199,7 +1244,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(concern.validation_summary, "AI checks passed; cleared for official review.")
         self.assertEqual(concern.validation_status, Concern.ValidationStatus.ACCEPTED)
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="")
+    @override_settings(OLLAMA_API_KEY="test-key")
     def test_flagged_completion_notifies_each_verified_official_once(self):
         from apps.concerns.tasks import process_concern_ai_task
 
@@ -1222,7 +1267,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         )
         self.assertEqual(notifications.count(), 1)
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="")
+    @override_settings(OLLAMA_API_KEY="test-key")
     def test_managed_concern_list_ai_flagged_filter_excludes_after_official_decision(self):
         concern = Concern.objects.create(
             reporter=self.resident,
@@ -1250,7 +1295,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(excluded_response.status_code, status.HTTP_200_OK)
         self.assertNotIn(concern.pk, [item["id"] for item in excluded_response.data])
 
-    @override_settings(EBOSES_YOLO_MODEL_PATH="")
+    @override_settings(OLLAMA_API_KEY="test-key")
     def test_ai_review_related_decision_clears_flag_but_keeps_flag_reasons(self):
         concern = Concern.objects.create(
             reporter=self.resident,

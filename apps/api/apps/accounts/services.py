@@ -91,8 +91,9 @@ class DevelopmentOTPProvider(BaseOTPProvider):
         # Allow in local development even when DEBUG is temporarily false.
         if not (settings.DEBUG or getattr(settings, "IS_LOCAL_DEVELOPMENT", False)):
             raise ImproperlyConfigured("Development OTP provider is only allowed in local development.")
+        # Console only, never the log file: a log with codes in it is a
+        # credential store nobody remembers to protect.
         print(f"Development OTP for {destination} ({purpose}): {code}", flush=True)
-        logger.info("Development OTP for %s (%s): %s", destination, purpose, code)
 
 
 class DjangoEmailOTPProvider(BaseOTPProvider):
@@ -108,18 +109,21 @@ class DjangoEmailOTPProvider(BaseOTPProvider):
             raise OTPDeliveryError("Unable to deliver email OTP.")
 
 
-class HTTPSMSOTPProvider(BaseOTPProvider):
+class GatewaySMSOTPProvider(BaseOTPProvider):
+    """Send every SMS code through the one barangay gateway.
+
+    Password reset and OTP resend used to post to their own
+    SMS_OTP_WEBHOOK_URL, so a deployment that configured only the emergency
+    gateway had a working registration flow and a silently broken password
+    reset. There is now a single outbound path: OUTBOUND_SMS_*.
+    """
+
     def deliver(self, destination, code, purpose):
-        url = getattr(settings, "SMS_OTP_WEBHOOK_URL", "")
-        if not url:
-            raise ImproperlyConfigured("SMS_OTP_WEBHOOK_URL is required for http_sms OTP delivery.")
-        response = httpx.post(
-            url,
-            json={"to": destination, "code": code, "purpose": purpose},
-            headers={"Authorization": f"Bearer {getattr(settings, 'SMS_OTP_WEBHOOK_TOKEN', '')}"},
-            timeout=10,
-        )
-        response.raise_for_status()
+        deliver_registration_otp(destination, code)
+
+
+# Kept so an existing SMS_OTP_PROVIDER=http_sms setting does not crash on boot.
+HTTPSMSOTPProvider = GatewaySMSOTPProvider
 
 
 class DisabledOTPProvider(BaseOTPProvider):
@@ -128,6 +132,11 @@ class DisabledOTPProvider(BaseOTPProvider):
 
 
 def get_otp_provider(channel):
+    if channel == OTPChallenge.Channel.SMS:
+        # SMS always goes through the gateway; there is nothing else to pick.
+        provider_name = settings.SMS_OTP_PROVIDER
+        if provider_name in {"http_sms", "gateway"}:
+            return GatewaySMSOTPProvider()
     provider_name = (
         settings.EMAIL_OTP_PROVIDER
         if channel == OTPChallenge.Channel.EMAIL
@@ -136,7 +145,8 @@ def get_otp_provider(channel):
     providers = {
         "development": DevelopmentOTPProvider,
         "django_email": DjangoEmailOTPProvider,
-        "http_sms": HTTPSMSOTPProvider,
+        "http_sms": GatewaySMSOTPProvider,
+        "gateway": GatewaySMSOTPProvider,
         "disabled": DisabledOTPProvider,
     }
     try:
@@ -630,36 +640,119 @@ def create_otp_challenge(user, channel, purpose, destination):
     return challenge, code
 
 
-def create_phone_otp_challenge(phone_number):
+OTP_EXPIRY_MINUTES = 5
+OTP_RESEND_COOLDOWN_SECONDS = 60
+OTP_MAX_PER_NUMBER_PER_HOUR = 5
+
+
+class OTPRateLimited(Exception):
+    """Raised when a resend is asked for too soon or too often."""
+
+    def __init__(self, message, retry_after=0):
+        super().__init__(message)
+        self.retry_after = int(retry_after)
+
+
+def _otp_rate_key(destination):
+    return f"otp-window:{hash_destination(destination)}"
+
+
+def check_otp_rate_limit(destination):
+    """Per-destination limits, on top of the IP-scoped DRF throttle.
+
+    The DRF throttle is keyed by IP, so one attacker on a mobile network can
+    cycle addresses and keep hammering a single victim's number. This limits
+    the number itself.
+    """
+    now = timezone.now()
+    latest = (
+        PhoneOTPChallenge.objects.filter(phone_number=destination)
+        .order_by("-created_at")
+        .first()
+    )
+    if latest:
+        elapsed = (now - latest.created_at).total_seconds()
+        if elapsed < OTP_RESEND_COOLDOWN_SECONDS:
+            raise OTPRateLimited(
+                "Please wait before asking for another code.",
+                retry_after=OTP_RESEND_COOLDOWN_SECONDS - elapsed,
+            )
+
+    recent = PhoneOTPChallenge.objects.filter(
+        phone_number=destination,
+        created_at__gte=now - timedelta(hours=1),
+    ).count()
+    if recent >= OTP_MAX_PER_NUMBER_PER_HOUR:
+        raise OTPRateLimited(
+            "Too many codes were requested for this number. Try again later.",
+            retry_after=OTP_RESEND_COOLDOWN_SECONDS * 5,
+        )
+
+
+def create_phone_otp_challenge(phone_number, *, enforce_rate_limit=True):
+    """Issue a registration OTP for a phone number.
+
+    The code is generated and verified here; the gateway only delivers the
+    finished message. It is never logged, never returned in an API response,
+    and never written to the outbound SMS record.
+    """
+    if enforce_rate_limit:
+        check_otp_rate_limit(phone_number)
+
+    # Any code still outstanding for this number stops working the moment a new
+    # one is issued, so a resend cannot leave two valid codes in circulation.
+    PhoneOTPChallenge.objects.filter(
+        phone_number=phone_number,
+        consumed_at__isnull=True,
+        verified_at__isnull=True,
+    ).update(consumed_at=timezone.now())
+
     code = f"{secrets.randbelow(1_000_000):06d}"
     challenge = PhoneOTPChallenge.objects.create(
         phone_number=phone_number,
         destination_hash=hash_destination(phone_number),
         code_hash=make_password(code),
-        expires_at=timezone.now() + timedelta(minutes=10),
+        expires_at=timezone.now() + timedelta(minutes=OTP_EXPIRY_MINUTES),
     )
     try:
-        deliver_otp(OTPChallenge.Channel.SMS, phone_number, code, OTPChallenge.Purpose.REGISTRATION)
-    except ImproperlyConfigured as exc:
-        # Local / misconfigured SMS: still keep the challenge so sign-up can proceed.
-        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) or settings.DEBUG:
-            print(f"SMS OTP delivery skipped ({exc}). Code for {phone_number}: {code}", flush=True)
-            logger.warning("SMS OTP delivery skipped for %s: %s (code=%s)", phone_number, exc, code)
-        else:
-            challenge.delete()
-            raise OTPDeliveryError(
-                "SMS verification is not available right now. Please try again later or contact the barangay office."
-            ) from exc
+        deliver_registration_otp(phone_number, code)
     except Exception as exc:
-        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) or settings.DEBUG:
-            print(f"SMS OTP delivery failed ({exc}). Code for {phone_number}: {code}", flush=True)
-            logger.exception("SMS OTP delivery failed for %s (code=%s)", phone_number, code)
-        else:
-            challenge.delete()
-            raise OTPDeliveryError(
-                "We could not send the SMS code. Check your number and try again in a moment."
-            ) from exc
+        challenge.delete()
+        logger.warning("Phone OTP delivery failed: %s", type(exc).__name__)
+        raise OTPDeliveryError(
+            "SMS verification is not available right now. Please try again in a moment."
+        ) from exc
     return challenge, code
+
+
+def deliver_registration_otp(phone_number, code):
+    """Compose the message here and hand the finished text to the gateway."""
+    from apps.sms.gateway import SmsConfigurationError, deliver, queue_sms
+    from apps.sms.models import SmsPurpose
+    from apps.sms.templates import otp_message
+
+    body = otp_message(code)
+    message = queue_sms(
+        phone_number,
+        body,
+        purpose=SmsPurpose.OTP,
+        idempotency_key=f"otp:{hash_destination(phone_number)}:{timezone.now().timestamp():.0f}",
+    )
+    if message is None:
+        raise OTPDeliveryError("That number cannot receive SMS.")
+
+    # queue_sms hands off on transaction commit. Registration is synchronous, so
+    # send now and surface a gateway outage immediately instead of telling the
+    # user a code is coming that never arrives.
+    try:
+        result = deliver(message.pk, phone_number, body)
+    except Exception as exc:
+        raise OTPDeliveryError("The SMS gateway did not accept the code.") from exc
+
+    if result == "skipped":
+        if settings.DEBUG or getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+            return
+        raise OTPDeliveryError("The SMS gateway is not available right now.")
 
 
 def normalize_registration_email(email: str) -> str:
@@ -680,8 +773,7 @@ def create_email_otp_challenge(email):
         deliver_otp(OTPChallenge.Channel.EMAIL, email, code, OTPChallenge.Purpose.REGISTRATION)
     except ImproperlyConfigured as exc:
         if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) or settings.DEBUG:
-            print(f"Email OTP delivery skipped ({exc}). Code for {email}: {code}", flush=True)
-            logger.warning("Email OTP delivery skipped for %s: %s (code=%s)", email, exc, code)
+            logger.warning("Email OTP delivery skipped: %s", type(exc).__name__)
         else:
             challenge.delete()
             raise OTPDeliveryError(
@@ -689,8 +781,7 @@ def create_email_otp_challenge(email):
             ) from exc
     except Exception as exc:
         if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) or settings.DEBUG:
-            print(f"Email OTP delivery failed ({exc}). Code for {email}: {code}", flush=True)
-            logger.exception("Email OTP delivery failed for %s (code=%s)", email, code)
+            logger.warning("Email OTP delivery failed: %s", type(exc).__name__)
         else:
             challenge.delete()
             raise OTPDeliveryError(

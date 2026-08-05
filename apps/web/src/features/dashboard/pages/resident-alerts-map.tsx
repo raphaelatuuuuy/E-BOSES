@@ -81,6 +81,7 @@ import {
 } from "@/features/dashboard/lib/resident-map-utils"
 import { useIsDesktop } from "@/features/dashboard/lib/shell"
 import { websocketTicket, websocketUrl } from "@/lib/api"
+import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
 
 type ChipKey = "all" | "emergencies" | ConcernCategory
 
@@ -583,7 +584,7 @@ export default function ResidentAlertsMapPage() {
             }
           } else if (message.payload?.emergency) {
             const emergency = message.payload.emergency
-            const active = ["submitted", "routed", "acknowledged", "en_route", "nearby", "arrived"].includes(emergency.status)
+            const active = isEmergencyActive(emergency.status)
             setEmergencies((current) => active
               ? current.some((item) => item.id === emergency.id)
                 ? current.map((item) => item.id === emergency.id ? emergency : item)

@@ -6,6 +6,7 @@ import type {
 } from "@/features/dashboard/api"
 
 import type leaflet from "leaflet"
+import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
 
 export type LayerKey =
   | "boundary"
@@ -51,7 +52,10 @@ export const defaultLayers: Record<LayerKey, boolean> = {
  * which meant one screen could show a pin with no matching row.
  */
 export const activeConcernStatuses = new Set(["submitted", "under_review", "assigned", "in_progress"])
-export const activeEmergencyStatuses = new Set(["submitted", "routed", "acknowledged", "en_route", "nearby", "arrived"])
+// Derived from the shared list so new statuses do not silently drop pins.
+export const activeEmergencyStatuses = {
+  has: (status: string) => isEmergencyActive(status),
+}
 
 export function isActiveConcern(concern: { status: string }) {
   return activeConcernStatuses.has(concern.status)
@@ -62,6 +66,7 @@ export function isActiveEmergency(emergency: { status: string }) {
 }
 
 export function validCoord(lat?: string | null, lng?: string | null) {
+  if (lat == null || lng == null || lat === "" || lng === "") return null
   const latitude = Number(lat)
   const longitude = Number(lng)
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null

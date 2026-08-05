@@ -133,10 +133,10 @@ function DialogHeader({
       <button
         type="button"
         onClick={() => setOpen(false)}
-        className="ml-4 flex size-7 shrink-0 items-center justify-center rounded-lg text-black transition-colors hover:bg-muted hover:text-black sm:size-8"
+        className="ml-4 flex size-7 shrink-0 items-center justify-center rounded-lg text-foreground transition-colors hover:bg-muted sm:size-8"
         aria-label="Close"
       >
-        <XIcon className="size-4 text-black" />
+        <XIcon className="size-4 text-foreground" />
       </button>
     </div>
   )

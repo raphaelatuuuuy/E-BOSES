@@ -33,8 +33,10 @@ c2pa-python>=0.5.0
 imagehash>=4.3,<5
 opencv-python-headless>=4.8,<5
 
-# Concern classification (downloads are pinned during setup/deployment)
-ultralytics>=8.4,<9
+# Concern review (Gemma) and privacy segmentation (SAM3 via Roboflow)
+# SAM3 is called over plain HTTP with `requests` above rather than through
+# roboflow's `inference-sdk`: every published version of that package requires
+# Python <3.13, and this project runs 3.13.
 ollama>=0.5,<1
 
 # Official OCR template testing

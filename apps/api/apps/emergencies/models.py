@@ -31,6 +31,46 @@ class MapGeometry(models.Model):
         return f"{self.name} ({self.osm_type}{self.osm_id})"
 
 
+DEFAULT_HOTLINES = [
+    {"label": "Marikina Rescue", "number": "161"},
+    {"label": "Emergency", "number": "911"},
+]
+
+
+class MapAddressPoint(models.Model):
+    """A house number imported from OpenStreetMap.
+
+    Street geometry alone answers "which road is this pin on"; these answer
+    "which house". Held locally so address lookup never depends on a third-party
+    API that can rate-limit us mid-emergency.
+    """
+
+    osm_type = models.CharField(max_length=1, default="N")
+    osm_id = models.PositiveBigIntegerField()
+    house_number = models.CharField(max_length=32, blank=True)
+    street = models.CharField(max_length=160, blank=True, db_index=True)
+    name = models.CharField(max_length=200, blank=True)
+    latitude = models.DecimalField(max_digits=10, decimal_places=7)
+    longitude = models.DecimalField(max_digits=10, decimal_places=7)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["osm_type", "osm_id"], name="unique_map_address_osm"),
+        ]
+        indexes = [
+            models.Index(fields=["latitude", "longitude"], name="emerg_addr_coords"),
+        ]
+
+    def __str__(self):
+        return f"{self.house_number} {self.street}".strip() or f"Address {self.osm_id}"
+
+    @property
+    def label(self) -> str:
+        parts = [self.house_number, self.street or self.name]
+        return " ".join(part for part in parts if part).strip()
+
+
 class MapDispatchPolicy(models.Model):
     class OutOfZoneAction(models.TextChoices):
         BLOCK = "block", "Block submission"
@@ -53,6 +93,16 @@ class MapDispatchPolicy(models.Model):
     # and redeploying the app. Blank means the SOS screen offers no SMS option,
     # which is the honest default until a barangay has a number to publish.
     emergency_sms_number = models.CharField(max_length=16, blank=True)
+    # Outside these hours the SOS button warns and points at the hotlines, but
+    # never blocks: an emergency at 2am is still an emergency, and a disabled
+    # button would simply lose the report.
+    duty_hours_start = models.TimeField(null=True, blank=True)
+    duty_hours_end = models.TimeField(null=True, blank=True)
+    hotlines = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='[{"label": "Marikina Rescue", "number": "161"}]',
+    )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -82,8 +132,26 @@ class MapDispatchPolicy(models.Model):
             "witness_radius_meters": int(self.witness_radius_meters),
             "responder_nearby_radius_meters": int(self.responder_nearby_radius_meters),
             "emergency_sms_number": self.emergency_sms_number,
+            "duty_hours_start": self.duty_hours_start.strftime("%H:%M") if self.duty_hours_start else None,
+            "duty_hours_end": self.duty_hours_end.strftime("%H:%M") if self.duty_hours_end else None,
+            "hotlines": self.hotlines or DEFAULT_HOTLINES,
             "updated_at": self.updated_at,
         }
+
+    def is_within_duty_hours(self, moment=None) -> bool:
+        """True when barangay responders are on their normal shift.
+
+        No configured window means always on duty, which is the safe default.
+        A window that wraps past midnight (e.g. 20:00-06:00) is handled.
+        """
+        if not self.duty_hours_start or not self.duty_hours_end:
+            return True
+        from django.utils import timezone as dj_timezone
+
+        now = (moment or dj_timezone.localtime()).time()
+        if self.duty_hours_start <= self.duty_hours_end:
+            return self.duty_hours_start <= now <= self.duty_hours_end
+        return now >= self.duty_hours_start or now <= self.duty_hours_end
 
     def __str__(self):
         return f"{self.barangay} dispatch policy"
@@ -209,16 +277,43 @@ class EmergencyAlert(models.Model):
         DRUG_RELATED = "drug_related", "Drug-Related Incident"
 
     class Status(models.TextChoices):
-        SUBMITTED = "submitted", "Submitted"
-        ROUTED = "routed", "Routed"
-        ACKNOWLEDGED = "acknowledged", "Acknowledged"
-        EN_ROUTE = "en_route", "En Route"
-        NEARBY = "nearby", "Nearby"
-        ARRIVED = "arrived", "Arrived"
+        SUBMITTED = "submitted", "Emergency Received"
+        ROUTING = "routing", "Finding Available Responder"
+        ROUTED = "routed", "Responder Assigned"
+        AWAITING_ACKNOWLEDGMENT = "awaiting_acknowledgment", "Awaiting Responder"
+        ACKNOWLEDGED = "acknowledged", "Responder Confirmed"
+        EN_ROUTE = "en_route", "Responder En Route"
+        NEARBY = "nearby", "Responder Nearby"
+        ARRIVED = "arrived", "Responder at Scene"
+        RESIDENT_SAFE = "resident_safe", "Resident Reported Safe"
+        BACKUP_REQUESTED = "backup_requested", "Backup Requested"
+        BACKUP_ASSIGNED = "backup_assigned", "Backup Assigned"
+        IN_PROGRESS = "in_progress", "Response in Progress"
+        TRANSFER_REQUIRED = "transfer_required", "Transfer Required"
+        ESCALATION_REQUIRED = "escalation_required", "Escalation Required"
         RESOLVED = "resolved", "Resolved"
         FALSE_ALARM = "false_alarm", "False Alarm"
         INVALID = "invalid", "Invalid"
         CANCELLED = "cancelled", "Cancelled"
+        CLOSED = "closed", "Closed"
+
+    class LocationConfidence(models.TextChoices):
+        CONFIRMED = "confirmed", "Confirmed"
+        REPORTED = "reported", "Reported area only"
+        UNKNOWN = "unknown", "Unknown"
+        OUTSIDE_AREA = "outside_area", "Outside service area"
+
+    class ReverseGeocodingStatus(models.TextChoices):
+        SUCCESS = "success", "Success"
+        FAILED = "failed", "Failed"
+        SKIPPED = "skipped", "Skipped"
+        PENDING = "pending", "Pending"
+
+    class ReporterVerification(models.TextChoices):
+        ACCOUNT = "account", "Signed-in account"
+        REGISTERED_NUMBER = "registered", "Registered mobile number"
+        UNVERIFIED_NUMBER = "unverified", "Mobile number not verified"
+        NEEDS_REVIEW = "needs_review", "Account match requires review"
 
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
@@ -227,11 +322,46 @@ class EmergencyAlert(models.Model):
     note = models.TextField(blank=True)
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.SUBMITTED)
     barangay = models.CharField(max_length=120, default="Marikina Heights")
-    latitude = models.DecimalField(max_digits=10, decimal_places=7)
-    longitude = models.DecimalField(max_digits=10, decimal_places=7)
+    # Nullable since the SMS fallback: a resident can text "This is a Fire
+    # emergency near Champaca Street" from a phone with no GPS fix. That is a
+    # real emergency and must be saved and routed. Substituting a barangay
+    # centroid instead would put a confident-looking pin on the wrong street,
+    # so an alert with no coordinates carries none.
+    latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
     location_source = models.CharField(max_length=32, default="gps")
     location_accuracy = models.FloatField(null=True, blank=True)
     address = models.CharField(max_length=255, blank=True)
+    # The area exactly as the resident described it. Never overwritten by
+    # geocoding, so an official can always see what was actually reported.
+    reported_area = models.CharField(max_length=255, blank=True)
+    # What reverse geocoding made of the coordinates. Shown to officials in
+    # preference to raw numbers.
+    resolved_location = models.CharField(max_length=255, blank=True)
+    reverse_geocoding_status = models.CharField(
+        max_length=16,
+        choices=ReverseGeocodingStatus.choices,
+        default=ReverseGeocodingStatus.SKIPPED,
+    )
+    location_confidence = models.CharField(
+        max_length=16,
+        choices=LocationConfidence.choices,
+        default=LocationConfidence.CONFIRMED,
+    )
+    reporter_verification = models.CharField(
+        max_length=16,
+        choices=ReporterVerification.choices,
+        default=ReporterVerification.ACCOUNT,
+    )
+    reporter_contact_number = models.CharField(
+        max_length=24,
+        blank=True,
+        help_text="Sender number for SMS-originated alerts. Masked everywhere except the audited reveal endpoint.",
+    )
+    # Answers from the SOS triage questions, or parsed back out of the SMS.
+    triage = models.JSONField(default=dict, blank=True)
+    category_needs_confirmation = models.BooleanField(default=False)
+    unresolved_fields = models.JSONField(default=list, blank=True)
     media_warnings = models.JSONField(default=list, blank=True)
     resolution_report = models.TextField(blank=True)
     status_version = models.PositiveIntegerField(default=0)
@@ -289,6 +419,29 @@ class EmergencyTypeRoleMap(models.Model):
         on_delete=models.CASCADE,
         related_name="emergency_role_maps",
     )
+    # Used for backup requests and acknowledgement timeouts, never for initial
+    # dispatch — sending every supporting unit to every call would strip the
+    # barangay of responders for the next emergency.
+    supporting_department = models.ForeignKey(
+        "concerns.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="emergency_support_maps",
+    )
+    escalation_department = models.ForeignKey(
+        "concerns.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="emergency_escalation_maps",
+    )
+    service_area = models.CharField(max_length=120, blank=True)
+    acknowledgment_timeout_seconds = models.PositiveIntegerField(
+        default=300,
+        help_text="Seconds before an unacknowledged assignment is reassigned or escalated.",
+    )
+    auto_backup_on_timeout = models.BooleanField(default=True)
     responder_unit = models.CharField(max_length=24)
     priority = models.PositiveSmallIntegerField(default=0)
     requires_shift = models.BooleanField(default=True)
@@ -427,6 +580,11 @@ class ResponderShift(models.Model):
 class EmergencyStatusEvent(models.Model):
     alert = models.ForeignKey(EmergencyAlert, on_delete=models.CASCADE, related_name="status_events")
     status = models.CharField(max_length=32, choices=EmergencyAlert.Status.choices)
+    # What happened, independent of the alert's status at the time. Without
+    # this every entry rendered as the current status, so a timeline of five
+    # different events all read "Emergency received".
+    event_key = models.CharField(max_length=40, blank=True)
+    label = models.CharField(max_length=120, blank=True)
     note = models.CharField(max_length=255, blank=True)
     actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="emergency_status_events")
     created_at = models.DateTimeField(auto_now_add=True)

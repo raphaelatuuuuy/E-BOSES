@@ -4,26 +4,26 @@ import { toast } from "sonner"
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
-  CopyIcon,
+  EyeOffIcon,
   MegaphoneIcon,
   SearchIcon,
-  ShieldCheckIcon,
   SlidersHorizontalIcon,
 } from "lucide-react"
 
-import { Button } from "@workspace/ui/components/button"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
-  listConcernAppeals,
   listManagedConcerns,
   listMyConcerns,
-  reviewConcernAppeal,
   type Concern,
-  type ConcernAppeal,
+  type ConcernMedia,
 } from "@/features/dashboard/api"
-import { concernNeedsReview, concernFlagReasons } from "@/features/dashboard/lib/concern-signals"
+import { concernNeedsReview } from "@/features/dashboard/lib/concern-signals"
+import { PRIVACY_STATE_BADGE, privacyState } from "@/features/dashboard/lib/plain-language"
+import { ReviewAssistant } from "@/features/dashboard/components/concerns/review-assistant"
+import { ConcernAppealsPanel } from "@/features/dashboard/components/concerns/concern-appeals-panel"
+import { MediaBlurEditor } from "@/features/dashboard/components/concerns/media-blur-editor"
 import { ReportChatPanel } from "@/features/dashboard/components/report-chat-panel"
 import { ReportLocationMap } from "@/features/dashboard/components/report-location-map"
 import { ReportStatusDialog, type StatusDialogMode } from "@/features/dashboard/components/report-status-dialog"
@@ -35,8 +35,6 @@ import {
   concernCategoryLabel,
   filters,
   formatDate,
-  formatEventTime,
-  humanizeFlagReason,
   openReportMedia,
   statusColors,
   statusGroup,
@@ -206,290 +204,8 @@ function EvidencePreviewGrid({ media }: { media: Concern["media"] }) {
   )
 }
 
-/**
- * AI guidance, in plain language.
- *
- * This replaced a four-section panel that spoke to the engineer who built it
- * rather than the barangay official reading it: "Image Detection (YOLO)",
- * "Description Analysis (NLP)", "Model: multilingual-keyword-v1 (base)",
- * "Pending until the base assessment worker completes", "not_configured".
- * None of that changes what an official does next, and several lines said the
- * same thing three ways.
- *
- * It is also read-only now. The old "Official AI review" form asked for a
- * decision and a written justification for agreeing or disagreeing with the
- * model — a second, parallel decision record sitting next to the real status
- * update, which is the one the resident actually sees. Officials record their
- * decision by moving the report's status; this panel only tells them what the
- * automatic check noticed.
- */
-function AiGuidancePanel({ report }: { report: Concern }) {
-  const navigate = useNavigate()
-  const ai = report.ai_assessment
-  const status = ai?.status ?? "not_configured"
-  const ready = status === "completed"
-  const photoPercent = ai?.yolo_confidence == null ? null : Math.round(ai.yolo_confidence * 100)
-  const textPercent = ai?.nlp_confidence == null ? null : Math.round(ai.nlp_confidence * 100)
-
-  // Plain-language state. No model names, no worker/queue vocabulary.
-  const state = {
-    pending: {
-      title: "Still checking this report",
-      detail: "You can review and act on it now — the automatic check is not required.",
-      tone: "border-status-active/40 bg-status-active-surface text-status-active-ink",
-    },
-    completed: {
-      title: ai?.recommendation || "Automatic check finished",
-      detail: "A suggestion only. Your decision is what counts.",
-      tone: "border-status-closed/40 bg-status-closed-surface text-status-closed-ink",
-    },
-    failed: {
-      title: "The check could not finish",
-      detail: "Nothing is blocked — review the report yourself as usual.",
-      tone: "border-severity-critical/40 bg-severity-critical-surface text-severity-critical-ink",
-    },
-    not_configured: {
-      title: "Automatic checking is off",
-      detail: "Photo checking has not been set up yet. Review the report yourself as usual.",
-      tone: "border-severity-moderate/40 bg-severity-moderate-surface text-severity-moderate-ink",
-    },
-  }[status]
-
-  const detectedTags = ai?.image_objects?.length ? ai.image_objects.map(String) : []
-
-  return (
-    <section className="space-y-3">
-      <div className={cn("rounded-panel border p-4", state.tone)}>
-        <div className="flex items-start gap-3">
-          <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-control bg-card/60">
-            <ShieldCheckIcon className="size-4" />
-          </span>
-          <div className="min-w-0">
-            <p className="text-sm font-semibold">{state.title}</p>
-            <p className="mt-0.5 text-xs font-medium opacity-90">{state.detail}</p>
-          </div>
-        </div>
-      </div>
-
-      {ready ? (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="rounded-panel border border-card-line bg-card p-3">
-            <p className="text-micro uppercase text-subtle-foreground">What the photos show</p>
-            {detectedTags.length ? (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {detectedTags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="rounded-pill bg-card-raised px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
-                  >
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <p className="mt-2 text-xs font-medium text-subtle-foreground">
-                Nothing specific was recognised in the photos.
-              </p>
-            )}
-            {photoPercent != null ? (
-              <p className="mt-2 text-xs font-medium text-subtle-foreground">
-                {photoPercent >= 75 ? "Fairly sure" : photoPercent >= 45 ? "Somewhat sure" : "Not very sure"}
-              </p>
-            ) : null}
-          </div>
-
-          <div className="rounded-panel border border-card-line bg-card p-3">
-            <p className="text-micro uppercase text-subtle-foreground">What the description says</p>
-            <p className="mt-2 text-xs font-medium text-foreground">
-              {ai?.explanation || "The description matches the chosen category."}
-            </p>
-            {textPercent != null ? (
-              <p className="mt-2 text-xs font-medium text-subtle-foreground">
-                {textPercent >= 75 ? "Fairly sure" : textPercent >= 45 ? "Somewhat sure" : "Not very sure"}
-              </p>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
-      {ai?.possible_duplicate ? (
-        <div className="rounded-panel border border-severity-moderate/40 bg-severity-moderate-surface p-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <CopyIcon className="size-4 shrink-0 text-severity-moderate-ink" />
-            <p className="text-sm font-semibold text-severity-moderate-ink">
-              This may already have been reported
-            </p>
-          </div>
-          <p className="mt-1 text-xs font-medium leading-5 text-severity-moderate-ink">
-            Check both before assigning. Keep them separate if they are different incidents.
-          </p>
-          {ai.duplicate_match ? (
-            <div className="mt-2.5 rounded-control border border-severity-moderate/40 bg-card p-2.5">
-              <p className="truncate text-sm font-semibold text-brand-navy">{ai.duplicate_match.title}</p>
-              <p className="mt-0.5 text-xs font-medium text-subtle-foreground">
-                {ai.duplicate_match.status.replace(/_/g, " ")}
-                {ai.duplicate_distance_meters != null ? ` · ${ai.duplicate_distance_meters} m away` : ""}
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="mt-2 w-full border-severity-moderate/40 bg-card text-severity-moderate-ink hover:bg-severity-moderate-surface"
-                onClick={() => navigate(`/dashboard/reports/${ai.duplicate_match?.public_id}`)}
-              >
-                Open the other report
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </section>
-  )
-}
-
-function OfficialConcernAppealsPanel({
-  appeals,
-  reports,
-  onOpenReport,
-  onAppealReviewed,
-  onRefresh,
-}: {
-  appeals: ConcernAppeal[]
-  reports: Concern[]
-  onOpenReport: (report: Concern) => void
-  onAppealReviewed: (appeal: ConcernAppeal) => void
-  onRefresh: () => Promise<void>
-}) {
-  const [busy, setBusy] = useState<string | null>(null)
-  const [notes, setNotes] = useState<Record<number, string>>({})
-  const pending = appeals.filter((appeal) => appeal.status === "submitted")
-  const visible = (pending.length ? pending : appeals).slice(0, 4)
-
-  function relatedReport(appeal: ConcernAppeal) {
-    return reports.find(
-      (report) =>
-        report.id === appeal.concern_id ||
-        report.tracking_id === appeal.concern_tracking_id,
-    )
-  }
-
-  async function decide(appeal: ConcernAppeal, status: "approved" | "denied") {
-    const note = notes[appeal.id]?.trim() || (status === "approved" ? "Appeal approved after official review." : "Appeal denied after official review.")
-    setBusy(`${appeal.id}-${status}`)
-    try {
-      const next = await reviewConcernAppeal(appeal.id, { status, decision_note: note })
-      onAppealReviewed(next)
-      setNotes((current) => {
-        const copy = { ...current }
-        delete copy[appeal.id]
-        return copy
-      })
-      await onRefresh()
-      toast.success(status === "approved" ? "Appeal approved" : "Appeal denied")
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Appeal decision could not be saved.")
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  return (
-    <section className="rounded-panel border border-card-line bg-card p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-brand-navy">Appeals</h2>
-          <p className="mt-1 text-xs font-semibold text-subtle-foreground">
-            Review reopened reports and resident objections.
-          </p>
-        </div>
-        <span className="rounded-control border border-card-line bg-card-raised px-2.5 py-1 text-xs font-semibold text-brand-navy">
-          {pending.length} pending
-        </span>
-      </div>
-
-      <div className="mt-4 space-y-3">
-        {visible.map((appeal) => {
-          const report = relatedReport(appeal)
-          const editable = appeal.status === "submitted"
-          return (
-            <article key={appeal.id} className="rounded-control border border-card-line bg-card p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-brand-navy">
-                    {appeal.concern_tracking_id || `Report #${appeal.concern_id ?? appeal.id}`}
-                  </p>
-                  <p className="mt-1 text-xs font-semibold text-subtle-foreground">
-                    {appeal.appellant.full_name} · {formatEventTime(appeal.created_at)}
-                  </p>
-                </div>
-                <span className="shrink-0 rounded-control border border-card-line bg-card px-2 py-1 text-[11px] font-semibold capitalize text-muted-foreground">
-                  {appeal.status}
-                </span>
-              </div>
-              <p className="mt-3 line-clamp-3 text-xs font-semibold leading-5 text-muted-foreground">
-                {appeal.reason}
-              </p>
-              {editable ? (
-                <textarea
-                  value={notes[appeal.id] ?? ""}
-                  onChange={(event) => setNotes((current) => ({ ...current, [appeal.id]: event.target.value }))}
-                  placeholder="Decision note for audit trail"
-                  className="mt-3 min-h-16 w-full rounded-control border border-card-line-strong bg-card px-3 py-2 text-xs font-semibold text-brand-navy outline-none focus:border-brand-orange"
-                />
-              ) : appeal.decision_note ? (
-                <p className="mt-3 rounded-control bg-card p-3 text-xs font-semibold text-muted-foreground">
-                  Decision: {appeal.decision_note}
-                </p>
-              ) : null}
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={!report}
-                  onClick={() => report ? onOpenReport(report) : toast.error("The original report is not in the current queue.")}
-                >
-                  Open report
-                </Button>
-                {editable ? (
-                  <>
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="bg-status-closed text-white hover:bg-status-closed"
-                      disabled={busy === `${appeal.id}-approved`}
-                      onClick={() => void decide(appeal, "approved")}
-                    >
-                      Approve
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="destructive"
-                      disabled={busy === `${appeal.id}-denied`}
-                      onClick={() => void decide(appeal, "denied")}
-                    >
-                      Deny
-                    </Button>
-                  </>
-                ) : null}
-              </div>
-            </article>
-          )
-        })}
-        {visible.length === 0 ? (
-          <p className="rounded-control border border-dashed border-card-line bg-card-raised p-5 text-center text-sm font-semibold text-subtle-foreground">
-            No concern appeals yet.
-          </p>
-        ) : null}
-      </div>
-    </section>
-  )
-}
-
 function OfficialConcernDashboard({
   reports,
-  appeals,
   selected,
   activeFilter,
   setActiveFilter,
@@ -498,12 +214,10 @@ function OfficialConcernDashboard({
   onSelect,
   onBack,
   onUpdated,
-  onAppealReviewed,
   onRefresh,
   error,
 }: {
   reports: Concern[]
-  appeals: ConcernAppeal[]
   selected: Concern | undefined
   activeFilter: string
   setActiveFilter: (filter: string) => void
@@ -512,7 +226,6 @@ function OfficialConcernDashboard({
   onSelect: (report: Concern) => void
   onBack: () => void
   onUpdated: (report: Concern) => void
-  onAppealReviewed: (appeal: ConcernAppeal) => void
   onRefresh: () => Promise<void>
   error: string
 }) {
@@ -539,6 +252,8 @@ function OfficialConcernDashboard({
   )
   const [actionPaneOpen, setActionPaneOpen] = useState(false)
   const [recordTab, setRecordTab] = useState("details")
+  // The photo an official is currently drawing blur boxes on, or null.
+  const [blurTarget, setBlurTarget] = useState<ConcernMedia | null>(null)
   // Only decides whether the command bar offers a button for the AI pane; the
   // workspace itself owns the responsive ladder.
   const isWideUp = useMinWidth(1440)
@@ -551,7 +266,7 @@ function OfficialConcernDashboard({
   const openCount = reports.filter((report) => OPEN_STATUSES.includes(report.status)).length
   const appealCount = reports.filter(hasOpenAppeal).length
 
-  const openAppeal = current?.appeals?.find((appeal) => appeal.status === "submitted") ?? null
+  const openAppealCount = current?.appeals?.filter((appeal) => appeal.status === "submitted").length ?? 0
 
   const facts = concernRecord?.facts ?? []
   const unitFact = facts.find((f) => f.label === "Assigned unit")
@@ -559,20 +274,10 @@ function OfficialConcernDashboard({
 
   const detailsTabContent = current ? (
     <div className="space-y-4">
-      {openAppeal ? (
-        <div className="rounded-panel border border-chart-3/40 bg-chart-3/10 p-4">
-          <p className="text-sm font-semibold text-foreground">The resident is appealing this decision</p>
-          <p className="mt-1.5 text-body text-muted-foreground">{openAppeal.reason}</p>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <span className="rounded-pill bg-chart-3/20 px-2.5 py-1 text-micro font-bold text-chart-3-ink">
-              {openAppeal.status}
-            </span>
-            <span className="text-micro text-subtle-foreground">
-              Filed {formatDate(openAppeal.created_at)}
-            </span>
-          </div>
-        </div>
-      ) : null}
+      {/* The appeal banner that used to sit here moved to the Appeals tab,
+          which shows the same reason next to the Approve/Deny controls. Two
+          copies of the resident's objection on one screen, only one of which
+          could be acted on, was the confusing half. */}
 
       <div className="rounded-panel border border-card-line bg-card p-4">
         <p className="text-micro uppercase text-subtle-foreground">Reported by</p>
@@ -609,23 +314,9 @@ function OfficialConcernDashboard({
         </div>
       </div>
 
-      {/* Flag reasons lead: they are the reason an official is being asked to
-          look at this concern at all. */}
-      {concernNeedsReview(current) && concernFlagReasons(current).length ? (
-        <div className="rounded-panel border border-severity-moderate/40 bg-severity-moderate-surface p-3">
-          <p className="text-micro uppercase text-severity-moderate-ink">Worth a closer look</p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {concernFlagReasons(current).map((code) => (
-              <span
-                key={code}
-                className="rounded-pill bg-card px-2 py-0.5 text-micro text-severity-moderate-ink"
-              >
-                {humanizeFlagReason(code)}
-              </span>
-            ))}
-          </div>
-        </div>
-      ) : null}
+      {/* The flag chips that used to sit here are gone. They restated, in a
+          third vocabulary, what the assistant below already says in sentences —
+          and they were the half of the screen that could contradict it. */}
 
       <div className="rounded-panel border border-card-line bg-card p-4">
         <p className="text-micro uppercase text-subtle-foreground">What the resident reported</p>
@@ -637,7 +328,7 @@ function OfficialConcernDashboard({
 
       {/* Guidance sits with the report it describes, not in a separate pane the
           official has to open. It is read-only. */}
-      <AiGuidancePanel report={current} />
+      <ReviewAssistant report={current} />
 
       <div className="rounded-panel border border-card-line bg-card p-4">
         <h3 className="text-heading text-foreground">Updates</h3>
@@ -668,12 +359,41 @@ function OfficialConcernDashboard({
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {current.media.map((media) =>
           media.mime_type.startsWith("image/") ? (
-            <AuthenticatedMediaImage
-              key={media.id}
-              src={media.preview_url}
-              alt={media.original_filename}
-              className="h-32 w-full rounded-control border border-card-line object-cover"
-            />
+            <figure key={media.id} className="overflow-hidden rounded-control border border-card-line">
+              <AuthenticatedMediaImage
+                src={media.preview_url}
+                alt={media.original_filename}
+                className="h-32 w-full object-cover"
+              />
+              <figcaption className="space-y-2 p-2.5">
+                {/* The badge is what tells an official whether residents can
+                    see this photo. Without it, a restricted image and a
+                    published one look identical in the grid. */}
+                <span
+                  className={cn(
+                    "inline-flex rounded-pill px-2 py-0.5 text-[11px] font-semibold",
+                    media.privacy_state === "protected"
+                      ? "bg-status-closed-surface text-status-closed-ink"
+                      : media.public_visible
+                        ? "bg-card-raised text-muted-foreground"
+                        : "bg-severity-moderate-surface text-severity-moderate-ink",
+                  )}
+                >
+                  {PRIVACY_STATE_BADGE[media.privacy_state] ?? "Needs Review"}
+                </span>
+                <p className="text-[12px] leading-5 text-muted-foreground">
+                  {privacyState(media.privacy_state).help}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setBlurTarget(media)}
+                  className="inline-flex items-center gap-1.5 text-label text-brand-orange transition-colors duration-[--duration-micro] hover:text-brand-orange-strong"
+                >
+                  <EyeOffIcon className="size-3.5" />
+                  Blur an area
+                </button>
+              </figcaption>
+            </figure>
           ) : (
             <a
               key={media.id}
@@ -721,6 +441,10 @@ function OfficialConcernDashboard({
       onMessageSent={onRefresh}
       className="border-card-line"
     />
+  ) : null
+
+  const appealsTabContent = current ? (
+    <ConcernAppealsPanel key={`appeals-${current.id}`} report={current} onRefresh={onRefresh} />
   ) : null
 
   const queuePane = (
@@ -800,6 +524,10 @@ function OfficialConcernDashboard({
             { id: "details", label: "Details", content: detailsTabContent },
             { id: "evidence", label: "Photos", count: current.media.length, content: evidenceTabContent },
             { id: "chat", label: "Chat", content: chatTabContent },
+            // Sits with the report it is about, so deciding an appeal needs no
+            // navigation. The count is pending appeals only — a decided one is
+            // history, not work.
+            { id: "appeals", label: "Appeals", count: openAppealCount, content: appealsTabContent },
           ]}
         />
       </div>
@@ -849,6 +577,17 @@ function OfficialConcernDashboard({
   }
 
   return (
+    <>
+    {blurTarget ? (
+      <MediaBlurEditor
+        media={blurTarget}
+        onClose={() => setBlurTarget(null)}
+        onUpdated={(media) => {
+          setBlurTarget(media)
+          void onRefresh()
+        }}
+      />
+    ) : null}
     <OpsWorkspace
       id="concerns"
       mobileView={hasExplicitSelection ? "detail" : "list"}
@@ -902,6 +641,7 @@ function OfficialConcernDashboard({
         </OpsBar>
       }
     />
+    </>
   )
 }
 
@@ -919,7 +659,6 @@ export default function ReportsPage() {
   const [selectedReport, setSelectedReport] = useState<string | null>(null)
   const [reportPage, setReportPage] = useState(1)
   const [reports, setReports] = useState<Concern[]>([])
-  const [concernAppeals, setConcernAppeals] = useState<ConcernAppeal[]>([])
   const [error, setError] = useState("")
   const [statusDialogOpen, setStatusDialogOpen] = useState(false)
   // Read at the dialog but never set — the setter was unused, so the mode has
@@ -937,17 +676,10 @@ export default function ReportsPage() {
     }
     setError("")
     try {
-      if (isOfficial) {
-        const [nextReports, nextAppeals] = await Promise.all([
-          listManagedConcerns(),
-          listConcernAppeals(),
-        ])
-        setReports(nextReports)
-        setConcernAppeals(nextAppeals)
-      } else {
-        setReports(await listMyConcerns())
-        setConcernAppeals([])
-      }
+      // Appeals ride along on each concern (`report.appeals`), so there is no
+      // second list to fetch — the queue-wide appeals request this used to make
+      // every 30 seconds fed a panel that was never rendered.
+      setReports(isOfficial ? await listManagedConcerns() : await listMyConcerns())
     } catch {
       setError(isOfficial ? "Could not load report management queue." : "Could not load your reports.")
     } finally {
@@ -1093,10 +825,6 @@ export default function ReportsPage() {
     setSelectedReport(next.public_id)
   }
 
-  function updateAppeal(next: ConcernAppeal) {
-    setConcernAppeals((current) => current.map((appeal) => appeal.id === next.id ? next : appeal))
-  }
-
   async function copyTrackingId(report: Concern) {
     await navigator.clipboard?.writeText(report.tracking_id)
     toast.success("Tracking ID copied")
@@ -1106,7 +834,6 @@ export default function ReportsPage() {
     return (
       <OfficialConcernDashboard
         reports={reports}
-        appeals={concernAppeals}
         selected={reports.find(
           (report) => report.public_id === selectedReport || String(report.id) === selectedReport,
         )}
@@ -1117,7 +844,6 @@ export default function ReportsPage() {
         onSelect={selectReport}
         onBack={closeReportDetails}
         onUpdated={updateReport}
-        onAppealReviewed={updateAppeal}
         onRefresh={loadReports}
         error={error}
       />
@@ -1154,10 +880,11 @@ export default function ReportsPage() {
           style={{ width: "min(100%, 52rem)" }}
         >
           <div
-            className="scrollbar-hide flex w-full gap-2 overflow-x-auto overscroll-x-contain pb-0.5 [-webkit-overflow-scrolling:touch]"
+            className="scrollbar-hide w-full min-w-0 overflow-x-auto overscroll-x-contain pb-0.5 [-webkit-overflow-scrolling:touch] touch-pan-x"
             role="tablist"
             aria-label="Report status filters"
           >
+            <div className="flex min-w-max flex-nowrap gap-2">
             {filters.map((filter) => (
               <button
                 key={filter}
@@ -1182,6 +909,7 @@ export default function ReportsPage() {
                 {filter}
               </button>
             ))}
+            </div>
           </div>
 
           {error ? <p className="text-sm text-destructive">{error}</p> : null}

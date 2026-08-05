@@ -7,6 +7,7 @@ Services layer:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -224,6 +225,12 @@ def dispatch_policy_payload() -> dict[str, Any]:
             "out_of_zone_action": "review",
             "witness_radius_meters": 250,
             "responder_nearby_radius_meters": 100,
+            "duty_hours_start": None,
+            "duty_hours_end": None,
+            "hotlines": [
+                {"label": "Marikina Rescue", "number": "161"},
+                {"label": "Emergency", "number": "911"},
+            ],
             "updated_at": None,
         }
 
@@ -944,6 +951,321 @@ def validate_report_location(latitude, longitude):
         "action": "review",
         "summary": "Location is outside the official acceptance zone and needs official review.",
     }
+
+
+# ---------------------------------------------------------------------------
+# Reverse geocoding
+# ---------------------------------------------------------------------------
+# Until now the only reverse geocoding in E-Boses ran in the browser (the SOS
+# map step calls Nominatim directly). An emergency that arrives by SMS has no
+# browser, so its address was stored as the literal string "SMS fallback
+# coordinates" and an official saw no street name at all.
+#
+# This never runs inline with dispatch. Callers schedule it after the alert is
+# saved and routed - see apps.emergencies.location_services.
+
+NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
+
+# Nominatim's usage policy wants an identifying User-Agent and at most one
+# request per second. A browser cannot set User-Agent at all, so calling it
+# directly from the SOS map gets the whole barangay's public IP rate-limited to
+# 429 - and a 429 carries no CORS headers, which surfaces as a confusing CORS
+# error rather than "you are being throttled". Everything goes through here.
+NOMINATIM_USER_AGENT = "E-Boses/1.0 (Barangay Marikina Heights emergency dispatch)"
+NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_MIN_INTERVAL_SECONDS = 1.1
+NOMINATIM_PACE_KEY = "nominatim-last-call"
+NOMINATIM_RAW_CACHE_TTL = 60 * 60 * 24 * 30
+NOMINATIM_FAIL_CACHE_TTL = 120
+
+
+def _pace_nominatim() -> None:
+    """Keep at least a second between outbound calls, process-wide."""
+    import time
+
+    last = cache.get(NOMINATIM_PACE_KEY)
+    now = time.monotonic()
+    if last is not None:
+        wait = NOMINATIM_MIN_INTERVAL_SECONDS - (now - last)
+        if 0 < wait <= NOMINATIM_MIN_INTERVAL_SECONDS:
+            time.sleep(wait)
+    cache.set(NOMINATIM_PACE_KEY, time.monotonic(), 60)
+
+
+def _nominatim_get(url: str, params: dict, cache_key: str):
+    """Cached, paced, identified GET against Nominatim. Never raises."""
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        import httpx
+
+        _pace_nominatim()
+        response = httpx.get(
+            url,
+            params=params,
+            headers={"User-Agent": NOMINATIM_USER_AGENT, "Accept-Language": "en"},
+            timeout=REVERSE_GEOCODE_TIMEOUT,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        logger.warning("Nominatim request failed: %s", type(exc).__name__)
+        cache.set(cache_key, None, NOMINATIM_FAIL_CACHE_TTL)
+        return None
+
+    cache.set(cache_key, payload, NOMINATIM_RAW_CACHE_TTL)
+    return payload
+
+
+NEAREST_STREET_CACHE_KEY = "map-street-index:v1"
+NEAREST_STREET_CACHE_TTL = 60 * 30
+NEAREST_STREET_MAX_METERS = 120
+
+
+def _street_index():
+    """(name, [(lng, lat), ...]) for every active street geometry."""
+    cached = cache.get(NEAREST_STREET_CACHE_KEY)
+    if cached is not None:
+        return cached
+
+    from apps.emergencies.models import MapGeometry
+
+    index = []
+    rows = MapGeometry.objects.filter(
+        kind=MapGeometry.Kind.STREET, is_active=True
+    ).values_list("name", "geometry")
+    for name, geometry in rows:
+        if not name or not isinstance(geometry, dict):
+            continue
+        coordinates = geometry.get("coordinates") or []
+        gtype = geometry.get("type")
+        lines = [coordinates] if gtype == "LineString" else coordinates if gtype == "MultiLineString" else []
+        points = [
+            (float(point[0]), float(point[1]))
+            for line in lines
+            for point in line
+            if isinstance(point, (list, tuple)) and len(point) >= 2
+        ]
+        if points:
+            index.append((name, points))
+
+    cache.set(NEAREST_STREET_CACHE_KEY, index, NEAREST_STREET_CACHE_TTL)
+    return index
+
+
+def nearest_known_street(latitude: float, longitude: float) -> dict[str, Any]:
+    """Closest barangay street from local geometry, no external call.
+
+    The barangay's own street data answers the question Nominatim was being
+    asked, without a network round trip, a rate limit, or a dependency that can
+    be down during an emergency. Nominatim is only consulted when the pin is
+    too far from any known street.
+    """
+    best_name = ""
+    best_distance = float("inf")
+    for name, points in _street_index():
+        for lng, lat in points:
+            distance = haversine_meters(latitude, longitude, lat, lng)
+            if distance < best_distance:
+                best_distance = distance
+                best_name = name
+    if not best_name or best_distance > NEAREST_STREET_MAX_METERS:
+        return {"street": "", "distance_meters": None, "house_number": ""}
+
+    return {
+        "street": best_name,
+        "distance_meters": round(best_distance, 1),
+        "house_number": _nearest_house_number(latitude, longitude, best_name),
+    }
+
+
+NEAREST_HOUSE_MAX_METERS = 35
+
+
+def _nearest_house_number(latitude: float, longitude: float, street: str) -> str:
+    """House number within a few metres of the pin, if OSM knows one.
+
+    Deliberately tight: a house number 30 m away is a different house, and a
+    confidently wrong address sends responders to the wrong gate.
+    """
+    from apps.emergencies.models import MapAddressPoint
+
+    # A small bounding box first so this stays an indexed lookup rather than a
+    # scan of every address in the barangay.
+    delta = 0.0005  # ~55 m
+    candidates = MapAddressPoint.objects.filter(
+        latitude__gte=latitude - delta,
+        latitude__lte=latitude + delta,
+        longitude__gte=longitude - delta,
+        longitude__lte=longitude + delta,
+    ).values_list("house_number", "street", "latitude", "longitude")
+
+    best_number = ""
+    best_distance = float("inf")
+    for house_number, house_street, lat, lng in candidates:
+        if not house_number:
+            continue
+        # Prefer a point that agrees with the street we already matched.
+        if house_street and street and house_street.lower() != street.lower():
+            continue
+        distance = haversine_meters(latitude, longitude, float(lat), float(lng))
+        if distance < best_distance:
+            best_distance = distance
+            best_number = house_number
+    return best_number if best_distance <= NEAREST_HOUSE_MAX_METERS else ""
+
+
+def nominatim_reverse(latitude: float, longitude: float, zoom: int = 18):
+    """Raw reverse-geocode payload, cached at ~11 m resolution."""
+    key = f"nominatim-rev:v1:{latitude:.4f},{longitude:.4f}:{zoom}"
+    return _nominatim_get(
+        NOMINATIM_REVERSE_URL,
+        {
+            "lat": f"{latitude:.7f}",
+            "lon": f"{longitude:.7f}",
+            "format": "jsonv2",
+            "addressdetails": 1,
+            "zoom": zoom,
+        },
+        key,
+    )
+
+
+def nominatim_search(query: str, limit: int = 1):
+    """Raw forward-geocode payload for a place name."""
+    normalized = " ".join((query or "").split()).lower()
+    if not normalized:
+        return None
+    key = f"nominatim-fwd:v1:{hashlib.sha256(normalized.encode()).hexdigest()[:24]}:{limit}"
+    return _nominatim_get(
+        NOMINATIM_SEARCH_URL,
+        {
+            "q": query,
+            "format": "jsonv2",
+            "limit": limit,
+            "countrycodes": "ph",
+            "addressdetails": 1,
+        },
+        key,
+    )
+
+
+REVERSE_GEOCODE_CACHE_PREFIX = "reverse-geocode:v1:"
+REVERSE_GEOCODE_CACHE_TTL = 60 * 60 * 24 * 30  # street names change slowly
+REVERSE_GEOCODE_TIMEOUT = 6.0
+
+REVERSE_STATUS_SUCCESS = "success"
+REVERSE_STATUS_FAILED = "failed"
+REVERSE_STATUS_SKIPPED = "skipped"
+
+
+def _reverse_cache_key(latitude: float, longitude: float) -> str:
+    # ~11 m of precision. Two pins on the same stretch of street share a cache
+    # entry, which keeps us well inside Nominatim's usage policy during a
+    # multi-casualty incident that produces a burst of alerts.
+    return f"{REVERSE_GEOCODE_CACHE_PREFIX}{latitude:.4f},{longitude:.4f}"
+
+
+def _compose_readable_area(address: dict[str, Any]) -> str:
+    """Build "Champaca Street, Marikina Heights" from Nominatim address parts.
+
+    Prefers the most specific thing a responder can actually navigate to, and
+    always appends the barangay so the string reads like a local address rather
+    than a postal one.
+    """
+    street = (
+        address.get("road")
+        or address.get("pedestrian")
+        or address.get("footway")
+        or address.get("residential")
+        or ""
+    ).strip()
+    landmark = (address.get("amenity") or address.get("building") or "").strip()
+    village = (
+        address.get("village")
+        or address.get("suburb")
+        or address.get("neighbourhood")
+        or address.get("quarter")
+        or ""
+    ).strip()
+
+    head = landmark or street
+    parts = [part for part in (head, village) if part]
+    if not parts:
+        city = (address.get("city") or address.get("town") or address.get("municipality") or "").strip()
+        return city
+    # Avoid "Marikina Heights, Marikina Heights" when the road IS the village.
+    deduped: list[str] = []
+    for part in parts:
+        if part.lower() not in {existing.lower() for existing in deduped}:
+            deduped.append(part)
+    return ", ".join(deduped)
+
+
+def reverse_geocode(latitude, longitude) -> dict[str, Any]:
+    """Resolve coordinates to a readable area.
+
+    Returns ``{"status", "location", "raw"}``. Never raises: a failed lookup
+    must degrade to "we do not know the street yet", never break dispatch.
+    """
+    if latitude is None or longitude is None:
+        return {"status": REVERSE_STATUS_SKIPPED, "location": "", "raw": {}}
+
+    from django.conf import settings
+
+    if not getattr(settings, "REVERSE_GEOCODE_ENABLED", True):
+        return {"status": REVERSE_STATUS_SKIPPED, "location": "", "raw": {}}
+
+    try:
+        lat = float(latitude)
+        lng = float(longitude)
+    except (TypeError, ValueError):
+        return {"status": REVERSE_STATUS_SKIPPED, "location": "", "raw": {}}
+
+    cache_key = _reverse_cache_key(lat, lng)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        import httpx
+
+        response = httpx.get(
+            NOMINATIM_REVERSE_URL,
+            params={
+                "lat": f"{lat:.7f}",
+                "lon": f"{lng:.7f}",
+                "format": "jsonv2",
+                "addressdetails": 1,
+                "zoom": 17,
+            },
+            headers={
+                # Nominatim's usage policy requires a real identifying UA.
+                "User-Agent": "E-Boses/1.0 (Barangay Marikina Heights emergency dispatch)",
+                "Accept-Language": "en",
+            },
+            timeout=REVERSE_GEOCODE_TIMEOUT,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        logger.warning("Reverse geocode failed for a pin: %s", type(exc).__name__)
+        # Cache the failure briefly so a dead mirror does not stall every alert.
+        result = {"status": REVERSE_STATUS_FAILED, "location": "", "raw": {}}
+        cache.set(cache_key, result, 120)
+        return result
+
+    address = payload.get("address") or {}
+    location = _compose_readable_area(address) or (payload.get("display_name") or "").split(",")[0].strip()
+    result = {
+        "status": REVERSE_STATUS_SUCCESS if location else REVERSE_STATUS_FAILED,
+        "location": location[:255],
+        "raw": {key: address.get(key) for key in ("road", "suburb", "village", "city", "amenity") if address.get(key)},
+    }
+    cache.set(cache_key, result, REVERSE_GEOCODE_CACHE_TTL if location else 300)
+    return result
 
 
 def map_context_payload() -> dict[str, Any]:

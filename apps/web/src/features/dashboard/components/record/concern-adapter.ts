@@ -12,11 +12,11 @@ import type { RecordAction, RecordFact, RecordSection, RecordView } from "./type
 /**
  * Maps a concern onto the shared record shape.
  *
- * Severity comes from the AI assessment — the YOLOv8 damage score, adjusted by
- * NLP relevance, floored by category. It deliberately ignores vote count and
- * anything about the reporter, because the whole point of AI severity in this
- * project is to rank on objective evidence rather than on who reported it or
- * where they live.
+ * Severity comes from the AI assessment — the review model's severity
+ * judgement, floored by category and lifted to critical by an urgent-attention
+ * flag. It deliberately ignores vote count and anything about the reporter,
+ * because the whole point of AI severity in this project is to rank on
+ * objective evidence rather than on who reported it or where they live.
  *
  * Community support still influences ordering, but only through `priority`, and
  * only inside a severity band (see `rankConcerns`).
@@ -58,10 +58,10 @@ export function concernSeverityOf(concern: Concern): { severity: Severity; asses
 
   return deriveConcernSeverity({
     category: concern.category,
-    // `yolo_confidence` is the model's damage score. Left undefined until the
-    // assessment completes, which makes the badge read "pending" rather than
-    // presenting a category floor as a measurement.
-    damageScore: completed ? (assessment?.yolo_confidence ?? null) : null,
+    // Left null until the assessment completes, which makes the badge read
+    // "pending" rather than presenting a category floor as a measurement.
+    severityEstimate: completed ? (assessment?.severity_estimate ?? null) : null,
+    urgentAttention: completed ? (assessment?.urgent_attention ?? false) : false,
     relevance: completed ? (assessment?.nlp_confidence ?? null) : null,
   })
 }

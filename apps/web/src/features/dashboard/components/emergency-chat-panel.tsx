@@ -421,7 +421,12 @@ export function EmergencyChatPanel({
           {attachment ? (
             <button
               type="button"
-              className="absolute bottom-14 left-3 flex max-w-[70%] items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-700"
+              className={cn(
+                "absolute bottom-14 left-3 flex max-w-[70%] items-center gap-1 rounded-md px-2 py-1 text-[11px]",
+                isDark
+                  ? "border border-white/15 bg-white/10 text-white"
+                  : "border border-slate-200 bg-slate-100 text-slate-700",
+              )}
               onClick={() => setAttachment(null)}
               aria-label="Remove attachment"
             >

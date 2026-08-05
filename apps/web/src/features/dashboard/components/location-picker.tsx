@@ -7,6 +7,7 @@ import type leaflet from "leaflet"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { apiRequest } from "@/lib/api"
+import { reverseGeocode } from "@/lib/geocode"
 
 const DEFAULT_CENTER: [number, number] = [14.6507, 121.1133]
 
@@ -99,21 +100,21 @@ function formatNominatimParts(data: {
   }
 }
 
-async function reverseGeocode(lat: number, lng: number): Promise<AddressParts> {
-  try {
-    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1`
-    const res = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "E-Boses/1.0 (barangay-concern-reports)",
-      },
-    })
-    if (!res.ok) throw new Error("reverse failed")
-    return formatNominatimParts(await res.json())
-  } catch {
-    // Do not persist Lat/Lng as a fake street — keep UI empty until lookup works.
-    return { primary: "Finding street…", secondary: "Marikina Heights", full: "" }
-  }
+/**
+ * Reverse-geocode a pin into display-ready address parts.
+ *
+ * Named apart from the imported `reverseGeocode` deliberately: this used to
+ * share that name, which meant the local declaration shadowed the import and
+ * the function called *itself* — infinite recursion that only ever exited
+ * through the catch below, so every pin silently resolved to "Finding street…".
+ */
+async function reverseGeocodeParts(lat: number, lng: number): Promise<AddressParts> {
+  const data = await reverseGeocode(lat, lng)
+  // The helper already swallows network and rate-limit failures into null. Do
+  // not persist Lat/Lng as a fake street — keep the UI empty until a lookup
+  // works.
+  if (!data) return { primary: "Finding street…", secondary: "Marikina Heights", full: "" }
+  return formatNominatimParts(data)
 }
 
 export default function LocationPickerModal({
@@ -152,7 +153,7 @@ export default function LocationPickerModal({
     reverseTimer.current = window.setTimeout(() => {
       setGeocoding(true)
       void Promise.all([
-        reverseGeocode(lat, lng),
+        reverseGeocodeParts(lat, lng),
         apiRequest<LocationClass>("/locations/validate/", {
           method: "POST",
           body: JSON.stringify({ latitude: lat, longitude: lng }),

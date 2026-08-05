@@ -4,16 +4,17 @@ export type ConcernCategory = {
   key: string
   label: string
   enabled: boolean
-  detected_labels: string[]
+}
+
+/** Whether a service is working, in the three words officials see. */
+export type ServiceStatus = {
+  status: "available" | "limited" | "unavailable"
+  reason?: string
 }
 
 export type ConcernClassificationConfig = {
   revision: number
-  image_model: string
   text_model: string
-  image_available?: boolean
-  text_available?: boolean
-  image_confidence_threshold: number
   text_relevance_threshold: number
   duplicate_similarity_threshold: number
   minimum_description_length: number
@@ -29,60 +30,70 @@ export type ConcernClassificationConfig = {
   flag_irrelevant: boolean
   notify_reviewer: boolean
   suspicious_terms: string[]
-  supported_classes?: string[]
-  label_mappings: Record<string, string>
   category_keywords: Record<string, string[]>
-  mapping_targets?: Array<{ key: string; label: string; group: "concern" | "emergency" | string }>
   categories: ConcernCategory[]
+  services?: {
+    report_review: ServiceStatus
+    media_protection: ServiceStatus
+  }
   metrics?: {
-    image_accuracy?: number | null
-    text_accuracy?: number | null
     auto_validated?: number
     flagged?: number
     tested?: number
   }
 }
 
-export type ImageClassificationResult = {
-  detected_label: string
-  detected_category: string
-  selected_category: string
-  confidence: number
-  outcome: "match" | "mismatch" | "needs_review"
-  message?: string
-  annotated_image?: string
-  objects?: Array<{ label: string; display_label?: string; confidence: number; category?: string; bbox?: number[] }>
-}
-
 export type ReportValidationResult = {
   classification: "related" | "irrelevant" | "suspicious" | "needs_review"
-  confidence: number
   category_match: boolean | null
   duplicate: boolean
   duplicate_similarity?: number | null
-  outcome: "approved" | "flagged" | "needs_review"
   explanation?: string
+  /**
+   * The real privacy stage, run against the sample photo. Nothing is stored —
+   * `protected_image` is a data URI for display only, and is empty unless
+   * something was actually blurred.
+   */
+  privacy?: {
+    state:
+      | "unchecked"
+      | "not_required"
+      | "protected"
+      | "sensitive_review_required"
+      | "no_match_found"
+      | "not_configured"
+      | "failed"
+    requested_classes?: string[]
+    detected_classes?: string[]
+    blurred_count?: number
+    protected_image?: string
+  }
   relevance?: "VALID" | "UNCLEAR" | "IRRELEVANT"
   primary_category?: string
   possible_categories?: string[]
-  content_flags?: string[]
-  image_flags?: string[]
+  detected_objects?: string[]
   text_assessment?: string
   photo_assessment?: string
-  recognized_photo_items?: string[]
-  visual_summary?: string
-  mismatch_reason?: string
-  image_review_limited?: boolean
-  image_review_message?: string
-  privacy_sensitive_information_detected?: boolean
-  disturbing_content_detected?: boolean
+  evidence_relationship?:
+    | "supports_report"
+    | "partially_supports_report"
+    | "contradicts_report"
+    | "no_useful_image_evidence"
+    | "image_unavailable"
+    | "image_review_failed"
+    | string
+  missing_information?: string[]
   urgent_attention?: boolean
-  evidence_relationship?: "supports_report" | "partially_supports_report" | "contradicts_report" | "no_useful_image_evidence" | "image_unavailable" | string
   severity?: "low" | "medium" | "high"
+  privacy_scan_required?: boolean
+  suspected_sensitive_classes?: string[]
   ai_result_uncertain?: boolean
   recommended_action?: string
-  public_media_treatment?: string
-  image?: ImageClassificationResult & { available?: boolean; objects?: ImageClassificationResult["objects"] }
+  short_explanation?: string
+  /** null when no photo was sent, false when one was sent and could not be read. */
+  image_review_succeeded?: boolean | null
+  image_uploaded?: boolean
+  image_error?: "" | "rejected" | "unreadable"
 }
 
 export function getConcernClassificationConfig() {
@@ -121,23 +132,13 @@ type RawJson = any
 function normalizeConfig(raw: RawJson): ConcernClassificationConfig {
   return {
     ...raw,
-    label_mappings: raw?.label_mappings ?? {},
     category_keywords: raw?.category_keywords ?? {},
-    mapping_targets: raw?.mapping_targets ?? [],
     categories: (raw?.categories ?? []).map((category: RawJson) => ({
       key: category.key ?? category.code,
       label: category.label ?? category.name,
       enabled: category.enabled !== false,
-      detected_labels: category.detected_labels ?? category.keywords ?? [],
     })),
   }
-}
-
-export function testConcernImage(file: File, category: string) {
-  const body = new FormData()
-  body.append("file", file)
-  body.append("category", category)
-  return apiRequest<ImageClassificationResult>("/concerns/classification/test-image/", { method: "POST", body })
 }
 
 export function testConcernReport(category: string, description: string) {

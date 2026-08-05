@@ -49,10 +49,32 @@ const CONCERN_CATEGORY_BASELINE: Record<string, number> = {
   others: 0,
 }
 
+/**
+ * Gemma reports three levels; the queue shows four. `critical` is reserved for
+ * urgentAttention, so the top band means "someone may be in danger right now"
+ * rather than "the model picked the highest of three options".
+ *
+ * Mirrors SEVERITY_ESTIMATE_LEVEL in apps/api/apps/concerns/severity.py.
+ */
+const SEVERITY_ESTIMATE_LEVEL: Record<string, number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+}
+
 export interface ConcernSeverityInput {
   category?: string | null
-  /** YOLOv8 damage score, 0..1. Absent while the assessment is still running. */
-  damageScore?: number | null
+  /**
+   * The review model's severity judgement over the text and the photo:
+   * "low" | "medium" | "high". Absent until the assessment completes.
+   *
+   * This replaced a YOLOv8 damage score — the mean confidence of the objects a
+   * detector found — which measured how recognisable a photo was, not how bad
+   * the situation in it was.
+   */
+  severityEstimate?: string | null
+  /** True when the review flagged possible immediate danger. Reaches `critical`. */
+  urgentAttention?: boolean | null
   /** NLP relevance, 0..1. */
   relevance?: number | null
   /** Configured relevance threshold; below it the report reads as off-topic. */
@@ -68,19 +90,17 @@ export interface SeverityResult {
 
 export function deriveConcernSeverity(input: ConcernSeverityInput): SeverityResult {
   const baseline = CONCERN_CATEGORY_BASELINE[input.category ?? "others"] ?? 0
-  const hasScore = typeof input.damageScore === "number" && Number.isFinite(input.damageScore)
+  const estimate = (input.severityEstimate ?? "").toLowerCase()
 
-  if (!hasScore) {
+  if (!(estimate in SEVERITY_ESTIMATE_LEVEL)) {
     return { severity: clampToSeverity(baseline), assessed: false }
   }
 
-  // Quartiles of the damage score: [0,.25) low, [.25,.5) moderate,
-  // [.5,.75) high, [.75,1] critical. Even bands, and simple to state when
-  // defending how a concern was ranked. Rounding `3 * score` instead would
-  // squeeze "low" into scores below 0.167 and push almost everything up.
-  const score = Math.max(0, Math.min(1, input.damageScore as number))
-  let level = Math.min(3, Math.floor(score * 4))
-  level = Math.max(level, baseline)
+  if (input.urgentAttention) {
+    return { severity: clampToSeverity(3), assessed: true }
+  }
+
+  let level = Math.max(SEVERITY_ESTIMATE_LEVEL[estimate], baseline)
 
   const threshold = input.relevanceThreshold ?? 0.65
   if (typeof input.relevance === "number" && input.relevance < threshold) {

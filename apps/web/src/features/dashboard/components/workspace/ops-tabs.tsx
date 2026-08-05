@@ -28,16 +28,28 @@ export interface OpsTab {
   content: React.ReactNode
 }
 
+/**
+ * `underline` is the record-pane treatment described above.
+ *
+ * `pill` is for a card that is *only* tabs — the responder's comms card, where
+ * there is no coloured record header above to compete with, and the tab row is
+ * the card's own header. A filled pill there reads as a control; an underline
+ * reads as a leftover border.
+ */
+export type OpsTabsVariant = "underline" | "pill"
+
 export function OpsTabs({
   tabs,
   value,
   onValueChange,
   className,
+  variant = "underline",
 }: {
   tabs: OpsTab[]
   value: string
   onValueChange: (id: string) => void
   className?: string
+  variant?: OpsTabsVariant
 }) {
   const listRef = React.useRef<HTMLDivElement>(null)
   const active = tabs.find((tab) => tab.id === value) ?? tabs[0]
@@ -69,13 +81,18 @@ export function OpsTabs({
     }
   }
 
+  const pill = variant === "pill"
+
   return (
     <div className={cn("flex min-w-0 flex-col", className)}>
       <div
         ref={listRef}
         role="tablist"
         onKeyDown={handleKeyDown}
-        className="scrollbar-hide -mx-1 flex shrink-0 gap-1 overflow-x-auto border-b border-card-line px-1"
+        className={cn(
+          "scrollbar-hide flex shrink-0 overflow-x-auto",
+          pill ? "gap-1" : "-mx-1 gap-1 border-b border-card-line px-1",
+        )}
       >
         {tabs.map((tab) => {
           const selected = tab.id === active?.id
@@ -91,9 +108,14 @@ export function OpsTabs({
               tabIndex={selected ? 0 : -1}
               onClick={() => onValueChange(tab.id)}
               className={cn(
-                "relative shrink-0 whitespace-nowrap px-3 py-2.5 text-label transition-colors duration-[--duration-micro]",
+                "relative shrink-0 whitespace-nowrap text-label transition-colors duration-[--duration-micro]",
+                // 44px tall in the pill variant: it is the primary control on a
+                // touch surface, not a secondary affordance inside a record.
+                pill ? "flex h-11 items-center rounded-pill px-4" : "px-3 py-2.5",
                 selected
-                  ? "text-foreground"
+                  ? pill
+                    ? "bg-card-raised text-foreground"
+                    : "text-foreground"
                   : tab.highlighted
                     ? "text-brand-orange hover:text-brand-orange-strong"
                     : "text-subtle-foreground hover:text-muted-foreground",
@@ -103,13 +125,15 @@ export function OpsTabs({
               {tab.count != null ? (
                 <span className="ml-1.5 tabular-nums text-faint-foreground">{tab.count}</span>
               ) : null}
-              <span
-                aria-hidden
-                className={cn(
-                  "absolute inset-x-2 -bottom-px h-0.5 rounded-pill transition-opacity duration-[--duration-micro]",
-                  selected ? "bg-brand-orange opacity-100" : "opacity-0",
-                )}
-              />
+              {pill ? null : (
+                <span
+                  aria-hidden
+                  className={cn(
+                    "absolute inset-x-2 -bottom-px h-0.5 rounded-pill transition-opacity duration-[--duration-micro]",
+                    selected ? "bg-brand-orange opacity-100" : "opacity-0",
+                  )}
+                />
+              )}
             </button>
           )
         })}
@@ -120,7 +144,12 @@ export function OpsTabs({
           role="tabpanel"
           id={`ops-tabpanel-${active.id}`}
           aria-labelledby={`ops-tab-${active.id}`}
-          className="min-w-0 pt-4"
+          // The pill panel scrolls on its own so the tab row stays put when
+          // the card's height is constrained; unconstrained it is a no-op.
+          className={cn(
+            "min-w-0",
+            pill ? "flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain pt-3" : "pt-4",
+          )}
         >
           {active.content}
         </div>

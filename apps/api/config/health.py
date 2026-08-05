@@ -39,8 +39,8 @@ def health_check(request):
             and getattr(settings, "WEB_PUSH_PRIVATE_KEY", "")
         ),
         "ai_configured": bool(
-            getattr(settings, "EBOSES_YOLO_MODEL_PATH", "")
-            and getattr(settings, "OLLAMA_API_KEY", "")
+            getattr(settings, "OLLAMA_API_KEY", "")
+            and getattr(settings, "ROBOFLOW_API_KEY", "")
         ),
         "ocr": ocr_status,
         "ocr_configured": bool(getattr(settings, "PADDLEOCR_TOKEN", "")),

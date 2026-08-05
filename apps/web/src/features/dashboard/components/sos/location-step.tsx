@@ -7,6 +7,7 @@ import { MapPin } from "lucide-react"
 import { cn } from "@workspace/ui/lib/utils"
 import { matchMarikinaHeightsStreet } from "@/features/auth/lib/marikina-heights-streets"
 import { reverseGeocodeToMarikinaStreet } from "@/features/auth/lib/reverse-geocode"
+import { reverseGeocode } from "@/lib/geocode"
 import { buildPinnedCoordinateAddress } from "@/features/dashboard/components/sos-fallback"
 
 const DEFAULT_CENTER: [number, number] = [14.6507, 121.1133]
@@ -39,18 +40,8 @@ async function reverseStreet(
     /* fall through */
   }
   try {
-    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1`
-    const res = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "E-Boses/1.0 (sos-location)",
-      },
-    })
-    if (!res.ok) throw new Error("reverse failed")
-    const data = (await res.json()) as {
-      address?: Record<string, string>
-      display_name?: string
-    }
+    const data = await reverseGeocode(lat, lng)
+    if (!data) throw new Error("reverse failed")
     const a = data.address ?? {}
     const road = (a.road || a.pedestrian || a.residential || "").trim()
     const curated = road ? matchMarikinaHeightsStreet(road) : null

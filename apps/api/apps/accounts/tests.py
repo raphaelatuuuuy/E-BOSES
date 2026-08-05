@@ -38,7 +38,7 @@ VALID_PDF_BYTES = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF"
 
 class MediaPrivacyRedactionTests(TestCase):
     def test_sensitive_regions_are_blurred_without_obscuring_the_whole_image(self):
-        from apps.accounts.media_services import _redact_sensitive_regions
+        from apps.accounts.media_services import _redact_sensitive_regions, _redaction_settings
 
         image = Image.new("RGB", (80, 80), "white")
         draw = ImageDraw.Draw(image)
@@ -48,9 +48,9 @@ class MediaPrivacyRedactionTests(TestCase):
 
         with patch(
             "apps.accounts.media_services._detect_sensitive_regions",
-            return_value=[(10, 10, 50, 50)],
+            return_value=[("face", 10, 10, 50, 50)],
         ):
-            redacted = _redact_sensitive_regions(image)
+            redacted = _redact_sensitive_regions(image, settings_map=_redaction_settings())
 
         self.assertEqual(redacted.getpixel((5, 5)), image.getpixel((5, 5)))
         self.assertNotEqual(
@@ -59,13 +59,13 @@ class MediaPrivacyRedactionTests(TestCase):
         )
 
     def test_redaction_fails_closed_when_detector_is_unavailable(self):
-        from apps.accounts.media_services import _redact_sensitive_regions
+        from apps.accounts.media_services import _redact_sensitive_regions, _redaction_settings
 
         image = Image.new("RGB", (80, 80), "white")
         ImageDraw.Draw(image).rectangle((0, 0, 39, 79), fill="black")
 
         with patch("apps.accounts.media_services._detect_sensitive_regions", return_value=None):
-            redacted = _redact_sensitive_regions(image)
+            redacted = _redact_sensitive_regions(image, settings_map=_redaction_settings())
 
         self.assertNotEqual(redacted.tobytes(), image.tobytes())
 

@@ -1,7 +1,10 @@
 import { useMemo } from "react"
+import type { LucideIcon } from "lucide-react"
+import { CalendarRangeIcon, GaugeIcon } from "lucide-react"
 
 import { ActivityGrid, Sparkline } from "@/features/dashboard/components/charts"
 import type { ResponderShift } from "@/features/dashboard/emergency-api"
+import { Pane } from "@/features/dashboard/components/responder/dispatch-surface"
 import { formatResponse } from "@/features/dashboard/lib/responder-format"
 
 /**
@@ -21,30 +24,40 @@ import { formatResponse } from "@/features/dashboard/lib/responder-format"
 const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] as const
 const WEEK_ROWS = ["Last", "This"] as const
 
+/**
+ * Chart frame, on the console's shared `Pane`. The figure rides in the pane
+ * header's action slot so both graphics agree with every other card on the
+ * screen about corner radius, header height and title size.
+ */
 function Frame({
   label,
+  icon,
   hint,
   figure,
   children,
 }: {
   label: string
+  icon: LucideIcon
   hint: string
   figure?: string
   children: React.ReactNode
 }) {
   return (
-    <section className="rounded-2xl border border-card-line bg-card p-4">
-      <div className="flex items-baseline justify-between gap-3">
-        <h2 className="text-micro uppercase tracking-wide text-nav-muted">{label}</h2>
-        {figure ? (
-          <span className="shrink-0 text-sm font-bold tabular-nums text-nav-text-active">
+    <Pane
+      title={label}
+      icon={icon}
+      className="min-h-0"
+      action={
+        figure ? (
+          <span className="shrink-0 pr-2 text-[13px] font-bold tabular-nums text-foreground">
             {figure}
           </span>
-        ) : null}
-      </div>
-      <p className="mt-1 text-xs leading-5 text-subtle-foreground">{hint}</p>
+        ) : null
+      }
+    >
+      <p className="text-body leading-6 text-subtle-foreground">{hint}</p>
       <div className="mt-4">{children}</div>
-    </section>
+    </Pane>
   )
 }
 
@@ -86,6 +99,7 @@ export function DutyRhythm({ shifts }: { shifts: ResponderShift[] }) {
   return (
     <Frame
       label="Duty rhythm"
+      icon={CalendarRangeIcon}
       hint="Days you served over the last two weeks. A darker square means more incidents handled."
       figure={`${served} of 14 days`}
     >
@@ -116,11 +130,12 @@ export function ResponseTrend({ shifts }: { shifts: ResponderShift[] }) {
   return (
     <Frame
       label="Response time"
+      icon={GaugeIcon}
       hint="Average time from dispatch to your acknowledgement, across recent shifts."
       figure={formatResponse(latest)}
     >
       {values.length < 2 ? (
-        <p className="text-xs leading-5 text-subtle-foreground">
+        <p className="text-body leading-6 text-subtle-foreground">
           {values.length === 0
             ? "No completed shift has recorded a response time yet."
             : "One shift recorded so far. The trend appears from the second."}

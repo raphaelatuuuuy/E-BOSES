@@ -1,0 +1,359 @@
+"""Responder actions shared by the HTTP API and the SMS command router.
+
+Both channels must produce identical records, notifications and audit trails,
+so neither owns the logic.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from django.db import transaction
+from django.utils import timezone
+
+from apps.accounts.services import create_audit_log
+from apps.notifications.services import create_emergency_notification, notify_emergency_status
+
+from .models import EmergencyAlert, EmergencyEscalation, EmergencyResponderAssignment
+
+logger = logging.getLogger(__name__)
+
+OPEN_ASSIGNMENT_STATUSES = [
+    EmergencyResponderAssignment.Status.ASSIGNED,
+    EmergencyResponderAssignment.Status.ACKNOWLEDGED,
+    EmergencyResponderAssignment.Status.EN_ROUTE,
+    EmergencyResponderAssignment.Status.ARRIVED,
+    EmergencyResponderAssignment.Status.ASSISTING,
+]
+
+BACKUP_TYPES = {
+    "tanod": "Additional Barangay Tanod",
+    "medical": "Medical Assistance",
+    "fire": "Fire Assistance",
+    "disaster": "Disaster Response",
+    "traffic": "Traffic Control",
+    "vawc": "VAWC or Protection Support",
+    "other": "Other Authorized Support",
+}
+
+URGENCY_LEVELS = {"immediate": "Immediate", "high": "High", "normal": "Normal"}
+
+
+class ActionError(Exception):
+    """Raised when an action cannot be applied; message is user-facing."""
+
+
+def open_assignment_for(alert, responder):
+    return alert.assignments.filter(responder=responder, status__in=OPEN_ASSIGNMENT_STATUSES).first()
+
+
+def active_assignment_for(responder):
+    from .views import ACTIVE_STATUSES
+
+    return (
+        EmergencyResponderAssignment.objects.filter(
+            responder=responder,
+            status__in=OPEN_ASSIGNMENT_STATUSES,
+            alert__status__in=ACTIVE_STATUSES,
+        )
+        .select_related("alert")
+        .order_by("-assigned_at", "-id")
+        .first()
+    )
+
+
+def _advance_alert(alert, new_status, actor, note):
+    from .views import create_status_event
+
+    alert.status = new_status
+    alert.status_version += 1
+    alert.save(update_fields=["status", "status_version", "updated_at"])
+    create_status_event(alert, new_status, actor, note)
+    try:
+        notify_emergency_status(alert, type=new_status, body=note)
+    except Exception:
+        logger.warning("Status notification failed for alert %s.", alert.pk, exc_info=True)
+
+
+@transaction.atomic
+def acknowledge(alert, responder, *, note="", source="api"):
+    from .views import log_assignment_action
+
+    assignment = open_assignment_for(alert, responder)
+    if not assignment:
+        raise ActionError("You are not assigned to this emergency.")
+    if assignment.status in {
+        EmergencyResponderAssignment.Status.EN_ROUTE,
+        EmergencyResponderAssignment.Status.ARRIVED,
+    }:
+        return assignment
+
+    assignment.status = EmergencyResponderAssignment.Status.EN_ROUTE
+    assignment.acknowledged_at = assignment.acknowledged_at or timezone.now()
+    assignment.status_note = note[:255]
+    assignment.save(update_fields=["status", "acknowledged_at", "status_note"])
+
+    log_assignment_action(
+        alert=alert,
+        assignment=assignment,
+        responder=responder,
+        actor=responder,
+        action="acknowledged",
+        new_status=assignment.status,
+        note=note[:255],
+        metadata={"source": source},
+    )
+    _advance_alert(alert, EmergencyAlert.Status.EN_ROUTE, responder, "Responder is on the way.")
+    create_audit_log(
+        "emergency.acknowledged",
+        actor=responder,
+        target_user=alert.reporter,
+        metadata={"alert_id": alert.pk, "source": source},
+    )
+    return assignment
+
+
+@transaction.atomic
+def decline(alert, responder, *, reason, source="api"):
+    """Remove a responder and immediately look for the next eligible one."""
+    from .views import apply_routing_effects, find_auto_responders, log_assignment_action, role_map_for_departments, responder_department_ids
+
+    reason = (reason or "").strip()
+    if len(reason) < 3:
+        raise ActionError("A short reason is required so dispatch knows why.")
+
+    assignment = open_assignment_for(alert, responder)
+    if not assignment:
+        raise ActionError("You are not assigned to this emergency.")
+
+    assignment.status = EmergencyResponderAssignment.Status.DECLINED
+    assignment.status_note = reason[:255]
+    assignment.save(update_fields=["status", "status_note"])
+    log_assignment_action(
+        alert=alert,
+        assignment=assignment,
+        responder=responder,
+        actor=responder,
+        action="declined",
+        new_status=assignment.status,
+        note=reason[:255],
+        metadata={"source": source},
+    )
+
+    assigned_ids = list(alert.assignments.values_list("responder_id", flat=True))
+    replacements = find_auto_responders(alert, limit=1, exclude_ids=assigned_ids)
+    replacement = replacements[0] if replacements else None
+
+    if replacement:
+        role_map = role_map_for_departments(alert.type, responder_department_ids(replacement))
+        new_assignment = EmergencyResponderAssignment.objects.create(
+            alert=alert,
+            responder=replacement,
+            role_map=role_map,
+            source=EmergencyResponderAssignment.Source.ESCALATION,
+            status=EmergencyResponderAssignment.Status.ASSIGNED,
+        )
+        log_assignment_action(
+            alert=alert,
+            assignment=new_assignment,
+            responder=replacement,
+            action="reassigned_after_decline",
+            new_status=new_assignment.status,
+            note=f"Replaces a responder who could not go: {reason[:120]}",
+        )
+        apply_routing_effects(alert, replacement, None, audit_action="emergency.reassigned")
+    elif not alert.assignments.filter(status__in=OPEN_ASSIGNMENT_STATUSES).exists():
+        EmergencyEscalation.objects.get_or_create(
+            alert=alert,
+            reason=f"Responder unavailable and no replacement on duty: {reason[:150]}",
+        )
+        _notify_officials(alert, "Responder declined and no replacement is on duty.")
+
+    create_audit_log(
+        "emergency.declined",
+        actor=responder,
+        target_user=alert.reporter,
+        metadata={"alert_id": alert.pk, "reason": reason[:200], "replacement_id": getattr(replacement, "pk", None), "source": source},
+    )
+    return replacement
+
+
+@transaction.atomic
+def mark_on_scene(alert, responder, *, note="", source="api"):
+    from .views import log_assignment_action
+
+    assignment = open_assignment_for(alert, responder)
+    if not assignment:
+        raise ActionError("You are not assigned to this emergency.")
+
+    assignment.status = EmergencyResponderAssignment.Status.ARRIVED
+    assignment.arrived_at = assignment.arrived_at or timezone.now()
+    assignment.save(update_fields=["status", "arrived_at"])
+    log_assignment_action(
+        alert=alert,
+        assignment=assignment,
+        responder=responder,
+        actor=responder,
+        action="arrived",
+        new_status=assignment.status,
+        note=note[:255],
+        metadata={"source": source},
+    )
+    _advance_alert(alert, EmergencyAlert.Status.ARRIVED, responder, "Responder is at the scene.")
+    return assignment
+
+
+@transaction.atomic
+def resolve(alert, responder, *, note, source="api"):
+    from .views import log_assignment_action
+
+    note = (note or "").strip()
+    if len(note) < 3:
+        raise ActionError("A short closing note is required before resolving.")
+
+    assignment = open_assignment_for(alert, responder)
+    if assignment:
+        assignment.status = EmergencyResponderAssignment.Status.RESOLVED
+        assignment.status_note = note[:255]
+        assignment.save(update_fields=["status", "status_note"])
+        log_assignment_action(
+            alert=alert,
+            assignment=assignment,
+            responder=responder,
+            actor=responder,
+            action="resolved",
+            new_status=assignment.status,
+            note=note[:255],
+            metadata={"source": source},
+        )
+
+    alert.resolved_at = timezone.now()
+    alert.resolution_report = note[:2000]
+    alert.save(update_fields=["resolved_at", "resolution_report", "updated_at"])
+    _advance_alert(alert, EmergencyAlert.Status.RESOLVED, responder, note[:255])
+    create_audit_log(
+        "emergency.resolved",
+        actor=responder,
+        target_user=alert.reporter,
+        metadata={"alert_id": alert.pk, "source": source},
+    )
+    return alert
+
+
+@transaction.atomic
+def request_backup(alert, responder, *, backup_type="other", reason="", urgency="high", source="api"):
+    from .views import find_backup_responder, log_assignment_action
+
+    reason = (reason or "").strip()
+    if len(reason) < 3:
+        raise ActionError("Say briefly what support you need.")
+    backup_type = backup_type if backup_type in BACKUP_TYPES else "other"
+    urgency = urgency if urgency in URGENCY_LEVELS else "high"
+
+    requester_assignment = open_assignment_for(alert, responder)
+    backup = find_backup_responder(alert)
+
+    escalation = EmergencyEscalation.objects.create(
+        alert=alert,
+        previous_assignment=requester_assignment,
+        escalated_to=backup,
+        triggered_by=responder,
+        reason=f"Backup requested. {reason[:150]}".strip(),
+    )
+
+    backup_assignment = None
+    if backup:
+        backup_assignment, _ = EmergencyResponderAssignment.objects.get_or_create(
+            alert=alert,
+            responder=backup,
+            defaults={
+                "status": EmergencyResponderAssignment.Status.ASSIGNED,
+                "source": EmergencyResponderAssignment.Source.ESCALATION,
+            },
+        )
+        log_assignment_action(
+            alert=alert,
+            assignment=backup_assignment,
+            responder=backup,
+            actor=responder,
+            action="backup_assigned",
+            new_status=backup_assignment.status,
+            note=escalation.reason[:255],
+            metadata={"backup_type": backup_type, "urgency": urgency, "source": source},
+        )
+        try:
+            create_emergency_notification(
+                alert=alert,
+                recipient=backup,
+                type="emergency_escalated",
+                title=f"Backup requested: {BACKUP_TYPES[backup_type]}",
+                body=reason[:240],
+            )
+        except Exception:
+            logger.warning("Backup notification failed for alert %s.", alert.pk, exc_info=True)
+    else:
+        _notify_officials(alert, f"Backup requested but nobody is free: {reason[:150]}")
+
+    create_audit_log(
+        "emergency.backup_requested",
+        actor=responder,
+        target_user=alert.reporter,
+        metadata={
+            "alert_id": alert.pk,
+            "backup_type": backup_type,
+            "urgency": urgency,
+            "backup_id": getattr(backup, "pk", None),
+            "source": source,
+        },
+    )
+    return backup
+
+
+@transaction.atomic
+def set_duty(responder, *, on_duty, source="api"):
+    from .models import ResponderShift
+
+    if bool(responder.is_on_duty) == bool(on_duty):
+        return responder
+
+    responder.is_on_duty = bool(on_duty)
+    responder.save(update_fields=["is_on_duty", "updated_at"])
+
+    if on_duty:
+        ResponderShift.objects.get_or_create(
+            responder=responder,
+            ended_at=None,
+            defaults={"status": ResponderShift.Status.ACTIVE, "started_at": timezone.now()},
+        )
+    else:
+        from .views import finish_responder_shift
+
+        shift = ResponderShift.objects.filter(responder=responder, ended_at__isnull=True).first()
+        if shift:
+            finish_responder_shift(shift)
+
+    create_audit_log(
+        "emergency.duty_changed",
+        actor=responder,
+        target_user=responder,
+        metadata={"is_on_duty": bool(on_duty), "source": source},
+    )
+    return responder
+
+
+def _notify_officials(alert, body):
+    from django.contrib.auth import get_user_model
+
+    User = get_user_model()
+    officials = User.objects.filter(role=User.Role.BARANGAY_OFFICIAL, status=User.Status.VERIFIED)[:20]
+    for official in officials:
+        try:
+            create_emergency_notification(
+                alert=alert,
+                recipient=official,
+                type="emergency_escalated",
+                title="Emergency needs attention",
+                body=body,
+            )
+        except Exception:
+            continue

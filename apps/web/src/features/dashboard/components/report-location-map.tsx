@@ -7,6 +7,7 @@ import type leaflet from "leaflet"
 import { cn } from "@workspace/ui/lib/utils"
 import { matchMarikinaHeightsStreet } from "@/features/auth/lib/marikina-heights-streets"
 import { reverseGeocodeToMarikinaStreet } from "@/features/auth/lib/reverse-geocode"
+import { reverseGeocode } from "@/lib/geocode"
 
 type ReportLocationMapProps = {
   latitude: number | string | null | undefined
@@ -114,18 +115,8 @@ async function reverseGeocodeStreet(lat: number, lng: number): Promise<string> {
   let nominatimRoad = ""
   let house = ""
   try {
-    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=jsonv2&addressdetails=1&zoom=18`
-    const res = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "E-Boses/1.0 (barangay-concern-reports)",
-      },
-    })
-    if (res.ok) {
-      const data = (await res.json()) as {
-        name?: string
-        address?: Record<string, string>
-      }
+    const data = await reverseGeocode(lat, lng)
+    if (data) {
       const a = data.address ?? {}
       house = a.house_number?.trim() || ""
       nominatimRoad = (

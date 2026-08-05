@@ -13,11 +13,11 @@ class MapsAdapter(Protocol):
         """Resolve coordinates into address/barangay metadata."""
 
 
-class YOLOAdapter(Protocol):
-    def detect_objects(self, *, image_path: str) -> list[dict]:
-        """Detect objects in submitted evidence images."""
-
-
 class NLPAdapter(Protocol):
     def classify_concern(self, *, title: str, description: str) -> dict:
         """Classify category, urgency, or unsafe content from concern text."""
+
+
+class PrivacySegmentationAdapter(Protocol):
+    def segment(self, *, image_path: str, classes: list[str]) -> list[dict]:
+        """Locate suspected sensitive regions in an image and return masks."""

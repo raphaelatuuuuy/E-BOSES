@@ -1,4 +1,4 @@
-import { AlertTriangleIcon, ChevronLeftIcon, MapPinIcon } from "lucide-react"
+import { AlertTriangleIcon, ChevronLeftIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -46,12 +46,6 @@ export function EmergencyBanner({
                   </span>
                 </div>
                 <p className="text-[12px] leading-snug text-neutral-600">{brief.line}</p>
-                {(selectedEmergency.address || selectedEmergency.barangay) &&
-                selectedEmergency.note ? (
-                  <p className="mt-0.5 text-[11px] text-neutral-500">
-                    {selectedEmergency.address || selectedEmergency.barangay}
-                  </p>
-                ) : null}
               </div>
             )
           })()
@@ -80,7 +74,6 @@ export function EmergencyPreviewCard({
   const brief = emergencyBrief(emergency)
   const dist = formatDistance(distance)
   const ago = timeAgo(emergency.created_at)
-  const place = (emergency.address || emergency.barangay || "").trim()
 
   return (
     <button
@@ -115,17 +108,11 @@ export function EmergencyPreviewCard({
             </div>
           </div>
           <p className="mt-0.5 text-[11px] text-neutral-500 sm:text-[12px]">
-            {[dist, ago, place].filter(Boolean).join(" · ")}
+            {[dist, ago].filter(Boolean).join(" · ")}
           </p>
-          {emergency.note?.trim() ? (
-            <p className="mt-1.5 line-clamp-2 break-words text-[12px] leading-snug text-neutral-600 sm:text-[13px]">
-              {emergency.note.trim()}
-            </p>
-          ) : (
-            <p className="mt-1.5 text-[12px] leading-snug text-neutral-500 sm:text-[13px]">
-              Ongoing SOS — responders may be en route
-            </p>
-          )}
+          <p className="mt-1.5 line-clamp-2 break-words text-[12px] leading-snug text-neutral-600 sm:text-[13px]">
+            Ongoing emergency — help has been dispatched.
+          </p>
         </div>
       </div>
     </button>
@@ -144,7 +131,6 @@ export function EmergencyDetailPanel({
 }) {
   const brief = emergencyBrief(emergency)
   const dist = formatDistance(distance)
-  const place = (emergency.address || emergency.barangay || "").trim()
   const st = brief.status
 
   return (
@@ -184,23 +170,16 @@ export function EmergencyDetailPanel({
             </div>
           </div>
 
-          {place ? (
-            <div className="mt-4 flex items-start gap-2 text-[13px] text-neutral-700">
-              <MapPinIcon className="mt-0.5 size-4 shrink-0 text-red-500" />
-              <span>{place}</span>
-            </div>
-          ) : null}
-
-          {emergency.note?.trim() ? (
-            <div className="mt-3 rounded-xl border border-red-100 bg-white px-3 py-2.5">
-              <p className="text-[11px] font-bold tracking-wide text-neutral-500 uppercase">
-                Note
-              </p>
-              <p className="mt-1 text-[14px] leading-relaxed text-neutral-800">
-                {emergency.note.trim()}
-              </p>
-            </div>
-          ) : null}
+          <div className="mt-3 rounded-xl border border-red-100 bg-white px-3 py-2.5">
+            <p className="text-[11px] font-bold tracking-wide text-neutral-500 uppercase">
+              Status
+            </p>
+            <p className="mt-1 text-[14px] leading-relaxed text-neutral-800">
+              {st.live
+                ? "This SOS is active. Help has been dispatched to the area."
+                : "This emergency is no longer active."}
+            </p>
+          </div>
 
           <div className="mt-4 grid grid-cols-2 gap-2 text-[12px]">
             <div className="rounded-xl border border-neutral-200 bg-white px-3 py-2.5">
@@ -227,11 +206,11 @@ export function EmergencyDetailPanel({
             </div>
           </div>
 
-          <p className="mt-4 text-[12px] leading-relaxed text-neutral-500">
-            {st.live
-              ? "This SOS is active. Barangay responders may be en route. Stay clear if you are not involved."
-              : "This emergency is no longer active."}
-          </p>
+          {st.live ? (
+            <p className="mt-4 text-[12px] leading-relaxed text-neutral-500">
+              Stay clear of the area if you are not involved.
+            </p>
+          ) : null}
         </div>
       </div>
     </div>

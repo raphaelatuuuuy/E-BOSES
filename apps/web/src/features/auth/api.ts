@@ -140,7 +140,8 @@ export function detectRegistrationProof(formData: FormData) {
 export interface PhoneOtpRequestResult {
   detail?: string
   /** Present only in local/development when SMS is printed to the API console. */
-  debug_code?: string
+  expires_in?: number
+  retry_after?: number
 }
 
 export function requestRegistrationPhoneOtp(payload: { phone_number: string }) {
@@ -260,7 +261,7 @@ export function changePassword(payload: {
 }
 
 export function requestAccountPhoneOtp(payload: { phone_number: string }) {
-  return apiRequest<{ detail?: string; debug_code?: string } | void>(
+  return apiRequest<{ detail?: string; expires_in?: number; retry_after?: number } | void>(
     "/auth/account/phone/request-otp/",
     {
       method: "POST",
@@ -277,7 +278,7 @@ export function verifyAccountPhoneOtp(payload: { phone_number: string; code: str
 }
 
 export function requestAccountEmailOtp(payload: { email: string }) {
-  return apiRequest<{ detail?: string; debug_code?: string } | void>(
+  return apiRequest<{ detail?: string; expires_in?: number; retry_after?: number } | void>(
     "/auth/account/email/request-otp/",
     {
       method: "POST",

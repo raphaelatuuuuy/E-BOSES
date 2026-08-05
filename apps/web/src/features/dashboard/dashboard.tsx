@@ -10,7 +10,6 @@ import { useAuthSession } from "@/features/auth/auth-session"
 import { isResponderUser } from "@/features/auth/roles"
 import { MobileNav } from "@/features/dashboard/components/mobile-nav"
 import { StaffMobileHeader } from "@/features/dashboard/components/mobile-header"
-import { ResponderDispatchFab } from "@/features/dashboard/components/responder-dispatch-fab"
 import { useLocationPing } from "@/features/dashboard/hooks/use-location-ping"
 import { NotificationProvider, fetchConcern } from "@/features/dashboard/components/notification-context"
 import { ReportStatusDialog, statusModeFromReport } from "@/features/dashboard/components/report-status-dialog"
@@ -26,6 +25,7 @@ import {
   SHELL_MAX_STAFF,
   SIDEBAR_MIN,
   SIDEBAR_W,
+  SIDEBAR_W_RESPONDER,
   SIDEBAR_W_STAFF,
 } from "@/features/dashboard/lib/shell"
 import type { StatusDialogMode } from "@/features/dashboard/components/report-status-dialog"
@@ -74,7 +74,7 @@ function DashboardContent() {
   const shellHome = isResident
     ? "/dashboard/home"
     : user?.role === "first_responder"
-      ? "/dashboard/responders/map"
+      ? "/dashboard/responders/dispatch"
       : "/dashboard/alerts-map"
 
   const statusDialog = statusDialogReport ? (
@@ -101,7 +101,8 @@ function DashboardContent() {
   // (`bg-card`, `border-card-line`, `text-muted-foreground`) rather than
   // literal colours. Currently applied to responders only; officials stay
   // light until their screens are migrated off hardcoded light colours.
-  const shellScope = !isResident && user && isResponderUser(user) ? "staff-dark" : undefined
+  const isResponder = Boolean(!isResident && user && isResponderUser(user))
+  const shellScope = isResponder ? "staff-dark" : undefined
 
   // Triage routes own their vertical space (see RouteChrome.workspace). Below
   // the desktop breakpoint they revert to a scrolling column, so the flag only
@@ -126,9 +127,15 @@ function DashboardContent() {
             <div
               className="grid h-svh max-h-svh min-h-0 overflow-hidden"
               style={{
+                // Two columns for everyone now. The responder used to have a
+                // third, 72px icon rail (avatar, bell, comms, sync dot, red
+                // dispatch button); that whole rail was removed — identity,
+                // notifications, comms and settings all live in the sidebar.
                 gridTemplateColumns: isResident
                   ? `minmax(${SIDEBAR_MIN}px, min(${SIDEBAR_W}px, 36vw)) minmax(0, 1fr)`
-                  : `${SIDEBAR_W_STAFF}px minmax(0, 1fr)`,
+                  : isResponder
+                    ? `${SIDEBAR_W_RESPONDER}px minmax(0, 1fr)`
+                    : `${SIDEBAR_W_STAFF}px minmax(0, 1fr)`,
               }}
             >
               <div
@@ -178,7 +185,7 @@ function DashboardContent() {
                   keyed off the map flag rather than `hideMobileNav`, which the
                   responder map no longer sets. */}
               {!hideMobileNav && !chrome.fullBleedMap && !isResident ? (
-                <StaffMobileHeader homeTo={shellHome} />
+                <StaffMobileHeader homeTo={shellHome} tone={isResponder ? "dark" : "light"} />
               ) : null}
               <Outlet />
             </main>
@@ -190,8 +197,6 @@ function DashboardContent() {
         {isResident ? (
           <SOSButton suppressed={chrome.fullBleedMap || isAccountWizardRoute} />
         ) : null}
-
-        {!isResident ? <ResponderDispatchFab /> : null}
 
         {statusDialog}
       </div>

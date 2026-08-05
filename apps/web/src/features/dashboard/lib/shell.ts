@@ -35,6 +35,13 @@ export const SIDEBAR_MIN = 220
 export const SIDEBAR_W_STAFF = 232
 
 /**
+ * Responder sidebar — wider than the official's 232px because it hosts the
+ * identity block (avatar + name + position) and the centred nav group, which
+ * need a little more air than the official's text rows.
+ */
+export const SIDEBAR_W_RESPONDER = 248
+
+/**
  * Vertical space the mobile nav row occupies, including its safe-area padding.
  *
  * Anything that floats at the bottom of a mobile screen offsets by this so it
@@ -42,6 +49,14 @@ export const SIDEBAR_W_STAFF = 232
  */
 export const MOBILE_NAV_CLEARANCE =
   "calc(3.75rem + max(1.25rem, env(safe-area-inset-bottom) + 0.75rem))"
+
+/**
+ * Same, for the responder's full-width bottom bar. It is a flush bar rather
+ * than a floating pill, so it sits 4rem tall against the viewport floor and
+ * absorbs the safe-area inset itself instead of clearing it.
+ */
+export const MOBILE_BAR_CLEARANCE =
+  "calc(4rem + env(safe-area-inset-bottom))"
 
 /** Layout tokens — MUST match home body grid. */
 export const FEED_MAX = 680
@@ -108,10 +123,9 @@ export interface RouteChrome {
  * role.
  */
 export function getRouteChrome(pathname: string): RouteChrome {
-  const isResponderMapRoute = pathname === "/dashboard/responders/map"
   const isAlertsMapRoute =
     pathname === "/dashboard/alerts-map" || pathname.endsWith("/alerts-map")
-  const fullBleedMap = isResponderMapRoute || isAlertsMapRoute
+  const fullBleedMap = isAlertsMapRoute
 
   const backChrome =
     pathname.startsWith("/dashboard/settings") ||
@@ -122,23 +136,21 @@ export function getRouteChrome(pathname: string): RouteChrome {
     pathname.startsWith("/dashboard/settings/reverify/") ||
     pathname === "/dashboard/settings/change-password"
 
-  // The alert map hides the bottom pill: it fills the viewport and its own
-  // floating panels sit where the pill would.
-  //
-  // The responder map is the exception. Its dispatch panel now opens as a sheet
-  // *behind* the nav rather than floating over it, so the two no longer collide
-  // — and hiding the nav there left a responder on the map with no way to reach
-  // Shift without going through the browser's back button.
-  const hideMobileNav =
-    backChrome || accountWizard || (fullBleedMap && !isResponderMapRoute)
+  const hideMobileNav = backChrome || accountWizard || fullBleedMap
 
   // Triage surfaces. Desktop only — below the desktop breakpoint these fall
   // back to a single scrolling column with list<->detail navigation, so the
   // shell must keep scrolling there.
+  //
+  // The responder dispatch console joins them: its left column (dispatch +
+  // timeline) and right column (map + comms) each scroll on their own, which
+  // only works if the shell stops scrolling around them. On a phone it reverts
+  // to one scrolling column like the rest.
   const workspace =
     pathname === "/dashboard/emergencies" ||
     pathname === "/dashboard/reports" ||
     pathname.startsWith("/dashboard/reports/") ||
+    pathname === "/dashboard/responders/dispatch" ||
     isAlertsMapRoute
 
   return { backChrome, accountWizard, fullBleedMap, hideMobileNav, workspace }

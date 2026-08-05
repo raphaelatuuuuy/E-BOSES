@@ -16,7 +16,8 @@ from rest_framework.test import APITestCase
 from apps.accounts.models import AuditLog, ResidentProfile
 from apps.notifications.models import Notification
 
-from .models import EmergencyAlert, EmergencyAppeal, EmergencyChatAttachment, EmergencyChatMessage, EmergencyEscalation, EmergencyLocationPing, EmergencyMedia, EmergencyResponderAssignment, EmergencyStatusEvent, MapGeometry, ResponderShift, WitnessNotification
+from .models import EmergencyAlert, EmergencyAppeal, EmergencyChatAttachment, EmergencyChatMessage, EmergencyEscalation, EmergencyLocationPing, EmergencyMedia, EmergencyResponderAssignment, EmergencyStatusEvent, EmergencyTypeRoleMap, MapGeometry, ResponderShift, WitnessNotification
+from apps.concerns.models import Department
 from .views import auto_route_alert
 
 
@@ -70,6 +71,21 @@ class EmergencyAPITests(APITestCase):
             status=User.Status.VERIFIED,
         )
         self.client.force_authenticate(self.resident)
+        bhw = Department.objects.get(code="bhw")
+        bdrrmo = Department.objects.get(code="bdrrmo")
+        # update_or_create, not create: migration 0027 now seeds a default
+        # routing table so a fresh barangay dispatches out of the box, and
+        # these two rows are part of it.
+        EmergencyTypeRoleMap.objects.update_or_create(
+            emergency_type=EmergencyAlert.Type.MEDICAL,
+            department=bhw,
+            defaults={"responder_unit": "bhw", "is_active": True},
+        )
+        EmergencyTypeRoleMap.objects.update_or_create(
+            emergency_type=EmergencyAlert.Type.FIRE,
+            department=bdrrmo,
+            defaults={"responder_unit": "bdrrmo", "is_active": True},
+        )
 
     def create_alert(self):
         response = self.client.post(
@@ -77,8 +93,8 @@ class EmergencyAPITests(APITestCase):
             {
                 "type": EmergencyAlert.Type.MEDICAL,
                 "note": "Chest pain near the covered court.",
-                "latitude": "14.6515000",
-                "longitude": "121.1207000",
+                "latitude": "14.6510000",
+                "longitude": "121.1150000",
                 "address": "Covered court",
             },
             format="json",
@@ -111,8 +127,8 @@ class EmergencyAPITests(APITestCase):
                 "/api/emergencies/",
                 {
                     "type": EmergencyAlert.Type.MEDICAL,
-                    "latitude": "14.6515000",
-                    "longitude": "121.1207000",
+                    "latitude": "14.6510000",
+                    "longitude": "121.1150000",
                     "address": "Covered court",
                 },
                 format="json",
@@ -135,7 +151,7 @@ class EmergencyAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("Location must be inside Barangay Marikina Heights", str(response.data))
+        self.assertIn("must be inside Barangay Marikina Heights", str(response.data))
         self.assertFalse(EmergencyAlert.objects.filter(address="Outside boundary").exists())
 
     def test_duplicate_optional_media_is_skipped_without_blocking_alert(self):
@@ -143,8 +159,8 @@ class EmergencyAPITests(APITestCase):
             "/api/emergencies/",
             {
                 "type": EmergencyAlert.Type.MEDICAL,
-                "latitude": "14.6515000",
-                "longitude": "121.1207000",
+                "latitude": "14.6510000",
+                "longitude": "121.1150000",
                 "address": "Covered court",
                 "media": [png_upload("first.png"), png_upload("second.png")],
             },
@@ -161,8 +177,8 @@ class EmergencyAPITests(APITestCase):
             "/api/emergencies/",
             {
                 "type": EmergencyAlert.Type.MEDICAL,
-                "latitude": "14.6515000",
-                "longitude": "121.1207000",
+                "latitude": "14.6510000",
+                "longitude": "121.1150000",
                 "address": "Covered court",
                 "media": png_upload("hash.png"),
             },
@@ -178,8 +194,8 @@ class EmergencyAPITests(APITestCase):
             "/api/emergencies/",
             {
                 "type": EmergencyAlert.Type.MEDICAL,
-                "latitude": "14.6515000",
-                "longitude": "121.1207000",
+                "latitude": "14.6510000",
+                "longitude": "121.1150000",
                 "address": "Covered court",
                 "media": png_upload("authorized.png"),
             },
@@ -236,8 +252,8 @@ class EmergencyAPITests(APITestCase):
             phone_number="+639360000009",
             password="pass",
             status=get_user_model().Status.VERIFIED,
-            current_latitude="14.6516000",
-            current_longitude="121.1208000",
+            current_latitude="14.6511000",
+            current_longitude="121.1151000",
             location_updated_at=timezone.now(),
         )
         ResidentProfile.objects.create(
@@ -282,8 +298,8 @@ class EmergencyAPITests(APITestCase):
             "/api/emergencies/",
             {
                 "type": EmergencyAlert.Type.FIRE,
-                "latitude": "14.6515000",
-                "longitude": "121.1207000",
+                "latitude": "14.6510000",
+                "longitude": "121.1150000",
                 "address": "Second alert",
             },
             format="json",
@@ -397,9 +413,15 @@ class EmergencyAPITests(APITestCase):
         self.assertFalse(alert.assignments.filter(responder=bhw_far).exists())
         self.assertFalse(alert.assignments.filter(responder__responder_unit=User.ResponderUnit.TANOD).exists())
         route_event = EmergencyStatusEvent.objects.get(alert=alert, status=EmergencyAlert.Status.ROUTED)
-        self.assertEqual(route_event.note, "Responder routed")
+        self.assertEqual(route_event.note, "A responder was automatically assigned.")
         self.assertTrue(Notification.objects.filter(recipient=bhw_near, emergency=alert, type=Notification.Type.EMERGENCY_ROUTED).exists())
-        self.assertFalse(Notification.objects.filter(recipient=bhw_far, emergency=alert, type=Notification.Type.EMERGENCY_ROUTED).exists())
+        self.assertFalse(
+            Notification.objects.filter(
+                recipient=bhw_far,
+                emergency=alert,
+                type=Notification.Type.EMERGENCY_ROUTED,
+            ).exclude(metadata__standby=True).exists()
+        )
 
     def test_auto_routing_excludes_nearest_responder_from_another_barangay(self):
         User = get_user_model()
@@ -1038,9 +1060,13 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(repeated_response.data, [])
         self.assertEqual(EmergencyEscalation.objects.filter(alert=alert, escalated_to=backup).count(), 1)
         assignment.refresh_from_db()
-        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ASSIGNED)
+        # The unacknowledged assignment is closed out rather than left
+        # sitting against a responder who never replied.
+        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ESCALATED)
         self.assertTrue(alert.assignments.filter(responder=backup).exists())
-        self.assertTrue(Notification.objects.filter(recipient=backup, type=Notification.Type.EMERGENCY_ESCALATED).exists())
+        # The replacement is genuinely assigned, so they get the assignment
+        # notification; the escalation notice goes to the reporter.
+        self.assertTrue(Notification.objects.filter(recipient=backup).exists())
         self.assertTrue(Notification.objects.filter(recipient=self.resident, type=Notification.Type.EMERGENCY_ESCALATED).exists())
 
     def test_resident_can_appeal_closed_emergency_and_official_reviews(self):
@@ -1356,12 +1382,29 @@ class EmergencyAPITests(APITestCase):
         self.assertNotIn("current_assignment", emergency)
         self.assertEqual(emergency["kind"], "emergency")
         self.assertIn("type", emergency)
-        self.assertNotIn("latitude", emergency)
-        self.assertNotIn("longitude", emergency)
-        self.assertNotIn("address", emergency)
+        # Resident pins need coordinates; address is shown in the banner.
+        self.assertEqual(emergency["latitude"], "14.6510000")
+        self.assertEqual(emergency["longitude"], "121.1150000")
+        self.assertEqual(emergency["address"], "Covered court")
         # Official live map remains staff-only
         still_denied = self.client.get("/api/dashboard/official/live-map/")
         self.assertEqual(still_denied.status_code, status.HTTP_403_FORBIDDEN)
+
+    @patch("apps.geo_services.collect_service_pois", return_value=[])
+    def test_resident_emergency_payload_null_coords_without_gps(self, _collect_service_pois):
+        alert = self.create_alert()
+        alert.latitude = None
+        alert.longitude = None
+        alert.save(update_fields=["latitude", "longitude", "updated_at"])
+
+        self.client.force_authenticate(self.resident)
+        response = self.client.get("/api/locations/resident-alerts-map/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        emergency = next(item for item in response.data["emergencies"] if item["id"] == alert.pk)
+        self.assertIsNone(emergency["latitude"])
+        self.assertIsNone(emergency["longitude"])
+        self.assertEqual(emergency["address"], "Covered court")
 
     def test_official_live_map_snapshot_serves_cached_geometry(self):
         cache.delete("live-map-static-geometry:v2")
@@ -1505,7 +1548,7 @@ class EmergencyAPITests(APITestCase):
         alert.refresh_from_db()
         self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
         self.assertEqual(alert.assignments.get().responder, self.responder)
-        self.assertEqual(alert.status_events.filter(status=EmergencyAlert.Status.ROUTED, note="Responder routed").count(), 1)
+        self.assertEqual(alert.status_events.filter(status=EmergencyAlert.Status.ROUTED, note="A responder was automatically assigned.").count(), 1)
         self.assertTrue(Notification.objects.filter(recipient=self.responder, emergency=alert, type=Notification.Type.EMERGENCY_ROUTED).exists())
         self.assertTrue(EmergencyChatMessage.objects.filter(alert=alert, sender=self.responder).exists())
         self.assertTrue(AuditLog.objects.filter(action="emergency.claimed", actor=self.responder, metadata__alert_id=alert.pk).exists())
@@ -1533,8 +1576,8 @@ class EmergencyAPITests(APITestCase):
         original = EmergencyResponderAssignment.objects.create(alert=alert, responder=first)
         self.client.force_authenticate(first)
 
-        initial = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", {}, format="json")
-        repeated = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", {}, format="json")
+        initial = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", {"backup_type": "medical", "reason": "Need another pair of hands", "urgency": "high"}, format="json")
+        repeated = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", {"backup_type": "medical", "reason": "Need another pair of hands", "urgency": "high"}, format="json")
 
         self.assertEqual(initial.status_code, status.HTTP_200_OK)
         self.assertEqual(repeated.status_code, status.HTTP_200_OK)
@@ -1543,19 +1586,24 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(alert.assignments.filter(status=EmergencyResponderAssignment.Status.ASSIGNED).count(), 2)
         self.assertEqual(initial.data["current_assignment"]["id"], original.pk)
         self.assertEqual([item["id"] for item in initial.data["active_assignments"]], [original.pk, alert.assignments.get(responder=second).pk])
-        self.assertEqual(alert.escalations.filter(reason="Backup requested.").count(), 1)
+        self.assertEqual(alert.escalations.count(), 2)
 
     def test_backup_authorization_and_no_candidate(self):
         alert = self.direct_alert(status=EmergencyAlert.Status.ROUTED)
         self.make_on_duty_responder(self.responder)
         EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
         self.client.force_authenticate(self.other)
-        denied = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", {}, format="json")
+        denied = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", {"backup_type": "medical", "reason": "Need another pair of hands", "urgency": "high"}, format="json")
         self.client.force_authenticate(self.responder)
-        unavailable = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", {}, format="json")
+        unavailable = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", {"backup_type": "medical", "reason": "Need another pair of hands", "urgency": "high"}, format="json")
 
         self.assertEqual(denied.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertEqual(unavailable.status_code, status.HTTP_409_CONFLICT)
+        # With nobody free the request is still recorded and escalated to an
+        # official rather than rejected outright.
+        self.assertEqual(unavailable.status_code, status.HTTP_200_OK)
+        alert.refresh_from_db()
+        self.assertEqual(alert.status, EmergencyAlert.Status.BACKUP_REQUESTED)
+        self.assertTrue(alert.escalations.exists())
 
     def test_first_ping_needs_no_acknowledgement_and_quantizes_browser_gps(self):
         alert = self.direct_alert(status=EmergencyAlert.Status.ROUTED)

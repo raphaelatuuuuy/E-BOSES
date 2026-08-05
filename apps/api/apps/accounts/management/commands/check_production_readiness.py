@@ -46,8 +46,10 @@ class Command(BaseCommand):
             warnings.append("CSRF_TRUSTED_ORIGINS is empty.")
         if not getattr(settings, "WEB_PUSH_PUBLIC_KEY", "") or not getattr(settings, "WEB_PUSH_PRIVATE_KEY", ""):
             warnings.append("Browser push VAPID keys are missing.")
-        if not getattr(settings, "EBOSES_YOLO_MODEL_PATH", ""):
-            warnings.append("YOLOv8m weights are missing; image assessment will fall back to official review. Text assessment uses the built-in base keyword model.")
+        if not getattr(settings, "OLLAMA_API_KEY", ""):
+            warnings.append("OLLAMA_API_KEY is missing; report review will be unavailable and every report goes straight to manual official review.")
+        if not getattr(settings, "ROBOFLOW_API_KEY", ""):
+            warnings.append("ROBOFLOW_API_KEY is missing; automatic media protection cannot run and flagged photos stay restricted pending manual privacy review.")
 
         paddle_token = getattr(settings, "PADDLEOCR_TOKEN", "")
         paddle_url = getattr(settings, "PADDLEOCR_JOB_URL", "")

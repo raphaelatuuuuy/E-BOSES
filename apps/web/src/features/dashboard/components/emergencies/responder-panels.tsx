@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react"
-import { LocateFixedIcon, NavigationIcon, ShieldCheckIcon } from "lucide-react"
+import { LocateFixedIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { markEmergencyArrived, resolveEmergency, sendEmergencyLocationPing, updateEmergencyDuty, type EmergencyAlert } from "@/features/dashboard/emergency-api"
+import { updateEmergencyDuty } from "@/features/dashboard/emergency-api"
 import { useResponderUnit } from "@/features/dashboard/hooks/use-responder-unit"
 
 export function DutyPanel({
@@ -92,76 +92,5 @@ export function DutyPanel({
         </Button>
       </div>
     </section>
-  )
-}
-
-export function ResponderActions({ alert, onChanged }: { alert: EmergencyAlert; onChanged: (alert: EmergencyAlert) => void }) {
-  const [busy, setBusy] = useState("")
-
-  async function run(label: string, fn: () => Promise<EmergencyAlert>) {
-    setBusy(label)
-    try {
-      const next = await fn()
-      onChanged(next)
-      toast.success("Emergency updated")
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Emergency update failed.")
-    } finally {
-      setBusy("")
-    }
-  }
-
-  function ping() {
-    if (!navigator.geolocation) {
-      toast.error("GPS is not available on this device.")
-      return
-    }
-    setBusy("ping")
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const { latitude, longitude, accuracy } = position.coords
-        void run("ping", () => sendEmergencyLocationPing(alert.id, { latitude, longitude, accuracy }))
-      },
-      () => {
-        setBusy("")
-        toast.error("Allow location access to send responder GPS.")
-      },
-      { enableHighAccuracy: true, timeout: 10000 },
-    )
-  }
-
-  return (
-    <div className="rounded-panel border border-card-line bg-card p-4">
-      <p className="text-sm font-semibold text-brand-navy">Responder actions</p>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <Button
-          type="button"
-          disabled={Boolean(busy) || !["routed", "acknowledged", "en_route", "nearby"].includes(alert.status)}
-          onClick={ping}
-          className="bg-brand-orange text-brand-orange-ink hover:bg-brand-orange-strong"
-        >
-          <LocateFixedIcon className="size-4" />
-          {busy === "ping" ? "Sending GPS" : "Mark en route"}
-        </Button>
-        <Button
-          type="button"
-          disabled={Boolean(busy) || !["en_route", "nearby", "acknowledged"].includes(alert.status)}
-          onClick={() => run("arrived", () => markEmergencyArrived(alert.id))}
-          variant="outline"
-        >
-          <NavigationIcon className="size-4" />
-          {busy === "arrived" ? "Updating" : "I have arrived on scene"}
-        </Button>
-        <Button
-          type="button"
-          disabled={Boolean(busy) || !["arrived", "en_route", "nearby"].includes(alert.status)}
-          onClick={() => run("resolve", () => resolveEmergency(alert.id, "Incident resolved by responder."))}
-          variant="outline"
-        >
-          <ShieldCheckIcon className="size-4" />
-          {busy === "resolve" ? "Resolving" : "Resolve incident"}
-        </Button>
-      </div>
-    </div>
   )
 }

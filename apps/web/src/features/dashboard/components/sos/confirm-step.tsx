@@ -12,7 +12,7 @@ export function SosConfirmStep({
   onSmsFallbackClick,
   typeLabel,
   locationLabel,
-  mediaCount,
+  triageSummary,
   note,
   submitting,
   dispatchCountdown,
@@ -24,7 +24,7 @@ export function SosConfirmStep({
   onSmsFallbackClick: () => void
   typeLabel?: string
   locationLabel?: string
-  mediaCount: number
+  triageSummary?: string
   note: string
   submitting: boolean
   dispatchCountdown: number
@@ -142,10 +142,10 @@ export function SosConfirmStep({
       </div>
       <div className="rounded-xl border border-white/15 bg-white/10 p-4">
         <p className="text-[11px] font-semibold tracking-wide text-white/55 uppercase">
-          Evidence
+          Situation
         </p>
         <p className="mt-1 text-[15px] font-semibold text-white">
-          {mediaCount ? `${mediaCount} photo(s)` : "None"}
+          {triageSummary || "Not answered"}
         </p>
         {note.trim() ? (
           <p className="mt-2 text-[14px] leading-6 text-white/75">

@@ -8,7 +8,6 @@ import {
   Minimize2Icon,
   NavigationIcon,
   RadioIcon,
-  ShieldCheckIcon,
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -43,19 +42,24 @@ const activeStatuses: EmergencyStatus[] = [
 
 const statusLabels: Record<EmergencyStatus, string> = {
   submitted: "Alert sent",
+  routing: "Finding responder",
   routed: "Responder assigned",
+  awaiting_acknowledgment: "Awaiting responder",
   acknowledged: "Responder routed",
   en_route: "On the way",
   nearby: "Nearby",
   arrived: "On scene",
+  resident_safe: "Resident safe",
+  backup_requested: "Backup requested",
+  backup_assigned: "Backup assigned",
+  in_progress: "Response in progress",
+  transfer_required: "Transfer required",
+  escalation_required: "Escalation required",
   resolved: "Resolved",
+  closed: "Closed",
   invalid: "Invalid",
   cancelled: "Cancelled",
   false_alarm: "False alarm",
-}
-
-function assignedUnit(alert: EmergencyAlert) {
-  return alert.current_assignment?.responder.responder_unit || "configured response unit"
 }
 
 /**
@@ -181,7 +185,11 @@ function buildStatusTimeline(alert: EmergencyAlert): TimelineRow[] {
       lower.includes("manual dispatch") ||
       lower.includes("barangay desk") ||
       lower.includes("emergency desk") ||
-      lower.includes("no on-duty")
+      lower.includes("no on-duty") ||
+      lower.includes("replaces a responder") ||
+      lower.includes("could not go") ||
+      lower.includes("standby") ||
+      lower.includes("reassigned")
     const looksLikeStatusOnly =
       !rawNote ||
       isDeskNoise ||
@@ -225,14 +233,13 @@ function buildStatusTimeline(alert: EmergencyAlert): TimelineRow[] {
 }
 
 function statusText(alert: EmergencyAlert) {
-  const unit = assignedUnit(alert)
   if (alert.status === "submitted") {
-    return `Finding nearest on-duty responder from the configured unit for this ${alert.type.replace(/_/g, " ")} case.`
+    return `Finding the nearest responder for this ${alert.type.replace(/_/g, " ")} case.`
   }
   if (alert.status === "routed") {
-    return `Assigned through the official dispatch rule. Unit: ${unit}.`
+    return "A responder has been assigned to your location."
   }
-  if (alert.status === "acknowledged") return "Responder routed; location updates will appear when travel begins."
+  if (alert.status === "acknowledged") return "A responder is on the way to your location."
   if (alert.status === "en_route") return "Responder is on the way."
   if (alert.status === "nearby") return "Responder is near your location."
   if (alert.status === "arrived") return "Responder has arrived."
@@ -252,10 +259,6 @@ function headline(alert: EmergencyAlert) {
 }
 function formatTime(value: string) {
   return new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit" }).format(new Date(value))
-}
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(new Date(value))
 }
 
 function distanceMeters(from: { lat: number; lng: number }, to: { lat: number; lng: number }) {
@@ -531,10 +534,6 @@ function DetailsColumn({
   alert,
   connectionState,
   distance,
-  locationIsStale,
-  lastLocation,
-  responder,
-  allAssignments,
   canAppeal,
   appealReason,
   setAppealReason,
@@ -547,18 +546,6 @@ function DetailsColumn({
   alert: EmergencyAlert
   connectionState: "connecting" | "live" | "degraded"
   distance: number | null
-  locationIsStale: boolean
-  lastLocation: EmergencyAlert["current_assignment"] extends infer A
-    ? A extends { last_location: infer L }
-      ? L
-      : null
-    : null
-  responder: EmergencyAlert["current_assignment"] extends infer A
-    ? A extends { responder: infer R }
-      ? R
-      : null
-    : null
-  allAssignments: EmergencyAlert["assignments"]
   canAppeal: boolean
   appealReason: string
   setAppealReason: (v: string) => void
@@ -568,7 +555,6 @@ function DetailsColumn({
   chatOpen: boolean
   chatMessage: EmergencyChatMessage | null
 }) {
-  const isLive = activeStatuses.includes(alert.status)
   return (
     <div className="space-y-3 pb-2">
       <div className="rounded-xl border border-white/10 bg-white/10 p-4 text-white">
@@ -579,11 +565,9 @@ function DetailsColumn({
           <div className="min-w-0">
             <p className="text-[14px] font-semibold">{statusText(alert)}</p>
 <p className="mt-1 text-[12px] text-white/70">
-               {!isLive && alert.route?.geometry
-                 ? "Road-based route persisted from OSRM"
-                 : distance !== null
-                   ? `${formatDistance(distance)} · ${formatEta(distance)}`
-                   : alert.address || alert.barangay}
+               {distance !== null
+                 ? `${formatDistance(distance)} · ${formatEta(distance)}`
+                 : alert.address || alert.barangay}
              </p>
             <p className="mt-1 text-[11px] text-white/50">
               {connectionState === "live"
@@ -591,56 +575,10 @@ function DetailsColumn({
                 : connectionState === "connecting"
                   ? "Connecting…"
                   : "Polling for updates"}
-              {locationIsStale ? " · GPS temporarily stale" : ""}
             </p>
           </div>
         </div>
       </div>
-
-<div className="rounded-xl border border-white/10 bg-white/10 p-4 text-white">
-        <div className="flex items-start gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-white">
-            <ShieldCheckIcon className="size-4" />
-          </span>
-          <div className="min-w-0">
-            {isLive ? (
-              <>
-                <p className="text-[14px] font-semibold">
-                  {responder && typeof responder === "object" && "full_name" in responder
-                    ? String((responder as { full_name: string }).full_name)
-                    : "Responder not assigned yet"}
-                </p>
-                <p className="mt-1 text-[12px] text-white/70">
-                  {responder && typeof responder === "object" && "role" in responder
-                    ? `${String((responder as { role: string }).role).replace(/_/g, " ")}${
-                        lastLocation && typeof lastLocation === "object" && lastLocation && "created_at" in lastLocation
-                          ? ` · GPS ${formatTime(String((lastLocation as { created_at: string }).created_at))}`
-                          : ""
-                      }`
-                    : "Barangay routing is pending."}
-                </p>
-              </>
-            ) : (
-              <>
-                <p className="text-[14px] font-semibold">Assigned responders</p>
-                <p className="mt-1 text-[12px] text-white/70">
-                  {allAssignments && allAssignments.length > 0
-                    ? allAssignments
-                        .map((a) => {
-                          const name = a.responder && typeof a.responder === "object" && "full_name" in a.responder
-                            ? String((a.responder as { full_name: string }).full_name)
-                            : "Unknown"
-                          const hasGps = Boolean(a.last_location)
-                          return `${name}${hasGps ? " · GPS available" : " · No GPS"}`
-                        })
-                        .join(" · ")
-                    : "No responders assigned"}
-                </p>
-              </>
-            )}
-          </div>
-        </div>
-</div>
 
       <div className="rounded-xl border border-white/10 bg-white/10 p-4">
         <div className="flex items-center justify-between gap-2">
@@ -959,10 +897,6 @@ export function EmergencyTrackingSheet({
   if (!open || !alert || typeof document === "undefined") return null
 
   const isLive = activeStatuses.includes(alert.status)
-  const responder =
-    isLive
-      ? alert.current_assignment?.responder ?? null
-      : alert.assignments?.[0]?.responder ?? null
   const lastLocation = isLive
     ? alert.current_assignment?.last_location ?? null
     : alert.assignments?.[0]?.last_location ?? null
@@ -974,12 +908,9 @@ export function EmergencyTrackingSheet({
         )
       : null
   const pendingAppeal = alert.appeals?.find((a) => a.status === "submitted")
-  const locationIsStale = Boolean(
-    lastLocation && Date.now() - new Date(lastLocation.created_at).getTime() > 20_000,
-  )
   const canAppeal = Boolean(alert && ["resolved", "cancelled"].includes(alert.status) && !pendingAppeal)
   const appealHistory = alert.appeals ?? []
-  const canCancel = ["submitted", "routed"].includes(alert.status)
+  const canCancel = ["submitted", "routing", "routed", "awaiting_acknowledgment"].includes(alert.status)
 
   async function submitCancellation() {
     const reason = cancelReason.trim()
@@ -1058,17 +989,6 @@ export function EmergencyTrackingSheet({
                 : "Polling"}
           </span>
         )}
-        {isLive && lastLocation ? (
-          <span className="rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-semibold text-neutral-800 shadow-md">
-            Responder {formatTime(lastLocation.created_at)}
-            {locationIsStale ? " · stale" : ""}
-          </span>
-        ) : null}
-        {!isLive && lastLocation ? (
-          <span className="rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-semibold text-neutral-800 shadow-md">
-            Last GPS {formatDate(lastLocation.created_at)} {formatTime(lastLocation.created_at)}
-          </span>
-        ) : null}
       </div>
     </>
   )
@@ -1078,10 +998,6 @@ export function EmergencyTrackingSheet({
       alert={alert}
       connectionState={connectionState}
       distance={distance}
-      locationIsStale={locationIsStale}
-      lastLocation={lastLocation}
-      responder={responder}
-      allAssignments={alert.assignments ?? []}
       canAppeal={canAppeal}
       appealReason={appealReason}
       setAppealReason={setAppealReason}

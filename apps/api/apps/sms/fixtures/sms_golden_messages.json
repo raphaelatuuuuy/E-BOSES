@@ -1,0 +1,155 @@
+{
+  "_comment": [
+    "Golden fixtures for the offline SOS SMS contract.",
+    "",
+    "The message body is composed on the resident's phone in TypeScript",
+    "(apps/web/src/features/dashboard/components/sos-fallback.ts) while the",
+    "device has no data, and parsed on the server in Python",
+    "(apps/api/apps/sms/parsing.py). Nothing enforces that those two stay in",
+    "step except this file: the node test asserts the renderer produces these",
+    "exact strings, and the Django test asserts the parser reads these exact",
+    "strings back into these exact fields.",
+    "",
+    "If you change the wording on either side, this file must change too - and",
+    "both test suites will tell you if only one side was updated."
+  ],
+  "cases": [
+    {
+      "name": "area_and_coordinates",
+      "input": {
+        "emergencyType": "Fire",
+        "readableArea": "Champaca Street, Marikina Heights",
+        "latitude": 14.650123,
+        "longitude": 121.112345
+      },
+      "message": "I need immediate help. This is a Fire emergency near Champaca Street, Marikina Heights. Please send assistance.\nLOC:14.650123,121.112345",
+      "expected": {
+        "category_code": "fire",
+        "reported_area": "Champaca Street, Marikina Heights",
+        "latitude": "14.650123",
+        "longitude": "121.112345",
+        "triage": {}
+      }
+    },
+    {
+      "name": "coordinates_only",
+      "input": {
+        "emergencyType": "Fire",
+        "latitude": 14.650123,
+        "longitude": 121.112345
+      },
+      "message": "I need immediate help. This is a Fire emergency. Please send assistance.\nLOC:14.650123,121.112345",
+      "expected": {
+        "category_code": "fire",
+        "reported_area": "",
+        "latitude": "14.650123",
+        "longitude": "121.112345",
+        "triage": {}
+      }
+    },
+    {
+      "name": "area_only_no_gps",
+      "input": {
+        "emergencyType": "Medical Emergency",
+        "readableArea": "the covered court in Marikina Heights"
+      },
+      "message": "I need immediate help. This is a Medical emergency near the covered court in Marikina Heights. Please send assistance.",
+      "expected": {
+        "category_code": "medical",
+        "reported_area": "covered court in Marikina Heights",
+        "latitude": null,
+        "longitude": null,
+        "triage": {}
+      }
+    },
+    {
+      "name": "flood_with_full_triage",
+      "input": {
+        "emergencyType": "Flood",
+        "readableArea": "Champaca Street, Marikina Heights",
+        "latitude": 14.650123,
+        "longitude": 121.112345,
+        "triage": {
+          "peopleAffected": "many",
+          "injuries": "no",
+          "detail": "waist"
+        }
+      },
+      "message": "I need immediate help. This is a Flood emergency near Champaca Street, Marikina Heights. 6 or more people affected, water is waist deep or higher, no one is injured. Please send assistance.\nLOC:14.650123,121.112345",
+      "expected": {
+        "category_code": "flood",
+        "reported_area": "Champaca Street, Marikina Heights",
+        "latitude": "14.650123",
+        "longitude": "121.112345",
+        "triage": {
+          "people_affected": "many",
+          "injuries": "no",
+          "detail": "waist"
+        }
+      }
+    },
+    {
+      "name": "fire_with_triage_and_note",
+      "input": {
+        "emergencyType": "Fire",
+        "readableArea": "Champaca Street",
+        "latitude": 14.650123,
+        "longitude": 121.112345,
+        "triage": {
+          "peopleAffected": "few",
+          "injuries": "yes",
+          "detail": "spreading"
+        },
+        "note": "Second floor, blue gate"
+      },
+      "message": "I need immediate help. This is a Fire emergency near Champaca Street. 2-5 people affected, fire is still spreading, someone is injured. Please send assistance.\nSecond floor, blue gate\nLOC:14.650123,121.112345",
+      "expected": {
+        "category_code": "fire",
+        "reported_area": "Champaca Street",
+        "latitude": "14.650123",
+        "longitude": "121.112345",
+        "triage": {
+          "people_affected": "few",
+          "injuries": "yes",
+          "detail": "spreading"
+        },
+        "note_contains": "Second floor, blue gate"
+      }
+    },
+    {
+      "name": "public_safety_maps_to_crime",
+      "input": {
+        "emergencyType": "Crime or Public Safety",
+        "readableArea": "the barangay hall in Marikina Heights"
+      },
+      "message": "I need immediate help. This is a Crime or Public Safety emergency near the barangay hall in Marikina Heights. Please send assistance.",
+      "expected": {
+        "category_code": "crime",
+        "reported_area": "barangay hall in Marikina Heights",
+        "latitude": null,
+        "longitude": null,
+        "triage": {}
+      }
+    },
+    {
+      "name": "dangerous_animal",
+      "input": {
+        "emergencyType": "Dangerous Animal",
+        "readableArea": "the playground in Marikina Heights",
+        "triage": {
+          "detail": "loose"
+        }
+      },
+      "message": "I need immediate help. This is a Dangerous Animal emergency near the playground in Marikina Heights. the animal is still loose. Please send assistance.",
+      "expected": {
+        "category_code": "dangerous_animal",
+        "reported_area": "playground in Marikina Heights",
+        "latitude": null,
+        "longitude": null,
+        "triage": {
+          "detail": "loose"
+        }
+      }
+    }
+  ]
+}

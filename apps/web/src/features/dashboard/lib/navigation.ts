@@ -275,16 +275,17 @@ const officialNav: RoleNavConfig = {
 }
 
 // ---------------------------------------------------------------------------
-// Responder — Map and Shift are the whole job. Profile is personal, so it sits
-// behind the account block like the official's does, not in the nav.
+// Responder — Dispatch is the job; Map answers "where is everything"; Shift is
+// the record of the day. Profile is personal, so it sits behind the account
+// block like the official's does, not in the nav.
 // ---------------------------------------------------------------------------
 
-const responderMap: NavItemConfig = {
-  key: "map",
-  label: "Map",
-  to: "/dashboard/responders/map",
-  icon: MapPinnedIcon,
-  isActive: (pathname) => matches(pathname, "/dashboard/responders/map"),
+export const responderDispatch: NavItemConfig = {
+  key: "dispatch",
+  label: "Dispatch",
+  to: "/dashboard/responders/dispatch",
+  icon: TriangleAlert,
+  isActive: (pathname) => matches(pathname, "/dashboard/responders/dispatch"),
 }
 
 const responderShift: NavItemConfig = {
@@ -303,16 +304,23 @@ const responderProfile: NavItemConfig = {
   isActive: (pathname) => matches(pathname, "/dashboard/responders/profile"),
 }
 
+const responderNotifications: NavItemConfig = {
+  key: "notifications",
+  label: "Notifications",
+  to: "/dashboard/responders/notifications",
+  icon: BellIcon,
+  isActive: (pathname) => matches(pathname, "/dashboard/responders/notifications"),
+}
+
 const responderNav: RoleNavConfig = {
-  items: [responderMap, responderShift],
+  // Dispatch sits above Shift as a regular nav item — the map is embedded in
+  // the dispatch surface, so there is no dedicated map tab any more.
+  items: [responderDispatch, responderShift, responderNotifications],
   footer: [],
-  // Populating `account` is what turns the sidebar's identity block from inert
-  // text into a disclosure, so the avatar becomes the way in — same interaction
-  // the official already has.
   account: [{ ...responderProfile, label: "View profile" }],
-  // The Dispatch action rides beside this pill rather than inside it, mirroring
-  // the resident's SOS button.
-  mobileItems: [responderMap, responderShift],
+  // Shift | Dispatch | Profile — dispatch centred so it stays the anchor,
+  // profile promoted into the bar now that the map tab is gone.
+  mobileItems: [responderShift, responderDispatch, responderProfile],
 }
 
 export const navigationByRole: Record<Role, RoleNavConfig> = {

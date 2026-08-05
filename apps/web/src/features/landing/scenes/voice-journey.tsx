@@ -38,8 +38,8 @@ export function VoiceJourney() {
       const segFills = gsap.utils.toArray<HTMLElement>(".vj-seg-fill", scope)
       const phone = scope.querySelector<HTMLElement>(".vj-phone")
 
-      // Phone-mock beats: photo, YOLO boxes (the camera placeholder fades out
-      // as the detections draw in), skeleton lines + NLP chips, location pin,
+      // Phone-mock beats: photo, review boxes (the camera placeholder fades out
+      // as they draw in), skeleton lines + category chips, location pin,
       // severity pips, then the tracking number counts up.
       const addMockBeats = (tl: gsap.core.Timeline) => {
         if (trackingRef.current) trackingRef.current.textContent = "EB-2026-0000"
@@ -188,7 +188,7 @@ export function VoiceJourney() {
             EB-2026-0142
           </span>
 
-          {/* Phone mock: photo with YOLO detections, NLP-highlighted description, location, severity */}
+          {/* Phone mock: photo under review, highlighted description, location, severity */}
           <div className="vj-phone mx-auto mt-8 w-64 rounded-3xl border border-white/15 bg-white/[0.04] p-4 shadow-2xl backdrop-blur-sm md:mx-0">
             <div className="vj-photo relative flex h-24 items-center justify-center overflow-hidden rounded-xl bg-white/10">
               <Camera className="vj-cam size-8 text-white/40 opacity-0" aria-hidden />

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { LoaderCircleIcon } from "lucide-react"
+import { ClipboardListIcon, LoaderCircleIcon } from "lucide-react"
 import { toast } from "sonner"
 import { useNavigate } from "react-router-dom"
 
@@ -19,12 +19,9 @@ import { ShiftStats } from "@/features/dashboard/components/responder/shift-stat
 import { ShiftControls } from "@/features/dashboard/components/responder/shift-controls"
 import { ShiftHistory } from "@/features/dashboard/components/responder/shift-history"
 import { DutyRhythm, ResponseTrend } from "@/features/dashboard/components/responder/shift-insights"
-import {
-  dispatchState,
-  dotClass,
-  formatAgo,
-  toneClass,
-} from "@/features/dashboard/lib/responder-format"
+import { Pane, State } from "@/features/dashboard/components/responder/dispatch-surface"
+import { MOBILE_BAR_CLEARANCE } from "@/features/dashboard/lib/shell"
+import { dispatchState, formatAgo } from "@/features/dashboard/lib/responder-format"
 import { cn } from "@workspace/ui/lib/utils"
 
 export default function ResponderShiftPage() {
@@ -146,8 +143,11 @@ export default function ResponderShiftPage() {
   }
 
   return (
-    <div className="min-h-full bg-canvas p-4 pb-[calc(7rem+env(safe-area-inset-bottom))] md:p-6 md:pb-8 lg:p-8">
-      <div className="mx-auto flex max-w-5xl flex-col gap-4">
+    <div
+      className="min-h-full bg-canvas p-4 md:p-6 lg:p-8"
+      style={{ paddingBottom: `calc(${MOBILE_BAR_CLEARANCE} + 1.5rem)` }}
+    >
+      <div className="mx-auto flex max-w-5xl flex-col gap-3">
         <ShiftControls
           unit={unit}
           isOnDuty={isOnDuty}
@@ -159,107 +159,125 @@ export default function ResponderShiftPage() {
         />
 
         {!unit.loading && !unit.assigned ? (
-          <div className="rounded-2xl border border-severity-moderate/40 bg-severity-moderate-surface px-4 py-3">
-            <p className="text-sm font-bold text-severity-moderate-ink">
-              You are not in a unit yet
-            </p>
-            <p className="mt-1 text-xs leading-5 text-severity-moderate-ink/80">
-              Emergencies are routed by unit, so nothing can reach you until a barangay
-              official adds you to one in Configuration, Units.
-            </p>
-          </div>
+          <Notice title="You are not in a unit yet">
+            Emergencies are routed by unit, so nothing can reach you until a barangay official
+            adds you to one in Configuration, Units.
+          </Notice>
         ) : null}
 
         {hasDutyMismatch ? (
-          <div className="rounded-2xl border border-severity-moderate/40 bg-severity-moderate-surface px-4 py-3">
-            <p className="text-sm font-bold text-severity-moderate-ink">
-              Start a shift to confirm you are available
-            </p>
-            <p className="mt-1 text-xs leading-5 text-severity-moderate-ink/80">
-              Your account is flagged available, but no shift session is open. Starting one
-              creates the GPS-stamped session dispatch relies on.
-            </p>
-          </div>
+          <Notice title="Start a shift to confirm you are available">
+            Your account is flagged available, but no shift session is open. Starting one
+            creates the GPS-stamped session dispatch relies on.
+          </Notice>
         ) : null}
 
         {error ? (
-          <div role="alert" className="rounded-2xl border border-severity-critical/40 bg-status-open-surface px-4 py-3 text-sm font-semibold text-status-open-ink">
+          <Notice title="Shift data could not load" tone="critical">
             {error}
-          </div>
+          </Notice>
         ) : null}
 
         <ShiftStats loading={loading} stats={stats} />
 
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid gap-3 lg:grid-cols-2">
           <DutyRhythm shifts={shiftHistory} />
           <ResponseTrend shifts={shiftHistory} />
         </div>
 
-        <section className="overflow-hidden rounded-2xl border border-card-line bg-card">
-          <div className="flex items-baseline justify-between gap-3 px-4 pb-2 pt-4">
-            <div>
-              <h2 className="text-micro uppercase tracking-wide text-nav-muted">
-                Today&apos;s dispatch log
-              </h2>
-              <p className="mt-1 text-xs leading-5 text-subtle-foreground">
-                Incidents currently attached to you.
-              </p>
-            </div>
-            {alerts.length > 0 ? (
-              <span className="shrink-0 text-sm font-bold tabular-nums text-nav-text-active">
-                {alerts.length}
-              </span>
-            ) : null}
-          </div>
-
+        <Pane
+          title="Today's dispatch log"
+          icon={ClipboardListIcon}
+          subtitle={alerts.length > 0 ? `${alerts.length}` : undefined}
+          padded={false}
+          className="min-h-0"
+        >
           {loading ? (
             <div className="flex items-center justify-center py-10">
-              <LoaderCircleIcon className="size-6 animate-spin text-nav-muted" />
+              <LoaderCircleIcon className="size-6 animate-spin text-subtle-foreground" />
             </div>
           ) : alerts.length === 0 ? (
-            <p className="px-4 pb-4 text-xs leading-5 text-subtle-foreground">
+            <p className="px-5 py-5 text-body leading-6 text-subtle-foreground">
               No dispatches yet. Assigned incidents appear here during your shift.
             </p>
           ) : (
-            <div className="divide-y divide-card-line border-t border-card-line">
+            <ul className="divide-y divide-card-line">
               {alerts.map((alert) => {
                 const state = dispatchState(alert, viewerId)
                 return (
-                  <button
-                    key={alert.id}
-                    type="button"
-                    onClick={() => navigate(`/dashboard/responders/map?alert=${alert.id}`)}
-                    className="w-full px-4 py-3 text-left transition-colors hover:bg-card-raised"
-                  >
-                    <div className="flex items-baseline justify-between gap-3">
-                      <span className="min-w-0 truncate text-sm font-bold capitalize text-foreground">
-                        {alert.type}
-                      </span>
-                      <span className="shrink-0 text-xs tabular-nums text-subtle-foreground">
-                        {formatAgo(alert.created_at)}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {alert.address || alert.barangay}
-                    </p>
-                    <p className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-semibold">
-                      <span
-                        className={cn("size-1.5 shrink-0 rounded-full", dotClass(state.tone))}
-                        aria-hidden
-                      />
-                      <span className={cn("uppercase tracking-wide", toneClass(state.tone))}>
-                        {state.label}
-                      </span>
-                    </p>
-                  </button>
+                  <li key={alert.id}>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/dashboard/responders/dispatch?alert=${alert.id}`)}
+                      className="w-full px-5 py-4 text-left transition-colors hover:bg-card-raised"
+                    >
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="min-w-0 truncate text-heading capitalize text-foreground">
+                          {alert.type}
+                        </span>
+                        <span className="shrink-0 text-body tabular-nums text-subtle-foreground">
+                          {formatAgo(alert.created_at)}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 truncate text-body text-muted-foreground">
+                        {alert.address || alert.barangay}
+                      </p>
+                      <State label={state.label} tone={state.tone} className="mt-1.5" />
+                    </button>
+                  </li>
                 )
               })}
-            </div>
+            </ul>
           )}
-        </section>
+        </Pane>
 
         <ShiftHistory shifts={shiftHistory} />
       </div>
+    </div>
+  )
+}
+
+/**
+ * A standing message on the Shift screen — missing unit, duty mismatch, load
+ * failure. One shape for all three; they previously each hand-rolled their own
+ * border, padding and type sizes.
+ */
+function Notice({
+  title,
+  tone = "moderate",
+  children,
+}: {
+  title: string
+  tone?: "moderate" | "critical"
+  children: React.ReactNode
+}) {
+  const critical = tone === "critical"
+  return (
+    <div
+      role={critical ? "alert" : undefined}
+      className={cn(
+        "rounded-2xl border px-4 py-3.5",
+        critical
+          ? "border-severity-critical/40 bg-severity-critical-surface"
+          : "border-severity-moderate/40 bg-severity-moderate-surface",
+      )}
+    >
+      <p
+        className={cn(
+          "text-heading",
+          critical ? "text-severity-critical-ink" : "text-severity-moderate-ink",
+        )}
+      >
+        {title}
+      </p>
+      <p
+        className={cn(
+          "mt-1 text-body leading-6",
+          critical ? "text-severity-critical-ink/80" : "text-severity-moderate-ink/80",
+        )}
+      >
+        {children}
+      </p>
     </div>
   )
 }

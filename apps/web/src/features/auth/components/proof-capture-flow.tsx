@@ -873,28 +873,30 @@ export function ProofCaptureFlow({
     let lastPreview: string | null = null
 
     try {
-      for (let i = 0; i < batch.length; i++) {
-        const file = batch[i]
-        const sideName = sideLabel(sidesNeeded[localIndex] ?? "single")
+      // Detect is an I/O-bound HTTP OCR call, so front + back run concurrently
+      // instead of front-then-back (~2x faster). Each side is independent.
+      const jobs = batch.map((file, i) => {
+        const sideIndex = nextIndex + i
+        const sideName = sideLabel(sidesNeeded[sideIndex] ?? "single")
         setProcessingStatus(
-          batch.length > 1
-            ? `Photo ${i + 1} of ${batch.length} · ${sideName}`
-            : `Processing ${sideName}…`,
+          batch.length > 1 ? `Checking ${sideName}…` : `Processing ${sideName}…`,
         )
         if (lastPreview) URL.revokeObjectURL(lastPreview)
         lastPreview = URL.createObjectURL(file)
         setPreviewUrl(lastPreview)
-
-        const result = await processOneFile({
+        return processOneFile({
           file,
-          sideIndex: localIndex,
-          preferredType: option?.key,
-          option,
-          priorDetect: detectResult,
-          alreadyCaptured: accFiles,
+          sideIndex,
+          preferredType: baseOption?.key,
+          option: baseOption,
+          priorDetect: detect,
+          alreadyCaptured: capturedFiles,
           sideLabelForUi: sidesNeeded.length > 1 ? sideName : undefined,
         })
+      })
+      const results = await Promise.all(jobs)
 
+      for (const result of results) {
         if (!result.ok) {
           if (result.detect) setDetect(result.detect)
           // Keep any sides that already passed (e.g. front OK, back failed).

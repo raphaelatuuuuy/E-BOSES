@@ -60,6 +60,7 @@ from .models import (
     ConcernFormField,
     ConcernFormValue,
     ConcernMedia,
+    ConcernMediaRedaction,
     ConcernOfficialRemark,
     ConcernResolutionEvidence,
     ConcernTimelineEntry,
@@ -96,6 +97,7 @@ from .serializers import (
     ConcernClarificationSerializer,
     ContentFlagSerializer,
     ContentFlagReviewSerializer,
+    ConcernMediaRedactionSerializer,
     ConcernMediaSerializer,
     ConcernOfficialRemarkCreateSerializer,
     ConcernOfficialRemarkSerializer,
@@ -117,7 +119,11 @@ from .serializers import (
     RoutingRuleSerializer,
     PublicUserSerializer,
 )
-from .services import ensure_concern_media_preview, user_can_access_concern_media_raw
+from .services import (
+    concern_media_is_publicly_displayable,
+    ensure_concern_media_preview,
+    user_can_access_concern_media_raw,
+)
 from .tasks import enqueue_concern_ai
 
 
@@ -1739,16 +1745,63 @@ class ConcernStatusUpdateView(APIView):
         if not note:
             note = f"Report status updated to {next_status.replace('_', ' ')}."
 
+        changed_fields = ["status", "update_text", "status_version", "updated_at"]
+
+        # Category and unit ride along with the status change so one press of
+        # "Save update" is one atomic write and one audit entry, rather than
+        # three requests that can half-apply.
+        new_category = serializer.validated_data.get("category") or ""
+        category_changed = bool(new_category) and new_category != concern.category
+        if category_changed:
+            concern.category = new_category
+            concern.category_ref = ConcernCategory.objects.filter(code=new_category, is_active=True).first()
+            changed_fields.extend(["category", "category_ref"])
+
+        new_department_id = serializer.validated_data.get("department_id")
+        department_changed = bool(new_department_id) and new_department_id != concern.assigned_department_id
+        department = None
+        if department_changed:
+            department = get_object_or_404(Department, pk=new_department_id, is_active=True)
+            concern.assigned_department = department
+            changed_fields.append("assigned_department")
+
         concern.status = next_status
         concern.update_text = note
         concern.status_version += 1
-        concern.save(update_fields=["status", "update_text", "status_version", "updated_at"])
+        concern.save(update_fields=changed_fields)
         ConcernStatusEvent.objects.create(
             concern=concern,
             status=next_status,
             note=note,
             actor=request.user,
         )
+        if category_changed:
+            create_timeline_entry(
+                concern=concern,
+                event_type=ConcernTimelineEntry.EventType.CUSTOM,
+                status=next_status,
+                message=f"Category changed to {new_category.replace('_', ' ')}.",
+                actor=request.user,
+                metadata={"category": new_category},
+            )
+        if department_changed and department is not None:
+            create_timeline_entry(
+                concern=concern,
+                event_type=ConcernTimelineEntry.EventType.ASSIGNMENT,
+                status=next_status,
+                message=f"Assigned to {department.name}.",
+                actor=request.user,
+                metadata={"department_id": department.pk},
+            )
+        internal_note = (serializer.validated_data.get("internal_note") or "").strip()
+        if internal_note:
+            # An internal note is not a status note: the resident never sees it.
+            ConcernOfficialRemark.objects.create(
+                concern=concern,
+                author=request.user,
+                body=internal_note,
+                visible_to_resident=False,
+            )
         evidence_records = []
         for uploaded_file, validated_file in validated_evidence:
             evidence_records.append(
@@ -1792,6 +1845,12 @@ class ConcernStatusUpdateView(APIView):
                 "status": next_status,
                 "resolution_evidence_ids": [record.pk for record in evidence_records],
                 "closed_assignment_ids": [item.pk for item in closed_assignments],
+                "category_changed_to": new_category if category_changed else "",
+                "department_changed_to": department.pk if department_changed and department else None,
+                "internal_note_recorded": bool(internal_note),
+                # Distinguishes an accepted recommendation from an independent
+                # decision that happened to match one.
+                "applied_ai_suggestion": bool(serializer.validated_data.get("applied_ai_suggestion")),
             },
             request_meta=request_meta(request),
         )
@@ -2030,11 +2089,148 @@ class ConcernMediaPreviewView(APIView):
 
     def get(self, request, pk):
         media = get_object_or_404(ConcernMedia.objects.select_related("concern__reporter"), pk=pk)
+        # Three conditions, all required: the concern is public, it passed
+        # validation, and a privacy run cleared this specific image. The third
+        # is new — before it, a photo whose protection had failed was still
+        # served on the community feed because the concern itself was public.
         is_publicly_displayable = (
             media.concern.visibility == media.concern.Visibility.COMMUNITY
             and media.concern.validation_status == media.concern.ValidationStatus.ACCEPTED
+            and concern_media_is_publicly_displayable(media)
         )
         if not is_publicly_displayable and not user_can_access_concern_media_raw(request.user, media):
             return Response({"detail": "You do not have permission to access this media."}, status=status.HTTP_403_FORBIDDEN)
         preview = ensure_concern_media_preview(media)
         return FileResponse(preview.open("rb"), content_type="image/jpeg")
+
+
+class ConcernMediaRedactionView(APIView):
+    """Let an official blur something the automatic scan did not catch.
+
+    The automatic pipeline is deliberately narrow — Gemma only asks for a scan
+    when it suspects a face, a plate, or blood, and SAM3 only looks for what it
+    was asked to look for. A reflection in a window, a house number, a name on a
+    delivery box: none of that is in scope, and an official looking at the photo
+    will see it.
+
+    Adding a box never calls SAM3. The automatic regions are already stored, so
+    the protected copy is rebuilt from both sets locally — which also means an
+    official can still protect an image while Roboflow is down.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to edit media redactions."}, status=status.HTTP_403_FORBIDDEN)
+        media = get_object_or_404(ConcernMedia.objects.select_related("concern__reporter"), pk=pk)
+        serializer = ConcernMediaRedactionSerializer(data=request.data, many=True)
+        serializer.is_valid(raise_exception=True)
+        if not serializer.validated_data:
+            return Response({"regions": ["Add at least one area to blur."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            ConcernMediaRedaction.objects.bulk_create(
+                [
+                    ConcernMediaRedaction(
+                        media=media,
+                        x=item["x"],
+                        y=item["y"],
+                        width=item["width"],
+                        height=item["height"],
+                        label=item.get("label", ""),
+                        source=ConcernMediaRedaction.Source.OFFICIAL,
+                        created_by=request.user,
+                    )
+                    for item in serializer.validated_data
+                ]
+            )
+            media.refresh_from_db()
+            from .ai.privacy import rerender_protected_copy
+
+            media = rerender_protected_copy(media)
+            create_audit_log(
+                "concern.media_redacted",
+                actor=request.user,
+                target_user=media.concern.reporter,
+                metadata={
+                    "concern_id": media.concern_id,
+                    "media_id": media.pk,
+                    "regions_added": len(serializer.validated_data),
+                    "privacy_state": media.privacy_state,
+                },
+                request_meta=request_meta(request),
+            )
+            create_timeline_entry(
+                concern=media.concern,
+                event_type=ConcernTimelineEntry.EventType.CUSTOM,
+                status=media.concern.status,
+                message="An official blurred part of an uploaded photo before public display.",
+                actor=request.user,
+                metadata={"media_id": media.pk},
+            )
+        return Response(ConcernMediaSerializer(media, context={"request": request}).data)
+
+    def delete(self, request, pk, redaction_id):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to edit media redactions."}, status=status.HTTP_403_FORBIDDEN)
+        media = get_object_or_404(ConcernMedia.objects.select_related("concern__reporter"), pk=pk)
+        # Only official regions can be removed. A SAM3 region is the record of
+        # what the privacy scan found; deleting it through this endpoint would
+        # un-blur a face with no trace of the decision.
+        redaction = get_object_or_404(
+            ConcernMediaRedaction,
+            pk=redaction_id,
+            media=media,
+            source=ConcernMediaRedaction.Source.OFFICIAL,
+        )
+        with transaction.atomic():
+            redaction.delete()
+            media.refresh_from_db()
+            from .ai.privacy import rerender_protected_copy
+
+            media = rerender_protected_copy(media)
+            create_audit_log(
+                "concern.media_redaction_removed",
+                actor=request.user,
+                target_user=media.concern.reporter,
+                metadata={"concern_id": media.concern_id, "media_id": media.pk, "redaction_id": redaction_id},
+                request_meta=request_meta(request),
+            )
+        return Response(ConcernMediaSerializer(media, context={"request": request}).data)
+
+
+class ConcernMediaPrivacyReprocessView(APIView):
+    """Re-run the automatic privacy scan for one image, at an official's request.
+
+    The normal cache refuses to call Roboflow twice for the same image and class
+    list. This is the documented way round that: an official who thinks the scan
+    missed something can force it, and the forced run is recorded.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return Response({"detail": "You do not have permission to reprocess media."}, status=status.HTTP_403_FORBIDDEN)
+        media = get_object_or_404(ConcernMedia.objects.select_related("concern__reporter"), pk=pk)
+        if not media.privacy_requested_classes:
+            return Response(
+                {"detail": "The automatic review did not ask for a privacy scan on this photo."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        create_audit_log(
+            "concern.media_privacy_reprocessed",
+            actor=request.user,
+            target_user=media.concern.reporter,
+            metadata={"concern_id": media.concern_id, "media_id": media.pk},
+            request_meta=request_meta(request),
+        )
+        from .tasks import enqueue_concern_media_privacy
+
+        enqueue_concern_media_privacy(media.pk, force=True)
+        media.refresh_from_db()
+        return Response(ConcernMediaSerializer(media, context={"request": request}).data)

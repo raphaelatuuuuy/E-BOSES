@@ -17,6 +17,8 @@ from apps.concerns.views import (
 from apps.config_summary import ConfigurationSummaryView
 from apps.dashboard_views import OfficialDashboardSummaryView, ResidentDashboardSummaryView, ResponderDashboardSummaryView
 from apps.live_map import (
+    GeocodeReverseView,
+    GeocodeSearchView,
     LocationMapContextView,
     LocationPingView,
     LocationSearchView,
@@ -39,6 +41,7 @@ urlpatterns = [
     path("api/responders/active/", ActiveResponderListView.as_view(), name="active-responders"),
     path("api/config/summary/", ConfigurationSummaryView.as_view(), name="config-summary"),
     path("api/emergencies/", include("apps.emergencies.urls")),
+    path("api/sms/", include("apps.sms.urls")),
     path("api/notifications/", include("apps.notifications.urls")),
     path("api/dashboard/resident/summary/", ResidentDashboardSummaryView.as_view(), name="dashboard-resident-summary"),
     path("api/dashboard/official/summary/", OfficialDashboardSummaryView.as_view(), name="dashboard-official-summary"),
@@ -48,5 +51,7 @@ urlpatterns = [
     path("api/locations/map-context/", LocationMapContextView.as_view(), name="location-map-context"),
     path("api/locations/validate/", LocationValidateView.as_view(), name="location-validate"),
     path("api/locations/search/", LocationSearchView.as_view(), name="location-search"),
+    path("api/locations/geocode/reverse/", GeocodeReverseView.as_view(), name="geocode-reverse"),
+    path("api/locations/geocode/search/", GeocodeSearchView.as_view(), name="geocode-search"),
     path("api/locations/resident-alerts-map/", ResidentAlertsMapView.as_view(), name="locations-resident-alerts-map"),
 ]

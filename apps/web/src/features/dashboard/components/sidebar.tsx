@@ -1,6 +1,6 @@
-import { Link, useLocation } from "react-router-dom"
+import { Link, useLocation, useNavigate } from "react-router-dom"
 import { useState } from "react"
-import { ChevronDownIcon } from "lucide-react"
+import { ChevronDownIcon, LogOutIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -10,7 +10,16 @@ import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
 import { useNotifications } from "@/features/dashboard/components/notification-context"
 import { useOfficialBadges } from "@/features/dashboard/hooks/use-official-badges"
-import { getRoleNav, type NavItemConfig } from "@/features/dashboard/lib/navigation"
+import { useAssignedDispatches } from "@/features/dashboard/hooks/use-assigned-dispatches"
+import {
+  ResponderNotificationsDialog,
+  ResponderProfileDialog,
+} from "@/features/dashboard/components/responder/account-dialogs"
+import {
+  getRoleNav,
+  type NavItemConfig,
+} from "@/features/dashboard/lib/navigation"
+import { displayPosition } from "@/features/dashboard/lib/position"
 
 function navLinkClass(active: boolean) {
   return cn(
@@ -102,10 +111,22 @@ function ResidentSidebar() {
 /**
  * Staff nav row — icon, label, trailing count badge, on one line.
  *
- * Active state is a raised navy chip with a flush orange edge bar, not a
- * saturated orange fill: on a dark panel the tint reads as "you are here"
- * without turning the whole nav into a warning colour. Orange stays reserved
- * for the edge bar, the icon and the count, so it still leads the eye.
+ * Two active treatments, chosen by `prominent`:
+ *
+ * - Default (official): a raised navy chip with a flush orange edge bar. The
+ *   official nav is fourteen items deep across four sections, and a saturated
+ *   fill repeated down that list turns the whole rail into a warning colour.
+ *   Orange stays reserved for the edge bar, the icon and the count.
+ *
+ * - Prominent (responder): a solid orange pill, the full width of the row.
+ *   The responder nav is three items on a screen someone reads while moving,
+ *   where "which of these three am I on" has to survive a glance — so the
+ *   scarcity argument above inverts and the fill is correct.
+ *
+ * The filled pill uses `brand-orange-ink` (near-black) rather than white.
+ * White on #ff6a1a measures 2.86:1 and fails WCAG AA outright; the near-black
+ * ink clears it at 6.91:1. See the note on --color-brand-orange-ink in
+ * globals.css — do not "fix" this back to white.
  */
 function StaffNavRow({
   item,
@@ -114,6 +135,7 @@ function StaffNavRow({
   onClick,
   asButton = false,
   expanded,
+  prominent = false,
 }: {
   item: NavItemConfig
   active: boolean
@@ -122,6 +144,8 @@ function StaffNavRow({
   onClick?: () => void
   asButton?: boolean
   expanded?: boolean
+  /** Responder rail treatment: taller row, larger label, solid orange fill. */
+  prominent?: boolean
 }) {
   // Only live emergencies earn the alarm treatment. Everything else is
   // pending work, which can wait for the official to look at it.
@@ -129,27 +153,40 @@ function StaffNavRow({
   const Icon = item.icon
   const inner = (
     <>
-      <span
-        aria-hidden
-        className={cn(
-          "absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-brand-orange transition-opacity duration-150",
-          active ? "opacity-100" : "opacity-0",
-        )}
-      />
+      {/* The edge bar exists to mark the active row when the fill is only a
+          faint tint. A solid pill says the same thing louder, so the bar would
+          just be a stripe of orange on orange. */}
+      {!prominent ? (
+        <span
+          aria-hidden
+          className={cn(
+            "absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-brand-orange transition-opacity duration-150",
+            active ? "opacity-100" : "opacity-0",
+          )}
+        />
+      ) : null}
 
       <Icon
         className={cn(
-          "size-[18px] shrink-0 transition-colors",
-          active ? "text-brand-orange" : "text-nav-muted group-hover:text-nav-text-active",
+          "shrink-0 transition-colors",
+          prominent ? "size-5" : "size-[18px]",
+          active
+            ? prominent
+              ? "text-brand-orange-ink"
+              : "text-brand-orange"
+            : "text-nav-muted group-hover:text-nav-text-active",
         )}
         strokeWidth={active ? 2.1 : 1.7}
       />
 
       <span
         className={cn(
-          "min-w-0 flex-1 truncate text-left text-[13.5px] leading-none transition-colors",
+          "min-w-0 flex-1 truncate text-left leading-none transition-colors",
+          prominent ? "text-[15px]" : "text-[13.5px]",
           active
-            ? "font-semibold text-nav-text-active"
+            ? prominent
+              ? "font-semibold text-brand-orange-ink"
+              : "font-semibold text-nav-text-active"
             : "font-medium text-nav-text group-hover:text-nav-text-active",
         )}
       >
@@ -159,8 +196,9 @@ function StaffNavRow({
       {badge && badge > 0 ? (
         <span
           className={cn(
-            "relative flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-pill px-1.5",
-            "text-micro leading-none tabular-nums",
+            "relative flex shrink-0 items-center justify-center rounded-pill px-1.5",
+            "leading-none tabular-nums",
+            prominent ? "h-5 min-w-5 text-[11px] font-bold" : "h-[18px] min-w-[18px] text-micro",
             // Urgency tiers. Previously every badge rendered identically, so
             // "3 pending configuration requests" shouted exactly as loud as
             // "2 active emergencies". Only the emergency count is allowed to
@@ -168,7 +206,11 @@ function StaffNavRow({
             urgent
               ? "bg-severity-critical text-brand-orange-ink"
               : active
-                ? "bg-brand-orange text-brand-orange-ink"
+                ? prominent
+                  // Inside a filled pill the badge has to contrast with the
+                  // orange, not repeat it.
+                  ? "bg-brand-orange-ink/85 text-brand-orange"
+                  : "bg-brand-orange text-brand-orange-ink"
                 : "bg-nav-active text-nav-text",
           )}
         >
@@ -196,9 +238,16 @@ function StaffNavRow({
   )
 
   const className = cn(
-    "group relative flex h-10 w-full items-center gap-2.5 rounded-xl pl-3 pr-2.5",
-    "transition-colors duration-150",
-    active ? "bg-nav-active" : "hover:bg-nav-raised",
+    "group relative flex w-full items-center transition-colors duration-150",
+    prominent
+      ? cn(
+          "h-12 gap-3 rounded-2xl px-3.5",
+          active ? "bg-brand-orange" : "hover:bg-nav-raised",
+        )
+      : cn(
+          "h-10 gap-2.5 rounded-xl pl-3 pr-2.5",
+          active ? "bg-nav-active" : "hover:bg-nav-raised",
+        ),
   )
 
   if (asButton) {
@@ -403,6 +452,226 @@ function StaffAccountBlock({
 }
 
 /**
+ * Responder sidebar nav — Dispatch sits at the top with alarm treatment when
+ * assignments are active (outlined icon on a red tint, not a filled white
+ * triangle). Non-dispatch active rows use the neutral raised background.
+ */
+function ResponderNavGroup() {
+  const location = useLocation()
+  const nav = getRoleNav("responder")
+  const { activeAlerts } = useAssignedDispatches(true)
+  const liveCount = activeAlerts.length
+
+  return (
+    <nav aria-label="Primary">
+      <ul className="flex flex-col gap-1.5">
+        {nav.items.map((item) => {
+          const active = item.isActive(location.pathname)
+          const Icon = item.icon
+          const isDispatch = item.key === "dispatch"
+          const alarming = isDispatch && liveCount > 0
+          return (
+            <li key={item.key}>
+              <Link
+                to={item.to}
+                aria-current={active ? "page" : undefined}
+                aria-label={alarming ? `${item.label}, ${liveCount} active` : item.label}
+                className={cn(
+                  "flex h-12 w-full items-center gap-2.5 rounded-2xl px-4 transition-colors duration-150",
+                  alarming
+                    ? "animate-sos-glow-blink bg-sos/15 text-sos ring-1 ring-sos/40"
+                    : active
+                      ? "bg-nav-active text-nav-text-active"
+                      : "text-nav-muted hover:bg-nav-raised hover:text-nav-text-active",
+                )}
+              >
+                <Icon
+                  className="size-5 shrink-0"
+                  strokeWidth={active || alarming ? 2.2 : 1.8}
+                  fill="none"
+                />
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-left text-[13px] leading-none",
+                    active || alarming ? "font-bold" : "font-medium",
+                  )}
+                >
+                  {item.label}
+                </span>
+                {alarming ? (
+                  <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-sos px-1.5 text-[10.5px] font-black leading-none text-white tabular-nums">
+                    {liveCount > 9 ? "9+" : liveCount}
+                  </span>
+                ) : null}
+              </Link>
+            </li>
+          )
+        })}
+      </ul>
+    </nav>
+  )
+}
+
+/**
+ * The responder's identity block, pinned to the sidebar floor.
+ *
+ * Avatar + name + display position when collapsed. Expanding it reveals the
+ * whole account in one popover — View profile → Notifications → Sign out — so
+ * there is no separate page-hopping for personal destinations (account
+ * settings has no responder page today and would bounce back to Dispatch).
+ * Profile and Notifications open as dialogs on the console's own palette
+ * (account-dialogs.tsx) rather than navigating out to the resident-styled
+ * pages. The position line shows the barangay's Position (`units[0].position`)
+ * or the responder's unit, never the raw role string.
+ */
+function ResponderAccountBlock({
+  items,
+  badge,
+}: {
+  items: readonly NavItemConfig[]
+  /** Unread notifications, surfaced on the collapsed block. */
+  badge?: number
+}) {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const { user, signOut } = useAuthSession()
+  const [open, setOpen] = useState(false)
+  const [notifOpen, setNotifOpen] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [signingOut, setSigningOut] = useState(false)
+  const name = user?.full_name || "Account"
+  const position = displayPosition(user)
+  const avatarInitials = initials(name)
+
+  async function handleSignOut() {
+    setSigningOut(true)
+    try {
+      await signOut()
+      navigate("/sign-in", { replace: true })
+    } finally {
+      setSigningOut(false)
+    }
+  }
+
+  return (
+    <div>
+      {open ? (
+        <ul className="mb-1 flex flex-col gap-0.5">
+          {items.map((item) => {
+            const active = item.isActive(location.pathname)
+            const Icon = item.icon
+            if (item.key === "notifications") {
+              return (
+                <li key={item.key}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpen(false)
+                      setNotifOpen(true)
+                    }}
+                    className="flex h-9 w-full items-center gap-2.5 rounded-lg px-3 text-[12.5px] leading-none transition-colors"
+                  >
+                    <Icon className="size-4 shrink-0 text-nav-muted" strokeWidth={1.8} />
+                    <span className="min-w-0 flex-1 truncate text-left font-medium text-nav-text hover:text-nav-text-active">
+                      {item.label}
+                    </span>
+                    {badge && badge > 0 ? (
+                      <span className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-brand-orange px-1.5 text-[10px] font-black leading-none text-brand-orange-ink tabular-nums">
+                        {badge > 99 ? "99+" : badge}
+                      </span>
+                    ) : null}
+                  </button>
+                </li>
+              )
+            }
+            if (item.key === "profile") {
+              return (
+                <li key={item.key}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpen(false)
+                      setProfileOpen(true)
+                    }}
+                    className="flex h-9 w-full items-center gap-2.5 rounded-lg px-3 text-[12.5px] leading-none transition-colors"
+                  >
+                    <Icon className="size-4 shrink-0 text-nav-muted" strokeWidth={1.8} />
+                    <span className="min-w-0 flex-1 truncate text-left font-medium text-nav-text hover:text-nav-text-active">
+                      {item.label}
+                    </span>
+                  </button>
+                </li>
+              )
+            }
+            return (
+              <li key={item.key}>
+                <Link
+                  to={item.to}
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => setOpen(false)}
+                  className="flex h-9 items-center gap-2.5 rounded-lg px-3 text-[12.5px] leading-none transition-colors"
+                >
+                  <Icon className="size-4 shrink-0 text-nav-muted" strokeWidth={1.8} />
+                  <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                </Link>
+              </li>
+            )
+          })}
+          <li>
+            <button
+              type="button"
+              onClick={() => void handleSignOut()}
+              disabled={signingOut}
+              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-3 text-[12.5px] font-medium leading-none text-nav-text transition-colors hover:bg-nav-raised hover:text-nav-text-active disabled:opacity-60"
+            >
+              <LogOutIcon className="size-4 shrink-0 text-nav-muted" strokeWidth={1.8} />
+              <span className="min-w-0 flex-1 truncate text-left">
+                {signingOut ? "Signing out…" : "Sign out"}
+              </span>
+            </button>
+          </li>
+        </ul>
+      ) : null}
+
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left transition-colors hover:bg-nav-raised"
+      >
+        <span className="relative shrink-0">
+          <span className="flex size-9 items-center justify-center rounded-full bg-nav-active text-[11.5px] font-black text-white ring-1 ring-white/10">
+            {avatarInitials}
+          </span>
+          {!open && badge && badge > 0 ? (
+            <span className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full bg-brand-orange ring-2 ring-nav-bg" />
+          ) : null}
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-[12.5px] font-bold leading-tight text-nav-text-active">
+            {name}
+          </span>
+          <span className="truncate text-[10.5px] font-semibold leading-tight text-nav-muted">
+            {position}
+          </span>
+        </span>
+        <ChevronDownIcon
+          aria-hidden
+          className={cn(
+            "size-3.5 shrink-0 text-nav-muted transition-transform duration-200",
+            open && "rotate-180",
+          )}
+          strokeWidth={2.4}
+        />
+      </button>
+
+      <ResponderNotificationsDialog open={notifOpen} onOpenChange={setNotifOpen} />
+      <ResponderProfileDialog open={profileOpen} onOpenChange={setProfileOpen} />
+    </div>
+  )
+}
+
+/**
  * Official / responder sidebar — fixed 232px navy panel with text labels.
  *
  * Items are grouped under their `section` heading; Configuration expands its
@@ -445,76 +714,93 @@ function StaffSidebar() {
     <aside className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-nav-bg">
       {isOfficialRole ? <StaffStatusStrip live={badges.emergencies ?? 0} /> : null}
 
-      <nav className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2.5 pb-2 [scrollbar-width:none]">
-        <ul className="flex flex-col gap-0.5">
-          {navItems.map((item, index) => {
-            const childActive =
-              item.children?.some((child) => child.isActive(location.pathname)) ?? false
-            const active = item.isActive(location.pathname) || childActive
-            const hasChildren = Boolean(item.children?.length)
-            const open = openKeys.includes(item.key)
-            const heading = headings[index]
+      {isResponderRole ? (
+        <>
+          <nav className="ops-pane flex min-h-0 flex-1 flex-col justify-center px-3 pt-4">
+            <ResponderNavGroup />
+          </nav>
 
-            return (
-              <li key={item.key}>
-                {heading ? <StaffNavSection label={heading} /> : null}
+          <div className="shrink-0 px-3 pb-4 pt-2">
+            <ResponderAccountBlock items={nav?.account ?? []} badge={unreadCount} />
+          </div>
+        </>
+      ) : (
+        <>
+          <nav className="ops-pane min-h-0 flex-1 px-2.5 pb-2">
+            <ul className="flex flex-col gap-0.5">
+              {navItems.map((item, index) => {
+                const childActive =
+                  item.children?.some((child) => child.isActive(location.pathname)) ?? false
+                const active = item.isActive(location.pathname) || childActive
+                const hasChildren = Boolean(item.children?.length)
+                const open = openKeys.includes(item.key)
+                const heading = headings[index]
 
-                <StaffNavRow
-                  item={item}
-                  active={active}
-                  badge={badges[item.key]}
-                  asButton={hasChildren}
-                  expanded={hasChildren ? open : undefined}
-                  onClick={hasChildren ? () => toggle(item.key) : undefined}
-                />
+                return (
+                  <li key={item.key}>
+                    {heading ? <StaffNavSection label={heading} /> : null}
 
-                {hasChildren && open ? (
-                  <ul className="ml-[22px] mt-0.5 flex flex-col gap-0.5 border-l border-nav-border pl-2.5">
-                    {item.children?.map((child) => {
-                      const childIsActive = child.isActive(location.pathname)
-                      return (
-                        <li key={child.key}>
-                          <Link
-                            to={child.to}
-                            aria-current={childIsActive ? "page" : undefined}
-                            className={cn(
-                              "flex h-8 items-center rounded-lg px-2.5 text-[12.5px] leading-none transition-colors",
-                              childIsActive
-                                ? "bg-nav-active font-bold text-nav-text-active"
-                                : "font-medium text-nav-muted hover:bg-nav-raised hover:text-nav-text-active",
-                            )}
-                          >
-                            <span className="min-w-0 truncate">{child.label}</span>
-                          </Link>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                ) : null}
-              </li>
-            )
-          })}
-        </ul>
-      </nav>
+                    <StaffNavRow
+                      item={item}
+                      active={active}
+                      badge={badges[item.key]}
+                      asButton={hasChildren}
+                      expanded={hasChildren ? open : undefined}
+                      onClick={hasChildren ? () => toggle(item.key) : undefined}
+                    />
 
-      <div className="shrink-0 border-t border-nav-border px-2.5 pb-3 pt-2">
-        {footerItems.length ? (
-          <ul className="mb-1 flex flex-col gap-0.5">
-            {footerItems.map((item) => (
-              <li key={item.key}>
-                <StaffNavRow item={item} active={item.isActive(location.pathname)} />
-              </li>
-            ))}
-          </ul>
-        ) : null}
+                    {hasChildren && open ? (
+                      <ul className="ml-[22px] mt-0.5 flex flex-col gap-0.5 border-l border-nav-border pl-2.5">
+                        {item.children?.map((child) => {
+                          const childIsActive = child.isActive(location.pathname)
+                          return (
+                            <li key={child.key}>
+                              <Link
+                                to={child.to}
+                                aria-current={childIsActive ? "page" : undefined}
+                                className={cn(
+                                  "flex h-8 items-center rounded-lg px-2.5 text-[12.5px] leading-none transition-colors",
+                                  childIsActive
+                                    ? "bg-nav-active font-bold text-nav-text-active"
+                                    : "font-medium text-nav-muted hover:bg-nav-raised hover:text-nav-text-active",
+                                )}
+                              >
+                                <span className="min-w-0 truncate">{child.label}</span>
+                              </Link>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    ) : null}
+                  </li>
+                )
+              })}
+            </ul>
+          </nav>
 
-        <StaffAccountBlock
-          name={user?.full_name || "Account"}
-          role={isResponderRole ? "First responder" : "Barangay official"}
-          items={nav?.account ?? []}
-          badge={unreadCount}
-        />
-      </div>
+          <div className="shrink-0 border-t border-nav-border px-2.5 pb-3 pt-2">
+            {footerItems.length ? (
+              <ul className="mb-1 flex flex-col gap-0.5">
+                {footerItems.map((item) => (
+                  <li key={item.key}>
+                    <StaffNavRow
+                      item={item}
+                      active={item.isActive(location.pathname)}
+                    />
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            <StaffAccountBlock
+              name={user?.full_name || "Account"}
+              role={displayPosition(user)}
+              items={nav?.account ?? []}
+              badge={unreadCount}
+            />
+          </div>
+        </>
+      )}
     </aside>
   )
 }

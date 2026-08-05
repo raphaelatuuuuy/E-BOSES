@@ -14,7 +14,7 @@ import { TrySampleStep } from "@/features/ocr/components/steps/try-sample-step"
 import { PROOF_THEME } from "@/features/ocr/components/proof-theme"
 import { useOcrTemplateState } from "@/features/ocr/hooks/use-ocr-template-state"
 
-const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, Record<string, never>>(
+const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, object>(
   function OcrTemplateBuilderPage(_props, ref) {
     usePageTitle("ID & Proof Templates")
     const [view, setView] = useState<"list" | "wizard">("list")

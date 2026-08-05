@@ -8,7 +8,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import models
 from django.utils import timezone
 from rest_framework import serializers, status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
@@ -29,14 +29,26 @@ CONCERN_ACTIVE = {
     Concern.Status.APPEALED,
 }
 
-EMERGENCY_ACTIVE = {
-    EmergencyAlert.Status.SUBMITTED,
-    EmergencyAlert.Status.ROUTED,
-    EmergencyAlert.Status.ACKNOWLEDGED,
-    EmergencyAlert.Status.EN_ROUTE,
-    EmergencyAlert.Status.NEARBY,
-    EmergencyAlert.Status.ARRIVED,
-}
+def _emergency_active_statuses():
+    """Single source of truth, so a new status cannot silently drop pins.
+
+    This set used to be duplicated here; when statuses were added the map
+    started treating live emergencies as closed and hiding them.
+    """
+    from apps.emergencies.views import ACTIVE_STATUSES
+
+    return ACTIVE_STATUSES
+
+
+class _LazyActiveStatuses:
+    def __iter__(self):
+        return iter(_emergency_active_statuses())
+
+    def __contains__(self, value):
+        return value in _emergency_active_statuses()
+
+
+EMERGENCY_ACTIVE = _LazyActiveStatuses()
 
 STREET_CATALOG = [
     {"name": "10th Avenue"}, {"name": "11th Avenue"}, {"name": "2nd Street"}, {"name": "3rd Street"},
@@ -238,6 +250,10 @@ def emergency_payload(alert):
 
 def route_for_responder_assignment(alert, assignment):
     if not assignment:
+        return None
+    # An SMS emergency may carry a readable area but no pin. There is nothing to
+    # route to until reverse geocoding or the reporter supplies coordinates.
+    if alert.latitude is None or alert.longitude is None:
         return None
     origin = assignment_last_location(assignment)
     if not origin:
@@ -455,6 +471,9 @@ def resident_emergency_payload(alert, request=None):
         "note": (alert.note or "")[:280],
         "status": alert.status,
         "barangay": alert.barangay,
+        "latitude": decimal_string(alert.latitude),
+        "longitude": decimal_string(alert.longitude),
+        "address": alert.address or "",
         "preview_url": None,
         "created_at": alert.created_at,
         "updated_at": alert.updated_at,
@@ -603,6 +622,14 @@ class LocationMapContextView(APIView):
         # has no data. Serving it here keeps it barangay-configurable instead of
         # frozen into the build.
         payload["emergency_sms_number"] = policy.emergency_sms_number
+        # The SOS screen warns (never blocks) outside barangay duty hours and
+        # offers the hotlines instead.
+        payload["duty_hours"] = {
+            "within_duty_hours": policy.is_within_duty_hours(),
+            "start": policy.duty_hours_start.strftime("%H:%M") if policy.duty_hours_start else None,
+            "end": policy.duty_hours_end.strftime("%H:%M") if policy.duty_hours_end else None,
+        }
+        payload["hotlines"] = policy.hotlines or []
         return Response(payload)
 
 
@@ -624,6 +651,96 @@ class LocationValidateView(APIView):
             )
         result = classify_location(lat, lng)
         return Response(result)
+
+
+class GeocodeReverseView(APIView):
+    """Server-side reverse geocoding for the map pin.
+
+    The browser used to call Nominatim directly. It cannot set a User-Agent,
+    so Nominatim throttled the whole barangay's public IP to 429 - and since a
+    429 carries no CORS headers, it surfaced as a CORS error instead of a rate
+    limit. Proxying gives us an identified client, a 30-day cache and one
+    request per second.
+
+    Open to anonymous callers because address capture happens during sign-up,
+    before an account exists. Throttled by scope instead.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_scope = "geocode"
+
+    def get(self, request):
+        from apps.geo_services import nominatim_reverse
+
+        try:
+            latitude = float(request.query_params.get("lat", ""))
+            longitude = float(request.query_params.get("lng") or request.query_params.get("lon") or "")
+        except (TypeError, ValueError):
+            return Response({"detail": "lat and lng are required."}, status=400)
+        if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+            return Response({"detail": "Coordinates are out of range."}, status=400)
+
+        try:
+            zoom = max(1, min(18, int(request.query_params.get("zoom", 18))))
+        except (TypeError, ValueError):
+            zoom = 18
+
+        from apps.geo_services import nearest_known_street
+
+        payload = nominatim_reverse(latitude, longitude, zoom=zoom)
+        if payload is not None:
+            return Response({"ok": True, "result": payload, "source": "nominatim"})
+
+        # Nominatim unavailable or rate-limiting us. The barangay's own street
+        # geometry answers the same question offline, so an emergency never
+        # depends on a third party being reachable.
+        local = nearest_known_street(latitude, longitude)
+        if local["street"]:
+            house_number = local.get("house_number") or ""
+            head = f"{house_number} {local['street']}".strip()
+            address = {
+                "road": local["street"],
+                "village": "Marikina Heights",
+                "city": "Marikina",
+            }
+            if house_number:
+                address["house_number"] = house_number
+            return Response({
+                "ok": True,
+                "source": "local",
+                "result": {
+                    "display_name": f"{head}, Marikina Heights, Marikina",
+                    "address": address,
+                },
+                "distance_meters": local["distance_meters"],
+            })
+
+        # 200 with a null result, not an error: the caller falls back to the
+        # pinned coordinates and must not treat this as a broken request.
+        return Response({"ok": False, "result": None, "source": "unavailable"})
+
+
+class GeocodeSearchView(APIView):
+    """Server-side forward geocoding for street lookup."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_scope = "geocode"
+
+    def get(self, request):
+        from apps.geo_services import nominatim_search
+
+        query = (request.query_params.get("q") or "").strip()
+        if len(query) < 3:
+            return Response({"detail": "q must be at least 3 characters."}, status=400)
+        try:
+            limit = max(1, min(10, int(request.query_params.get("limit", 1))))
+        except (TypeError, ValueError):
+            limit = 1
+
+        payload = nominatim_search(query[:200], limit=limit)
+        return Response({"ok": payload is not None, "results": payload or []})
 
 
 class LocationSearchView(APIView):

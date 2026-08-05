@@ -80,6 +80,7 @@ export function inMapBounds(lat: number, lng: number) {
  * - Rejects pins far outside Marikina so markers don't "teleport" across the world
  */
 export function validCoord(lat?: string | number | null, lng?: string | number | null) {
+  if (lat == null || lng == null || lat === "" || lng === "") return null
   let latitude = Number(lat)
   let longitude = Number(lng)
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
@@ -202,6 +203,14 @@ export function mapConcernToFeedPost(c: ResidentMapConcern): Concern {
             raw_url: c.preview_url,
             validation_status: "accepted" as const,
             validation_detail: "",
+            // The live-map payload only ever carries a preview URL the server
+            // already decided was publicly displayable, so by construction this
+            // pin's image is a cleared one. There is no privacy pipeline detail
+            // in the payload to report beyond that.
+            privacy_state: "protected" as const,
+            public_visible: true,
+            privacy_detected_classes: [],
+            redactions: [],
             uploaded_at: c.created_at,
           },
         ]
@@ -217,29 +226,33 @@ export function mapConcernToFeedPost(c: ResidentMapConcern): Concern {
   }
 }
 
-/** Human-readable SOS / emergency pipeline status */
+/** Human-readable SOS / emergency pipeline status — resident-facing wording */
 export function emergencyStatusLabel(status: string): { label: string; live: boolean } {
   const s = status.toLowerCase()
-  if (s === "submitted") return { label: "Submitted", live: true }
-  if (s === "routed") return { label: "Routed", live: true }
-  if (s === "acknowledged") return { label: "Responder routed", live: true }
-  if (s === "en_route") return { label: "En route", live: true }
+  if (s === "submitted") return { label: "Alert sent", live: true }
+  if (s === "routing") return { label: "Finding help", live: true }
+  if (s === "routed") return { label: "Help on the way", live: true }
+  if (s === "awaiting_acknowledgment" || s === "acknowledged") return { label: "Help on the way", live: true }
+  if (s === "en_route") return { label: "On the way", live: true }
   if (s === "nearby") return { label: "Nearby", live: true }
-  if (s === "arrived") return { label: "Arrived", live: true }
+  if (s === "arrived") return { label: "On scene", live: true }
+  if (s === "resident_safe") return { label: "Resident safe", live: true }
+  if (s === "backup_requested") return { label: "Extra help requested", live: true }
+  if (s === "backup_assigned") return { label: "Extra help on the way", live: true }
+  if (s === "in_progress") return { label: "In progress", live: true }
+  if (s === "transfer_required") return { label: "Transferring", live: true }
+  if (s === "escalation_required") return { label: "More help coming", live: true }
   if (s === "resolved") return { label: "Resolved", live: false }
   if (s === "cancelled") return { label: "Cancelled", live: false }
-  return {
-    label: status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) || "Active",
-    live: true,
-  }
+  if (s === "closed") return { label: "Closed", live: false }
+  return { label: "Active", live: true }
 }
 
 export function emergencyBrief(em: ResidentMapEmergency) {
   const type = (em.type_label || em.type || "Emergency").replace(/_/g, " ")
-  const note = (em.note || "").trim()
-  const street = (em.address || em.barangay || "").trim()
-  const detail = note || street || "Ongoing emergency"
-  const short = detail.length > 48 ? `${detail.slice(0, 46)}…` : detail
   const st = emergencyStatusLabel(em.status)
-  return { title: type, line: short, status: st }
+  const line = st.live
+    ? "Help has been dispatched to the area."
+    : "This emergency is no longer active."
+  return { title: type, line, status: st }
 }

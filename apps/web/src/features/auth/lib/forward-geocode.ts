@@ -31,26 +31,22 @@ export async function geocodeMarikinaStreet(
   ]
 
   for (const q of queries) {
-    const params = new URLSearchParams({
-      format: "jsonv2",
-      q,
-      limit: "1",
-      countrycodes: "ph",
-      addressdetails: "1",
-    })
+    // Same reason as reverse-geocode.ts: proxied so Nominatim sees an
+    // identified, cached, rate-paced client instead of every resident's browser.
+    const params = new URLSearchParams({ q, limit: "1" })
     try {
       const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?${params.toString()}`,
+        `/api/locations/geocode/search/?${params.toString()}`,
         {
           headers: { Accept: "application/json" },
         },
       )
       if (!response.ok) continue
-      const rows = (await response.json()) as Array<{
-        lat?: string
-        lon?: string
-        display_name?: string
-      }>
+      const envelope = (await response.json()) as {
+        ok?: boolean
+        results?: Array<{ lat?: string; lon?: string; display_name?: string }>
+      }
+      const rows = envelope.results ?? []
       const hit = rows?.[0]
       const lat = Number(hit?.lat)
       const lng = Number(hit?.lon)

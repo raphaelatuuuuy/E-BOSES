@@ -20,11 +20,12 @@ export function getStatusPath(status: UserStatus, options?: { isOnboarded?: bool
   if (status === "rejected") return "/sign-in"
   // Self-deactivated / suspended accounts land on reactivate screen (not hard-blocked at login).
   if (status === "suspended") return "/account-inactive"
-  // After email OTP, backend may still be finishing OCR as pending_verification.
-  // Skip the old account-pending screen and continue into onboarding/dashboard.
-  const canEnterApp = status === "verified" || status === "pending_verification"
-  if (canEnterApp && options?.isOnboarded === false) return "/onboarding"
-  if (canEnterApp) return "/dashboard"
+  // Verification is still in progress — the resident waits on the approval screen
+  // until an official decides the case. ProtectedOnboarding/Dashboard only admit
+  // verified users, so sending pending_verification there would redirect-loop.
+  if (status === "pending_verification") return "/account-pending"
+  // Verified users finish onboarding once, then enter the dashboard.
+  if (status === "verified" && options?.isOnboarded === false) return "/onboarding"
   return "/dashboard"
 }
 

@@ -292,3 +292,113 @@ def enqueue_concern_ai(concern_id):
         # Use the same claimed/idempotent execution path as a worker so local
         # fallback runs retain attempt, failure, and recovery evidence too.
         return process_concern_ai_task.run(concern_id)
+
+
+@shared_task(
+    bind=True,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    autoretry_for=(OSError, TimeoutError),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 2},
+    time_limit=180,
+    soft_time_limit=150,
+)
+def process_concern_media_privacy_task(self, media_id, force=False):
+    """Run SAM3 + OpenCV for one image, after Gemma has asked for a scan.
+
+    Separate from the assessment task on purpose. Roboflow is a third-party
+    round trip on top of a Gemma round trip, and putting both inside one task
+    means a slow segmentation call can time out an assessment that already
+    succeeded. Splitting them also makes QUEUED → PROCESSING → terminal a real,
+    observable sequence rather than three values a single function passes
+    through.
+    """
+    from .ai.privacy import process_media_privacy
+    from .models import ConcernMedia
+
+    claimed = _claim_media_privacy(media_id, force=force)
+    if claimed is None:
+        return {"media_id": media_id, "skipped": True, "skip_reason": "already_running_or_done"}
+
+    media = ConcernMedia.objects.get(pk=media_id)
+    try:
+        media = process_media_privacy(
+            media,
+            requested_classes=list(media.privacy_requested_classes or []),
+            force=bool(force),
+        )
+    except Exception:
+        # Never leave a row stuck in PROCESSING: that state reads as "in
+        # progress" forever in the UI and blocks the next claim.
+        ConcernMedia.objects.filter(pk=media_id, privacy_state=ConcernMedia.PrivacyState.PROCESSING).update(
+            privacy_state=ConcernMedia.PrivacyState.FAILED_RESTRICTED,
+            public_visible=False,
+            privacy_failure={"reason": "privacy_task_crashed", "at": timezone.now().isoformat()},
+            privacy_processed_at=timezone.now(),
+        )
+        raise
+
+    transaction.on_commit(lambda: broadcast_media_privacy_update(media_id))
+    return {
+        "media_id": media_id,
+        "privacy_state": media.privacy_state,
+        "public_visible": media.public_visible,
+        "skipped": False,
+    }
+
+
+@transaction.atomic
+def _claim_media_privacy(media_id: int, *, force: bool):
+    """Take the row if nobody else is working on it.
+
+    Cheaper than the assessment's run-lease bookkeeping because the state field
+    is itself the lease: only QUEUED (or anything at all, when an official asks
+    for a re-run) is claimable.
+    """
+    from .models import ConcernMedia
+
+    media = ConcernMedia.objects.select_for_update().filter(pk=media_id).first()
+    if media is None:
+        return None
+    if not force and media.privacy_state != ConcernMedia.PrivacyState.QUEUED:
+        return None
+    media.privacy_state = ConcernMedia.PrivacyState.PROCESSING
+    media.public_visible = False
+    media.save(update_fields=["privacy_state", "public_visible"])
+    return media.pk
+
+
+def enqueue_concern_media_privacy(media_id, *, force=False):
+    """Queue privacy processing, with the same inline fallback as the assessment."""
+    try:
+        return process_concern_media_privacy_task.delay(media_id, force=force)
+    except Exception as exc:
+        logger.warning(
+            "Concern media privacy queue unavailable for media_id=%s (%s); processing inline.",
+            media_id,
+            exc.__class__.__name__,
+        )
+        return process_concern_media_privacy_task.run(media_id, force=force)
+
+
+def broadcast_media_privacy_update(media_id: int) -> None:
+    """Tell an open Details pane that a photo's privacy state moved."""
+    from apps.notifications.services import broadcast_live_map_event
+
+    from .models import ConcernMedia
+
+    media = ConcernMedia.objects.select_related("concern").filter(pk=media_id).first()
+    if media is None:
+        return
+    broadcast_live_map_event(
+        "concern.media_privacy.updated",
+        {
+            "concern_id": media.concern_id,
+            "media": {
+                "id": media.pk,
+                "privacy_state": media.privacy_state,
+                "public_visible": media.public_visible,
+            },
+        },
+    )

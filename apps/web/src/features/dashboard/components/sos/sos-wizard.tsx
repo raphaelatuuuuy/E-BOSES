@@ -25,10 +25,13 @@ import {
 import {
   buildEmergencySmsHref,
   buildEmergencySmsMessage,
+  describeTriage,
   deleteQueuedSosEmergency,
   enqueueSosEmergency,
   isSosLocationReady,
   listQueuedSosEmergencies,
+  toServerTriage,
+  type SosTriageAnswers,
 } from "@/features/dashboard/components/sos-fallback"
 import {
   SosLocationStep,
@@ -36,7 +39,9 @@ import {
 } from "@/features/dashboard/components/sos/location-step"
 import { emergencies, emergencyOptionsFromCategories, SosTypeStep } from "@/features/dashboard/components/sos/type-step"
 import { SosDetailsStep } from "@/features/dashboard/components/sos/details-step"
+import { SosTriageStep } from "@/features/dashboard/components/sos/triage-step"
 import { SosConfirmStep } from "@/features/dashboard/components/sos/confirm-step"
+import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
 
 // Build-time fallback only. The live number comes from the barangay's dispatch
 // policy (see MapDispatchPolicy.emergency_sms_number) so it can be changed
@@ -46,22 +51,25 @@ const emergencySmsNumberFallback =
 const OFFLINE_SUBMIT_ERROR =
   "You’re offline. Reconnect to send online, or use the SMS backup below."
 
-type WizardStep = "category" | "location" | "details" | "review" | "countdown"
+type WizardStep = "category" | "triage" | "location" | "details" | "review" | "countdown"
 
 const WIZARD_STEPS: WizardStep[] = [
   "category",
+  "triage",
   "location",
   "details",
   "review",
   "countdown",
 ]
 
-const WIZARD_LABELS = ["Type", "Location", "Details", "Review"] as const
+const WIZARD_LABELS = ["Type", "Details", "Location", "Note", "Review"] as const
+const WIZARD_STEP_COUNT = WIZARD_LABELS.length
 
 function stepTitle(step: WizardStep) {
   if (step === "category") return "What’s the emergency?"
+  if (step === "triage") return "Quick questions"
   if (step === "location") return "Confirm your location"
-  if (step === "details") return "Add details (optional)"
+  if (step === "details") return "Anything else? (optional)"
   if (step === "review") return "Review & send"
   return "Sending alert"
 }
@@ -71,15 +79,7 @@ function stepIndex(step: WizardStep) {
 }
 
 function isActiveAlert(alert: EmergencyAlert | null) {
-  const activeEmergencyStatuses = [
-    "submitted",
-    "routed",
-    "acknowledged",
-    "en_route",
-    "nearby",
-    "arrived",
-  ]
-  return Boolean(alert && activeEmergencyStatuses.includes(alert.status))
+  return Boolean(alert && isEmergencyActive(alert.status))
 }
 
 function SosShell({
@@ -307,7 +307,7 @@ export function SosWizard({
   const [emergency, setEmergency] = useState<EmergencyType | "">("")
   const [note, setNote] = useState("")
   const [location, setLocation] = useState<SosLocationValue | null>(null)
-  const [mediaFiles, setMediaFiles] = useState<File[]>([])
+  const [triage, setTriage] = useState<SosTriageAnswers>({})
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [submitError, setSubmitError] = useState("")
   const [submitting, setSubmitting] = useState(false)
@@ -327,7 +327,7 @@ export function SosWizard({
     address: string
     locationSource: "gps" | "manual_pin" | "network" | "sms" | "sms_landmark"
     locationAccuracy: number | null
-    mediaFiles: File[]
+    triage: SosTriageAnswers
   }) {
     const formData = new FormData()
     formData.append("client_request_id", payload.clientRequestId)
@@ -338,7 +338,9 @@ export function SosWizard({
     formData.append("location_source", payload.locationSource)
     if (payload.locationAccuracy != null) formData.append("location_accuracy", String(payload.locationAccuracy))
     formData.append("address", payload.address.slice(0, 255))
-    for (const file of payload.mediaFiles) formData.append("media", file)
+    if (Object.keys(payload.triage).length) {
+      formData.append("triage", JSON.stringify(toServerTriage(payload.triage)))
+    }
     return formData
   }
 
@@ -358,7 +360,7 @@ export function SosWizard({
             address: item.address,
             locationSource: item.locationSource,
             locationAccuracy: item.locationAccuracy,
-            mediaFiles: item.mediaFiles,
+            triage: item.triage ?? {},
           }),
         )
         await deleteQueuedSosEmergency(item.id)
@@ -407,7 +409,7 @@ export function SosWizard({
     setEmergency("")
     setNote("")
     setLocation(null)
-    setMediaFiles([])
+    setTriage({})
     setFieldErrors({})
     setSubmitError("")
     setDispatchCountdown(5)
@@ -457,6 +459,11 @@ export function SosWizard({
         return
       }
       setFieldErrors({})
+      setStep("triage")
+      return
+    }
+    if (step === "triage") {
+      // Every triage question is optional; nothing blocks here.
       setStep("location")
       return
     }
@@ -485,26 +492,6 @@ export function SosWizard({
     }
   }
 
-  function handleMediaSelection(files: FileList | null) {
-    if (!files) return
-    const selected = Array.from(files).slice(0, 2)
-    const invalid = selected.find(
-      (file) =>
-        !["image/jpeg", "image/png"].includes(file.type) ||
-        file.size > 2 * 1024 * 1024
-    )
-    if (invalid) {
-      setMediaFiles([])
-      setFieldErrors((c) => ({
-        ...c,
-        media: `${invalid.name}: use JPG/PNG up to 2 MB.`,
-      }))
-      return
-    }
-    setMediaFiles(selected)
-    setFieldErrors((c) => ({ ...c, media: "" }))
-  }
-
   async function submitEmergency() {
     if (!location || !emergency) return
     if (!navigator.onLine) {
@@ -530,7 +517,7 @@ export function SosWizard({
         locationSource: location.source === "gps" ? "gps" : "manual_pin",
         locationAccuracy: location.accuracy ?? null,
         address: addr,
-        mediaFiles,
+        triage,
       })
 
       const alert = await createEmergency(formData)
@@ -587,7 +574,7 @@ export function SosWizard({
       address: location.address || location.addressPrimary,
       locationSource: location.source === "gps" ? "gps" : "manual_pin",
       locationAccuracy: location.accuracy ?? null,
-      mediaFiles,
+      triage,
       createdAt: new Date().toISOString(),
       retryCount: 0,
       ...extra,
@@ -612,16 +599,16 @@ export function SosWizard({
 
   const emergencyOptions = emergencyCategories.length ? emergencyOptionsFromCategories(emergencyCategories) : emergencies
   const typeMeta = emergencyOptions.find((e) => e.value === emergency)
-      const smsBody = location
-    ? buildEmergencySmsMessage({
-        requestId: clientRequestIdRef.current,
-        userId: user?.id,
-        emergencyType: typeMeta?.label ?? (emergency || "Emergency"),
-        latitude: location.lat,
-        longitude: location.lng,
-        note,
-      })
-    : ""
+  // Built even without a map fix: an emergency with only a described area is
+  // still a valid SMS, and the backend saves and routes it.
+  const smsBody = buildEmergencySmsMessage({
+    emergencyType: typeMeta?.label ?? (emergency || "Other Emergency"),
+    readableArea: location?.addressPrimary || location?.address || "",
+    latitude: location?.lat ?? null,
+    longitude: location?.lng ?? null,
+    triage,
+    note,
+  })
   const emergencySmsHref = buildEmergencySmsHref(
     emergencySmsNumber || emergencySmsNumberFallback,
     smsBody,
@@ -723,7 +710,7 @@ export function SosWizard({
         subtitle={
           step === "countdown"
             ? "Tap cancel if this was accidental"
-            : `Step ${Math.min(stepIndex(step), 4)} of 4 · Emergency SOS`
+            : `Step ${Math.min(stepIndex(step), WIZARD_STEP_COUNT)} of 4 · Emergency SOS`
         }
         showBack={step !== "category" && step !== "countdown"}
         onBack={goBack}
@@ -734,7 +721,7 @@ export function SosWizard({
             <div className="mb-3 flex items-center justify-between gap-1">
               {WIZARD_LABELS.map((label, i) => {
                 const n = i + 1
-                const current = Math.min(stepIndex(step), 4)
+                const current = Math.min(stepIndex(step), WIZARD_STEP_COUNT)
                 const done = n < current
                 const active = n === current
                 return (
@@ -779,7 +766,7 @@ export function SosWizard({
               <div
                 className="h-full rounded-full bg-brand-orange transition-all duration-300"
                 style={{
-                  width: `${(Math.min(stepIndex(step), 4) / 4) * 100}%`,
+                  width: `${(Math.min(stepIndex(step), WIZARD_STEP_COUNT) / WIZARD_STEP_COUNT) * 100}%`,
                 }}
               />
             </div>
@@ -819,15 +806,16 @@ export function SosWizard({
           </div>
         ) : null}
 
-        {step === "details" ? (
-          <SosDetailsStep
-            note={note}
-            onNoteChange={setNote}
-            mediaFiles={mediaFiles}
-            mediaError={fieldErrors.media}
-            onMediaSelect={handleMediaSelection}
-            onClearMedia={() => setMediaFiles([])}
+        {step === "triage" ? (
+          <SosTriageStep
+            categoryCode={emergency || ""}
+            value={triage}
+            onChange={setTriage}
           />
+        ) : null}
+
+        {step === "details" ? (
+          <SosDetailsStep note={note} onNoteChange={setNote} />
         ) : null}
 
         {step === "review" || step === "countdown" ? (
@@ -839,7 +827,7 @@ export function SosWizard({
             onSmsFallbackClick={announceSmsFallback}
             typeLabel={typeMeta?.label}
             locationLabel={locationLabel}
-            mediaCount={mediaFiles.length}
+            triageSummary={describeTriage(triage)}
             note={note}
             submitting={submitting}
             dispatchCountdown={dispatchCountdown}
