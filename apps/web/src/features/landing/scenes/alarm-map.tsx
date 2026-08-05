@@ -71,7 +71,7 @@ export function AlarmMap() {
   )
 
   return (
-    <section ref={root} id="contact" className="relative scroll-mt-24 overflow-hidden bg-black/40 px-5 md:px-10">
+    <section ref={root} id="contact" className="relative scroll-mt-24 overflow-hidden bg-[#00001C]/40 px-5 md:px-10">
       {/* Pinned viewport-fit area: headline, one-at-a-time beats, and the map.
           The hotline block lives BELOW this wrapper so it never pushes the map
           or beat copy off-screen while pinned; it scrolls in normally once the
