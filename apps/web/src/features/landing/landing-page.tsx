@@ -18,7 +18,7 @@ gsap.registerPlugin(ScrollTrigger, useGSAP)
 
 export default function LandingPage() {
   return (
-    <div className="landing-fonts flex min-h-screen flex-col bg-[#00001C] text-[#f5f2ec]">
+    <div className="landing-fonts flex min-h-screen flex-col bg-landing-bg text-landing-cream">
       <Navbar />
       <main className="flex-grow">
         <HeroReach />

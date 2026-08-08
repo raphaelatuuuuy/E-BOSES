@@ -82,9 +82,13 @@ export function AddressStep({ values, errors, onChange, onContinue }: AddressSte
     [query, hasQuery],
   )
 
-  React.useEffect(() => {
+  // Keep the local query in sync when the submit street changes externally
+  // (parent reset) — render-adjust instead of a sync setState effect.
+  const [prevStreet, setPrevStreet] = React.useState(values.street || "")
+  if (prevStreet !== (values.street || "")) {
+    setPrevStreet(values.street || "")
     setQuery(values.street || "")
-  }, [values.street])
+  }
 
   React.useEffect(() => {
     function onDocClick(event: MouseEvent) {
@@ -342,7 +346,7 @@ export function AddressStep({ values, errors, onChange, onContinue }: AddressSte
               <button
                 type="button"
                 onClick={() => void applyCurrentLocation()}
-                className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-[#ff8133] px-6 text-[15px] font-semibold text-white shadow-sm transition-[transform,colors,filter,box-shadow] duration-150 ease-out hover:bg-[#e6732e] active:scale-[0.96] active:brightness-95 active:shadow-none"
+                className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-primary px-6 text-[15px] font-semibold text-white shadow-sm transition-[transform,colors,filter,box-shadow] duration-150 ease-out hover:bg-brand-orange-strong active:scale-[0.96] active:brightness-95 active:shadow-none"
               >
                 Use current location
                 <LocationPlaneIcon className="size-4" strokeWidth={2} />

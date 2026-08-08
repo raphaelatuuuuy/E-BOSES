@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { toast } from "sonner"
 import { LeafIcon, SearchIcon, ShieldCheckIcon, TrafficConeIcon } from "lucide-react"
 
-import { openAuthenticatedMedia } from "@/features/dashboard/components/authenticated-media"
+import { openAuthenticatedMedia } from "@/features/dashboard/lib/authenticated-media"
 import type {
   Concern,
   ConcernCategory,
@@ -86,10 +86,10 @@ export const categoryLabels: Record<ConcernCategory, string> = {
 }
 
 export const categoryStyles: Record<ConcernCategory, { icon: typeof TrafficConeIcon; bg: string; text: string; sub: string }> = {
-  infrastructure: { icon: TrafficConeIcon, bg: "bg-[#eef3ff]", text: "text-[#2447b3]", sub: "Roads & utilities" },
-  environment: { icon: LeafIcon, bg: "bg-[#eef3ff]", text: "text-[#2447b3]", sub: "Garbage Collection" },
-  public_safety: { icon: ShieldCheckIcon, bg: "bg-[#fff1ea]", text: "text-[#ff5003]", sub: "Safety & response" },
-  others: { icon: SearchIcon, bg: "bg-[#eef3ff]", text: "text-[#2447b3]", sub: "General concern" },
+  infrastructure: { icon: TrafficConeIcon, bg: "bg-tint", text: "text-brand-blue", sub: "Roads & utilities" },
+  environment: { icon: LeafIcon, bg: "bg-tint", text: "text-brand-blue", sub: "Garbage Collection" },
+  public_safety: { icon: ShieldCheckIcon, bg: "bg-brand-orange-soft", text: "text-accent", sub: "Safety & response" },
+  others: { icon: SearchIcon, bg: "bg-tint", text: "text-brand-blue", sub: "General concern" },
 }
 
 export function statusGroup(status: ConcernStatus): (typeof filters)[number] {

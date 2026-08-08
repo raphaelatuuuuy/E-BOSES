@@ -4,7 +4,6 @@ import { ImageIcon, Loader2Icon } from "lucide-react"
 import { cn } from "@workspace/ui/lib/utils"
 import { getAccessToken } from "@/lib/api"
 
-
 export function AuthenticatedMediaImage({
   src,
   alt,
@@ -60,20 +59,4 @@ export function AuthenticatedMediaImage({
     )
   }
   return <img src={objectUrl} alt={alt} className={className} />
-}
-
-
-export async function openAuthenticatedMedia(src: string, filename: string) {
-  const token = getAccessToken()
-  const response = await fetch(src, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  })
-  if (!response.ok) throw new Error("Could not open this file.")
-  const objectUrl = URL.createObjectURL(await response.blob())
-  const link = document.createElement("a")
-  link.href = objectUrl
-  link.download = filename
-  link.rel = "noopener"
-  link.click()
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000)
 }

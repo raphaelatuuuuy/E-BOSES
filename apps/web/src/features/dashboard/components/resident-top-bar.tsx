@@ -114,7 +114,7 @@ export function ResidentLogoBar({
           className="flex min-w-0 items-center gap-2.5 rounded-xl px-2 py-1.5 no-underline transition-colors hover:bg-nav-raised"
         >
           <img
-            src="/contents/logo.png"
+            src="/contents/logo.webp"
             alt="Boses Marikina Heights"
             className="size-8 shrink-0 object-contain"
           />
@@ -137,7 +137,7 @@ export function ResidentLogoBar({
         to={homeTo}
         className="flex min-w-0 items-center gap-2 rounded-lg px-2.5 no-underline"
       >
-        <img src="/contents/logo.png" alt="Boses Marikina Heights" className="size-9 shrink-0 object-contain" />
+        <img src="/contents/logo.webp" alt="Boses Marikina Heights" className="size-9 shrink-0 object-contain" />
         <div className="flex min-w-0 flex-col">
           <span className="truncate text-[26px] font-bold leading-none tracking-tight text-brand-orange">
             Boses

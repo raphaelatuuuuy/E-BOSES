@@ -186,26 +186,26 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
   }
 
   useEffect(() => {
-    let active = true
-    void refreshProofOptions().then(() => {
-      if (!active) return
-    })
-    return () => {
-      active = false
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Fire-and-forget options load; deferred one macrotask so the mount
+    // render settles first (the loading flag already starts true).
+    const id = window.setTimeout(() => void refreshProofOptions(), 0)
+    return () => window.clearTimeout(id)
   }, [])
 
-  useEffect(() => {
-    if (!phoneOtpResendAvailableAt) {
-      setPhoneOtpCooldownSeconds(0)
-      return
-    }
+  // Reset the phone cooldown display whenever the resend window closes —
+  // render-adjust instead of a sync setState at the top of the ticking effect.
+  const [prevPhoneExpiry, setPrevPhoneExpiry] = useState(phoneOtpResendAvailableAt)
+  if (prevPhoneExpiry !== phoneOtpResendAvailableAt) {
+    setPrevPhoneExpiry(phoneOtpResendAvailableAt)
+    if (!phoneOtpResendAvailableAt) setPhoneOtpCooldownSeconds(0)
+  }
 
-    function updateCooldown() {
-      const expiry = phoneOtpResendAvailableAt
-      if (expiry === null) return
-      const nextSeconds = Math.max(0, Math.ceil((expiry - Date.now()) / 1000))
+  useEffect(() => {
+    const phoneExpiry = phoneOtpResendAvailableAt
+    if (!phoneExpiry) return
+
+    const updateCooldown = () => {
+      const nextSeconds = Math.max(0, Math.ceil((phoneExpiry - Date.now()) / 1000))
       setPhoneOtpCooldownSeconds(nextSeconds)
       if (nextSeconds === 0) {
         setPhoneOtpResendAvailableAt(null)
@@ -217,16 +217,20 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     return () => window.clearInterval(timer)
   }, [phoneOtpResendAvailableAt])
 
-  useEffect(() => {
-    if (!emailOtpResendAvailableAt) {
-      setEmailOtpCooldownSeconds(0)
-      return
-    }
+  // Reset the email cooldown display whenever the resend window closes —
+  // render-adjust instead of a sync setState at the top of the ticking effect.
+  const [prevEmailExpiry, setPrevEmailExpiry] = useState(emailOtpResendAvailableAt)
+  if (prevEmailExpiry !== emailOtpResendAvailableAt) {
+    setPrevEmailExpiry(emailOtpResendAvailableAt)
+    if (!emailOtpResendAvailableAt) setEmailOtpCooldownSeconds(0)
+  }
 
-    function updateCooldown() {
-      const expiry = emailOtpResendAvailableAt
-      if (expiry === null) return
-      const nextSeconds = Math.max(0, Math.ceil((expiry - Date.now()) / 1000))
+  useEffect(() => {
+    const emailExpiry = emailOtpResendAvailableAt
+    if (!emailExpiry) return
+
+    const updateCooldown = () => {
+      const nextSeconds = Math.max(0, Math.ceil((emailExpiry - Date.now()) / 1000))
       setEmailOtpCooldownSeconds(nextSeconds)
       if (nextSeconds === 0) {
         setEmailOtpResendAvailableAt(null)

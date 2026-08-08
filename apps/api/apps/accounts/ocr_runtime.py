@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import timedelta
 from decimal import Decimal
@@ -9,6 +10,7 @@ from io import BytesIO
 from statistics import fmean
 
 from django.conf import settings
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Max
@@ -32,25 +34,28 @@ from .ocr import (
     OCRProviderAuthenticationError,
     OCRProviderError,
     OCRProviderUnavailable,
+    OCRResponse,
 )
 from .ocr_engine import (
     EasyOCRProvider,
     FallbackOCRProvider,
-    PaddleOCRProvider,
+    OCRSpaceProvider,
     classify_document_type,
     document_uses_field_regions,
     evaluate_template_match,
     extract_fields,
+    field_matches_side,
     field_side,
     merge_extracted_fields,
     normalized_text,
+    parse_date,
     run_engine,
     suffix_for_filename,
 )
 
 
 logger = logging.getLogger(__name__)
-PROVIDER = "paddleocr"
+PROVIDER = "ocrspace"
 OFFICIAL_OCR_PROVIDER = "easyocr_official"
 ACTIVE_CASE_STATUSES = {
     ResidenceVerificationCase.Status.AWAITING_EMAIL,
@@ -247,7 +252,34 @@ class _EmptyProfile:
     gender = ""
 
 
-def detect_residence_proof(proof_file, *, hint_type: str | None = None, side: str | None = None) -> dict:
+class _SubmittedProfile:
+    """Registrant details from the in-flight sign-up form, used at detect time.
+
+    Signup is unauthenticated so we cannot query a resident profile — we trust
+    the values the user is typing into their own form. The point is not
+    authentication; it is: "does the ID you uploaded match what you claim you
+    are?" Same shape ocr_engine.evaluate_rules expects.
+    """
+
+    def __init__(self, data: dict | None):
+        data = data or {}
+        self.first_name = str(data.get("first_name") or "").strip()
+        self.middle_name = str(data.get("middle_name") or "").strip()
+        self.last_name = str(data.get("last_name") or "").strip()
+        self.address = str(data.get("address") or "").strip()
+        self.gender = str(data.get("gender") or "").strip()
+        dob = str(data.get("date_of_birth") or "").strip()
+        # Keep as string; ocr_engine parses via parse_date.
+        self.date_of_birth = dob or None
+
+
+def detect_residence_proof(
+    proof_file,
+    *,
+    hint_type: str | None = None,
+    side: str | None = None,
+    submitted_profile: dict | None = None,
+) -> dict:
     """Classify an uploaded/captured proof against published enabled templates.
 
     Used at sign-up so the ID type dropdown can auto-select. Does not create a case.
@@ -343,8 +375,9 @@ def detect_residence_proof(proof_file, *, hint_type: str | None = None, side: st
         logger.exception("Sign-up detect OCR enhance skipped")
 
     provider = FallbackOCRProvider(
-        primary=PaddleOCRProvider(),
+        primary=OCRSpaceProvider(),
         fallback_factory=lambda: EasyOCRProvider(gpu=False),
+        caller="signup.detect",
     )
     try:
         # deskew=False when regions are used so OCR geometry matches Mark Areas boxes.
@@ -446,8 +479,11 @@ def detect_residence_proof(proof_file, *, hint_type: str | None = None, side: st
             "message": "We could not read any text from this photo. Retake with better lighting and hold steady.",
         }
 
-    profile = _EmptyProfile()
+    # Trust the sign-up form values when provided — the whole point of the
+    # detect step is to check the uploaded ID matches what the resident says.
+    profile = _SubmittedProfile(submitted_profile) if submitted_profile else _EmptyProfile()
     from .ocr_engine import (
+        evaluate_rules,
         normalize_extracted_dates,
         validate_extracted_field_rules,
     )
@@ -495,7 +531,28 @@ def detect_residence_proof(proof_file, *, hint_type: str | None = None, side: st
         configuration=configuration,
         side=proof_side,
     )
-    field_failures = [c for c in field_checks if not c.get("passed")]
+    # Admin-configured OCRRule rows (profile_match / required / not_expired /
+    # contains_any / format / within_days …). These are the toggles surfaced
+    # in the builder's Rules step; running them here is what makes sign-up
+    # actually enforce what the admin configured. Skipped rules (e.g. profile
+    # match with no submitted value) return passed=None and do not block.
+    configured_rule_results = evaluate_rules(
+        configuration,
+        detected_type,
+        extracted,
+        profile,
+        lines,
+        side=proof_side,
+    )
+    for rule_result in configured_rule_results:
+        if rule_result.get("passed") is False:
+            field_checks.append(rule_result)
+    field_failures = [
+        c
+        for c in field_checks
+        if c.get("passed") is False
+        and (c.get("on_failure") or "manual_review") == "manual_review"
+    ]
 
     reasons = []
     if not detected_ok:
@@ -616,7 +673,7 @@ def record_provider_failure(error: Exception, *, provider_key=PROVIDER, configur
     now = timezone.now()
     status.consecutive_failures += 1
     if configured is None:
-        configured = bool(getattr(settings, "PADDLEOCR_TOKEN", ""))
+        configured = bool(getattr(settings, "OCRSPACE_API_KEY", ""))
     if not configured:
         status.status = OCRServiceStatus.Status.NOT_CONFIGURED
         status.circuit_state = OCRServiceStatus.CircuitState.OPEN
@@ -715,20 +772,22 @@ def process_verification_case(case_id, *, trigger=VerificationCheck.Trigger.SYST
     if not attempts:
         return case
     if provider is None:
-        if not circuit_allows_request(force=force):
-            provider = EasyOCRProvider(gpu=False)
-        else:
-            provider = FallbackOCRProvider(
-                primary=PaddleOCRProvider(),
-                fallback_factory=lambda: EasyOCRProvider(gpu=False),
-            )
+        # Always prefer hosted OCR.space, falling back to local EasyOCR only
+        # when the primary actually fails. The circuit breaker still tracks
+        # health, but it no longer short-circuits sign-up straight to EasyOCR
+        # while OCR.space may be available again.
+        provider = FallbackOCRProvider(
+            primary=OCRSpaceProvider(),
+            fallback_factory=lambda: EasyOCRProvider(gpu=False),
+            caller="signup.case",
+        )
     else:
-        if not getattr(settings, "PADDLEOCR_TOKEN", ""):
-            error = OCRProviderAuthenticationError("PaddleOCR is not configured.")
+        if not getattr(settings, "OCRSPACE_API_KEY", ""):
+            error = OCRProviderAuthenticationError("OCR.space is not configured.")
             record_provider_failure(error)
             return fail_case_attempts(case.pk, attempts, error)
         if not circuit_allows_request(force=force):
-            error = OCRProviderUnavailable("PaddleOCR circuit is open.")
+            error = OCRProviderUnavailable("OCR.space circuit is open.")
             return fail_case_attempts(case.pk, attempts, error)
 
     all_lines = []
@@ -1167,10 +1226,10 @@ def retry_case(case_id):
 
 
 def run_health_canary(*, provider=None):
-    if not getattr(settings, "PADDLEOCR_TOKEN", ""):
-        error = OCRProviderAuthenticationError("PaddleOCR is not configured.")
+    if not getattr(settings, "OCRSPACE_API_KEY", ""):
+        error = OCRProviderAuthenticationError("OCR.space is not configured.")
         return record_provider_failure(error)
-    provider = provider or PaddleOCRProvider()
+    provider = provider or OCRSpaceProvider()
     image = Image.new("RGB", (460, 100), "white")
     ImageDraw.Draw(image).text((18, 38), "E-BOSES OCR HEALTH CHECK", fill="black")
     buffer = BytesIO()
@@ -1180,7 +1239,7 @@ def run_health_canary(*, provider=None):
     except OCRProviderError as exc:
         return record_provider_failure(exc)
     except Exception:
-        logger.exception("Unexpected PaddleOCR health canary adapter failure")
+        logger.exception("Unexpected OCR.space health canary adapter failure")
         return record_provider_failure(OCRProviderUnavailable("Unexpected OCR canary failure."))
     return record_provider_success(
         latency_ms=response.latency_ms,
@@ -1216,6 +1275,23 @@ def run_official_health_canary(*, provider=None):
         provider_key=OFFICIAL_OCR_PROVIDER,
     )
 
+_OCR_CACHE_TTL_SECONDS = 600
+
+
+def _provider_id(provider) -> str:
+    # Prefer an explicit stable name; fall back to the model string. Never
+    # isinstance against module-level classes — tests patch those names and
+    # isinstance(provider, <mock>) raises TypeError.
+    provider_name = getattr(provider, "provider_name", None)
+    if provider_name:
+        return provider_name
+    return getattr(provider, "model", provider.__class__.__name__)
+
+
+def _recognize_with_cache(provider, image_bytes: bytes, *, suffix: str, deskew: bool):
+    return provider.recognize(image_bytes, suffix=suffix, deskew=deskew)
+
+
 def process_test_run(test_run_id, *, provider=None, force=False, side: str | None = None):
     with transaction.atomic():
         test_run = OCRTestRun.objects.select_for_update(of=("self",)).select_related(
@@ -1229,7 +1305,17 @@ def process_test_run(test_run_id, *, provider=None, force=False, side: str | Non
     field_file = test_run.file or (test_run.sample.file if test_run.sample_id else None)
     if not field_file:
         return fail_test_run(test_run_id, OCRProviderError("No test document was provided."))
-    provider = provider or EasyOCRProvider(gpu=False)
+    if provider is None:
+        if getattr(settings, "OCRSPACE_API_KEY", ""):
+            provider = FallbackOCRProvider(
+                primary=OCRSpaceProvider(),
+                fallback_factory=lambda: EasyOCRProvider(gpu=False),
+                caller="test_tool",
+            )
+        else:
+            import sys
+            print("[OCR] test_tool using EasyOCR (no OCRSPACE_API_KEY)", file=sys.stderr, flush=True)
+            provider = EasyOCRProvider(gpu=False)
     # Prefer explicit side arg; fall back to linked sample name (front/back/single).
     test_side = (side or "").strip().lower() or None
     if not test_side and test_run.sample_id:
@@ -1238,10 +1324,11 @@ def process_test_run(test_run_id, *, provider=None, force=False, side: str | Non
         test_side = None
     try:
         use_regions = document_uses_field_regions(test_run.document_type)
-        response = provider.recognize(
-            _read_private_file(field_file),
+        image_bytes = _read_private_file(field_file)
+        response = _recognize_with_cache(
+            provider,
+            image_bytes,
             suffix=suffix_for_filename(test_run.original_filename or getattr(test_run.sample, "original_filename", "")),
-            # Template tests use drawn boxes — never deskew/crop or boxes miss the text.
             deskew=not use_regions,
         )
         record_provider_success(
@@ -1249,9 +1336,9 @@ def process_test_run(test_run_id, *, provider=None, force=False, side: str | Non
             details={"model": response.model, "probe": "test", "side": test_side, "regions": use_regions},
             provider_key=OFFICIAL_OCR_PROVIDER,
         )
-        profile = getattr(test_run.requested_by, "resident_profile", None)
-        if profile is None:
-            profile = _SyntheticProfile()
+        simulated = (test_run.metadata or {}).get("simulated_profile") or {}
+        profile = _SimulatedProfile(simulated)
+        profile_source = "simulated" if any(str(value or "").strip() for value in simulated.values()) else "empty"
         page_size = None
         if response.image_width and response.image_height:
             page_size = (float(response.image_width), float(response.image_height))
@@ -1293,13 +1380,63 @@ def process_test_run(test_run_id, *, provider=None, force=False, side: str | Non
         extracted["__template_match__"] = template_match
         if test_side:
             extracted["__test_side__"] = test_side
+        is_easyocr = response.job_id == "local-easyocr"
+        test_run.metadata = {
+            **(test_run.metadata or {}),
+            "provider": "easyocr" if is_easyocr else "ocrspace",
+            "model": response.model,
+            "profile_source": profile_source,
+        }
         template_ok = bool(template_match.get("passed", True))
         outcome_passed = engine.outcome == "passed" and template_ok
         test_run.status = OCRTestRun.Status.PASSED if outcome_passed else OCRTestRun.Status.WARNING
         test_run.provider_job_id = response.job_id
         test_run.ocr_confidence = Decimal(str(engine.confidence))
         test_run.extracted_fields = extracted
-        test_run.rule_results = [*template_checks, *(engine.rule_results or [])]
+        # Emit synthetic PASSED rule_results for hints-based checks (Advanced
+        # regex "Must contain", DOB parseability) so the Try Sample results
+        # panel does not report "No rule configured" for fields that DO have a
+        # rule that simply passed. Failures are already handled by
+        # _prepend_priority_failures inside run_engine.
+        engine_rules = list(engine.rule_results or [])
+        rule_field_codes = {
+            str(rule.get("field"))
+            for rule in engine_rules
+            if rule.get("field")
+        }
+        hint_passes: list[dict] = []
+        try:
+            fields_iter = test_run.document_type.fields.all()
+        except Exception:
+            fields_iter = []
+        for field in fields_iter:
+            if test_side and not field_matches_side(field, test_side):
+                continue
+            code = getattr(field, "code", "") or ""
+            if not code or code in rule_field_codes:
+                # Fail already recorded or field not testable.
+                continue
+            item = (engine.extracted_fields or {}).get(code) or {}
+            value = str(item.get("value") or "").strip() if isinstance(item, dict) else ""
+            hints = getattr(field, "extraction_hints", None) or {}
+            if not isinstance(hints, dict):
+                hints = {}
+            pattern = str(hints.get("regex_pattern") or "").strip()
+            label = getattr(field, "label", None) or code
+            if pattern and value:
+                # Emit "passed" only when it actually matched — extractor sets
+                # pattern_ok=True/False; None means not checked (skip).
+                if item.get("pattern_ok") is True:
+                    hint_passes.append({
+                        "code": f"{code}_pattern",
+                        "name": f"{label} matches the expected pattern",
+                        "field": code,
+                        "passed": True,
+                        "score": 1.0,
+                        "on_failure": "manual_review",
+                        "detail": f"{label} contains the required text.",
+                    })
+        test_run.rule_results = [*template_checks, *engine_rules, *hint_passes]
         test_run.error_code = engine.review_reason if not outcome_passed else ""
         test_run.error_message = (
             ""
@@ -1322,9 +1459,17 @@ def fail_test_run(test_run_id, error):
     return test_run
 
 
-class _SyntheticProfile:
-    first_name = ""
-    middle_name = ""
-    last_name = ""
-    address = ""
-    date_of_birth = timezone.now().date()
+class _SimulatedProfile:
+    """Resident profile typed by the official to simulate a sign-up submission."""
+
+    def __init__(self, values: dict):
+        self.first_name = str(values.get("first_name") or "")
+        self.middle_name = str(values.get("middle_name") or "")
+        self.last_name = str(values.get("last_name") or "")
+        self.address = str(values.get("address") or "")
+        self.gender = str(values.get("gender") or "")
+        raw_dob = str(values.get("date_of_birth") or "").strip()
+        if raw_dob:
+            self.date_of_birth = parse_date(raw_dob)
+        else:
+            self.date_of_birth = None

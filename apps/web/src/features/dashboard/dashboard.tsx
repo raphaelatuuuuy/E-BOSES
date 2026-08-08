@@ -12,7 +12,8 @@ import { MobileNav } from "@/features/dashboard/components/mobile-nav"
 import { StaffMobileHeader } from "@/features/dashboard/components/mobile-header"
 import { useLocationPing } from "@/features/dashboard/hooks/use-location-ping"
 import { NotificationProvider, fetchConcern } from "@/features/dashboard/components/notification-context"
-import { ReportStatusDialog, statusModeFromReport } from "@/features/dashboard/components/report-status-dialog"
+import { ReportStatusDialog } from "@/features/dashboard/components/report-status-dialog"
+import { statusModeFromReport } from "@/features/dashboard/components/report-status-mode"
 import { ResidentSearchProvider } from "@/features/dashboard/components/resident-search-context"
 import {
   ResidentLogoBar,
@@ -28,7 +29,7 @@ import {
   SIDEBAR_W_RESPONDER,
   SIDEBAR_W_STAFF,
 } from "@/features/dashboard/lib/shell"
-import type { StatusDialogMode } from "@/features/dashboard/components/report-status-dialog"
+import type { StatusDialogMode } from "@/features/dashboard/components/report-status-mode"
 import type { Concern } from "@/features/dashboard/api"
 
 function DashboardContent() {

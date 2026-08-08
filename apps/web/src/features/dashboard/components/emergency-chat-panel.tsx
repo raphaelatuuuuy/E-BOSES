@@ -9,7 +9,8 @@ import { Message, MessageAvatar, MessageContent, MessageFooter } from "@/compone
 import { websocketTicket, websocketUrl } from "@/lib/api"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { checkConcernMedia, type PublicUser } from "@/features/dashboard/api"
-import { AuthenticatedMediaImage, openAuthenticatedMedia } from "@/features/dashboard/components/authenticated-media"
+import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
+import { openAuthenticatedMedia } from "@/features/dashboard/lib/authenticated-media"
 import {
   listEmergencyChat,
   sendEmergencyChat,
@@ -266,7 +267,7 @@ export function EmergencyChatPanel({
           <p
             className={cn(
               "text-[12px] font-semibold tracking-wide uppercase",
-              isDark ? "text-white/60" : "text-[#68739c]",
+              isDark ? "text-white/60" : "text-subtle-foreground",
             )}
           >
             Live chat
@@ -274,7 +275,7 @@ export function EmergencyChatPanel({
           <p
             className={cn(
               "flex items-center gap-1 text-[11px]",
-              isDark ? "text-white/45" : "text-[#68739c]",
+              isDark ? "text-white/45" : "text-subtle-foreground",
             )}
           >
             <UsersIcon className="size-3 shrink-0" />
@@ -296,13 +297,13 @@ export function EmergencyChatPanel({
         {loadError && messages.length === 0 && !loading ? (
           <div className="py-6 text-center">
             <p className={cn("text-[12px]", isDark ? "text-red-200" : "text-red-600")}>{loadError}</p>
-            <button type="button" onClick={() => void load()} className={cn("mt-2 rounded-lg border px-3 py-1.5 text-xs font-bold", isDark ? "border-white/20 text-white" : "border-slate-200 text-[#07145f]")}>Try again</button>
+            <button type="button" onClick={() => void load()} className={cn("mt-2 rounded-lg border px-3 py-1.5 text-xs font-bold", isDark ? "border-white/20 text-white" : "border-slate-200 text-brand-navy")}>Try again</button>
           </div>
         ) : messages.length === 0 && !loading ? (
           <p
             className={cn(
               "py-6 text-center text-[12px]",
-              isDark ? "text-white/45" : "text-[#68739c]",
+              isDark ? "text-white/45" : "text-subtle-foreground",
             )}
           >
             Group chat is open. Status updates (en route, nearby, arrived) appear here automatically.
@@ -395,10 +396,10 @@ export function EmergencyChatPanel({
             rows={1}
             placeholder="Message the group…"
             className={cn(
-              "max-h-24 min-h-10 flex-1 resize-none rounded-xl border px-3 py-2.5 text-[13px] outline-none focus:border-[#ff6a1a]",
+              "max-h-24 min-h-10 flex-1 resize-none rounded-xl border px-3 py-2.5 text-[13px] outline-none focus:border-brand-orange",
               isDark
                 ? "border-white/15 bg-black/25 text-white placeholder:text-white/40"
-                : "border-slate-200 bg-[#f8fafc] text-[#07145f] placeholder:text-slate-400",
+                : "border-slate-200 bg-canvas text-brand-navy placeholder:text-slate-400",
             )}
           />
           <input
@@ -437,7 +438,7 @@ export function EmergencyChatPanel({
             type="button"
             disabled={sending || (!draft.trim() && !attachment)}
             onClick={() => void handleSend()}
-            className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#ff6a1a] text-white hover:bg-[#e85f17] disabled:opacity-50"
+            className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
             aria-label="Send message"
           >
             {sending ? <Loader2Icon className="size-4 animate-spin" /> : <SendIcon className="size-4" />}
@@ -456,8 +457,6 @@ export function EmergencyChatPanel({
     </div>
   )
 }
-
-
 
 
 

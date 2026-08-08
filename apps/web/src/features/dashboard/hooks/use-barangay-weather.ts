@@ -28,11 +28,19 @@ export function useBarangayWeather(lat: number | null, lng: number | null, place
     placeName,
   })
 
+  // Flag the widget as loading when the target (coords + place) changes —
+  // render-adjust instead of a synchronous setState inside the effect.
+  const targetKey = `${lat ?? ""}/${lng ?? ""}/${placeName}`
+  const [prevTarget, setPrevTarget] = useState(targetKey)
+  if (prevTarget !== targetKey) {
+    setPrevTarget(targetKey)
+    setWeather((prev) => ({ ...prev, loading: true, error: null, placeName }))
+  }
+
   useEffect(() => {
     if (lat == null || lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) return
 
     let cancelled = false
-    setWeather((prev) => ({ ...prev, loading: true, error: null, placeName }))
 
     const params = new URLSearchParams({
       latitude: String(lat),

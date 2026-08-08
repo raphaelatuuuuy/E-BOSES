@@ -76,11 +76,11 @@ export function humanizeProofError(message: string, _side?: ProofSide | null): s
   text = text
     .replace(
       /This ID expired on ([^.]+)\.\s*Please use a valid,? unexpired ID\.?/gi,
-      "This has already expired on $1. Please use a valid one.",
+      "ID has already expired. Please use a valid one.",
     )
     .replace(
       /This ID has already expired\.?/gi,
-      "This has already expired. Please use a valid one.",
+      "ID has already expired. Please use a valid one.",
     )
     .replace(
       /This ID looks expired or the expiry date could not be read\.\s*Please use a valid ID\.?/gi,
@@ -141,6 +141,7 @@ export function humanizeProofError(message: string, _side?: ProofSide | null): s
     .replace(/\brequired pattern\b/gi, "expected format")
     .replace(/\bregex\b/gi, "")
     .replace(/\bpattern_ok\b/gi, "")
+    .replace(/^ID mismatched\.?$/gi, "This ID is mismatched. Please use a valid one.")
     .replace(/\bID mismatched\.?/gi, "does not match your details.")
     .replace(/\s{2,}/g, " ")
     .trim()
@@ -287,12 +288,20 @@ export async function detectProofOcr(args: {
   file: File
   option: ResidenceProofOption
   side?: ProofSide
+  profile?: {
+    first_name?: string
+    middle_name?: string
+    last_name?: string
+    date_of_birth?: string
+    gender?: string
+    address?: string
+  }
   onStatus?: (message: string) => void
 }): Promise<
   | { ok: true; detect: ResidenceProofDetectResult }
   | { ok: false; message: string; detect: ResidenceProofDetectResult | null }
 > {
-  const { file, option, side, onStatus } = args
+  const { file, option, side, profile, onStatus } = args
   const label = side === "back" ? "back" : side === "front" ? "front" : "document"
   onStatus?.(`Reading ${label}…`)
 
@@ -301,6 +310,14 @@ export async function detectProofOcr(args: {
   detectData.append("proof_type", option.key)
   if (side) {
     detectData.append("proof_side", side)
+  }
+  // Registrant profile so backend can run admin-configured profile_match
+  // rules (e.g. "Match date of birth") against what the sign-up form claims.
+  if (profile) {
+    for (const [key, value] of Object.entries(profile)) {
+      if (!value) continue
+      detectData.append(key, value)
+    }
   }
 
   let detectResult: ResidenceProofDetectResult

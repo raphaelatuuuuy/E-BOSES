@@ -61,7 +61,7 @@ export function NotificationPopover({ tone = "light" }: { tone?: "light" | "dark
             "absolute -right-0.5 -top-0.5 flex size-4 min-w-4 items-center justify-center rounded-full px-0.5 text-[10px] font-bold",
             dark
               ? "bg-brand-orange text-brand-orange-ink"
-              : "bg-[#ff6a1a] text-white",
+              : "bg-brand-orange text-white",
           )}
         >
           {unreadCount > 9 ? "9+" : unreadCount}

@@ -1,4 +1,3 @@
-/* eslint-disable react-refresh/only-export-components */
 import { useState } from "react"
 import { ChevronLeft } from "lucide-react"
 
@@ -6,9 +5,9 @@ import { Button } from "@workspace/ui/components/button"
 import { completeOnboard } from "@/features/auth/api"
 
 const steps = [
-  { imgMb: "/contents/official-onboard-mb-1.png", img: "/contents/official-onboard-1.png", title: "Review concerns with confidence", description: "View submitted reports, locations, evidence, and AI-assisted assessments in one organized workspace." },
-  { imgMb: "/contents/official-onboard-mb-2.png", img: "/contents/official-onboard-2.png", title: "Make informed decisions", description: "Use evidence, location details, and explainable AI insights to validate and prioritize community concerns." },
-  { imgMb: "/contents/official-onboard-mb-3.png", img: "/contents/official-onboard-3.png", title: "Assign and coordinate action", description: "Assign responders, monitor progress, and keep residents informed from review to resolution." },
+  { imgMb: "/contents/official-onboard-mb-1.webp", img: "/contents/official-onboard-1.webp", title: "Review concerns with confidence", description: "View submitted reports, locations, evidence, and AI-assisted assessments in one organized workspace." },
+  { imgMb: "/contents/official-onboard-mb-2.webp", img: "/contents/official-onboard-2.webp", title: "Make informed decisions", description: "Use evidence, location details, and explainable AI insights to validate and prioritize community concerns." },
+  { imgMb: "/contents/official-onboard-mb-3.webp", img: "/contents/official-onboard-3.webp", title: "Assign and coordinate action", description: "Assign responders, monitor progress, and keep residents informed from review to resolution." },
 ]
 
 export default function OfficialOnboardingPage() {

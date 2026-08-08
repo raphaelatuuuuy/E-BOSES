@@ -58,7 +58,7 @@ export function GuidelinesStep({
 }: GuidelinesStepProps) {
   return (
     <div className="flex flex-1 flex-col pt-2">
-      <StepTitle className="max-w-[34rem] text-[1.625rem] font-semibold leading-[1.25] tracking-tight text-[#1a1a1a] md:text-[1.75rem]">
+      <StepTitle className="max-w-[34rem] text-[1.625rem] font-semibold leading-[1.25] tracking-tight text-foreground md:text-[1.75rem]">
         One last thing! Let&apos;s all do our part to keep
         <br />
         E-Boses safe and fun.

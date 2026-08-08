@@ -17,7 +17,8 @@ import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Message, MessageAvatar, MessageContent, MessageFooter } from "@/components/ui/message"
 import { useAuthSession } from "@/features/auth/auth-session"
 import type { ConcernConversationItem, ConcernStatus, PublicUser } from "@/features/dashboard/api"
-import { AuthenticatedMediaImage, openAuthenticatedMedia } from "@/features/dashboard/components/authenticated-media"
+import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
+import { openAuthenticatedMedia } from "@/features/dashboard/lib/authenticated-media"
 
 function formatConversationTime(value: string) {
   return new Intl.DateTimeFormat("en", {
@@ -195,7 +196,7 @@ export function ConcernConversation({
                     }}
                     className={cn(
                       "text-left text-[14px] font-bold text-neutral-900",
-                      clickableStatus && "underline-offset-2 hover:text-[#ff6a1a] hover:underline",
+                      clickableStatus && "underline-offset-2 hover:text-brand-orange hover:underline",
                     )}
                   >
                     {label}
@@ -249,7 +250,6 @@ export function ConcernConversation({
     </div>
   )
 }
-
 
 
 

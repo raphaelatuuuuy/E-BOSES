@@ -101,7 +101,10 @@ export default function OfficialDispatchRulesPage() {
   }, [])
 
   useEffect(() => {
-    void load()
+    // Defer the initial fetch one macrotask so the mount render settles first;
+    // load() sets loading synchronously (reused by refresh handlers).
+    const id = window.setTimeout(() => void load(), 0)
+    return () => window.clearTimeout(id)
   }, [load])
 
   const respondingUnits = useMemo(
@@ -290,7 +293,7 @@ export default function OfficialDispatchRulesPage() {
       ) : null}
 
       {draft ? (
-        <section className="overflow-hidden rounded-3xl border border-brand-orange/20 bg-gradient-to-br from-white via-[#fff8f3] to-[#eef3ff] p-4 shadow-sm">
+        <section className="overflow-hidden rounded-3xl border border-brand-orange/20 bg-gradient-to-br from-white via-brand-orange-soft to-tint p-4 shadow-sm">
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="Label" value={draft.label || ""} onChange={(label) => setDraft((current) => ({ ...current, label, code: current?.id ? current.code : slugify(label) }))} />
             <Field label="Code" value={draft.code || ""} onChange={(code) => setDraft((current) => ({ ...current, code: slugify(code) }))} disabled={Boolean(draft.id)} />
@@ -321,7 +324,7 @@ export default function OfficialDispatchRulesPage() {
           </label>
           <div className="mt-4 flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => setDraft(null)}>Cancel</Button>
-            <Button type="button" disabled={busy === "category" || !draft.label?.trim()} onClick={() => void saveCategory()} className="bg-brand-navy text-white hover:bg-[#0b1b75]">Save category</Button>
+            <Button type="button" disabled={busy === "category" || !draft.label?.trim()} onClick={() => void saveCategory()} className="bg-brand-navy text-white hover:bg-brand-navy">Save category</Button>
           </div>
         </section>
       ) : null}

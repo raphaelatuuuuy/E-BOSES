@@ -116,11 +116,17 @@ def ensure_emergency_media_preview(media):
         return media.preview_file
     if media.preview_file:
         media.preview_file.delete(save=False)
-    media.preview_file.save(
-        f"redacted-v3-{media.pk}.jpg",
-        ContentFile(build_redacted_preview_bytes(media.file, media.mime_type)),
-        save=True,
-    )
+    # The FieldFile caches the handle it opens for the read, and the preview
+    # FileField keeps a reference back to the model instance, so the raw file
+    # can stay locked on Windows until the cyclic garbage collector runs. Close
+    # it explicitly or deleting the file in tests (or rotating it in prod)
+    # hits WinError 32.
+    with media.file.open("rb") as source:
+        media.preview_file.save(
+            f"redacted-v3-{media.pk}.jpg",
+            ContentFile(build_redacted_preview_bytes(source, media.mime_type)),
+            save=True,
+        )
     return media.preview_file
 
 

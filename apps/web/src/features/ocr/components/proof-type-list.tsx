@@ -1,7 +1,6 @@
 import { useState } from "react"
-import { Info, Pencil, Plus, Trash2 } from "lucide-react"
+import { Pencil, Plus, Trash2 } from "lucide-react"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Dialog,
@@ -15,11 +14,6 @@ import { Switch } from "@workspace/ui/components/switch"
 import { cn } from "@workspace/ui/lib/utils"
 
 import type { OcrDocumentType } from "@/features/ocr/api"
-import {
-  deriveProofStatus,
-  proofStatusLabel,
-  type ProofListStatus,
-} from "@/features/ocr/lib/proof-status"
 import { PROOF_THEME } from "@/features/ocr/components/proof-theme"
 
 export function ProofTypeList(props: {
@@ -42,28 +36,12 @@ export function ProofTypeList(props: {
     pendingRemoveKey ||
     "this proof type"
 
-  // Zero types with enabled !== false → none are live on resident sign-up.
-  const noLiveTypes = !documents.some((doc) => doc.enabled !== false)
-
   return (
     <div className="w-full space-y-6">
-      {noLiveTypes ? (
-        <div
-          role="status"
-          className="flex gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold leading-6 text-[#145be7]"
-        >
-          <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-          <p>
-            No proof types are live on sign-up yet. Turn on{" "}
-            <strong className="font-black">Available on sign-up</strong> when a type is ready.
-          </p>
-        </div>
-      ) : null}
-
       {documents.length === 0 ? (
         <div className={cn(PROOF_THEME.card, "flex flex-col items-center gap-4 py-10 text-center")}>
           <div className="space-y-1">
-            <h3 className={cn("text-lg font-black", PROOF_THEME.title)}>
+            <h3 className={cn("text-lg font-semibold", PROOF_THEME.title)}>
               No proof types yet
             </h3>
             <p className={cn("font-semibold", PROOF_THEME.body)}>
@@ -100,7 +78,6 @@ export function ProofTypeList(props: {
             </thead>
             <tbody>
               {documents.map((doc) => {
-                const status = deriveProofStatus(doc)
                 const displayName =
                   doc.template_name?.trim() || doc.name?.trim() || "Untitled proof"
                 const available = doc.enabled !== false
@@ -110,13 +87,10 @@ export function ProofTypeList(props: {
                 return (
                   <tr key={doc.key} className="border-b border-card-line last:border-b-0">
                     <td className="py-4 pl-5">
-                      <div className="flex items-center gap-2">
-                        <span className="font-black text-[#07145f]">{displayName}</span>
-                        <StatusBadge status={status} />
-                      </div>
+                      <span className={cn("font-semibold", PROOF_THEME.title)}>{displayName}</span>
                     </td>
                     <td className="py-4">
-                      <span className="text-sm font-semibold text-[#68739c]">
+                      <span className={cn("text-sm font-semibold", PROOF_THEME.muted)}>
                         {needsBoth ? "Front & back required" : "Front only"}
                         {doc.fields?.length
                           ? ` · ${doc.fields.length} field${doc.fields.length === 1 ? "" : "s"}`
@@ -130,7 +104,7 @@ export function ProofTypeList(props: {
                           disabled={saving}
                           onCheckedChange={(enabled) => onToggleAvailable(doc.key, enabled)}
                         />
-                        <span className="text-xs font-semibold text-[#68739c]">
+                        <span className={cn("text-xs font-semibold", PROOF_THEME.muted)}>
                           {available
                             ? "Residents can choose this proof"
                             : "Hidden until you turn this on"}
@@ -143,7 +117,7 @@ export function ProofTypeList(props: {
                           type="button"
                           size="sm"
                           className="font-bold text-white"
-                          style={{ backgroundColor: "#145be7" }}
+                          style={{ backgroundColor: PROOF_THEME.primary }}
                           onClick={() => onEdit(doc.key)}
                           disabled={saving}
                         >
@@ -190,7 +164,7 @@ export function ProofTypeList(props: {
             <Button
               type="button"
               variant="outline"
-              className="font-bold"
+              className="font-bold hover:bg-tint hover:text-brand-blue"
               disabled={saving}
               onClick={() => setPendingRemoveKey(null)}
             >
@@ -214,25 +188,5 @@ export function ProofTypeList(props: {
         </DialogContent>
       </Dialog>
     </div>
-  )
-}
-
-function StatusBadge({ status }: { status: ProofListStatus }) {
-  const styles: Record<ProofListStatus, string> = {
-    live: "border-emerald-200 bg-emerald-50 text-emerald-800",
-    hidden: "border-amber-200 bg-amber-50 text-amber-800",
-    needs_setup: "border-slate-200 bg-slate-50 text-slate-700",
-  }
-
-  return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "shrink-0 font-bold ring-0 hover:bg-inherit",
-        styles[status],
-      )}
-    >
-      {proofStatusLabel(status)}
-    </Badge>
   )
 }

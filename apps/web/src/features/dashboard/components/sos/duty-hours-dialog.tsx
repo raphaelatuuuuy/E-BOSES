@@ -92,7 +92,7 @@ export function DutyHoursDialog({
         <button
           type="button"
           onClick={onSendAnyway}
-          className="mt-4 h-12 w-full rounded-full bg-brand-orange text-[15px] font-semibold text-white hover:bg-[#e85f17]"
+          className="mt-4 h-12 w-full rounded-full bg-brand-orange text-[15px] font-semibold text-white hover:bg-brand-orange-strong"
         >
           Send SOS anyway
         </button>

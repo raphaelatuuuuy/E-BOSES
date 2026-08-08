@@ -31,7 +31,7 @@ const errorSlotClassName =
   "border-[3px] border-destructive data-[active=true]:border-[3px] data-[active=true]:border-destructive"
 
 const slotClassName =
-  "h-14 min-w-0 flex-1 rounded-xl border border-[#c5cdd8] bg-white text-lg font-medium text-[#0f172a] shadow-none data-[active=true]:border-[3px] data-[active=true]:border-[#ff8133]"
+  "h-14 min-w-0 flex-1 rounded-xl border border-card-line-strong bg-white text-lg font-medium text-foreground shadow-none data-[active=true]:border-[3px] data-[active=true]:border-primary"
 
 export function EmailOtpStep({
   email,
@@ -71,7 +71,7 @@ export function EmailOtpStep({
 
   return (
     <div className="flex flex-1 flex-col pt-2">
-      <h1 className="text-[1.5rem] font-semibold leading-snug tracking-tight text-[#0f172a] md:text-[1.75rem]">
+      <h1 className="text-[1.5rem] font-semibold leading-snug tracking-tight text-foreground md:text-[1.75rem]">
         Sent to {displayEmail}! Enter the code you will receive shortly.
       </h1>
 
@@ -130,7 +130,7 @@ export function EmailOtpStep({
           type="button"
           disabled={busy || !codeComplete}
           onClick={onSubmit}
-          className="h-11 min-w-[7.5rem] rounded-full bg-[#ff8133] px-8 text-base font-semibold text-white shadow-none hover:bg-[#e6732e] active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-50"
+          className="h-11 min-w-[7.5rem] rounded-full bg-primary px-8 text-base font-semibold text-white shadow-none hover:bg-brand-orange-strong active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isVerifying ? (
             <LoaderCircle className="size-5 animate-spin" aria-hidden="true" />

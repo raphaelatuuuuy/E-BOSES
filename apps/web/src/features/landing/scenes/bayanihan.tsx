@@ -32,9 +32,9 @@ const ROLES: ReadonlyArray<readonly [string, string]> = [
 ] as const
 
 function toneClass(tone: Tone): string {
-  if (tone === "accent") return "text-[#ff5003]"
+  if (tone === "accent") return "text-accent"
   if (tone === "ghost") return "text-transparent"
-  return "text-[#f5f2ec]"
+  return "text-landing-cream"
 }
 
 function WordMarqueeRow({ words, reverse = false }: { words: MarqueeWord[]; reverse?: boolean }) {
@@ -60,7 +60,7 @@ function WordMarqueeRow({ words, reverse = false }: { words: MarqueeWord[]; reve
               {w.text}
             </span>
             {w.chip ? (
-              <span className="border border-[#ff5003]/40 px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.3em] text-[#ff8133]">
+              <span className="border border-accent/40 px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.3em] text-primary">
                 {w.chip}
               </span>
             ) : null}
@@ -124,10 +124,10 @@ export function Bayanihan() {
       />
 
       <div className="bay-reveal relative mx-auto max-w-5xl px-5 text-center md:px-10">
-        <p className="mb-4 font-mono text-xs font-bold uppercase tracking-[0.3em] text-[#ff5003]">Bayanihan</p>
+        <p className="mb-4 font-mono text-xs font-bold uppercase tracking-[0.3em] text-accent">Bayanihan</p>
         <blockquote className="font-heading text-[clamp(1.75rem,4.5vw,3.5rem)] font-bold italic leading-tight">
           &ldquo;Kapag may nagsalita, may makikinig.
-          <span className="text-[#ff8133]"> Kapag may humingi ng tulong, may darating.</span>&rdquo;
+          <span className="text-primary"> Kapag may humingi ng tulong, may darating.</span>&rdquo;
         </blockquote>
         <p className="mt-4 text-sm text-white/40">When someone speaks, someone listens. When someone calls for help, someone comes.</p>
       </div>
@@ -153,7 +153,7 @@ export function Bayanihan() {
                 {/* Accent bar grows on hover, mirrored to the row's leading edge (desktop only) */}
                 <span
                   aria-hidden
-                  className={`pointer-events-none absolute top-0 hidden h-full w-[2px] origin-top scale-y-0 bg-[#ff5003] transition-transform duration-500 ease-out group-hover:scale-y-100 md:block ${reversed ? "right-0" : "left-0"}`}
+                  className={`pointer-events-none absolute top-0 hidden h-full w-[2px] origin-top scale-y-0 bg-accent transition-transform duration-500 ease-out group-hover:scale-y-100 md:block ${reversed ? "right-0" : "left-0"}`}
                 />
                 {/* Huge ghost index, alternating sides on md+ */}
                 <span
@@ -164,7 +164,7 @@ export function Bayanihan() {
                   0{i + 1}
                 </span>
                 <div>
-                  <h3 className="font-heading text-3xl font-bold text-[#f5f2ec] md:text-4xl">{title}</h3>
+                  <h3 className="font-heading text-3xl font-bold text-landing-cream md:text-4xl">{title}</h3>
                   <p className={`mt-3 leading-relaxed text-white/55 md:max-w-xl ${reversed ? "md:ml-auto" : ""}`}>{body}</p>
                 </div>
               </div>

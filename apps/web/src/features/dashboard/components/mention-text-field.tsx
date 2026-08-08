@@ -59,11 +59,14 @@ export function MentionTextField({
   const [display, setDisplay] = useState(() => storageToDisplay(value))
   const [stack, setStack] = useState<MentionRef[]>(() => extractMentionStack(value))
 
-  // Parent reset / reply prefill (storage tokens → short display)
-  useEffect(() => {
+  // Parent reset / reply prefill (storage tokens → short display). Adjusted
+  // during render when `value` changes instead of via a sync setState effect.
+  const [prevValue, setPrevValue] = useState(value)
+  if (prevValue !== value) {
+    setPrevValue(value)
     setDisplay(storageToDisplay(value))
     setStack(extractMentionStack(value))
-  }, [value])
+  }
 
   function emit(nextDisplay: string, nextStack: MentionRef[]) {
     setDisplay(nextDisplay)
@@ -76,11 +79,17 @@ export function MentionTextField({
     [display, cursor, stack],
   )
 
+  // Drop stale remote results as soon as the mention query dissolves (render-adjust
+  // instead of a sync setState in the search effect below).
+  const activeQuery = active?.query ?? null
+  const [prevActiveQuery, setPrevActiveQuery] = useState(activeQuery)
+  if (prevActiveQuery !== activeQuery) {
+    setPrevActiveQuery(activeQuery)
+    if (!active) setRemoteUsers([])
+  }
+
   useEffect(() => {
-    if (!active) {
-      setRemoteUsers([])
-      return
-    }
+    if (!active) return
     const q = active.query
     const t = window.setTimeout(() => {
       void searchResidentsForMention(q || undefined)
@@ -99,7 +108,7 @@ export function MentionTextField({
         .catch(() => setRemoteUsers([]))
     }, q ? 180 : 0)
     return () => window.clearTimeout(t)
-  }, [active?.query, active?.start])
+  }, [active])
 
   const suggestions = useMemo(() => {
     if (!active) return []
@@ -120,9 +129,14 @@ export function MentionTextField({
     return out.slice(0, 10)
   }, [active, localUsers, remoteUsers])
 
-  useEffect(() => {
+  // Reset the arrow-key highlight whenever the suggestion list changes
+  // (render-adjust instead of a sync effect).
+  const suggestionKey = `${suggestions.length}/${active?.query ?? ""}`
+  const [prevSuggestions, setPrevSuggestions] = useState(suggestionKey)
+  if (prevSuggestions !== suggestionKey) {
+    setPrevSuggestions(suggestionKey)
     setHighlight(0)
-  }, [suggestions.length, active?.query])
+  }
 
   function insertMention(user: MentionUser) {
     if (!active) return
@@ -258,7 +272,7 @@ export function MentionTextField({
                   insertMention(u)
                 }}
               >
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[#c5d0e6] text-[12px] font-semibold text-[#2c3a5a]">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[12px] font-semibold text-navy-muted">
                   {firstNameOf(u.full_name)[0]?.toUpperCase() ?? "?"}
                 </span>
                 <span className="min-w-0">
@@ -281,34 +295,34 @@ export function MentionTextField({
 function renderDisplayHighlight(display: string, stack: MentionRef[]): ReactNode {
   if (!display) return "\u00a0"
   const pending = [...stack]
-  const nodes: ReactNode[] = []
+  const parts: Array<{ kind: "text" | "mention"; value: string }> = []
   let last = 0
-  let key = 0
   const re = /@([^\s@]+)/g
   let m: RegExpExecArray | null
   while ((m = re.exec(display)) !== null) {
-    if (m.index > last) {
-      nodes.push(<span key={`t-${key++}`}>{display.slice(last, m.index)}</span>)
-    }
+    if (m.index > last) parts.push({ kind: "text", value: display.slice(last, m.index) })
     const name = m[1]!
     const idx = pending.findIndex((x) => x.name === name)
     if (idx >= 0) {
       pending.splice(idx, 1)
-      nodes.push(
-        <span
-          key={`m-${key++}`}
-          className="font-semibold text-neutral-900 underline underline-offset-2 decoration-neutral-900"
-        >
-          @{name}
-        </span>,
-      )
+      parts.push({ kind: "mention", value: name })
     } else {
-      nodes.push(<span key={`t-${key++}`}>{m[0]}</span>)
+      parts.push({ kind: "text", value: m[0] })
     }
     last = m.index + m[0].length
   }
-  if (last < display.length) {
-    nodes.push(<span key={`t-${key++}`}>{display.slice(last)}</span>)
-  }
-  return nodes.length ? nodes : display
+  if (last < display.length) parts.push({ kind: "text", value: display.slice(last) })
+  if (parts.length === 0) return display
+  return parts.map((part, index) =>
+    part.kind === "mention" ? (
+      <span
+        key={`m-${index}`}
+        className="font-semibold text-neutral-900 underline underline-offset-2 decoration-neutral-900"
+      >
+        @{part.value}
+      </span>
+    ) : (
+      <span key={`t-${index}`}>{part.value}</span>
+    ),
+  )
 }

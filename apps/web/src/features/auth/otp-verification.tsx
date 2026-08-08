@@ -115,7 +115,7 @@ export default function OtpVerificationPage({
         <AuthPageLogo />
         <div className="flex flex-1 flex-col justify-center px-6 py-8 md:px-12 lg:px-16">
           <div className="mx-auto w-full max-w-[400px]">
-            <h1 className="text-center text-[1.5rem] font-medium leading-tight tracking-tight text-[#0f172a] md:text-[1.75rem]">
+            <h1 className="text-center text-[1.5rem] font-medium leading-tight tracking-tight text-foreground md:text-[1.75rem]">
               {title}
             </h1>
             <p className="mt-2 text-center text-sm text-muted-foreground">{composedDescription}</p>

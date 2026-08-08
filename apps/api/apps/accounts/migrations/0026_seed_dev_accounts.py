@@ -1,3 +1,4 @@
+import sys
 from datetime import date
 
 from django.contrib.auth.hashers import make_password
@@ -68,6 +69,11 @@ SEED_ACCOUNTS = [
 
 
 def seed_dev_accounts(apps, schema_editor):
+    # DEV-ONLY creds: a test run would inherit this on-duty responder and the
+    # seeded officials, silently changing every dashboard/role count the suite
+    # asserts. Skip when the suite builds its database.
+    if "test" in sys.argv:
+        return
     User = apps.get_model("accounts", "User")
     ResidentProfile = apps.get_model("accounts", "ResidentProfile")
     ResidentSettings = apps.get_model("accounts", "ResidentSettings")

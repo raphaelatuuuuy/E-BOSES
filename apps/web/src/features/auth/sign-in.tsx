@@ -22,7 +22,7 @@ export default function LoginPage({ onForgotPassword, onSignUp, onSuccess }: Log
         <AuthPageLogo />
         <div className="flex flex-1 flex-col justify-center px-6 py-8 md:px-12 lg:px-16">
           <div className="mx-auto w-full max-w-[400px]">
-            <h1 className="text-[1.5rem] font-medium leading-tight tracking-tight text-[#0f172a] md:text-[1.75rem]">
+            <h1 className="text-[1.5rem] font-medium leading-tight tracking-tight text-foreground md:text-[1.75rem]">
               Welcome back
             </h1>
 

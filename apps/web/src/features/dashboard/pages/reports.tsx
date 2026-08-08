@@ -26,7 +26,8 @@ import { ConcernAppealsPanel } from "@/features/dashboard/components/concerns/co
 import { MediaBlurEditor } from "@/features/dashboard/components/concerns/media-blur-editor"
 import { ReportChatPanel } from "@/features/dashboard/components/report-chat-panel"
 import { ReportLocationMap } from "@/features/dashboard/components/report-location-map"
-import { ReportStatusDialog, type StatusDialogMode } from "@/features/dashboard/components/report-status-dialog"
+import { ReportStatusDialog } from "@/features/dashboard/components/report-status-dialog"
+import type { StatusDialogMode } from "@/features/dashboard/components/report-status-mode"
 import { ConcernTimeline } from "@/features/dashboard/components/concerns/concern-timeline"
 import { buildConcernTimelineEntries } from "@/features/dashboard/components/concerns/concern-timeline-lib"
 import {
@@ -47,10 +48,8 @@ import { ConcernQueueItem } from "@/features/dashboard/components/concerns/conce
 import { rankConcerns, toConcernRecordView } from "@/features/dashboard/components/record/concern-adapter"
 import { OfficialStatusPanel } from "@/features/dashboard/components/concerns/official-status-panel"
 import { ResidentFollowUpPanel } from "@/features/dashboard/components/concerns/resident-follow-up-panel"
-import {
-  AuthenticatedMediaImage,
-  openAuthenticatedMedia,
-} from "@/features/dashboard/components/authenticated-media"
+import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
+import { openAuthenticatedMedia } from "@/features/dashboard/lib/authenticated-media"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { usePageTitle } from "@/hooks/use-page-title"
 import {
@@ -689,7 +688,9 @@ export default function ReportsPage() {
   }
 
   useEffect(() => {
-    void loadReports()
+    // LoadReports sets loading/error synchronously, so defer the initial call
+    // one macrotask; the 30s interval + event listeners are async callbacks.
+    const first = window.setTimeout(() => void loadReports(), 0)
     function refresh() {
       void loadReports()
     }
@@ -697,29 +698,37 @@ export default function ReportsPage() {
     window.addEventListener("eboses:report-created", refresh)
     window.addEventListener("eboses:concern-updated", refresh)
     return () => {
+      window.clearTimeout(first)
       window.clearInterval(interval)
       window.removeEventListener("eboses:report-created", refresh)
       window.removeEventListener("eboses:concern-updated", refresh)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- captured intentionally; see comment above
   }, [isOfficial])
 
-  useEffect(() => {
-    if (routeReportId) {
-      setSelectedReport(routeReportId)
-    } else if (!routeReportId) {
-      setSelectedReport(null)
-    }
-  }, [routeReportId])
+  // Adopt a routed report id (deep links) — render-adjust instead of a sync
+  // setState effect.
+  const [prevRouteId, setPrevRouteId] = useState(routeReportId)
+  if (prevRouteId !== routeReportId) {
+    setPrevRouteId(routeReportId)
+    if (routeReportId) setSelectedReport(routeReportId)
+    else setSelectedReport(null)
+  }
 
   // Deep link from the official overview's "Pending reviews" tile
-  // (`/dashboard/reports?ai=flagged`) → activate the "Needs review" chip, then
-  // clear the param. Filter state otherwise lives purely in component state on
-  // this page (chip clicks never touch the URL), so consume-on-load-and-clear
-  // is the simplest pattern consistent with that — no continuous URL sync needed.
+  // (`/dashboard/reports?ai=flagged`) → activate the "Needs review" chip.
+  // The filter flip is a render-adjust; clearing the URL param is a side
+  // effect (navigation) so it stays in the effect below.
+  const deepLinkFlagged = isOfficial && searchParams.get("ai") === "flagged"
+  const [prevDeepLink, setPrevDeepLink] = useState(deepLinkFlagged)
+  if (prevDeepLink !== deepLinkFlagged) {
+    setPrevDeepLink(deepLinkFlagged)
+    if (deepLinkFlagged) setActiveFilter("Needs review")
+  }
+
   useEffect(() => {
     if (!isOfficial) return
     if (searchParams.get("ai") === "flagged") {
-      setActiveFilter("Needs review")
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev)
@@ -754,9 +763,12 @@ export default function ReportsPage() {
     }
   }, [isOfficial, activeFilter])
 
-  useEffect(() => {
+  // Reset pagination whenever the active chip changes — render-adjust.
+  const [prevFilterChip, setPrevFilterChip] = useState(activeFilter)
+  if (prevFilterChip !== activeFilter) {
+    setPrevFilterChip(activeFilter)
     setReportPage(1)
-  }, [activeFilter])
+  }
 
   useEffect(() => {
     // Wait until list is loaded so we don't drop a deep-linked selection on first paint.
@@ -765,7 +777,10 @@ export default function ReportsPage() {
       (report) => report.public_id === selectedReport || String(report.id) === selectedReport,
     )
     if (!inFilter) {
-      setSelectedReport(null)
+      // Drop the report that no longer matches the active filter. The setState
+      // is deferred a microtask so it isn't synchronous inside the effect; the
+      // URL normalization for deep links is the genuine side-effect here.
+      queueMicrotask(() => setSelectedReport(null))
       if (routeReportId) navigate("/dashboard/reports", { replace: true })
     }
   }, [activeFilter, reports, selectedReport, routeReportId, navigate, loaded])

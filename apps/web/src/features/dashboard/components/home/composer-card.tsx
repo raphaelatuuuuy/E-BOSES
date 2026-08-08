@@ -32,7 +32,7 @@ export function ComposerCard({
           <button
             type="button"
             onClick={onOpenComposer}
-            className="h-9 shrink-0 rounded-full bg-brand-orange px-3.5 text-[13px] font-semibold text-white transition-colors hover:bg-[#e85f12] active:scale-[0.98] sm:h-10 sm:px-5 sm:text-[14px]"
+            className="h-9 shrink-0 rounded-full bg-brand-orange px-3.5 text-[13px] font-semibold text-white transition-colors hover:bg-brand-orange-strong active:scale-[0.98] sm:h-10 sm:px-5 sm:text-[14px]"
           >
             Report
           </button>

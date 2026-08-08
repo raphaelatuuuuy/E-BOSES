@@ -51,12 +51,12 @@ class Command(BaseCommand):
         if not getattr(settings, "ROBOFLOW_API_KEY", ""):
             warnings.append("ROBOFLOW_API_KEY is missing; automatic media protection cannot run and flagged photos stay restricted pending manual privacy review.")
 
-        paddle_token = getattr(settings, "PADDLEOCR_TOKEN", "")
-        paddle_url = getattr(settings, "PADDLEOCR_JOB_URL", "")
-        if not paddle_token:
-            failures.append("PADDLEOCR_TOKEN is required for automatic document verification.")
-        if not paddle_url or not paddle_url.startswith("https://"):
-            failures.append("PADDLEOCR_JOB_URL must be an HTTPS PaddleOCR endpoint.")
+        ocrspace_key = getattr(settings, "OCRSPACE_API_KEY", "")
+        ocrspace_url = getattr(settings, "OCRSPACE_URL", "")
+        if not ocrspace_key:
+            failures.append("OCRSPACE_API_KEY is required for automatic document verification.")
+        if not ocrspace_url or not ocrspace_url.startswith("https://"):
+            failures.append("OCRSPACE_URL must be an HTTPS OCR.space endpoint.")
 
         media_root = Path(settings.MEDIA_ROOT).resolve()
         private_media_root = Path(settings.PRIVATE_MEDIA_ROOT).resolve()

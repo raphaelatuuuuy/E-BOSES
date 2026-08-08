@@ -7,6 +7,7 @@ or unbounded regular expressions.
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from io import BytesIO
@@ -54,6 +55,8 @@ def _easyocr_reader(*, gpu=False, languages=None):
 
 
 class EasyOCRProvider:
+    provider_name = "easyocr"
+
     def __init__(self, *, reader=None, gpu=False, languages=None):
         self.reader = reader
         self.gpu = bool(gpu)
@@ -120,13 +123,17 @@ def _easyocr_bbox(box) -> list[float]:
     ys = [point[1] for point in points]
     return [min(xs), min(ys), max(xs), max(ys)]
 
-class PaddleOCRProvider:
+class OCRSpaceProvider:
+    provider_name = "ocrspace"
+
     def recognize(self, content: bytes, *, suffix: str, deskew: bool = True) -> OCRResponse:
         return ocr_bytes_with_metadata(content, suffix=suffix, deskew=deskew)
 
 
 class FallbackOCRProvider:
-    """Try hosted PaddleOCR first, then local EasyOCR for provider failures."""
+    """Try hosted OCR.space first, then local EasyOCR for provider failures."""
+
+    provider_name = "fallback"
 
     def __init__(
         self,
@@ -134,10 +141,12 @@ class FallbackOCRProvider:
         primary: OCRProvider | None = None,
         fallback: OCRProvider | None = None,
         fallback_factory: Callable[[], OCRProvider] | None = None,
+        caller: str = "ocr",
     ):
-        self.primary = primary or PaddleOCRProvider()
+        self.primary = primary or OCRSpaceProvider()
         self._fallback = fallback
         self._fallback_factory = fallback_factory or (lambda: EasyOCRProvider(gpu=False))
+        self.caller = caller
 
     @property
     def fallback(self) -> OCRProvider:
@@ -146,10 +155,25 @@ class FallbackOCRProvider:
         return self._fallback
 
     def recognize(self, content: bytes, *, suffix: str, deskew: bool = True) -> OCRResponse:
+        import sys
         try:
-            return self.primary.recognize(content, suffix=suffix, deskew=deskew)
-        except OCRProviderError:
-            return self.fallback.recognize(content, suffix=suffix, deskew=deskew)
+            response = self.primary.recognize(content, suffix=suffix, deskew=deskew)
+            print(
+                f"[OCR] {self.caller} used OCR.space (model={response.model}, {response.latency_ms} ms)",
+                file=sys.stderr, flush=True,
+            )
+            return response
+        except OCRProviderError as exc:
+            print(
+                f"[OCR] {self.caller} OCR.space failed ({exc}); falling back to EasyOCR",
+                file=sys.stderr, flush=True,
+            )
+            response = self.fallback.recognize(content, suffix=suffix, deskew=deskew)
+            print(
+                f"[OCR] {self.caller} used EasyOCR fallback (model={response.model}, {response.latency_ms} ms)",
+                file=sys.stderr, flush=True,
+            )
+            return response
 
 
 def document_uses_field_regions(document_type) -> bool:
@@ -387,7 +411,7 @@ def _normalize_bbox(bbox) -> list[float] | None:
 
 
 def _infer_page_size(bboxes: list[list[float]]) -> tuple[float, float]:
-    """Infer page size from absolute pixel bboxes (PaddleOCR usually returns pixels)."""
+    """Infer page size from absolute pixel bboxes (providers usually return pixels)."""
     max_x = 1.0
     max_y = 1.0
     for box in bboxes:
@@ -542,7 +566,10 @@ def evaluate_template_match(document_type, lines, overall_confidence: float) -> 
 
     keywords = list(document_type.keywords or [])
     if keywords:
-        missing = [kw for kw in keywords if normalized_text(kw) not in normalized]
+        # Whitespace-insensitive containment: "BONAFIDE RESIDENT" must satisfy
+        # the "bona fide resident" keyword (and vice versa).
+        compacted_text = normalized.replace(" ", "")
+        missing = [kw for kw in keywords if normalized_text(kw).replace(" ", "") not in compacted_text]
         passed = not missing
         checks.append(
             {
@@ -635,6 +662,8 @@ def _profile_value(field, profile, profile_key: str | None = None) -> str:
         return str(getattr(profile, "address", "") or "")
     if key in {"date_of_birth", "birth_date", "dob"}:
         dob = getattr(profile, "date_of_birth", None)
+        if isinstance(dob, str):
+            dob = parse_date(dob)
         return dob.isoformat() if dob else ""
     if key in {"gender", "sex"}:
         return str(getattr(profile, "gender", "") or "")
@@ -683,6 +712,8 @@ def _looks_like_label(text: str, aliases: list[str] | None = None) -> bool:
         "PLACE OF BIRTH",
         "KAPANGANAKAN",
         "PETSA NG KAPANGANAKAN",
+        "PETSANG KAPANGANAKAN",
+        "PETSANG",
         "GENDER",
         "SEX",
         "KASARIAN",
@@ -715,6 +746,9 @@ def _looks_like_label(text: str, aliases: list[str] | None = None) -> bool:
         "FIRST NAME",
         "KASARIAN",
         "KAPANGANAKAN",
+        "PETSA NG KAPANGANAKAN",
+        "PETSANG KAPANGANAKAN",
+        "PETSANG",
         "PHILIPPINE IDENTIFICATION",
         "REPUBLIC OF THE PHILIPPINES",
         "BLOOD TYPE",
@@ -869,9 +903,74 @@ def _clip_text_to_region(text: str, line_bbox: list[float], region_bbox: list[fl
     return clipped.strip(" \t:-#.|")
 
 
-def _candidate_from_region(lines, region: dict | None, aliases: list[str], multi_line: bool = False):
+def _expected_matcher(hints) -> callable | None:
+    """Build a matcher that recognizes the expected VALUE of a configured field.
+
+    Fields that declare regex_pattern / expected_keywords have a "ground truth"
+    value. A snippet that matches this expected value must never be rejected as a
+    label (e.g. id_type expects "Philippine Identification Card" — exactly the
+    string that _looks_like_label otherwise treats as a card header).
+
+    The returned callable has a `.strong(text)` helper that reports whether the
+    expected text essentially IS the line (high coverage), used so multi-line
+    fields whose regex is only a partial keyword (e.g. address "MARIKINA
+    HEIGHTS") keep their full value instead of being truncated.
+    """
+    hints = hints if isinstance(hints, dict) else {}
+    patterns: list[re.Pattern] = []
+    regex = str(hints.get("regex_pattern") or "").strip()
+    if regex and _is_usable_field_regex(regex):
+        try:
+            patterns.append(re.compile(regex, re.IGNORECASE))
+        except re.error:
+            patterns = []
+    keywords = [str(k or "").strip() for k in (hints.get("expected_keywords") or []) if str(k or "").strip()]
+    if not patterns and not keywords:
+        return None
+
+    def matches(text) -> bool:
+        raw = str(text or "").strip()
+        if not raw:
+            return False
+        if any(pattern.search(raw) for pattern in patterns):
+            return True
+        if keywords:
+            norm = normalized_text(raw)
+            if any(normalized_text(kw) in norm for kw in keywords):
+                return True
+        return False
+
+    def strong(text) -> bool:
+        raw = str(text or "").strip()
+        if not raw:
+            return False
+        text_norm = normalized_text(raw)
+        span = 0
+        for pattern in patterns:
+            match = pattern.search(raw)
+            if match:
+                span = max(span, match.end() - match.start())
+        for kw in keywords:
+            kw_norm = normalized_text(kw)
+            if kw_norm and kw_norm in text_norm:
+                span = max(span, len(kw_norm))
+        return bool(span) and (span / max(1, len(text_norm))) >= 0.6
+
+    matches.strong = strong
+    return matches
+
+
+def _candidate_from_region(
+    lines,
+    region: dict | None,
+    aliases: list[str],
+    multi_line: bool = False,
+    expected: callable | None = None,
+    join_dates: bool = False,
+):
     """Extract only text that intersects the drawn template region (relative 0–1)."""
-    # Slight inset reduces label bleed from neighbors sitting on the box edge.
+    # Bounding region with a slight inset reduces label bleed from neighbors
+    # section of code uses the original region coordinates.
     region_bbox = _region_to_bbox(region, inset=0.008)
     if not region_bbox:
         return "", 0.0, {}
@@ -905,7 +1004,8 @@ def _candidate_from_region(lines, region: dict | None, aliases: list[str], multi
         clipped = _clip_text_to_region(line["text"], bbox, region_bbox)
         if not clipped:
             continue
-        if _looks_like_label(clipped, aliases):
+        matches_expected = bool(expected and expected(clipped))
+        if _looks_like_label(clipped, aliases) and not matches_expected:
             continue
 
         # Distance of line center from region center — prefer centered content.
@@ -931,6 +1031,7 @@ def _candidate_from_region(lines, region: dict | None, aliases: list[str], multi
                 "x": inter[0],
                 "score": score,
                 "line_overlap": line_overlap,
+                "expected": matches_expected,
             }
         )
 
@@ -938,16 +1039,26 @@ def _candidate_from_region(lines, region: dict | None, aliases: list[str], multi
         # Retry once with a slightly looser region (no inset) if the tight box missed.
         loose = _region_to_bbox(region, inset=0.0)
         if loose and loose != region_bbox:
-            return _candidate_from_region_loose(lines, loose, aliases, multi_line=multi_line)
+            return _candidate_from_region_loose(
+                lines, loose, aliases, multi_line=multi_line, expected=expected, join_dates=join_dates
+            )
         return "", 0.0, {"method": "region", "region": region_bbox, "hits": 0, "strict": True}
 
     hits.sort(key=lambda item: (item["y"], item["x"]))
     if multi_line:
-        # Drop pure-label fragments before joining
-        value_hits = [item for item in hits if not _looks_like_label(item["text"], aliases)]
-        use_hits = value_hits or hits
+        # Keep pure-label fragments that match the field's expected value, otherwise
+        # drop label fragments before joining.
+        value_hits = [
+            item for item in hits
+            if not _looks_like_label(item["text"], aliases) or item.get("expected")
+        ]
+        # Lines that ARE the expected value (high coverage) win — they replace any
+        # partial/label fragments instead of merely being appended.
+        strong = getattr(expected, "strong", None) if expected else None
+        strong_hits = [item for item in value_hits if strong and strong(item["text"])] if strong else []
+        use_hits = strong_hits or value_hits or hits
         text = " ".join(item["text"] for item in use_hits).strip()
-        if _looks_like_label(text, aliases):
+        if _looks_like_label(text, aliases) and not expected:
             return "", 0.0, {"method": "region", "region": region_bbox, "hits": len(hits), "rejected": "label"}
         conf = fmean(item["confidence"] for item in use_hits)
         bbox = [
@@ -958,7 +1069,33 @@ def _candidate_from_region(lines, region: dict | None, aliases: list[str], multi
         ]
         return text, conf, {"method": "region", "region": region_bbox, "hits": len(use_hits), "bbox": bbox, "strict": True}
 
-    best = max(hits, key=lambda item: item["score"])
+    if join_dates and len(hits) > 1:
+        # OCR.space often splits "JULY 24, 2004" into separate lines ("JULY 24," + "2004").
+        ordered = sorted(hits, key=lambda item: (item["y"], item["x"]))
+        joined_text = " ".join(item["text"] for item in ordered).strip()
+        if parse_date(joined_text):
+            conf = fmean(item["confidence"] for item in ordered)
+            joined_bbox = [
+                min(item["bbox"][0] for item in ordered),
+                min(item["bbox"][1] for item in ordered),
+                max(item["bbox"][2] for item in ordered),
+                max(item["bbox"][3] for item in ordered),
+            ]
+            return (
+                joined_text,
+                conf,
+                {
+                    "method": "region",
+                    "region": region_bbox,
+                    "hits": len(ordered),
+                    "bbox": joined_bbox,
+                    "source_line": ordered[-1]["index"],
+                    "joined_date_fragments": True,
+                },
+            )
+
+    expected_hits = [item for item in hits if item.get("expected")]
+    best = max(expected_hits or hits, key=lambda item: item["score"])
     return (
         best["text"],
         best["confidence"],
@@ -974,8 +1111,15 @@ def _candidate_from_region(lines, region: dict | None, aliases: list[str], multi
     )
 
 
-def _candidate_from_region_loose(lines, region_bbox: list[float], aliases: list[str], multi_line: bool = False):
-    """Fallback region extract without inset — still rejects labels."""
+def _candidate_from_region_loose(
+    lines,
+    region_bbox: list[float],
+    aliases: list[str],
+    multi_line: bool = False,
+    expected: callable | None = None,
+    join_dates: bool = False,
+):
+    """Fallback region extract without inset — still rejects labels except expected value."""
     hits = []
     for index, line in enumerate(lines):
         bbox = line.get("bbox")
@@ -993,7 +1137,8 @@ def _candidate_from_region_loose(lines, region_bbox: list[float], aliases: list[
         if not _center_in_bbox(center, region_bbox, pad=0.02) and line_overlap < 0.45:
             continue
         clipped = _clip_text_to_region(line["text"], bbox, region_bbox)
-        if not clipped or _looks_like_label(clipped, aliases):
+        matches_expected = bool(expected and expected(clipped))
+        if not clipped or (_looks_like_label(clipped, aliases) and not matches_expected):
             continue
         hits.append(
             {
@@ -1004,17 +1149,48 @@ def _candidate_from_region_loose(lines, region_bbox: list[float], aliases: list[
                 "y": inter[1],
                 "x": inter[0],
                 "score": line_overlap + line["confidence"] * 0.1,
+                "expected": matches_expected,
             }
         )
     if not hits:
         return "", 0.0, {"method": "region", "region": region_bbox, "hits": 0, "strict": False}
     if multi_line:
-        text = " ".join(item["text"] for item in sorted(hits, key=lambda i: (i["y"], i["x"]))).strip()
-        if _looks_like_label(text, aliases):
+        value_hits = [
+            item for item in hits
+            if not _looks_like_label(item["text"], aliases) or item.get("expected")
+        ]
+        strong = getattr(expected, "strong", None) if expected else None
+        strong_hits = [item for item in value_hits if strong and strong(item["text"])] if strong else []
+        use_hits = strong_hits or value_hits or hits
+        text = " ".join(item["text"] for item in sorted(use_hits, key=lambda i: (i["y"], i["x"]))).strip()
+        if _looks_like_label(text, aliases) and not expected:
             return "", 0.0, {"method": "region", "rejected": "label"}
-        conf = fmean(item["confidence"] for item in hits)
-        return text, conf, {"method": "region", "hits": len(hits), "strict": False}
-    best = max(hits, key=lambda item: item["score"])
+        conf = fmean(item["confidence"] for item in use_hits)
+        return text, conf, {"method": "region", "hits": len(use_hits), "strict": False}
+    if join_dates and len(hits) > 1:
+        ordered = sorted(hits, key=lambda item: (item["y"], item["x"]))
+        joined_text = " ".join(item["text"] for item in ordered).strip()
+        if parse_date(joined_text):
+            conf = fmean(item["confidence"] for item in ordered)
+            joined_bbox = [
+                min(item["bbox"][0] for item in ordered),
+                min(item["bbox"][1] for item in ordered),
+                max(item["bbox"][2] for item in ordered),
+                max(item["bbox"][3] for item in ordered),
+            ]
+            return (
+                joined_text,
+                conf,
+                {
+                    "method": "region",
+                    "bbox": joined_bbox,
+                    "source_line": ordered[-1]["index"],
+                    "joined_date_fragments": True,
+                    "strict": False,
+                },
+            )
+    expected_hits = [item for item in hits if item.get("expected")]
+    best = max(expected_hits or hits, key=lambda item: item["score"])
     return best["text"], best["confidence"], {
         "method": "region",
         "bbox": best["bbox"],
@@ -1061,7 +1237,7 @@ DATE_FRAGMENT = re.compile(
 
 
 def _looks_like_date_fragment(value: str) -> bool:
-    text = (value or "").strip()
+    text = (value or "").strip().rstrip(",.")
     if not text:
         return False
     if parse_date(text):
@@ -1093,6 +1269,94 @@ def _is_identifier_field(field) -> bool:
             "id no",
         )
     )
+
+
+def _is_date_field(field) -> bool:
+    """Heuristic from field code/label only — used to join split date fragments."""
+    code = str(getattr(field, "code", "") or "").lower()
+    label = str(getattr(field, "label", "") or "").lower()
+    blob = f"{code} {label}"
+    if any(
+        token in blob
+        for token in (
+            "birth",
+            "dob",
+            "issued",
+            "issue date",
+            "date of issue",
+            "expir",
+            "valid until",
+            "valid thru",
+        )
+    ):
+        return True
+    data_type = str(getattr(field, "data_type", "") or "").lower()
+    return data_type == "date" or data_type.startswith("date")
+
+
+def _enlarge_region(region: dict, scale: float = 1.2) -> dict:
+    """Scale a relative (0–1) region around its center — alignment tolerance only."""
+    if not isinstance(region, dict):
+        return dict(region or {})
+    try:
+        x = float(region.get("x") or 0.0)
+        y = float(region.get("y") or 0.0)
+        w = float(region.get("w") or region.get("width") or 0.0)
+        h = float(region.get("h") or region.get("height") or 0.0)
+    except (TypeError, ValueError):
+        return dict(region)
+    cx, cy = x + w / 2.0, y + h / 2.0
+    nw = min(1.0, max(0.0, w * scale))
+    nh = min(1.0, max(0.0, h * scale))
+    out = {
+        "x": max(0.0, cx - nw / 2.0),
+        "y": max(0.0, cy - nh / 2.0),
+        "w": nw,
+        "h": nh,
+    }
+    if "width" in region:
+        out["width"] = nw
+    if "height" in region:
+        out["height"] = nh
+    return out
+
+
+def _complete_date_fragment(clean_lines, value, region: dict | None = None, evidence: dict | None = None):
+    """Join a date fragment ("JULY 24," or "2004") with a neighboring fragment that completes it.
+
+    Only lines inside the drawn region (or near the evidence bbox) are considered —
+    a split date must never be completed from text elsewhere on the card.
+    """
+    candidate = str(value or "").strip()
+    if not candidate or parse_date(candidate):
+        return None
+    box = None
+    if region:
+        box = _region_to_bbox(_enlarge_region(region, 1.2), inset=0.0)
+    else:
+        ev_bbox = (evidence or {}).get("bbox") if isinstance(evidence, dict) else None
+        if isinstance(ev_bbox, (list, tuple)) and len(ev_bbox) == 4:
+            x0, y0, x1, y1 = (float(v) for v in ev_bbox)
+            pad_y = max(0.01, (y1 - y0) * 1.0)
+            box = [x0, max(0.0, y0 - pad_y), x1, y1 + pad_y]
+    fragments = [candidate]
+    for line in clean_lines:
+        text = str(line.get("text") or "").strip()
+        if not text or normalized_text(text) == normalized_text(candidate):
+            continue
+        line_bbox = line.get("bbox")
+        if box and (not isinstance(line_bbox, (list, tuple)) or not _intersection_bbox(line_bbox, box)):
+            continue
+        if _looks_like_date_fragment(text) or re.fullmatch(r"\d{2,4}", text) or normalized_text(candidate) in normalized_text(text):
+            fragments.append(text)
+    for left in fragments:
+        for right in fragments:
+            if left is right:
+                continue
+            joined = f"{left} {right}".replace(", ,", ",").replace("  ", " ")
+            if parse_date(joined):
+                return joined
+    return None
 
 
 def _normalize_id_number_token(value: str) -> str:
@@ -1129,25 +1393,30 @@ def _extract_id_number_from_text(text: str) -> str:
 
 
 def _is_usable_field_regex(pattern: str) -> bool:
-    """Skip accidental/too-narrow official regex (e.g. bare year '2024' from a bad save)."""
+    """A pattern the official configured is always enforced when it compiles safely.
+
+    Patterns like a bare "2026" are intentional (e.g. "document number must contain
+    2026"), so they must NOT be silently skipped — an official who set the pattern
+    expects a mismatch to be flagged.
+    """
     text = (pattern or "").strip()
-    if not text or not is_safe_regex(text):
-        return False
-    # Year-only or 1–3 char patterns almost never validate real ID numbers.
-    if re.fullmatch(r"\d{4}", text):
-        return False
-    if len(text) < 4:
-        return False
-    return True
+    return bool(text) and is_safe_regex(text)
 
 
-def _find_id_number_near_region(lines, region: dict | None = None):
-    """Find the best ID-number candidate, optionally nearest to a drawn region."""
+def _find_id_number_near_region(lines, region: dict | None = None, confine: bool = False):
+    """Find the best ID-number candidate, optionally nearest to a drawn region.
+
+    confine=True limits the search to lines that intersect the region bbox — used
+    when a template box is drawn, so a blank box never pulls an ID from elsewhere.
+    """
     region_bbox = _region_to_bbox(region)
     region_center = _bbox_center(region_bbox) if region_bbox else None
     best = None  # (score, value, confidence, bbox, index)
 
     for index, line in enumerate(lines or []):
+        bbox = line.get("bbox")
+        if confine and (not bbox or len(bbox) < 4 or not _intersection_bbox(bbox, region_bbox)):
+            continue
         value = _extract_id_number_from_text(line.get("text") or "")
         if not value or _looks_like_date_fragment(value):
             continue
@@ -1308,18 +1577,20 @@ def extract_fields(
         region = hints.get("region") if isinstance(hints.get("region"), dict) else None
         multi_line = bool(hints.get("multi_line"))
         has_region = _region_to_bbox(region) is not None
+        expected = _expected_matcher(hints)
         value = ""
         confidence = 0.0
         evidence: dict = {}
 
         is_id_field = _is_identifier_field(field)
+        is_date_field = _is_date_field(field)
 
         # Primary path: text inside the drawn box only (no data-type reinterpretation).
         if has_region:
             value, confidence, evidence = _candidate_from_region(
-                clean_lines, region, aliases, multi_line=multi_line
+                clean_lines, region, aliases, multi_line=multi_line, expected=expected, join_dates=is_date_field
             )
-            if value and _looks_like_label(value, aliases):
+            if value and _looks_like_label(value, aliases) and not (expected and expected(value)):
                 value, confidence, evidence = "", 0.0, {"method": "region", "rejected": "label"}
             # Soft cleanup for ID-like fields: prefer the ID token inside the box text.
             if value and is_id_field:
@@ -1334,10 +1605,13 @@ def extract_fields(
                     else:
                         value, confidence, evidence = "", 0.0, {"method": "region", "rejected": "date_fragment"}
                 else:
-                    # Region text was not a usable ID token — search nearby, then page-wide.
+                    # Region text was not a usable ID token — search nearby, then the
+                    # enlarged box only (never page-wide, so a blank box can't "lie").
                     id_value, id_conf, id_ev = _find_id_number_near_region(clean_lines, region)
                     if not id_value:
-                        id_value, id_conf, id_ev = _find_id_number_near_region(clean_lines, None)
+                        id_value, id_conf, id_ev = _find_id_number_near_region(
+                            clean_lines, _enlarge_region(region), confine=True
+                        )
                     if id_value:
                         value, confidence, evidence = id_value, id_conf, id_ev
                     else:
@@ -1345,39 +1619,36 @@ def extract_fields(
                             "method": "region",
                             "rejected": "no_id_token",
                         }
-            # Region miss (empty box on phone photos vs sample crop): still try global ID search.
+            # Region miss (empty box): confinement to the enlarged box only.
             if is_id_field and not value:
                 id_value, id_conf, id_ev = _find_id_number_near_region(clean_lines, region)
                 if not id_value:
-                    id_value, id_conf, id_ev = _find_id_number_near_region(clean_lines, None)
+                    id_value, id_conf, id_ev = _find_id_number_near_region(
+                        clean_lines, _enlarge_region(region), confine=True
+                    )
                 if id_value:
                     value, confidence, evidence = id_value, id_conf, id_ev
 
-            # Critical for National ID / phone captures: sample-drawn boxes rarely align
-            # with real photos. Fall back to label/alias proximity for non-ID fields.
+            # Non-ID region miss: retry with a slightly enlarged box (alignment
+            # tolerance). Never fall back to page-wide label/alias search — a drawn
+            # box is the source of truth; a blank box must yield an honest empty.
             if not value and not is_id_field:
-                alias_value, alias_conf, alias_ev = _candidate_after_alias(clean_lines, aliases)
-                if alias_value and not _looks_like_label(alias_value, aliases):
+                enlarged_value, enlarged_conf, enlarged_ev = _candidate_from_region(
+                    clean_lines,
+                    _enlarge_region(region),
+                    aliases,
+                    multi_line=multi_line,
+                    expected=expected,
+                    join_dates=is_date_field,
+                )
+                if enlarged_value and not _looks_like_label(enlarged_value, aliases):
                     value, confidence, evidence = (
-                        alias_value,
-                        alias_conf,
-                        {**(alias_ev or {}), "method": "alias_after_region_miss"},
+                        enlarged_value,
+                        enlarged_conf,
+                        {**(enlarged_ev or {}), "method": "region_enlarged"},
                     )
-                profile_value = _profile_value(field, profile)
-                if profile_value and confidence < 0.55:
-                    profile_candidate = _candidate_matching_profile(clean_lines, profile_value)
-                    if profile_candidate[1] > confidence and not _looks_like_label(
-                        profile_candidate[0], aliases
-                    ):
-                        value, confidence, evidence = (
-                            profile_candidate[0],
-                            profile_candidate[1],
-                            {
-                                **profile_candidate[2],
-                                "method": "profile_after_region_miss",
-                                "bbox": (evidence or {}).get("bbox"),
-                            },
-                        )
+                if not value:
+                    evidence = {"method": "region_miss", "region": _region_to_bbox(region)}
         else:
             # No canvas box: alias proximity (legacy / incomplete templates).
             if is_id_field:
@@ -1425,14 +1696,30 @@ def extract_fields(
             # Try region-only re-pick excluding used lines
             if region:
                 filtered = [line for i, line in enumerate(clean_lines) if i not in used_line_indexes]
-                alt_value, alt_conf, alt_ev = _candidate_from_region(filtered, region, aliases, multi_line=multi_line)
-                if alt_value and not _looks_like_label(alt_value, aliases):
+                alt_value, alt_conf, alt_ev = _candidate_from_region(
+                    filtered, region, aliases, multi_line=multi_line, expected=expected, join_dates=is_date_field
+                )
+                if alt_value and not (_looks_like_label(alt_value, aliases) and not (expected and expected(alt_value))):
                     value, confidence, evidence = alt_value, alt_conf, alt_ev
                     source_line = evidence.get("source_line")
         if isinstance(source_line, int):
             used_line_indexes.add(source_line)
 
-        if value and _looks_like_label(value, aliases):
+        # Date fields: OCR may split "JULY 24, 2004" into "JULY 24," + "2004" lines,
+        # or bleed the label onto the value (e.g. "Petsa ng kapanganakan: JULY 24, 2004").
+        # Complete a fragment only with neighboring fragments inside the box/evidence area.
+        if is_date_field and value and not parse_date(str(value).strip()):
+            date_only = [m.group(0) for m in DATE_PATTERN.finditer(str(value))]
+            if len(date_only) == 1:
+                value = date_only[0]
+                evidence = {**(evidence or {}), "date_label_stripped": True}
+            else:
+                completed = _complete_date_fragment(clean_lines, value, region=region, evidence=evidence)
+                if completed:
+                    value = completed
+                    evidence = {**(evidence or {}), "completed_date_fragment": True}
+
+        if value and _looks_like_label(value, aliases) and not (expected and expected(value)):
             value, confidence = "", 0.0
 
         bbox = None
@@ -1619,7 +1906,8 @@ def resident_validation_message(
     if rule_key in {"date_format", "date"}:
         return f"Could not read the {name} as a date. Please retake a clearer photo."
     if rule_key in {"profile_match", "matches_profile", "similarity"}:
-        return f"The {name} does not match what you entered. Please check your details."
+        display_name = name[:1].upper() + name[1:] if name else "This detail"
+        return f"{display_name} does not match what you entered. Please check your details."
     if rule_key in {"recency"}:
         return "This document looks too old. Please use a more recent one."
     if rule_key in {"allowed_value", "contains_keyword"}:
@@ -1742,10 +2030,7 @@ def validate_extracted_field_rules(
                         "label": label,
                         "passed": False,
                         "rule": "not_expired",
-                        "detail": (
-                            f"This has already expired on {parsed.strftime('%B %d, %Y')}. "
-                            "Please use a valid one."
-                        ),
+                        "detail": "ID has already expired. Please use a valid one.",
                     }
                 )
             else:
@@ -1789,7 +2074,7 @@ def validate_extracted_field_rules(
                         "label": label,
                         "passed": False,
                         "rule": "date_format",
-                        "detail": "The date of birth looks incorrect. Please retake a clearer photo.",
+                        "detail": "Date of birth looks incorrect. Please retake a clearer photo.",
                     }
                 )
             else:
@@ -1802,13 +2087,12 @@ def validate_extracted_field_rules(
                             "label": label,
                             "passed": False,
                             "rule": "date_format",
-                            "detail": "The date of birth looks incorrect. Please retake a clearer photo.",
+                            "detail": "Date of birth looks incorrect. Please retake a clearer photo.",
                         }
                     )
 
-        # Regex pattern from extraction_hints — never show raw regex/value to residents.
-        # Skip unusable patterns (e.g. bare year "2024") that reject valid IDs like MH2025-….
         pattern = str(hints.get("regex_pattern") or "").strip()
+        custom_failure_message = str(hints.get("failure_message") or "").strip()
         if pattern and value and _is_usable_field_regex(pattern):
             try:
                 if not re.search(pattern, value, flags=re.IGNORECASE):
@@ -1818,10 +2102,7 @@ def validate_extracted_field_rules(
                             "label": label,
                             "passed": False,
                             "rule": "regex",
-                            "detail": (
-                                f"Could not read the {friendly_label} clearly. "
-                                "Please retake a clearer photo."
-                            ),
+                            "detail": custom_failure_message or "ID is mismatched.",
                         }
                     )
             except re.error:
@@ -1937,18 +2218,14 @@ def evaluate_rules(
                     score = 0.0
                     detail = mismatch_msg
                 elif not str(expected or "").strip():
-                    # Profile empty (e.g. middle name not filled) — only fail if matching first/last/gender/dob/address
                     if profile_key == "middle_name":
                         passed = True
                         score = 1.0
                         detail = "Middle name not provided on the form; skip match."
                     else:
-                        passed = False
-                        score = 0.0
-                        detail = (
-                            f"Your {form_label} is missing on the form. "
-                            "Please go back and complete your details."
-                        )
+                        passed = None
+                        score = None
+                        detail = "Not tested. Fill the resident details form to check this."
                 elif profile_key == "date_of_birth":
                     ocr_date = parse_date(value)
                     profile_dob = getattr(profile, "date_of_birth", None)
@@ -2044,10 +2321,7 @@ def evaluate_rules(
                 detail = "Could not read the expiry date. Please retake a clearer photo."
             elif parsed < date.today():
                 passed = False
-                detail = (
-                    f"This has already expired on {parsed.strftime('%B %d, %Y')}. "
-                    "Please use a valid one."
-                )
+                detail = "ID has already expired. Please use a valid one."
             else:
                 passed = True
                 detail = f"Valid until {parsed.strftime('%B %d, %Y')}."
@@ -2138,11 +2412,27 @@ def evaluate_rules(
             }:
                 detail = custom_message
 
+        # Also expose the rule's field reference from `value.field` when the FK
+        # is missing, and the rule_type / value.profile so the frontend can
+        # match rules to extracted fields defensively (e.g. resolve profile
+        # matches by profile key when field codes drift between templates).
+        value_field = None
+        value_profile = None
+        if isinstance(rule.value, dict):
+            raw_field = rule.value.get("field")
+            if isinstance(raw_field, str) and raw_field.strip():
+                value_field = raw_field.strip()
+            raw_profile = rule.value.get("profile")
+            if isinstance(raw_profile, str) and raw_profile.strip():
+                value_profile = raw_profile.strip()
         results.append(
             {
                 "code": rule.code,
                 "name": rule.name,
-                "field": rule.field.code if rule.field_id else None,
+                "field": rule.field.code if rule.field_id else value_field,
+                "rule_type": rule.rule_type,
+                "operator": rule.operator,
+                "profile": value_profile,
                 "passed": passed,
                 "score": score,
                 "on_failure": rule.on_failure,
@@ -2150,6 +2440,66 @@ def evaluate_rules(
             }
         )
     return results
+
+
+def _prepend_priority_failures(
+    rules: list[dict],
+    extracted: dict,
+    missing: list[str],
+    pattern_failures: list[str],
+    document_type=None,
+) -> list[dict]:
+    """Emit synthetic per-field failures for missing-required and pattern mismatches.
+
+    These take priority: any other rule result for the same field/side is dropped
+    so the results table cannot claim Passed while the ID is actually mismatched.
+    """
+    failure_msg_by_field: dict[str, str] = {}
+    if document_type is not None:
+        fields_attr = getattr(document_type, "fields", None)
+        try:
+            iterator = fields_attr.all() if hasattr(fields_attr, "all") else (fields_attr or [])
+        except Exception:
+            iterator = []
+        for field in iterator:
+            hints = field.extraction_hints if isinstance(getattr(field, "extraction_hints", None), dict) else {}
+            msg = str(hints.get("failure_message") or "").strip()
+            if msg:
+                failure_msg_by_field[field.code] = msg
+    override: list[dict] = []
+    override_field_codes: set[str] = set()
+    for code in missing:
+        item = extracted.get(code) or {}
+        label = item.get("label") or code.replace("_", " ").title()
+        override.append({
+            "code": f"{code}_required_missing",
+            "name": f"{label} is present",
+            "field": code,
+            "passed": False,
+            "score": 0.0,
+            "on_failure": "manual_review",
+            "detail": failure_msg_by_field.get(code) or f"{label} was not read from this photo.",
+        })
+        override_field_codes.add(code)
+    for code in pattern_failures:
+        if code in override_field_codes:
+            continue
+        item = extracted.get(code) or {}
+        label = item.get("label") or code.replace("_", " ").title()
+        override.append({
+            "code": f"{code}_pattern",
+            "name": f"{label} matches the expected format",
+            "field": code,
+            "passed": False,
+            "score": 0.0,
+            "on_failure": "manual_review",
+            "detail": failure_msg_by_field.get(code) or "ID is mismatched.",
+        })
+        override_field_codes.add(code)
+    if not override:
+        return rules
+    filtered = [rule for rule in rules if rule.get("field") not in override_field_codes]
+    return [*override, *filtered]
 
 
 def run_engine(
@@ -2200,7 +2550,8 @@ def run_engine(
         if item.get("required") and item.get("value") and float(item.get("confidence") or 0) < float(item.get("min_confidence") or 0)
     ]
     pattern_failures = [code for code, item in extracted.items() if item.get("value") and item.get("pattern_ok") is False]
-    blocking_rules = [item for item in rules if not item["passed"] and item["on_failure"] == "manual_review"]
+    rules = _prepend_priority_failures(rules, extracted, missing, pattern_failures, document_type=document_type)
+    blocking_rules = [item for item in rules if item["passed"] is False and item["on_failure"] == "manual_review"]
     threshold = float(
         settings.get("confidence_threshold", settings.get("ocr_confidence_threshold", 0.8))
     )

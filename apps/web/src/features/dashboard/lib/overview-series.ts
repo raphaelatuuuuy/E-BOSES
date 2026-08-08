@@ -1,4 +1,3 @@
-import type { BarPoint } from "@/features/dashboard/components/charts"
 import type { Concern } from "@/features/dashboard/api"
 
 /**
@@ -9,6 +8,13 @@ import type { Concern } from "@/features/dashboard/api"
  * concern list the page already fetches. Kept out of the component files so
  * they stay component-only (react-refresh).
  */
+
+/** One bar in the official overview's daily count charts. */
+export interface BarPoint {
+  label: string
+  value: number
+  caption?: string
+}
 
 const DAY_MS = 86400000
 const DAY_LETTERS = ["S", "M", "T", "W", "T", "F", "S"]

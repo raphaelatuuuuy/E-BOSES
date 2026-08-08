@@ -230,7 +230,8 @@ export default function AccountReverifyNamePage() {
 
   useEffect(() => {
     let cancelled = false
-    setProofOptionsLoading(true)
+    // proofOptionsLoading already starts true on mount; the async result
+    // continuations below own the state afterwards.
     void listResidenceProofOptions()
       .then((options) => {
         if (!cancelled) setProofOptions(options)
@@ -351,7 +352,7 @@ export default function AccountReverifyNamePage() {
         <div className="mt-3 w-full pb-5">
           <div className="h-1 w-full overflow-hidden rounded-full bg-neutral-100">
             <div
-              className="h-full rounded-full bg-[#ff8133] transition-[width] duration-300"
+              className="h-full rounded-full bg-primary transition-[width] duration-300"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -359,7 +360,7 @@ export default function AccountReverifyNamePage() {
 
         {step === "name" ? (
           <>
-            <h1 className="text-[1.5rem] font-bold tracking-tight text-[#020c4e]">
+            <h1 className="text-[1.5rem] font-bold tracking-tight text-foreground">
               Enter your legal name
             </h1>
             <p className="mt-2 text-[15px] text-neutral-500">
@@ -402,7 +403,7 @@ export default function AccountReverifyNamePage() {
                 setProofErrors({})
                 setStep("proof")
               }}
-              className="mt-8 flex h-12 w-full items-center justify-center rounded-full bg-[#ff8133] text-[15px] font-semibold text-white hover:bg-[#e6732e] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:hover:bg-neutral-200 disabled:opacity-100"
+              className="mt-8 flex h-12 w-full items-center justify-center rounded-full bg-primary text-[15px] font-semibold text-white hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:hover:bg-neutral-200 disabled:opacity-100"
             >
               Continue
             </button>
@@ -436,7 +437,7 @@ export default function AccountReverifyNamePage() {
             {busy && matchOk !== false ? (
               <>
                 <Loader2Icon className="size-12 animate-spin text-neutral-400" />
-                <h1 className="mt-6 text-[1.45rem] font-bold tracking-tight text-[#020c4e]">
+                <h1 className="mt-6 text-[1.45rem] font-bold tracking-tight text-foreground">
                   Checking your name…
                 </h1>
                 <p className="mt-2 max-w-sm text-[15px] text-neutral-500">
@@ -448,7 +449,7 @@ export default function AccountReverifyNamePage() {
                 <span className="flex size-16 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
                   <CheckCircle2Icon className="size-10" strokeWidth={1.75} />
                 </span>
-                <h1 className="mt-6 text-[1.45rem] font-bold tracking-tight text-[#020c4e]">
+                <h1 className="mt-6 text-[1.45rem] font-bold tracking-tight text-foreground">
                   Name matched
                 </h1>
                 <p className="mt-2 max-w-sm text-[15px] leading-relaxed text-neutral-500">
@@ -466,7 +467,7 @@ export default function AccountReverifyNamePage() {
                       void applyNameChange()
                     }
                   }}
-                  className="mt-10 flex h-12 w-full max-w-sm items-center justify-center rounded-full bg-[#ff8133] text-[15px] font-semibold text-white hover:bg-[#e6732e] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:hover:bg-neutral-200 disabled:opacity-100"
+                  className="mt-10 flex h-12 w-full max-w-sm items-center justify-center rounded-full bg-primary text-[15px] font-semibold text-white hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:hover:bg-neutral-200 disabled:opacity-100"
                 >
                   {busy ? (
                     <Loader2Icon className="size-4 animate-spin" />
@@ -482,7 +483,7 @@ export default function AccountReverifyNamePage() {
                 <span className="flex size-16 items-center justify-center rounded-full bg-red-50 text-red-600">
                   <XCircleIcon className="size-10" strokeWidth={1.75} />
                 </span>
-                <h1 className="mt-6 text-[1.45rem] font-bold tracking-tight text-[#020c4e]">
+                <h1 className="mt-6 text-[1.45rem] font-bold tracking-tight text-foreground">
                   Name did not match
                 </h1>
                 <p className="mt-2 max-w-sm text-[15px] leading-relaxed text-neutral-500">
@@ -501,7 +502,7 @@ export default function AccountReverifyNamePage() {
                     setError("")
                     setStep("proof")
                   }}
-                  className="mt-10 flex h-12 w-full max-w-sm items-center justify-center rounded-full bg-[#ff8133] text-[15px] font-semibold text-white hover:bg-[#e6732e]"
+                  className="mt-10 flex h-12 w-full max-w-sm items-center justify-center rounded-full bg-primary text-[15px] font-semibold text-white hover:bg-brand-orange-strong"
                 >
                   Try again
                 </button>
@@ -526,4 +527,3 @@ export default function AccountReverifyNamePage() {
     </div>
   )
 }
-

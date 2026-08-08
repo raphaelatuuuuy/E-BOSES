@@ -63,7 +63,7 @@ export function NotificationsPanel({
               ? onDisableBrowserNotifications
               : onEnableBrowserNotifications
           }
-          className="h-10 shrink-0 rounded-full bg-brand-orange text-white hover:bg-[#e85f17]"
+          className="h-10 shrink-0 rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong"
         >
           {browserBusy ? "Working" : browserState.subscribed ? "Disable" : "Enable"}
         </Button>

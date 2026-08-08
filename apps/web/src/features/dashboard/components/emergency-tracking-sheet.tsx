@@ -25,10 +25,8 @@ import {
 } from "@/features/dashboard/emergency-api"
 import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
 import { applyRouteMotion, routeLineStyle } from "@/features/dashboard/lib/route-line"
-import {
-  AuthenticatedMediaImage,
-  openAuthenticatedMedia,
-} from "@/features/dashboard/components/authenticated-media"
+import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
+import { openAuthenticatedMedia } from "@/features/dashboard/lib/authenticated-media"
 
 import type leaflet from "leaflet"
 
@@ -314,7 +312,6 @@ function EmergencyTrackingMap({
   const accuracyRefs = useRef<Map<number, leaflet.Circle>>(new Map())
   const [mapReady, setMapReady] = useState(0)
   const isLive = activeStatuses.includes(alert.status)
-  const resident: leaflet.LatLngTuple = [Number(alert.latitude), Number(alert.longitude)]
 
   useEffect(() => {
     let cancelled = false
@@ -325,7 +322,7 @@ function EmergencyTrackingMap({
       if (cancelled || !containerRef.current) return
       leafletRef.current = L
       const map = L.map(containerRef.current, {
-        center: resident,
+        center: [Number(alert.latitude), Number(alert.longitude)],
         zoom: 16,
         zoomControl: false,
         attributionControl: false,
@@ -345,10 +342,14 @@ function EmergencyTrackingMap({
         iconSize: [16, 16],
         iconAnchor: [8, 8],
       })
-      L.marker(resident, { icon: residentIcon }).addTo(map)
+      L.marker([Number(alert.latitude), Number(alert.longitude)], { icon: residentIcon }).addTo(map)
       setMapReady((value) => value + 1)
       requestAnimationFrame(() => map?.invalidateSize())
     }
+
+    const responderMarkers = responderMarkerRefs.current
+    const routes = routeRefs.current
+    const accuracyCircles = accuracyRefs.current
 
     void init()
     return () => {
@@ -356,12 +357,12 @@ function EmergencyTrackingMap({
       mapRef.current?.remove()
       mapRef.current = null
       leafletRef.current = null
-      responderMarkerRefs.current.forEach((marker) => marker.remove())
-      responderMarkerRefs.current.clear()
-      routeRefs.current.forEach((polyline) => polyline.remove())
-      routeRefs.current.clear()
-      accuracyRefs.current.forEach((circle) => circle.remove())
-      accuracyRefs.current.clear()
+      responderMarkers.forEach((marker) => marker.remove())
+      responderMarkers.clear()
+      routes.forEach((polyline) => polyline.remove())
+      routes.clear()
+      accuracyCircles.forEach((circle) => circle.remove())
+      accuracyCircles.clear()
     }
   }, [alert.id, alert.latitude, alert.longitude])
 
@@ -514,7 +515,7 @@ function EmergencyTrackingMap({
         }
       })
       if (!isLive && activeAssignments.length === 0) {
-        map.fitBounds(L.latLngBounds([resident]), { padding: [44, 44], maxZoom: 17 })
+        map.fitBounds(L.latLngBounds([[Number(alert.latitude), Number(alert.longitude)]]), { padding: [44, 44], maxZoom: 17 })
       }
     }
   }, [
@@ -527,7 +528,7 @@ function EmergencyTrackingMap({
     mapReady,
   ])
 
-  return <div ref={containerRef} className={cn("h-full w-full bg-[#e8eef5]", className)} />
+  return <div ref={containerRef} className={cn("h-full w-full bg-tint", className)} />
 }
 
 function DetailsColumn({
@@ -598,7 +599,7 @@ function DetailsColumn({
                     className={cn(
                       "absolute left-[11px] top-7 bottom-0 w-px",
                       row.state === "done" || row.state === "current"
-                        ? "bg-[#ff6a1a]/55"
+                        ? "bg-brand-orange/55"
                         : "bg-white/15",
                     )}
                     aria-hidden
@@ -609,7 +610,7 @@ function DetailsColumn({
                     "relative z-[1] mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-[10px]",
                     row.state === "done" && "bg-emerald-500 text-white",
                     row.state === "current" &&
-                      "bg-[#ff6a1a] text-white shadow-[0_0_0_4px_rgba(255,106,26,0.25)]",
+                      "bg-brand-orange text-white shadow-[0_0_0_4px_rgba(255,106,26,0.25)]",
                     row.state === "pending" && "border-2 border-white/25 bg-transparent text-white/40",
                     row.state === "cancelled" && "bg-red-600 text-white",
                   )}
@@ -635,7 +636,7 @@ function DetailsColumn({
                     >
                       {row.label}
                       {row.state === "current" ? (
-                        <span className="ml-2 text-[10px] font-bold tracking-wide text-[#ffb380] uppercase">
+                        <span className="ml-2 text-[10px] font-bold tracking-wide text-brand-orange uppercase">
                           Now
                         </span>
                       ) : null}
@@ -708,7 +709,7 @@ function DetailsColumn({
                 type="button"
                 className="overflow-hidden rounded-lg border border-white/15 text-left"
                 onClick={() => {
-                  void openAuthenticatedMedia(media.raw_url, media.original_filename).catch((error) => {
+                  void openAuthenticatedMedia(media.raw_url, media.original_filename).catch((error: unknown) => {
                     toast.error(error instanceof Error ? error.message : "Could not open evidence.")
                   })
                 }}
@@ -751,13 +752,13 @@ function DetailsColumn({
             value={appealReason}
             onChange={(e) => setAppealReason(e.target.value)}
             placeholder="Explain what should be reviewed"
-            className="mt-3 min-h-20 w-full resize-none rounded-xl border border-white/15 bg-black/25 px-3 py-2 text-sm text-white outline-none placeholder:text-white/40 focus:border-[#ff6a1a]"
+            className="mt-3 min-h-20 w-full resize-none rounded-xl border border-white/15 bg-black/25 px-3 py-2 text-sm text-white outline-none placeholder:text-white/40 focus:border-brand-orange"
           />
           <Button
             type="button"
             disabled={appealBusy || !appealReason.trim()}
             onClick={() => void submitAppeal()}
-            className="mt-3 h-11 w-full rounded-full bg-[#ff6a1a] text-white hover:bg-[#e85f17]"
+            className="mt-3 h-11 w-full rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong"
           >
             {appealBusy ? "Submitting" : "Submit review request"}
           </Button>
@@ -791,18 +792,30 @@ export function EmergencyTrackingSheet({
   )
   const [chatMessage, setChatMessage] = useState<EmergencyChatMessage | null>(null)
 
-  useEffect(() => {
+  // Reset transient sheet state when the sheet closes, and adopt a newly
+  // selected alert — render-adjust instead of sync setStates inside effects.
+  const [prevInitialAlert, setPrevInitialAlert] = useState(initialAlert)
+  if (prevInitialAlert !== initialAlert) {
+    setPrevInitialAlert(initialAlert)
     setAlert(initialAlert)
-  }, [initialAlert])
+  }
 
-  useEffect(() => {
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (prevOpen !== open) {
+    setPrevOpen(open)
     if (!open) {
       setExpanded(false)
       setChatMessage(null)
       setCancelOpen(false)
       setCancelReason("")
     }
-  }, [open])
+  }
+
+  // Stable primitives for the polling/websocket effects: the alert object is
+  // replaced on every live update, and reconnecting the socket just because it
+  // changed would fight the update channel itself.
+  const alertId = alert?.id
+  const alertStatus = alert?.status
 
   useEffect(() => {
     if (!open) return
@@ -814,10 +827,10 @@ export function EmergencyTrackingSheet({
   }, [open])
 
   useEffect(() => {
-    if (!open || !alert || !activeStatuses.includes(alert.status) || connectionState !== "degraded") return
+    if (!open || !alertId || !alertStatus || !activeStatuses.includes(alertStatus) || connectionState !== "degraded") return
     const interval = window.setInterval(async () => {
       try {
-        const nextAlert = await getEmergency(alert.id)
+        const nextAlert = await getEmergency(alertId)
         setAlert(nextAlert)
         onAlertChange?.(nextAlert)
       } catch {
@@ -825,23 +838,23 @@ export function EmergencyTrackingSheet({
       }
     }, 5000)
     return () => window.clearInterval(interval)
-  }, [open, alert?.id, alert?.status, connectionState, onAlertChange])
+  }, [open, alertId, alertStatus, connectionState, onAlertChange])
 
   useEffect(() => {
-    if (!open || !alert || !activeStatuses.includes(alert.status)) return
+    if (!open || !alertId || !alertStatus || !activeStatuses.includes(alertStatus)) return
     let socket: WebSocket | null = null
     let reconnectTimer: number | undefined
     let closedByComponent = false
     let reconnectAttempts = 0
 
     async function connect() {
-      if (!alert) return
+      if (!alertId) return
       setConnectionState("connecting")
       try {
         const ticket = await websocketTicket()
         if (closedByComponent) return
         socket = new WebSocket(
-          websocketUrl(`/ws/emergencies/${alert.id}/tracking/?ticket=${encodeURIComponent(ticket)}`),
+          websocketUrl(`/ws/emergencies/${alertId}/tracking/?ticket=${encodeURIComponent(ticket)}`),
         )
       } catch {
         setConnectionState("degraded")
@@ -892,7 +905,7 @@ export function EmergencyTrackingSheet({
       if (reconnectTimer) window.clearTimeout(reconnectTimer)
       socket?.close()
     }
-  }, [open, alert?.id, alert?.status, onAlertChange])
+  }, [open, alertId, alertStatus, onAlertChange])
 
   if (!open || !alert || typeof document === "undefined") return null
 
@@ -969,7 +982,7 @@ export function EmergencyTrackingSheet({
           Route taken
         </span>
       ) : distance !== null && !isLive ? (
-        <span className="w-fit rounded-full bg-[#07145f] px-2.5 py-1 text-[11px] font-semibold text-white shadow-md">
+        <span className="w-fit rounded-full bg-brand-navy px-2.5 py-1 text-[11px] font-semibold text-white shadow-md">
           {formatDistance(distance)} · {formatEta(distance)}
         </span>
       ) : null}
@@ -1027,7 +1040,7 @@ export function EmergencyTrackingSheet({
         aria-modal="true"
         aria-label="Emergency tracking"
         className={cn(
-          "z-10 flex flex-col overflow-hidden bg-[#07145f] text-white",
+          "z-10 flex flex-col overflow-hidden bg-brand-navy text-white",
           // Mobile: full screen
           !isDesktop && "fixed inset-0 h-full w-full",
           // Desktop dock
@@ -1041,7 +1054,7 @@ export function EmergencyTrackingSheet({
         )}
       >
         {/* Red urgency header */}
-        <header className="flex shrink-0 items-center gap-2 bg-gradient-to-r from-[#c41212] via-[#e11d2e] to-[#b91c1c] px-3 py-3 sm:px-4">
+        <header className="flex shrink-0 items-center gap-2 bg-gradient-to-r from-red-800 via-red-600 to-red-700 px-3 py-3 sm:px-4">
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-[15px] font-bold sm:text-base">{headline(alert)}</h2>
           </div>
@@ -1066,7 +1079,7 @@ export function EmergencyTrackingSheet({
         </header>
 
         {/* Body — stacked map + details (sidebar width is enough; split was cramped/broken) */}
-        <div className="flex min-h-0 flex-1 flex-col bg-[#07145f]">
+        <div className="flex min-h-0 flex-1 flex-col bg-brand-navy">
           <div
             className={cn(
               "relative shrink-0 border-b border-white/10",
@@ -1082,7 +1095,7 @@ export function EmergencyTrackingSheet({
         </div>
 
         {/* Footer */}
-        <div className="shrink-0 border-t border-white/10 bg-[#050e45] px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        <div className="shrink-0 border-t border-white/10 bg-nav-bg px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           {cancelOpen && canCancel ? (
             <div className="mb-3 rounded-xl border border-red-300/25 bg-red-500/10 p-3">
               <label htmlFor="emergency-cancel-reason" className="text-[13px] font-semibold text-white">
@@ -1133,7 +1146,7 @@ export function EmergencyTrackingSheet({
             <button
               type="button"
               onClick={() => onOpenChange(false)}
-              className="h-11 flex-1 rounded-full bg-[#ff6a1a] text-[14px] font-semibold text-white hover:bg-[#e85f17]"
+              className="h-11 flex-1 rounded-full bg-brand-orange text-[14px] font-semibold text-white hover:bg-brand-orange-strong"
             >
               Close tracking
             </button>

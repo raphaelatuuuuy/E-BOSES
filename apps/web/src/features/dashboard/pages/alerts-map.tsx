@@ -311,7 +311,7 @@ export default function AlertsMapPage() {
     }
     items.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
     return items.slice(0, 20)
-  }, [snapshot, filteredConcerns, feedChip])
+  }, [snapshot, visibleEmergencies, filteredConcerns, feedChip])
 
   const feedChips = ["all", "concerns", "emergencies"] as const
 

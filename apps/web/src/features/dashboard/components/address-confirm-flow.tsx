@@ -20,6 +20,7 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { FloatingLabelInput } from "@/features/auth/components/floating-label-input"
 import { NeighborhoodPeekCards } from "@/features/auth/components/sign-up-steps/verified-peek-step"
+import { parseStoredAddress } from "@/features/dashboard/lib/address-parse"
 import {
   filterMarikinaHeightsStreets,
   formatStreetAddress,
@@ -66,29 +67,6 @@ function locationErrorMessage(error: unknown) {
     }
   }
   return "Could not get your location. Please select your street from the list."
-}
-
-/** Split stored "123 Street, Marikina Heights, Marikina City" into street + house. */
-export function parseStoredAddress(address: string): {
-  street: string
-  houseNumber: string
-} {
-  const raw = address.trim()
-  if (!raw || raw.toLowerCase() === "pending") {
-    return { street: "", houseNumber: "" }
-  }
-
-  const primary = raw.split(",")[0]?.trim() || raw
-  const matched =
-    matchMarikinaHeightsStreet(primary) || matchMarikinaHeightsStreet(raw)
-
-  if (!matched) {
-    return { street: primary, houseNumber: "" }
-  }
-
-  const idx = primary.toLowerCase().indexOf(matched.toLowerCase())
-  const house = idx > 0 ? primary.slice(0, idx).trim() : ""
-  return { street: matched, houseNumber: house }
 }
 
 /** Confirm card: street (+ optional house #) only — no city suffix. */
@@ -301,7 +279,7 @@ export function AddressConfirmFlow({
           {/* ── Confirm ── */}
           {step === "confirm" ? (
             <div className="flex flex-col pt-4">
-              <h2 className="text-[1.65rem] font-bold leading-tight tracking-tight text-[#020c4e]">
+              <h2 className="text-[1.65rem] font-bold leading-tight tracking-tight text-foreground">
                 Confirm your address
               </h2>
               <p className="mt-3 text-[15px] leading-relaxed text-neutral-600">
@@ -324,7 +302,7 @@ export function AddressConfirmFlow({
                     setLocationOpen(false)
                     setStep("edit")
                   }}
-                  className="inline-flex h-10 shrink-0 items-center justify-center rounded-full border border-neutral-300 bg-white px-5 text-[14px] font-semibold text-neutral-700 transition-colors hover:border-[#ff8133] hover:bg-[#ff8133] hover:text-white"
+                  className="inline-flex h-10 shrink-0 items-center justify-center rounded-full border border-neutral-300 bg-white px-5 text-[14px] font-semibold text-neutral-700 transition-colors hover:border-primary hover:bg-primary hover:text-white"
                 >
                   Edit
                 </button>
@@ -334,7 +312,7 @@ export function AddressConfirmFlow({
                 type="button"
                 disabled={saving || !street.trim()}
                 onClick={() => void handleConfirm()}
-                className="mt-8 flex h-12 w-full items-center justify-center rounded-full bg-[#ff8133] text-[15px] font-semibold text-white transition-colors hover:bg-[#e6732e] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:hover:bg-neutral-200 disabled:opacity-100"
+                className="mt-8 flex h-12 w-full items-center justify-center rounded-full bg-primary text-[15px] font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:hover:bg-neutral-200 disabled:opacity-100"
               >
                 {saving ? (
                   <>
@@ -351,7 +329,7 @@ export function AddressConfirmFlow({
           {/* ── Edit ── */}
           {step === "edit" ? (
             <div className="flex flex-col pt-4">
-              <h2 className="text-[1.65rem] font-bold leading-tight tracking-tight text-[#020c4e]">
+              <h2 className="text-[1.65rem] font-bold leading-tight tracking-tight text-foreground">
                 Enter your new address
               </h2>
               <p className="mt-2 text-[14px] leading-relaxed text-neutral-500">
@@ -505,7 +483,7 @@ export function AddressConfirmFlow({
               <button
                 type="button"
                 onClick={handleEditContinue}
-                className="mt-8 flex h-12 w-full items-center justify-center rounded-full bg-[#ff8133] text-[15px] font-semibold text-white transition-colors hover:bg-[#e6732e]"
+                className="mt-8 flex h-12 w-full items-center justify-center rounded-full bg-primary text-[15px] font-semibold text-white transition-colors hover:bg-brand-orange-strong"
               >
                 Continue
               </button>
@@ -536,7 +514,7 @@ export function AddressConfirmFlow({
                       <button
                         type="button"
                         onClick={() => void applyCurrentLocation()}
-                        className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-[#ff8133] px-6 text-[15px] font-semibold text-white shadow-sm transition-[transform,colors,filter,box-shadow] duration-150 ease-out hover:bg-[#e6732e] active:scale-[0.96] active:brightness-95 active:shadow-none"
+                        className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-primary px-6 text-[15px] font-semibold text-white shadow-sm transition-[transform,colors,filter,box-shadow] duration-150 ease-out hover:bg-brand-orange-strong active:scale-[0.96] active:brightness-95 active:shadow-none"
                       >
                         Use current location
                         <LocationPlaneIcon className="size-4" strokeWidth={2} />
@@ -570,7 +548,7 @@ export function AddressConfirmFlow({
               <button
                 type="button"
                 onClick={onClose}
-                className="mt-8 flex h-12 w-full items-center justify-center rounded-full bg-[#ff8133] text-[15px] font-semibold text-white shadow-sm transition-colors hover:bg-[#e6732e]"
+                className="mt-8 flex h-12 w-full items-center justify-center rounded-full bg-primary text-[15px] font-semibold text-white shadow-sm transition-colors hover:bg-brand-orange-strong"
               >
                 Continue
               </button>

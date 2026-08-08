@@ -64,7 +64,7 @@ export function ProblemLogbook() {
 
         {/* Paper slips tucked into the folder (bottoms hidden by the pocket) */}
         <div className="problem-slip-drift absolute left-[9%] top-[32%] w-[38%]">
-          <div className="problem-slip -rotate-6 border border-white/20 bg-[#0b0b10]/95 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.55)]">
+          <div className="problem-slip -rotate-6 border border-white/20 bg-landing-bg/95 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.55)]">
             <div className="h-px w-3/4 bg-white/25" />
             <div className="mt-2 h-px w-full bg-white/15" />
             <div className="mt-2 h-px w-1/2 bg-white/15" />
@@ -72,10 +72,10 @@ export function ProblemLogbook() {
         </div>
 
         <div className="problem-slip-drift absolute right-[6%] top-[24%] w-[50%]">
-          <div className="problem-slip rotate-2 border border-[#ff8133]/35 bg-[#0b0b10]/95 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.55),0_0_18px_rgba(255,80,3,0.1)]">
+          <div className="problem-slip rotate-2 border border-primary/35 bg-landing-bg/95 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.55),0_0_18px_rgba(255,80,3,0.1)]">
             <div className="flex items-center justify-between gap-2">
               <div className="h-px w-1/4 bg-white/25" />
-              <span className="whitespace-nowrap border border-[#ff5003]/50 bg-[#ff5003]/10 px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-[0.2em] text-[#ff8133]">
+              <span className="whitespace-nowrap border border-accent/50 bg-accent/10 px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-[0.2em] text-primary">
                 walang update
               </span>
             </div>
@@ -85,7 +85,7 @@ export function ProblemLogbook() {
         </div>
 
         <div className="problem-slip-drift absolute left-[30%] top-[36%] w-[42%]">
-          <div className="problem-slip -rotate-2 border border-white/20 bg-[#0b0b10]/95 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.55)]">
+          <div className="problem-slip -rotate-2 border border-white/20 bg-landing-bg/95 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.55)]">
             <div className="h-px w-2/3 bg-white/25" />
             <div className="mt-2 h-px w-11/12 bg-white/15" />
           </div>

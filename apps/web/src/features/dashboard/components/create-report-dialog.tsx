@@ -26,7 +26,8 @@ import {
   type ConcernVisibility,
 } from "@/features/dashboard/api"
 import { Dialog, DialogBody } from "@/features/dashboard/components/dialog"
-import { ReportStatusDialog, statusModeFromReport } from "@/features/dashboard/components/report-status-dialog"
+import { ReportStatusDialog } from "@/features/dashboard/components/report-status-dialog"
+import { statusModeFromReport } from "@/features/dashboard/components/report-status-mode"
 import { ApiError } from "@/lib/api"
 import { useCategoryOptions } from "@/features/dashboard/lib/concern-categories"
 
@@ -645,7 +646,7 @@ export function CreateReportDialog({
                     type="button"
                     disabled={isSubmitting || isCheckingMedia}
                     onClick={() => void handleSubmit()}
-                    className="inline-flex h-10 items-center justify-center rounded-full bg-[#ff8133] px-5 text-[14px] font-semibold text-white transition-colors hover:bg-[#e6732e] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:opacity-100 sm:h-11 sm:px-6 sm:text-[15px]"
+                    className="inline-flex h-10 items-center justify-center rounded-full bg-primary px-5 text-[14px] font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:opacity-100 sm:h-11 sm:px-6 sm:text-[15px]"
                   >
                     {isSubmitting ? "Reporting…" : "Report"}
                   </button>
@@ -654,7 +655,7 @@ export function CreateReportDialog({
 
               {/* Identity */}
               <div className="flex items-center gap-3 px-4 pt-4 sm:px-5">
-                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-[#c5d0e6] text-[17px] font-semibold text-[#2c3a5a] sm:size-12 sm:text-[18px]">
+                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[17px] font-semibold text-navy-muted sm:size-12 sm:text-[18px]">
                   {letter}
                 </span>
                 <div className="min-w-0 flex-1">

@@ -28,9 +28,26 @@ python manage.py runserver
 python manage.py runserver 0.0.0.0:8000
 
 # In a production deployment, run a separate OCR worker and scheduler.
-celery -A config worker -l INFO -Q eboses --concurrency=2
-celery -A config beat -l INFO
+python -m celery -A config worker -l INFO -Q eboses --pool=solo
+python -m celery -A config beat -l INFO
 ```
+
+On Windows, use the helper scripts instead (idempotent, log + pid files, and a
+scheduled task so the daily schedules can never be forgotten):
+
+```powershell
+# Start worker + beat (skips any already running) - a no-op if both are up.
+powershell -ExecutionPolicy Bypass -File scripts\start-celery.ps1
+# Stop them both (kills any stray celery processes too).
+powershell -ExecutionPolicy Bypass -File scripts\stop-celery.ps1
+# Register a Task Scheduler job: start worker+beat at boot AND logon with
+# restart-on-failure x3, so the schedules survive reboots and crashes.
+powershell -ExecutionPolicy Bypass -File scripts\install-celery-startup-task.ps1
+```
+
+Logs and pid files live under `apps/api/logs/`. Do NOT run beat embedded in the
+worker (`celery -B`): it works on a single box, but a second worker instance
+would run a second beat and double-fire every scheduled task.
 
 The API starts at `http://localhost:8000`. For phones, use `0.0.0.0:8000` and set root `.env` `VITE_API_BASE_URL` / `FRONTEND_URL` to your PC’s LAN IP (see root README).
 
@@ -40,18 +57,18 @@ The migration creates a published default policy and an editable draft. Run
 `python manage.py migrate` before starting the API or worker. Officials edit
 the draft at `/api/auth/ocr/config/draft/` and activate it explicitly through
 the publish endpoint. Signup only validates the selected document type and
-queues OCR after both OTP channels are complete; it never waits for PaddleOCR.
+queues OCR after both OTP channels are complete; it never waits for OCR.space.
 
 OCR worker requirements:
 
-- Set `PADDLEOCR_TOKEN` and an HTTPS `PADDLEOCR_JOB_URL`.
+- Set `OCRSPACE_API_KEY` and an HTTPS `OCRSPACE_URL`.
 - Run the worker on the dedicated `eboses` queue with bounded concurrency;
-  PaddleOCR calls are CPU/network heavy and must not share the web process.
+  OCR.space calls are CPU/network heavy and must not share the web process.
 - Run Celery Beat so the five-minute health canary and outage-only recovery
   sweep execute. Recovery is capped at 20 cases per sweep and cannot overwrite
   an official decision.
 - Use `python manage.py check_production_readiness --strict` before release.
-  Missing Paddle credentials, Redis/Celery settings, secure cookies, or a
+  Missing OCR.space credentials, Redis/Celery settings, secure cookies, or a
   public/private media-root overlap are blockers.
 
 ## App Structure

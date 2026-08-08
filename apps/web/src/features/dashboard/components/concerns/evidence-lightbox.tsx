@@ -1,7 +1,7 @@
 import { useEffect } from "react"
 import { ChevronLeftIcon, ChevronRightIcon, DownloadIcon, XIcon } from "lucide-react"
 
-import { openAuthenticatedMedia } from "@/features/dashboard/components/authenticated-media"
+import { openAuthenticatedMedia } from "@/features/dashboard/lib/authenticated-media"
 import type { ConcernMedia } from "@/features/dashboard/api"
 
 /** Extracted verbatim from `pages/reports.tsx` (was `ReportDetailsSidebar`'s evidence viewer). */

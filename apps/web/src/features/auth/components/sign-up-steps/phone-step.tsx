@@ -36,13 +36,13 @@ const OTP_LENGTH = 6
 const OTP_EXPIRY_SECONDS = 5 * 60
 
 const primaryBtnClass =
-  "inline-flex h-12 min-w-[10rem] items-center justify-center gap-2 rounded-full bg-[#ff8133] px-8 text-base font-semibold text-white shadow-none transition-[transform,colors,filter] duration-150 ease-out hover:bg-[#e6732e] active:scale-[0.96] active:brightness-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100"
+  "inline-flex h-12 min-w-[10rem] items-center justify-center gap-2 rounded-full bg-primary px-8 text-base font-semibold text-white shadow-none transition-[transform,colors,filter] duration-150 ease-out hover:bg-brand-orange-strong active:scale-[0.96] active:brightness-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100"
 
 const errorSlotClassName =
   "border-[3px] border-destructive data-[active=true]:border-[3px] data-[active=true]:border-destructive"
 
 const slotClassName =
-  "h-14 min-w-0 flex-1 rounded-xl border border-[#c5cdd8] bg-white text-lg font-medium text-[#0f172a] shadow-none data-[active=true]:border-[3px] data-[active=true]:border-[#ff8133]"
+  "h-14 min-w-0 flex-1 rounded-xl border border-card-line-strong bg-white text-lg font-medium text-foreground shadow-none data-[active=true]:border-[3px] data-[active=true]:border-primary"
 
 /** Simple 5-point star for the PH flag SVG. */
 function starPoints(cx: number, cy: number, outer: number, inner: number) {
@@ -156,9 +156,18 @@ export function PhoneStep({
 
   // Server expiry is 5 minutes; the countdown starts when the code is sent.
   const [secondsLeft, setSecondsLeft] = React.useState(OTP_EXPIRY_SECONDS)
+
+  // Reset the countdown each time a fresh code is (re)sent — render-adjust
+  // instead of a sync setState at the top of the ticking effect below.
+  const otpKey = `${phoneOtpSent}|${phoneOtpVerified}|${phoneOtpCooldownSeconds}`
+  const [prevOtpKey, setPrevOtpKey] = React.useState(otpKey)
+  if (prevOtpKey !== otpKey) {
+    setPrevOtpKey(otpKey)
+    if (phoneOtpSent && !phoneOtpVerified) setSecondsLeft(OTP_EXPIRY_SECONDS)
+  }
+
   React.useEffect(() => {
     if (!phoneOtpSent || phoneOtpVerified) return
-    setSecondsLeft(OTP_EXPIRY_SECONDS)
     const timer = window.setInterval(() => {
       setSecondsLeft((current) => (current <= 0 ? 0 : current - 1))
     }, 1000)
@@ -193,7 +202,7 @@ export function PhoneStep({
   if (phoneOtpSent && !phoneOtpVerified) {
     return (
       <div className="flex flex-1 flex-col pt-2">
-        <h1 className="text-[1.5rem] font-semibold leading-snug tracking-tight text-[#0f172a] md:text-[1.75rem]">
+        <h1 className="text-[1.5rem] font-semibold leading-snug tracking-tight text-foreground md:text-[1.75rem]">
           Phone number verification
         </h1>
         <p className="mt-2 text-sm text-neutral-600">
@@ -280,7 +289,7 @@ export function PhoneStep({
             type="button"
             disabled={busy || !phoneCodeComplete || codeExpired}
             onClick={onVerifyOtp}
-            className="h-11 min-w-[7.5rem] rounded-full bg-[#ff8133] px-8 text-base font-semibold text-white shadow-none hover:bg-[#e6732e] active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-50"
+            className="h-11 min-w-[7.5rem] rounded-full bg-primary px-8 text-base font-semibold text-white shadow-none hover:bg-brand-orange-strong active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isVerifyingPhoneOtp ? (
               <LoaderCircle className="size-5 animate-spin" aria-hidden="true" />

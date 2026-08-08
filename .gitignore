@@ -33,6 +33,9 @@ __pycache__/
 *.pyo
 *.pyd
 
+# Celery beat schedule database (regenerated on beat startup)
+celerybeat-schedule*
+
 # Static files (collected by Django)
 static/
 

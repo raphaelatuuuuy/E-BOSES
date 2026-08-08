@@ -1,31 +1,23 @@
-"""Adapter interfaces for account-related external integrations."""
+"""Integration adapters for account workflows.
 
-from typing import Protocol
+The account app touches the outside world through two adapters: media
+processing (redaction, preview generation, raw-file audit trails) and
+verification. Views depend on this module instead of reaching into
+CV/PIL/HTTP specifics themselves.
+"""
 
+from .media_services import (
+    build_redacted_preview_bytes,
+    build_sanitized_preview_bytes,
+    ensure_residence_proof_preview,
+    log_raw_media_access,
+    user_can_access_residence_proof_raw,
+)
 
-class SMSAdapter(Protocol):
-    """Sends SMS messages such as OTP challenges."""
-
-    def send_sms(self, *, phone_number: str, message: str) -> None:
-        """Deliver an SMS message to a phone number."""
-
-
-class EmailAdapter(Protocol):
-    """Sends transactional email such as OTP and password reset messages."""
-
-    def send_email(self, *, to: str, subject: str, body: str) -> None:
-        """Deliver an email message."""
-
-
-class OCRAdapter(Protocol):
-    """Extracts identity and address fields from residence proof uploads."""
-
-    def extract_residence_fields(self, *, file_path: str) -> dict:
-        """Return structured fields parsed from a proof document."""
-
-
-class StorageAdapter(Protocol):
-    """Stores private verification files outside model/business logic."""
-
-    def save_private_file(self, *, path: str, content: bytes, content_type: str) -> str:
-        """Persist file bytes and return a storage key or URL."""
+__all__ = [
+    "build_redacted_preview_bytes",
+    "build_sanitized_preview_bytes",
+    "ensure_residence_proof_preview",
+    "log_raw_media_access",
+    "user_can_access_residence_proof_raw",
+]

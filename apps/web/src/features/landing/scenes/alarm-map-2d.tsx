@@ -121,13 +121,13 @@ export function AlarmMap2D({ progress }: { progress: MutableRefObject<number> })
         {[0, 1, 2].map((k) => (
           <span
             key={k}
-            className="am-pulse absolute aspect-square w-[16%] rounded-full border border-[#ff3b30]/70 opacity-0"
+            className="am-pulse absolute aspect-square w-[16%] rounded-full border border-sos/70 opacity-0"
             style={{ ...INCIDENT, transform: "translate(-50%,-50%)" }}
           />
         ))}
         {/* Beat 1: red SOS core */}
         <span
-          className="am-sos absolute size-3 rounded-full bg-[#ff3b30] opacity-0 shadow-[0_0_16px_rgba(255,59,48,0.95),0_0_36px_rgba(255,59,48,0.5)]"
+          className="am-sos absolute size-3 rounded-full bg-sos opacity-0 shadow-[0_0_16px_rgba(255,59,48,0.95),0_0_36px_rgba(255,59,48,0.5)]"
           style={{ ...INCIDENT, transform: "translate(-50%,-50%)" }}
         />
 
@@ -148,9 +148,9 @@ export function AlarmMap2D({ progress }: { progress: MutableRefObject<number> })
             className="am-resp absolute -translate-x-1/2 -translate-y-1/2 opacity-0"
             style={{ left, top }}
           >
-            <span className="block size-2 rounded-full bg-[#4da3ff] shadow-[0_0_10px_rgba(77,163,255,0.85)]" />
+            <span className="block size-2 rounded-full bg-landing-sky shadow-[0_0_10px_rgba(77,163,255,0.85)]" />
             {label && (
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 whitespace-nowrap font-mono text-[9px] uppercase tracking-[0.2em] text-[#4da3ff]/80">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 whitespace-nowrap font-mono text-[9px] uppercase tracking-[0.2em] text-landing-sky/80">
                 {label}
               </span>
             )}
@@ -171,7 +171,7 @@ export function AlarmMap2D({ progress }: { progress: MutableRefObject<number> })
         {NEIGHBORS.map(({ left, top }) => (
           <span
             key={`${left}${top}`}
-            className="am-nb absolute size-1.5 rounded-full bg-[#37d67a] opacity-0 shadow-[0_0_8px_rgba(55,214,122,0.8)]"
+            className="am-nb absolute size-1.5 rounded-full bg-emerald-400 opacity-0 shadow-[0_0_8px_rgba(55,214,122,0.8)]"
             style={{ left, top, transform: "translate(-50%,-50%)" }}
           />
         ))}

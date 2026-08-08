@@ -1,4 +1,3 @@
-/* eslint-disable react-refresh/only-export-components */
 import { useState } from "react"
 import { ChevronLeft } from "lucide-react"
 
@@ -6,10 +5,10 @@ import { Button } from "@workspace/ui/components/button"
 import { completeOnboard } from "@/features/auth/api"
 
 const steps = [
-  { imgMb: "/contents/onboarding-1-mb.png", img: "/contents/onboarding-1.png", title: "Report a Concern", description: "Easily submit reports about road issues, flood concerns, or any community problem. Your voice matters in making our barangay better." },
-  { imgMb: "/contents/onboarding-2-mb.png", img: "/contents/onboarding-2.png", title: "Emergency Alert", description: "Send instant emergency alerts with your location. First responders and barangay officials are notified immediately to provide assistance." },
-  { imgMb: "/contents/onboarding-3-mb.png", img: "/contents/onboarding-3.png", title: "Stay Connected", description: "Keep up with barangay announcements, community events, and updates. Engage with your neighbors and local officials in one place." },
-  { img: "/contents/onboarding-4.png", title: "You're All Set!", description: "You now have access to report concerns, send alerts, and stay connected. Let's work together for a better barangay." },
+  { imgMb: "/contents/onboarding-1-mb.webp", img: "/contents/onboarding-1.webp", title: "Report a Concern", description: "Easily submit reports about road issues, flood concerns, or any community problem. Your voice matters in making our barangay better." },
+  { imgMb: "/contents/onboarding-2-mb.webp", img: "/contents/onboarding-2.webp", title: "Emergency Alert", description: "Send instant emergency alerts with your location. First responders and barangay officials are notified immediately to provide assistance." },
+  { imgMb: "/contents/onboarding-3-mb.webp", img: "/contents/onboarding-3.webp", title: "Stay Connected", description: "Keep up with barangay announcements, community events, and updates. Engage with your neighbors and local officials in one place." },
+  { img: "/contents/onboarding-4.webp", title: "You're All Set!", description: "You now have access to report concerns, send alerts, and stay connected. Let's work together for a better barangay." },
 ]
 
 export default function OnboardingPage() {

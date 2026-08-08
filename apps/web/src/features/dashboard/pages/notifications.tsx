@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import {
@@ -99,6 +99,11 @@ export default function NotificationsPage() {
     subscribed: false,
   })
   const [browserBusy, setBrowserBusy] = useState(false)
+  const browserStateRef = useRef(browserState)
+
+  useEffect(() => {
+    browserStateRef.current = browserState
+  })
 
   useEffect(() => {
     // Retry a few times — the SW may still be activating on fresh page load.
@@ -110,7 +115,7 @@ export default function NotificationsPage() {
         if (state.serverConfigured || state.subscribed) { setBrowserState(state); return }
         await new Promise((r) => setTimeout(r, 500))
       }
-      setBrowserState(await getBrowserNotificationState().catch(() => browserState))
+      setBrowserState(await getBrowserNotificationState().catch(() => browserStateRef.current))
     })()
     return () => {
       cancelled = true
@@ -302,7 +307,7 @@ export default function NotificationsPage() {
           </header>
 
           <div className="w-full" aria-label="Notification filters">
-            <div className="mb-2 rounded-2xl border border-[#ffd8c2] bg-[#fff7f2] p-4">
+            <div className="mb-2 rounded-2xl border border-brand-orange/20 bg-brand-orange-soft p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0 pb-4 sm:pb-5">
                   <p className="text-[15px] font-bold text-neutral-900">Stay connected to alerts</p>
@@ -328,7 +333,7 @@ export default function NotificationsPage() {
                     type="button"
                     disabled={browserBusy || !browserState.supported || browserState.permission === "denied" || !browserState.serverConfigured}
                     onClick={() => void toggleBrowserPush()}
-                    className="h-11 rounded-full bg-brand-orange px-4 text-[13px] font-bold text-white hover:bg-[#e85f17] disabled:cursor-not-allowed disabled:opacity-50"
+                    className="h-11 rounded-full bg-brand-orange px-4 text-[13px] font-bold text-white hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {browserBusy ? "Working" : browserState.subscribed ? "Disable push" : "Enable push"}
                   </button>
@@ -370,7 +375,7 @@ export default function NotificationsPage() {
                     onClick={() => void openNotification(item)}
                     className={cn(
                       "flex w-full gap-3.5 px-4 py-4 text-left transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-orange",
-                      !item.is_read && "bg-[#fff8f3]",
+                      !item.is_read && "bg-brand-orange-soft",
                     )}
                   >
                     <span

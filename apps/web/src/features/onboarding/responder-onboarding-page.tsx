@@ -5,9 +5,9 @@ import { Button } from "@workspace/ui/components/button"
 import { completeOnboard } from "@/features/auth/api"
 
 const steps = [
-  { imgMb: "/contents/responder-onboard-mb-1.png", img: "/contents/responder-onboard-1.png", title: "Respond when your community needs you", description: "Receive automatically routed emergencies and urgent concerns with the information needed to take action." },
-  { imgMb: "/contents/responder-onboard-mb-2.png", img: "/contents/responder-onboard-2.png", title: "Reach the incident faster", description: "View the resident's location, follow the route, and receive live updates while responding." },
-  { imgMb: "/contents/responder-onboard-mb-3.png", img: "/contents/responder-onboard-3.png", title: "Keep everyone updated", description: "Send GPS, update your response status, request backup, and document the incident until it is resolved." },
+  { imgMb: "/contents/responder-onboard-mb-1.webp", img: "/contents/responder-onboard-1.webp", title: "Respond when your community needs you", description: "Receive automatically routed emergencies and urgent concerns with the information needed to take action." },
+  { imgMb: "/contents/responder-onboard-mb-2.webp", img: "/contents/responder-onboard-2.webp", title: "Reach the incident faster", description: "View the resident's location, follow the route, and receive live updates while responding." },
+  { imgMb: "/contents/responder-onboard-mb-3.webp", img: "/contents/responder-onboard-3.webp", title: "Keep everyone updated", description: "Send GPS, update your response status, request backup, and document the incident until it is resolved." },
 ]
 
 export default function ResponderOnboardingPage() {

@@ -303,7 +303,7 @@ export function SosLocationStep({
         )}
       </div>
 
-      <div className="relative min-h-[220px] flex-1 overflow-hidden rounded-xl border border-neutral-200 bg-[#e8eef5]">
+      <div className="relative min-h-[220px] flex-1 overflow-hidden rounded-xl border border-neutral-200 bg-tint">
         <div
           ref={containerRef}
           className="sos-loc-map absolute inset-0 z-0 h-full w-full"
@@ -315,11 +315,11 @@ export function SosLocationStep({
           aria-hidden
         >
           <span
-            className="absolute block size-3.5 rounded-full border-[2.5px] border-white bg-[#2b7fff] shadow-[0_2px_8px_rgba(37,99,235,.45)]"
+            className="absolute block size-3.5 rounded-full border-[2.5px] border-white bg-brand-blue shadow-[0_2px_8px_rgba(37,99,235,.45)]"
             style={{ marginLeft: -7, marginTop: -7 }}
           />
           <span
-            className="absolute size-5 rounded-full bg-[#2b7fff]/20"
+            className="absolute size-5 rounded-full bg-brand-blue/20"
             style={{ marginLeft: -10, marginTop: -10 }}
           />
         </div>

@@ -141,11 +141,11 @@ export function Problem() {
             {PAIN_POINTS.map(([title, body], i) => (
               <div key={title} className="problem-line">
                 <div className="flex items-baseline gap-5">
-                  <span className="font-mono text-sm text-[#ff5003]">0{i + 1}</span>
+                  <span className="font-mono text-sm text-accent">0{i + 1}</span>
                   <h3 className="font-heading text-[clamp(1.6rem,4.5vw,3rem)] font-bold leading-[1.05]">
                     {title.split(" ").map((w, j) => (
                       <Fragment key={j}>
-                        <span className="problem-word inline-block text-[#f5f2ec]">{w}</span>{" "}
+                        <span className="problem-word inline-block text-landing-cream">{w}</span>{" "}
                       </Fragment>
                     ))}
                   </h3>

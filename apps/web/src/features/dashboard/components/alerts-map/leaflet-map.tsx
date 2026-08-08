@@ -60,6 +60,11 @@ export function AlertsLeafletMap({
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
   const LRef = useRef<typeof leaflet | null>(null)
+  // Mount-time values for the one-shot map construction effect. Reading them
+  // through refs keeps that effect stable while still seeing the props the
+  // page loaded with.
+  const initialSnapshotRef = useRef(snapshot)
+  const initialLayersRef = useRef(layers)
   /**
    * Two groups, not one.
    *
@@ -101,7 +106,6 @@ export function AlertsLeafletMap({
       (street.geometries ?? []).flatMap((geometry) => geoJsonToLines(geometry).map((line) => ({ name: street.name, line }))),
     )
   }, [snapshot.map.streets.streets])
-  const streetKey = [...selectedStreetNames].sort().join("|")
   const zoneDraftKey = [
     zoneDraft.acceptance_center_latitude,
     zoneDraft.acceptance_center_longitude,
@@ -216,8 +220,8 @@ export function AlertsLeafletMap({
       if (cancelled || !containerRef.current) return
       LRef.current = L
       map = L.map(containerRef.current, {
-        center: [snapshot.map.center.latitude, snapshot.map.center.longitude],
-        zoom: snapshot.map.center.zoom,
+        center: [initialSnapshotRef.current.map.center.latitude, initialSnapshotRef.current.map.center.longitude],
+        zoom: initialSnapshotRef.current.map.center.zoom,
         zoomControl: false,
         attributionControl: false,
         preferCanvas: true,
@@ -232,12 +236,12 @@ export function AlertsLeafletMap({
       alertLayersRef.current = L.layerGroup().addTo(map)
       peopleLayersRef.current = L.layerGroup().addTo(map)
       mapRef.current = map
-      if (snapshot.map.boundary.geometry) {
-        boundaryRef.current = L.geoJSON(snapshot.map.boundary.geometry as Parameters<typeof L.geoJSON>[0], {
+      if (initialSnapshotRef.current.map.boundary.geometry) {
+        boundaryRef.current = L.geoJSON(initialSnapshotRef.current.map.boundary.geometry as Parameters<typeof L.geoJSON>[0], {
           style: { color: MAP_COLORS.structure, weight: 1.5, fillColor: MAP_COLORS.structure, fillOpacity: 0.05, opacity: 0.5 },
         }).addTo(map)
         map.fitBounds(boundaryRef.current.getBounds(), { padding: [18, 18] })
-        if (!layers.boundary && boundaryRef.current) map.removeLayer(boundaryRef.current)
+        if (!initialLayersRef.current.boundary && boundaryRef.current) map.removeLayer(boundaryRef.current)
       }
       // Leaflet measures the container exactly once, at construction. On
       // mobile this page mounts before the flex chain has resolved a height,
@@ -408,7 +412,15 @@ export function AlertsLeafletMap({
       handle.off("drag", onHandleDrag)
       handle.off("dragend", onHandleDragEnd)
     }
-  }, [layers.acceptance_zone, snapshot.map.center.latitude, snapshot.map.center.longitude, zoneDraftKey, mapReady])
+  }, [
+    layers.acceptance_zone,
+    snapshot.map.center.latitude,
+    snapshot.map.center.longitude,
+    zoneDraft.acceptance_center_latitude,
+    zoneDraft.acceptance_center_longitude,
+    zoneDraft.acceptance_radius_meters,
+    mapReady,
+  ])
 
   // Alerts + reference geometry. Deps are the individual snapshot slices rather
   // than the snapshot object, so a location ping (which only replaces `people`)
@@ -502,7 +514,7 @@ export function AlertsLeafletMap({
     layers,
     selected?.kind,
     selected?.id,
-    streetKey,
+    selectedStreetNames,
     streetLines,
     onSelect,
     mapReady,

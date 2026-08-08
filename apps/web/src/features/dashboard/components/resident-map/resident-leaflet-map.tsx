@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import type {
   Concern,
@@ -92,13 +92,12 @@ export function ResidentLeafletMap({
   const groupRef = useRef<leaflet.LayerGroup | null>(null)
   const boundaryLayerRef = useRef<leaflet.GeoJSON | null>(null)
   const onMapInteractRef = useRef(onMapInteract)
-  onMapInteractRef.current = onMapInteract
+  useEffect(() => {
+    onMapInteractRef.current = onMapInteract
+  }, [onMapInteract])
   const [mapReady, setMapReady] = useState(false)
 
-  const boundaryGeomKey = useMemo(
-    () => (boundary?.geometry ? JSON.stringify(boundary.geometry) : ""),
-    [boundary?.geometry],
-  )
+  const boundaryGeomKey = boundary?.geometry ? JSON.stringify(boundary.geometry) : ""
   const fittedGeomKeyRef = useRef("")
 
   useEffect(() => {
@@ -438,7 +437,7 @@ export function ResidentLeafletMap({
       `}</style>
       <div
         ref={containerRef}
-        className="eboses-alerts-map absolute inset-0 z-0 h-full w-full bg-[#e8eef5]"
+        className="eboses-alerts-map absolute inset-0 z-0 h-full w-full bg-tint"
         style={{ minHeight: "100%" }}
       />
     </>

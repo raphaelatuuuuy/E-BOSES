@@ -57,8 +57,8 @@ export default function AccountInactivePage() {
           className="mx-auto flex max-w-3xl items-center gap-2"
           aria-label="Boses — back to landing page"
         >
-          <img src="/contents/logo.png" alt="" className="h-8 w-auto" />
-          <span className="font-heading text-xl font-bold text-[#ff8133]">Boses</span>
+          <img src="/contents/logo.webp" alt="" className="h-8 w-auto" />
+          <span className="font-heading text-xl font-bold text-primary">Boses</span>
         </Link>
       </header>
 
@@ -90,7 +90,7 @@ export default function AccountInactivePage() {
           type="button"
           disabled={busy || !user}
           onClick={() => void handleReactivate()}
-          className="mt-8 inline-flex h-11 items-center justify-center rounded-md bg-[#ff6a1a] px-5 text-[15px] font-semibold text-white transition-colors hover:bg-[#e85f12] disabled:opacity-60"
+          className="mt-8 inline-flex h-11 items-center justify-center rounded-md bg-brand-orange px-5 text-[15px] font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:opacity-60"
         >
           {busy ? (
             <>

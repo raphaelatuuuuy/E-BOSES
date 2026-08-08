@@ -125,7 +125,7 @@ export function FeedCommentItem({
       ro?.disconnect()
       window.removeEventListener("resize", measure)
     }
-  }, [hasReplies, comment.replies.length, comment.replies.map((r) => r.id).join(",")])
+  }, [hasReplies, comment.replies.length, comment.replies])
 
   /** Shared header + body + actions (used for root and nested) */
   const commentMain = (
@@ -303,7 +303,7 @@ export function FeedCommentItem({
         <UserAvatar
           user={comment.author}
           size="sm"
-          className="relative z-10 !size-8 !text-[13px] leading-none !bg-[#c5d0e6] !text-[#2c3a5a]"
+          className="relative z-10 !size-8 !text-[13px] leading-none !bg-slate-soft !text-navy-muted"
         />
         <div className="min-w-0 flex-1">{commentMain}</div>
       </div>
@@ -333,7 +333,7 @@ export function FeedCommentItem({
                     <UserAvatar
                       user={reply.author}
                       size="sm"
-                      className="!size-8 !text-[13px] leading-none !bg-[#c5d0e6] !text-[#2c3a5a]"
+                      className="!size-8 !text-[13px] leading-none !bg-slate-soft !text-navy-muted"
                     />
                   </div>
                   <FeedCommentItem

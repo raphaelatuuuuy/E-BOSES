@@ -79,31 +79,29 @@ export function reconcileStack(display: string, prev: MentionRef[]): MentionRef[
 
 /** Posted comments: show @Name bold+underline (no raw token). */
 export function renderCommentBody(body: string): ReactNode {
-  const nodes: ReactNode[] = []
   const re = new RegExp(MENTION_TOKEN_RE.source, "g")
+  const parts: Array<{ kind: "text" | "mention"; value: string }> = []
   let last = 0
   let match: RegExpExecArray | null
-  let key = 0
   while ((match = re.exec(body)) !== null) {
-    if (match.index > last) {
-      nodes.push(<span key={`t-${key++}`}>{body.slice(last, match.index)}</span>)
-    }
-    const name = match[1]
-    nodes.push(
-      <span
-        key={`m-${key++}`}
-        className="font-semibold text-neutral-900 underline underline-offset-2 decoration-neutral-900"
-      >
-        @{name}
-      </span>,
-    )
+    if (match.index > last) parts.push({ kind: "text", value: body.slice(last, match.index) })
+    parts.push({ kind: "mention", value: match[1] ?? "" })
     last = match.index + match[0].length
   }
-  if (last < body.length) {
-    nodes.push(<span key={`t-${key++}`}>{body.slice(last)}</span>)
-  }
-  if (nodes.length === 0) return body
-  return nodes
+  if (last < body.length) parts.push({ kind: "text", value: body.slice(last) })
+  if (parts.length === 0) return body
+  return parts.map((part, index) =>
+    part.kind === "mention" ? (
+      <span
+        key={`m-${index}`}
+        className="font-semibold text-neutral-900 underline underline-offset-2 decoration-neutral-900"
+      >
+        @{part.value}
+      </span>
+    ) : (
+      <span key={`t-${index}`}>{part.value}</span>
+    ),
+  )
 }
 
 /**

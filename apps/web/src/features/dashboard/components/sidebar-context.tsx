@@ -1,5 +1,8 @@
 "use client"
 
+/* eslint-disable react-refresh/only-export-components -- the provider, hook and
+   context must live in one module; fast refresh degrades to a full reload. */
+
 import * as React from "react"
 
 interface SidebarContextValue {

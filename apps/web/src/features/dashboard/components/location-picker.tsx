@@ -276,13 +276,19 @@ export default function LocationPickerModal({
     })
   }, [open, mapContext])
 
+  // Clear stale results when the query drops below the debounce threshold, or
+  // the picker opens/closes — via render-adjust instead of a sync setState in
+  // the debounce effect below.
+  const searchKey = `${open}/${search.trim()}`
+  const [prevSearchKey, setPrevSearchKey] = useState(searchKey)
+  if (prevSearchKey !== searchKey) {
+    setPrevSearchKey(searchKey)
+    if (!open || search.trim().length < 2) setResults([])
+  }
+
   // Debounced API search
   useEffect(() => {
-    if (!open) return
-    if (search.trim().length < 2) {
-      setResults([])
-      return
-    }
+    if (!open || search.trim().length < 2) return
     const t = window.setTimeout(() => {
       setSearching(true)
       void apiRequest<{ results: SearchHit[] }>(
@@ -451,7 +457,7 @@ export default function LocationPickerModal({
           {sheetMode !== "expanded" ? (
             <>
               <span
-                className="eboses-pin-pulse absolute left-1/2 top-1/2 size-3 rounded-full bg-[#2b7fff]"
+                className="eboses-pin-pulse absolute left-1/2 top-1/2 size-3 rounded-full bg-brand-blue"
                 style={{
                   marginLeft: -6,
                   marginTop: -6,

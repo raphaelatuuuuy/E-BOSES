@@ -6,6 +6,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { GlobeIcon, SendIcon, MessageCircleIcon, CircleArrowUp } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
+import {
+  concernBodyText,
+  feedTimeAgo,
+  feedCategoryLabel,
+  streetLabelFromAddress,
+} from "@/features/dashboard/components/feed-post-text"
 import type { Concern, ConcernComment, PublicUser } from "@/features/dashboard/api"
 import {
   collectThreadMentionUsers,
@@ -35,63 +41,6 @@ const IC = {
   xxs: "size-4",
 } as const
 
-/**
- * Create-report stores `title` as the first ~80 chars of `description`.
- * Prefer a single body so the feed never shows the text twice.
- */
-export function concernBodyText(post: {
-  title?: string | null
-  description?: string | null
-}): string {
-  const title = (post.title || "").trim()
-  const description = (post.description || "").trim()
-  if (!description) return title
-  if (!title) return description
-  // Auto-title is a prefix (often mid-word) of the full description
-  if (description.startsWith(title) || title.startsWith(description)) {
-    return description.length >= title.length ? description : title
-  }
-  return description
-}
-
-/** Short label for lists when title is only a hard-sliced description. */
-export function concernTitleText(post: {
-  title?: string | null
-  description?: string | null
-}): string {
-  const body = concernBodyText(post)
-  const title = (post.title || "").trim()
-  if (!title) return body.slice(0, 80) || "Report"
-  // Mid-word slice looks broken in list headers — clean at word boundary
-  if (body.startsWith(title) && title.length < body.length) {
-    const cut = title.replace(/\s+\S*$/, "").trim()
-    return cut.length >= 24 ? cut : title
-  }
-  return title
-}
-
-export function feedTimeAgo(value: string) {
-  const diffMs = Date.now() - new Date(value).getTime()
-  const minutes = Math.max(1, Math.floor(diffMs / 60000))
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h`
-  const days = Math.floor(hours / 24)
-  if (days < 7) return `${days}d`
-  return `${Math.floor(days / 7)}w`
-}
-
-export function feedCategoryLabel(value: string) {
-  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
-}
-
-export function streetLabelFromAddress(address?: string | null) {
-  if (!address?.trim()) return null
-  const first = address.split(",")[0]?.trim()
-  if (!first || first.toLowerCase() === "pending") return null
-  return first
-}
-
 function commentPlaceLabel(author: PublicUser) {
   const street =
     streetLabelFromAddress(author.street) ||
@@ -117,7 +66,7 @@ export function FeedUserAvatar({
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#c5d0e6] font-semibold text-[#2c3a5a]",
+        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-soft font-semibold text-navy-muted",
         sizeClass,
         className,
       )}
@@ -177,9 +126,14 @@ function FeedCommentItem({
   const isEdited = Boolean(comment.is_edited)
   const originalText = (comment.original_body || "").trim()
 
-  useEffect(() => {
+  // Reset the "show original" toggle whenever the comment content changes —
+  // render-adjust instead of a sync setState effect.
+  const commentKey = `${comment.id}|${comment.body}|${comment.is_edited}`
+  const [prevCommentKey, setPrevCommentKey] = useState(commentKey)
+  if (prevCommentKey !== commentKey) {
+    setPrevCommentKey(commentKey)
     setShowOriginal(false)
-  }, [comment.id, comment.body, comment.is_edited])
+  }
 
   const hasReplies = !isReply && comment.replies.length > 0
   const threadRootRef = useRef<HTMLDivElement>(null)
@@ -214,7 +168,7 @@ function FeedCommentItem({
       ro?.disconnect()
       window.removeEventListener("resize", measure)
     }
-  }, [hasReplies, comment.replies.length, comment.replies.map((r) => r.id).join(",")])
+  }, [hasReplies, comment.replies.length, comment.replies])
 
   const commentMain = (
     <>
@@ -381,7 +335,7 @@ function FeedCommentItem({
         <FeedUserAvatar
           user={comment.author}
           size="sm"
-          className="relative z-10 !size-8 !text-[13px] leading-none !bg-[#c5d0e6] !text-[#2c3a5a]"
+          className="relative z-10 !size-8 !text-[13px] leading-none !bg-slate-soft !text-navy-muted"
         />
         <div className="min-w-0 flex-1">{commentMain}</div>
       </div>
@@ -407,7 +361,7 @@ function FeedCommentItem({
                     <FeedUserAvatar
                       user={reply.author}
                       size="sm"
-                      className="!size-8 !text-[13px] leading-none !bg-[#c5d0e6] !text-[#2c3a5a]"
+                      className="!size-8 !text-[13px] leading-none !bg-slate-soft !text-navy-muted"
                     />
                   </div>
                   <FeedCommentItem
@@ -632,7 +586,9 @@ export function FeedPostCard({
 
   useEffect(() => {
     if (!focusCommentOnMount) return
-    setExpanded(true)
+    // Defer the expandState a microtask so parent state propagation doesn't
+    // happen as a synchronous render-phase side effect; focus once it renders.
+    queueMicrotask(() => setExpanded(true))
     window.requestAnimationFrame(() => {
       document.getElementById(commentFieldId)?.focus()
     })
@@ -658,7 +614,7 @@ export function FeedPostCard({
     <>
       <article
         className={cn(
-          "relative rounded-lg border-[1.5px] border-[#d0d0d0] bg-white",
+          "relative rounded-lg border-[1.5px] border-card-line-strong bg-white",
           className,
         )}
       >

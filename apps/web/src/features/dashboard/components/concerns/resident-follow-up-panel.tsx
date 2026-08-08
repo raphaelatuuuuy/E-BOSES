@@ -85,7 +85,7 @@ async function submitAppeal() {
               type="button"
               disabled={busy === "appeal" || !appealReason.trim()}
               onClick={() => void submitAppeal()}
-              className="h-11 bg-[#ff6a1a] text-white hover:bg-[#e85f17]"
+              className="h-11 bg-brand-orange text-white hover:bg-brand-orange-strong"
             >
               {busy === "appeal" ? "Submitting" : "Submit appeal"}
             </Button>
@@ -94,6 +94,5 @@ async function submitAppeal() {
     </div>
   )
 }
-
 
 

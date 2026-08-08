@@ -29,7 +29,7 @@ const errorSlotClassName =
   "border-[3px] border-destructive data-[active=true]:border-[3px] data-[active=true]:border-destructive"
 
 const slotClassName =
-  "h-14 min-w-0 flex-1 rounded-xl border border-[#c5cdd8] bg-white text-lg font-medium text-[#0f172a] shadow-none data-[active=true]:border-[3px] data-[active=true]:border-[#ff8133]"
+  "h-14 min-w-0 flex-1 rounded-xl border border-card-line-strong bg-white text-lg font-medium text-foreground shadow-none data-[active=true]:border-[3px] data-[active=true]:border-primary"
 
 export default function AccountOtpVerificationPage({
   onBack,
@@ -46,17 +46,21 @@ export default function AccountOtpVerificationPage({
   const [cooldownExpiry, setCooldownExpiry] = useState<number | null>(null)
   const [cooldownSeconds, setCooldownSeconds] = useState(0)
 
+  // Reset the displayed seconds whenever the cooldown is cleared — render-adjust
+  // instead of a sync setState at the top of the ticking effect below.
+  const [prevExpiry, setPrevExpiry] = useState(cooldownExpiry)
+  if (prevExpiry !== cooldownExpiry) {
+    setPrevExpiry(cooldownExpiry)
+    if (cooldownExpiry === null) setCooldownSeconds(0)
+  }
+
   usePageTitle("Verify Account")
 
   useEffect(() => {
-    if (!cooldownExpiry) {
-      setCooldownSeconds(0)
-      return
-    }
+    const expiry = cooldownExpiry
+    if (expiry === null) return
 
-    function tick() {
-      const expiry = cooldownExpiry
-      if (expiry === null) return
+    const tick = () => {
       const remaining = Math.max(0, Math.ceil((expiry - Date.now()) / 1000))
       setCooldownSeconds(remaining)
       if (remaining === 0) setCooldownExpiry(null)
@@ -114,7 +118,7 @@ export default function AccountOtpVerificationPage({
         <AuthPageLogo />
         <div className="flex flex-1 flex-col justify-center px-6 py-8 md:px-12 lg:px-16">
           <div className="mx-auto w-full max-w-[440px]">
-            <h1 className="text-[1.5rem] font-semibold leading-snug tracking-tight text-[#0f172a] md:text-[1.75rem]">
+            <h1 className="text-[1.5rem] font-semibold leading-snug tracking-tight text-foreground md:text-[1.75rem]">
               Sent to {email}! Enter the code you will receive shortly.
             </h1>
 
@@ -148,7 +152,7 @@ export default function AccountOtpVerificationPage({
               type="button"
               disabled={isResending || cooldownActive || isVerifying}
               onClick={handleResend}
-              className="mt-5 inline-flex items-center gap-2 text-sm font-medium text-[#334155] transition-colors hover:text-[#0f172a] disabled:cursor-not-allowed disabled:opacity-60"
+              className="mt-5 inline-flex items-center gap-2 text-sm font-medium text-subtle-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
             >
               <RotateCw
                 className={cn("size-4 shrink-0", isResending && "animate-spin")}
@@ -169,7 +173,7 @@ export default function AccountOtpVerificationPage({
                   type="button"
                   onClick={onBack}
                   disabled={isVerifying}
-                  className="inline-flex items-center gap-1.5 text-sm font-medium text-[#2563eb] transition-colors hover:text-[#1d4ed8] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-brand-blue transition-colors hover:text-brand-blue disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Edit your email
                   <Pencil className="size-3.5 shrink-0" aria-hidden="true" />
@@ -179,7 +183,7 @@ export default function AccountOtpVerificationPage({
                 type="button"
                 disabled={isVerifying || !codeComplete}
                 onClick={handleVerify}
-                className="h-11 min-w-[7.5rem] rounded-full bg-[#16a34a] px-8 text-base font-semibold text-white shadow-none hover:bg-[#15803d] disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-11 min-w-[7.5rem] rounded-full bg-green-600 px-8 text-base font-semibold text-white shadow-none hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isVerifying ? (
                   <LoaderCircle className="size-5 animate-spin" aria-hidden="true" />

@@ -1,5 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Epilogue:wght@500;600;700;800&display=swap");
-@import url("https://fonts.googleapis.com/css2?family=Clash+Display:wght@500;600;700&display=swap");
 @import "tailwindcss";
 
 @font-face {
@@ -238,6 +236,22 @@
      because it is the established brand appearance; switching this to
      #0a0a0a raises it to 6.91:1 and is a one-line change if wanted. */
   --color-brand-orange-ink: #ffffff;
+
+  /* Official pages palette. These four consolidate a drifted hex palette
+     (#dfe7f5/#cbd8ee/#e7edf8, #43507f/#2c3a5a/#48547b, #145be7/#2447b3/#2b7fff,
+     #c5d0e6/#9eb3c9) into purpose-aligned tokens: hairline on tinted cards,
+     muted navy headings, the interactive blue, and soft slate fills. */
+  --color-line-tint: #dfe7f5;
+  --color-navy-muted: #43507f;
+  --color-brand-blue: #145be7;
+  --color-slate-soft: #c5d0e6;
+
+  /* Landing page palette (cinematic dark + citrus accent). `bg` absorbs the
+     near-black scene surfaces (#00001c/#050203/#07070b/#0b0b10) so a single
+     token keeps the dark scenes consistent; `cream` is the flag-page text. */
+  --color-landing-bg: #00001c;
+  --color-landing-cream: #f5f2ec;
+  --color-landing-sky: #4da3ff;
 
   /* Overlay elevation. Tinted with the brand navy rather than neutral
      black — a pure-black shadow on a navy-and-white palette reads grey
@@ -533,6 +547,13 @@
   --color-ice-soft: var(--color-ice-soft);
   --color-ice-dim: var(--color-ice-dim);
   --color-brand-orange-ink: var(--color-brand-orange-ink);
+  --color-line-tint: var(--color-line-tint);
+  --color-navy-muted: var(--color-navy-muted);
+  --color-brand-blue: var(--color-brand-blue);
+  --color-slate-soft: var(--color-slate-soft);
+  --color-landing-bg: var(--color-landing-bg);
+  --color-landing-cream: var(--color-landing-cream);
+  --color-landing-sky: var(--color-landing-sky);
   --color-nav-glass: var(--color-nav-glass);
   --color-rail-glass: var(--color-rail-glass);
   --color-map-overlay: var(--color-map-overlay);

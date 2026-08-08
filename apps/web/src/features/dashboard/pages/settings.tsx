@@ -27,10 +27,8 @@ import {
   type BrowserNotificationState,
 } from "@/features/dashboard/browser-notifications"
 import { AccountLifecycleFlow } from "@/features/dashboard/components/account-lifecycle-flow"
-import {
-  AddressConfirmFlow,
-  parseStoredAddress,
-} from "@/features/dashboard/components/address-confirm-flow"
+import { AddressConfirmFlow } from "@/features/dashboard/components/address-confirm-flow"
+import { parseStoredAddress } from "@/features/dashboard/lib/address-parse"
 
 export type { SettingKey }
 

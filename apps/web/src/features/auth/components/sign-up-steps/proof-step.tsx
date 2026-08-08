@@ -148,11 +148,15 @@ export function ProofStep({
   /** After a type is verified, lock all options so switching does not wipe uploads. */
   const typesLocked = isApproved
 
-  React.useEffect(() => {
+  // When the submitted proof type changes externally, adopt it locally —
+  // render-adjust instead of a sync setState effect.
+  const [prevProofType, setPrevProofType] = React.useState(values.proofType)
+  if (prevProofType !== values.proofType) {
+    setPrevProofType(values.proofType)
     if (values.proofType && values.proofType !== selectedType) {
       setSelectedType(values.proofType)
     }
-  }, [values.proofType, selectedType])
+  }
 
   React.useEffect(() => {
     return () => {
@@ -356,6 +360,14 @@ export function ProofStep({
           file: files[i]!,
           option: dialogOption,
           side,
+          profile: {
+            first_name: values.firstName ?? "",
+            middle_name: values.middleName ?? "",
+            last_name: values.lastName ?? "",
+            date_of_birth: values.dateOfBirth ?? "",
+            gender: values.gender ?? "",
+            address: values.address ?? "",
+          },
         })
         if (!ocr.ok) {
           const message = humanizeProofError(
@@ -441,8 +453,8 @@ export function ProofStep({
                   disabled={disabled}
                   onClick={() => openUploadDialog(option)}
                   className={cn(
-                    // Same light-grey pill for every card (no check / close icons)
-                    "group relative flex w-full items-center justify-center gap-2.5 rounded-full bg-[#eef1f6] px-5 py-3.5 text-center text-neutral-800 transition-[background-color,transform] duration-150 ease-out hover:bg-[#e4e8f0] active:scale-[0.99] disabled:cursor-not-allowed",
+                    // Same light-grey card for every option (no check / close icons)
+                    "group relative flex w-full items-center gap-3 rounded-2xl bg-tint px-4 py-3.5 text-left text-neutral-800 transition-[background-color,transform] duration-150 ease-out hover:bg-tint active:scale-[0.99] disabled:cursor-not-allowed",
                     typesLocked && !selected && "opacity-50",
                     typesLocked && selected && "opacity-100",
                     !typesLocked && "disabled:opacity-50",
@@ -451,10 +463,17 @@ export function ProofStep({
                   <BoxIdCardIcon
                     // Always regular at rest; solid only on hover/focus (group).
                     solid={false}
-                    className="text-neutral-800"
+                    className="shrink-0 text-neutral-800"
                   />
-                  <span className="text-[15px] font-semibold leading-none tracking-tight">
-                    {option.name}
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[15px] font-semibold leading-tight tracking-tight">
+                      {option.name}
+                    </span>
+                    {option.description?.trim() ? (
+                      <span className="mt-0.5 block text-xs font-medium leading-snug text-neutral-500">
+                        {option.description}
+                      </span>
+                    ) : null}
                   </span>
                 </button>
               )
@@ -659,7 +678,7 @@ export function ProofStep({
                 type="button"
                 disabled={busy || !allSidesAccepted}
                 onClick={() => void runOcrVerify()}
-                className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-[#ff8133] px-6 text-[15px] font-semibold text-white shadow-sm transition-[transform,colors,filter] duration-150 ease-out hover:bg-[#e6732e] active:scale-[0.96] active:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-primary px-6 text-[15px] font-semibold text-white shadow-sm transition-[transform,colors,filter] duration-150 ease-out hover:bg-brand-orange-strong active:scale-[0.96] active:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {verifyingOcr ? (
                   <LoaderCircleIcon className="size-5 animate-spin" aria-hidden="true" />

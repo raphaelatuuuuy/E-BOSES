@@ -1,14 +1,17 @@
-"""Small, typed PaddleOCR hosted-job client.
+"""Small, typed OCR.space hosted-client.
 
 This module deliberately knows nothing about residents or verification rules.  It
-only submits a document, waits for the provider job, and returns normalized OCR
-lines plus provider metadata.  Keeping that boundary makes provider failures
-safe to route to manual review instead of turning them into signup failures.
+only submits a document to the OCR.space API and returns normalized OCR lines
+plus provider metadata.  Keeping that boundary makes provider failures safe to
+route to manual review instead of turning them into signup failures.
+
+OCR.space Engine 2 returns word-level bounding boxes when ``isOverlayRequired``
+is enabled; the free tier does not report per-word confidence, so recognized
+lines are trusted with confidence=1.0.
 """
 
 import json
 import os
-import tempfile
 import time
 from dataclasses import dataclass
 
@@ -52,23 +55,34 @@ class OCRResponse:
 
 
 def _request_error(exc: Exception) -> OCRProviderError:
+    import sys
+    cause = exc.__cause__ or exc.__context__
+    print(
+        f"[OCR] request failed: {type(exc).__name__}: {exc!r}",
+        file=sys.stderr, flush=True,
+    )
+    if cause is not None:
+        print(
+            f"[OCR]   cause: {type(cause).__name__}: {cause!r}",
+            file=sys.stderr, flush=True,
+        )
     if isinstance(exc, requests.Timeout):
-        return OCRProviderTimeout("PaddleOCR request timed out.")
+        return OCRProviderTimeout("OCR.space request timed out.")
     if isinstance(exc, requests.ConnectionError):
-        return OCRProviderUnavailable("PaddleOCR could not be reached.")
-    return OCRProviderUnavailable("PaddleOCR request failed.")
+        return OCRProviderUnavailable("OCR.space could not be reached.")
+    return OCRProviderUnavailable("OCR.space request failed.")
 
 
 def _raise_for_status(response):
     if response.status_code in (401, 403):
-        raise OCRProviderAuthenticationError("PaddleOCR credentials were rejected.")
+        raise OCRProviderAuthenticationError("OCR.space credentials were rejected.")
     if response.status_code == 429 or response.status_code >= 500:
-        raise OCRProviderUnavailable(f"PaddleOCR returned HTTP {response.status_code}.")
+        raise OCRProviderUnavailable(f"OCR.space returned HTTP {response.status_code}.")
     try:
         response.raise_for_status()
     except requests.RequestException as exc:
         raise OCRProviderResponseError(
-            f"PaddleOCR returned HTTP {getattr(response, 'status_code', 'unknown')}."
+            f"OCR.space returned HTTP {getattr(response, 'status_code', 'unknown')}."
         ) from exc
 
 
@@ -76,153 +90,212 @@ def _response_json(response):
     try:
         payload = response.json()
     except (ValueError, TypeError) as exc:
-        raise OCRProviderResponseError("PaddleOCR returned malformed JSON.") from exc
+        raise OCRProviderResponseError("OCR.space returned malformed JSON.") from exc
     if not isinstance(payload, dict):
-        raise OCRProviderResponseError("PaddleOCR returned an unexpected response.")
+        raise OCRProviderResponseError("OCR.space returned an unexpected response.")
     return payload
 
 
-def ocr_file_with_metadata(file_path: str) -> OCRResponse:
-    """Submit a local or remote image to PaddleOCR and return OCR results.
+def _request_with_retries(attempt_request, *, max_retries, what="request"):
+    """Run attempt_request() (a zero-arg callable returning a requests.Response),
+    retrying transient connection/timeout errors with exponential backoff.
 
-    Accepts a local file path or an http(s) URL.
-    Returns a list of OCR result dicts, each containing:
-        - text (str): recognised text
-        - confidence (float)
-        - bbox (list[float]): [x1, y1, x2, y2, x3, y3, x4, y4]
-        - image_url (str | None): cropped image of this text region
+    HTTP error responses are not retried here — callers validate them with
+    _raise_for_status afterwards. The callable is invoked fresh on every
+    attempt so file handles or streams can be reopened per attempt.
     """
+    import sys
+    last_exc = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            return attempt_request()
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt >= max_retries:
+                break
+            delay = 2 ** (attempt - 1)  # 1s, 2s, 4s…
+            print(
+                f"[OCR] {what} attempt {attempt}/{max_retries} failed: "
+                f"{type(exc).__name__}: {exc!r}; retrying in {delay}s",
+                file=sys.stderr, flush=True,
+            )
+            time.sleep(delay)
+    raise _request_error(last_exc)
+
+
+def _mime_for_suffix(suffix: str) -> str:
+    return {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".pdf": "application/pdf",
+        ".gif": "image/gif",
+        ".bmp": "image/bmp",
+        ".tif": "image/tiff",
+        ".tiff": "image/tiff",
+    }.get(suffix, "application/octet-stream")
+
+
+def _engine_label() -> str:
+    engine = getattr(settings, "OCRSPACE_ENGINE", 2)
+    return f"ocrspace:engine{engine}"
+
+
+def _parse_ocrspace_payload(payload: dict, image_width=None, image_height=None) -> OCRResponse:
+    """Convert an OCR.space JSON payload into normalized OCR lines."""
+    job_id = "ocrspace"
+    exit_code = payload.get("OCRExitCode")
+    if exit_code not in {1, 2}:
+        message = payload.get("ErrorMessage") or payload.get("ErrorDetails") or "OCR.space failed to parse the image."
+        raise OCRProviderResponseError(f"OCR.space parse failed: {message}")
+
+    results = payload.get("ParsedResults") or []
+    lines: list[dict] = []
+    for page in results:
+        if page.get("FileParseExitCode") not in {1, "1", None}:
+            message = page.get("ErrorMessage") or "OCR.space page parse failed."
+            raise OCRProviderResponseError(f"OCR.space page failed: {message}")
+        overlay = page.get("TextOverlay") or {}
+        overlay_lines = overlay.get("Lines") or []
+        if overlay_lines:
+            for item in overlay_lines:
+                text = str(item.get("LineText") or "").strip()
+                if not text:
+                    continue
+                words = item.get("Words") or []
+                if words:
+                    lefts = [float(word.get("Left") or 0) for word in words]
+                    tops = [float(word.get("Top") or 0) for word in words]
+                    rights = [float(word.get("Left") or 0) + float(word.get("Width") or 0) for word in words]
+                    bottoms = [float(word.get("Top") or 0) + float(word.get("Height") or 0) for word in words]
+                    bbox = [min(lefts), min(tops), max(rights), max(bottoms)]
+                else:
+                    bbox = []
+                lines.append({"text": text, "confidence": 1.0, "bbox": bbox})
+        else:
+            parsed_text = str(page.get("ParsedText") or "")
+            for raw_line in parsed_text.splitlines():
+                text = raw_line.strip()
+                if not text:
+                    continue
+                lines.append({"text": text, "confidence": 1.0, "bbox": []})
+    return OCRResponse(
+        lines=lines,
+        job_id=job_id,
+        latency_ms=0,
+        model=_engine_label(),
+        image_width=image_width,
+        image_height=image_height,
+    )
+
+
+def _submit_payload(
+    payload: bytes | None,
+    *,
+    filename: str,
+    mime: str,
+    source_url: str | None = None,
+) -> OCRResponse:
     started = time.monotonic()
-    token = getattr(settings, "PADDLEOCR_TOKEN", "")
-    job_url = getattr(settings, "PADDLEOCR_JOB_URL", "")
-    model = getattr(settings, "PADDLEOCR_MODEL", "PP-OCRv6")
-    poll_interval = getattr(settings, "PADDLEOCR_POLL_INTERVAL_SECONDS", 2.0)
-    max_polls = getattr(settings, "PADDLEOCR_MAX_POLLS", 30)
-    connect_timeout = getattr(settings, "PADDLEOCR_CONNECT_TIMEOUT", 10)
-    read_timeout = getattr(settings, "PADDLEOCR_READ_TIMEOUT", 30)
+    api_key = getattr(settings, "OCRSPACE_API_KEY", "")
+    endpoint = getattr(settings, "OCRSPACE_URL", "https://api.ocr.space/parse/image")
+    engine = getattr(settings, "OCRSPACE_ENGINE", 2)
+    language = getattr(settings, "OCRSPACE_LANGUAGE", "eng")
+    overlay = bool(getattr(settings, "OCRSPACE_OVERLAY", True))
+    connect_timeout = getattr(settings, "OCRSPACE_CONNECT_TIMEOUT", 10)
+    read_timeout = getattr(settings, "OCRSPACE_READ_TIMEOUT", 60)
+    max_retries = max(1, int(getattr(settings, "OCRSPACE_MAX_RETRIES", 3) or 3))
 
-    if not token:
-        raise OCRProviderAuthenticationError("PaddleOCR is not configured.")
-    if not job_url.startswith(("https://", "http://")):
-        raise OCRProviderResponseError("PaddleOCR job URL is invalid.")
+    if not api_key:
+        raise OCRProviderAuthenticationError("OCR.space is not configured.")
+    if not endpoint.startswith(("https://", "http://")):
+        raise OCRProviderResponseError("OCR.space API URL is invalid.")
 
-    headers = {"Authorization": f"bearer {token}"}
-    optional_payload = {
-        "useDocOrientationClassify": False,
-        "useDocUnwarping": False,
-        "useTextlineOrientation": False,
+    headers = {"apikey": api_key}
+    data = {
+        "language": language,
+        "OCREngine": str(engine),
+        "isOverlayRequired": "true" if overlay else "false",
     }
 
-    is_url = file_path.startswith(("http://", "https://"))
-
-    if is_url:
-        headers["Content-Type"] = "application/json"
-        payload = {
-            "fileUrl": file_path,
-            "model": model,
-            "optionalPayload": optional_payload,
-        }
-        try:
-            resp = requests.post(
-                job_url, json=payload, headers=headers,
+    def attempt_post() -> requests.Response:
+        if source_url:
+            return requests.post(
+                endpoint,
+                headers=headers,
+                data={**data, "url": source_url, "filetype": mime.split("/")[-1].upper()},
                 timeout=(connect_timeout, read_timeout),
             )
-        except requests.RequestException as exc:
-            raise _request_error(exc) from exc
+        return requests.post(
+            endpoint,
+            headers=headers,
+            data=data,
+            files={"file": (filename, payload, mime)},
+            timeout=(connect_timeout, read_timeout),
+        )
+
+    resp = _request_with_retries(attempt_post, max_retries=max_retries, what="submit")
+    _raise_for_status(resp)
+    payload_json = _response_json(resp)
+    response = _parse_ocrspace_payload(payload_json)
+    response = OCRResponse(
+        lines=response.lines,
+        job_id=response.job_id,
+        latency_ms=int((time.monotonic() - started) * 1000),
+        model=response.model,
+        image_width=response.image_width,
+        image_height=response.image_height,
+    )
+    return response
+
+
+def ocr_file_with_metadata(file_path: str) -> OCRResponse:
+    """Submit a local file path or http(s) URL to OCR.space and return OCR results.
+
+    Returns an OCRResponse with lines containing:
+        - text (str): recognised text
+        - confidence (float): 1.0 (OCR.space reports no per-word confidence)
+        - bbox (list[float]): [x1, y1, x2, y2] in absolute pixels
+    """
+    image_width = None
+    image_height = None
+    source_url = None
+    payload = None
+    filename = "document.jpg"
+    mime = "image/jpeg"
+
+    is_url = file_path.startswith(("http://", "https://"))
+    if is_url:
+        source_url = file_path
+        mime = "image/jpeg"
     else:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"OCR file not found: {file_path}")
-        data = {
-            "model": model,
-            "optionalPayload": json.dumps(optional_payload),
-        }
-        with open(file_path, "rb") as f:
-            files = {"file": f}
+        suffix = os.path.splitext(file_path)[1].lower() or ".jpg"
+        mime = _mime_for_suffix(suffix)
+        filename = os.path.basename(file_path) or "document.jpg"
+        with open(file_path, "rb") as file_handle:
+            payload = file_handle.read()
+        if mime.startswith("image/"):
             try:
-                resp = requests.post(
-                    job_url, headers=headers, data=data, files=files,
-                    timeout=(connect_timeout, read_timeout),
-                )
-            except requests.RequestException as exc:
-                raise _request_error(exc) from exc
+                from io import BytesIO
 
-    _raise_for_status(resp)
-    try:
-        job_id = str(_response_json(resp)["data"]["jobId"])
-    except (KeyError, TypeError) as exc:
-        raise OCRProviderResponseError("PaddleOCR did not return a job identifier.") from exc
+                from PIL import Image
 
-    # Poll until done
-    jsonl_url = None
-    for _ in range(max_polls):
-        try:
-            status_resp = requests.get(
-                f"{job_url}/{job_id}", headers=headers,
-                timeout=(connect_timeout, read_timeout),
-            )
-        except requests.RequestException as exc:
-            raise _request_error(exc) from exc
-        _raise_for_status(status_resp)
-        try:
-            data = _response_json(status_resp)["data"]
-            state = data["state"]
-        except (KeyError, TypeError) as exc:
-            raise OCRProviderResponseError("PaddleOCR returned an invalid job status.") from exc
+                with Image.open(BytesIO(payload)) as image:
+                    image_width, image_height = image.size
+            except Exception:
+                image_width = None
+                image_height = None
 
-        if state == "done":
-            jsonl_url = data["resultUrl"]["jsonUrl"]
-            break
-        elif state == "failed":
-            error_msg = data.get("errorMsg", "unknown error")
-            raise OCRProviderResponseError(f"PaddleOCR job failed: {error_msg}")
-
-        time.sleep(poll_interval)
-    else:
-        raise OCRProviderTimeout("PaddleOCR job did not complete within the poll limit.")
-
-    if not jsonl_url:
-        return OCRResponse([], job_id, int((time.monotonic() - started) * 1000), model)
-
-    # Fetch and parse JSONL results
-    try:
-        jsonl_resp = requests.get(
-            jsonl_url, timeout=(connect_timeout, read_timeout),
-        )
-    except requests.RequestException as exc:
-        raise _request_error(exc) from exc
-    _raise_for_status(jsonl_resp)
-
-    results = []
-    for line in jsonl_resp.text.strip().split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            page_result = json.loads(line)["result"]
-        except (ValueError, KeyError, TypeError) as exc:
-            raise OCRProviderResponseError("PaddleOCR returned malformed result data.") from exc
-        for ocr_entry in page_result.get("ocrResults", []):
-            pruned = ocr_entry.get("prunedResult", {})
-            rec_texts = pruned.get("rec_texts", [])
-            rec_scores = pruned.get("rec_scores", [])
-            rec_boxes = pruned.get("rec_boxes", [])
-            image_url = ocr_entry.get("ocrImage", None)
-            for i, text in enumerate(rec_texts):
-                text = text.strip()
-                confidence = rec_scores[i] if i < len(rec_scores) else 0.0
-                bbox = rec_boxes[i] if i < len(rec_boxes) else []
-                results.append({
-                    "text": text,
-                    "confidence": confidence,
-                    "bbox": bbox,
-                    "image_url": image_url,
-                })
-
+    response = _submit_payload(payload, filename=filename, mime=mime, source_url=source_url)
     return OCRResponse(
-        lines=results,
-        job_id=job_id,
-        latency_ms=int((time.monotonic() - started) * 1000),
-        model=model,
+        lines=response.lines,
+        job_id=response.job_id,
+        latency_ms=response.latency_ms,
+        model=response.model,
+        image_width=image_width,
+        image_height=image_height,
     )
 
 
@@ -230,23 +303,6 @@ def ocr_file(file_path: str) -> list[dict]:
     """Backward-compatible wrapper returning only recognized lines."""
 
     return ocr_file_with_metadata(file_path).lines
-
-
-def ocr_bytes(image_bytes: bytes) -> list[dict]:
-    """Submit raw image bytes to PaddleOCR and return OCR results.
-
-    Writes bytes to a temp file, delegates to ocr_file, then cleans up.
-    """
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        tmp.write(image_bytes)
-        tmp_path = tmp.name
-    try:
-        return ocr_file(tmp_path)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
 
 
 def ocr_bytes_with_metadata(image_bytes: bytes, *, suffix=".png", deskew: bool = True) -> OCRResponse:
@@ -280,167 +336,33 @@ def ocr_bytes_with_metadata(image_bytes: bytes, *, suffix=".png", deskew: bool =
 
             with Image.open(BytesIO(payload)) as image:
                 image_width, image_height = image.size
+
+            # Downscale oversized uploads so the slow link to the OCR provider
+            # (and the fallback engine) never has to push multi-megabyte bodies.
+            max_side = 1600
+            if max(image_width, image_height) > max_side:
+                ratio = max_side / max(image_width, image_height)
+                with Image.open(BytesIO(payload)) as image:
+                    resized = image.convert("RGB").resize(
+                        (max(1, int(image_width * ratio)), max(1, int(image_height * ratio))),
+                        Image.LANCZOS,
+                    )
+                    buffer = BytesIO()
+                    resized.save(buffer, format="JPEG", quality=85, optimize=True)
+                    payload = buffer.getvalue()
+                    out_suffix = ".jpg"
+                image_width, image_height = resized.size
         except Exception:
             image_width = None
             image_height = None
 
-    safe_suffix = out_suffix if out_suffix in {".png", ".jpg", ".jpeg", ".pdf"} else ".bin"
-    with tempfile.NamedTemporaryFile(suffix=safe_suffix, delete=False) as tmp:
-        tmp.write(payload)
-        tmp_path = tmp.name
-    try:
-        response = ocr_file_with_metadata(tmp_path)
-        return OCRResponse(
-            lines=response.lines,
-            job_id=response.job_id,
-            latency_ms=response.latency_ms,
-            model=response.model,
-            image_width=image_width,
-            image_height=image_height,
-        )
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-
-
-def validate_barangay_id_ocr(ocr_results: list[dict], user_data: dict) -> tuple[bool, str, str, dict]:
-    """Validate a Barangay ID's OCR output against signup data.
-
-    Returns (passed: bool, reason: str, failed_field: str, details: dict).
-    failed_field maps to a form field: "firstName", "lastName", "dateOfBirth", "address", "proofType", or "".
-    """
-    import calendar
-    import re
-    from datetime import date as dt_date
-
-    texts = [r["text"].upper().strip() for r in ocr_results if r["text"].strip()]
-    all_text = " ".join(texts)
-
-    MONTHS = {
-        "JANUARY": 1, "FEBRUARY": 2, "MARCH": 3, "APRIL": 4, "MAY": 5, "JUNE": 6,
-        "JULY": 7, "AUGUST": 8, "SEPTEMBER": 9, "OCTOBER": 10, "NOVEMBER": 11, "DECEMBER": 12,
-    }
-    MONTH_NAMES = ["", "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
-                    "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"]
-
-    details = {
-        "extracted_texts": texts,
-        "name": {"user_tokens": [], "ocr_tokens": [], "matched_tokens": [], "status": "pending"},
-        "address": {"found": "", "status": "pending"},
-        "birthdate": {"user_birth": "", "month_found": False, "year_found": False, "status": "pending"},
-        "dates": {"found": [], "date_issued": None, "valid_until": None, "status": "pending"},
-    }
-
-    # ── 1. Name overlap ──────────────────────────────────────────────────
-    full_name_str = f"{user_data.get('last_name', '')} {user_data.get('first_name', '')} {user_data.get('middle_name', '')}"
-    user_tokens = set(full_name_str.upper().split())
-    ocr_tokens = set(all_text.replace(",", " ").split())
-    overlap = user_tokens & ocr_tokens
-
-    details["name"]["user_tokens"] = sorted(user_tokens)
-    details["name"]["ocr_tokens_not_in_name"] = sorted(ocr_tokens - user_tokens)
-    details["name"]["matched_tokens"] = sorted(overlap)
-    details["name"]["user_first_name"] = user_data.get("first_name", "").upper().strip()
-    details["name"]["user_last_name"] = user_data.get("last_name", "").upper().strip()
-    details["name"]["first_name_in_ocr"] = all(
-        token in ocr_tokens for token in user_data.get("first_name", "").upper().split()
+    mime = _mime_for_suffix(out_suffix)
+    response = _submit_payload(payload, filename=f"document{out_suffix}", mime=mime)
+    return OCRResponse(
+        lines=response.lines,
+        job_id=response.job_id,
+        latency_ms=response.latency_ms,
+        model=response.model,
+        image_width=image_width,
+        image_height=image_height,
     )
-    details["name"]["last_name_in_ocr"] = user_data.get("last_name", "").upper().strip() in ocr_tokens
-
-    if not details["name"]["last_name_in_ocr"]:
-        details["name"]["status"] = "failed"
-        return False, "Your last name does not matched on the ID.", "lastName", details
-    if not details["name"]["first_name_in_ocr"]:
-        details["name"]["status"] = "failed"
-        return False, "Your first name does not matched on the ID.", "firstName", details
-    details["name"]["status"] = "passed"
-
-    # ── 2. Address — must mention Marikina ───────────────────────────────
-    if "MARIKINA HEIGHTS" in all_text:
-        details["address"]["found"] = "MARIKINA HEIGHTS"
-    elif "MARIKINA" in all_text:
-        details["address"]["found"] = "MARIKINA"
-
-    if not details["address"]["found"]:
-        details["address"]["status"] = "failed"
-        return False, "Your Marikina address does not matched on the ID.", "address", details
-    details["address"]["status"] = "passed"
-
-    # ── 3. Birthdate check ───────────────────────────────────────────────
-    user_birth = user_data.get("date_of_birth", "")
-    details["birthdate"]["user_birth"] = user_birth
-    birth_ok = False
-    if user_birth:
-        try:
-            ub = dt_date.fromisoformat(str(user_birth))
-            month_name = MONTH_NAMES[ub.month]
-            details["birthdate"]["month_found"] = month_name in all_text
-            details["birthdate"]["year_found"] = str(ub.year) in all_text
-            if details["birthdate"]["month_found"] and details["birthdate"]["year_found"]:
-                birth_ok = True
-        except Exception:
-            pass
-    if not birth_ok:
-        details["birthdate"]["status"] = "failed"
-        return False, "Your birthdate does not matched on the ID.", "dateOfBirth", details
-    details["birthdate"]["status"] = "passed"
-
-    # ── 4. Date issued / valid until ─────────────────────────────────────
-    DATE_RE = re.compile(
-        r"(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*"
-        r"\s+(\d{1,2}),\s*(\d{4})",
-        re.IGNORECASE,
-    )
-    raw_dates: list[tuple[int, int, int]] = []
-    for text in texts:
-        for m in DATE_RE.finditer(text):
-            month_name = m.group(1).upper()
-            for full, num in MONTHS.items():
-                if month_name == full[:len(month_name)]:
-                    month = num
-                    break
-            else:
-                continue
-            day = int(m.group(2))
-            year = int(m.group(3))
-            raw_dates.append((year, month, day))
-
-    details["dates"]["found"] = [
-        f"{MONTH_NAMES[m]}{d}, {y}" for y, m, d in raw_dates
-    ]
-
-    if raw_dates:
-        birth_date_tuple = None
-        if user_birth:
-            try:
-                ub = dt_date.fromisoformat(str(user_birth))
-                birth_date_tuple = (ub.year, ub.month, ub.day)
-            except Exception:
-                pass
-
-        remaining = []
-        for d in raw_dates:
-            if birth_date_tuple and d == birth_date_tuple:
-                continue
-            remaining.append(d)
-        remaining = list(set(remaining))
-
-        if len(remaining) >= 2:
-            sorted_d = sorted(remaining)
-            date_issued = sorted_d[0]
-            valid_until = sorted_d[-1]
-            details["dates"]["date_issued"] = f"{MONTH_NAMES[date_issued[1]]} {date_issued[2]}, {date_issued[0]}"
-            details["dates"]["valid_until"] = f"{MONTH_NAMES[valid_until[1]]} {valid_until[2]}, {valid_until[0]}"
-
-            max_day = calendar.monthrange(valid_until[0], valid_until[1])[1]
-            clamped_day = min(valid_until[2], max_day)
-            today = dt_date.today()
-            vu_date = dt_date(valid_until[0], valid_until[1], clamped_day)
-            if vu_date < today:
-                details["dates"]["status"] = "expired"
-                return False, "This has already expired. Please use a valid one.", "proofType", details
-
-    details["dates"]["status"] = "passed"
-    return True, "Proof validated successfully.", "", details

@@ -18,7 +18,7 @@ import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { cn } from "@workspace/ui/lib/utils"
 
-import type { OcrDocumentType, OcrFieldDefinition, OcrTestField, ProofSide } from "@/features/ocr/api"
+import type { OcrDocumentType, OcrFieldDefinition, ProofSide } from "@/features/ocr/api"
 import { MarkAreasCanvas } from "@/features/ocr/components/mark-areas-canvas"
 import { PROOF_THEME } from "@/features/ocr/components/proof-theme"
 import {
@@ -27,12 +27,6 @@ import {
   fieldDisplayNumber,
   type FieldRegion,
 } from "@/features/ocr/lib/create-document-defaults"
-
-function asPercent(value: number | null | undefined) {
-  if (value == null || Number.isNaN(Number(value))) return "—"
-  const numeric = Number(value)
-  return `${Math.round(numeric <= 1 ? numeric * 100 : numeric)}%`
-}
 
 function Panel({
   title,
@@ -58,10 +52,10 @@ function Panel({
         )}
       >
         <div className="min-w-0">
-          <h2 className={cn("flex items-center gap-2 text-base font-black", PROOF_THEME.title)}>
+          <h2 className={cn("flex items-center gap-2 text-base font-semibold", PROOF_THEME.title)}>
             {step != null ? (
               <span
-                className="flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-black text-white"
+                className="flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white"
                 style={{ backgroundColor: PROOF_THEME.primary }}
               >
                 {step}
@@ -114,7 +108,6 @@ export function MarkAreasStep(props: {
   zoom: number
   setZoom: (updater: number | ((z: number) => number)) => void
   canvasSource: string | null
-  extractedByKey?: Map<string, OcrTestField>
   sampleInputRef?: RefObject<HTMLInputElement | null>
   sampleUploadSideRef?: RefObject<ProofSide>
 }) {
@@ -141,7 +134,6 @@ export function MarkAreasStep(props: {
     zoom,
     setZoom,
     canvasSource,
-    extractedByKey,
     sampleInputRef: externalSampleInputRef,
     sampleUploadSideRef: externalUploadSideRef,
   } = props
@@ -216,7 +208,6 @@ export function MarkAreasStep(props: {
     // Stable number/color across Front + Back (not re-numbered per side).
     const displayNumber = fieldDisplayNumber(field, fields)
     const color = fieldDisplayColor(field, fields)
-    const detected = extractedByKey?.get(field.key)
     const selected = selectedField?.key === field.key
     const isEditing = editingKey === field.key
     const isDragging = dragKey === field.key
@@ -268,14 +259,14 @@ export function MarkAreasStep(props: {
         className={cn(
           "flex items-center gap-2 rounded-xl border px-2.5 py-2.5 transition-colors",
           selected
-            ? "border-[#145be7] bg-blue-50/80 shadow-sm"
-            : "border-[#dfe7f5] bg-[#f8fafc] hover:bg-white",
+            ? "border-brand-blue bg-tint/80 shadow-sm"
+            : "border-line-tint bg-canvas hover:bg-white",
           isDragging && "opacity-50",
-          isDropTarget && "border-[#145be7] ring-2 ring-[#145be7]/25",
+          isDropTarget && "border-brand-blue ring-2 ring-brand-blue/25",
         )}
       >
         <span
-          className="cursor-grab touch-none text-[#c0cadb] active:cursor-grabbing"
+          className="cursor-grab touch-none text-line-tint active:cursor-grabbing"
           title={
             dualSides
               ? "Drag to reorder or move between Front and Back"
@@ -318,12 +309,12 @@ export function MarkAreasStep(props: {
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="size-8 shrink-0"
+                  className="size-8 shrink-0 hover:bg-tint"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => commitEdit(field.key)}
                   aria-label="Save name"
                 >
-                  <Check className="size-3.5 text-[#145be7]" />
+                  <Check className="size-3.5 text-brand-blue" />
                 </Button>
               </div>
             ) : (
@@ -336,7 +327,7 @@ export function MarkAreasStep(props: {
                 }}
                 onDoubleClick={() => startEdit(field)}
               >
-                <span className={cn("block truncate text-sm font-black", PROOF_THEME.title)}>
+                <span className={cn("block truncate text-sm font-semibold", PROOF_THEME.title)}>
                   {field.label}
                 </span>
                 <span className="mt-0.5 flex flex-wrap items-center gap-1.5">
@@ -357,9 +348,6 @@ export function MarkAreasStep(props: {
                       Required
                     </span>
                   ) : null}
-                  <span className={cn("text-[11px] font-semibold", PROOF_THEME.muted)}>
-                    {asPercent(detected?.confidence ?? field.min_confidence)} quality
-                  </span>
                 </span>
               </button>
             )}
@@ -371,43 +359,43 @@ export function MarkAreasStep(props: {
             type="button"
             variant="ghost"
             size="icon"
-            className="size-7"
+            className="size-7 hover:bg-tint"
             disabled={index === 0}
             title="Move up"
             onClick={() => onMoveField(field.key, -1)}
           >
-            <ChevronUp className="size-3.5 text-[#68739c]" />
+            <ChevronUp className="size-3.5 text-subtle-foreground" />
           </Button>
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="size-7"
+            className="size-7 hover:bg-tint"
             disabled={index >= list.length - 1}
             title="Move down"
             onClick={() => onMoveField(field.key, 1)}
           >
-            <ChevronDown className="size-3.5 text-[#68739c]" />
+            <ChevronDown className="size-3.5 text-subtle-foreground" />
           </Button>
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="size-8"
+            className="size-8 hover:bg-tint"
             title="Edit name"
             onClick={() => startEdit(field)}
           >
-            <Pencil className="size-3.5 text-[#68739c]" />
+            <Pencil className="size-3.5 text-subtle-foreground" />
           </Button>
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="size-8"
+            className="size-8 hover:bg-rose-50"
             title="Remove"
             onClick={() => onRemoveField(field.key)}
           >
-            <Trash2 className="size-3.5 text-[#68739c]" />
+            <Trash2 className="size-3.5 text-subtle-foreground" />
           </Button>
         </div>
       </div>
@@ -457,7 +445,7 @@ export function MarkAreasStep(props: {
                 className={cn(
                   "space-y-2 rounded-xl p-2 transition-colors",
                   dragOverSide === "front" && dragKey
-                    ? "bg-sky-50/80 ring-2 ring-[#145be7]/20"
+                    ? "bg-sky-50/80 ring-2 ring-brand-blue/20"
                     : "",
                 )}
                 onDragOver={(e) => {
@@ -473,8 +461,8 @@ export function MarkAreasStep(props: {
               >
                 <p
                   className={cn(
-                    "text-[11px] font-black uppercase tracking-wide",
-                    activeSideKey === "front" ? "text-[#145be7]" : PROOF_THEME.muted,
+                    "text-[11px] font-semibold uppercase tracking-wide",
+                    activeSideKey === "front" ? PROOF_THEME.accent : PROOF_THEME.muted,
                   )}
                 >
                   Front fields
@@ -485,7 +473,7 @@ export function MarkAreasStep(props: {
                 {frontFields.length === 0 ? (
                   <p
                     className={cn(
-                      "rounded-lg border border-dashed border-[#cbd8ee] px-3 py-4 text-center text-xs font-semibold",
+                      "rounded-lg border border-dashed border-line-tint px-3 py-4 text-center text-xs font-semibold",
                       PROOF_THEME.muted,
                     )}
                   >
@@ -499,7 +487,7 @@ export function MarkAreasStep(props: {
               </div>
               <div
                 className={cn(
-                  "space-y-2 rounded-xl border-t border-[#e8eef8] p-2 pt-3 transition-colors",
+                  "space-y-2 rounded-xl border-t border-line-tint p-2 pt-3 transition-colors",
                   dragOverSide === "back" && dragKey
                     ? "bg-violet-50/80 ring-2 ring-violet-400/25"
                     : "",
@@ -517,8 +505,8 @@ export function MarkAreasStep(props: {
               >
                 <p
                   className={cn(
-                    "text-[11px] font-black uppercase tracking-wide",
-                    activeSideKey === "back" ? "text-[#145be7]" : PROOF_THEME.muted,
+                    "text-[11px] font-semibold uppercase tracking-wide",
+                    activeSideKey === "back" ? PROOF_THEME.accent : PROOF_THEME.muted,
                   )}
                 >
                   Back fields
@@ -529,7 +517,7 @@ export function MarkAreasStep(props: {
                 {backFields.length === 0 ? (
                   <p
                     className={cn(
-                      "rounded-lg border border-dashed border-[#cbd8ee] px-3 py-4 text-center text-xs font-semibold",
+                      "rounded-lg border border-dashed border-line-tint px-3 py-4 text-center text-xs font-semibold",
                       PROOF_THEME.muted,
                     )}
                   >
@@ -551,7 +539,7 @@ export function MarkAreasStep(props: {
               {fields.length === 0 ? (
                 <p
                   className={cn(
-                    "rounded-xl border border-dashed border-[#cbd8ee] px-3 py-10 text-center text-sm font-semibold",
+                    "rounded-xl border border-dashed border-line-tint px-3 py-10 text-center text-sm font-semibold",
                     PROOF_THEME.muted,
                   )}
                 >
@@ -561,17 +549,6 @@ export function MarkAreasStep(props: {
             </>
           )}
         </div>
-        <p
-          className={cn(
-            "mt-3 border-t pt-3 text-[11px] font-semibold",
-            PROOF_THEME.border,
-            PROOF_THEME.muted,
-          )}
-        >
-          {dualSides
-            ? "Drag rows between Front and Back. Mark boxes only on the matching photo."
-            : "Click an item to edit it. Use the grip icon to change order."}
-        </p>
       </Panel>
 
       <Panel
@@ -595,7 +572,7 @@ export function MarkAreasStep(props: {
             <Button
               variant="outline"
               size="sm"
-              className="bg-white"
+              className="bg-white hover:bg-tint hover:text-brand-blue"
               onClick={() => setZoom((z) => Math.min(2, z + 0.1))}
             >
               <ZoomIn className="size-3.5" />
@@ -603,19 +580,24 @@ export function MarkAreasStep(props: {
             <Button
               variant="outline"
               size="sm"
-              className="bg-white"
+              className="bg-white hover:bg-tint hover:text-brand-blue"
               onClick={() => setZoom((z) => Math.max(0.5, z - 0.1))}
             >
               <ZoomOut className="size-3.5" />
             </Button>
-            <Button variant="outline" size="sm" className="bg-white" onClick={() => setZoom(1)}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-white hover:bg-tint hover:text-brand-blue"
+              onClick={() => setZoom(1)}
+            >
               <RotateCcw className="size-3.5" />
             </Button>
           </div>
         }
       >
         <div className="mb-4">
-          <p className={cn("mb-2 text-xs font-black", PROOF_THEME.title)}>Sample photos</p>
+          <p className={cn("mb-2 text-xs font-semibold", PROOF_THEME.title)}>Sample photos</p>
           <div className={cn("grid gap-2", canvasSides.length > 1 ? "grid-cols-2" : "grid-cols-1")}>
             {canvasSides.map((side) => {
               const label =
@@ -628,13 +610,13 @@ export function MarkAreasStep(props: {
                   className={cn(
                     "rounded-xl border p-2.5 transition",
                     active
-                      ? "border-[#145be7] bg-blue-50/50 ring-1 ring-[#145be7]/25"
-                      : "border-[#dfe7f5] bg-white",
+                      ? "border-brand-blue bg-tint/50 ring-1 ring-brand-blue/25"
+                      : "border-line-tint bg-white",
                   )}
                 >
                   <button
                     type="button"
-                    className={cn("mb-2 text-left text-xs font-black", PROOF_THEME.title)}
+                    className={cn("mb-2 text-left text-xs font-semibold", PROOF_THEME.title)}
                     onClick={() => setSamplePreviewSide(side)}
                   >
                     {label}
@@ -651,7 +633,7 @@ export function MarkAreasStep(props: {
                   {hasImage ? (
                     <button
                       type="button"
-                      className="mb-2 block w-full overflow-hidden rounded-lg border border-[#dfe7f5] bg-[#f8faff]"
+                      className="mb-2 block w-full overflow-hidden rounded-lg border border-line-tint bg-canvas"
                       onClick={() => setSamplePreviewSide(side)}
                     >
                       <img
@@ -670,7 +652,7 @@ export function MarkAreasStep(props: {
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="h-8 text-xs font-bold"
+                      className="h-8 text-xs font-bold hover:bg-tint hover:text-brand-blue"
                       disabled={saving}
                       onClick={() => {
                         sampleUploadSideRef.current = side
@@ -686,7 +668,7 @@ export function MarkAreasStep(props: {
                         type="button"
                         variant="outline"
                         size="sm"
-                        className="h-8 text-xs font-bold text-destructive hover:text-destructive"
+                        className="h-8 text-xs font-bold text-destructive hover:bg-rose-50 hover:text-destructive"
                         disabled={saving}
                         onClick={() => onRemoveSample(side)}
                       >
@@ -741,17 +723,6 @@ export function MarkAreasStep(props: {
             sampleInputRef.current?.click()
           }}
         />
-        <p
-          className={cn(
-            "mt-3 border-t pt-3 text-[11px] font-semibold",
-            PROOF_THEME.border,
-            PROOF_THEME.muted,
-          )}
-        >
-          Select an item from the list or a box on the photo. Drag the box to move it; use the
-          corner to resize. Changes go live when you upload a sample, try a photo, or toggle
-          availability.
-        </p>
       </Panel>
     </section>
   )

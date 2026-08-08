@@ -35,8 +35,8 @@ import {
   CollapsedStrip,
   DispatchCard,
   Pane,
-  usePaneCollapse,
 } from "@/features/dashboard/components/responder/dispatch-surface"
+import { usePaneCollapse } from "@/features/dashboard/components/responder/pane-collapse"
 import { ResizableSplit } from "@/features/dashboard/components/workspace/resizable-split"
 import { useIncidentActions } from "@/features/dashboard/components/responder/use-incident-actions"
 

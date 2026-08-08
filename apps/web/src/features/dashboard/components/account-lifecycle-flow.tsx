@@ -204,7 +204,7 @@ export function AccountLifecycleFlow({
                 <button
                   type="button"
                   onClick={() => setStep("means")}
-                  className="mt-8 flex h-12 w-full items-center justify-center rounded-full bg-[#ff8133] text-[15px] font-semibold text-white hover:bg-[#e6732e]"
+                  className="mt-8 flex h-12 w-full items-center justify-center rounded-full bg-primary text-[15px] font-semibold text-white hover:bg-brand-orange-strong"
                 >
                   Continue
                 </button>
@@ -255,7 +255,7 @@ export function AccountLifecycleFlow({
                 type="button"
                 disabled={!confirmed}
                 onClick={() => setStep("feedback")}
-                className="mt-8 flex h-12 w-full items-center justify-center rounded-full bg-[#ff8133] text-[15px] font-semibold text-white transition-colors hover:bg-[#e6732e] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:hover:bg-neutral-200 disabled:opacity-100"
+                className="mt-8 flex h-12 w-full items-center justify-center rounded-full bg-primary text-[15px] font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:hover:bg-neutral-200 disabled:opacity-100"
               >
                 Continue with deactivation
               </button>
@@ -377,7 +377,7 @@ export function AccountLifecycleFlow({
               <button
                 type="button"
                 onClick={onClose}
-                className="mt-10 flex h-12 w-full items-center justify-center rounded-full bg-[#ff8133] text-[15px] font-semibold text-white hover:bg-[#e6732e]"
+                className="mt-10 flex h-12 w-full items-center justify-center rounded-full bg-primary text-[15px] font-semibold text-white hover:bg-brand-orange-strong"
               >
                 Done
               </button>

@@ -20,7 +20,7 @@ function LetterAvatar({
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-full bg-[#c5d0e6] font-semibold text-[#2c3a5a]",
+        "inline-flex shrink-0 items-center justify-center rounded-full bg-slate-soft font-semibold text-navy-muted",
         className,
       )}
     >
@@ -120,7 +120,7 @@ export function ProfileAccountMenu({
         </PopoverTrigger>
 
         <PopoverContent
-          className="w-[280px] overflow-hidden rounded-2xl border-[1.5px] border-solid border-[#d0d0d0] bg-white p-0 shadow-[0_8px_30px_rgba(15,23,42,0.12)]"
+          className="w-[280px] overflow-hidden rounded-2xl border-[1.5px] border-solid border-card-line-strong bg-white p-0 shadow-[0_8px_30px_rgba(15,23,42,0.12)]"
           side="bottom"
         >
           <div className="flex flex-col items-center px-5 pb-4 pt-6 text-center">
@@ -132,7 +132,7 @@ export function ProfileAccountMenu({
 
           </div>
 
-          <div className="border-t-[1.5px] border-solid border-[#d0d0d0]" />
+          <div className="border-t-[1.5px] border-solid border-card-line-strong" />
 
           <Link
             to="/dashboard/settings"
@@ -143,7 +143,7 @@ export function ProfileAccountMenu({
             Settings
           </Link>
 
-          <div className="border-t-[1.5px] border-solid border-[#d0d0d0]" />
+          <div className="border-t-[1.5px] border-solid border-card-line-strong" />
 
           <button
             type="button"

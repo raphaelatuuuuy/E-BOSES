@@ -529,6 +529,7 @@ class EmergencyLocationPing(models.Model):
         indexes = [
             models.Index(fields=["assignment", "created_at"], name="emerg_ping_assignment_time"),
             models.Index(fields=["responder", "created_at"], name="emerg_ping_responder_time"),
+            models.Index(fields=["created_at"], name="emerg_ping_created_at"),
         ]
 
 

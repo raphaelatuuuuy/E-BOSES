@@ -66,5 +66,5 @@ export function useLocationPing(user: AuthUser | null) {
       window.clearInterval(timer)
       document.removeEventListener("visibilitychange", schedule)
     }
-  }, [user?.id, user?.status])
+  }, [user])
 }

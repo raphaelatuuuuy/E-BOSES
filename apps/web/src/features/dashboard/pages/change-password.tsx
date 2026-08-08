@@ -15,7 +15,7 @@ import { ApiError } from "@/lib/api"
 import { cn } from "@workspace/ui/lib/utils"
 
 const primaryBtn =
-  "flex h-12 w-full items-center justify-center rounded-full bg-[#ff8133] text-[15px] font-semibold text-white shadow-none transition-colors hover:bg-[#e6732e] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:hover:bg-neutral-200 disabled:opacity-100"
+  "flex h-12 w-full items-center justify-center rounded-full bg-primary text-[15px] font-semibold text-white shadow-none transition-colors hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:hover:bg-neutral-200 disabled:opacity-100"
 
 export default function ChangePasswordPage() {
   usePageTitle("Change password")
@@ -78,12 +78,12 @@ export default function ChangePasswordPage() {
           >
             <ChevronLeftIcon className="size-6" strokeWidth={2.25} />
           </button>
-          <h1 className="text-[17px] font-semibold tracking-tight text-[#020c4e]">
+          <h1 className="text-[17px] font-semibold tracking-tight text-foreground">
             Change password
           </h1>
         </header>
 
-        <h2 className="text-[1.45rem] font-bold leading-tight tracking-tight text-[#020c4e] sm:text-[1.6rem]">
+        <h2 className="text-[1.45rem] font-bold leading-tight tracking-tight text-foreground sm:text-[1.6rem]">
           Set a new password for{" "}
           <span className="break-all">{user?.email || "your account"}</span>
         </h2>
@@ -105,7 +105,7 @@ export default function ChangePasswordPage() {
           <button
             type="button"
             onClick={() => navigate("/forgot-password")}
-            className="text-[14px] font-medium text-[#ff8133] hover:underline"
+            className="text-[14px] font-medium text-primary hover:underline"
           >
             Forgot your password?
           </button>

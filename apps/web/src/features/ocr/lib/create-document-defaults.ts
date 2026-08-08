@@ -8,15 +8,18 @@ import { resolveFieldSide } from "@/features/ocr/api"
 
 export type FieldRegion = OcrFieldRegion
 
+// Categorical ramp for field boxes/chips. Every color passes 4.5:1 contrast
+// with the white 10px label text; orange-700 (rust) is deliberately distinct
+// from the brand orange, and red-600 stays brighter than the rose error pills.
 export const FIELD_COLORS = [
-  "#2563eb",
-  "#16a34a",
-  "#ca8a04",
-  "#dc2626",
-  "#9333ea",
-  "#0891b2",
-  "#ea580c",
-  "#4f46e5",
+  "#2563eb", // blue — 5.1:1
+  "#15803d", // green-700 — 5.0:1 (was #16a34a, 3.3:1)
+  "#a16207", // yellow-700 — 4.9:1 (was #ca8a04, 2.9:1)
+  "#dc2626", // red-600 — 4.8:1
+  "#9333ea", // purple-600 — 5.4:1
+  "#0e7490", // cyan-700 — 5.4:1 (was #0891b2, 3.7:1)
+  "#c2410c", // orange-700 — 5.2:1 (was #ea580c, 3.6:1)
+  "#4f46e5", // indigo-600 — 6.3:1
 ]
 
 /** True when key looks system-generated (not a human slug). */

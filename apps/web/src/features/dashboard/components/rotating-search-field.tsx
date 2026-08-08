@@ -45,11 +45,12 @@ export function RotatingSearchField({
 }: RotatingSearchFieldProps) {
   const [index, setIndex] = useState(0)
   const [focused, setFocused] = useState(false)
-  const [reduceMotion, setReduceMotion] = useState(false)
+  const [reduceMotion, setReduceMotion] = useState(
+    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  )
 
   useEffect(() => {
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)")
-    setReduceMotion(mq.matches)
     function onMq() {
       setReduceMotion(mq.matches)
     }
@@ -156,7 +157,7 @@ export function RotatingSearchField({
           placeholder={focused && !value ? "Search…" : ""}
           aria-label="Search feed"
           className={cn(
-            "absolute inset-0 h-11 w-full rounded-full border-[1.5px] border-solid border-[#d0d0d0] bg-white pl-11 pr-4",
+            "absolute inset-0 h-11 w-full rounded-full border-[1.5px] border-solid border-card-line-strong bg-white pl-11 pr-4",
             TEXT,
             "text-neutral-900 caret-neutral-900 shadow-none outline-none",
             "placeholder:text-neutral-500",

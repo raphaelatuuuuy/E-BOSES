@@ -417,6 +417,20 @@ class ResidenceProofDetectView(APIView):
         if detect_side is None and len(proof_files) == 1:
             detect_side = None
 
+        # Registrant profile from the in-flight sign-up form. Optional so the
+        # detect endpoint keeps working for early-step checks; when provided,
+        # admin-configured profile_match rules run against these values.
+        submitted_profile = {
+            "first_name": str(request.data.get("first_name") or "").strip(),
+            "middle_name": str(request.data.get("middle_name") or "").strip(),
+            "last_name": str(request.data.get("last_name") or "").strip(),
+            "date_of_birth": str(request.data.get("date_of_birth") or "").strip(),
+            "gender": str(request.data.get("gender") or "").strip(),
+            "address": str(request.data.get("address") or "").strip(),
+        }
+        if not any(submitted_profile.values()):
+            submitted_profile = None
+
         try:
             # When two files are uploaded, run side-aware extract on each and merge.
             if len(proof_files) >= 2:
@@ -425,9 +439,14 @@ class ResidenceProofDetectView(APIView):
                 hint_type = (request.data.get("proof_type") or "").strip() or None
 
                 def detect_side(index: int, side: str) -> dict:
-                    return detect_residence_proof(proof_files[index], hint_type=hint_type, side=side)
+                    return detect_residence_proof(
+                        proof_files[index],
+                        hint_type=hint_type,
+                        side=side,
+                        submitted_profile=submitted_profile,
+                    )
 
-                # PaddleOCR is an I/O-bound HTTP poll, so the two sides can run
+                # OCR.space is an I/O-bound HTTP call, so the two sides can run
                 # concurrently instead of front-then-back (~2x faster).
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     front_future = executor.submit(detect_side, 0, "front")
@@ -469,6 +488,7 @@ class ResidenceProofDetectView(APIView):
                     proof_files[0],
                     hint_type=(request.data.get("proof_type") or "").strip() or None,
                     side=detect_side,
+                    submitted_profile=submitted_profile,
                 )
         except Exception:
             import logging

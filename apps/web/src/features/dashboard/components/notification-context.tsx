@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- Provider + useNotifications() hook are an intentional pair in one module (React's context pattern). */
 import * as React from "react"
 import { apiRequest, websocketTicket, websocketUrl } from "@/lib/api"
 import type { Concern } from "@/features/dashboard/api"
@@ -88,7 +89,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }
 
   React.useEffect(() => {
-    void fetchAll()
+    // Defer the first fetch one macrotask so the mount render settles first;
+    // the setStates inside fetchAll are all async continuations.
+    window.setTimeout(() => void fetchAll(), 0)
     void registerNotificationWorker().catch(() => null)
     const interval = setInterval(() => {
       if (!socketLiveRef.current) void fetchAll()
@@ -118,7 +121,6 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   React.useEffect(() => {
     let socket: WebSocket | null = null
-    let connectTimer: number | undefined
     let reconnectTimer: number | undefined
     let closedByComponent = false
     let reconnectAttempts = 0
@@ -188,7 +190,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       }
     }
 
-    connectTimer = window.setTimeout(() => void connect(), 0)
+    const connectTimer = window.setTimeout(() => void connect(), 0)
     return () => {
       closedByComponent = true
       socketLiveRef.current = false

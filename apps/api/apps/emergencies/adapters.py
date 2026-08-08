@@ -1,13 +1,18 @@
-"""Adapter interfaces for emergency response integrations."""
+"""Integration adapters for emergency workflows.
 
-from typing import Protocol
+Emergency media (photos, chat attachments) is stored under a private storage
+backend and served through redacted previews; dispatching also depends on the
+shift workflow. This module is the single boundary for those integrations.
+"""
 
+from .media_services import (
+    ensure_chat_attachment_preview,
+    ensure_emergency_media_preview,
+    user_can_access_emergency_media,
+)
 
-class MapsAdapter(Protocol):
-    def estimate_route(self, *, origin: tuple[float, float], destination: tuple[float, float]) -> dict:
-        """Return routing metadata for responders."""
-
-
-class PushNotificationAdapter(Protocol):
-    def broadcast_emergency(self, *, topic: str, payload: dict) -> None:
-        """Push an emergency alert to subscribed devices."""
+__all__ = [
+    "ensure_chat_attachment_preview",
+    "ensure_emergency_media_preview",
+    "user_can_access_emergency_media",
+]

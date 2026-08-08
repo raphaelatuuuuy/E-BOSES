@@ -193,12 +193,6 @@ function BeatOverlays({ progress, dims }: { progress: MutableRefObject<number>; 
   const blueRef = useMemo(() => new THREE.Color(BLUE), [])
   const greenRef = useMemo(() => new THREE.Color(GREEN), [])
 
-  const setRef =
-    <T,>(list: MutableRefObject<Array<T | null>>, i: number) =>
-    (el: T | null) => {
-      list.current[i] = el
-    }
-
   /** Routed arcs from each responder to the incident, lifted off the surface. */
   const arcs = useMemo(() => {
     const target = new THREE.Vector3(ix, iy, top + u * 0.022)
@@ -356,7 +350,13 @@ function BeatOverlays({ progress, dims }: { progress: MutableRefObject<number>; 
 
       {/* Concentric range rings around the incident */}
       {[0.09, 0.14, 0.19].map((r, k) => (
-        <mesh key={`rr${r}`} ref={setRef(rangeRings, k)} position={[ix, iy, top + u * 0.003]}>
+        <mesh
+          key={`rr${r}`}
+          ref={(el: THREE.Mesh | null) => {
+            rangeRings.current[k] = el
+          }}
+          position={[ix, iy, top + u * 0.003]}
+        >
           <ringGeometry args={[u * (r - 0.0035), u * r, 72]} />
           <meshBasicMaterial color={BLUE} transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
         </mesh>
@@ -379,7 +379,13 @@ function BeatOverlays({ progress, dims }: { progress: MutableRefObject<number>; 
 
       {/* Beat 2: routed arcs, unit -> incident */}
       {arcs.map((arc, i) => (
-        <mesh key={`arc${i}`} ref={setRef(arcMeshes, i)} geometry={arc.geometry}>
+        <mesh
+          key={`arc${i}`}
+          ref={(el: THREE.Mesh | null) => {
+            arcMeshes.current[i] = el
+          }}
+          geometry={arc.geometry}
+        >
           <meshBasicMaterial
             color={BLUE}
             transparent
@@ -392,7 +398,13 @@ function BeatOverlays({ progress, dims }: { progress: MutableRefObject<number>; 
 
       {/* Beat 1: expanding pulse rings that lift as they spread */}
       {[0, 1, 2].map((k) => (
-        <mesh key={k} ref={setRef(pulses, k)} position={[ix, iy, top + u * 0.006]}>
+        <mesh
+          key={k}
+          ref={(el: THREE.Mesh | null) => {
+            pulses.current[k] = el
+          }}
+          position={[ix, iy, top + u * 0.006]}
+        >
           <ringGeometry args={[u * 0.072, u * 0.08, 56]} />
           <meshBasicMaterial color={RED} transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
         </mesh>
@@ -434,7 +446,12 @@ function BeatOverlays({ progress, dims }: { progress: MutableRefObject<number>; 
         const tex = respLabelTex[i]
         return (
           <group key={`r${x}${y}`} position={[lx, ly, top]}>
-            <mesh ref={setRef(responders, i)} position={[0, 0, u * 0.01]}>
+            <mesh
+              ref={(el: THREE.Mesh | null) => {
+                responders.current[i] = el
+              }}
+              position={[0, 0, u * 0.01]}
+            >
               <sphereGeometry args={[u * 0.013, 12, 10]} />
               <meshBasicMaterial color={BLUE} transparent opacity={0} depthWrite={false} />
             </mesh>
@@ -442,7 +459,9 @@ function BeatOverlays({ progress, dims }: { progress: MutableRefObject<number>; 
               // Each plate gets its own height so units never stack on one
               // another at any rotation angle.
               <sprite
-                ref={setRef(respLabels, i)}
+                ref={(el: THREE.Sprite | null) => {
+                  respLabels.current[i] = el
+                }}
                 position={[0, 0, u * (0.16 + i * 0.075)]}
                 scale={[labelH * 0.8 * tex.aspect, labelH * 0.8, 1]}
               >
@@ -455,7 +474,13 @@ function BeatOverlays({ progress, dims }: { progress: MutableRefObject<number>; 
 
       {/* Beat 3: green neighbor dots on the surface */}
       {NEIGHBORS.map(({ x, y }, i) => (
-        <mesh key={`n${x}${y}`} ref={setRef(neighbors, i)} position={[px(x), py(y), top + u * 0.01]}>
+        <mesh
+          key={`n${x}${y}`}
+          ref={(el: THREE.Mesh | null) => {
+            neighbors.current[i] = el
+          }}
+          position={[px(x), py(y), top + u * 0.01]}
+        >
           <sphereGeometry args={[u * 0.01, 12, 10]} />
           <meshBasicMaterial color={GREEN} transparent opacity={0} depthWrite={false} />
         </mesh>

@@ -12,3 +12,88 @@ def escalate_overdue_emergencies_task(minutes=None):
 
     escalations = escalate_overdue_assignments(minutes=minutes)
     return {"escalated": len(escalations), "minutes": minutes}
+
+
+@shared_task(time_limit=120, soft_time_limit=90)
+def periodic_housekeeping_task():
+    """Flush expired JWT tokens and prune old location pings + audit logs.
+
+    Runs daily via ``CELERY_BEAT_SCHEDULE``. Refresh tokens accumulate in the
+    blacklist tables, background GPS pings and audit-log rows accumulate
+    quickly; all three are disposable once expired/old.
+
+    Pruning old pings is safe: live-map and tracking lookups read the latest
+    ping per assignment and fall back to the responder's current coordinates
+    when no ping remains (see ``assignment_last_location``).
+    """
+    import logging
+    from datetime import timedelta
+
+    from django.conf import settings
+    from django.core.management import call_command
+    from django.utils import timezone
+
+    from apps.accounts.models import AuditLog
+    from apps.emergencies.models import EmergencyLocationPing
+
+    logger = logging.getLogger(__name__)
+
+    call_command("flushexpiredtokens")
+
+    # Clamp so a misconfigured 0/negative env value cannot wipe tracking data.
+    retention_days = max(1, int(getattr(settings, "LOCATION_PING_RETENTION_DAYS", 30)))
+    cutoff = timezone.now() - timedelta(days=retention_days)
+    pings_removed, _ = EmergencyLocationPing.objects.filter(created_at__lt=cutoff).delete()
+
+    audit_retention_days = max(30, int(getattr(settings, "AUDIT_LOG_RETENTION_DAYS", 180)))
+    audit_cutoff = timezone.now() - timedelta(days=audit_retention_days)
+    audit_removed, _ = AuditLog.objects.filter(created_at__lt=audit_cutoff).delete()
+
+    logger.info(
+        "Housekeeping: flushed expired tokens; removed %s location pings older than %s days "
+        "and %s audit logs older than %s days",
+        pings_removed,
+        retention_days,
+        audit_removed,
+        audit_retention_days,
+    )
+    return {
+        "expired_tokens_flushed": True,
+        "pings_removed": pings_removed,
+        "audit_logs_removed": audit_removed,
+    }
+
+
+@shared_task(time_limit=120, soft_time_limit=90)
+def refresh_map_service_pois_task():
+    """Refresh OSM service POIs from Overpass into the on-disk snapshot.
+
+    Runs daily via ``CELERY_BEAT_SCHEDULE``. Map requests never block on
+    Overpass (they serve the on-disk snapshot), so this background refresh is
+    how live OSM data reaches the snapshot file.
+    """
+    import logging
+
+    from django.core.cache import cache
+
+    from apps.geo_services import (
+        MAP_CONTEXT_CACHE_KEY,
+        OSM_POI_CACHE_KEY,
+        collect_service_pois,
+        fetch_osm_service_pois,
+    )
+
+    logger = logging.getLogger(__name__)
+    cache.delete(OSM_POI_CACHE_KEY)
+    cache.delete(MAP_CONTEXT_CACHE_KEY)
+
+    osm = fetch_osm_service_pois(force_refresh=True)
+    merged = collect_service_pois(force_refresh=False)
+    cache.delete(MAP_CONTEXT_CACHE_KEY)
+
+    logger.info(
+        "Refreshed map service POIs: %d OSM rows, %d merged markers",
+        len(osm),
+        len(merged),
+    )
+    return {"osm": len(osm), "merged": len(merged)}

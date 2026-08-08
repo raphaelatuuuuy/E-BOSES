@@ -225,7 +225,7 @@ def enhance_for_ocr_bgr(bgr: np.ndarray) -> tuple[np.ndarray, dict]:
         out = bgr
         h, w = out.shape[:2]
         min_edge = min(h, w)
-        # Prefer ~1000px short edge for PaddleOCR on small camera crops
+        # Prefer ~1000px short edge for OCR on small camera crops
         if min_edge < 1000:
             scale = 1000.0 / float(min_edge)
             # Cap so huge upscales of tiny blur don't explode memory

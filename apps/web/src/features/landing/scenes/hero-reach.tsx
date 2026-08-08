@@ -103,7 +103,7 @@ export function HeroReach() {
           {HEADLINE.map((word) => (
             <Fragment key={word}>
               <span className="inline-block overflow-hidden pb-[0.08em] align-bottom">
-                <span className={`hero-word inline-block ${word.startsWith("boses") ? "text-[#ff5003]" : ""}`}>
+                <span className={`hero-word inline-block ${word.startsWith("boses") ? "text-accent" : ""}`}>
                   {word}
                 </span>
               </span>{" "}
@@ -117,13 +117,13 @@ export function HeroReach() {
         <div className="hero-ctas mt-7 flex flex-wrap items-center justify-center gap-5">
           <Link
             to="/sign-up"
-            className="inline-flex min-h-12 items-center gap-3 bg-[#ff5003] px-7 font-semibold text-white transition-colors hover:bg-[#d94300] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
+            className="inline-flex min-h-12 items-center gap-3 bg-accent px-7 font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
           >
             Create an account to report <ArrowRight aria-hidden className="size-5" />
           </Link>
           <a
             href="#emergency-help"
-            className="inline-flex min-h-12 items-center font-semibold text-[#f5f2ec] underline decoration-[#ff8133] decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
+            className="inline-flex min-h-12 items-center font-semibold text-landing-cream underline decoration-primary decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
           >
             Need emergency help?
           </a>
@@ -149,7 +149,7 @@ export function HeroReach() {
         aria-hidden
       >
         <img
-          src="/contents/lefthand.png"
+          src="/contents/lefthand.webp"
           alt=""
           decoding="async"
           className="hero-hand-left pointer-events-none absolute"
@@ -160,7 +160,7 @@ export function HeroReach() {
           }}
         />
         <img
-          src="/contents/righthand.png"
+          src="/contents/righthand.webp"
           alt=""
           decoding="async"
           className="hero-hand-right pointer-events-none absolute"

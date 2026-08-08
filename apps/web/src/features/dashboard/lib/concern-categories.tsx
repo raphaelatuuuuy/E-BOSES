@@ -1,5 +1,8 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
 
+/* eslint-disable react-refresh/only-export-components -- provider + hooks must
+   live in one module; fast refresh degrades to a full reload. */
+
 import { apiRequest } from "@/lib/api"
 
 /**

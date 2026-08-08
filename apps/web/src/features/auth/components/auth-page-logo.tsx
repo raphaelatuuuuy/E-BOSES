@@ -17,8 +17,8 @@ export function AuthPageLogo({ className }: { className?: string }) {
       )}
       aria-label="Boses — back to landing page"
     >
-      <img src="/contents/logo.png" alt="E-Boses" className="h-9 w-auto md:h-10" />
-      <span className="font-heading text-xl font-bold text-[#ff8133] md:text-2xl">Boses</span>
+      <img src="/contents/logo.webp" alt="E-Boses" className="h-9 w-auto md:h-10" />
+      <span className="font-heading text-xl font-bold text-primary md:text-2xl">Boses</span>
     </Link>
   )
 }

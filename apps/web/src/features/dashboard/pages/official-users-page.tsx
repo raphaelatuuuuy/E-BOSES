@@ -40,16 +40,16 @@ function UserRow({
 }) {
   const isResponder = user.role === "first_responder"
   return (
-    <div className="rounded-2xl border border-[#dfe7f5] bg-white p-4">
+    <div className="rounded-2xl border border-line-tint bg-white p-4">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#eef3ff] text-[#145be7]">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-tint text-brand-blue">
             {isResponder ? <UserCheckIcon className="size-5" /> : <UsersIcon className="size-5" />}
           </span>
           <div className="min-w-0">
             <p className="truncate font-black text-brand-navy">{nameOf(user)}</p>
-            <p className="mt-1 truncate text-xs font-semibold text-[#68739c]">{user.email}</p>
-            <p className="mt-1 text-xs font-semibold text-[#68739c]">
+            <p className="mt-1 truncate text-xs font-semibold text-subtle-foreground">{user.email}</p>
+            <p className="mt-1 text-xs font-semibold text-subtle-foreground">
               {user.units && user.units.length > 0
                 ? `${user.units.map((u) => u.position).join(", ")} · ${isResponder ? `${user.responder_unit || "No unit"} · ${user.is_on_duty ? "On duty" : "Off duty"}` : user.phone_number || "-"}`
                 : isResponder
@@ -174,10 +174,10 @@ export default function OfficialUsersPage() {
         <p className="mt-2 text-[15px] font-medium leading-6 text-neutral-600">Manage resident verification and responder access. Live availability remains controlled by each responder’s Shift workflow.</p>
         <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="relative w-full max-w-xl">
-            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#68739c]" />
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name, email, or phone" className="h-11 w-full rounded-xl border border-[#cbd8ee] bg-[#f8fafc] pl-9 pr-3 text-sm font-semibold text-brand-navy outline-none focus:border-brand-orange" />
+            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle-foreground" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name, email, or phone" className="h-11 w-full rounded-xl border border-line-tint bg-canvas pl-9 pr-3 text-sm font-semibold text-brand-navy outline-none focus:border-brand-orange" />
           </div>
-          <Button type="button" className="h-11 shrink-0 rounded-xl bg-brand-orange px-4 font-black text-white hover:bg-[#e85c11]" onClick={() => setShowCreate((value) => !value)}>
+          <Button type="button" className="h-11 shrink-0 rounded-xl bg-brand-orange px-4 font-black text-white hover:bg-brand-orange-strong" onClick={() => setShowCreate((value) => !value)}>
             {showCreate ? <XIcon className="size-4" /> : <PlusIcon className="size-4" />}
             {showCreate ? "Close" : "Add responder"}
           </Button>
@@ -185,34 +185,34 @@ export default function OfficialUsersPage() {
       </section>
 
       {showCreate ? (
-        <section className="rounded-2xl border border-[#ffd1b8] bg-[#fff8f3] p-5">
+        <section className="rounded-2xl border border-brand-orange/20 bg-brand-orange-soft p-5">
           <div>
             <p className="text-sm font-black text-brand-navy">Create responder account</p>
-            <p className="mt-1 text-sm font-medium text-[#68739c]">The account is verified immediately and appears in routing only after the responder starts a shift and shares a valid location.</p>
+            <p className="mt-1 text-sm font-medium text-subtle-foreground">The account is verified immediately and appears in routing only after the responder starts a shift and shares a valid location.</p>
           </div>
           <form className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4" onSubmit={submitResponder}>
-            <label className="grid gap-1.5 text-xs font-black uppercase tracking-wide text-[#48547b]">
+            <label className="grid gap-1.5 text-xs font-black uppercase tracking-wide text-navy-muted">
               Email
-              <input required type="email" value={newResponder.email} onChange={(event) => setNewResponder((value) => ({ ...value, email: event.target.value }))} className="h-11 rounded-xl border border-[#cbd8ee] bg-white px-3 text-sm font-semibold normal-case tracking-normal text-brand-navy outline-none focus:border-brand-orange" placeholder="responder@eboses.test" />
+              <input required type="email" value={newResponder.email} onChange={(event) => setNewResponder((value) => ({ ...value, email: event.target.value }))} className="h-11 rounded-xl border border-line-tint bg-white px-3 text-sm font-semibold normal-case tracking-normal text-brand-navy outline-none focus:border-brand-orange" placeholder="responder@eboses.test" />
             </label>
-            <label className="grid gap-1.5 text-xs font-black uppercase tracking-wide text-[#48547b]">
+            <label className="grid gap-1.5 text-xs font-black uppercase tracking-wide text-navy-muted">
               Mobile number
-              <input required inputMode="tel" pattern="\+63[0-9]{10}" value={newResponder.phone_number} onChange={(event) => setNewResponder((value) => ({ ...value, phone_number: event.target.value }))} className="h-11 rounded-xl border border-[#cbd8ee] bg-white px-3 text-sm font-semibold normal-case tracking-normal text-brand-navy outline-none focus:border-brand-orange" placeholder="+639171234567" />
+              <input required inputMode="tel" pattern="\+63[0-9]{10}" value={newResponder.phone_number} onChange={(event) => setNewResponder((value) => ({ ...value, phone_number: event.target.value }))} className="h-11 rounded-xl border border-line-tint bg-white px-3 text-sm font-semibold normal-case tracking-normal text-brand-navy outline-none focus:border-brand-orange" placeholder="+639171234567" />
             </label>
-            <label className="grid gap-1.5 text-xs font-black uppercase tracking-wide text-[#48547b]">
+            <label className="grid gap-1.5 text-xs font-black uppercase tracking-wide text-navy-muted">
               Temporary password
-              <input required minLength={8} type="password" autoComplete="new-password" value={newResponder.password} onChange={(event) => setNewResponder((value) => ({ ...value, password: event.target.value }))} className="h-11 rounded-xl border border-[#cbd8ee] bg-white px-3 text-sm font-semibold normal-case tracking-normal text-brand-navy outline-none focus:border-brand-orange" placeholder="At least 8 characters" />
+              <input required minLength={8} type="password" autoComplete="new-password" value={newResponder.password} onChange={(event) => setNewResponder((value) => ({ ...value, password: event.target.value }))} className="h-11 rounded-xl border border-line-tint bg-white px-3 text-sm font-semibold normal-case tracking-normal text-brand-navy outline-none focus:border-brand-orange" placeholder="At least 8 characters" />
             </label>
-            <label className="grid gap-1.5 text-xs font-black uppercase tracking-wide text-[#48547b]">
+            <label className="grid gap-1.5 text-xs font-black uppercase tracking-wide text-navy-muted">
               Operational unit
-                <select value={newResponder.responder_unit} onChange={(event) => setNewResponder((value) => ({ ...value, responder_unit: event.target.value as NonNullable<AuthUser["responder_unit"]> }))} className="h-11 rounded-xl border border-[#cbd8ee] bg-white px-3 text-sm font-semibold normal-case tracking-normal text-brand-navy outline-none focus:border-brand-orange">
+                <select value={newResponder.responder_unit} onChange={(event) => setNewResponder((value) => ({ ...value, responder_unit: event.target.value as NonNullable<AuthUser["responder_unit"]> }))} className="h-11 rounded-xl border border-line-tint bg-white px-3 text-sm font-semibold normal-case tracking-normal text-brand-navy outline-none focus:border-brand-orange">
                 <option value="bhw">BHW · Medical</option>
                 <option value="tanod">Tanod · Safety</option>
                 <option value="bdrrmo">BDRRMO · Disaster</option>
               </select>
             </label>
             <div className="md:col-span-2 xl:col-span-4">
-              <Button disabled={creating} type="submit" className="h-11 rounded-xl bg-brand-navy px-5 font-black text-white hover:bg-[#0d217e]">
+              <Button disabled={creating} type="submit" className="h-11 rounded-xl bg-brand-navy px-5 font-black text-white hover:bg-brand-navy/80">
                 {creating ? "Creating…" : "Create responder"}
               </Button>
             </div>
@@ -222,10 +222,10 @@ export default function OfficialUsersPage() {
 
       {loading ? <div className="rounded-2xl border border-neutral-200 p-8 text-sm font-semibold text-neutral-500">Loading users…</div> : null}
       {!loading ? <div className="grid gap-5 xl:grid-cols-2">
-        <section className="space-y-3"><div className="flex items-center justify-between"><h2 className="text-sm font-black uppercase tracking-wide text-brand-navy">Residents <span className="text-[#68739c]">({residents.length})</span></h2></div>{residents.map((item) => <UserRow key={item.id} user={item} busy={busy === item.id} onResidentStatus={(status) => void run(item.id, () => updateResidentStatus(item.id, status))} onResponderUpdate={() => undefined} />)}{residents.length === 0 ? <p className="rounded-xl border border-dashed border-[#cbd8ee] p-6 text-sm text-[#68739c]">No residents match this search.</p> : null}</section>
-        <section className="space-y-3"><div className="flex items-center justify-between"><h2 className="text-sm font-black uppercase tracking-wide text-brand-navy">Responders <span className="text-[#68739c]">({responders.length})</span></h2></div>{responders.map((item) => <UserRow key={item.id} user={item} busy={busy === item.id} onResidentStatus={() => undefined} onResponderUpdate={(payload) => void run(item.id, () => updateResponder(item.id, payload))} />)}{responders.length === 0 ? <p className="rounded-xl border border-dashed border-[#cbd8ee] p-6 text-sm text-[#68739c]">No responders match this search.</p> : null}</section>
+        <section className="space-y-3"><div className="flex items-center justify-between"><h2 className="text-sm font-black uppercase tracking-wide text-brand-navy">Residents <span className="text-subtle-foreground">({residents.length})</span></h2></div>{residents.map((item) => <UserRow key={item.id} user={item} busy={busy === item.id} onResidentStatus={(status) => void run(item.id, () => updateResidentStatus(item.id, status))} onResponderUpdate={() => undefined} />)}{residents.length === 0 ? <p className="rounded-xl border border-dashed border-line-tint p-6 text-sm text-subtle-foreground">No residents match this search.</p> : null}</section>
+        <section className="space-y-3"><div className="flex items-center justify-between"><h2 className="text-sm font-black uppercase tracking-wide text-brand-navy">Responders <span className="text-subtle-foreground">({responders.length})</span></h2></div>{responders.map((item) => <UserRow key={item.id} user={item} busy={busy === item.id} onResidentStatus={() => undefined} onResponderUpdate={(payload) => void run(item.id, () => updateResponder(item.id, payload))} />)}{responders.length === 0 ? <p className="rounded-xl border border-dashed border-line-tint p-6 text-sm text-subtle-foreground">No responders match this search.</p> : null}</section>
       </div> : null}
-      <p className="text-xs font-semibold text-[#68739c]">{allUsers.length} resident and responder accounts shown. Responder availability is controlled by each responder’s Shift workflow.</p>
+      <p className="text-xs font-semibold text-subtle-foreground">{allUsers.length} resident and responder accounts shown. Responder availability is controlled by each responder’s Shift workflow.</p>
     </div>
   )
 }

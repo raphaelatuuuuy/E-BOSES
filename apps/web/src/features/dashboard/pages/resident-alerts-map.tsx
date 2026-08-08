@@ -52,11 +52,11 @@ import {
   type ResidentMapConcern,
   type ResidentMapEmergency,
 } from "@/features/dashboard/api"
+import { FeedPostCard } from "@/features/dashboard/components/feed-post-card"
 import {
-  FeedPostCard,
   concernBodyText,
   streetLabelFromAddress,
-} from "@/features/dashboard/components/feed-post-card"
+} from "@/features/dashboard/components/feed-post-text"
 import {
   EmergencyBanner,
   EmergencyDetailPanel,
@@ -534,8 +534,10 @@ export default function ResidentAlertsMapPage() {
   }
 
   useEffect(() => {
-    void load()
-    return () => {}
+    // load() sets loading synchronously, so defer the initial fetch a
+    // macrotask to let the mount render settle (resumes are event-driven).
+    const id = window.setTimeout(() => void load(), 0)
+    return () => window.clearTimeout(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -801,7 +803,7 @@ export default function ResidentAlertsMapPage() {
 
   if (loading && posts.length === 0 && emergencies.length === 0) {
     return (
-      <div className="relative h-full min-h-[60vh] w-full bg-[#f4f6f9]">
+      <div className="relative h-full min-h-[60vh] w-full bg-canvas">
         <Skeleton className="h-full w-full rounded-none" />
       </div>
     )
@@ -975,7 +977,7 @@ export default function ResidentAlertsMapPage() {
   return (
     <div
       className={cn(
-        "relative w-full overflow-hidden bg-[#f4f6f9]",
+        "relative w-full overflow-hidden bg-canvas",
         isDesktop ? "h-[calc(100svh-3.5rem)]" : "h-[calc(100svh-5rem)]",
       )}
     >

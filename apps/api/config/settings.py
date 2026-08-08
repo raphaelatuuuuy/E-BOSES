@@ -12,6 +12,7 @@ import sys
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import environ
+from django.core.exceptions import ImproperlyConfigured
 
 env = environ.Env()
 
@@ -20,12 +21,35 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Read .env file at the repo root
 environ.Env.read_env(BASE_DIR.parent.parent / ".env")
 
-ENVIRONMENT = env("DJANGO_ENV", default="local")
+# Environments are explicit: nothing counts as "local" just because a variable
+# is unset. Local development opts in with DJANGO_ENV=local; any other value
+# (or a missing value) gets production-safe, fail-closed behaviour below.
+ENVIRONMENT = env("DJANGO_ENV", default="production")
 IS_LOCAL_DEVELOPMENT = ENVIRONMENT == "local"
 
-SECRET_KEY = env("DJANGO_SECRET_KEY", default="local-development-only-secret-key")
+# Fail closed: never sign JWTs, refresh tokens, password-reset links or
+# WebSocket tickets with the published dev placeholder outside local dev.
+SECRET_KEY = env("DJANGO_SECRET_KEY", default="")
+if not SECRET_KEY:
+    if IS_LOCAL_DEVELOPMENT:
+        SECRET_KEY = "local-development-only-secret-key"
+    else:
+        raise ImproperlyConfigured(
+            "DJANGO_SECRET_KEY must be set (and safe to use) outside local development."
+        )
+
 DEBUG = env.bool("DEBUG", default=True)
-ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["*"])
+
+# ALLOWED_HOSTS: pinned everywhere but local development. A staging/production
+# deployment that forgets it fails at boot instead of accepting any Host.
+if IS_LOCAL_DEVELOPMENT:
+    ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["*"])
+else:
+    ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=[])
+    if not ALLOWED_HOSTS:
+        raise ImproperlyConfigured(
+            "ALLOWED_HOSTS must list the exact hostnames outside local development."
+        )
 
 # Application definition
 ENABLE_GIS = env.bool("ENABLE_GIS", default=False)
@@ -63,6 +87,7 @@ INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "django.middleware.gzip.GZipMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -116,6 +141,11 @@ else:
     DATABASES = {
         "default": env.db_url("DATABASE_URL", default=default_database_url),
     }
+    # Reuse the Postgres connection across requests: establishing a connection
+    # costs tens of milliseconds per request on this machine. CONN_HEALTH_CHECKS
+    # quietly discards connections the server dropped while idle.
+    DATABASES["default"]["CONN_MAX_AGE"] = 60
+    DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
     if ENABLE_GIS:
         DATABASES["default"]["ENGINE"] = "django.contrib.gis.db.backends.postgis"
 
@@ -150,6 +180,48 @@ def _celery_redis_url(value):
 
 CELERY_BROKER_URL = _celery_redis_url(env("CELERY_BROKER_URL", default=REDIS_URL))
 CELERY_RESULT_BACKEND = _celery_redis_url(env("CELERY_RESULT_BACKEND", default=REDIS_URL))
+
+# Django cache: shared Redis instead of the per-process LocMemCache so the API
+# server, Celery worker and beat all see the same keys. Beat tasks (POI
+# refresh, housekeeping) clear keys in the worker process and the API server
+# picks the invalidation up immediately instead of waiting out a process-local
+# TTL. CACHE_REDIS_URL defaults to the same private Redis as Channels/Celery;
+# the built-in RedisCache backend needs no extra dependency (redis-py ships
+# with celery[redis]). Tests stay on LocMemCache so the suite never touches
+# the hosted Redis and remains hermetic.
+#
+# Note: the URL is used as-is. _celery_redis_url() is NOT reused here because it
+# appends ssl_cert_reqs=CERT_REQUIRED, which redis-py's own from_url() parser
+# rejects (it wants lowercase none/optional/required). redis-py 5.x defaults to
+# verifying certs for rediss://, so the raw URL is correct and safe.
+if IS_TEST_RUN:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "eboses-tests",
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            # Prefix-scoped clear(): the stock RedisCacheClient.clear() calls
+            # FLUSHDB, which would wipe the Celery broker and Channels data
+            # sharing the same Upstash DB (Upstash has no separate DBs).
+            "BACKEND": "config.cache_backend.PrefixScopedRedisCache",
+            "LOCATION": env("CACHE_REDIS_URL", default=REDIS_URL),
+            "KEY_PREFIX": "eboses",
+            "TIMEOUT": 300,
+            # Django's RedisCacheClient forwards OPTIONS straight into
+            # redis-py's ConnectionPool.from_url(), so connection-level kwargs
+            # live at the top level here (no CONNECTION_POOL_KWARGS nesting).
+            "OPTIONS": {
+                # Fail fast when the hosted Redis is unreachable instead of
+                # hanging every request for the OS connect timeout.
+                "socket_connect_timeout": 3,
+                "socket_timeout": 5,
+            },
+        }
+    }
 CELERY_TASK_DEFAULT_QUEUE = env("CELERY_TASK_DEFAULT_QUEUE", default="eboses")
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
@@ -158,6 +230,8 @@ CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_ALWAYS_EAGER = env.bool("CELERY_TASK_ALWAYS_EAGER", default=False)
 CELERY_TASK_TIME_LIMIT = env.int("CELERY_TASK_TIME_LIMIT", default=180)
 CELERY_TASK_SOFT_TIME_LIMIT = env.int("CELERY_TASK_SOFT_TIME_LIMIT", default=120)
+# Task result keys expire after 6 hours instead of the Celery default of 24h.
+CELERY_RESULT_EXPIRES = env.int("CELERY_RESULT_EXPIRES", default=21600)
 CELERY_BEAT_SCHEDULE = {
     "ocr-health-canary": {
         "task": "apps.accounts.ocr_tasks.ocr_health_canary_task",
@@ -176,7 +250,28 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 15.0,
         "options": {"queue": "eboses"},
     },
+    # Once a day, refresh OSM service POIs so the map's Services layer stays
+    # current without ever blocking a request on the public Overpass mirrors.
+    "refresh-map-service-pois": {
+        "task": "apps.emergencies.tasks.refresh_map_service_pois_task",
+        "schedule": 24 * 60 * 60.0,
+        "options": {"queue": "eboses"},
+    },
+    # Daily maintenance: flush expired refresh tokens and prune old pings.
+    "periodic-housekeeping": {
+        "task": "apps.emergencies.tasks.periodic_housekeeping_task",
+        "schedule": 24 * 60 * 60.0,
+        "options": {"queue": "eboses"},
+    },
 }
+
+# Password hashing: Argon2id first (modern, fast to verify, memory-hard).
+# Existing PBKDF2 hashes upgrade lazily on the user's next successful login.
+PASSWORD_HASHERS = [
+    "django.contrib.auth.hashers.Argon2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher",
+]
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
@@ -240,6 +335,13 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
 }
+
+# Background GPS pings older than this many days are pruned by the daily
+# housekeeping beat task (apps.emergencies.tasks.periodic_housekeeping_task).
+LOCATION_PING_RETENTION_DAYS = env.int("LOCATION_PING_RETENTION_DAYS", default=30)
+
+# Audit log entries older than this many days are pruned by the same task.
+AUDIT_LOG_RETENTION_DAYS = env.int("AUDIT_LOG_RETENTION_DAYS", default=180)
 
 # CORS
 frontend_url = env("FRONTEND_URL", default="http://localhost:5173") if IS_LOCAL_DEVELOPMENT else env("FRONTEND_URL")
@@ -389,6 +491,11 @@ OUTBOUND_SMS_DRIVER = env(
     "OUTBOUND_SMS_DRIVER",
     default="console" if (IS_LOCAL_DEVELOPMENT or IS_TEST_RUN) else "disabled",
 )
+if IS_TEST_RUN:
+    # A `.env` pointed at the barangay's live gateway must never dial out from
+    # a test run. The console driver still records the OutboundSmsMessage row
+    # tests assert, it just never touches the network.
+    OUTBOUND_SMS_DRIVER = "console"
 OUTBOUND_SMS_URL = env("OUTBOUND_SMS_URL", default="")
 # GET gateways take {to} and {body} in the URL itself; POST gateways take
 # OUTBOUND_SMS_PAYLOAD_TEMPLATE as the JSON body.
@@ -450,19 +557,17 @@ ROBOFLOW_TIMEOUT_SECONDS = env.int("ROBOFLOW_TIMEOUT_SECONDS", default=60)
 EBOSES_PRIVACY_BLUR_STRENGTH = env.int("EBOSES_PRIVACY_BLUR_STRENGTH", default=31)
 EBOSES_PRIVACY_MASK_PADDING = env.float("EBOSES_PRIVACY_MASK_PADDING", default=0.12)
 
-# PaddleOCR
-PADDLEOCR_TOKEN = env("PADDLEOCR_TOKEN", default="")
-PADDLEOCR_JOB_URL = env("PADDLEOCR_JOB_URL", default="https://paddleocr.aistudio-app.com/api/v2/ocr/jobs")
-PADDLEOCR_MODEL = env("PADDLEOCR_MODEL", default="PP-OCRv6")
-PADDLEOCR_POLL_INTERVAL_SECONDS = env.float("PADDLEOCR_POLL_INTERVAL_SECONDS", default=2.0)
-PADDLEOCR_MAX_POLLS = env.int("PADDLEOCR_MAX_POLLS", default=30)
-PADDLEOCR_CONNECT_TIMEOUT = env.int("PADDLEOCR_CONNECT_TIMEOUT", default=10)
-PADDLEOCR_READ_TIMEOUT = env.int("PADDLEOCR_READ_TIMEOUT", default=30)
-PADDLEOCR_MAX_RETRIES = env.int("PADDLEOCR_MAX_RETRIES", default=3)
+# OCR.space
+OCRSPACE_API_KEY = env("OCRSPACE_API_KEY", default="")
+OCRSPACE_URL = env("OCRSPACE_URL", default="https://api.ocr.space/parse/image")
+OCRSPACE_ENGINE = env.int("OCRSPACE_ENGINE", default=2)
+OCRSPACE_LANGUAGE = env("OCRSPACE_LANGUAGE", default="auto")
+OCRSPACE_OVERLAY = env.bool("OCRSPACE_OVERLAY", default=True)
+OCRSPACE_CONNECT_TIMEOUT = env.int("OCRSPACE_CONNECT_TIMEOUT", default=10)
+OCRSPACE_READ_TIMEOUT = env.int("OCRSPACE_READ_TIMEOUT", default=60)
+OCRSPACE_MAX_RETRIES = env.int("OCRSPACE_MAX_RETRIES", default=3)
 OSM_ROUTE_URL = env("OSM_ROUTE_URL", default="https://router.project-osrm.org/route/v1/driving")
 OSM_ROUTE_TIMEOUT_SECONDS = env.int("OSM_ROUTE_TIMEOUT_SECONDS", default=4)
 
 if not IS_LOCAL_DEVELOPMENT and DEBUG:
-    from django.core.exceptions import ImproperlyConfigured
-
     raise ImproperlyConfigured("DEBUG must be false outside local development.")

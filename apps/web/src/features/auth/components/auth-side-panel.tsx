@@ -5,12 +5,18 @@ import { useAuthPanelRotation } from "@/features/auth/hooks/use-auth-panel-rotat
 export function AuthSidePanel() {
   const { slide, total, current, next } = useAuthPanelRotation()
   const [animate, setAnimate] = useState(true)
+  const [prevCurrent, setPrevCurrent] = useState(current)
 
-  useEffect(() => {
-    // Reset animation trigger — just a simple crossfade
+  // Restart the crossfade when the carousel advances: reset the animation
+  // during render (React's "adjusting state when a prop changes" pattern)
+  // instead of a synchronous setState inside an effect.
+  if (current !== prevCurrent) {
+    setPrevCurrent(current)
     setAnimate(false)
-    requestAnimationFrame(() => setAnimate(true))
-  }, [current])
+  }
+  useEffect(() => {
+    if (!animate) requestAnimationFrame(() => setAnimate(true))
+  }, [animate])
 
   return (
     <section className="relative hidden flex-col overflow-hidden lg:flex lg:h-full lg:min-h-screen">
@@ -20,8 +26,8 @@ export function AuthSidePanel() {
         className="absolute left-0 top-0 z-10 flex items-center gap-2 px-8 py-6 md:px-10"
         aria-label="Boses — back to landing page"
       >
-        <img src="/contents/logo.png" alt="E-Boses" className="h-9 w-auto md:h-10" />
-        <span className="font-heading text-xl font-bold text-[#ff8133] md:text-2xl">Boses</span>
+        <img src="/contents/logo.webp" alt="E-Boses" className="h-9 w-auto md:h-10" />
+        <span className="font-heading text-xl font-bold text-primary md:text-2xl">Boses</span>
       </Link>
 
       {/* Image area */}
@@ -60,7 +66,7 @@ export function AuthSidePanel() {
               onClick={next}
               className={`h-1.5 rounded-full transition-all duration-500 ${
                 i === current
-                  ? "w-8 bg-[#ff8133]"
+                  ? "w-8 bg-primary"
                   : "w-1.5 bg-muted-foreground/30 hover:bg-muted-foreground/50"
               }`}
               aria-label={`Slide ${i + 1}`}

@@ -32,7 +32,7 @@ type ReportCategory = {
 }
 
 /** E-Boses / barangay taxonomy — same multi-step shape as Nextdoor samples */
-export const REPORT_CATEGORIES: ReportCategory[] = [
+const REPORT_CATEGORIES: ReportCategory[] = [
   {
     id: "spam",
     title: "Spam or commercial content",
@@ -225,23 +225,25 @@ export function ReportPostDialog({
   const [subReasonId, setSubReasonId] = useState<string | null>(null)
   const [note, setNote] = useState("")
   const [submitting, setSubmitting] = useState(false)
-  const [mounted, setMounted] = useState(false)
+  const [mounted] = useState(true)
 
   const category = REPORT_CATEGORIES.find((c) => c.id === categoryId) ?? null
   const subReason = category?.children.find((c) => c.id === subReasonId) ?? null
 
-  useEffect(() => {
-    setMounted(true)
-  }, [])
-
-  useEffect(() => {
-    if (!open) return
-    setStep("category")
-    setCategoryId(null)
-    setSubReasonId(null)
-    setNote("")
-    setSubmitting(false)
-  }, [open, concernId])
+  // Reset the form whenever the dialog (re)opens or targets a new concern —
+  // render-adjust instead of a sync setState effect.
+  const dialogKey = open ? (concernId ?? "open") : "closed"
+  const [prevDialogKey, setPrevDialogKey] = useState(dialogKey)
+  if (prevDialogKey !== dialogKey) {
+    setPrevDialogKey(dialogKey)
+    if (open) {
+      setStep("category")
+      setCategoryId(null)
+      setSubReasonId(null)
+      setNote("")
+      setSubmitting(false)
+    }
+  }
 
   useEffect(() => {
     if (!open) return
@@ -509,11 +511,16 @@ export function CommentMoreMenu({
   const menuRef = useRef<HTMLDivElement>(null)
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
 
+  // Clear the measured position the moment the menu closes — render-adjust
+  // instead of a sync setState at the top of the positioning effect below.
+  const [prevMenuOpen, setPrevMenuOpen] = useState(open)
+  if (prevMenuOpen !== open) {
+    setPrevMenuOpen(open)
+    if (!open) setMenuPos(null)
+  }
+
   useEffect(() => {
-    if (!open) {
-      setMenuPos(null)
-      return
-    }
+    if (!open) return
     function place() {
       const btn = rootRef.current
       if (!btn) return
@@ -532,10 +539,11 @@ export function CommentMoreMenu({
           : below
       setMenuPos({ top, left })
     }
-    place()
+    const raf = window.requestAnimationFrame(place)
     window.addEventListener("resize", place)
     window.addEventListener("scroll", place, true)
     return () => {
+      cancelAnimationFrame(raf)
       window.removeEventListener("resize", place)
       window.removeEventListener("scroll", place, true)
     }
@@ -634,11 +642,16 @@ export function PostMoreMenu({
   const menuRef = useRef<HTMLDivElement>(null)
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
 
+  // Clear the measured position the moment the menu closes — render-adjust
+  // instead of a sync setState at the top of the positioning effect below.
+  const [prevMenuOpen, setPrevMenuOpen] = useState(open)
+  if (prevMenuOpen !== open) {
+    setPrevMenuOpen(open)
+    if (!open) setMenuPos(null)
+  }
+
   useEffect(() => {
-    if (!open) {
-      setMenuPos(null)
-      return
-    }
+    if (!open) return
     function place() {
       const btn = rootRef.current
       if (!btn) return
@@ -650,11 +663,12 @@ export function PostMoreMenu({
       )
       setMenuPos({ top: r.bottom + 4, left })
     }
-    place()
+    const raf = window.requestAnimationFrame(place)
     window.addEventListener("resize", place)
     // Capture scroll on any ancestor so menu tracks / closes cleanly
     window.addEventListener("scroll", place, true)
     return () => {
+      cancelAnimationFrame(raf)
       window.removeEventListener("resize", place)
       window.removeEventListener("scroll", place, true)
     }

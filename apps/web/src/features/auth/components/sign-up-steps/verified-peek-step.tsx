@@ -66,10 +66,18 @@ export function NeighborhoodPeekCards({
     label: "…",
   })
 
-  // Geocode street → pin on the actual road
+  // Geocode street → pin on the actual road. The pin is cleared (loading) the
+  // moment the street key changes — render-adjust instead of a sync setState
+  // at the top of the effect; the geocode result is an async continuation.
+  const geocodeKey = `${street}|${houseNumber ?? ""}`
+  const [prevGeocodeKey, setPrevGeocodeKey] = React.useState(geocodeKey)
+  if (prevGeocodeKey !== geocodeKey) {
+    setPrevGeocodeKey(geocodeKey)
+    setCoords(null)
+  }
+
   React.useEffect(() => {
     let cancelled = false
-    setCoords(null)
     void (async () => {
       const hit = await geocodeMarikinaStreet(street, houseNumber)
       if (cancelled) return

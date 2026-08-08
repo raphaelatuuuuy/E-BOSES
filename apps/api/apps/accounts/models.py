@@ -565,7 +565,7 @@ class OCRServiceStatus(models.Model):
         OPEN = "open", "Open"
         HALF_OPEN = "half_open", "Half-open"
 
-    provider = models.SlugField(max_length=64, unique=True, default="paddleocr")
+    provider = models.SlugField(max_length=64, unique=True, default="ocrspace")
     status = models.CharField(max_length=24, choices=Status.choices, default=Status.NOT_CONFIGURED)
     circuit_state = models.CharField(max_length=16, choices=CircuitState.choices, default=CircuitState.CLOSED)
     consecutive_failures = models.PositiveSmallIntegerField(default=0)
@@ -882,6 +882,7 @@ class OCRTestRun(models.Model):
     )
     extracted_fields = models.JSONField(default=dict, blank=True)
     rule_results = models.JSONField(default=list, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
     error_code = models.CharField(max_length=80, blank=True)
     error_message = models.CharField(max_length=255, blank=True)
     queued_at = models.DateTimeField(default=timezone.now)
@@ -915,3 +916,13 @@ class AuditLog(models.Model):
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["created_at"], name="audit_log_created_at"),
+            models.Index(fields=["actor", "created_at"], name="audit_log_actor_created"),
+        ]
+
+    def __str__(self):
+        return f"audit {self.action} by {self.actor_id or 'system'} at {self.created_at:%Y-%m-%d %H:%M}"

@@ -26,7 +26,7 @@ const otpSlotClass =
   "h-14 min-w-0 flex-1 rounded-xl border-2 border-input bg-white text-lg font-medium text-neutral-800 shadow-none data-[active=true]:border-[3px] data-[active=true]:border-primary"
 
 const primaryBtn =
-  "flex h-12 w-full items-center justify-center rounded-full bg-[#ff8133] text-[15px] font-semibold text-white transition-colors hover:bg-[#e6732e] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:hover:bg-neutral-200 disabled:opacity-100"
+  "flex h-12 w-full items-center justify-center rounded-full bg-primary text-[15px] font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:hover:bg-neutral-200 disabled:opacity-100"
 
 export default function AccountReverifyEmailPage() {
   usePageTitle("Verify email")
@@ -129,7 +129,7 @@ export default function AccountReverifyEmailPage() {
         <div className="mt-3 w-full pb-5">
           <div className="h-1 w-full overflow-hidden rounded-full bg-neutral-100">
             <div
-              className="h-full rounded-full bg-[#ff8133] transition-[width] duration-300"
+              className="h-full rounded-full bg-primary transition-[width] duration-300"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -137,7 +137,7 @@ export default function AccountReverifyEmailPage() {
 
         {step === "enter" ? (
           <>
-            <h1 className="text-[1.5rem] font-bold tracking-tight text-[#020c4e]">
+            <h1 className="text-[1.5rem] font-bold tracking-tight text-foreground">
               Update your email
             </h1>
             <p className="mt-2 text-[15px] text-neutral-500">
@@ -177,7 +177,7 @@ export default function AccountReverifyEmailPage() {
           </>
         ) : (
           <>
-            <h1 className="text-[1.5rem] font-bold tracking-tight text-[#020c4e]">
+            <h1 className="text-[1.5rem] font-bold tracking-tight text-foreground">
               Enter the code we sent
             </h1>
             <p className="mt-2 text-[15px] text-neutral-500">
@@ -225,7 +225,7 @@ export default function AccountReverifyEmailPage() {
               type="button"
               disabled={sending || cooldown > 0}
               onClick={() => void sendOtp()}
-              className="mt-3 flex h-11 w-full items-center justify-center text-[14px] font-semibold text-[#020c4e] disabled:opacity-50"
+              className="mt-3 flex h-11 w-full items-center justify-center text-[14px] font-semibold text-foreground disabled:opacity-50"
             >
               {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}
             </button>

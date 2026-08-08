@@ -32,7 +32,6 @@ from .media_forensics import (
     png_metadata_forensics,
     visual_tamper_forensics,
 )
-from .ocr import ocr_bytes, validate_barangay_id_ocr
 from apps.media_utils import (
     sha256_file,
     phash_file,

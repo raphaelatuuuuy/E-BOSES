@@ -81,7 +81,7 @@ export function SignUpShell({
               >
                 <div className="h-[5px] w-full overflow-hidden rounded-full bg-orange-100 md:h-[7px]">
                   <div
-                    className="h-full rounded-full bg-[#ff8133] transition-all duration-300 ease-out"
+                    className="h-full rounded-full bg-primary transition-all duration-300 ease-out"
                     style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
                   />
                 </div>
@@ -99,8 +99,8 @@ export function SignUpShell({
                 className="flex items-center gap-2"
                 aria-label="Boses — back to landing page"
               >
-                <img src="/contents/logo.png" alt="E-Boses" className="h-9 w-auto md:h-10" />
-                <span className="font-heading text-xl font-semibold text-[#ff8133] md:text-2xl">
+                <img src="/contents/logo.webp" alt="E-Boses" className="h-9 w-auto md:h-10" />
+                <span className="font-heading text-xl font-semibold text-primary md:text-2xl">
                   Boses
                 </span>
               </Link>
@@ -116,7 +116,7 @@ export function SignUpShell({
               <div className={cn("mx-auto w-full px-5 pb-3", contentMax, "md:px-0")}>
                 <div className="h-[5px] w-full overflow-hidden rounded-full bg-orange-100">
                   <div
-                    className="h-full rounded-full bg-[#ff8133] transition-all duration-300 ease-out"
+                    className="h-full rounded-full bg-primary transition-all duration-300 ease-out"
                     style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
                   />
                 </div>
@@ -167,7 +167,7 @@ export function StepContinueButton({
         type="button"
         disabled={disabled || loading}
         className={cn(
-          "inline-flex h-12 items-center justify-center gap-2 rounded-full bg-[#ff8133] px-8 text-base font-semibold text-white shadow-none transition-[transform,colors,filter] duration-150 ease-out hover:bg-[#e6732e] active:scale-[0.96] active:brightness-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100",
+          "inline-flex h-12 items-center justify-center gap-2 rounded-full bg-primary px-8 text-base font-semibold text-white shadow-none transition-[transform,colors,filter] duration-150 ease-out hover:bg-brand-orange-strong active:scale-[0.96] active:brightness-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100",
           fullWidth && "w-full",
           className,
         )}
@@ -187,7 +187,7 @@ export function StepTitle({ children, className }: { children: React.ReactNode; 
   return (
     <h1
       className={cn(
-        "text-[1.5rem] font-medium leading-tight tracking-tight text-[#0f172a] md:text-[1.75rem]",
+        "text-[1.5rem] font-medium leading-tight tracking-tight text-foreground md:text-[1.75rem]",
         className,
       )}
     >

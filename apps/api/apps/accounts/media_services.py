@@ -193,11 +193,12 @@ def ensure_residence_proof_preview(proof):
     if proof.blurred_preview_file:
         proof.blurred_preview_file.delete(save=False)
     preview_name = f"preview-{proof.pk}.jpg"
-    proof.blurred_preview_file.save(
-        preview_name,
-        ContentFile(build_sanitized_preview_bytes(proof.file, proof.mime_type, blur=True)),
-        save=True,
-    )
+    with proof.file.open("rb") as source:
+        proof.blurred_preview_file.save(
+            preview_name,
+            ContentFile(build_sanitized_preview_bytes(source, proof.mime_type, blur=True)),
+            save=True,
+        )
     return proof.blurred_preview_file
 
 

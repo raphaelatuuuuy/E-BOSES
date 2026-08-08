@@ -37,7 +37,7 @@
       "short_name": "Alerts",
       "description": "View barangay alerts and incidents.",
       "url": "/dashboard/alerts-map",
-      "icons": [{ "src": "/contents/alerts.png", "sizes": "192x192", "type": "image/png" }]
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     },
     {
       "name": "Notifications",

@@ -12,12 +12,10 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { CollapsibleSection } from "@/features/dashboard/components/concerns/collapsible-section"
 import type { Concern } from "@/features/dashboard/api"
-import { concernBodyText } from "@/features/dashboard/components/feed-post-card"
+import { concernBodyText } from "@/features/dashboard/components/feed-post-text"
 import { ReportChatPanel } from "@/features/dashboard/components/report-chat-panel"
-import {
-  AuthenticatedMediaImage,
-  openAuthenticatedMedia,
-} from "@/features/dashboard/components/authenticated-media"
+import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
+import { openAuthenticatedMedia } from "@/features/dashboard/lib/authenticated-media"
 import {
   ReportLocationMap,
 } from "@/features/dashboard/components/report-location-map"

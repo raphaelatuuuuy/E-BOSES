@@ -117,9 +117,9 @@ export function HomeRail({
 
       <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
         <div className="border-b border-neutral-200 p-3">
-          <div className="aspect-[16/10] w-full overflow-hidden rounded-lg bg-[#e8f0fa]">
+          <div className="aspect-[16/10] w-full overflow-hidden rounded-lg bg-tint">
             <img
-              src="/contents/marikina-area-2.png"
+              src="/contents/marikina-area-2.webp"
               alt="Marikina City landmark"
               className="h-full w-full object-cover"
             />

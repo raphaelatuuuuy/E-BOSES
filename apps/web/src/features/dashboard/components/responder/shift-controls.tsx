@@ -56,10 +56,13 @@ function EndShiftButton({
 
   // A shift that ends while the confirm is armed (from another tab, or the
   // duty mismatch resolving) must not leave the button sitting in its alarm
-  // state waiting for a press that would now do nothing.
-  useEffect(() => {
+  // state waiting for a press that would now do nothing. Render-adjust keeps
+  // the disarm out of an effect body.
+  const [prevBusy, setPrevBusy] = useState<boolean | undefined>(undefined)
+  if (prevBusy !== busy) {
+    setPrevBusy(busy)
     if (busy) setArmed(false)
-  }, [busy])
+  }
 
   return (
     <button

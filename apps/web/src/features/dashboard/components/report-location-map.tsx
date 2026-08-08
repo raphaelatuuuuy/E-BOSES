@@ -29,7 +29,7 @@ function looksLikeCoordOrPlaceholder(value?: string | null) {
   return false
 }
 
-export function isUsableReportAddress(value?: string | null) {
+function isUsableReportAddress(value?: string | null) {
   return !looksLikeCoordOrPlaceholder(value)
 }
 
@@ -112,8 +112,8 @@ async function reverseGeocodeStreet(lat: number, lng: number): Promise<string> {
   }
 
   // 2) Nominatim road / house on this exact point
-  let nominatimRoad = ""
-  let house = ""
+  let nominatimRoad: string | undefined
+  let house: string | undefined
   try {
     const data = await reverseGeocode(lat, lng)
     if (data) {
@@ -149,7 +149,7 @@ async function reverseGeocodeStreet(lat: number, lng: number): Promise<string> {
 }
 
 /** Street line from DB address (first segment before comma). */
-export function streetFromStoredAddress(address?: string | null) {
+function streetFromStoredAddress(address?: string | null) {
   if (!isUsableReportAddress(address)) return null
   return address!.split(",")[0]?.trim() || address!.trim()
 }
@@ -158,7 +158,7 @@ export function streetFromStoredAddress(address?: string | null) {
  * Prefer the street saved on the concern row at submit time.
  * External reverse-geocode runs only for legacy rows that stored Lat/Lng or Pending.
  */
-export function useReportStreetAddress(opts: {
+function useReportStreetAddress(opts: {
   address?: string | null
   barangay?: string | null
   latitude?: number | string | null
@@ -174,19 +174,21 @@ export function useReportStreetAddress(opts: {
     return hasCoords ? "Finding street…" : "No address on file"
   })
 
+  // Adjust state when the address/coordinates change (render-adjust pattern
+  // instead of a sync setState inside an effect): the async geocode resolution
+  // below is the only code that runs in an effect.
+  const [prevInput, setPrevInput] = useState({ fromDb, hasCoords })
+  if (prevInput.fromDb !== fromDb || prevInput.hasCoords !== hasCoords) {
+    setPrevInput({ fromDb, hasCoords })
+    if (fromDb) setStreet(fromDb)
+    else if (hasCoords) setStreet("Finding street…")
+    else setStreet("No address on file")
+  }
+
   useEffect(() => {
     // Source of truth: address column saved with the report (no network).
-    if (fromDb) {
-      setStreet(fromDb)
-      return
-    }
-    // Legacy / bad data only — backfill label from pin once.
-    if (!hasCoords) {
-      setStreet("No address on file")
-      return
-    }
+    if (fromDb || !hasCoords) return
     let cancelled = false
-    setStreet("Finding street…")
     void reverseGeocodeStreet(lat, lng).then((line) => {
       if (!cancelled) setStreet(line)
     })
@@ -333,7 +335,7 @@ export function ReportLocationMap({
       }
       mapRef.current = null
     }
-  }, [lat, lng, valid])
+  }, [lat, lng, valid, streetLabel])
 
   if (!valid) {
     return (
@@ -352,7 +354,7 @@ export function ReportLocationMap({
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-xl border border-neutral-200 bg-[#e8eef5]",
+        "relative overflow-hidden rounded-xl border border-neutral-200 bg-tint",
         heightClassName,
         className,
       )}
@@ -414,7 +416,6 @@ export function ReportLocationAddress({
     </div>
   )
 }
-
 
 
 

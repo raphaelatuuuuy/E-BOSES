@@ -8,22 +8,22 @@ type Slide = {
 
 const SLIDES: Slide[] = [
   {
-    image: "/contents/feature-1.png",
+    image: "/contents/feature-1.webp",
     headline: "Report issues in seconds",
     description: "Snap a photo, pin the location, and let your barangay know.",
   },
   {
-    image: "/contents/feature-3.png",
+    image: "/contents/feature-3.webp",
     headline: "Track resolution progress",
     description: "Follow your report from submission to resolution with real-time updates.",
   },
   {
-    image: "/contents/feature-2.png",
+    image: "/contents/feature-2.webp",
     headline: "Emergency alerts, instantly",
     description: "Send GPS-tagged alerts to first responders when you need help fast.",
   },
   {
-    image: "/contents/feature-4.png",
+    image: "/contents/feature-4.webp",
     headline: "Stay connected with your community",
     description: "Get notified about barangay events, announcements, and nearby concerns.",
   },

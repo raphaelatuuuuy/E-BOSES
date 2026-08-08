@@ -5,17 +5,15 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
-// Token discipline for the official dashboard.
+// Token discipline for the app.
 //
 // The alert-map panel had drifted onto a private palette of hex literals
-// (#dfe7f5, #2447b3, #43507f, #68739c) that existed nowhere in
-// packages/ui/src/styles/globals.css, which is why it read as a different
-// application. Nothing prevented that, so this does.
+// that existed nowhere in packages/ui/src/styles/globals.css, which is why it
+// read as a different application. Nothing prevented that, so this does.
 //
-// There are ~378 pre-existing violations across features/dashboard, so the rule
-// is an ERROR only on the surfaces already migrated and a WARNING elsewhere:
-// erroring everywhere would break `npm run lint` today and teach everyone to
-// ignore it. As each later phase migrates a module, add it to MIGRATED.
+// Every module in src has now been migrated to design tokens — the rule is an
+// ERROR across all of src, so any future hex literal in a className fails the
+// build until either a token is used or a new token is added to globals.css.
 const HEX_IN_CLASSNAME = [
   {
     // Matches hex colours inside className strings, e.g. "text-[#2447b3]".
@@ -31,21 +29,7 @@ const HEX_IN_CLASSNAME = [
   },
 ]
 
-const MIGRATED = [
-  'src/features/dashboard/components/record/**/*.{ts,tsx}',
-  'src/features/dashboard/components/alerts-map/**/*.{ts,tsx}',
-  // Phase 1 (operations). Each of these was verified to contain zero hex
-  // literals inside className before being promoted from warn to error.
-  'src/features/dashboard/components/emergencies/**/*.{ts,tsx}',
-  'src/features/dashboard/components/overview/**/*.{ts,tsx}',
-  'src/features/dashboard/components/charts/**/*.{ts,tsx}',
-  'src/features/dashboard/components/staff/**/*.{ts,tsx}',
-  'src/features/dashboard/components/workspace/**/*.{ts,tsx}',
-  'src/features/dashboard/lib/route-line.ts',
-  'src/features/dashboard/pages/emergencies.tsx',
-  'src/features/dashboard/pages/official-overview.tsx',
-  'src/features/dashboard/pages/alerts-map.tsx',
-]
+const MIGRATED = ['src/**/*.{ts,tsx}']
 
 export default defineConfig([
 
@@ -83,10 +67,5 @@ export default defineConfig([
   {
     files: MIGRATED,
     rules: { 'no-restricted-syntax': ['error', ...HEX_IN_CLASSNAME] },
-  },
-  {
-    files: ['src/features/dashboard/**/*.{ts,tsx}'],
-    ignores: MIGRATED,
-    rules: { 'no-restricted-syntax': ['warn', ...HEX_IN_CLASSNAME] },
   },
 ])

@@ -71,7 +71,7 @@ export function AlarmMap() {
   )
 
   return (
-    <section ref={root} id="contact" className="relative scroll-mt-24 overflow-hidden bg-[#00001C]/40 px-5 md:px-10">
+    <section ref={root} id="contact" className="relative scroll-mt-24 overflow-hidden bg-landing-bg/40 px-5 md:px-10">
       {/* Pinned viewport-fit area: headline, one-at-a-time beats, and the map.
           The hotline block lives BELOW this wrapper so it never pushes the map
           or beat copy off-screen while pinned; it scrolls in normally once the
@@ -81,7 +81,7 @@ export function AlarmMap() {
         className="mx-auto grid min-h-svh max-w-7xl content-center gap-8 py-4 lg:grid-cols-[1fr_1.1fr] lg:items-center lg:gap-12"
       >
         <div className="min-w-0">
-          <p className="mb-4 font-mono text-xs font-bold uppercase tracking-[0.3em] text-[#ff5003]">
+          <p className="mb-4 font-mono text-xs font-bold uppercase tracking-[0.3em] text-accent">
             When seconds matter
           </p>
           <h2 className="font-heading text-[clamp(2rem,5vw,3.75rem)] font-bold leading-tight">
@@ -93,8 +93,8 @@ export function AlarmMap() {
           <ol className={reduced ? "mt-6 space-y-8 lg:mt-10" : "mt-6 grid lg:mt-10"}>
             {BEATS.map(([title, body], i) => (
               <li key={title} className={reduced ? "am-beat" : "am-beat col-start-1 row-start-1"}>
-                <span className="font-mono text-xs uppercase tracking-[0.25em] text-[#ff8133]">0{i + 1}</span>
-                <h3 className="mt-1 font-heading text-[clamp(1.5rem,3vw,2.25rem)] font-bold leading-tight text-[#f5f2ec]">
+                <span className="font-mono text-xs uppercase tracking-[0.25em] text-primary">0{i + 1}</span>
+                <h3 className="mt-1 font-heading text-[clamp(1.5rem,3vw,2.25rem)] font-bold leading-tight text-landing-cream">
                   {title}
                 </h3>
                 <p className="mt-2 max-w-md leading-relaxed text-white/60">{body}</p>
@@ -126,7 +126,7 @@ export function AlarmMap() {
         <div className="rounded-lg border border-white/10 bg-white/[0.03] p-6 md:p-8">
           <div className="flex flex-col gap-7 md:flex-row md:items-center md:justify-between md:gap-10">
             <div className="min-w-0">
-              <p className="font-mono text-[11px] font-bold uppercase tracking-[0.3em] text-[#ff8133]">
+              <p className="font-mono text-[11px] font-bold uppercase tracking-[0.3em] text-primary">
                 Emergency help
               </p>
               <p className="mt-2 max-w-md text-sm leading-relaxed text-white/60">
@@ -136,7 +136,7 @@ export function AlarmMap() {
               <a
                 href="https://www.google.com/maps/search/?api=1&query=Barangay+Hall+Marikina+Heights+Marikina+City"
                 target="_blank" rel="noreferrer"
-                className="mt-3 inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-[#f5f2ec] underline decoration-[#ff8133] decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
+                className="mt-3 inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-landing-cream underline decoration-primary decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
               >
                 <MapPin className="size-4" aria-hidden /> Barangay Hall, Marikina Heights
               </a>
@@ -144,7 +144,7 @@ export function AlarmMap() {
             <div className="flex shrink-0 flex-col gap-2 md:items-end">
               <a
                 href="tel:161"
-                className="inline-flex min-h-12 w-full items-center justify-center gap-3 bg-[#ff5003] px-8 text-lg font-semibold text-white transition-colors hover:bg-[#d94300] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white md:w-auto"
+                className="inline-flex min-h-12 w-full items-center justify-center gap-3 bg-accent px-8 text-lg font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white md:w-auto"
               >
                 <Phone className="size-5" aria-hidden weight="fill" /> Call 161
               </a>

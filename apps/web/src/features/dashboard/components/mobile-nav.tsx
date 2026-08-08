@@ -184,7 +184,7 @@ export function MobileNav() {
           <nav
             className={cn(
               "pointer-events-auto flex h-[3.75rem] items-center gap-1 rounded-full px-2",
-              "border-2 border-neutral-300/90 bg-[#eef0f4] shadow-[0_10px_32px_rgba(15,23,42,0.18)]",
+              "border-2 border-neutral-300/90 bg-chart-grid shadow-[0_10px_32px_rgba(15,23,42,0.18)]",
               isResident ? "w-auto shrink-0" : "w-full max-w-lg justify-evenly gap-0.5 px-1.5",
             )}
             aria-label="Primary"

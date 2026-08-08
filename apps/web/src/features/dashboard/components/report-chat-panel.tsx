@@ -16,7 +16,8 @@ import {
 } from "@/features/dashboard/api"
 import { checkConcernMedia } from "@/features/dashboard/api"
 import { ApiError } from "@/lib/api"
-import { AuthenticatedMediaImage, openAuthenticatedMedia } from "@/features/dashboard/components/authenticated-media"
+import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
+import { openAuthenticatedMedia } from "@/features/dashboard/lib/authenticated-media"
 
 function formatChatTime(value: string) {
   return new Intl.DateTimeFormat("en", {
@@ -187,7 +188,7 @@ export function ReportChatPanel({
       <div className="flex items-center justify-between gap-2 border-b border-neutral-100 px-4 py-3">
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 text-[13px] font-bold text-neutral-900">
-            <MessageCircleIcon className="size-4 shrink-0 text-[#ff6a1a]" strokeWidth={2.25} />
+            <MessageCircleIcon className="size-4 shrink-0 text-brand-orange" strokeWidth={2.25} />
             {title}
           </p>
           <p className="mt-0.5 text-[12px] font-medium text-neutral-500">
@@ -262,7 +263,7 @@ export function ReportChatPanel({
       {!disabled ? (
         <div className="border-t border-neutral-100 p-2.5 sm:p-3">
           {attachment ? (
-            <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-[#cbd8ee] bg-[#f8fafc] px-3 py-2 text-xs font-semibold text-[#07145f]">
+            <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-line-tint bg-canvas px-3 py-2 text-xs font-semibold text-brand-navy">
               <span className="flex min-w-0 items-center gap-2 truncate"><PaperclipIcon className="size-4 shrink-0" />{attachment.name}</span>
               <button type="button" onClick={() => setAttachment(null)} className="rounded-full p-1 hover:bg-white" aria-label="Remove attachment"><XIcon className="size-4" /></button>
             </div>
@@ -284,13 +285,13 @@ export function ReportChatPanel({
             }}
             rows={1}
             placeholder="Write a message…"
-            className="max-h-28 min-h-11 flex-1 resize-none rounded-xl border border-neutral-200 bg-[#f8fafc] px-3 py-2.5 text-[14px] text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-[#ff6a1a]"
+            className="max-h-28 min-h-11 flex-1 resize-none rounded-xl border border-neutral-200 bg-canvas px-3 py-2.5 text-[14px] text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-brand-orange"
           />
           <button
             type="button"
             disabled={sending || (!draft.trim() && !attachment)}
             onClick={() => void handleSend()}
-            className="flex size-11 shrink-0 items-center justify-center rounded-full bg-[#ff6a1a] text-white hover:bg-[#e85f17] disabled:opacity-50"
+            className="flex size-11 shrink-0 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
             aria-label="Send message"
           >
             {sending ? (
@@ -309,7 +310,6 @@ export function ReportChatPanel({
     </div>
   )
 }
-
 
 
 

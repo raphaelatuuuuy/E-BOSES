@@ -1,3 +1,6 @@
+/* eslint-disable react-refresh/only-export-components -- the provider and hook
+   must live in one module; fast refresh degrades to a full reload. */
+
 import * as React from "react"
 
 type ResidentSearchContextValue = {

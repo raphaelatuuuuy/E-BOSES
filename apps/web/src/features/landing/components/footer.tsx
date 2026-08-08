@@ -10,7 +10,7 @@ const PLATFORM_LINKS = [
 
 export function Footer() {
   return (
-    <footer className="relative overflow-hidden border-t border-white/10 bg-linear-to-b from-[#00001C] to-[#050203] text-white">    
+    <footer className="relative overflow-hidden border-t border-white/10 bg-linear-to-b from-landing-bg to-landing-bg text-white">    
       {/* Backdrop: ember horizon. Deep red-orange glow rising from the bottom
           edge into black, with a warmer highlight off to the right. */}
       <div aria-hidden className="pointer-events-none absolute inset-0">
@@ -38,7 +38,7 @@ export function Footer() {
 
       {/* Peeking mascot pinned to the right screen edge (desktop) */}
       <img
-        src="/contents/footer.png"
+        src="/contents/footer.webp"
         alt=""
         aria-hidden
         loading="lazy"
@@ -51,8 +51,8 @@ export function Footer() {
           <div className="space-y-6">
             <div>
               <Link to="/" className="flex items-center gap-2">
-                <img src="/contents/logo.png" alt="E-Boses" className="h-10 w-auto object-contain" />
-                <span className="text-lg font-bold text-[#ff8133]">Boses</span>
+                <img src="/contents/logo.webp" alt="E-Boses" className="h-10 w-auto object-contain" />
+                <span className="text-lg font-bold text-primary">Boses</span>
               </Link>
               <p className="mt-3 text-sm leading-relaxed text-white/40">
                 E-Boses helps Marikina Heights residents report local concerns, send emergency
@@ -68,7 +68,7 @@ export function Footer() {
                 <ul className="space-y-4 text-sm text-white/50">
                   {PLATFORM_LINKS.map((link) => (
                     <li key={link.label}>
-                      <a className="transition-colors hover:text-[#ff8133]" href={link.href}>
+                      <a className="transition-colors hover:text-primary" href={link.href}>
                         {link.label}
                       </a>
                     </li>
@@ -76,7 +76,7 @@ export function Footer() {
                 </ul>
               </div>
               <img
-                src="/contents/footer.png"
+                src="/contents/footer.webp"
                 alt=""
                 aria-hidden
                 loading="lazy"

@@ -174,7 +174,3 @@ export function SosTriageStep({
     </div>
   )
 }
-
-export function hasTriageQuestionsFor(categoryCode: string) {
-  return categoryCode in DETAIL_QUESTIONS
-}

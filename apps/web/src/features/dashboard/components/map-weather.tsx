@@ -1,5 +1,8 @@
 "use client"
 
+/* eslint-disable react-refresh/only-export-components -- the weather data hook,
+   its state type/labels and the widget components are intentionally one unit. */
+
 import { useEffect, useState, type ReactNode } from "react"
 import {
   CloudRainIcon,
@@ -65,11 +68,19 @@ export function useMapWeather(lat: number | null, lng: number | null, placeName:
     placeName,
   })
 
+  // Mark the widget as loading when the target (coords + place) changes —
+  // render-adjust instead of a synchronous setState inside the effect.
+  const targetKey = `${lat ?? ""}/${lng ?? ""}/${placeName}`
+  const [prevTarget, setPrevTarget] = useState(targetKey)
+  if (prevTarget !== targetKey) {
+    setPrevTarget(targetKey)
+    setWeather((prev) => ({ ...prev, loading: true, error: null, placeName }))
+  }
+
   useEffect(() => {
     if (lat == null || lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) return
 
     let cancelled = false
-    setWeather((prev) => ({ ...prev, loading: true, error: null, placeName }))
 
     const params = new URLSearchParams({
       latitude: String(lat),
@@ -197,11 +208,11 @@ export function MapControlButton({
 }) {
   const base = "inline-flex h-10 min-w-10 items-center justify-center gap-2 rounded-lg border px-2.5 text-[13px] font-bold shadow-md transition disabled:cursor-not-allowed disabled:opacity-60"
   const variants = {
-    light: "border-neutral-200 bg-white text-neutral-900 hover:border-[#2447b3]/40 hover:bg-[#f8fbff]",
+    light: "border-neutral-200 bg-white text-neutral-900 hover:border-brand-blue/40 hover:bg-tint",
     dark: "border-rail-line bg-nav-glass/90 text-foreground backdrop-blur hover:border-ice/40 hover:bg-nav-raised",
     brand: "border-brand-orange bg-brand-orange-soft text-brand-orange hover:bg-brand-orange/20",
   }
-  const activeCls = active && variant !== "dark" ? "border-[#ff6a1a] bg-[#fff6f0] text-[#ff6a1a]" : ""
+  const activeCls = active && variant !== "dark" ? "border-brand-orange bg-brand-orange-soft text-brand-orange" : ""
   return (
     <button
       type="button"

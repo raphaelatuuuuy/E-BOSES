@@ -8,7 +8,7 @@ from copy import deepcopy
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Max, Q
 from django.utils import timezone
 from django.utils.text import slugify
 from rest_framework import status
@@ -102,11 +102,10 @@ def _normalize_extraction_hints(raw) -> dict:
         hints["remove_special_chars"] = bool(raw["remove_special_chars"])
     pattern = str(raw.get("regex_pattern") or "").strip()
     if pattern:
-        from .ocr_engine import is_safe_regex
-
-        if not is_safe_regex(pattern):
-            raise ValidationError({"extraction_hints": ["Regular expression pattern is unsafe or invalid."]})
         hints["regex_pattern"] = pattern[:120]
+    failure_message = str(raw.get("failure_message") or "").strip()
+    if failure_message:
+        hints["failure_message"] = failure_message[:160]
     case_mode = str(raw.get("case_normalization") or "").strip().lower()
     if case_mode in {"none", "uppercase", "lowercase", "name", "title", "upper", "lower"}:
         hints["case_normalization"] = case_mode
@@ -1005,9 +1004,22 @@ class OCRTestRunView(APIView):
             mime_type=getattr(file, "content_type", "") or "",
             file_size=file.size,
         )
+        # Optional simulated resident profile: officials can type what a
+        # resident would enter at sign-up so match rules are tested against
+        # those details instead of the official's own account profile.
+        simulated_profile = {
+            key: str(request.data.get(f"profile_{key}") or "").strip()
+            for key in ("first_name", "middle_name", "last_name", "gender", "date_of_birth", "address")
+        }
+        simulated_profile = {key: value for key, value in simulated_profile.items() if value}
+        if simulated_profile:
+            metadata = dict(run.metadata or {})
+            metadata["simulated_profile"] = simulated_profile
+            run.metadata = metadata
+            run.save(update_fields=["metadata", "updated_at"])
         # The local development environment commonly has no Celery worker
         # process.  Run the interactive test immediately there so officials
-        # see PaddleOCR results instead of a job that stays queued forever.
+        # see OCR.space results instead of a job that stays queued forever.
         # Production keeps the asynchronous queue and only falls back to a
         # synchronous run when broker submission itself fails.
         if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
@@ -1039,6 +1051,7 @@ def _test_payload(run):
             else:
                 extraction_json[key] = item
     overall = float(run.ocr_confidence) if run.ocr_confidence is not None else None
+    metadata = run.metadata or {}
     return {
         "id": run.pk,
         "status": run.status,
@@ -1050,6 +1063,9 @@ def _test_payload(run):
         "ocr_confidence": overall,
         "confidence": overall,
         "overall_confidence": overall,
+        "provider": metadata.get("provider", "ocrspace"),
+        "model": metadata.get("model") or "",
+        "provider_job_id": run.provider_job_id,
         "extracted_fields": extracted,
         "extraction_json": extraction_json,
         "template_match": template_match,
@@ -1057,6 +1073,8 @@ def _test_payload(run):
         "error_code": run.error_code,
         "error_message": run.error_message,
         "error": run.error_message or None,
+        "simulated_profile": metadata.get("simulated_profile") or {},
+        "profile_source": metadata.get("profile_source") or "empty",
         "created_at": run.created_at,
         "completed_at": run.completed_at,
     }

@@ -18,8 +18,10 @@ import {
 } from "@/features/dashboard/components/dialog"
 import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
 import type { Concern, ConcernStatus, ConcernStatusEvent, PublicUser } from "@/features/dashboard/api"
-
-export type StatusDialogMode = "submitted" | "assigned" | "rejected" | "resolved"
+import {
+  statusModeFromReport,
+  type StatusDialogMode,
+} from "@/features/dashboard/components/report-status-mode"
 
 const STATUS_STEPS: Array<{ key: ConcernStatus; label: string }> = [
   { key: "submitted", label: "Submitted" },
@@ -39,13 +41,13 @@ const MODE_CONFIG: Record<
 > = {
   submitted: {
     statusLabel: "Submitted",
-    statusClass: "bg-[#fff4eb] text-[#c2410c] ring-[#ffd7b8]",
+    statusClass: "bg-brand-orange-soft text-brand-orange-strong ring-brand-orange/20",
     title: "Report received",
     subtitle: "Your report was received and is being reviewed by the barangay team.",
   },
   assigned: {
     statusLabel: "Assigned",
-    statusClass: "bg-[#eef3ff] text-[#07145f] ring-[#cbd8ee]",
+    statusClass: "bg-tint text-brand-navy ring-line-tint",
     title: "Report assigned",
     subtitle: "Your report has been assigned to a barangay staff member for action.",
   },
@@ -61,13 +63,6 @@ const MODE_CONFIG: Record<
     title: "Report resolved",
     subtitle: "Your report has been resolved. Here’s a summary of what was done.",
   },
-}
-
-export function statusModeFromReport(report: Concern | { status: ConcernStatus }): StatusDialogMode {
-  if (report.status === "assigned" || report.status === "in_progress") return "assigned"
-  if (report.status === "rejected") return "rejected"
-  if (report.status === "resolved") return "resolved"
-  return "submitted"
 }
 
 function formatDate(value: string) {
@@ -163,14 +158,14 @@ function StatusLine({ report, mode }: { report: Concern; mode: StatusDialogMode 
   const currentIdx = activeIndex(report, mode)
 
   return (
-    <div className="rounded-2xl border border-neutral-200 bg-[#fafbfc] px-3 py-5 sm:px-5">
+    <div className="rounded-2xl border border-neutral-200 bg-canvas px-3 py-5 sm:px-5">
       <div className="relative grid grid-cols-4 gap-1 sm:gap-2">
         <div className="absolute left-[12%] right-[12%] top-[18px] h-[3px] rounded-full bg-neutral-200" />
         <div className="absolute left-[12%] right-[12%] top-[18px] h-[3px] rounded-full">
           <div
             className={cn(
               "h-full rounded-full transition-all",
-              mode === "rejected" ? "bg-red-500" : "bg-[#ff6a1a]",
+              mode === "rejected" ? "bg-red-500" : "bg-brand-orange",
             )}
             style={{ width: `${(Math.min(currentIdx, 3) / 3) * 100}%` }}
           />
@@ -186,8 +181,8 @@ function StatusLine({ report, mode }: { report: Concern; mode: StatusDialogMode 
               <div
                 className={cn(
                   "flex size-9 items-center justify-center rounded-full border-2 text-[13px] font-bold sm:size-10 sm:text-[14px]",
-                  done && "border-[#07145f] bg-[#07145f] text-white",
-                  current && !rejectedCurrent && "border-[#ff6a1a] bg-[#ff6a1a] text-white shadow-[0_0_0_4px_rgba(255,106,26,0.18)]",
+                  done && "border-brand-navy bg-brand-navy text-white",
+                  current && !rejectedCurrent && "border-brand-orange bg-brand-orange text-white shadow-[0_0_0_4px_rgba(255,106,26,0.18)]",
                   rejectedCurrent && "border-red-500 bg-red-500 text-white",
                   !done && !current && "border-neutral-200 bg-white text-neutral-400",
                 )}
@@ -242,7 +237,7 @@ function ActorCard({
 
   return (
     <div className="flex items-center gap-3.5 rounded-2xl border border-neutral-200 bg-white px-4 py-3.5">
-      <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#dbe3f4] text-[16px] font-bold text-[#2c3a5a]">
+      <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-full bg-tint text-[16px] font-bold text-navy-muted">
         {letter}
       </div>
       <div className="min-w-0">
@@ -283,7 +278,7 @@ export function ReportStatusDialog({
     : config.subtitle
   const statusLabel = isInProgress ? "In progress" : config.statusLabel
   const statusClass = isInProgress
-    ? "bg-[#eef3ff] text-[#07145f] ring-[#cbd8ee]"
+    ? "bg-tint text-brand-navy ring-line-tint"
     : config.statusClass
   const actor = pickActor(report, resolvedMode)
   const actions = extractActions(report)
@@ -395,7 +390,7 @@ export function ReportStatusDialog({
             </p>
           </div>
         ) : showDetail ? (
-          <div className="rounded-2xl border border-neutral-200 bg-[#fafbfc] px-4 py-4 sm:px-5">
+          <div className="rounded-2xl border border-neutral-200 bg-canvas px-4 py-4 sm:px-5">
             <p className="text-[12px] font-bold uppercase tracking-wide text-neutral-500 sm:text-[13px]">
               {resolvedMode === "resolved"
                 ? "Action summary"
@@ -420,7 +415,7 @@ export function ReportStatusDialog({
                   key={index}
                   className="flex items-start gap-2.5 text-[15px] font-medium leading-6 text-neutral-700"
                 >
-                  <span className="mt-2 size-2 shrink-0 rounded-full bg-[#ff6a1a]" />
+                  <span className="mt-2 size-2 shrink-0 rounded-full bg-brand-orange" />
                   {action}
                 </li>
               ))}
@@ -464,7 +459,7 @@ export function ReportStatusDialog({
             <button
               type="button"
               onClick={handleTrack}
-              className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-[#ff6a1a] px-6 text-[15px] font-bold text-white transition-colors hover:bg-[#e85f17] sm:h-14 sm:px-7 sm:text-[16px]"
+              className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-brand-orange px-6 text-[15px] font-bold text-white transition-colors hover:bg-brand-orange-strong sm:h-14 sm:px-7 sm:text-[16px]"
             >
               <SearchIcon className="size-5" strokeWidth={2.25} />
               Track report
@@ -482,7 +477,7 @@ export function ReportStatusDialog({
             <button
               type="button"
               onClick={handleTrack}
-              className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-[#ff6a1a] px-7 text-[15px] font-bold text-white transition-colors hover:bg-[#e85f17] sm:h-14 sm:text-[16px]"
+              className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-brand-orange px-7 text-[15px] font-bold text-white transition-colors hover:bg-brand-orange-strong sm:h-14 sm:text-[16px]"
             >
               <SearchIcon className="size-5" strokeWidth={2.25} />
               {resolvedMode === "submitted" ? "Track report" : "View report"}

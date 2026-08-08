@@ -84,7 +84,7 @@ export function BirthDatePicker({
     left: number
     maxHeight: number
   } | null>(null)
-  const [mounted, setMounted] = React.useState(false)
+  const [mounted] = React.useState(true)
 
   const parsed: Dayjs | null = React.useMemo(() => {
     if (!value) return null
@@ -92,16 +92,18 @@ export function BirthDatePicker({
     return d.isValid() ? d : null
   }, [value])
 
-  React.useEffect(() => {
-    setMounted(true)
-  }, [])
-
-  React.useEffect(() => {
-    if (open) {
+  // Reset the calendar when the picker opens and clear position on close —
+  // render-adjust instead of setStates inside effects.
+  const [prevOpen, setPrevOpen] = React.useState(false)
+  if (prevOpen !== open) {
+    setPrevOpen(open)
+    if (!open) {
+      setCoords(null)
+    } else {
       setDraft(parsed ?? maxDate)
       setView("year")
     }
-  }, [open, parsed, maxDate])
+  }
 
   React.useEffect(() => {
     if (!open) return
@@ -136,11 +138,7 @@ export function BirthDatePicker({
   }, [isMobile])
 
   React.useLayoutEffect(() => {
-    if (!open) {
-      setCoords(null)
-      return
-    }
-    updatePosition()
+    if (!open) return
     const raf = requestAnimationFrame(updatePosition)
     const t = window.setTimeout(updatePosition, 40)
     window.addEventListener("resize", updatePosition)
@@ -376,14 +374,14 @@ export function BirthDatePicker({
             <button
               type="button"
               onClick={clearDraft}
-              className="rounded-full px-4 py-2.5 text-sm font-semibold uppercase tracking-wide text-[#ff8133]"
+              className="rounded-full px-4 py-2.5 text-sm font-semibold uppercase tracking-wide text-primary"
             >
               Clear
             </button>
             <button
               type="button"
               onClick={applyDraft}
-              className="rounded-full px-4 py-2.5 text-sm font-semibold uppercase tracking-wide text-[#ff8133]"
+              className="rounded-full px-4 py-2.5 text-sm font-semibold uppercase tracking-wide text-primary"
             >
               OK
             </button>

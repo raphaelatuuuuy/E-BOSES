@@ -1,13 +1,10 @@
-"""Query helpers for concern list/detail endpoints."""
+"""Query helpers for concern workflows.
 
+Selectors keep lookup and filtering details out of API views so views can
+validate input, call services, and format responses without growing queryset
+logic over time.
+"""
 
-def concern_list_queryset(base_queryset, *, status=None, category=None, barangay=None):
-    """Apply common concern filters to a base queryset."""
-    queryset = base_queryset
-    if status:
-        queryset = queryset.filter(status=status)
-    if category:
-        queryset = queryset.filter(category=category)
-    if barangay:
-        queryset = queryset.filter(barangay=barangay)
-    return queryset
+from .units import assigned_legacy_unit, assigned_unit_for
+
+__all__ = ["assigned_legacy_unit", "assigned_unit_for"]

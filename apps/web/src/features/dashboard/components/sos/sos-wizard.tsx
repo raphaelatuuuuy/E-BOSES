@@ -37,7 +37,11 @@ import {
   SosLocationStep,
   type SosLocationValue,
 } from "@/features/dashboard/components/sos/location-step"
-import { emergencies, emergencyOptionsFromCategories, SosTypeStep } from "@/features/dashboard/components/sos/type-step"
+import { SosTypeStep } from "@/features/dashboard/components/sos/type-step"
+import {
+  emergencies,
+  emergencyOptionsFromCategories,
+} from "@/features/dashboard/components/sos/emergency-catalog"
 import { SosDetailsStep } from "@/features/dashboard/components/sos/details-step"
 import { SosTriageStep } from "@/features/dashboard/components/sos/triage-step"
 import { SosConfirmStep } from "@/features/dashboard/components/sos/confirm-step"
@@ -185,7 +189,7 @@ function SosShell({
         {/* Red urgency header — full-screen mobile gets top safe-area padding (notch/status bar) */}
         <header
           className={cn(
-            "flex shrink-0 items-center gap-1 bg-gradient-to-r from-[#c41212] via-[#e11d2e] to-[#b91c1c] px-3 sm:px-4",
+            "flex shrink-0 items-center gap-1 bg-gradient-to-r from-red-800 via-red-600 to-red-700 px-3 sm:px-4",
             !isDesktop
               ? "pt-[max(0.625rem,env(safe-area-inset-top))] pb-2.5"
               : "py-2.5"
@@ -247,7 +251,7 @@ function SosShell({
         </div>
 
         {footer ? (
-          <div className="shrink-0 border-t border-white/10 bg-[#050e45] px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
+          <div className="shrink-0 border-t border-white/10 bg-nav-bg px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
             {footer}
           </div>
         ) : null}
@@ -373,6 +377,12 @@ export function SosWizard({
     }
   }
 
+  const retryQueuedRef = useRef(retryQueuedEmergencies)
+
+  useEffect(() => {
+    retryQueuedRef.current = retryQueuedEmergencies
+  })
+
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true)
@@ -382,7 +392,7 @@ export function SosWizard({
       setStatusAnnouncement(
         "Connection restored. You can send the emergency alert online."
       )
-      void retryQueuedEmergencies()
+      void retryQueuedRef.current()
     }
     const handleOffline = () => {
       setIsOnline(false)
@@ -645,7 +655,7 @@ export function SosWizard({
           <a
             href={emergencySmsHref}
             onClick={announceSmsFallback}
-            className="flex h-11 flex-[1.4] items-center justify-center gap-2 rounded-full bg-brand-orange px-4 text-[14px] font-semibold text-white hover:bg-[#e85f17]"
+            className="flex h-11 flex-[1.4] items-center justify-center gap-2 rounded-full bg-brand-orange px-4 text-[14px] font-semibold text-white hover:bg-brand-orange-strong"
           >
             <PhoneIcon className="size-4" aria-hidden="true" />
             SMS backup
@@ -654,7 +664,7 @@ export function SosWizard({
           <button
             type="button"
             onClick={goNext}
-            className="h-11 flex-[1.4] rounded-full bg-brand-orange text-[14px] font-semibold text-white hover:bg-[#e85f17]"
+            className="h-11 flex-[1.4] rounded-full bg-brand-orange text-[14px] font-semibold text-white hover:bg-brand-orange-strong"
           >
             {step === "details"
               ? "Skip / Next"

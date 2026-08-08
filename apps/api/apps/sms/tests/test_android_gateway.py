@@ -42,6 +42,7 @@ def webhook_body(message, phone=RESIDENT, event="sms:received", message_id="msg-
     OUTBOUND_SMS_URL="http://10.118.12.5:8080/message",
     OUTBOUND_SMS_USERNAME="sms",
     OUTBOUND_SMS_PASSWORD="oJkay91V",
+    OUTBOUND_SMS_PAYLOAD_TEMPLATE='{"message": "{body}", "phoneNumbers": ["{to}"]}',
 )
 class AndroidGatewayDriverTests(SimpleTestCase):
     def test_send_payload_uses_a_phone_numbers_array(self):

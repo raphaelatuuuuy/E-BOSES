@@ -175,7 +175,7 @@ export function VoiceJourney() {
       <div className="mx-auto grid max-w-7xl content-center gap-12 md:h-full md:grid-cols-[0.9fr_1.1fr] md:items-center md:gap-10">
         {/* Left/top: header + phone mock */}
         <div className="text-center md:text-left">
-          <p className="mb-3 font-mono text-xs font-bold uppercase tracking-[0.3em] text-[#ff5003]">
+          <p className="mb-3 font-mono text-xs font-bold uppercase tracking-[0.3em] text-accent">
             How E-Boses works
           </p>
           <h2 className="font-heading text-[clamp(1.8rem,3.5vw,3rem)] font-bold leading-tight">
@@ -183,7 +183,7 @@ export function VoiceJourney() {
           </h2>
           <span
             ref={trackingRef}
-            className="vj-tracking mt-5 inline-block border border-[#ff5003]/40 bg-[#ff5003]/10 px-3 py-1 font-mono text-sm text-[#ff8133]"
+            className="vj-tracking mt-5 inline-block border border-accent/40 bg-accent/10 px-3 py-1 font-mono text-sm text-primary"
           >
             EB-2026-0142
           </span>
@@ -194,17 +194,17 @@ export function VoiceJourney() {
               <Camera className="vj-cam size-8 text-white/40 opacity-0" aria-hidden />
               <div
                 aria-hidden
-                className="vj-box absolute left-[12%] top-[38%] h-[45%] w-[46%] border border-[#ff5003] shadow-[0_0_6px_rgba(255,80,3,0.35)]"
+                className="vj-box absolute left-[12%] top-[38%] h-[45%] w-[46%] border border-accent shadow-[0_0_6px_rgba(255,80,3,0.35)]"
               >
-                <span className="absolute -left-px -top-3.5 whitespace-nowrap bg-[#ff5003] px-1 font-mono text-[9px] font-semibold leading-[14px] text-[#07070b]">
+                <span className="absolute -left-px -top-3.5 whitespace-nowrap bg-accent px-1 font-mono text-[9px] font-semibold leading-[14px] text-landing-bg">
                   pothole 0.94
                 </span>
               </div>
               <div
                 aria-hidden
-                className="vj-box absolute right-[8%] top-[22%] h-[30%] w-[30%] border border-[#4da3ff] shadow-[0_0_6px_rgba(77,163,255,0.35)]"
+                className="vj-box absolute right-[8%] top-[22%] h-[30%] w-[30%] border border-landing-sky shadow-[0_0_6px_rgba(77,163,255,0.35)]"
               >
-                <span className="absolute -left-px -top-3.5 whitespace-nowrap bg-[#4da3ff] px-1 font-mono text-[9px] font-semibold leading-[14px] text-[#07070b]">
+                <span className="absolute -left-px -top-3.5 whitespace-nowrap bg-landing-sky px-1 font-mono text-[9px] font-semibold leading-[14px] text-landing-bg">
                   debris 0.71
                 </span>
               </div>
@@ -212,14 +212,14 @@ export function VoiceJourney() {
             <div className="mt-3 space-y-2">
               <div className="vj-desc-line flex h-3.5 items-center gap-1.5">
                 <span className="vj-desc-seg h-2 w-10 rounded-sm bg-white/20" aria-hidden />
-                <span className="vj-chip border border-[#ff5003]/50 bg-[#ff5003]/15 px-1 font-mono text-[9px] leading-[13px] text-[#ff8133]">
+                <span className="vj-chip border border-accent/50 bg-accent/15 px-1 font-mono text-[9px] leading-[13px] text-primary">
                   lubak
                 </span>
                 <span className="vj-desc-seg h-2 flex-1 rounded-sm bg-white/20" aria-hidden />
               </div>
               <div className="vj-desc-line flex h-3.5 items-center gap-1.5">
                 <span className="vj-desc-seg h-2 flex-1 rounded-sm bg-white/20" aria-hidden />
-                <span className="vj-chip border border-[#4da3ff]/50 bg-[#4da3ff]/15 px-1 font-mono text-[9px] leading-[13px] text-[#7db4ff]">
+                <span className="vj-chip border border-landing-sky/50 bg-landing-sky/15 px-1 font-mono text-[9px] leading-[13px] text-landing-sky">
                   kalsada
                 </span>
                 <span className="vj-desc-seg h-2 w-8 rounded-sm bg-white/20" aria-hidden />
@@ -228,7 +228,7 @@ export function VoiceJourney() {
                 <span className="vj-desc-seg h-2 w-3/5 rounded-sm bg-white/20" aria-hidden />
               </div>
             </div>
-            <div className="vj-pin mt-4 flex items-center gap-2 rounded-lg bg-[#ff5003]/15 px-3 py-2 text-sm text-[#ff8133]">
+            <div className="vj-pin mt-4 flex items-center gap-2 rounded-lg bg-accent/15 px-3 py-2 text-sm text-primary">
               <MapPin className="size-4" aria-hidden /> Marikina Heights
             </div>
             <div className="vj-severity mt-3 flex items-center justify-between border-t border-white/10 pt-2.5">
@@ -240,7 +240,7 @@ export function VoiceJourney() {
                   i < 4 ? (
                     <span
                       key={i}
-                      className="vj-sev-pip-lit size-1.5 bg-[#ff5003] shadow-[0_0_4px_rgba(255,80,3,0.8)]"
+                      className="vj-sev-pip-lit size-1.5 bg-accent shadow-[0_0_4px_rgba(255,80,3,0.8)]"
                     />
                   ) : (
                     <span key={i} className="size-1.5 border border-white/25" />
@@ -260,17 +260,17 @@ export function VoiceJourney() {
                   aria-hidden
                   className="absolute left-[6.5px] top-[12px] bottom-[calc(-2rem_-_12px)] w-px overflow-hidden bg-white/10"
                 >
-                  <span className="vj-seg-fill absolute inset-0 bg-[#ff5003] shadow-[0_0_8px_rgba(255,80,3,0.8)]" />
+                  <span className="vj-seg-fill absolute inset-0 bg-accent shadow-[0_0_8px_rgba(255,80,3,0.8)]" />
                 </span>
               )}
               <span
                 aria-hidden
-                className="absolute left-0 top-[5px] z-10 flex size-3.5 items-center justify-center rounded-full border border-[#ff5003]/60 bg-[#07070b]"
+                className="absolute left-0 top-[5px] z-10 flex size-3.5 items-center justify-center rounded-full border border-accent/60 bg-landing-bg"
               >
-                <span className="vj-dot-fill size-2 rounded-full bg-[#ff5003] shadow-[0_0_10px_rgba(255,80,3,0.9)]" />
+                <span className="vj-dot-fill size-2 rounded-full bg-accent shadow-[0_0_10px_rgba(255,80,3,0.9)]" />
               </span>
               <div className="vj-station-body">
-                <span className="font-mono text-xs uppercase tracking-[0.25em] text-[#ff8133]">
+                <span className="font-mono text-xs uppercase tracking-[0.25em] text-primary">
                   0{i + 1} · {label}
                 </span>
                 <p className="mt-1.5 max-w-md text-sm leading-relaxed text-white/60 md:text-base">

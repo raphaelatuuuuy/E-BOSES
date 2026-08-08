@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,15 @@ OVERPASS_URLS = (
 OSM_POI_CACHE_KEY = "locations-osm-pois:v2"
 OSM_POI_CACHE_TTL = 60 * 60 * 6  # 6 hours
 OSM_POI_FAIL_TTL = 90  # brief empty so map still loads; retries soon
+# Circuit breaker: after every mirror fails, skip live Overpass for a while and
+# serve the on-disk snapshot so map requests never stall on a dead mirror.
+OVERPASS_BREAKER_KEY = "locations-osm-pois:breaker"
+OVERPASS_BREAKER_TTL = 10 * 60
+# Short budgets: Overpass mirrors either answer or 504. A 17-second block per
+# request (measured 2026-08) made the alerts map unusable whenever the public
+# mirrors were slow. Mirrors are tried in parallel and one success is enough.
+OVERPASS_CONNECT_TIMEOUT = 3.0
+OVERPASS_READ_TIMEOUT = 8.0
 MAP_CONTEXT_CACHE_KEY = "locations-map-context:v4"
 MAP_CONTEXT_CACHE_TTL = 300
 
@@ -725,39 +735,77 @@ def _elements_to_pois(elements: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def fetch_osm_service_pois(*, force_refresh: bool = False) -> list[dict[str, Any]]:
-    """Live OpenStreetMap amenities in / near Heights (cached + on-disk snapshot)."""
+    """Live OpenStreetMap amenities in / near Heights (cached + on-disk snapshot).
+
+    Never blocks map requests on a dead mirror: mirrors are queried in parallel
+    with short timeouts, one success is enough, and after a full failure the
+    circuit breaker serves the on-disk snapshot for OVERPASS_BREAKER_TTL.
+    """
     if not force_refresh:
         cached = cache.get(OSM_POI_CACHE_KEY)
         if cached is not None:
             return cached
+        # Never block map requests on the public Overpass mirrors: the on-disk
+        # snapshot is the served source of truth. A live refresh only happens
+        # on an explicit force (refresh_map_service_pois command) or on a first
+        # ever run with no snapshot at all.
+        snapshot = _load_osm_snapshot()
+        if snapshot:
+            cache.set(OSM_POI_CACHE_KEY, snapshot, OSM_POI_CACHE_TTL)
+            return snapshot
+        if cache.get(OVERPASS_BREAKER_KEY):
+            return []
 
     import httpx
 
     query = _overpass_query()
+    timeout = httpx.Timeout(OVERPASS_READ_TIMEOUT, connect=OVERPASS_CONNECT_TIMEOUT)
+    headers = {"User-Agent": "E-Boses/1.0 (barangay-map-pois; educational)"}
+
     elements: list[dict[str, Any]] = []
-    last_error: Exception | None = None
-    for url in OVERPASS_URLS:
+    errors: list[str] = []
+
+    def _try_mirror(url: str) -> list[dict[str, Any]] | None:
         try:
-            with httpx.Client(
-                timeout=httpx.Timeout(18.0, connect=6.0),
-                headers={"User-Agent": "E-Boses/1.0 (barangay-map-pois; educational)"},
-            ) as client:
+            with httpx.Client(timeout=timeout, headers=headers) as client:
                 response = client.post(url, data={"data": query})
                 response.raise_for_status()
                 payload = response.json()
-            elements = list(payload.get("elements") or [])
-            break
+            return list(payload.get("elements") or [])
         except Exception as exc:  # noqa: BLE001 — try next mirror
-            last_error = exc
             logger.warning("Overpass fetch failed via %s: %s", url, exc)
-    else:
-        if last_error:
-            logger.error("All Overpass mirrors failed: %s", last_error)
+            errors.append(f"{url}: {type(exc).__name__}: {exc}")
+            return None
+
+    # Query every mirror at once; the first that answers wins. One slow mirror
+    # can no longer serialize every other mirror behind it.
+    pool = ThreadPoolExecutor(max_workers=len(OVERPASS_URLS))
+    try:
+        futures = [pool.submit(_try_mirror, url) for url in OVERPASS_URLS]
+        for future in as_completed(futures):
+            result = future.result()
+            if result:
+                elements = result
+                for other in futures:
+                    other.cancel()
+                break
+    finally:
+        # Never block the request on mirrors that are still timing out; they
+        # finish on their own in the background.
+        pool.shutdown(wait=False)
+
+    if not elements:
+        # Every mirror failed (or returned nothing). Trip the breaker so the
+        # next requests serve the snapshot immediately instead of re-stalling.
+        if errors:
+            logger.error("All Overpass mirrors failed: %s", "; ".join(errors[:3]))
+        cache.set(OVERPASS_BREAKER_KEY, True, OVERPASS_BREAKER_TTL)
         snapshot = _load_osm_snapshot()
         if snapshot:
-            logger.info("Using OSM POI snapshot (%s places)", len(snapshot))
+            logger.info("Overpass unavailable; using OSM POI snapshot (%s places)", len(snapshot))
             cache.set(OSM_POI_CACHE_KEY, snapshot, OSM_POI_CACHE_TTL)
             return snapshot
+        logger.error("Overpass mirrors failed and no POI snapshot is available.")
         cache.set(OSM_POI_CACHE_KEY, [], OSM_POI_FAIL_TTL)
         return []
 

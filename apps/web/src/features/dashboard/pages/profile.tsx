@@ -93,10 +93,13 @@ export default function ProfilePage() {
   const [editing, setEditing] = useState(false)
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
 
-  useEffect(() => {
-    if (!user) return
-    setProfileForm(profileFormFromUser(user))
-  }, [user])
+  // Adopt the profile form when the session user (re)loads — render-adjust
+  // instead of a sync setState effect.
+  const [prevUser, setPrevUser] = useState(user)
+  if (prevUser !== user) {
+    setPrevUser(user)
+    if (user) setProfileForm(profileFormFromUser(user))
+  }
 
   useEffect(() => {
     if (loading) return
@@ -183,7 +186,7 @@ export default function ProfilePage() {
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[calc(7.5rem+env(safe-area-inset-bottom))] md:pb-12">
         {/* Cover + chrome */}
         <div className="relative">
-          <div className="relative h-[132px] w-full overflow-hidden bg-[#9eb3c9] sm:h-[160px]">
+          <div className="relative h-[132px] w-full overflow-hidden bg-slate-soft sm:h-[160px]">
             {/* Simple city skyline (Nextdoor-style cover, light) */}
             <svg
               className="absolute inset-0 h-full w-full opacity-90"
@@ -275,7 +278,7 @@ export default function ProfilePage() {
           {/* Letter avatar only (no portrait images) */}
           <div className="relative z-10 -mt-12 px-4 sm:-mt-14 sm:px-6">
             <span
-              className="flex size-[88px] items-center justify-center overflow-hidden rounded-full bg-[#c5d0e6] text-3xl font-bold text-[#2c3a5a] ring-[3px] ring-white sm:size-24 sm:text-4xl"
+              className="flex size-[88px] items-center justify-center overflow-hidden rounded-full bg-slate-soft text-3xl font-bold text-navy-muted ring-[3px] ring-white sm:size-24 sm:text-4xl"
               aria-hidden
             >
               {letter}
@@ -342,7 +345,7 @@ export default function ProfilePage() {
                 type="button"
                 onClick={() => void handleProfileSubmit()}
                 disabled={savingProfile}
-                className="mt-3 inline-flex h-10 items-center gap-2 rounded-full bg-brand-orange px-4 text-sm font-semibold text-white hover:bg-[#e85f17] disabled:opacity-60"
+                className="mt-3 inline-flex h-10 items-center gap-2 rounded-full bg-brand-orange px-4 text-sm font-semibold text-white hover:bg-brand-orange-strong disabled:opacity-60"
               >
                 {savingProfile ? (
                   <Loader2Icon className="size-4 animate-spin" />
@@ -384,7 +387,7 @@ export default function ProfilePage() {
             <button
               type="button"
               onClick={() => navigate("/dashboard/reports")}
-              className="mt-3 text-[13px] font-semibold text-[#2447b3] hover:underline"
+              className="mt-3 text-[13px] font-semibold text-brand-blue hover:underline"
             >
               View reports →
             </button>

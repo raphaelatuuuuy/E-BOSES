@@ -53,7 +53,7 @@ export function MiddleNameStep({
         <button
           type="button"
           onClick={onContinue}
-          className="inline-flex h-12 items-center justify-center rounded-full bg-[#ff8133] px-8 text-base font-semibold text-white transition-colors hover:bg-[#e6732e]"
+          className="inline-flex h-12 items-center justify-center rounded-full bg-primary px-8 text-base font-semibold text-white transition-colors hover:bg-brand-orange-strong"
         >
           Continue
         </button>

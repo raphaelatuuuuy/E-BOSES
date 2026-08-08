@@ -93,7 +93,7 @@ export function StaffMobileHeader({
     >
       <Link to={homeTo} className="flex min-w-0 items-center gap-2 no-underline">
         <img
-          src="/contents/logo.png"
+          src="/contents/logo.webp"
           alt="Boses Marikina Heights"
           className="size-8 shrink-0 object-contain"
         />

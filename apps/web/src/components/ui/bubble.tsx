@@ -16,8 +16,8 @@ export function Bubble({
       className={cn(
         "relative w-fit max-w-full rounded-2xl px-3 py-2 text-[13px] leading-5 shadow-sm",
         variant === "default"
-          ? "rounded-br-md bg-[#ff6a1a] text-white"
-          : "rounded-bl-md border border-neutral-200 bg-[#f4f6fb] text-[#1a2340]",
+          ? "rounded-br-md bg-brand-orange text-white"
+          : "rounded-bl-md border border-neutral-200 bg-canvas text-brand-navy",
         className,
       )}
       {...props}

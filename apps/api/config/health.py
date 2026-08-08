@@ -17,10 +17,10 @@ def health_check(request):
         from apps.accounts.models import OCRServiceStatus
 
         ocr_status = (
-            OCRServiceStatus.objects.filter(provider="paddleocr")
+            OCRServiceStatus.objects.filter(provider="ocrspace")
             .values_list("status", flat=True)
             .first()
-            or ("not_configured" if not getattr(settings, "PADDLEOCR_TOKEN", "") else "unknown")
+            or ("not_configured" if not getattr(settings, "OCRSPACE_API_KEY", "") else "unknown")
         )
     except Exception:
         # Health must remain useful during first boot/migrations.  A missing
@@ -43,5 +43,5 @@ def health_check(request):
             and getattr(settings, "ROBOFLOW_API_KEY", "")
         ),
         "ocr": ocr_status,
-        "ocr_configured": bool(getattr(settings, "PADDLEOCR_TOKEN", "")),
+        "ocr_configured": bool(getattr(settings, "OCRSPACE_API_KEY", "")),
     }, status=200 if status == "ok" else 503)

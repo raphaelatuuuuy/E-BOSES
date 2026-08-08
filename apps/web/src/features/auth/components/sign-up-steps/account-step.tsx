@@ -156,7 +156,7 @@ export function AccountStep({
               }}
               className={cn(
                 "font-semibold underline-offset-2 hover:underline",
-                errors.agreeToTerms ? "text-destructive" : "text-[#ff8133]",
+                errors.agreeToTerms ? "text-destructive" : "text-primary",
               )}
             >
               Privacy Policy
@@ -171,7 +171,7 @@ export function AccountStep({
               }}
               className={cn(
                 "font-semibold underline-offset-2 hover:underline",
-                errors.agreeToTerms ? "text-destructive" : "text-[#ff8133]",
+                errors.agreeToTerms ? "text-destructive" : "text-primary",
               )}
             >
               Terms of Service

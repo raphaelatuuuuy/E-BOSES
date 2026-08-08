@@ -22,7 +22,8 @@ import {
   resolveEmergency,
   type EmergencyAlert,
 } from "@/features/dashboard/emergency-api"
-import { AuthenticatedMediaImage, openAuthenticatedMedia } from "@/features/dashboard/components/authenticated-media"
+import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
+import { openAuthenticatedMedia } from "@/features/dashboard/lib/authenticated-media"
 import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
 import { RecordDetail } from "@/features/dashboard/components/record/record-detail"
 import { toEmergencyRecordView } from "@/features/dashboard/components/record/emergency-adapter"

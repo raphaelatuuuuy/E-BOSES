@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { toast } from "sonner"
 import {
@@ -9,6 +9,7 @@ import {
   FileTextIcon,
   GlobeIcon,
   CheckIcon,
+  MegaphoneIcon,
   PencilIcon,
   SearchIcon,
   XIcon,
@@ -38,7 +39,7 @@ import {
   type PublicUser,
 } from "@/features/dashboard/api"
 import { mentionToken, toMentionUser } from "@/features/dashboard/components/comment-mentions"
-import { concernBodyText } from "@/features/dashboard/components/feed-post-card"
+import { concernBodyText } from "@/features/dashboard/components/feed-post-text"
 import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
 import {
   PostMoreMenu,
@@ -194,11 +195,17 @@ export default function HomePage() {
     }
   }
 
+  const loadHomeRef = useRef(loadHome)
+
+  useEffect(() => {
+    loadHomeRef.current = loadHome
+  })
+
   useEffect(() => {
     if (authLoading) return
-    const initialLoad = window.setTimeout(() => void loadHome(), 0)
+    const initialLoad = window.setTimeout(() => void loadHomeRef.current(), 0)
     function refresh() {
-      void loadHome()
+      void loadHomeRef.current()
     }
     const interval = window.setInterval(refresh, 30000)
     window.addEventListener("eboses:report-created", refresh)
@@ -536,7 +543,7 @@ export default function HomePage() {
                     "focus-visible:border-brand-navy focus-visible:text-brand-navy",
                     active
                       ? "border-brand-navy bg-white text-brand-navy"
-                      : "border-[#d0d0d0] bg-white text-neutral-600 hover:border-brand-navy hover:bg-neutral-50 hover:text-brand-navy",
+                      : "border-card-line-strong bg-white text-neutral-600 hover:border-brand-navy hover:bg-neutral-50 hover:text-brand-navy",
                   )}
                 >
                   {tab.label}
@@ -634,8 +641,8 @@ export default function HomePage() {
                 className="rounded-2xl border border-neutral-200 bg-white p-3.5 md:rounded-lg"
               >
                 <div className="flex gap-2.5">
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[#fff1ea]">
-                    <img src="/contents/announcements.png" alt="" className="size-7 object-contain" />
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-brand-orange-soft">
+                    <MegaphoneIcon className="size-7 text-brand-orange" strokeWidth={2} />
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-2">
@@ -662,7 +669,7 @@ export default function HomePage() {
                             ? "bg-red-50 text-red-700"
                             : announcement.urgency === "important"
                               ? "bg-amber-50 text-amber-700"
-                              : "bg-[#fff1ea] text-brand-orange",
+                              : "bg-brand-orange-soft text-brand-orange",
                           FS.label,
                         )}
                       >
@@ -872,7 +879,7 @@ export default function HomePage() {
             {announcements.length === 0 && sortedConcerns.length === 0 && !error ? (
               <div className="flex flex-col items-center rounded-lg border border-neutral-200 bg-white px-6 py-10 text-center">
                 <img
-                  src="/contents/feed-header.png"
+                  src="/contents/feed-header.webp"
                   alt=""
                   className="mb-4 h-44 w-auto max-w-[90%] object-contain opacity-95 sm:h-52"
                 />

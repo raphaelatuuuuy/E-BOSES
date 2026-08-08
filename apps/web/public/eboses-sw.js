@@ -106,8 +106,8 @@ function buildNotificationOptions(data) {
   const { actions, actionUrls } = notificationActions(data.actions, url)
   const options = {
     body: cleanNotificationText(data.body, "Open E-Boses for details."),
-    icon: data.icon || "/contents/logo.png",
-    badge: data.badge || "/contents/logo.png",
+    icon: data.icon || "/icons/icon-192.png",
+    badge: data.badge || "/icons/icon-192.png",
     tag: data.tag || `eboses-${data.category || "update"}`,
     data: {
       url,

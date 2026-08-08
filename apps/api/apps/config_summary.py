@@ -159,9 +159,12 @@ def _dispatch():
     categories = list(EmergencyCategory.objects.filter(is_active=True).values_list("code", "label"))
     types = [code for code, _ in categories]
     mapped = set(
-        EmergencyTypeRoleMap.objects.filter(is_active=True, department__isnull=False).values_list(
-            "emergency_type", flat=True
-        )
+        EmergencyTypeRoleMap.objects.filter(
+            is_active=True,
+            department__isnull=False,
+            department__is_active=True,
+            department__responds_to_emergencies=True,
+        ).values_list("emergency_type", flat=True)
     )
     covered = mapped
     covered_count = sum(1 for item in types if item in covered)

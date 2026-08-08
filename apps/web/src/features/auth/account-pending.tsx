@@ -75,8 +75,8 @@ export default function AccountPendingPage() {
           className="mx-auto flex max-w-3xl items-center gap-2"
           aria-label="Boses — back to landing page"
         >
-          <img src="/contents/logo.png" alt="" className="h-8 w-auto" />
-          <span className="font-heading text-xl font-bold text-[#ff8133]">Boses</span>
+          <img src="/contents/logo.webp" alt="" className="h-8 w-auto" />
+          <span className="font-heading text-xl font-bold text-primary">Boses</span>
         </Link>
       </header>
 
@@ -119,7 +119,7 @@ export default function AccountPendingPage() {
                 type="button"
                 disabled={checking}
                 onClick={() => void checkStatus(true)}
-                className="inline-flex h-11 items-center justify-center rounded-md bg-[#ff6a1a] px-5 text-[15px] font-semibold text-white transition-colors hover:bg-[#e85f12] disabled:opacity-60"
+                className="inline-flex h-11 items-center justify-center rounded-md bg-brand-orange px-5 text-[15px] font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:opacity-60"
               >
                 {checking ? (
                   <>

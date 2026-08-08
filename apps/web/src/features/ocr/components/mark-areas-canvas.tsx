@@ -39,7 +39,8 @@ function regionsOverlapOrClose(
 function sideLabel(side: ProofSide) {
   if (side === "front") return "Front"
   if (side === "back") return "Back"
-  return "Document"
+  // single-side proofs use the front photo — label it consistently.
+  return "Front"
 }
 
 export function MarkAreasCanvas(props: {
@@ -137,17 +138,17 @@ export function MarkAreasCanvas(props: {
   }
 
   return (
-    <div className="relative flex min-h-[16rem] flex-1 items-center justify-center overflow-auto rounded-xl bg-[#eef2fb] p-4">
+    <div className="relative flex min-h-[16rem] flex-1 items-center justify-center overflow-auto rounded-xl bg-tint p-4">
       {!imageUrl ? (
         <button
           type="button"
           onClick={onRequestUpload}
-          className="flex w-full max-w-md flex-col items-center gap-2 rounded-2xl border border-dashed border-[#cbd8ee] bg-white px-6 py-14 text-center shadow-sm"
+          className="flex w-full max-w-md flex-col items-center gap-2 rounded-2xl border border-dashed border-line-tint bg-white px-6 py-14 text-center shadow-sm"
         >
-          <span className="flex size-12 items-center justify-center rounded-full bg-blue-50 text-[#145be7]">
+          <span className="flex size-12 items-center justify-center rounded-full bg-tint text-brand-blue">
             <CloudUpload className="size-6" />
           </span>
-          <span className={cn("text-sm font-black", PROOF_THEME.title)}>
+          <span className={cn("text-sm font-semibold", PROOF_THEME.title)}>
             {emptyUploadLabel ??
               (sampleSide === "back"
                 ? "Upload the back"
@@ -168,7 +169,7 @@ export function MarkAreasCanvas(props: {
             <img
               src={imageUrl}
               alt="Sample photo"
-              className="block max-h-[32rem] max-w-full select-none rounded-md border border-[#d5deee] bg-white object-contain"
+              className="block max-h-[32rem] max-w-full select-none rounded-md border border-line-tint bg-white object-contain"
               draggable={false}
             />
             {sorted.map((field, index) => {
@@ -190,7 +191,7 @@ export function MarkAreasCanvas(props: {
                   key={field.key}
                   role="button"
                   tabIndex={0}
-                  title={`${field.label} — drag to move, corner to resize. The system reads text inside this box.`}
+                  title={`${field.label}. Drag to move, corner to resize. The system reads text inside this box.`}
                   onPointerDown={(event) => beginRegionDrag(event, field.key, "move", region)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
@@ -245,7 +246,7 @@ export function MarkAreasCanvas(props: {
                 </div>
               )
             })}
-            <span className="pointer-events-none absolute bottom-2 right-2 rotate-[-8deg] text-xs font-semibold uppercase tracking-widest text-blue-500/40">
+            <span className="pointer-events-none absolute bottom-2 right-2 rotate-[-8deg] text-xs font-semibold uppercase tracking-widest text-brand-blue/40">
               {sideLabel(sampleSide)} preview
             </span>
           </div>

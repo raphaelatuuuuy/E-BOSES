@@ -63,6 +63,7 @@ export interface OcrFieldHints {
   side?: ProofSide | "front" | "back" | "single"
   multi_line?: boolean
   regex_pattern?: string
+  failure_message?: string
   auto_correct?: boolean
   remove_special_chars?: boolean
   case_normalization?: "none" | "uppercase" | "lowercase" | "name" | "title" | string
@@ -251,6 +252,10 @@ export interface OcrTestResult {
   completed_at?: string | null
   /** Which photo side this test run targeted (front / back). */
   test_side?: ProofSide | "front" | "back" | "single" | null
+  /** OCR engine that produced this result ("ocrspace" | "easyocr"). */
+  provider?: "ocrspace" | "easyocr" | string
+  model?: string
+  provider_job_id?: string
 }
 
 /** Normalize backend extracted_fields (object or array) into a UI list. */
@@ -327,15 +332,34 @@ export interface VerificationExtractedField {
   status?: "passed" | "warning" | "failed" | "missing"
 }
 
+export type SimulatedProfileKey =
+  | "first_name"
+  | "middle_name"
+  | "last_name"
+  | "gender"
+  | "date_of_birth"
+  | "address"
+
+/** Resident details an official can type to simulate what a resident enters at sign-up. */
+export type SimulatedProfile = Partial<Record<SimulatedProfileKey, string>>
+
 export interface VerificationRuleResult {
   key?: string
   code?: string
   name?: string
   label?: string
-  passed: boolean
+  field?: string | null
+  rule_type?: string
+  operator?: string
+  /** For profile_match rules: which resident profile key this rule compares to. */
+  profile?: string | null
+  on_failure?: "warning" | "manual_review" | string
+  passed: boolean | null
+  score?: number | null
   message?: string
   detail?: string
   confidence?: number | null
+  template_check?: boolean
 }
 
 export interface VerificationAttempt {
@@ -642,6 +666,12 @@ function serializeConfiguration(configuration: OcrConfiguration) {
           }
         }),
         // Only send rules whose field still exists on this proof type.
+        // NOTE: we intentionally send only string codes for document_type and
+        // field, NOT numeric ids. Publishing creates a fresh draft with new
+        // pks; local state keeps the old ids. Sending stale ids makes the
+        // backend fail its pk lookup and delete the rule. Codes are stable
+        // across publish/republish and the backend's field/document lookup
+        // already falls back to them.
         rules: document.rules
           .filter((rule) => {
             const fieldKey = rule.field_key || ""
@@ -649,7 +679,8 @@ function serializeConfiguration(configuration: OcrConfiguration) {
             return document.fields.some((field) => field.key === fieldKey)
           })
           .map((rule) => ({
-            id: rule.id,
+            // Omit rule.id too so a stale id doesn't collide with a newly
+            // cloned rule row; upsert-by-code handles both create and update.
             code: rule.key,
             key: rule.key,
             name: rule.name ?? rule.key ?? "Validation rule",
@@ -793,6 +824,7 @@ export function runOcrTest(
   file: File,
   documentType: string,
   side?: ProofSide | "front" | "back" | "single" | null,
+  profile?: SimulatedProfile,
 ) {
   const formData = new FormData()
   formData.append("file", file)
@@ -801,6 +833,11 @@ export function runOcrTest(
     formData.append("side", side)
   } else if (side === "single") {
     formData.append("side", "single")
+  }
+  if (profile) {
+    for (const [key, value] of Object.entries(profile)) {
+      if (value?.trim()) formData.append(`profile_${key}`, value.trim())
+    }
   }
   return apiRequest<OcrTestResult>("/auth/ocr/tests/", {
     method: "POST",

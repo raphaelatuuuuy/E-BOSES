@@ -113,7 +113,7 @@ function UnitEditor({
         />
       </label>
 
-      <div className="rounded-2xl border border-brand-orange/15 bg-gradient-to-br from-[#fff8f3] to-[#eef3ff] p-4">
+      <div className="rounded-2xl border border-brand-orange/15 bg-gradient-to-br from-brand-orange-soft to-tint p-4">
         <label className="flex items-start gap-3">
           <input
             type="checkbox"

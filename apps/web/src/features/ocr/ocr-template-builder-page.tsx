@@ -1,5 +1,5 @@
 import { forwardRef, useImperativeHandle, useState } from "react"
-import { ArrowLeft, LoaderCircle } from "lucide-react"
+import { ArrowLeft, Check, LoaderCircle } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
@@ -23,6 +23,7 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
     configuration,
     loading,
     saving,
+    autoSaveState,
     error,
     selectedDocument,
     selectedField,
@@ -31,6 +32,8 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
     setFieldSearch,
     setSelectedDocKey,
     setSelectedFieldKey,
+    editedDocKeys,
+    addedDocKeys,
     updateSelectedDocument,
     updateField,
     updateFieldHints,
@@ -64,18 +67,20 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
     sortedCanvasFields,
     selectedFieldIndex,
     canvasSource,
-    testFile,
-    testPreviewUrl,
-    testResult,
-    setTestResult,
+    testSlots,
+    mergedTestResult,
     testRunning,
-    runTest,
-    runTestFromSample,
-    setTestPhoto,
+    runningTestKey,
+    runTestAll,
+    uploadTestSlot,
+    clearTestSlot,
+    sampleMatchForSide,
+    resetTests,
+    testProfile,
+    setTestProfileField,
+    relevantProfileKeys,
     validateRequiredSamples,
     missingRequiredSampleSides,
-    extractedList,
-    extractedByKey,
     selectedDetected,
   } = useOcrTemplateState()
 
@@ -104,7 +109,7 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
     return (
       <div className={cn("flex min-h-[70vh] flex-col", PROOF_THEME.bg)}>
         <div className="flex flex-1 items-center justify-center gap-3">
-          <LoaderCircle className="size-8 animate-spin text-[#145be7]" />
+          <LoaderCircle className="size-8 animate-spin text-brand-blue" />
           <span className={cn("text-sm font-semibold", PROOF_THEME.muted)}>
             Loading proof templates…
           </span>
@@ -140,7 +145,7 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
             setSelectedDocKey(docKey)
             const doc = configuration.document_types.find((item) => item.key === docKey)
             setSelectedFieldKey(doc?.fields[0]?.key ?? "")
-            setTestResult(null)
+            resetTests()
             setView("wizard")
           }}
           onRemove={(docKey) => {
@@ -179,6 +184,11 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
   // evaluated undefined: the proof name never displayed and step one never
   // showed as complete. Same precedence the proof list uses.
   const proofDisplayName = selectedDocument.template_name?.trim() || selectedDocument.name?.trim() || ""
+  // A doc created this session and never edited carries a placeholder name and
+  // pre-placed default regions — none of that counts as real setup, so its
+  // sections stay unchecked until the official actually configures something.
+  const isUntouchedNewDoc =
+    addedDocKeys.has(selectedDocument.key) && !editedDocKeys.has(selectedDocument.key)
 
   return (
     <div className="flex min-h-full flex-col">
@@ -193,32 +203,60 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
               <ArrowLeft className="size-3.5" />
               All proof types
             </button>
-            <h2 className="mt-2 font-heading text-xl font-bold text-foreground">
+            <h2 className="mt-2 font-heading text-xl font-semibold text-foreground">
               {proofDisplayName || "New proof type"}
             </h2>
-            <p className="mt-1 text-sm font-medium text-muted-foreground">
-              Set this up once. Residents pick from the types you switch on here.
-            </p>
+            {autoSaveState !== "idle" ? (
+              <span
+                className={cn(
+                  "mt-1 inline-flex items-center gap-1 text-[11px] font-semibold",
+                  autoSaveState === "error"
+                    ? "text-rose-600"
+                    : autoSaveState === "saved"
+                      ? "text-emerald-600"
+                      : "text-muted-foreground",
+                )}
+                aria-live="polite"
+              >
+                {autoSaveState === "saving" || autoSaveState === "pending" ? (
+                  <LoaderCircle className="size-3 animate-spin" />
+                ) : autoSaveState === "saved" ? (
+                  <Check className="size-3" />
+                ) : null}
+                {autoSaveState === "pending" || autoSaveState === "saving"
+                  ? "Saving…"
+                  : autoSaveState === "saved"
+                    ? "Saved"
+                    : autoSaveState === "error"
+                      ? "Save failed — will retry"
+                      : ""}
+              </span>
+            ) : null}
           </div>
 
-          {/* The switch that actually matters, kept visible rather than buried
-              on the wizard's last step. */}
-          <label className="flex items-center gap-3 rounded-2xl border border-card-line bg-card px-4 py-3">
-            <input
-              type="checkbox"
-              checked={availableOnSignup}
-              onChange={(event) => {
-                if (event.target.checked && !validateRequiredSamples(selectedDocument)) return
-                void setProofAvailableOnSignup(selectedDocument.key, event.target.checked)
-              }}
-              className="size-4 accent-brand-orange"
-            />
+          <label className="group flex cursor-pointer items-center gap-3 rounded-2xl border border-line-tint bg-white px-4 py-3 transition-colors duration-150 hover:border-brand-blue/40">
+            <span className="relative flex size-[18px] shrink-0 items-center justify-center">
+              <input
+                type="checkbox"
+                checked={availableOnSignup}
+                onChange={(event) => {
+                  if (event.target.checked && !validateRequiredSamples(selectedDocument)) return
+                  void setProofAvailableOnSignup(selectedDocument.key, event.target.checked)
+                }}
+                className="peer size-[18px] cursor-pointer appearance-none rounded-[5px] border-2 border-line-tint bg-white transition-colors duration-150 hover:border-brand-blue/60 checked:border-brand-blue checked:bg-brand-blue focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-blue/70"
+              />
+              <Check
+                aria-hidden
+                strokeWidth={3.5}
+                className="pointer-events-none absolute size-3.5 text-white opacity-0 transition-opacity duration-150 peer-checked:opacity-100"
+              />
+            </span>
             <span>
-              <span className="block text-sm font-bold text-foreground">Offer this at sign-up</span>
+              <span className="block text-sm font-semibold text-foreground">Available on sign-up</span>
               <span className="block text-xs font-medium text-muted-foreground">
                 {missingSampleLabels.length
-                  ? `Add a ${missingSampleLabels.join(" and ")} sample first`
-                  : "Residents can use this proof type"}
+                  ? `Add a ${missingSampleLabels.join(" and ")} sample first.`
+                  : "Residents can choose this ID when registering."}
               </span>
             </span>
           </label>
@@ -227,9 +265,8 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
         <ProofEditorSection
           index={1}
           title="Name and photo sides"
-          hint="What this proof is called, and whether it needs a front, back or one photo."
-          done={Boolean(proofDisplayName)}
-          doneLabel={`${proofDisplayName} · ${sampleCount} sample photo${sampleCount === 1 ? "" : "s"}`}
+          done={!isUntouchedNewDoc && Boolean(proofDisplayName)}
+          doneLabel={`${proofDisplayName}, ${sampleCount} sample photo${sampleCount === 1 ? "" : "s"}`}
           defaultOpen={!proofDisplayName}
         >
           <ProofDetailsStep
@@ -248,7 +285,6 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
         <ProofEditorSection
           index={2}
           title="Mark where the details are"
-          hint="Upload a sample photo, then draw a box around each detail to read."
           done={markedFields > 0 && missingSampleLabels.length === 0}
           doneLabel={`${markedFields} area${markedFields === 1 ? "" : "s"} marked`}
           defaultOpen={Boolean(proofDisplayName) && markedFields === 0}
@@ -281,7 +317,6 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
             zoom={zoom}
             setZoom={setZoom}
             canvasSource={canvasSource}
-            extractedByKey={extractedByKey}
             sampleInputRef={sampleInputRef}
             sampleUploadSideRef={sampleUploadSideRef}
           />
@@ -290,9 +325,7 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
         <ProofEditorSection
           index={3}
           title="Checks for each detail"
-          hint="What counts as a valid value — required, expiry date, name match."
-          done={markedFields > 0}
-          doneLabel="Adjust how strictly each detail is checked"
+          done={!isUntouchedNewDoc && markedFields > 0}
         >
           <RulesStep
             document={selectedDocument}
@@ -313,28 +346,23 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
         <ProofEditorSection
           index={4}
           title="Try it on a real photo"
-          hint="Check that the right details are read before residents use this."
-          done={Boolean(testResult)}
-          doneLabel="Last test run — try another any time"
+          done={mergedTestResult.tested}
         >
           <TrySampleStep
-            documentKey={selectedDocument.key}
             testRunning={testRunning}
-            testFile={testFile}
-            testPreviewUrl={testPreviewUrl}
-            testResult={testResult}
-            extractedList={extractedList}
+            runningTestKey={runningTestKey}
+            testSlots={testSlots}
+            mergedTestResult={mergedTestResult}
             documentFields={selectedDocument.fields}
             canvasSides={canvasSides}
-            samplePreviewBySide={samplePreviewBySide}
-            onPickFile={(file) => {
-              void setTestPhoto(file)
-            }}
-            onRunTest={() => {
-              void runTest(testFile)
-            }}
-            onRunTestFromSample={(side) => {
-              void runTestFromSample(side)
+            sampleMatchForSide={sampleMatchForSide}
+            testProfile={testProfile}
+            relevantProfileKeys={relevantProfileKeys}
+            onTestProfileChange={(key, value) => setTestProfileField(key, value)}
+            onUploadSlot={(side, file) => uploadTestSlot(side, file)}
+            onClearSlot={(side) => clearTestSlot(side)}
+            onRunTestAll={() => {
+              void runTestAll()
             }}
           />
         </ProofEditorSection>
@@ -344,12 +372,12 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
             type="button"
             onClick={() => void backToList()}
             disabled={saving}
-            className="rounded-xl bg-brand-orange text-white hover:bg-brand-orange-strong"
+            className={cn("rounded-xl text-white", PROOF_THEME.primaryBg)}
           >
-            {saving ? "Saving…" : "Done"}
+            {saving ? "Saving..." : "Done"}
           </Button>
           <span className="text-xs font-medium text-muted-foreground">
-            Changes save as you make them.
+            Changes save automatically.
           </span>
         </div>
       </div>
