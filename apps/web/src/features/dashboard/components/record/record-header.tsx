@@ -1,60 +1,21 @@
 import { ClockIcon, MapPinIcon, NavigationIcon } from "lucide-react"
 
-import { SEVERITY_LABEL, type Severity } from "./severity"
+import { cn } from "@workspace/ui/lib/utils"
 import type { RecordFact, RecordView } from "./types"
 
 /**
  * Tier 1 — answers what, where, how bad and how long before anything else.
  *
- * The flat label→value list this replaces gave severity, address, responder and
- * timestamp identical weight, so nothing was scannable. Here severity owns a
- * coloured rule and the largest type, and the rest steps down from it.
+ * The badges are gone: no severity strip, no severity chip, no status chip and
+ * no type eyebrow. The title leads, the elapsed time sits beside it, and the
+ * location and facts follow.
  */
-
-const SEVERITY_RULE: Record<Severity, string> = {
-  critical: "bg-severity-critical",
-  high: "bg-severity-high",
-  moderate: "bg-severity-moderate",
-  low: "bg-severity-low",
-}
-
-const SEVERITY_BADGE: Record<Severity, string> = {
-  critical: "bg-severity-critical-surface text-severity-critical-ink",
-  high: "bg-severity-high-surface text-severity-high-ink",
-  moderate: "bg-severity-moderate-surface text-severity-moderate-ink",
-  low: "bg-severity-low-surface text-severity-low-ink",
-}
-
-const STATUS_BADGE = {
-  open: "bg-status-open-surface text-status-open-ink",
-  active: "bg-status-active-surface text-status-active-ink",
-  closed: "bg-status-closed-surface text-status-closed-ink",
-} as const
-
-export function SeverityBadge({
-  severity,
-  assessed = true,
-}: {
-  severity: Severity
-  assessed?: boolean
-}) {
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${SEVERITY_BADGE[severity]}`}
-    >
-      {/* Shape as well as colour: severity must survive greyscale and glare. */}
-      <span className={`h-2 w-2 rounded-full ${SEVERITY_RULE[severity]}`} aria-hidden />
-      {SEVERITY_LABEL[severity]}
-      {!assessed ? <span className="font-semibold opacity-75">· pending</span> : null}
-    </span>
-  )
-}
 
 function Fact({ fact }: { fact: RecordFact }) {
   const missing = fact.value === null || fact.value === ""
   return (
     <div className="min-w-0">
-      <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <dt className="text-[11px] font-semibold text-muted-foreground">
         {fact.label}
       </dt>
       <dd
@@ -70,39 +31,32 @@ function Fact({ fact }: { fact: RecordFact }) {
   )
 }
 
-export function RecordHeader({ record, compact }: { record: RecordView; compact?: boolean }) {
+export function RecordHeader({
+  record,
+  compact,
+  embedded = false,
+}: {
+  record: RecordView
+  compact?: boolean
+  /** Render as a band inside a unified dossier card, without its own border. */
+  embedded?: boolean
+}) {
   if (compact) return null
 
   return (
-    <header className="relative overflow-hidden rounded-panel border border-card-line bg-card">
-      {/* Fixed-weight severity rule — the second, non-colour encoding. */}
-      <span
-        className={`absolute inset-y-0 left-0 w-1.5 ${SEVERITY_RULE[record.severity]}`}
-        aria-hidden
-      />
-
+    <header className={cn("relative overflow-hidden bg-card", !embedded && "rounded-panel border border-card-line")}>
       <div className="space-y-3 py-4 pl-5 pr-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-control bg-tint px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-brand-navy">
-            {record.typeLabel}
-          </span>
-          <SeverityBadge severity={record.severity} assessed={record.severityAssessed} />
-          <span
-            className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${STATUS_BADGE[record.status.group]}`}
-          >
-            {record.status.label}
-          </span>
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="min-w-0 font-heading text-lg leading-tight font-bold text-foreground">
+            {record.title}
+          </h2>
           {record.elapsedLabel ? (
-            <span className="ml-auto inline-flex items-center gap-1.5 text-xs font-semibold tabular-nums text-muted-foreground">
+            <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold tabular-nums text-muted-foreground">
               <ClockIcon className="size-3.5" aria-hidden />
               {record.elapsedLabel}
             </span>
           ) : null}
         </div>
-
-        <h2 className="font-heading text-lg leading-tight font-bold text-foreground">
-          {record.title}
-        </h2>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
           <span className="inline-flex min-w-0 items-center gap-1.5 font-medium text-foreground">

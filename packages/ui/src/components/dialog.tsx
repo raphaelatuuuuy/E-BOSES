@@ -49,6 +49,15 @@ function Dialog({
     }
   }, [open])
 
+  React.useEffect(() => {
+    if (!open) return
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false)
+    }
+    document.addEventListener("keydown", handleKeyDown)
+    return () => document.removeEventListener("keydown", handleKeyDown)
+  }, [open, setOpen])
+
   return (
     <DialogContext.Provider value={{ open, setOpen }}>
       {children}
@@ -114,8 +123,9 @@ function DialogContent({
 function DialogHeader({
   className,
   children,
+  action,
   ...props
-}: React.ComponentProps<"div">) {
+}: React.ComponentProps<"div"> & { action?: React.ReactNode }) {
   const { setOpen } = useDialog()
   const title = React.Children.toArray(children).find(
     (child) => React.isValidElement(child) && child.type === DialogTitle,
@@ -130,14 +140,17 @@ function DialogHeader({
       {...props}
     >
       <div className="min-w-0 flex-1">{title || children}</div>
-      <button
-        type="button"
-        onClick={() => setOpen(false)}
-        className="ml-4 flex size-7 shrink-0 items-center justify-center rounded-lg text-foreground transition-colors hover:bg-muted sm:size-8"
-        aria-label="Close"
-      >
-        <XIcon className="size-4 text-foreground" />
-      </button>
+      <div className="ml-4 flex shrink-0 items-center gap-1">
+        {action}
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="flex size-7 shrink-0 items-center justify-center rounded-lg text-foreground transition-colors hover:bg-muted sm:size-8"
+          aria-label="Close"
+        >
+          <XIcon className="size-4 text-foreground" />
+        </button>
+      </div>
     </div>
   )
 }

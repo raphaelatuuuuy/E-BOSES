@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom"
 
+import { statusGroupOf } from "@/features/dashboard/lib/status-vocabulary"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 import type { Concern, OfficialRoleSummary } from "@/features/dashboard/api"
@@ -105,9 +106,12 @@ export function KpiRow({
   /** Concerns filed this week minus last week. */
   weekDelta: number
 }) {
-  const resolved = concerns.filter((concern) => concern.status === "resolved").length
+  const settled = concerns.filter((concern) => statusGroupOf(concern.status) === "closed")
+  const resolved = settled.filter(
+    (concern) => concern.status === "resolved" || concern.status === "partially_resolved",
+  ).length
   const resolutionRate =
-    concerns.length === 0 ? 0 : Math.round((resolved / concerns.length) * 100)
+    settled.length === 0 ? 0 : Math.round((resolved / settled.length) * 100)
   const live = summary?.active_emergencies ?? 0
   const responders = summary?.responders_on_duty ?? 0
 
@@ -130,7 +134,7 @@ export function KpiRow({
         label="Resolution Rate"
         value={resolutionRate}
         suffix="%"
-        note={`${resolved} of ${concerns.length} concerns closed with a fix`}
+        note={`${resolved} of ${settled.length} finished concerns ended with a fix`}
         to="/dashboard/reports"
         tone="tint"
         loading={loading}

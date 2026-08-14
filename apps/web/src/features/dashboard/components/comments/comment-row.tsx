@@ -1,0 +1,168 @@
+import { useState, type ReactNode } from "react"
+
+import { cn } from "@workspace/ui/lib/utils"
+import { timeAgo } from "@/features/dashboard/lib/format"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
+import { commentPlaceLabel } from "@/features/dashboard/components/home/home-style"
+import { renderCommentBody } from "@/features/dashboard/components/comment-mentions"
+import type { UnifiedComment } from "./comment-types"
+
+const AVATAR = "!size-8 !text-[13px] leading-none !bg-slate-soft !text-navy-muted"
+
+/**
+ * The reply connector runs *avatar to avatar*: a trunk descending from the
+ * parent's avatar, curving right into the reply's avatar. It is drawn in two
+ * pieces because only the reply knows where it sits — `CommentRow trunk`
+ * carries the vertical run through the parent's body, and the pieces below
+ * carry the curve and the run between siblings.
+ *
+ * Geometry: the avatar column is 32px wide, so the trunk sits at x=16.
+ * Replies indent by 36px (`REPLY_INDENT`), leaving a 20px curve.
+ */
+export const REPLY_INDENT = "pl-9"
+
+/** Curve from the trunk into this reply's avatar. Every reply gets one. */
+export const REPLY_CURVE =
+  "pointer-events-none absolute -left-5 -top-3 h-7 w-5 rounded-bl-[12px] border-b border-l border-neutral-200"
+
+/** Trunk continuing past this reply to the next one. Not on the last reply. */
+export const REPLY_TRUNK =
+  "pointer-events-none absolute -left-5 top-4 -bottom-3 w-px bg-neutral-200"
+
+export function CommentAvatar({
+  comment,
+  className,
+}: {
+  comment: UnifiedComment
+  className?: string
+}) {
+  if (comment.author.user) {
+    return <UserAvatar user={comment.author.user} size="sm" className={cn(AVATAR, className)} />
+  }
+  return (
+    <span
+      className={cn(
+        "inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[13px] font-semibold text-navy-muted",
+        className,
+      )}
+    >
+      {(comment.author.label[0] || "?").toUpperCase()}
+    </span>
+  )
+}
+
+export function OfficialBadge() {
+  return (
+    <span className="rounded-full bg-brand-navy/10 px-1.5 py-0.5 text-[10px] font-bold text-brand-navy">
+      Official
+    </span>
+  )
+}
+
+export function CommentMeta({
+  comment,
+  extra,
+}: {
+  comment: UnifiedComment
+  extra?: ReactNode
+}) {
+  const place = comment.author.user ? commentPlaceLabel(comment.author.user) : null
+  return (
+    <p className="flex flex-wrap items-center gap-x-1.5 text-[13px] leading-snug text-neutral-400">
+      <span className="font-semibold text-neutral-900">{comment.author.label}</span>
+      {comment.author.isOfficial ? <OfficialBadge /> : null}
+      <span>· {timeAgo(comment.createdAt)}</span>
+      {place ? <span>· {place}</span> : null}
+      {extra}
+    </p>
+  )
+}
+
+export function CommentBody({ comment }: { comment: UnifiedComment }) {
+  const [showOriginal, setShowOriginal] = useState(false)
+  const key = `${comment.id}|${comment.body}|${comment.isEdited}`
+  const [prevKey, setPrevKey] = useState(key)
+  if (prevKey !== key) {
+    setPrevKey(key)
+    setShowOriginal(false)
+  }
+  const canShowOriginal = comment.isEdited && Boolean(comment.originalBody)
+
+  return (
+    <>
+      <p className="m-0 whitespace-pre-wrap break-words text-[15px] leading-[1.35] text-neutral-800">
+        {renderCommentBody(comment.body)}
+      </p>
+      {canShowOriginal ? (
+        <button
+          type="button"
+          onClick={() => setShowOriginal((value) => !value)}
+          className="mt-1 text-[12px] font-medium text-neutral-400 transition-colors hover:text-neutral-700"
+        >
+          {showOriginal ? "Hide original" : "View original"}
+        </button>
+      ) : null}
+      {canShowOriginal && showOriginal ? (
+        <div className="mt-1.5 rounded-lg bg-neutral-50 px-2.5 py-1.5 ring-1 ring-neutral-100">
+          <p className="m-0 whitespace-pre-wrap break-words text-[14px] leading-snug text-neutral-600">
+            {renderCommentBody(comment.originalBody)}
+          </p>
+        </div>
+      ) : null}
+    </>
+  )
+}
+
+export function CommentRow({
+  comment,
+  meta,
+  actions,
+  trailing,
+  trunk = false,
+  children,
+  className,
+}: {
+  comment: UnifiedComment
+  meta?: ReactNode
+  actions?: ReactNode
+  trailing?: ReactNode
+  /** Runs the thread trunk down from this avatar — set when it has replies. */
+  trunk?: boolean
+  children?: ReactNode
+  className?: string
+}) {
+  return (
+    <div className={cn("flex items-stretch gap-2.5", className)}>
+      <div className="flex w-8 shrink-0 flex-col items-center">
+        <CommentAvatar comment={comment} />
+        {trunk ? <span aria-hidden className="mt-1.5 w-px flex-1 bg-neutral-200" /> : null}
+      </div>
+      <div className="min-w-0 flex-1">
+        <CommentMeta comment={comment} extra={meta} />
+        {children ?? <CommentBody comment={comment} />}
+        {actions ? (
+          <div className="mt-2 flex flex-wrap items-center gap-3 leading-none">{actions}</div>
+        ) : null}
+      </div>
+      {trailing ? <div className="-mt-0.5 shrink-0">{trailing}</div> : null}
+    </div>
+  )
+}
+
+export function CommentAction({
+  onClick,
+  children,
+}: {
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-[13px] font-semibold text-neutral-500 transition-colors hover:text-neutral-800"
+    >
+      {children}
+    </button>
+  )
+}

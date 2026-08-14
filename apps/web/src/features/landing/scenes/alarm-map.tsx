@@ -1,12 +1,16 @@
 // apps/web/src/features/landing/scenes/alarm-map.tsx
-import { Component, Suspense, lazy, useRef, type ReactNode } from "react"
+import { Component, Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react"
 import gsap from "gsap"
 import { useGSAP } from "@gsap/react"
-import { MapPin, Phone } from "@phosphor-icons/react"
+import { MapPinIcon, PhoneIcon } from "lucide-react"
 
 import { MM, isLowEndDevice, prefersReducedMotion } from "../landing-theme"
 import { AlarmMap2D } from "./alarm-map-2d"
 
+// The 3D scene pulls in three.js (~900 kB before gzip). It is only mounted
+// once the map section gets near the viewport (see mapNear3D below), so the
+// chunk is not downloaded while the user is still reading the hero / problem
+// sections. The 2D fallback stays on screen until the chunk is ready.
 const AlarmMap3D = lazy(() => import("./alarm-map-3d"))
 
 const BEATS = [
@@ -31,6 +35,33 @@ export function AlarmMap() {
   const progress = useRef(0)
   const reduced = prefersReducedMotion()
   const use3D = !isLowEndDevice() && !reduced
+
+  // Defer the three.js chunk until the pinned map area is within ~1.5 viewport
+  // heights below the screen. Stops the browser downloading ~244 kB gzip for a
+  // scene the visitor may never scroll to. When IntersectionObserver is
+  // unavailable the map is treated as "already near" so 3D still works.
+  const [mapNear3D, setMapNear3D] = useState(
+    () => typeof IntersectionObserver === "undefined",
+  )
+
+  useEffect(() => {
+    if (!use3D || mapNear3D) return
+    const target = pinArea.current
+    if (!target) return
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          setMapNear3D(true)
+          observer.disconnect()
+        }
+      },
+      // 1.5 viewport heights of lead time: the SVG is usually in cache, and the
+      // 2D fallback covers the brief fetch window after the pin releases.
+      { rootMargin: "0px 0px 150% 0px", threshold: 0 },
+    )
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [use3D, mapNear3D])
 
   useGSAP(
     () => {
@@ -108,7 +139,7 @@ export function AlarmMap() {
             grid fits short viewports. No overflow-clip: the canvas is sized to
             this box, so nothing may cut it on the sides or bottom. */}
         <div className="relative mx-auto flex aspect-square w-full min-w-0 max-w-[min(96vw,32rem,56svh)] items-center justify-center lg:max-w-[min(48rem,84svh)]">
-          {use3D ? (
+          {use3D && mapNear3D ? (
             <MapErrorBoundary fallback={<AlarmMap2D progress={progress} />}>
               <Suspense fallback={<AlarmMap2D progress={progress} />}>
                 <AlarmMap3D progress={progress} />
@@ -130,15 +161,14 @@ export function AlarmMap() {
                 Emergency help
               </p>
               <p className="mt-2 max-w-md text-sm leading-relaxed text-white/60">
-                Designed for seniors: one large button, minimal steps. If someone
-                is in immediate danger, call the city hotline directly.
+                If someone is in immediate danger, call the city hotline directly.
               </p>
               <a
                 href="https://www.google.com/maps/search/?api=1&query=Barangay+Hall+Marikina+Heights+Marikina+City"
                 target="_blank" rel="noreferrer"
                 className="mt-3 inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-landing-cream underline decoration-primary decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
               >
-                <MapPin className="size-4" aria-hidden /> Barangay Hall, Marikina Heights
+                <MapPinIcon className="size-4" strokeWidth={1.5} aria-hidden /> Barangay Hall, Marikina Heights
               </a>
             </div>
             <div className="flex shrink-0 flex-col gap-2 md:items-end">
@@ -146,7 +176,7 @@ export function AlarmMap() {
                 href="tel:161"
                 className="inline-flex min-h-12 w-full items-center justify-center gap-3 bg-accent px-8 text-lg font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white md:w-auto"
               >
-                <Phone className="size-5" aria-hidden weight="fill" /> Call 161
+                <PhoneIcon className="size-5" strokeWidth={2.5} aria-hidden /> Call 161
               </a>
               <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-white/45 md:text-right">
                 Marikina City emergency hotline

@@ -47,9 +47,16 @@ export interface SosEmergencyOption {
   customIconLabel?: string
   iconImageUrl?: string
   desc: string
-  iconBg: string
-  iconColor: string
 }
+
+/**
+ * One treatment for every emergency type.
+ *
+ * Each type used to carry its own `iconBg`/`iconColor` pair, so the SOS wizard
+ * opened as an eight-colour chart in which no colour meant anything. The icon
+ * says what the emergency is; the surface says only "pick one".
+ */
+export const SOS_ICON_WELL = "bg-white/10 text-white"
 
 /**
  * Emergency type catalogue — shared by the type-select step and the
@@ -61,56 +68,42 @@ export const emergencies: SosEmergencyOption[] = [
     value: "medical" as const,
     icon: Activity,
     desc: "Injury, illness, rescue",
-    iconBg: "bg-emerald-500/20",
-    iconColor: "text-emerald-400",
   },
   {
     label: "Fire",
     value: "fire" as const,
     icon: Flame,
     desc: "Building, house, residence",
-    iconBg: "bg-orange-500/20",
-    iconColor: "text-orange-400",
   },
   {
     label: "Crime",
     value: "crime" as const,
     icon: ShieldAlert,
     desc: "Assault, theft, threat",
-    iconBg: "bg-violet-500/20",
-    iconColor: "text-violet-400",
   },
   {
     label: "Disaster",
     value: "disaster" as const,
     icon: CloudRainWind,
     desc: "Flood, quake, storm",
-    iconBg: "bg-blue-500/20",
-    iconColor: "text-blue-400",
   },
   {
     label: "Child Protection",
     value: "child_protection" as const,
     icon: ShieldAlert,
     desc: "Child abuse, neglect, exploitation",
-    iconBg: "bg-pink-500/20",
-    iconColor: "text-pink-300",
   },
   {
     label: "Domestic Violence",
     value: "domestic_violence" as const,
     icon: ShieldAlert,
     desc: "Violence at home, VAWC cases",
-    iconBg: "bg-red-500/20",
-    iconColor: "text-red-300",
   },
   {
     label: "Drug-Related",
     value: "drug_related" as const,
     icon: ShieldAlert,
     desc: "Drug-related incident or concern",
-    iconBg: "bg-amber-500/20",
-    iconColor: "text-amber-300",
   },
 ]
 
@@ -122,7 +115,5 @@ export function emergencyOptionsFromCategories(categories: EmergencyCategory[]) 
     customIconLabel: category.custom_icon_label,
     iconImageUrl: category.icon_image_url,
     desc: category.subtext,
-    iconBg: "bg-white/10",
-    iconColor: "text-white",
   }))
 }

@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import type {
+  Announcement,
   Concern,
+  GeoJsonPolygon,
   ResidentAlertsMapSnapshot,
   ResidentMapEmergency,
 } from "@/features/dashboard/api"
@@ -12,6 +14,17 @@ import {
   MAP_BOUNDS,
   validCoord,
 } from "@/features/dashboard/lib/resident-map-utils"
+import { timeAgo } from "@/features/dashboard/lib/format"
+import { formatFixTime } from "@/features/dashboard/lib/last-known-position"
+import { advisoryMeta, advisoryMarkerHtml } from "@/features/dashboard/components/community-content/advisory-tags"
+import { MAP_COLORS } from "@/features/dashboard/components/alerts-map/lib"
+import {
+  concernMarkerHtml,
+  concernMarkerSize,
+  isResolvedStatus,
+} from "@/features/dashboard/components/map/concern-marker"
+import { geoJsonToRing, polygonCentroid } from "@/features/dashboard/components/community-content/area-lib"
+import { geoJsonToLines } from "@/features/dashboard/components/alerts-map/lib"
 
 import type leaflet from "leaflet"
 
@@ -23,12 +36,6 @@ export type MapApi = {
   fitBoundary: (paddingBottom?: number) => void
   zoomIn: () => void
   zoomOut: () => void
-}
-
-function markerDotHtml(color: string, selected: boolean) {
-  const size = selected ? 34 : 22
-  const border = selected ? 3 : 2
-  return `<div style="width:${size}px;height:${size}px;border-radius:999px;background:${color};border:${border}px solid #fff;box-shadow:0 4px 14px rgba(15,23,42,.28)"></div>`
 }
 
 /** Ongoing SOS pin — red pulse-style dot */
@@ -66,11 +73,15 @@ export function ResidentLeafletMap({
   boundary,
   posts,
   emergencies = [],
+  announcements = [],
   selectedId,
   selectedEmergencyId,
+  selectedAnnouncementId,
   userPos,
+  userPosAt,
   onSelect,
   onSelectEmergency,
+  onSelectAnnouncement,
   onReady,
   onMapInteract,
 }: {
@@ -78,11 +89,18 @@ export function ResidentLeafletMap({
   boundary?: ResidentAlertsMapSnapshot["map"]["boundary"] | null
   posts: Concern[]
   emergencies?: ResidentMapEmergency[]
+  /** Published barangay advisories that carry a drawn affected area. */
+  announcements?: Announcement[]
   selectedId: number | null
   selectedEmergencyId?: number | null
+  /** Advisories keep their barangay highlight while their panel is open. */
+  selectedAnnouncementId?: number | null
   userPos: { lat: number; lng: number } | null
+  /** Epoch ms of the last GPS fix (shown under the user pin tooltip). */
+  userPosAt?: number | null
   onSelect: (id: number) => void
   onSelectEmergency?: (id: number) => void
+  onSelectAnnouncement?: (id: number) => void
   onReady: (api: MapApi) => void
   onMapInteract?: () => void
 }) {
@@ -91,6 +109,12 @@ export function ResidentLeafletMap({
   const LRef = useRef<typeof leaflet | null>(null)
   const groupRef = useRef<leaflet.LayerGroup | null>(null)
   const boundaryLayerRef = useRef<leaflet.GeoJSON | null>(null)
+  const advisoryRoadsRef = useRef<
+    Map<number, { roads: Array<{ casing: leaflet.Polyline; core: leaflet.Polyline }>; wide: string | null }>
+  >(new Map())
+  const highlightGroupRef = useRef<leaflet.LayerGroup | null>(null)
+  const hoverIdRef = useRef<number | null>(null)
+  const focusIdRef = useRef<number | null>(null)
   const onMapInteractRef = useRef(onMapInteract)
   useEffect(() => {
     onMapInteractRef.current = onMapInteract
@@ -99,6 +123,39 @@ export function ResidentLeafletMap({
 
   const boundaryGeomKey = boundary?.geometry ? JSON.stringify(boundary.geometry) : ""
   const fittedGeomKeyRef = useRef("")
+
+  // Advisory pin hover/focus: dimmed roads at rest; on focus the advisory's
+  // roads go full-strength and a barangay-wide advisory fills the boundary.
+  const applyAdvisoryFocus = useCallback(
+    (id: number | null) => {
+      const L = LRef.current
+      const highlight = highlightGroupRef.current
+      if (!L || !highlight) return
+      highlight.clearLayers()
+      for (const [key, entry] of advisoryRoadsRef.current) {
+        const strong = id != null && key === id
+        for (const { casing, core } of entry.roads) {
+          casing.setStyle({ opacity: strong ? 0.95 : 0.55 })
+          core.setStyle({ opacity: strong ? 0.95 : 0.4 })
+        }
+      }
+      const entry = id != null ? advisoryRoadsRef.current.get(id) : null
+      if (entry?.wide && boundary?.geometry) {
+        const ring = geoJsonToRing(boundary.geometry as GeoJsonPolygon)
+        if (ring.length >= 3) {
+          L.polygon(ring, {
+            color: entry.wide,
+            weight: 2,
+            opacity: 0.9,
+            fillColor: entry.wide,
+            fillOpacity: 0.15,
+            interactive: false,
+          }).addTo(highlight)
+        }
+      }
+    },
+    [boundary],
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -155,6 +212,8 @@ export function ResidentLeafletMap({
       )
       carto.addTo(map)
 
+      // Hover-only barangay fill: sits beneath every advisory road/marker.
+      highlightGroupRef.current = L.layerGroup().addTo(map)
       groupRef.current = L.layerGroup().addTo(map)
       mapRef.current = map
 
@@ -245,6 +304,9 @@ export function ResidentLeafletMap({
       groupRef.current = null
       boundaryLayerRef.current = null
       fittedGeomKeyRef.current = ""
+      highlightGroupRef.current = null
+      hoverIdRef.current = null
+      focusIdRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -299,10 +361,13 @@ export function ResidentLeafletMap({
     const group = groupRef.current
     if (!L || !group) return
     group.clearLayers()
+    advisoryRoadsRef.current.clear()
+    highlightGroupRef.current?.clearLayers()
+    hoverIdRef.current = null
 
     // Only plot device GPS when near Marikina (avoids far-away user pin)
     if (userPos && isLocalGps(userPos)) {
-      L.marker([userPos.lat, userPos.lng], {
+      const userMarker = L.marker([userPos.lat, userPos.lng], {
         icon: L.divIcon({
           className: "",
           html: userPinHtml(),
@@ -310,22 +375,43 @@ export function ResidentLeafletMap({
           iconAnchor: [14, 14],
         }),
         zIndexOffset: 1200,
-        interactive: false,
         keyboard: false,
-      }).addTo(group)
+      })
+      userMarker.bindTooltip(
+        `<div style="font:600 12px/1.5 system-ui,sans-serif;color:#0f172a;max-width:200px">
+          <div style="font-weight:800;color:#1d4ed8;margin-bottom:1px">You</div>
+          ${
+            userPosAt != null && Number.isFinite(userPosAt)
+              ? `<div style="font-weight:500;color:#64748b">Last known: ${escapeHtml(formatFixTime(userPosAt))}</div>`
+              : ""
+          }
+        </div>`,
+        {
+          direction: "top",
+          offset: [0, -10],
+          opacity: 1,
+          className: "eboses-em-tip",
+          permanent: false,
+        },
+      )
+      userMarker.addTo(group)
     }
 
     for (const post of posts) {
       const pos = validCoord(post.latitude, post.longitude)
       if (!pos) continue
-      const color = categoryMeta[post.category]?.color ?? "#64748b"
       const selected = selectedId === post.id
+      const pinSize = concernMarkerSize(selected)
       const marker = L.marker(pos, {
         icon: L.divIcon({
           className: "",
-          html: markerDotHtml(selected ? color : "#64748b", selected),
-          iconSize: [selected ? 34 : 22, selected ? 34 : 22],
-          iconAnchor: [selected ? 17 : 11, selected ? 17 : 11],
+          html: concernMarkerHtml({
+            category: post.category,
+            status: post.status,
+            selected,
+          }),
+          iconSize: [pinSize, pinSize],
+          iconAnchor: [pinSize / 2, pinSize / 2],
         }),
         zIndexOffset: selected ? 900 : 100,
       })
@@ -333,7 +419,174 @@ export function ResidentLeafletMap({
         L.DomEvent.stopPropagation(e)
         onSelect(post.id)
       })
+      const meta = categoryMeta[post.category]
+      const catLabel = meta?.label ?? post.category.replace(/_/g, " ")
+      marker.bindTooltip(
+        `<div style="font:600 11px/1.45 system-ui,sans-serif;color:#0f172a;max-width:200px">
+          <div style="font-weight:800;color:${meta?.color ?? "#475569"}">${escapeHtml(catLabel)}</div>
+          ${
+            isResolvedStatus(post.status)
+              ? `<div style="font-weight:700;color:${MAP_COLORS.resolved}">Resolved</div>`
+              : ""
+          }
+          ${
+            post.created_at
+              ? `<div style="font-weight:500;color:#64748b">Posted ${escapeHtml(timeAgo(post.created_at))} ago</div>`
+              : ""
+          }
+        </div>`,
+        {
+          direction: "top",
+          offset: [0, -8],
+          opacity: 1,
+          className: "eboses-em-tip",
+          permanent: false,
+        },
+      )
       marker.addTo(group)
+    }
+
+    // Barangay advisories — the affected-area outline plus a tag icon at its
+    // centroid. Officials pick the tag (water, electric, road, flooding,
+    // general), so each advisory reads as its icon + color on the map.
+    /** One advisory marker, wherever the advisory's anchor turns out to be. */
+    const addAdvisoryMarker = (announcement: Announcement, at: leaflet.LatLngTuple) => {
+      const id = announcement.id
+      const tagColor = advisoryMeta(announcement.tag).color
+      const marker = L.marker(at, {
+        icon: L.divIcon({
+          className: "",
+          html: advisoryMarkerHtml(announcement.tag),
+          iconSize: [26, 26],
+          iconAnchor: [13, 13],
+        }),
+        zIndexOffset: 600,
+        keyboard: true,
+      })
+      marker.on("mouseover", () => {
+        hoverIdRef.current = id
+        applyAdvisoryFocus(id)
+      })
+      marker.on("mouseout", () => {
+        hoverIdRef.current = null
+        applyAdvisoryFocus(focusIdRef.current)
+      })
+      marker.on("click", (e) => {
+        L.DomEvent.stopPropagation(e)
+        onSelectAnnouncement?.(id)
+      })
+      const icon = marker.getElement()
+      if (icon) {
+        icon.addEventListener("focus", () => {
+          focusIdRef.current = id
+          applyAdvisoryFocus(id)
+        })
+        icon.addEventListener("blur", () => {
+          focusIdRef.current = null
+          applyAdvisoryFocus(hoverIdRef.current)
+        })
+      }
+      marker.bindTooltip(
+        `<div style="font:600 11px/1.45 system-ui,sans-serif;color:#0f172a;max-width:220px">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
+            <span style="font-weight:800;color:${tagColor}">${escapeHtml(announcement.tag || "Announcement")}</span>
+            ${
+              announcement.is_pinned
+                ? `<span style="font-size:9px;font-weight:800;letter-spacing:.04em;color:#fff;background:${tagColor};border-radius:999px;padding:1px 6px">PINNED</span>`
+                : ""
+            }
+          </div>
+          <div style="font-weight:800;color:#0f172a;margin-bottom:2px">${escapeHtml(announcement.title)}</div>
+          ${
+            announcement.place_label
+              ? `<div style="font-weight:600;color:#475569">${escapeHtml(announcement.place_label)}</div>`
+              : ""
+          }
+          ${
+            announcement.created_at
+              ? `<div style="font-weight:500;color:#64748b">Posted ${escapeHtml(timeAgo(announcement.created_at))} ago</div>`
+              : ""
+          }
+        </div>`,
+        {
+          direction: "top",
+          offset: [0, -14],
+          opacity: 1,
+          className: "eboses-em-tip",
+          permanent: false,
+        },
+      )
+      marker.addTo(group)
+    }
+
+    for (const announcement of announcements) {
+      const geometry = announcement.area_geometry
+      const point = validCoord(announcement.latitude, announcement.longitude)
+      const tagColor = advisoryMeta(announcement.tag).color
+      const roads: Array<{ casing: leaflet.Polyline; core: leaflet.Polyline }> = []
+
+      // An explicit point wins: the official pinned that exact place.
+      if (point) addAdvisoryMarker(announcement, point)
+
+      if (!geometry) {
+        const drawRoad = (run: leaflet.LatLngTuple[]) => {
+          const casing = L.polyline(run, {
+            color: "#ffffff",
+            weight: 8,
+            opacity: 0.55,
+            lineCap: "round",
+            lineJoin: "round",
+            interactive: false,
+          }).addTo(group)
+          const core = L.polyline(run, {
+            color: tagColor,
+            weight: 3,
+            opacity: 0.4,
+            lineCap: "round",
+            lineJoin: "round",
+            interactive: false,
+          }).addTo(group)
+          roads.push({ casing, core })
+        }
+        let anchor: leaflet.LatLngTuple | null = null
+        for (const line of announcement.street_geometries ?? []) {
+          const points = geoJsonToLines(line)
+          for (const run of points) {
+            drawRoad(run)
+            if (!anchor && run.length > 0) anchor = run[Math.floor(run.length / 2)] ?? null
+          }
+        }
+        if (!point && !anchor) {
+          const bGeometry = boundary?.geometry as GeoJsonPolygon | null
+          const ring = bGeometry ? geoJsonToRing(bGeometry) : []
+          const centroid = ring.length > 2 ? polygonCentroid(bGeometry) : null
+          addAdvisoryMarker(announcement, centroid ?? [center.latitude, center.longitude])
+          advisoryRoadsRef.current.set(announcement.id, { roads: [], wide: tagColor })
+        } else if (!point && anchor) {
+          addAdvisoryMarker(announcement, anchor)
+        }
+        if (roads.length > 0) advisoryRoadsRef.current.set(announcement.id, { roads, wide: null })
+        continue
+      }
+      try {
+        const areaLayer = L.geoJSON(geometry as Parameters<typeof L.geoJSON>[0], {
+          style: {
+            color: tagColor,
+            weight: 1.5,
+            opacity: 0.55,
+            fillColor: tagColor,
+            fillOpacity: 0.18,
+            interactive: false,
+          },
+        })
+        areaLayer.addTo(group)
+
+        // Without an explicit point, the corridor's centroid carries the icon.
+        const centroid = point ? null : polygonCentroid(geometry)
+        if (centroid) addAdvisoryMarker(announcement, centroid)
+      } catch {
+        /* skip a malformed geometry */
+      }
     }
 
     // Ongoing emergencies — red dots + brief label
@@ -363,6 +616,11 @@ export function ResidentLeafletMap({
           </div>
           <div style="font-weight:600;color:#b91c1c;margin-bottom:2px">${escapeHtml(brief.status.label)}</div>
           <div style="font-weight:500;color:#475569">${escapeHtml(brief.line)}</div>
+          ${
+            em.created_at
+              ? `<div style="font-weight:500;color:#64748b">Posted ${escapeHtml(timeAgo(em.created_at))} ago</div>`
+              : ""
+          }
         </div>`,
         {
           direction: "top",
@@ -378,7 +636,9 @@ export function ResidentLeafletMap({
       })
       marker.addTo(group)
     }
-  }, [mapReady, posts, emergencies, selectedId, selectedEmergencyId, userPos, onSelect, onSelectEmergency])
+    // Re-apply after a rebuild: a selection survives while a hover does not.
+    applyAdvisoryFocus(focusIdRef.current)
+  }, [mapReady, posts, emergencies, announcements, selectedId, selectedEmergencyId, userPos, userPosAt, onSelect, onSelectEmergency, onSelectAnnouncement, boundary?.geometry, center.latitude, center.longitude, applyAdvisoryFocus])
 
   useEffect(() => {
     if (!mapReady || selectedId == null || !mapRef.current) return
@@ -393,6 +653,21 @@ export function ResidentLeafletMap({
     const pos = em ? validCoord(em.latitude, em.longitude) : null
     if (pos) mapRef.current.panTo(pos, { animate: true })
   }, [mapReady, selectedEmergencyId, emergencies])
+
+  // Opening an advisory keeps its barangay highlight while the panel is open;
+  // closing the panel drops it back to hover-only.
+  useEffect(() => {
+    if (!mapReady) return
+    if (selectedAnnouncementId == null) {
+      if (focusIdRef.current != null) {
+        focusIdRef.current = null
+        applyAdvisoryFocus(hoverIdRef.current)
+      }
+    } else {
+      focusIdRef.current = selectedAnnouncementId
+      applyAdvisoryFocus(selectedAnnouncementId)
+    }
+  }, [mapReady, selectedAnnouncementId, applyAdvisoryFocus])
 
   return (
     <>

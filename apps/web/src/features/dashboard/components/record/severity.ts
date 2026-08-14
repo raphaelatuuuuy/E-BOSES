@@ -24,10 +24,10 @@ export type Severity = "low" | "moderate" | "high" | "critical"
 export const SEVERITY_ORDER: readonly Severity[] = ["low", "moderate", "high", "critical"]
 
 export const SEVERITY_LABEL: Record<Severity, string> = {
-  critical: "CRITICAL",
-  high: "HIGH",
-  moderate: "MODERATE",
-  low: "LOW",
+  critical: "Critical",
+  high: "High",
+  moderate: "Moderate",
+  low: "Low",
 }
 
 export function severityLevel(severity: Severity): number {
@@ -201,4 +201,52 @@ export function sortRecords<T extends SortableRecord>(records: readonly T[]): T[
     if (bandDelta !== 0) return bandDelta
     return b.priority - a.priority
   })
+}
+
+export type PriorityBand = "high" | "medium" | "low"
+
+export const PRIORITY_BAND_LABEL: Record<PriorityBand, string> = {
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+}
+
+export function priorityBand(score: number): PriorityBand {
+  if (score >= 65) return "high"
+  if (score >= 35) return "medium"
+  return "low"
+}
+
+export interface PriorityExplanationInput {
+  severity: Severity
+  urgentAttention?: boolean
+  hoursSinceStatusChange?: number
+  linkedReports?: number
+  voteCount?: number
+  categoryLabel?: string
+}
+
+export function priorityReasons(input: PriorityExplanationInput): string[] {
+  const reasons: string[] = []
+  if (input.urgentAttention) reasons.push("the report describes immediate danger")
+  if (input.severity === "critical" || input.severity === "high") {
+    reasons.push(`the assessed impact is ${input.severity}`)
+  }
+  if ((input.linkedReports ?? 1) > 1) {
+    reasons.push(`${input.linkedReports} residents reported it`)
+  }
+  const days = Math.floor((input.hoursSinceStatusChange ?? 0) / 24)
+  if (days >= 3) reasons.push(`it has been waiting ${days} days`)
+  if ((input.voteCount ?? 0) >= 5) reasons.push(`${input.voteCount} neighbours supported it`)
+  if (reasons.length === 0) reasons.push("no urgent factors were found")
+  return reasons
+}
+
+export function priorityExplanation(band: PriorityBand, input: PriorityExplanationInput): string {
+  const reasons = priorityReasons(input)
+  const joined =
+    reasons.length === 1
+      ? reasons[0]
+      : `${reasons.slice(0, -1).join(", ")} and ${reasons[reasons.length - 1]}`
+  return `${PRIORITY_BAND_LABEL[band]} priority because ${joined}.`
 }

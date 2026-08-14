@@ -4,17 +4,20 @@ import { CalendarRangeIcon, GaugeIcon } from "lucide-react"
 
 import { ActivityGrid, Sparkline } from "@/features/dashboard/components/charts"
 import type { ResponderShift } from "@/features/dashboard/emergency-api"
-import { Pane } from "@/features/dashboard/components/responder/dispatch-surface"
 import { formatResponse } from "@/features/dashboard/lib/responder-format"
 
 /**
  * The two graphics on the Shift screen.
  *
+ * Both are bare blocks — no card chrome of their own — because the page
+ * places them side by side inside one card with a hairline divider, keeping
+ * the screen to three regions instead of five cards.
+ *
  * Both are single-series on purpose. The dark chart ramp separates by hue
  * rather than lightness, so its weak spot is telling adjacent *categorical*
- * series apart — a weakness a single series cannot hit. It also suits the data:
- * a barangay responder handles few incidents, and a four-slice donut where
- * three slices are zero says less than the number would.
+ * series apart — a weakness a single series cannot hit. It also suits the
+ * data: a barangay responder handles few incidents, and a four-slice donut
+ * where three slices are zero says less than the number would.
  *
  * Neither invents data. Below two completed shifts the trend prints the figure
  * with no plot, because a two-point line implies a shape that is not there.
@@ -25,13 +28,12 @@ const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] as const
 const WEEK_ROWS = ["Last", "This"] as const
 
 /**
- * Chart frame, on the console's shared `Pane`. The figure rides in the pane
- * header's action slot so both graphics agree with every other card on the
- * screen about corner radius, header height and title size.
+ * Block header (icon + title + figure) shared by every graphic. The page
+ * supplies the containing card and the hairline between the two blocks.
  */
-function Frame({
+function Block({
   label,
-  icon,
+  icon: Icon,
   hint,
   figure,
   children,
@@ -43,21 +45,21 @@ function Frame({
   children: React.ReactNode
 }) {
   return (
-    <Pane
-      title={label}
-      icon={icon}
-      className="min-h-0"
-      action={
-        figure ? (
-          <span className="shrink-0 pr-2 text-[13px] font-bold tabular-nums text-foreground">
+    <div className="min-w-0">
+      <div className="flex items-center gap-2">
+        <Icon className="size-4 shrink-0 text-subtle-foreground" />
+        <h3 className="min-w-0 truncate text-[15px] font-bold leading-none text-foreground">
+          {label}
+        </h3>
+        {figure ? (
+          <span className="ml-auto shrink-0 text-[13px] font-bold tabular-nums text-foreground">
             {figure}
           </span>
-        ) : null
-      }
-    >
-      <p className="text-body leading-6 text-subtle-foreground">{hint}</p>
+        ) : null}
+      </div>
+      <p className="mt-1.5 text-body leading-6 text-subtle-foreground">{hint}</p>
       <div className="mt-4">{children}</div>
-    </Pane>
+    </div>
   )
 }
 
@@ -97,7 +99,7 @@ export function DutyRhythm({ shifts }: { shifts: ResponderShift[] }) {
   }, [shifts])
 
   return (
-    <Frame
+    <Block
       label="Duty rhythm"
       icon={CalendarRangeIcon}
       hint="Days you served over the last two weeks. A darker square means more incidents handled."
@@ -109,7 +111,7 @@ export function DutyRhythm({ shifts }: { shifts: ResponderShift[] }) {
         cells={cells}
         legendLabel="One square is one day"
       />
-    </Frame>
+    </Block>
   )
 }
 
@@ -128,7 +130,7 @@ export function ResponseTrend({ shifts }: { shifts: ResponderShift[] }) {
   const latest = values[values.length - 1] ?? null
 
   return (
-    <Frame
+    <Block
       label="Response time"
       icon={GaugeIcon}
       hint="Average time from dispatch to your acknowledgement, across recent shifts."
@@ -148,6 +150,6 @@ export function ResponseTrend({ shifts }: { shifts: ResponderShift[] }) {
           className="h-12"
         />
       )}
-    </Frame>
+    </Block>
   )
 }

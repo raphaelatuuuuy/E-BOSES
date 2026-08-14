@@ -53,6 +53,11 @@ apps/web/certs/
 vite_error.txt
 vite_output.txt
 
+# Demo seeding artifacts
+apps/api/_demo_photo_cache/
+apps/api/_demo_backups/
+apps/api/_describe_*.json
+
 # Turbo cache
 .turbo/
 

@@ -1,46 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { toast } from "sonner"
+import { useCallback, useEffect, useMemo, useState } from "react"
 
 import {
   listAssignedEmergencies,
   type EmergencyAlert,
 } from "@/features/dashboard/emergency-api"
+import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/record/status"
 
-/**
- * Assigned dispatches, polled.
- *
- * Lifted out of the old responder dispatch FAB so the sidebar Dispatch nav
- * group, the mobile bottom bar and the sync indicator can all read one count
- * instead of each owning a poll loop. Exactly one consumer is ever mounted at a
- * time — this hook is shared for the *code*, not to support simultaneous
- * mounts, and mounting two would give two pollers and two arrival toasts just
- * as it did before.
- */
-
-/**
- * A dispatch counts as active until it is settled. The old list stopped at
- * "arrived", which silently dropped every emergency the responder kept working
- * past that point — in progress, backup requested/assigned, transfer and
- * escalation are all still live work, and they are exactly the dispatches the
- * sidebar alarm exists for. Only resolved, closed, cancelled, false alarm and
- * invalid read as done.
- */
-export const ACTIVE_DISPATCH_STATUSES = new Set([
-  "submitted",
-  "routing",
-  "routed",
-  "awaiting_acknowledgment",
-  "acknowledged",
-  "en_route",
-  "nearby",
-  "arrived",
-  "resident_safe",
-  "backup_requested",
-  "backup_assigned",
-  "in_progress",
-  "transfer_required",
-  "escalation_required",
-])
+export const ACTIVE_DISPATCH_STATUSES = ACTIVE_EMERGENCY_STATUSES
 
 const POLL_MS = 30_000
 
@@ -58,24 +24,16 @@ export function useAssignedDispatches(enabled: boolean): AssignedDispatches {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState("")
   const [syncedAt, setSyncedAt] = useState<number | null>(null)
-  const hadActiveRef = useRef(false)
 
   const load = useCallback(async () => {
     try {
       const next = await listAssignedEmergencies()
-      const hasActive = next.some((alert) => ACTIVE_DISPATCH_STATUSES.has(alert.status))
+      // No toast on arrival — a polling app that interrupts with a toast keeps
+      // nagging while the push, the notification inbox and the red dispatch
+      // badge already carry the alert once each.
       setAlerts(next)
       setLoadError("")
       setSyncedAt(Date.now())
-      // A newly arrived dispatch announces itself rather than navigating:
-      // yanking someone off the screen they chose is worse than the button
-      // going red with a count, which is what happens instead.
-      if (hasActive && !hadActiveRef.current) {
-        toast.warning("New dispatch assigned to you", {
-          description: "Open Dispatch to acknowledge it.",
-        })
-      }
-      hadActiveRef.current = hasActive
     } catch {
       setLoadError("Dispatch could not refresh. Showing the last known assignment.")
     } finally {

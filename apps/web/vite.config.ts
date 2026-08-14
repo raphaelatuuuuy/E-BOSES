@@ -149,6 +149,9 @@ export default defineConfig(({ mode }) => {
             if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom)[\\/]/.test(id)) {
               return "react-vendor"
             }
+            if (/[\\/]node_modules[\\/](three|three-stdlib|@react-three)[\\/]/.test(id)) {
+              return "three-vendor"
+            }
             if (/[\\/]node_modules[\\/]leaflet[\\/]/.test(id)) return "leaflet"
             if (id.includes("packages/ui")) return "ui-vendor"
             return

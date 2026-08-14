@@ -1,15 +1,20 @@
+import { Surface } from "@/features/dashboard/components/workspace/band"
 import { RecordHeader } from "./record-header"
 import { RecordSection } from "./record-section"
 import { RecordWorkflow } from "./record-workflow"
 import type { RecordView } from "./types"
 
 /**
- * The three tiers, composed.
+ * The three tiers, composed as one dossier.
  *
- * This component knows nothing about panels or sheets — `record-panel` and
- * `record-sheet` are pure containers around identical children. That is the
- * structural reason mobile cannot lose information: there is no second, thinner
- * mobile rendering that can drift out of sync with the desktop one.
+ * This used to be a stack of separate bordered cards — header, workflow, and one
+ * card per collapsible section — so an incident read as a pile of boxes rather
+ * than a single record. Now the tiers are bands inside one `Surface`, divided by
+ * hairlines: summary at the top, the live workflow beneath it, then the
+ * collapsible depth. One card, one incident.
+ *
+ * It still knows nothing about panels or sheets, so desktop and mobile render
+ * identical children and cannot drift apart.
  */
 export function RecordDetail({
   record,
@@ -20,12 +25,12 @@ export function RecordDetail({
   showAssignee?: boolean
 }) {
   return (
-    <div className="space-y-3">
-      <RecordHeader record={record} />
-      <RecordWorkflow record={record} showAssignee={showAssignee} />
+    <Surface>
+      <RecordHeader record={record} embedded />
+      <RecordWorkflow record={record} showAssignee={showAssignee} embedded />
       {record.sections.map((section) => (
-        <RecordSection key={section.key} section={section} />
+        <RecordSection key={section.key} section={section} embedded />
       ))}
-    </div>
+    </Surface>
   )
 }

@@ -9,6 +9,8 @@ import {
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
+import { roleLabelOf } from "@/features/dashboard/lib/people"
+import { formatClock } from "@/features/dashboard/lib/responder-format"
 import {
   Dialog,
   DialogHeader,
@@ -53,13 +55,13 @@ const MODE_CONFIG: Record<
   },
   rejected: {
     statusLabel: "Rejected",
-    statusClass: "bg-red-50 text-red-700 ring-red-200",
+    statusClass: "bg-sos/10 text-sos ring-sos/30",
     title: "Report not approved",
     subtitle: "Your report was reviewed but needs changes or more detail before it can proceed.",
   },
   resolved: {
     statusLabel: "Resolved",
-    statusClass: "bg-emerald-50 text-emerald-800 ring-emerald-200",
+    statusClass: "bg-neutral-100 text-neutral-600 ring-neutral-200",
     title: "Report resolved",
     subtitle: "Your report has been resolved. Here’s a summary of what was done.",
   },
@@ -73,19 +75,8 @@ function formatDate(value: string) {
   }).format(new Date(value))
 }
 
-function formatTime(value: string) {
-  return new Intl.DateTimeFormat("en", {
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value))
-}
-
 function formatDateTime(value: string) {
-  return `${formatDate(value)} · ${formatTime(value)}`
-}
-
-function roleLabel(role: string) {
-  return role.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+  return `${formatDate(value)} · ${formatClock(value)}`
 }
 
 function findEvent(report: Concern, status: ConcernStatus): ConcernStatusEvent | undefined {
@@ -165,7 +156,7 @@ function StatusLine({ report, mode }: { report: Concern; mode: StatusDialogMode 
           <div
             className={cn(
               "h-full rounded-full transition-all",
-              mode === "rejected" ? "bg-red-500" : "bg-brand-orange",
+              mode === "rejected" ? "bg-sos" : "bg-brand-orange",
             )}
             style={{ width: `${(Math.min(currentIdx, 3) / 3) * 100}%` }}
           />
@@ -183,7 +174,7 @@ function StatusLine({ report, mode }: { report: Concern; mode: StatusDialogMode 
                   "flex size-9 items-center justify-center rounded-full border-2 text-[13px] font-bold sm:size-10 sm:text-[14px]",
                   done && "border-brand-navy bg-brand-navy text-white",
                   current && !rejectedCurrent && "border-brand-orange bg-brand-orange text-white shadow-[0_0_0_4px_rgba(255,106,26,0.18)]",
-                  rejectedCurrent && "border-red-500 bg-red-500 text-white",
+                  rejectedCurrent && "border-sos bg-sos text-white",
                   !done && !current && "border-neutral-200 bg-white text-neutral-400",
                 )}
               >
@@ -208,7 +199,7 @@ function StatusLine({ report, mode }: { report: Concern; mode: StatusDialogMode 
                   <>
                     {formatDate(date)}
                     <br />
-                    {formatTime(date)}
+                    {formatClock(date)}
                   </>
                 ) : (
                   "Pending"
@@ -241,14 +232,14 @@ function ActorCard({
         {letter}
       </div>
       <div className="min-w-0">
-        <p className="text-[12px] font-semibold uppercase tracking-wide text-neutral-500">
+        <p className="text-[12px] font-semibold text-neutral-500">
           {label}
         </p>
         <p className="truncate text-[16px] font-semibold text-neutral-900">
           {actor.actor.full_name}
         </p>
         <p className="mt-0.5 text-[13px] font-medium text-neutral-600">
-          {roleLabel(actor.actor.role)} · {formatDateTime(actor.time)}
+          {roleLabelOf(actor.actor.role)} · {formatDateTime(actor.time)}
         </p>
       </div>
     </div>
@@ -344,7 +335,7 @@ export function ReportStatusDialog({
 
         {/* Tracking number card */}
         <div className="rounded-2xl border border-neutral-200 bg-white px-4 py-4 sm:px-5">
-          <p className="text-[12px] font-bold uppercase tracking-wide text-neutral-500 sm:text-[13px]">
+          <p className="text-[12px] font-bold text-neutral-500 sm:text-[13px]">
             Tracking number
           </p>
           <div className="mt-2 flex items-center gap-2.5">
@@ -358,7 +349,7 @@ export function ReportStatusDialog({
               className="flex size-10 items-center justify-center rounded-full bg-neutral-100 text-neutral-700 transition-colors hover:bg-neutral-200"
             >
               {copied ? (
-                <CheckIcon className="size-5 text-emerald-600" strokeWidth={2.5} />
+                <CheckIcon className="size-5 text-neutral-600" strokeWidth={2.5} />
               ) : (
                 <CopyIcon className="size-5" strokeWidth={2} />
               )}
@@ -382,8 +373,8 @@ export function ReportStatusDialog({
         ) : null}
 
         {resolvedMode === "rejected" ? (
-          <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-red-800 sm:px-5">
-            <AlertTriangleIcon className="mt-0.5 size-6 shrink-0 text-red-600" strokeWidth={2} />
+          <div className="flex items-start gap-3 rounded-2xl border border-sos/30 bg-sos/10 px-4 py-4 text-sos sm:px-5">
+            <AlertTriangleIcon className="mt-0.5 size-6 shrink-0 text-sos" strokeWidth={2} />
             <p className="text-[15px] font-medium leading-6">
               <span className="font-bold">Reason: </span>
               {detailText}
@@ -391,7 +382,7 @@ export function ReportStatusDialog({
           </div>
         ) : showDetail ? (
           <div className="rounded-2xl border border-neutral-200 bg-canvas px-4 py-4 sm:px-5">
-            <p className="text-[12px] font-bold uppercase tracking-wide text-neutral-500 sm:text-[13px]">
+            <p className="text-[12px] font-bold text-neutral-500 sm:text-[13px]">
               {resolvedMode === "resolved"
                 ? "Action summary"
                 : resolvedMode === "assigned"
@@ -406,7 +397,7 @@ export function ReportStatusDialog({
 
         {(resolvedMode === "assigned" || resolvedMode === "resolved") && actions.length > 0 ? (
           <div className="rounded-2xl border border-neutral-200 bg-white px-4 py-4 sm:px-5">
-            <p className="text-[12px] font-bold uppercase tracking-wide text-neutral-500 sm:text-[13px]">
+            <p className="text-[12px] font-bold text-neutral-500 sm:text-[13px]">
               {resolvedMode === "resolved" ? "Actions taken" : "Pending actions"}
             </p>
             <ul className="mt-3 space-y-2.5">
@@ -426,7 +417,7 @@ export function ReportStatusDialog({
         {resolvedMode === "resolved" &&
         report.media.some((media) => media.mime_type?.startsWith("image/")) ? (
           <div className="rounded-2xl border border-neutral-200 bg-white px-4 py-4 sm:px-5">
-            <p className="text-[12px] font-bold uppercase tracking-wide text-neutral-500 sm:text-[13px]">
+            <p className="text-[12px] font-bold text-neutral-500 sm:text-[13px]">
               Photo evidence
             </p>
             <div className="mt-3 grid grid-cols-2 gap-2.5">

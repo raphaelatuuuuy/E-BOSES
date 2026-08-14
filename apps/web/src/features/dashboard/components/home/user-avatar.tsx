@@ -1,17 +1,20 @@
 import { cn } from "@workspace/ui/lib/utils"
 
-import type { PublicUser } from "@/features/dashboard/api"
-
 /**
  * Letter-only avatar (no image) shared by the Home feed page, the composer
  * card, and the post-comments UI.
+ *
+ * Typed on the two fields it actually reads rather than on `PublicUser`, so the
+ * signed-in `AuthUser` (which has no `initials`) can be passed without a cast.
  */
+export type AvatarUser = { full_name?: string | null; initials?: string | null }
+
 export function UserAvatar({
   user,
   size = "md",
   className,
 }: {
-  user?: PublicUser | null
+  user?: AvatarUser | null
   size?: "sm" | "md" | "lg"
   className?: string
 }) {

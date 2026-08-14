@@ -12,19 +12,6 @@ import {
 } from "@/features/dashboard/api"
 import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
 
-/**
- * Let an official blur something the automatic scan did not cover.
- *
- * The automatic pipeline is narrow on purpose — it looks for faces, plates and
- * blood, and only when the review model asks it to. Everything else an official
- * can see in a photo (a house number, a name on a parcel, a face reflected in a
- * window) is out of its scope but obvious to a person. This is how they cover it.
- *
- * Boxes are stored normalised 0..1: the official draws on a scaled preview, the
- * blur is applied to a differently-scaled render, and the original may be any
- * resolution. Pixels would not survive that.
- */
-
 interface Draft {
   x: number
   y: number
@@ -57,6 +44,8 @@ export function MediaBlurEditor({
 
   function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
     if (!surfaceRef.current || busy) return
+
+    event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
     const point = normalisedPoint(event, surfaceRef.current)
     originRef.current = point
@@ -79,8 +68,7 @@ export function MediaBlurEditor({
     const box = draft
     originRef.current = null
     setDraft(null)
-    // Below this size the box is a stray click, not an intent to blur. The
-    // server enforces the same floor.
+
     if (!box || box.width < 0.01 || box.height < 0.01) return
     setPending((current) => [...current, box])
   }
@@ -143,12 +131,14 @@ export function MediaBlurEditor({
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
+            onDragStart={(event) => event.preventDefault()}
             className="relative mx-auto w-fit max-w-full cursor-crosshair touch-none select-none overflow-hidden rounded-control border border-card-line"
           >
             <AuthenticatedMediaImage
               src={media.raw_url || media.preview_url}
               alt={media.original_filename}
-              className="max-h-[52vh] w-auto max-w-full object-contain"
+              className="pointer-events-none max-h-[52vh] w-auto max-w-full select-none object-contain"
+              draggable={false}
             />
             {[...saved, ...pending, ...(draft ? [draft] : [])].map((box, index) => (
               <span
@@ -172,7 +162,7 @@ export function MediaBlurEditor({
 
           {saved.length ? (
             <div className="mt-4">
-              <p className="text-micro uppercase text-subtle-foreground">Already blurred</p>
+              <p className="text-micro text-subtle-foreground">Already blurred</p>
               <div className="mt-2 flex flex-wrap gap-2">
                 {saved.map((region, index) => (
                   <button

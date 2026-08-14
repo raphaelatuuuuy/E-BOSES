@@ -3,10 +3,11 @@ import { createPortal } from "react-dom"
 import {
   CheckIcon,
   CircleDotIcon,
-  MapPinIcon,
   Maximize2Icon,
   Minimize2Icon,
-  NavigationIcon,
+  MinusIcon,
+  PlayIcon,
+  PlusIcon,
   RadioIcon,
   XIcon,
 } from "lucide-react"
@@ -24,93 +25,37 @@ import {
   type EmergencyStatus,
 } from "@/features/dashboard/emergency-api"
 import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
-import { applyRouteMotion, routeLineStyle } from "@/features/dashboard/lib/route-line"
-import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
-import { openAuthenticatedMedia } from "@/features/dashboard/lib/authenticated-media"
+import {
+  drawRoute,
+  routeRenderGeometry,
+  type RouteLayers,
+} from "@/features/dashboard/lib/route-line"
+import {
+  AuthenticatedMediaImage,
+  MediaLightbox,
+} from "@/features/dashboard/components/authenticated-media"
+import {
+  toMediaPreviewItem,
+  type MediaPreviewItem,
+} from "@/features/dashboard/lib/authenticated-media"
+import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/record/status"
+import { formatClock } from "@/features/dashboard/lib/responder-format"
+import { useIsDesktop } from "@/features/dashboard/lib/shell"
+import {
+  MapControlStack,
+  MapStackButton,
+  MapStackDivider,
+} from "@/features/dashboard/components/map-control-stack"
 
 import type leaflet from "leaflet"
 
-const activeStatuses: EmergencyStatus[] = [
-  "submitted",
-  "routed",
-  "en_route",
-  "nearby",
-  "arrived",
-]
 
-const statusLabels: Record<EmergencyStatus, string> = {
-  submitted: "Alert sent",
-  routing: "Finding responder",
-  routed: "Responder assigned",
-  awaiting_acknowledgment: "Awaiting responder",
-  acknowledged: "Responder routed",
-  en_route: "On the way",
-  nearby: "Nearby",
-  arrived: "On scene",
-  resident_safe: "Resident safe",
-  backup_requested: "Backup requested",
-  backup_assigned: "Backup assigned",
-  in_progress: "Response in progress",
-  transfer_required: "Transfer required",
-  escalation_required: "Escalation required",
-  resolved: "Resolved",
-  closed: "Closed",
-  invalid: "Invalid",
-  cancelled: "Cancelled",
-  false_alarm: "False alarm",
-}
 
 /**
  * Resident-facing pipeline.
  * No “barangay desk / manual review” step — after send, system auto-routes
  * to the nearest on-duty responder for this emergency type.
  */
-const PIPELINE: Array<{
-  status: EmergencyStatus
-  label: string
-  defaultNote: (alert: EmergencyAlert) => string
-  pendingHint: (alert: EmergencyAlert) => string
-}> = [
-  {
-    status: "submitted",
-    label: "Alert sent",
-    defaultNote: () => "Your SOS was received by E-Boses.",
-    pendingHint: () => "Waiting to send",
-  },
-  {
-    status: "routed",
-    label: "Responder assigned",
-    defaultNote: (alert) =>
-      `Auto-routed using the official dispatch rule for this ${alert.type.replace(/_/g, " ")} case.`,
-    pendingHint: (alert) =>
-      `Finding the nearest on-duty responder from the configured response unit for this ${alert.type.replace(/_/g, " ")} case...`,
-  },
-  {
-    status: "en_route",
-    label: "On the way",
-    defaultNote: () => "Responder is traveling to your location.",
-    pendingHint: () => "Responder is preparing to travel",
-  },
-  {
-    status: "nearby",
-    label: "Nearby",
-    defaultNote: () => "Responder is close to your location.",
-    pendingHint: () => "Almost there",
-  },
-  {
-    status: "arrived",
-    label: "On scene",
-    defaultNote: () => "Responder has arrived.",
-    pendingHint: () => "Waiting for arrival",
-  },
-  {
-    status: "resolved",
-    label: "Resolved",
-    defaultNote: () => "This emergency was closed.",
-    pendingHint: () => "Closes when help finishes",
-  },
-]
-
 type TimelineRow = {
   key: string
   status: EmergencyStatus
@@ -120,109 +65,111 @@ type TimelineRow = {
   state: "done" | "current" | "pending" | "cancelled"
 }
 
+const PIPELINE: Array<{
+  status: EmergencyStatus
+  eventKeys: string[]
+  label: string
+  pendingHint: (alert: EmergencyAlert) => string
+}> = [
+  {
+    status: "submitted",
+    eventKeys: ["received_app", "received_sms", "received_call", "escalated_from_concern"],
+    label: "Emergency Received",
+    pendingHint: () => "Waiting to send",
+  },
+  {
+    status: "routed",
+    eventKeys: ["responder_assigned", "responder_reassigned"],
+    label: "Responder Assigned",
+    pendingHint: (alert) =>
+      `Finding the nearest on-duty responder from the configured response unit for this ${alert.type.replace(/_/g, " ")} case...`,
+  },
+  {
+    status: "en_route",
+    eventKeys: ["responder_en_route"],
+    label: "Responder En Route",
+    pendingHint: () => "Responder is preparing to travel",
+  },
+  {
+    status: "nearby",
+    eventKeys: ["responder_nearby"],
+    label: "Responder Nearby",
+    pendingHint: () => "Almost there",
+  },
+  {
+    status: "arrived",
+    eventKeys: ["responder_arrived"],
+    label: "Responder Arrived",
+    pendingHint: () => "Waiting for arrival",
+  },
+  {
+    status: "resolved",
+    eventKeys: ["resolved"],
+    label: "Emergency Resolved",
+    pendingHint: () => "Closes when help finishes",
+  },
+]
+
 function buildStatusTimeline(alert: EmergencyAlert): TimelineRow[] {
-  const events = [...(alert.status_events ?? [])].sort(
-    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-  )
-  const byStatus = new Map<EmergencyStatus, { note: string; time: string }>()
-  for (const event of events) {
-    const existing = byStatus.get(event.status)
-    // Prefer the most useful note; keep earliest timestamp for the stage
-    if (!existing) {
-      byStatus.set(event.status, {
-        note: event.note?.trim() || "",
-        time: event.created_at,
+  const timeline = alert.timeline ?? []
+  const byKey = new Map<string, { title: string; description: string; at: string }>()
+  for (const entry of timeline) {
+    if (!byKey.has(entry.event_key)) {
+      byKey.set(entry.event_key, {
+        title: entry.title,
+        description: entry.description,
+        at: entry.at,
       })
-    } else {
-      const note = event.note?.trim()
-      if (note && note !== existing.note) {
-        // Keep first time; append distinct later notes briefly
-        if (!existing.note) existing.note = note
-        else if (!existing.note.includes(note)) existing.note = `${existing.note} · ${note}`
-      }
     }
   }
 
-  const pipelineIndex = (status: EmergencyStatus) =>
-    PIPELINE.findIndex((step) => step.status === status)
-
-  let currentIdx = pipelineIndex(alert.status)
-  if (alert.status === "cancelled") {
-    // Mark progress up to last non-cancelled/non-false_alarm event
-    const last = [...events].reverse().find((e) => e.status !== "cancelled" && e.status !== "false_alarm")
-    currentIdx = last ? Math.max(0, pipelineIndex(last.status)) : 0
+  const hitFor = (keys: string[]) => {
+    for (const key of keys) {
+      const found = byKey.get(key)
+      if (found) return found
+    }
+    return null
   }
 
+  const reachedIndex = PIPELINE.reduce(
+    (highest, step, index) => (hitFor(step.eventKeys) ? index : highest),
+    -1,
+  )
+
   const rows: TimelineRow[] = PIPELINE.map((step, index) => {
-    const hit = byStatus.get(step.status)
-    // No initialiser: the branch chain below ends in an `else`, so every path
-    // assigns and a default here would be dead.
+    const hit = hitFor(step.eventKeys)
     let state: TimelineRow["state"]
 
-    if (alert.status === "resolved") {
+    if (alert.status === "resolved" || alert.status === "false_alarm") {
       state = "done"
     } else if (alert.status === "cancelled") {
-      if (index <= Math.max(0, currentIdx)) state = "done"
-      else state = "pending";
-    } else if (alert.status === "false_alarm") {
+      state = index <= Math.max(0, reachedIndex) ? "done" : "pending"
+    } else if (index < reachedIndex) {
       state = "done"
-    } else if (currentIdx < 0) {
-      state = index === 0 ? "current" : "pending"
-    } else if (index < currentIdx) {
-      state = "done"
-    } else if (index === currentIdx) {
+    } else if (index === reachedIndex) {
       state = "current"
     } else {
       state = "pending"
     }
 
-    const rawNote = hit?.note?.trim() || ""
-    const lower = rawNote.toLowerCase()
-    // Drop desk/manual-dispatch noise — routing is automatic by category unit
-    const isDeskNoise =
-      lower.includes("manual dispatch") ||
-      lower.includes("barangay desk") ||
-      lower.includes("emergency desk") ||
-      lower.includes("no on-duty") ||
-      lower.includes("replaces a responder") ||
-      lower.includes("could not go") ||
-      lower.includes("standby") ||
-      lower.includes("reassigned")
-    const looksLikeStatusOnly =
-      !rawNote ||
-      isDeskNoise ||
-      lower === step.status ||
-      lower === step.label.toLowerCase() ||
-      lower === statusLabels[step.status].toLowerCase() ||
-      lower === "submitted" ||
-      lower === "emergency alert submitted." ||
-      lower === "emergency alert submitted"
-    // Prefer backend auto-route note when present; else category-aware defaults
-    const note =
-      state === "pending"
-        ? step.pendingHint(alert)
-        : looksLikeStatusOnly
-          ? step.defaultNote(alert)
-          : rawNote
-
     return {
       key: step.status,
       status: step.status,
-      label: step.label,
-      note,
-      time: hit?.time ?? (state !== "pending" && index === 0 ? alert.created_at : null),
+      label: hit?.title || step.label,
+      note: hit?.description || (state === "pending" ? step.pendingHint(alert) : step.label),
+      time: hit?.at ?? (index === 0 && state !== "pending" ? alert.created_at : null),
       state,
     }
   })
 
-  if (alert.status === "cancelled") {
-    const cancelHit = byStatus.get("cancelled")
+  const cancelHit = byKey.get("cancelled") ?? byKey.get("false_alarm")
+  if (alert.status === "cancelled" || alert.status === "false_alarm") {
     rows.push({
       key: "cancelled",
       status: "cancelled",
-      label: "Cancelled",
-      note: cancelHit?.note || "This alert was closed.",
-      time: cancelHit?.time ?? alert.updated_at,
+      label: cancelHit?.title || "Emergency Cancelled",
+      note: cancelHit?.description || "This emergency was closed.",
+      time: cancelHit?.at ?? alert.updated_at,
       state: "cancelled",
     })
   }
@@ -231,32 +178,65 @@ function buildStatusTimeline(alert: EmergencyAlert): TimelineRow[] {
 }
 
 function statusText(alert: EmergencyAlert) {
-  if (alert.status === "submitted") {
-    return `Finding the nearest responder for this ${alert.type.replace(/_/g, " ")} case.`
+  const caseName = `this ${alert.type.replace(/_/g, " ")} case`
+  switch (alert.status) {
+    case "submitted":
+      return `Finding the nearest responder for ${caseName}.`
+    case "routing":
+      return `Finding the nearest responder for ${caseName}.`
+    case "routed":
+      return "A responder has been assigned to your location."
+    case "awaiting_acknowledgment":
+      return "A responder is assigned - waiting for them to confirm."
+    case "acknowledged":
+      return "A responder is on the way to your location."
+    case "en_route":
+      return "Responder is on the way."
+    case "nearby":
+      return "Responder is near your location."
+    case "arrived":
+      return "Responder has arrived."
+    case "resident_safe":
+      return "You reported that you are safe. The barangay is confirming with the responder."
+    case "backup_requested":
+      return "Extra help is being arranged for your emergency."
+    case "backup_assigned":
+      return "A backup responder has been assigned."
+    case "in_progress":
+      return "Responders are on the scene handling your emergency."
+    case "transfer_required":
+      return "Your case is being handed to a different response unit."
+    case "escalation_required":
+      return "The barangay is arranging another responder for your emergency."
+    case "resolved":
+      return "Emergency has been resolved."
+    case "closed":
+      return "This alert was closed by the barangay after review."
+    case "invalid":
+      return "This alert was marked invalid after review."
+    case "false_alarm":
+      return "This alert was marked as a false alarm."
+    case "cancelled":
+      return "Emergency was cancelled."
+    default:
+      return "Your emergency alert is being handled."
   }
-  if (alert.status === "routed") {
-    return "A responder has been assigned to your location."
-  }
-  if (alert.status === "acknowledged") return "A responder is on the way to your location."
-  if (alert.status === "en_route") return "Responder is on the way."
-  if (alert.status === "nearby") return "Responder is near your location."
-  if (alert.status === "arrived") return "Responder has arrived."
-  if (alert.status === "resolved") return "Emergency has been resolved."
-  if (alert.status === "false_alarm") return "This alert was marked as a false alarm."
-  if (alert.status === "invalid") return "This alert was marked invalid after review."
-  return "Emergency was cancelled."
 }
 
 function headline(alert: EmergencyAlert) {
   if (["en_route", "nearby", "arrived"].includes(alert.status)) return "Help is on the way"
+  if (alert.status === "submitted" || alert.status === "routing") return "Finding your responder"
+  if (alert.status === "awaiting_acknowledgment" || alert.status === "acknowledged") return "Responder assigned"
+  if (alert.status === "backup_requested" || alert.status === "backup_assigned") return "Extra help on the way"
+  if (alert.status === "in_progress") return "Response in progress"
+  if (alert.status === "transfer_required") return "Transferring response"
+  if (alert.status === "escalation_required") return "Arranging another responder"
+  if (alert.status === "resident_safe") return "You reported safe"
   if (alert.status === "resolved") return "Emergency resolved"
-  if (alert.status === "cancelled") return "Alert closed"
+  if (alert.status === "closed" || alert.status === "cancelled") return "Alert closed"
   if (alert.status === "false_alarm") return "False alarm"
   if (alert.status === "invalid") return "Invalid alert"
   return "Emergency active"
-}
-function formatTime(value: string) {
-  return new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit" }).format(new Date(value))
 }
 
 function distanceMeters(from: { lat: number; lng: number }, to: { lat: number; lng: number }) {
@@ -281,19 +261,6 @@ function formatEta(meters: number) {
   return `ETA ${minutes} min`
 }
 
-function useIsDesktop() {
-  const [desktop, setDesktop] = useState(() =>
-    typeof window !== "undefined" ? window.matchMedia("(min-width: 1024px)").matches : true,
-  )
-  useEffect(() => {
-    const mq = window.matchMedia("(min-width: 1024px)")
-    const apply = () => setDesktop(mq.matches)
-    apply()
-    mq.addEventListener("change", apply)
-    return () => mq.removeEventListener("change", apply)
-  }, [])
-  return desktop
-}
 
 function EmergencyTrackingMap({
   alert,
@@ -308,10 +275,9 @@ function EmergencyTrackingMap({
   const mapRef = useRef<leaflet.Map | null>(null)
   const leafletRef = useRef<typeof leaflet | null>(null)
   const responderMarkerRefs = useRef<Map<number, leaflet.Marker>>(new Map())
-  const routeRefs = useRef<Map<number, leaflet.Polyline>>(new Map())
-  const accuracyRefs = useRef<Map<number, leaflet.Circle>>(new Map())
+  const routeRef = useRef<RouteLayers | null>(null)
   const [mapReady, setMapReady] = useState(0)
-  const isLive = activeStatuses.includes(alert.status)
+  const isLive = ACTIVE_EMERGENCY_STATUSES.has(alert.status)
 
   useEffect(() => {
     let cancelled = false
@@ -348,8 +314,6 @@ function EmergencyTrackingMap({
     }
 
     const responderMarkers = responderMarkerRefs.current
-    const routes = routeRefs.current
-    const accuracyCircles = accuracyRefs.current
 
     void init()
     return () => {
@@ -359,10 +323,8 @@ function EmergencyTrackingMap({
       leafletRef.current = null
       responderMarkers.forEach((marker) => marker.remove())
       responderMarkers.clear()
-      routes.forEach((polyline) => polyline.remove())
-      routes.clear()
-      accuracyCircles.forEach((circle) => circle.remove())
-      accuracyCircles.clear()
+      routeRef.current?.remove()
+      routeRef.current = null
     }
   }, [alert.id, alert.latitude, alert.longitude])
 
@@ -390,133 +352,36 @@ function EmergencyTrackingMap({
         Number(lastLocation.latitude),
         Number(lastLocation.longitude),
       ]
-      const responderIcon = L.divIcon({
-        className: "",
-        html: `<div style="width:22px;height:22px;border-radius:999px;background:#07145f;border:3px solid white;box-shadow:0 4px 10px rgba(7,20,95,.35)"></div>`,
-        iconSize: [22, 22],
-        iconAnchor: [11, 11],
-      })
       const existingMarker = responderMarkerRefs.current.get(assignment.id)
       if (existingMarker) existingMarker.setLatLng(responderLatLng)
       else {
-        const marker = L.marker(responderLatLng, { icon: responderIcon }).addTo(map)
-        responderMarkerRefs.current.set(assignment.id, marker)
-      }
-
-      const routeGeometry = assignment.route?.geometry as { coordinates?: number[][] } | null
-      const routeCoords = routeGeometry?.coordinates?.map((c) => [c[1], c[0]] as leaflet.LatLngTuple) ?? []
-      const historyCoords = assignment.location_history?.map((ping) => [Number(ping.latitude), Number(ping.longitude)] as leaflet.LatLngTuple) ?? []
-      const lineCoords = routeCoords.length ? routeCoords : historyCoords.length > 1 ? historyCoords : []
-      const existingRoute = routeRefs.current.get(assignment.id)
-      // Road geometry when routing succeeded, otherwise the responder's own
-      // breadcrumb — the latter is an approximation and is drawn as one.
-      const routeStyle = routeLineStyle({
-        live: isLive,
-        approximate: routeCoords.length === 0,
-        weight: routeCoords.length ? 4 : 3,
-      })
-      if (lineCoords.length) {
-        if (existingRoute) {
-          existingRoute.setLatLngs(lineCoords)
-          // Restyle on update too: an incident resolving mid-session has to
-          // stop the crawl, not just freeze the coordinates.
-          existingRoute.setStyle(routeStyle)
-          applyRouteMotion(existingRoute, isLive)
-        } else {
-          const polyline = L.polyline(lineCoords, routeStyle).addTo(map)
-          applyRouteMotion(polyline, isLive)
-          routeRefs.current.set(assignment.id, polyline)
-        }
-      } else if (existingRoute) {
-        existingRoute.remove()
-        routeRefs.current.delete(assignment.id)
-      }
-
-      const accuracy = Math.max(0, lastLocation.accuracy ?? 0)
-      const existingAccuracy = accuracyRefs.current.get(assignment.id)
-      if (existingAccuracy) {
-        existingAccuracy.setLatLng(responderLatLng)
-        existingAccuracy.setRadius(accuracy)
-      } else if (accuracy > 0) {
-        const circle = L.circle(responderLatLng, {
-          radius: accuracy,
-          color: "#07145f",
-          fillColor: "#07145f",
-          fillOpacity: 0.08,
-          weight: 1,
+        const marker = L.marker(responderLatLng, {
+          icon: L.divIcon({
+            className: "",
+            html: `<div style="width:22px;height:22px;border-radius:999px;background:#07145f;border:3px solid white;box-shadow:0 4px 10px rgba(7,20,95,.35)"></div>`,
+            iconSize: [22, 22],
+            iconAnchor: [11, 11],
+          }),
         }).addTo(map)
-        accuracyRefs.current.set(assignment.id, circle)
+        responderMarkerRefs.current.set(assignment.id, marker)
       }
     }
 
-    const routeGeometry = alert.route?.geometry as { coordinates?: number[][] } | null | undefined
-    const hasRouteGeometry = Boolean(routeGeometry?.coordinates?.length)
+    routeRef.current?.remove()
+    const destination: leaflet.LatLngTuple = [Number(alert.latitude), Number(alert.longitude)]
+    const primary = activeAssignments.find((item) => item.last_location)?.last_location ?? null
+    const { road, approach, connectors } = routeRenderGeometry(alert.route, {
+      origin: primary
+        ? [Number(primary.latitude), Number(primary.longitude)]
+        : null,
+      destination,
+    })
+    routeRef.current = drawRoute(L, map, { road, approach, connectors, live: isLive })
 
-    for (const assignment of activeAssignments) {
-      const lastLocation = assignment.last_location
-      if (!lastLocation) continue
-      const responderLatLng: leaflet.LatLngTuple = [
-        Number(lastLocation.latitude),
-        Number(lastLocation.longitude),
-      ]
-      const responderIcon = L.divIcon({
-        className: "",
-        html: `<div style="width:22px;height:22px;border-radius:999px;background:#07145f;border:3px solid white;box-shadow:0 4px 10px rgba(7,20,95,.35)"></div>`,
-        iconSize: [22, 22],
-        iconAnchor: [11, 11],
-      })
-      const existingMarker = responderMarkerRefs.current.get(assignment.id)
-      if (existingMarker) existingMarker.setLatLng(responderLatLng)
-      else {
-        const marker = L.marker(responderLatLng, { icon: responderIcon }).addTo(map)
-        responderMarkerRefs.current.set(assignment.id, marker)
-      }
-
-      const accuracy = Math.max(0, lastLocation.accuracy ?? 0)
-      const existingAccuracy = accuracyRefs.current.get(assignment.id)
-      if (existingAccuracy) {
-        existingAccuracy.setLatLng(responderLatLng)
-        existingAccuracy.setRadius(accuracy)
-      } else if (accuracy > 0) {
-        const circle = L.circle(responderLatLng, {
-          radius: accuracy,
-          color: "#07145f",
-          fillColor: "#07145f",
-          fillOpacity: 0.08,
-          weight: 1,
-        }).addTo(map)
-        accuracyRefs.current.set(assignment.id, circle)
-      }
-    }
-
-    if (hasRouteGeometry && routeGeometry) {
-      const coords = routeGeometry.coordinates?.map((c: number[]) => [c[1], c[0]] as leaflet.LatLngTuple)
-      if (coords && coords.length > 0) {
-        routeRefs.current.forEach((polyline, key) => {
-          if (key !== -1) {
-            polyline.remove()
-            routeRefs.current.delete(key)
-          }
-        })
-        const routePolyline = L.polyline(
-          coords,
-          routeLineStyle({ live: isLive, weight: isLive ? 4 : 3 }),
-        ).addTo(map)
-        applyRouteMotion(routePolyline, isLive)
-        routeRefs.current.set(-1, routePolyline)
-        const bounds = L.latLngBounds(coords)
-        map.fitBounds(bounds, { padding: [44, 44], maxZoom: 17 })
-      }
-    } else {
-      routeRefs.current.forEach((polyline, key) => {
-        if (key !== -1) {
-          polyline.remove()
-          routeRefs.current.delete(key)
-        }
-      })
-      if (!isLive && activeAssignments.length === 0) {
-        map.fitBounds(L.latLngBounds([[Number(alert.latitude), Number(alert.longitude)]]), { padding: [44, 44], maxZoom: 17 })
-      }
+    if (routeRef.current) {
+      map.fitBounds(L.latLngBounds(routeRef.current.points), { padding: [44, 44], maxZoom: 17 })
+    } else if (!isLive && activeAssignments.length === 0) {
+      map.fitBounds(L.latLngBounds([destination]), { padding: [44, 44], maxZoom: 17 })
     }
   }, [
     alert.id,
@@ -528,7 +393,223 @@ function EmergencyTrackingMap({
     mapReady,
   ])
 
-  return <div ref={containerRef} className={cn("h-full w-full bg-tint", className)} />
+  return (
+    <div className={cn("relative h-full w-full", className)}>
+      <div ref={containerRef} className="h-full w-full bg-tint" />
+      {/* The wheel stays bound to the sheet's scroll, so these buttons are the
+          only way to zoom. */}
+      <div className="absolute bottom-3 right-3 z-[600]">
+        <MapControlStack className="border-black/10 bg-white shadow-[0_4px_14px_rgba(15,23,42,0.18)]">
+          <MapStackButton
+            label="Zoom in"
+            onClick={() => mapRef.current?.zoomIn()}
+            className="text-neutral-800 hover:bg-black/5 hover:text-black"
+          >
+            <PlusIcon className="size-5" />
+          </MapStackButton>
+          <MapStackDivider className="bg-black/10" />
+          <MapStackButton
+            label="Zoom out"
+            onClick={() => mapRef.current?.zoomOut()}
+            className="text-neutral-800 hover:bg-black/5 hover:text-black"
+          >
+            <MinusIcon className="size-5" />
+          </MapStackButton>
+        </MapControlStack>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The body of the tracking sheet.
+ *
+ * One continuous surface: sections are separated by a hairline and introduced
+ * by a small-caps label, rather than each sitting in its own bordered card.
+ * Seven nested boxes inside a sheet that is already a box read as furniture,
+ * and pushed the timeline — the thing a waiting resident actually watches —
+ * halfway down the scroll.
+ */
+
+function Section({
+  label,
+  children,
+  className,
+}: {
+  label?: string
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <section className={cn("-mx-4 flex flex-col border-t border-white/10 px-4", className)}>
+      {label ? (
+        <p className="text-[12px] font-semibold text-white/60">{label}</p>
+      ) : null}
+      <div className={cn("flex min-h-0 flex-col", label ? "mt-3" : undefined)}>{children}</div>
+    </section>
+  )
+}
+
+function StatusTimeline({ alert }: { alert: EmergencyAlert }) {
+  const rows = buildStatusTimeline(alert)
+  return (
+    <ol className="sos-timeline relative">
+      {rows.map((row, index) => {
+        const next = rows[index + 1]
+        const isLast = index === rows.length - 1
+        // The connector belongs to the gap below this node, so it reads the
+        // next row's state, not this one's. Solid up to and including the
+        // active node — the responder has already travelled that stretch —
+        // and dotted from there on.
+        const filled = next ? next.state !== "pending" : false
+        return (
+          <li key={row.key} className="sos-timeline__row relative flex gap-3 pb-4 last:pb-0">
+            {!isLast ? (
+              <span
+                aria-hidden
+                className={cn(
+                  "absolute bottom-0 left-[11px] top-7 w-px",
+                  filled ? "bg-brand-orange/55" : "sos-timeline__ahead",
+                )}
+              />
+            ) : null}
+            <span
+              className={cn(
+                "relative z-[1] mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-[10px]",
+                row.state === "done" && "bg-brand-navy text-white",
+                row.state === "current" && "sos-timeline__now bg-brand-orange text-white",
+                row.state === "pending" && "border-2 border-white/25 bg-transparent text-white/40",
+                row.state === "cancelled" && "bg-sos text-white",
+              )}
+              aria-hidden
+            >
+              {row.state === "done" ? (
+                <CheckIcon className="size-3.5" strokeWidth={3} />
+              ) : row.state === "current" ? (
+                <RadioIcon className="size-3.5" strokeWidth={2.5} />
+              ) : row.state === "cancelled" ? (
+                <XIcon className="size-3.5" strokeWidth={3} />
+              ) : (
+                <CircleDotIcon className="size-3 opacity-50" />
+              )}
+            </span>
+            <div className="min-w-0 flex-1 pt-0.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <p
+                  className={cn(
+                    "text-[13px] font-semibold",
+                    row.state === "pending" ? "text-white/45" : "text-white",
+                  )}
+                >
+                  {row.label}
+                  {row.state === "current" ? (
+                    <span className="ml-2 text-[10px] font-bold text-brand-orange">
+                      Now
+                    </span>
+                  ) : null}
+                </p>
+                {row.time ? (
+                  <time className="shrink-0 text-[11px] tabular-nums text-white/50">
+                    {formatClock(row.time)}
+                  </time>
+                ) : row.state === "pending" ? (
+                  <span className="shrink-0 text-[11px] text-white/30">Pending</span>
+                ) : null}
+              </div>
+              <p
+                className={cn(
+                  "mt-0.5 text-[12px] leading-5",
+                  row.state === "pending" ? "text-white/35" : "text-white/70",
+                )}
+              >
+                {row.note}
+              </p>
+            </div>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+const MILESTONE_STATUSES: EmergencyStatus[] = [
+  "submitted",
+  "routed",
+  "en_route",
+  "nearby",
+  "arrived",
+]
+
+/**
+ * Compact horizontal progress tracker for the expanded two-column layout.
+ * Shows the five main stages at a glance (vertical timeline stays for the
+ * dock/mobile layouts) with the current stage's note underneath.
+ */
+function MilestoneStepper({ alert }: { alert: EmergencyAlert }) {
+  const rows = buildStatusTimeline(alert)
+  const milestones = MILESTONE_STATUSES.map((status) =>
+    rows.find((row) => row.status === status),
+  ).filter((row): row is TimelineRow => Boolean(row))
+  const currentRow =
+    milestones.find((row) => row.state === "current") ??
+    [...milestones].reverse().find((row) => row.state === "done")
+  const reachedCount = milestones.filter((row) => row.state !== "pending").length
+
+  return (
+    <div>
+      <div className="relative">
+        {/* Track spans the node centers: nodes sit centered in their
+            flex-1 columns at 10%, 30%, 50%, 70%, 90% of the width. */}
+        <div className="absolute left-[10%] right-[10%] top-[9px] h-0.5 rounded-full bg-white/15" />
+        <div
+          className="absolute left-[10%] top-[9px] h-0.5 rounded-full bg-brand-navy/80 transition-all duration-500"
+          style={{ width: `calc(80% * ${Math.max(0, reachedCount - 1) / Math.max(1, milestones.length - 1)})` }}
+        />
+        <div className="relative z-[1] flex w-full">
+          {milestones.map((row) => (
+            <span key={row.key} className="flex flex-1 justify-center">
+              <span
+                className={cn(
+                  "flex size-5 items-center justify-center rounded-full border-2 bg-brand-navy",
+                  row.state === "done" && "border-neutral-300 bg-brand-navy text-white",
+                  row.state === "current" && "sos-timeline__now border-brand-orange bg-brand-orange text-white",
+                  row.state === "pending" && "border-white/25 text-transparent",
+                  row.state === "cancelled" && "border-sos bg-sos text-white",
+                )}
+                aria-hidden
+              >
+                {row.state === "done" ? (
+                  <CheckIcon className="size-3" strokeWidth={3} />
+                ) : row.state === "current" ? (
+                  <RadioIcon className="size-3" strokeWidth={2.5} />
+                ) : row.state === "cancelled" ? (
+                  <XIcon className="size-3" strokeWidth={3} />
+                ) : null}
+              </span>
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="mt-1.5 flex w-full justify-between">
+        {milestones.map((row) => (
+          <span
+            key={row.key}
+            className={cn(
+              "flex-1 text-center text-[10px] font-semibold leading-4",
+              row.state === "pending" ? "text-white/45" : "text-white/80",
+            )}
+          >
+            {row.label}
+          </span>
+        ))}
+      </div>
+      {currentRow?.note ? (
+        <p className="mt-3 border-t border-white/10 pt-3 text-[12px] leading-5 text-white/70">
+          {currentRow.note}
+        </p>
+      ) : null}
+    </div>
+  )
 }
 
 function DetailsColumn({
@@ -543,6 +624,7 @@ function DetailsColumn({
   appealHistory,
   chatOpen,
   chatMessage,
+  milestoneMode,
 }: {
   alert: EmergencyAlert
   connectionState: "connecting" | "live" | "degraded"
@@ -555,197 +637,129 @@ function DetailsColumn({
   appealHistory: EmergencyAlert["appeals"]
   chatOpen: boolean
   chatMessage: EmergencyChatMessage | null
+  /** Expanded two-column layout: compact horizontal tracker instead of the vertical timeline. */
+  milestoneMode?: boolean
 }) {
+  const live = ACTIVE_EMERGENCY_STATUSES.has(alert.status)
+  const address = alert.address?.trim() || alert.barangay || "Pinned location"
+  const hasResponder = (alert.assignments?.length ?? 0) > 0 || Boolean(alert.current_assignment)
+  const reach =
+    distance !== null
+      ? live
+        ? `${formatDistance(distance)} · ${formatEta(distance)}`
+        : `${formatDistance(distance)} · last position`
+      : null
+  const connection = live
+    ? connectionState === "live"
+      ? "Live updates"
+      : connectionState === "connecting"
+        ? "Connecting…"
+        : "Polling for updates"
+    : "Final status"
+  const [lightbox, setLightbox] = useState<{ items: MediaPreviewItem[]; index: number } | null>(null)
+  const mediaItems: MediaPreviewItem[] = alert.media.map((media) =>
+    toMediaPreviewItem(media.raw_url, media.original_filename, media.mime_type),
+  )
+
   return (
-    <div className="space-y-3 pb-2">
-      <div className="rounded-xl border border-white/10 bg-white/10 p-4 text-white">
-        <div className="flex items-start gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-red-500/20 text-red-200">
-            <NavigationIcon className="size-4" />
-          </span>
-          <div className="min-w-0">
-            <p className="text-[14px] font-semibold">{statusText(alert)}</p>
-<p className="mt-1 text-[12px] text-white/70">
-               {distance !== null
-                 ? `${formatDistance(distance)} · ${formatEta(distance)}`
-                 : alert.address || alert.barangay}
-             </p>
-            <p className="mt-1 text-[11px] text-white/50">
-              {connectionState === "live"
-                ? "Live updates"
-                : connectionState === "connecting"
-                  ? "Connecting…"
-                  : "Polling for updates"}
-            </p>
-          </div>
+    <div className="flex flex-1 flex-col pb-2">
+      <div className="pb-4">
+        <p className="text-base font-semibold leading-6 text-white">{statusText(alert)}</p>
+        <p className="mt-1 text-[13px] leading-5 text-white/70">{address}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
+          {reach ? <span className="tabular-nums text-white/80">{reach}</span> : null}
+          {reach ? (
+            <span aria-hidden className="text-white/30">
+              ·
+            </span>
+          ) : null}
+          <span className="text-white/60">{connection}</span>
         </div>
       </div>
 
-      <div className="rounded-xl border border-white/10 bg-white/10 p-4">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-[12px] font-semibold tracking-wide text-white/60 uppercase">Status timeline</p>
-          <span className="text-[11px] font-medium text-white/45">
-            {statusLabels[alert.status]}
-          </span>
-        </div>
-        <ol className="relative mt-4 space-y-0">
-          {buildStatusTimeline(alert).map((row, index, arr) => {
-            const isLast = index === arr.length - 1
-            return (
-              <li key={row.key} className="relative flex gap-3 pb-4 last:pb-0">
-                {/* Connector line */}
-                {!isLast ? (
-                  <span
-                    className={cn(
-                      "absolute left-[11px] top-7 bottom-0 w-px",
-                      row.state === "done" || row.state === "current"
-                        ? "bg-brand-orange/55"
-                        : "bg-white/15",
-                    )}
-                    aria-hidden
-                  />
-                ) : null}
-                <span
-                  className={cn(
-                    "relative z-[1] mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-[10px]",
-                    row.state === "done" && "bg-emerald-500 text-white",
-                    row.state === "current" &&
-                      "bg-brand-orange text-white shadow-[0_0_0_4px_rgba(255,106,26,0.25)]",
-                    row.state === "pending" && "border-2 border-white/25 bg-transparent text-white/40",
-                    row.state === "cancelled" && "bg-red-600 text-white",
-                  )}
-                  aria-hidden
-                >
-                  {row.state === "done" ? (
-                    <CheckIcon className="size-3.5" strokeWidth={3} />
-                  ) : row.state === "current" ? (
-                    <RadioIcon className="size-3.5" strokeWidth={2.5} />
-                  ) : row.state === "cancelled" ? (
-                    <XIcon className="size-3.5" strokeWidth={3} />
-                  ) : (
-                    <CircleDotIcon className="size-3 opacity-50" />
-                  )}
-                </span>
-                <div className="min-w-0 flex-1 pt-0.5">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <p
-                      className={cn(
-                        "text-[13px] font-semibold",
-                        row.state === "pending" ? "text-white/45" : "text-white",
-                      )}
-                    >
-                      {row.label}
-                      {row.state === "current" ? (
-                        <span className="ml-2 text-[10px] font-bold tracking-wide text-brand-orange uppercase">
-                          Now
-                        </span>
-                      ) : null}
-                    </p>
-                    {row.time ? (
-                      <time className="shrink-0 text-[11px] tabular-nums text-white/50">
-                        {formatTime(row.time)}
-                      </time>
-                    ) : row.state === "pending" ? (
-                      <span className="shrink-0 text-[11px] text-white/30">Pending</span>
-                    ) : null}
-                  </div>
-                  <p
-                    className={cn(
-                      "mt-0.5 text-[12px] leading-5",
-                      row.state === "pending" ? "text-white/35" : "text-white/70",
-                    )}
-                  >
-                    {row.note}
-                  </p>
-                </div>
-              </li>
-            )
-          })}
-        </ol>
-      </div>
-
-      <div className="rounded-xl border border-white/10 bg-white/10 p-4 text-white">
-        <div className="flex items-start gap-3">
-          <MapPinIcon className="mt-0.5 size-4 shrink-0 text-white/70" />
-          <div className="min-w-0">
-            <p className="text-[12px] font-semibold text-white/60 uppercase">Your location</p>
-            <p className="mt-1 text-[14px] font-medium">
-              {alert.address?.trim() || alert.barangay || "Pinned location"}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Group chat only after a responder is assigned */}
-      {(alert.assignments?.length > 0 || alert.current_assignment) &&
-      alert.status !== "submitted" ? (
-        <EmergencyChatPanel
-          alertId={alert.id}
-          open={chatOpen}
-          disabled={alert.status === "cancelled" || alert.status === "resolved"}
-          incomingMessage={chatMessage}
-          realtime={false}
-          scrollable={false}
-          participantHint={
-            alert.assignments?.length
-              ? `Group · you + ${alert.assignments.length} responder${alert.assignments.length === 1 ? "" : "s"}`
-              : "Group · you + assigned responders"
-          }
-          className="min-h-[280px]"
-        />
+      {milestoneMode ? (
+        <Section label="Status">
+          <MilestoneStepper alert={alert} />
+        </Section>
       ) : (
-        <div className="rounded-xl border border-dashed border-white/15 bg-white/5 px-4 py-3 text-[12px] leading-5 text-white/55">
-          Live chat opens once a responder is assigned to this emergency (auto-routed by case type).
-        </div>
+        <Section label="Status">
+          <StatusTimeline alert={alert} />
+        </Section>
       )}
 
-      {alert.media.length > 0 ? (
-        <div className="rounded-xl border border-white/10 bg-white/10 p-4">
-          <p className="text-[12px] font-semibold tracking-wide text-white/60 uppercase">Evidence</p>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            {alert.media.map((media) => (
-              <button
-                key={media.id}
-                type="button"
-                className="overflow-hidden rounded-lg border border-white/15 text-left"
-                onClick={() => {
-                  void openAuthenticatedMedia(media.raw_url, media.original_filename).catch((error: unknown) => {
-                    toast.error(error instanceof Error ? error.message : "Could not open evidence.")
-                  })
-                }}
-              >
-                <AuthenticatedMediaImage
-                  src={media.preview_url}
-                  alt={media.original_filename}
-                  className="h-24 w-full object-cover"
-                />
-              </button>
-            ))}
+      <Section label="Chat">
+        {hasResponder && alert.status !== "submitted" ? (
+          <EmergencyChatPanel
+            alertId={alert.id}
+            open={chatOpen}
+            disabled={alert.status === "cancelled" || alert.status === "resolved"}
+            incomingMessage={chatMessage}
+            realtime={false}
+            bare
+          />
+        ) : (
+          <div className="flex min-h-[140px] items-center justify-center">
+            <p className="text-[12px] leading-5 text-white/55">
+              Chat opens once a responder is assigned to this emergency.
+            </p>
           </div>
-        </div>
+        )}
+      </Section>
+
+      {alert.media.length > 0 ? (
+        <Section label="Evidence">
+          <div className="grid grid-cols-2 gap-2">
+            {alert.media.map((media, mediaIndex) =>
+              media.mime_type.startsWith("image/") ? (
+                <button
+                  key={media.id}
+                  type="button"
+                  className="overflow-hidden rounded-lg border border-white/15 text-left"
+                  onClick={() => setLightbox({ items: mediaItems, index: mediaIndex })}
+                >
+                  <AuthenticatedMediaImage
+                    src={media.preview_url}
+                    alt={media.original_filename}
+                    className="h-24 w-full object-cover"
+                  />
+                </button>
+              ) : (
+                <button
+                  key={media.id}
+                  type="button"
+                  className="flex h-24 items-center justify-center gap-2 rounded-lg border border-white/15 bg-black/20 text-[12px] font-semibold text-white/85 transition-colors hover:border-white/30"
+                  onClick={() => setLightbox({ items: mediaItems, index: mediaIndex })}
+                >
+                  <PlayIcon className="size-4" />
+                  Video evidence
+                </button>
+              ),
+            )}
+          </div>
+        </Section>
       ) : null}
 
       {appealHistory?.length ? (
-        <div className="rounded-xl border border-white/10 bg-white/10 p-4 text-white">
-          <p className="text-[12px] font-semibold tracking-wide text-white/60 uppercase">Review history</p>
-          <div className="mt-3 space-y-2">
+        <Section label="Review history">
+          <div className="space-y-3">
             {appealHistory.map((appeal) => (
-              <div key={appeal.id} className="rounded-lg border border-white/10 bg-black/20 p-3 text-[12px] leading-5">
+              <div key={appeal.id} className="text-[12px] leading-5">
                 <div className="flex justify-between gap-2">
-                  <span className="font-semibold">Review {appeal.status}</span>
-                  <span className="text-white/50">{formatTime(appeal.decided_at || appeal.created_at)}</span>
+                  <span className="font-semibold text-white">Review {appeal.status}</span>
+                  <span className="text-white/50">
+                    {formatClock(appeal.decided_at || appeal.created_at)}
+                  </span>
                 </div>
-                <p className="mt-1 text-white/80">{appeal.reason}</p>
+                <p className="mt-0.5 text-white/70">{appeal.reason}</p>
               </div>
             ))}
           </div>
-        </div>
+        </Section>
       ) : null}
 
       {canAppeal ? (
-        <div className="rounded-xl border border-white/10 bg-white/10 p-4">
-          <p className="text-[14px] font-semibold text-white">Request post-incident review</p>
-          <p className="mt-1 text-[12px] text-white/65">
+        <Section label="Request a review">
+          <p className="text-[12px] leading-5 text-white/65">
             Use only if this emergency was resolved or recorded incorrectly.
           </p>
           <textarea
@@ -762,7 +776,15 @@ function DetailsColumn({
           >
             {appealBusy ? "Submitting" : "Submit review request"}
           </Button>
-        </div>
+        </Section>
+      ) : null}
+
+      {lightbox ? (
+        <MediaLightbox
+          items={lightbox.items}
+          index={lightbox.index}
+          onClose={() => setLightbox(null)}
+        />
       ) : null}
     </div>
   )
@@ -781,6 +803,7 @@ export function EmergencyTrackingSheet({
 }) {
   const isDesktop = useIsDesktop()
   const [expanded, setExpanded] = useState(false)
+  const [detailsExpanded, setDetailsExpanded] = useState(false)
   const [alert, setAlert] = useState<EmergencyAlert | null>(initialAlert)
   const [appealReason, setAppealReason] = useState("")
   const [appealBusy, setAppealBusy] = useState(false)
@@ -788,7 +811,7 @@ export function EmergencyTrackingSheet({
   const [cancelReason, setCancelReason] = useState("")
   const [cancelBusy, setCancelBusy] = useState(false)
   const [connectionState, setConnectionState] = useState<"connecting" | "live" | "degraded">(
-    initialAlert && activeStatuses.includes(initialAlert.status) ? "connecting" : "live"
+    initialAlert && ACTIVE_EMERGENCY_STATUSES.has(initialAlert.status) ? "connecting" : "live"
   )
   const [chatMessage, setChatMessage] = useState<EmergencyChatMessage | null>(null)
 
@@ -805,6 +828,7 @@ export function EmergencyTrackingSheet({
     setPrevOpen(open)
     if (!open) {
       setExpanded(false)
+      setDetailsExpanded(false)
       setChatMessage(null)
       setCancelOpen(false)
       setCancelReason("")
@@ -827,7 +851,7 @@ export function EmergencyTrackingSheet({
   }, [open])
 
   useEffect(() => {
-    if (!open || !alertId || !alertStatus || !activeStatuses.includes(alertStatus) || connectionState !== "degraded") return
+    if (!open || !alertId || !alertStatus || !ACTIVE_EMERGENCY_STATUSES.has(alertStatus) || connectionState !== "degraded") return
     const interval = window.setInterval(async () => {
       try {
         const nextAlert = await getEmergency(alertId)
@@ -841,7 +865,7 @@ export function EmergencyTrackingSheet({
   }, [open, alertId, alertStatus, connectionState, onAlertChange])
 
   useEffect(() => {
-    if (!open || !alertId || !alertStatus || !activeStatuses.includes(alertStatus)) return
+    if (!open || !alertId || !alertStatus || !ACTIVE_EMERGENCY_STATUSES.has(alertStatus)) return
     let socket: WebSocket | null = null
     let reconnectTimer: number | undefined
     let closedByComponent = false
@@ -909,7 +933,7 @@ export function EmergencyTrackingSheet({
 
   if (!open || !alert || typeof document === "undefined") return null
 
-  const isLive = activeStatuses.includes(alert.status)
+  const isLive = ACTIVE_EMERGENCY_STATUSES.has(alert.status)
   const lastLocation = isLive
     ? alert.current_assignment?.last_location ?? null
     : alert.assignments?.[0]?.last_location ?? null
@@ -960,50 +984,24 @@ export function EmergencyTrackingSheet({
     }
   }
 
-  const streetLine = alert.address?.trim() || alert.barangay || "Your pin"
+  // One chip: what state this alert is in. Distance, connection and the
+  // resident's address all read once, in the sheet header below.
   const mapOverlay = (
-    <>
-<div className="pointer-events-none absolute left-3 top-3 z-[500] flex max-w-[min(100%,280px)] flex-col gap-1.5">
+    <div className="pointer-events-none absolute left-3 top-3 z-[500]">
       {isLive ? (
-        <span className="w-fit rounded-full bg-red-600 px-2.5 py-1 text-[10px] font-bold tracking-wide text-white uppercase shadow-md">
+        <span className="w-fit rounded-full bg-sos px-2.5 py-1 text-[10px] font-bold tracking-wide text-white shadow-md">
           Live · Alert
         </span>
       ) : alert.status === "resolved" ? (
-        <span className="w-fit rounded-full bg-emerald-600 px-2.5 py-1 text-[10px] font-bold tracking-wide text-white uppercase shadow-md">
+        <span className="w-fit rounded-full bg-brand-navy px-2.5 py-1 text-[10px] font-bold tracking-wide text-white shadow-md">
           Resolved
         </span>
       ) : alert.status === "cancelled" ? (
-        <span className="w-fit rounded-full bg-neutral-600 px-2.5 py-1 text-[10px] font-bold tracking-wide text-white uppercase shadow-md">
+        <span className="w-fit rounded-full bg-neutral-600 px-2.5 py-1 text-[10px] font-bold tracking-wide text-white shadow-md">
           Closed
         </span>
       ) : null}
-      {!isLive && alert.route?.geometry ? (
-        <span className="w-fit rounded-full bg-neutral-400/80 px-2.5 py-1 text-[11px] font-semibold text-neutral-800 shadow-md">
-          Route taken
-        </span>
-      ) : distance !== null && !isLive ? (
-        <span className="w-fit rounded-full bg-brand-navy px-2.5 py-1 text-[11px] font-semibold text-white shadow-md">
-          {formatDistance(distance)} · {formatEta(distance)}
-        </span>
-      ) : null}
     </div>
-    <div className="pointer-events-none absolute right-3 top-3 z-[500]">
-      <span className="rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-semibold text-neutral-900 shadow-md">
-        You · {streetLine}
-      </span>
-    </div>
-<div className="pointer-events-none absolute bottom-3 left-3 right-3 z-[500] flex flex-wrap gap-1.5">
-        {isLive && (
-          <span className="rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-semibold text-neutral-800 shadow-md">
-            {connectionState === "live"
-              ? "Live GPS"
-              : connectionState === "connecting"
-                ? "Connecting"
-                : "Polling"}
-          </span>
-        )}
-      </div>
-    </>
   )
 
   const details = (
@@ -1019,12 +1017,14 @@ export function EmergencyTrackingSheet({
       appealHistory={appealHistory}
       chatOpen={open}
       chatMessage={chatMessage}
+      milestoneMode={isDesktop && expanded}
     />
   )
 
+  const toggleDetails = () => setDetailsExpanded((v) => !v)
+
   return createPortal(
     <div className="fixed inset-0 z-[260]">
-      {/* Plain dark scrim — no blur (laggy) / no blue tint */}
       <button
         type="button"
         className={cn(
@@ -1041,20 +1041,14 @@ export function EmergencyTrackingSheet({
         aria-label="Emergency tracking"
         className={cn(
           "z-10 flex flex-col overflow-hidden bg-brand-navy text-white",
-          // Mobile: full screen
           !isDesktop && "fixed inset-0 h-full w-full",
-          // Desktop dock
-          isDesktop &&
-            !expanded &&
-            "fixed bottom-6 right-6 h-[min(680px,calc(100dvh-3rem))] w-[min(400px,calc(100vw-2.5rem))] rounded-2xl border border-white/10 shadow-[0_16px_48px_rgba(0,0,0,0.45)]",
-          // Desktop expanded = right sidebar
-          isDesktop &&
-            expanded &&
-            "fixed inset-y-0 right-0 h-full w-[min(520px,100vw)] max-w-[100vw] border-l border-white/10 shadow-[-12px_0_40px_rgba(0,0,0,0.4)]",
+          isDesktop && !expanded &&
+            "fixed bottom-6 right-6 max-h-[min(720px,calc(100dvh-2rem))] w-[min(400px,calc(100vw-2.5rem))] rounded-2xl border border-white/10 shadow-[0_16px_48px_rgba(0,0,0,0.45)]",
+          isDesktop && expanded &&
+            "fixed left-1/2 top-1/2 max-h-[min(calc(100dvh-3rem),880px)] w-[min(calc(100vw-3rem),1080px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-white/10 shadow-[0_12px_40px_rgba(0,0,0,0.45)]",
         )}
       >
-        {/* Red urgency header */}
-        <header className="flex shrink-0 items-center gap-2 bg-gradient-to-r from-red-800 via-red-600 to-red-700 px-3 py-3 sm:px-4">
+        <header className="flex shrink-0 items-center gap-2 bg-sos px-3 py-3 sm:px-4">
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-[15px] font-bold sm:text-base">{headline(alert)}</h2>
           </div>
@@ -1078,26 +1072,58 @@ export function EmergencyTrackingSheet({
           </button>
         </header>
 
-        {/* Body — stacked map + details (sidebar width is enough; split was cramped/broken) */}
         <div className="flex min-h-0 flex-1 flex-col bg-brand-navy">
-          <div
-            className={cn(
-              "relative shrink-0 border-b border-white/10",
-              isDesktop && expanded ? "h-[min(42%,320px)] min-h-[220px]" : isDesktop ? "h-[220px]" : "h-[min(40vh,260px)]",
-            )}
-          >
-            <EmergencyTrackingMap alert={alert} expanded={expanded} />
-            {mapOverlay}
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
-            {details}
-          </div>
+          {isDesktop && expanded ? (
+            <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(0,5fr)_minmax(0,4fr)]">
+              <div className="relative min-h-[min(420px,60vh)] border-r border-white/10">
+                <EmergencyTrackingMap alert={alert} expanded={expanded} />
+                {mapOverlay}
+              </div>
+              <div className="scrollbar-hide min-h-0 overflow-y-auto overscroll-contain px-4">
+                <div className="ops-pane-fade flex min-h-full flex-col">{details}</div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div
+                className={cn(
+                  "relative shrink-0 border-b border-white/10",
+                  isDesktop ? "h-[250px]" : detailsExpanded ? "h-[min(35vh,200px)]" : "h-[65vh]",
+                )}
+              >
+                <EmergencyTrackingMap alert={alert} expanded={expanded} />
+                {mapOverlay}
+              </div>
+              {!isDesktop && !detailsExpanded ? (
+                <button
+                  type="button"
+                  onClick={toggleDetails}
+                  className="flex shrink-0 flex-col items-center gap-1 bg-nav-bg py-2"
+                >
+                  <span className="h-1 w-10 rounded-full bg-white/30" />
+                  <span className="text-[11px] font-semibold text-white/60">Show details</span>
+                </button>
+              ) : null}
+              {!isDesktop && detailsExpanded ? (
+                <button
+                  type="button"
+                  onClick={toggleDetails}
+                  className="flex shrink-0 flex-col items-center gap-1 bg-nav-bg py-2"
+                >
+                  <span className="h-1 w-10 rounded-full bg-white/30" />
+                  <span className="text-[11px] font-semibold text-white/60">Hide details</span>
+                </button>
+              ) : null}
+              <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-4">
+                <div className="ops-pane-fade flex min-h-full flex-col">{details}</div>
+              </div>
+            </>
+          )}
         </div>
 
-        {/* Footer */}
         <div className="shrink-0 border-t border-white/10 bg-nav-bg px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           {cancelOpen && canCancel ? (
-            <div className="mb-3 rounded-xl border border-red-300/25 bg-red-500/10 p-3">
+            <div className="mb-3 rounded-xl border border-sos/30/25 bg-sos/10 p-3">
               <label htmlFor="emergency-cancel-reason" className="text-[13px] font-semibold text-white">
                 Why are you cancelling?
               </label>
@@ -1109,7 +1135,7 @@ export function EmergencyTrackingSheet({
                 value={cancelReason}
                 onChange={(event) => setCancelReason(event.target.value.slice(0, 500))}
                 placeholder="Example: Sent by accident; everyone here is safe."
-                className="mt-2 min-h-20 w-full resize-none rounded-lg border border-white/15 bg-black/25 px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/35 focus:border-red-300"
+                className="mt-2 min-h-20 w-full resize-none rounded-lg border border-white/15 bg-black/25 px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/35 focus:border-sos/30"
               />
               <div className="mt-2 flex gap-2">
                 <button
@@ -1126,7 +1152,7 @@ export function EmergencyTrackingSheet({
                   type="button"
                   disabled={cancelBusy || cancelReason.trim().length < 10}
                   onClick={() => void submitCancellation()}
-                  className="h-10 flex-1 rounded-lg bg-red-600 text-[13px] font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-45"
+                  className="h-10 flex-1 rounded-lg bg-sos text-[13px] font-semibold text-white hover:bg-sos disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   {cancelBusy ? "Cancelling…" : "Confirm cancel"}
                 </button>
@@ -1138,7 +1164,7 @@ export function EmergencyTrackingSheet({
               <button
                 type="button"
                 onClick={() => setCancelOpen(true)}
-                className="h-11 flex-1 rounded-full border border-red-300/40 text-[14px] font-semibold text-red-100 hover:bg-red-500/15"
+                className="h-11 flex-1 rounded-full border border-sos/30/40 text-[14px] font-semibold text-sos hover:bg-sos/15"
               >
                 Cancel alert
               </button>

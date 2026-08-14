@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { createPortal } from "react-dom"
-import { Link, useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import { ChevronDownIcon, LogOutIcon, PlusCircleIcon, UserIcon, ClipboardListIcon } from "lucide-react"
 
 import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/components/popover"
@@ -8,7 +8,8 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { RESIDENT_DESKTOP_MIN_PX } from "@/features/dashboard/components/resident-top-bar"
+import { useIsDesktop } from "@/features/dashboard/lib/shell"
+import { openSettingsDialog } from "@/features/dashboard/components/settings/settings-event"
 
 function LetterAvatar({
   letter,
@@ -29,22 +30,6 @@ function LetterAvatar({
   )
 }
 
-
-
-function useIsDesktop() {
-  const [isDesktop, setIsDesktop] = useState(() =>
-    typeof window !== "undefined" ? window.innerWidth >= RESIDENT_DESKTOP_MIN_PX : true,
-  )
-  useEffect(() => {
-    const mq = window.matchMedia(`(min-width: ${RESIDENT_DESKTOP_MIN_PX}px)`)
-    const apply = () => setIsDesktop(mq.matches)
-    apply()
-    mq.addEventListener("change", apply)
-    return () => mq.removeEventListener("change", apply)
-  }, [])
-  return isDesktop
-}
-
 /**
  * Account menu:
  * - Desktop: popover under avatar (with chevron badge)
@@ -53,9 +38,15 @@ function useIsDesktop() {
 export function ProfileAccountMenu({
   placeLabel = "Marikina Heights",
   className,
+  onOpenSettings,
+  onOpenProfile,
 }: {
   placeLabel?: string
   className?: string
+  /** Opens the Settings pop-up instead of navigating to the settings page. */
+  onOpenSettings?: () => void
+  /** Opens the Profile pop-up instead of navigating to the profile page. */
+  onOpenProfile?: () => void
 }) {
   const { user, signOut } = useAuthSession()
   const navigate = useNavigate()
@@ -82,6 +73,17 @@ export function ProfileAccountMenu({
   function closeAndGo(path: string) {
     setOpen(false)
     navigate(path)
+  }
+
+  function closeAndOpenProfile() {
+    setOpen(false)
+    if (onOpenProfile) onOpenProfile()
+    else navigate("/dashboard/profile")
+  }
+
+  function openSettings() {
+    setOpen(false)
+    onOpenSettings?.()
   }
 
   useEffect(() => {
@@ -134,14 +136,39 @@ export function ProfileAccountMenu({
 
           <div className="border-t-[1.5px] border-solid border-card-line-strong" />
 
-          <Link
-            to="/dashboard/settings"
-            onClick={() => setOpen(false)}
-            className="flex items-center gap-3 px-5 py-3.5 text-[15px] font-medium text-neutral-800 no-underline transition-colors hover:bg-neutral-50"
+          <button
+            type="button"
+            onClick={closeAndOpenProfile}
+            className="flex w-full items-center gap-3 px-5 py-3.5 text-left text-[15px] font-medium text-neutral-800 transition-colors hover:bg-neutral-50"
           >
-            <PlusCircleIcon className="size-5 shrink-0 text-neutral-700" strokeWidth={1.75} />
-            Settings
-          </Link>
+            <UserIcon className="size-5 shrink-0 text-neutral-700" strokeWidth={1.75} />
+            View profile
+          </button>
+
+          <div className="border-t-[1.5px] border-solid border-card-line-strong" />
+
+          {onOpenSettings ? (
+            <button
+              type="button"
+              onClick={openSettings}
+              className="flex w-full items-center gap-3 px-5 py-3.5 text-left text-[15px] font-medium text-neutral-800 transition-colors hover:bg-neutral-50"
+            >
+              <PlusCircleIcon className="size-5 shrink-0 text-neutral-700" strokeWidth={1.75} />
+              Settings
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                openSettingsDialog()
+              }}
+              className="flex w-full items-center gap-3 px-5 py-3.5 text-left text-[15px] font-medium text-neutral-800 transition-colors hover:bg-neutral-50"
+            >
+              <PlusCircleIcon className="size-5 shrink-0 text-neutral-700" strokeWidth={1.75} />
+              Settings
+            </button>
+          )}
 
           <div className="border-t-[1.5px] border-solid border-card-line-strong" />
 
@@ -188,11 +215,11 @@ export function ProfileAccountMenu({
               <nav className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-3">
                 <button
                   type="button"
-                  onClick={() => closeAndGo("/dashboard/profile")}
+                  onClick={closeAndOpenProfile}
                   className="flex min-h-[48px] w-full items-center gap-3.5 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-neutral-50"
                 >
                   <UserIcon className="size-[22px] shrink-0 text-neutral-700" />
-                  <span className="text-[16px] font-normal text-neutral-900">My profile</span>
+                  <span className="text-[16px] font-normal text-neutral-900">View profile</span>
                 </button>
 
                 <button
@@ -209,7 +236,7 @@ export function ProfileAccountMenu({
               <div className="mt-auto border-t border-neutral-200 px-5 pb-[max(1.5rem,calc(env(safe-area-inset-bottom)+0.5rem))] pt-4">
                 <button
                   type="button"
-                  onClick={() => closeAndGo("/dashboard/settings")}
+                  onClick={openSettings}
                   className="block w-full py-2.5 text-left text-[15px] font-normal text-neutral-600 transition-colors hover:text-neutral-900"
                 >
                   Settings

@@ -9,16 +9,11 @@
     "build": "tsc -b && vite build",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -b",
     "preview": "vite preview --host"
   },
   "dependencies": {
-    "@emotion/react": "^11.14.0",
-    "@emotion/styled": "^11.14.1",
     "@gsap/react": "^2.1.2",
-    "@mui/material": "^9.2.0",
-    "@mui/x-date-pickers": "^9.9.0",
-    "@phosphor-icons/react": "^2.1.10",
     "@react-three/fiber": "^9.6.1",
     "@workspace/ui": "*",
     "dayjs": "^1.11.21",

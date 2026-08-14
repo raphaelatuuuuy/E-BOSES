@@ -3,17 +3,8 @@ import { Link } from "react-router-dom"
 import { toast } from "sonner"
 import {
   AlertTriangleIcon,
-  CircleArrowUp,
-  CalendarDaysIcon,
   ChevronRightIcon,
-  FileTextIcon,
-  GlobeIcon,
   CheckIcon,
-  MegaphoneIcon,
-  PencilIcon,
-  SearchIcon,
-  XIcon,
-  MessageCircleIcon,
 } from "lucide-react"
 
 import { Skeleton } from "@workspace/ui/components/skeleton"
@@ -30,7 +21,7 @@ import {
   getResidentDashboardSummary,
   listAnnouncements,
   listFeedConcerns,
-  listTodayBarangayEvents,
+  listBarangayEventCalendar,
   updateConcernComment,
   voteConcern,
   type Announcement,
@@ -38,37 +29,28 @@ import {
   type Concern,
   type PublicUser,
 } from "@/features/dashboard/api"
-import { mentionToken, toMentionUser } from "@/features/dashboard/components/comment-mentions"
-import { concernBodyText } from "@/features/dashboard/components/feed-post-text"
+import { streetLabelFromAddress } from "@/features/dashboard/components/feed-post-text"
 import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
-import {
-  PostMoreMenu,
-  ReportPostDialog,
-} from "@/features/dashboard/components/report-post-dialog"
-import { PostCommentsBlock } from "@/features/dashboard/components/feed/post-comments"
 import { ComposerCard } from "@/features/dashboard/components/home/composer-card"
 import { HomeRail } from "@/features/dashboard/components/home/home-rail"
-import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
+import { FeedPostCard } from "@/features/dashboard/components/feed-post-card"
 import {
   BARANGAY,
-  FS,
-  GET_STARTED_KEY,
-  IC,
-  STROKE,
-  categoryLabel,
   railLiveMapSrc,
-  streetLabelFromAddress,
-  timeAgo,
 } from "@/features/dashboard/components/home/home-style"
-import { NotificationPopover } from "@/features/dashboard/components/notification-popover"
+import {
+  ResidentNotificationsButton,
+  ResidentProfileDialog,
+} from "@/features/dashboard/components/resident/resident-account-dialogs"
+import { openSettingsDialog } from "@/features/dashboard/components/settings/settings-event"
 import { ProfileAccountMenu } from "@/features/dashboard/components/profile-account-menu"
-import { useResidentSearch } from "@/features/dashboard/components/resident-search-context"
 import {
   ResidentContentGrid,
   RESIDENT_DESKTOP_MIN_PX,
 } from "@/features/dashboard/components/resident-top-bar"
-import { RotatingSearchField } from "@/features/dashboard/components/rotating-search-field"
 import { FEED_MAX, RAIL_W } from "@/features/dashboard/lib/shell"
+import { rankFeed, type FeedOrigin } from "@/features/dashboard/lib/feed-ranking"
+import { AnnouncementCarousel } from "@/features/dashboard/components/home/announcement-carousel"
 import { usePageTitle } from "@/hooks/use-page-title"
 
 const FEED_TABS = [
@@ -83,34 +65,19 @@ type FeedTab = (typeof FEED_TABS)[number]["id"]
 export default function HomePage() {
   usePageTitle("Home")
   const { user, loading: authLoading } = useAuthSession()
-  const { search, setSearch } = useResidentSearch()
+
   const [createOpen, setCreateOpen] = useState(false)
   const [feedTab, setFeedTab] = useState<FeedTab>("for_you")
+  const [origin, setOrigin] = useState<FeedOrigin | null>(null)
   const [feedFilterOpen, setFeedFilterOpen] = useState(false)
-  const [mobileSearchOpen, setMobileSearchOpen] = useState(false)
+
+  const [profileOpen, setProfileOpen] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState("")
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [events, setEvents] = useState<BarangayEvent[]>([])
   const [concerns, setConcerns] = useState<Concern[]>([])
-  const [getStartedOpen, setGetStartedOpen] = useState(() => {
-    try {
-      return localStorage.getItem(GET_STARTED_KEY) !== "1"
-    } catch {
-      return true
-    }
-  })
   const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set())
-  const [showAllComments, setShowAllComments] = useState<Set<number>>(new Set())
-  const [commentInputs, setCommentInputs] = useState<Record<number, string>>({})
-  /** Which comment is open for reply (global — one at a time) */
-  const [replyOpenId, setReplyOpenId] = useState<number | null>(null)
-  const [replyDraft, setReplyDraft] = useState("")
-  const [commentMenuOpenId, setCommentMenuOpenId] = useState<number | null>(null)
-  const [editingCommentId, setEditingCommentId] = useState<number | null>(null)
-  const [editDraft, setEditDraft] = useState("")
-  const [menuOpenPostId, setMenuOpenPostId] = useState<number | null>(null)
-  const [reportDialogPostId, setReportDialogPostId] = useState<number | null>(null)
   const [barangayActiveEmergencies, setBarangayActiveEmergencies] = useState(0)
 
   const displayName = user
@@ -177,8 +144,8 @@ export default function HomePage() {
     try {
       const [nextAnnouncements, nextConcerns, nextEvents, summary] = await Promise.all([
         listAnnouncements(),
-        listFeedConcerns("all", undefined, undefined, search || undefined),
-        listTodayBarangayEvents(),
+        listFeedConcerns("all"),
+        listBarangayEventCalendar(),
         getResidentDashboardSummary().catch(() => null),
       ])
       setAnnouncements(nextAnnouncements)
@@ -216,16 +183,7 @@ export default function HomePage() {
       window.removeEventListener("eboses:report-created", refresh)
       window.removeEventListener("eboses:concern-updated", refresh)
     }
-  }, [authLoading, search])
-
-  function dismissGetStarted() {
-    setGetStartedOpen(false)
-    try {
-      localStorage.setItem(GET_STARTED_KEY, "1")
-    } catch {
-      /* ignore */
-    }
-  }
+  }, [authLoading])
 
   async function handleVote(post: Concern) {
     const nextVote = post.user_vote === 1 ? 0 : 1
@@ -239,41 +197,29 @@ export default function HomePage() {
     )
   }
 
-  async function submitComment(postId: number, parentId?: number | null) {
-    const isReply = parentId != null
-    const body = (isReply ? replyDraft : commentInputs[postId] ?? "").trim()
-    if (!body) return
+  async function submitComment(postId: number, body: string, parentId?: number | null) {
+    const trimmed = body.trim()
+    if (!trimmed) return
     try {
       await commentOnConcern(postId, {
-        body,
+        body: trimmed,
         parent: parentId ?? null,
       })
-      if (isReply) {
-        setReplyDraft("")
-        setReplyOpenId(null)
-      } else {
-        setCommentInputs((current) => ({ ...current, [postId]: "" }))
-      }
       await loadHome()
       setExpandedComments((current) => new Set(current).add(postId))
-      if (isReply) {
-        setShowAllComments((current) => new Set(current).add(postId))
-      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not post comment.")
     }
   }
 
-  async function saveCommentEdit(postId: number, commentId: number) {
-    const body = editDraft.trim()
-    if (!body) {
+  async function saveCommentEdit(postId: number, commentId: number, body: string) {
+    const trimmed = body.trim()
+    if (!trimmed) {
       toast.error("Comment cannot be empty.")
       return
     }
     try {
-      await updateConcernComment(postId, commentId, { body })
-      setEditingCommentId(null)
-      setEditDraft("")
+      await updateConcernComment(postId, commentId, { body: trimmed })
       await loadHome()
       toast.success("Comment updated")
     } catch (err) {
@@ -285,14 +231,6 @@ export default function HomePage() {
     if (!window.confirm("Delete this comment?")) return
     try {
       await deleteConcernComment(postId, commentId)
-      if (editingCommentId === commentId) {
-        setEditingCommentId(null)
-        setEditDraft("")
-      }
-      if (replyOpenId === commentId) {
-        setReplyOpenId(null)
-        setReplyDraft("")
-      }
       await loadHome()
       toast.success("Comment deleted")
     } catch (err) {
@@ -300,17 +238,28 @@ export default function HomePage() {
     }
   }
 
-  const sortedConcerns = useMemo(() => {
-    const list = [...concerns]
-    if (feedTab === "trending") {
-      return list.sort(
-        (a, b) => b.vote_count + b.comment_count - (a.vote_count + a.comment_count),
-      )
-    }
-    return list.sort(
-      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  useEffect(() => {
+    if (feedTab !== "nearby" && feedTab !== "for_you") return
+    if (origin || !navigator.geolocation) return
+    let cancelled = false
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        if (!cancelled) {
+          setOrigin({ lat: position.coords.latitude, lng: position.coords.longitude })
+        }
+      },
+      () => void 0,
+      { maximumAge: 300_000, timeout: 8_000 },
     )
-  }, [concerns, feedTab])
+    return () => {
+      cancelled = true
+    }
+  }, [feedTab, origin])
+
+  const sortedConcerns = useMemo(
+    () => rankFeed(concerns, feedTab, origin),
+    [concerns, feedTab, origin],
+  )
 
   if (!loaded) {
     return (
@@ -319,18 +268,15 @@ export default function HomePage() {
           <Skeleton className="mx-auto h-10 w-full max-w-md rounded-full" />
         </div>
         <div
-          className="mx-auto grid w-full gap-4 p-4 md:px-5"
-          style={{
-            maxWidth: FEED_MAX + RAIL_W + 16,
-            gridTemplateColumns: `minmax(0, ${FEED_MAX}px) ${RAIL_W}px`,
-          }}
+          className="mx-auto w-full p-4 lg:grid lg:grid-cols-[minmax(0,680px)_288px] lg:gap-4 lg:px-5"
+          style={{ maxWidth: FEED_MAX + RAIL_W + 16 }}
         >
           <div className="min-w-0 space-y-3">
             <Skeleton className="h-14 w-full rounded-lg" />
             <Skeleton className="h-9 w-full rounded-md" />
             <Skeleton className="h-40 w-full rounded-lg" />
           </div>
-          <div className="hidden min-w-0 space-y-3 md:block">
+          <div className="hidden min-w-0 space-y-3 lg:block">
             <Skeleton className="h-24 w-full rounded-lg" />
             <Skeleton className="h-48 w-full rounded-lg" />
           </div>
@@ -344,11 +290,9 @@ export default function HomePage() {
       {/* Mobile top — also used at ~200% zoom (CSS width < 1024) */}
       <style>{`
         .resident-mobile-top { display: none; }
-        .resident-mobile-only { display: none; }
         .resident-home-rail { min-width: 0; }
         @media (max-width: ${RESIDENT_DESKTOP_MIN_PX - 1}px) {
           .resident-mobile-top { display: block; }
-          .resident-mobile-only { display: block; }
           .resident-home-desktop-grid { display: block !important; }
           .resident-home-rail { display: none !important; }
         }
@@ -396,13 +340,13 @@ export default function HomePage() {
           width: 10px;
           height: 10px;
           border-radius: 9999px;
-          background: #22c55e;
+          background: var(--color-brand-navy);
           border: 1.5px solid #fff;
-          box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.25);
+          box-shadow: 0 0 0 1px rgb(7 20 95 / 0.25);
         }
         .rail-live-dot__status--alert {
-          background: #ef4444;
-          box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.35);
+          background: var(--color-sos);
+          box-shadow: 0 0 0 1px rgb(242 59 53 / 0.35);
         }
         .rail-live-dot__ring {
           position: absolute;
@@ -441,8 +385,8 @@ export default function HomePage() {
           .rail-live-dot__ring { animation: none; opacity: 0.3; transform: scale(1.4); }
         }
       `}</style>
-      {/* Mobile top: map+status dot · Marikina Heights · search icon · notif · avatar */}
-      <header className="resident-mobile-top sticky top-0 z-30 border-b border-neutral-200 bg-white">
+      {/* Mobile top: map+status dot · Marikina Heights · notif · avatar */}
+      <header className="resident-mobile-top sticky top-0 z-30 bg-white">
         <div className="flex h-12 items-center gap-2 px-4">
           <Link
             to="/dashboard/alerts-map"
@@ -484,44 +428,33 @@ export default function HomePage() {
           <p className="min-w-0 flex-1 truncate text-[16px] font-bold tracking-tight text-neutral-900">
             {BARANGAY}
           </p>
-          <button
-            type="button"
-            onClick={() => setMobileSearchOpen((v) => !v)}
-            className="group flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-700 hover:bg-neutral-50"
-            aria-label="Search"
-            aria-expanded={mobileSearchOpen}
-          >
-            <SearchIcon
-              className={cn(
-                "size-7 shrink-0 transition-opacity duration-150",
-                mobileSearchOpen
-                  ? "opacity-100"
-                  : "opacity-55 group-hover:opacity-100 group-focus-visible:opacity-100 group-active:opacity-100",
-              )}
-              strokeWidth={2}
-            />
-          </button>
-          <NotificationPopover />
-          <ProfileAccountMenu placeLabel={BARANGAY} />
+
+          <ResidentNotificationsButton />
+          <ProfileAccountMenu
+            placeLabel={BARANGAY}
+            onOpenProfile={() => setProfileOpen(true)}
+            onOpenSettings={() => openSettingsDialog()}
+          />
         </div>
-        {mobileSearchOpen ? (
-          <div className="border-t border-neutral-200 bg-white px-4 py-2.5">
-            <RotatingSearchField
-              value={search}
-              onChange={setSearch}
-              maxWidth="100%"
-              inputClassName="h-10 border border-neutral-200 bg-white"
-            />
-          </div>
-        ) : null}
+
       </header>
+      <ResidentProfileDialog
+        open={profileOpen}
+        onOpenChange={setProfileOpen}
+        onOpenSettings={(closeDialog) => {
+          closeDialog()
+          openSettingsDialog()
+        }}
+      />
 
       {/*
         Mobile: padded feed · Desktop: same grid as top bar
       */}
-      <ResidentContentGrid className="resident-home-desktop-grid min-w-0 flex-1 pb-[calc(7.5rem+env(safe-area-inset-bottom))] pt-3 max-lg:pt-3.5 md:pb-8 md:pt-3">
+      <ResidentContentGrid className="resident-home-desktop-grid min-w-0 flex-1 pb-[calc(7.5rem+env(safe-area-inset-bottom))] pt-3 max-lg:pt-3.5 lg:pb-8 lg:pt-3">
         {/* CENTER feed column */}
         <div className="min-w-0 w-full max-lg:px-3.5">
+
+
           {/* Composer — mobile: rounded pill (avatar→Report); filter sits beside outside */}
           <ComposerCard
             user={sessionUserAsPublic}
@@ -530,7 +463,7 @@ export default function HomePage() {
           />
 
           {/* Desktop: inline chips only */}
-          <div className="mb-3 hidden flex-wrap items-center gap-1.5 md:flex">
+          <div className="mb-3 hidden flex-wrap items-center gap-1.5 lg:flex">
             {FEED_TABS.map((tab) => {
               const active = feedTab === tab.id
               return (
@@ -552,331 +485,73 @@ export default function HomePage() {
             })}
           </div>
 
-          {getStartedOpen ? (
-            <section className="mb-3 max-lg:pt-1">
-              <div className="mb-1.5 flex items-center justify-between">
-                <h2 className={cn("font-bold text-neutral-900", FS.section)}>Get started on E-Boses</h2>
-                <button
-                  type="button"
-                  onClick={dismissGetStarted}
-                  className="flex size-7 items-center justify-center rounded-full text-neutral-500 hover:bg-neutral-100"
-                  aria-label="Dismiss"
-                >
-                  <XIcon className={IC.xs} strokeWidth={STROKE} />
-                </button>
-              </div>
-              <div className="grid grid-cols-1 gap-2.5 min-[520px]:grid-cols-3">
-                <GetStartedCard
-                  icon={<PencilIcon className={IC.md} strokeWidth={STROKE} />}
-                  title="Report a concern"
-                  body="Tell the barangay about issues near you."
-                  cta="Report"
-                  onClick={() => setCreateOpen(true)}
-                />
-                <GetStartedCard
-                  icon={<FileTextIcon className={IC.md} strokeWidth={STROKE} />}
-                  title="Track your reports"
-                  body="Follow status updates on what you submitted."
-                  cta="View reports"
-                  to="/dashboard/reports"
-                />
-                <GetStartedCard
-                  icon={<AlertTriangleIcon className={IC.md} strokeWidth={STROKE} />}
-                  title="Emergency SOS"
-                  body="Get urgent help from barangay responders."
-                  cta="How it works"
-                  onClick={() => window.dispatchEvent(new Event("eboses:open-sos"))}
-                />
-              </div>
-            </section>
-          ) : null}
-
-          {events.length > 0 ? (
-            <section className="resident-mobile-only mb-3 rounded-2xl border border-neutral-200 bg-white p-3.5 md:mb-3 md:rounded-lg">
-              <div className="flex items-center gap-2 text-brand-navy">
-                <CalendarDaysIcon className="size-7" strokeWidth={STROKE} />
-                <h2 className="text-[16px] font-bold">Today in your barangay</h2>
-              </div>
-              <div className="mt-3 divide-y divide-neutral-200">
-                {events.map((event) => (
-                  <div key={event.id} className="py-3 first:pt-0 last:pb-0">
-                    <p className="text-[15px] font-bold text-neutral-900">{event.title}</p>
-                    <p className="mt-1 text-[14px] leading-5 text-neutral-600">{event.detail}</p>
-                    <p className="mt-1 text-[13px] font-medium text-brand-navy">
-                      {new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit" }).format(new Date(event.starts_at))}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : null}
-
           {error ? <p className="mb-3 text-[15px] text-destructive">{error}</p> : null}
 
           {hasOngoingAlerts ? (
             <Link
               to="/dashboard/alerts-map"
-              className="mb-3 flex items-center gap-3 rounded-2xl border border-red-100 bg-red-50 px-3.5 py-3 no-underline transition-colors hover:bg-red-100/80 md:mb-2.5 md:rounded-lg md:border"
+              className="mb-3 flex items-center gap-3 rounded-2xl border border-sos/30 bg-sos/10 px-3.5 py-3 no-underline transition-colors hover:bg-sos/10/80 lg:mb-2.5 lg:rounded-lg lg:border"
             >
-              <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600">
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-sos/10 text-sos">
                 <AlertTriangleIcon className="size-5" strokeWidth={2.25} />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block text-[15px] font-bold text-red-800">
+                <span className="block text-[15px] font-bold text-sos">
                   {barangayActiveEmergencies} ongoing alert
                   {barangayActiveEmergencies === 1 ? "" : "s"} in {BARANGAY}
                 </span>
-                <span className="mt-0.5 block text-[13px] font-medium text-red-700/90">
-                  See locations, reports, and services on the map
+                <span className="mt-0.5 block text-[13px] font-medium text-sos/90">
+                  See concerns, emergencies, and announcements on the map
                 </span>
               </span>
-              <ChevronRightIcon className="size-5 shrink-0 text-red-600" strokeWidth={2} />
+              <ChevronRightIcon className="size-5 shrink-0 text-sos" strokeWidth={2} />
             </Link>
           ) : null}
 
-          <div className="flex flex-col gap-3 max-lg:gap-3 md:gap-2.5">
-            {announcements.map((announcement) => (
-              <article
-                key={`a-${announcement.id}`}
-                className="rounded-2xl border border-neutral-200 bg-white p-3.5 md:rounded-lg"
-              >
-                <div className="flex gap-2.5">
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-brand-orange-soft">
-                    <MegaphoneIcon className="size-7 text-brand-orange" strokeWidth={2} />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className={cn("truncate font-bold text-neutral-900", FS.author)}>
-                          Barangay Hall
-                        </p>
-                        <p
-                          className={cn(
-                            "flex flex-wrap items-center gap-1 text-neutral-500",
-                            FS.meta,
-                          )}
-                        >
-                          <span>{BARANGAY}</span>
-                          <span>·</span>
-                          <span>{announcement.date_label}</span>
-                          <GlobeIcon className={IC.xxs} strokeWidth={STROKE} />
-                        </p>
-                      </div>
-                      <span
-                        className={cn(
-                          "shrink-0 rounded-md px-1.5 py-0.5 font-bold uppercase",
-                          announcement.urgency === "urgent"
-                            ? "bg-red-50 text-red-700"
-                            : announcement.urgency === "important"
-                              ? "bg-amber-50 text-amber-700"
-                              : "bg-brand-orange-soft text-brand-orange",
-                          FS.label,
-                        )}
-                      >
-                        {announcement.is_pinned ? "Pinned · " : ""}{announcement.tag || "Announcement"}
-                      </span>
-                    </div>
-                    <h3 className={cn("mt-2 font-bold leading-snug text-neutral-900", FS.body)}>
-                      {announcement.title}
-                    </h3>
-                    <p className={cn("mt-1 leading-relaxed text-neutral-800", FS.body)}>
-                      {announcement.body}
-                    </p>
-                    {announcement.image_url ? (
-                      <img
-                        src={announcement.image_url}
-                        alt={announcement.image_alt || ""}
-                        className="mt-3 max-h-72 w-full rounded-xl object-cover"
-                      />
-                    ) : null}
-                  </div>
-                </div>
-              </article>
+          <div className="flex flex-col gap-3 lg:gap-2.5">
+            <AnnouncementCarousel announcements={announcements} />
+
+            {sortedConcerns.map((post) => (
+              <FeedPostCard
+                key={post.id}
+                post={post}
+                sessionUser={sessionUserAsPublic}
+                commentsExpanded={expandedComments.has(post.id)}
+                onCommentsExpandedChange={(open) =>
+                  setExpandedComments((prev) => {
+                    const next = new Set(prev)
+                    if (open) next.add(post.id)
+                    else next.delete(post.id)
+                    return next
+                  })
+                }
+                onVote={(p) => void handleVote(p)}
+                onComment={(postId, body, parent) =>
+                  submitComment(postId, body, parent ?? null)
+                }
+                onEditComment={saveCommentEdit}
+                onDeleteComment={removeComment}
+              />
             ))}
 
-            {sortedConcerns.map((post) => {
-              const isExpanded = expandedComments.has(post.id)
-              const reporterStreet = streetLabelFromAddress(post.reporter.street)
-              return (
-                <article
-                  key={post.id}
-                  className="relative overflow-hidden rounded-2xl border border-neutral-200 bg-white md:rounded-lg"
+            {sortedConcerns.length === 0 && concerns.length > 0 && !error ? (
+              <div className="rounded-lg border border-neutral-200 bg-white px-5 py-8 text-center">
+                <p className="text-[15px] font-semibold text-neutral-700">
+                  {feedTab === "nearby"
+                    ? "Nothing reported within 1.5 km of you."
+                    : "No posts match this filter."}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setFeedTab("recent")}
+                  className="mt-2 text-[14px] font-semibold text-brand-orange"
                 >
-                  {/* Header + body (padded) */}
-                  <div className="flex gap-2.5 p-3.5 pb-0">
-                    <UserAvatar user={post.reporter} size="lg" />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className={cn("truncate font-bold text-neutral-900", FS.author)}>
-                            {post.reporter.full_name}
-                          </p>
-                          <p
-                            className={cn(
-                              "inline-flex max-w-full items-center gap-1 overflow-hidden text-neutral-500",
-                              FS.meta,
-                            )}
-                          >
-                            {reporterStreet ? (
-                              <>
-                                <span className="min-w-0 truncate">{reporterStreet}</span>
-                                <span className="shrink-0" aria-hidden>
-                                  ·
-                                </span>
-                              </>
-                            ) : null}
-                            <span className="shrink-0">{categoryLabel(post.category)}</span>
-                            <span className="shrink-0" aria-hidden>
-                              ·
-                            </span>
-                            <span className="shrink-0">{timeAgo(post.created_at)}</span>
-                            <GlobeIcon className={cn(IC.xxs, "shrink-0")} strokeWidth={STROKE} />
-                          </p>
-                        </div>
-                        <PostMoreMenu
-                          open={menuOpenPostId === post.id}
-                          onOpenChange={(open) =>
-                            setMenuOpenPostId(open ? post.id : null)
-                          }
-                          onReport={() => setReportDialogPostId(post.id)}
-                        />
-                      </div>
-                    </div>
-                  </div>
+                  Show all recent posts
+                </button>
+              </div>
+            ) : null}
 
-                  <div className="px-3.5 pt-2">
-                    <p className={cn("leading-relaxed text-neutral-900", FS.body)}>
-                      {concernBodyText(post)}
-                    </p>
-                  </div>
-
-                  {/* Media — edge-to-edge; slight line above the image */}
-                  {post.media.length > 0 && post.media[0].mime_type?.startsWith("image/") ? (
-                    <div className="mt-2.5 border-y border-neutral-200">
-                      <img
-                        src={post.media[0].preview_url}
-                        alt=""
-                        className="max-h-80 w-full object-cover"
-                      />
-                    </div>
-                  ) : null}
-
-                  {/* Engagement + collapsible comments */}
-                  <div className="space-y-2.5 p-3.5 pt-3">
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => void handleVote(post)}
-                        aria-label={post.user_vote === 1 ? "Remove upvote" : "Upvote"}
-                        aria-pressed={post.user_vote === 1}
-                        className={cn(
-                          "inline-flex h-9 min-w-9 items-center justify-center gap-1 rounded-full bg-neutral-100 px-2.5 text-neutral-500 transition-colors",
-                          "hover:bg-neutral-200/80 hover:text-neutral-800",
-                          "active:text-neutral-800",
-                          post.user_vote === 1 && "bg-neutral-200/90 text-neutral-800",
-                        )}
-                      >
-                        <CircleArrowUp
-                          className="size-7 shrink-0"
-                          strokeWidth={STROKE}
-                        />
-                        {post.vote_count > 0 ? (
-                          <span className="pr-0.5 text-[13px] font-semibold tabular-nums">
-                            {post.vote_count}
-                          </span>
-                        ) : null}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setExpandedComments((prev) => {
-                            const next = new Set(prev)
-                            if (next.has(post.id)) next.delete(post.id)
-                            else next.add(post.id)
-                            return next
-                          })
-                          window.requestAnimationFrame(() => {
-                            if (!isExpanded) {
-                              document.getElementById(`home-comment-${post.id}`)?.focus()
-                            }
-                          })
-                        }}
-                        aria-label={isExpanded ? "Hide comments" : "Show comments"}
-                        aria-expanded={isExpanded}
-                        className={cn(
-                          "group inline-flex h-9 min-w-9 items-center justify-center gap-1 rounded-full bg-neutral-100 px-2.5 text-neutral-700 transition-colors",
-                          "hover:bg-neutral-200/80",
-                          isExpanded ? "opacity-100" : "opacity-70 hover:opacity-100 active:opacity-100",
-                        )}
-                      >
-                        <MessageCircleIcon className="size-6 shrink-0" />
-                        {post.comment_count > 0 ? (
-                          <span className="pr-0.5 text-[13px] font-semibold tabular-nums">
-                            {post.comment_count}
-                          </span>
-                        ) : null}
-                      </button>
-                    </div>
-
-                    <PostCommentsBlock
-                      post={post}
-                      isExpanded={isExpanded}
-                      showAllComments={showAllComments.has(post.id)}
-                      onToggleShowAll={() => {
-                        setShowAllComments((prev) => {
-                          const next = new Set(prev)
-                          if (next.has(post.id)) next.delete(post.id)
-                          else next.add(post.id)
-                          return next
-                        })
-                      }}
-                      commentInput={commentInputs[post.id] ?? ""}
-                      onCommentInputChange={(value) =>
-                        setCommentInputs((prev) => ({ ...prev, [post.id]: value }))
-                      }
-                      onSubmitTopLevel={() => void submitComment(post.id)}
-                      replyOpenId={replyOpenId}
-                      replyDraft={replyDraft}
-                      onToggleReply={(c) => {
-                        setReplyOpenId((cur) => {
-                          if (cur === c.id) {
-                            setReplyDraft("")
-                            return null
-                          }
-                          // Prefill @FirstName mention (bold+underline when rendered)
-                          setReplyDraft(
-                            `${mentionToken(toMentionUser(c.author))} `,
-                          )
-                          return c.id
-                        })
-                      }}
-                      onReplyDraftChange={setReplyDraft}
-                      onSubmitReply={(parentId) => void submitComment(post.id, parentId)}
-                      sessionUser={sessionUserAsPublic}
-                      menuOpenId={commentMenuOpenId}
-                      onMenuOpenChange={setCommentMenuOpenId}
-                      editingId={editingCommentId}
-                      editDraft={editDraft}
-                      onStartEdit={(c) => {
-                        setEditingCommentId(c.id)
-                        setEditDraft(c.body)
-                        setReplyOpenId(null)
-                      }}
-                      onEditDraftChange={setEditDraft}
-                      onCancelEdit={() => {
-                        setEditingCommentId(null)
-                        setEditDraft("")
-                      }}
-                      onSaveEdit={(commentId) => void saveCommentEdit(post.id, commentId)}
-                      onDelete={(commentId) => void removeComment(post.id, commentId)}
-                    />
-                  </div>
-                </article>
-              )
-            })}
-
-            {announcements.length === 0 && sortedConcerns.length === 0 && !error ? (
+            {announcements.length === 0 && concerns.length === 0 && !error ? (
               <div className="flex flex-col items-center rounded-lg border border-neutral-200 bg-white px-6 py-10 text-center">
                 <img
                   src="/contents/feed-header.webp"
@@ -906,7 +581,7 @@ export default function HomePage() {
       {/* Mobile feed filter sheet — Nextdoor “Filter by” layout, E-Boses white */}
       {feedFilterOpen ? (
         <div
-          className="fixed inset-0 z-[200] flex flex-col justify-end bg-black/30 md:hidden"
+          className="fixed inset-0 z-[200] flex flex-col justify-end bg-black/30 lg:hidden"
           role="dialog"
           aria-modal="true"
           aria-label="Filter by"
@@ -955,57 +630,6 @@ export default function HomePage() {
       ) : null}
 
       <CreateReportDialog open={createOpen} onOpenChange={setCreateOpen} />
-
-      <ReportPostDialog
-        open={reportDialogPostId != null}
-        concernId={reportDialogPostId}
-        onClose={() => setReportDialogPostId(null)}
-      />
     </div>
-  )
-}
-
-function GetStartedCard({
-  icon,
-  title,
-  body,
-  cta,
-  to,
-  onClick,
-}: {
-  icon: React.ReactNode
-  title: string
-  body: string
-  cta: string
-  to?: string
-  onClick?: () => void
-}) {
-  const inner = (
-    <>
-      <span className="flex size-9 items-center justify-center rounded-full bg-neutral-100 text-neutral-700">
-        {icon}
-      </span>
-      <p className="mt-2.5 text-[15px] font-bold leading-snug text-neutral-900">{title}</p>
-      <p className="mt-1 flex-1 text-[14px] leading-relaxed text-neutral-500">{body}</p>
-      <span className="mt-3 inline-flex h-9 items-center justify-center rounded-md bg-neutral-900 px-4 text-[14px] font-bold text-white">
-        {cta}
-      </span>
-    </>
-  )
-
-  const className =
-    "flex min-w-0 flex-col rounded-lg border border-neutral-200 bg-white p-3.5 no-underline transition-colors hover:bg-neutral-50/80"
-
-  if (to) {
-    return (
-      <Link to={to} className={className}>
-        {inner}
-      </Link>
-    )
-  }
-  return (
-    <button type="button" onClick={onClick} className={cn(className, "text-left")}>
-      {inner}
-    </button>
   )
 }

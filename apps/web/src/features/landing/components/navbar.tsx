@@ -1,13 +1,16 @@
 import { Link } from "react-router-dom"
-import { ArrowRight, List, X } from "@phosphor-icons/react"
+import { ArrowRightIcon, MenuIcon, XIcon } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
-const NAV_LINKS = [
+type NavLink = { label: string; href?: string; to?: string }
+
+const NAV_LINKS: NavLink[] = [
   { label: "Home", href: "#top" },
   { label: "How E-Boses helps", href: "#about" },
   { label: "How it works", href: "#how-it-works" },
   { label: "Resident benefits", href: "#impact" },
   { label: "Contact", href: "#contact" },
+  { label: "Help Center", to: "/help" },
 ]
 
 const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
@@ -93,11 +96,18 @@ export function Navbar() {
             </Link>
 
             <nav aria-label="Primary navigation" className="hidden items-center gap-7 lg:flex">
-              {NAV_LINKS.map((link) => (
-                <a key={link.label} href={link.href} className="min-h-11 py-3 text-sm font-medium text-white/70 transition-colors hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground">
-                  {link.label}
-                </a>
-              ))}
+              {NAV_LINKS.map((link) => {
+                const className = "min-h-11 py-3 text-sm font-medium text-white/70 transition-colors hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+                return link.to ? (
+                  <Link key={link.label} to={link.to} className={className}>
+                    {link.label}
+                  </Link>
+                ) : (
+                  <a key={link.label} href={link.href} className={className}>
+                    {link.label}
+                  </a>
+                )
+              })}
             </nav>
 
             <Link to="/sign-in" className="hidden min-h-11 items-center px-4 text-sm font-semibold text-white underline decoration-primary decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground lg:inline-flex">
@@ -105,7 +115,7 @@ export function Navbar() {
             </Link>
 
             <button ref={menuButtonRef} type="button" onClick={() => setMobileOpen(true)} className="inline-flex size-11 items-center justify-center rounded-full border border-white/25 text-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground lg:hidden" aria-label="Open menu" aria-expanded={mobileOpen} aria-controls="mobile-navigation">
-              <List className="size-5" aria-hidden="true" />
+              <MenuIcon className="size-5" strokeWidth={1.5} aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -123,18 +133,30 @@ export function Navbar() {
             <img src="/contents/logo.webp" alt="E-Boses" className="h-10 w-auto object-contain" />
           </Link>
           <button ref={closeButtonRef} type="button" onClick={closeMenu} className="flex size-11 items-center justify-center rounded-full border border-white/25 text-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground" aria-label="Close menu" tabIndex={mobileOpen ? 0 : -1}>
-            <X className="size-5" aria-hidden="true" />
+            <XIcon className="size-5" strokeWidth={1.5} aria-hidden="true" />
           </button>
         </div>
 
         <nav aria-label="Mobile navigation" className="relative z-10 flex flex-col px-5 pt-6">
-          {NAV_LINKS.map((link) => (
-            <a key={link.label} href={link.href} onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="flex min-h-14 items-center justify-between border-b border-white/10 py-4 text-xl font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-foreground">
-              {link.label}<ArrowRight className="size-5 text-accent" aria-hidden="true" />
-            </a>
-          ))}
+          {NAV_LINKS.map((link) => {
+            const className = "flex min-h-14 items-center justify-between border-b border-white/10 py-4 text-xl font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-foreground"
+            const inner = (
+              <>
+                {link.label}<ArrowRightIcon className="size-5 text-accent" strokeWidth={1.5} aria-hidden="true" />
+              </>
+            )
+            return link.to ? (
+              <Link key={link.label} to={link.to} onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className={className}>
+                {inner}
+              </Link>
+            ) : (
+              <a key={link.label} href={link.href} onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className={className}>
+                {inner}
+              </a>
+            )
+          })}
           <Link to="/sign-in" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="flex min-h-14 items-center justify-between border-b border-white/10 py-4 text-xl font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-foreground">
-            Sign in<ArrowRight className="size-5 text-accent" aria-hidden="true" />
+            Sign in<ArrowRightIcon className="size-5 text-accent" strokeWidth={1.5} aria-hidden="true" />
           </Link>
         </nav>
 

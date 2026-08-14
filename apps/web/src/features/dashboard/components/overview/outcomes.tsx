@@ -2,6 +2,7 @@ import { useMemo } from "react"
 import { Link } from "react-router-dom"
 
 import { Skeleton } from "@workspace/ui/components/skeleton"
+import { statusGroupOf } from "@/features/dashboard/lib/status-vocabulary"
 import {
   DonutLegend,
   SegmentedDonut,
@@ -29,9 +30,6 @@ export function OutcomesCard({
   const slices = useMemo<DonutSlice[]>(() => {
     const count = (match: (concern: Concern) => boolean) => concerns.filter(match).length
     return [
-      // Segments read from the shared status vocabulary rather than a private
-      // set of greys, so a slice and the status badge on the same concern agree
-      // — the rule the token file states for severity, applied to status.
       {
         key: "resolved",
         label: "Resolved",
@@ -39,21 +37,21 @@ export function OutcomesCard({
         color: "var(--color-status-closed)",
       },
       {
-        key: "in_progress",
+        key: "active",
         label: "In progress",
-        value: count((c) => c.status === "assigned" || c.status === "in_progress"),
+        value: count((c) => statusGroupOf(c.status) === "active"),
         color: "var(--color-brand-orange)",
       },
       {
-        key: "review",
-        label: "Under review",
-        value: count((c) => c.status === "submitted" || c.status === "under_review"),
+        key: "open",
+        label: "Needs attention",
+        value: count((c) => statusGroupOf(c.status) === "open"),
         color: "var(--color-status-active)",
       },
       {
         key: "closed",
-        label: "Not accepted",
-        value: count((c) => c.status === "rejected" || c.status === "appealed"),
+        label: "Closed without a fix",
+        value: count((c) => statusGroupOf(c.status) === "closed" && c.status !== "resolved"),
         color: "var(--color-subtle-foreground)",
       },
     ]

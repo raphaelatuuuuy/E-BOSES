@@ -22,7 +22,7 @@ export function useOfficialBadges(enabled: boolean): Record<string, number> {
         const summary = await getOfficialDashboardSummary()
         if (cancelled) return
         setBadges({
-          concerns: summary.pending_reviews,
+          concerns: summary.open_reports,
           emergencies: summary.active_emergencies,
           community: summary.pending_content_flags,
           configuration:

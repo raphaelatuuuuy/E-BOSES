@@ -293,7 +293,7 @@ function RadiusField({
 }) {
   return (
     <label className="block rounded-2xl border border-card-line bg-card p-4">
-      <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+      <span className="text-[11px] font-bold text-muted-foreground">
         {label}
       </span>
       <span className="mt-1 flex items-baseline gap-1.5">

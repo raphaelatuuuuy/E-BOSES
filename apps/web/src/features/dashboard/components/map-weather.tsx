@@ -176,7 +176,7 @@ export function MapWeatherButton({
       {weather.loading ? (
         <LoaderCircleIcon className="size-4 animate-spin text-neutral-400" />
       ) : (
-        <MapWeatherIcon code={weather.code} className="size-5 text-amber-500" />
+        <MapWeatherIcon code={weather.code} className="size-5 text-neutral-500" />
       )}
       <span>
         {weather.temperature != null ? `${Math.round(weather.temperature)}°C` : "—"}
@@ -277,12 +277,12 @@ export function MapWeatherDetails({ weather }: { weather: MapWeatherState }) {
               className="grid grid-cols-[40px_minmax(0,1fr)_auto_36px] items-center gap-2 text-sm"
             >
               <span className="font-bold text-neutral-800">{day.day}</span>
-              <MapWeatherIcon code={day.code} className="size-5 text-amber-500" />
+              <MapWeatherIcon code={day.code} className="size-5 text-neutral-500" />
               <span className="font-bold text-neutral-800">
                 {Math.round(day.high)}°{" "}
                 <span className="font-medium text-neutral-400">{Math.round(day.low)}°</span>
               </span>
-              <span className="text-right text-sky-600">{day.rain}%</span>
+              <span className="text-right text-neutral-600">{day.rain}%</span>
             </div>
           ))}
         </div>

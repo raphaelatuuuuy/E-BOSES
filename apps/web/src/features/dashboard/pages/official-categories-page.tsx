@@ -16,6 +16,8 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { Checkbox } from "@workspace/ui/components/checkbox"
+
 import { apiRequest } from "@/lib/api"
 import { DataTable, type Column } from "@/features/dashboard/components/record/data-table"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
@@ -52,6 +54,9 @@ interface Category {
   icon_image_url: string
   department: number | null
   department_detail: Unit | null
+  photo_required: boolean
+  description_required: boolean
+  location_required: boolean
   is_active: boolean
 }
 
@@ -92,6 +97,28 @@ function slugify(value: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80)
+}
+
+function RequirementToggle({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string
+  hint: string
+  checked: boolean
+  onChange: (value: boolean) => void
+}) {
+  return (
+    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-card-line bg-card px-3 py-2.5">
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-foreground">{label}</span>
+        <span className="block text-xs font-medium text-muted-foreground">{hint}</span>
+      </span>
+      <Checkbox checked={checked} onChange={(event) => onChange(event.currentTarget.checked)} aria-label={label} />
+    </label>
+  )
 }
 
 export default function OfficialCategoriesPage() {
@@ -141,6 +168,9 @@ export default function OfficialCategoriesPage() {
       payload.append("description", draft.description || "")
       payload.append("icon_key", draft.icon_key || "tag")
       payload.append("custom_icon_label", (draft.custom_icon_label || "").trim())
+      payload.append("photo_required", String(draft.photo_required ?? true))
+      payload.append("description_required", String(draft.description_required ?? true))
+      payload.append("location_required", String(draft.location_required ?? true))
       payload.append("is_active", String(draft.is_active ?? true))
       if (draft.department) payload.append("department", String(draft.department))
       if (draft.iconFile) payload.append("icon_image", draft.iconFile)
@@ -209,7 +239,7 @@ export default function OfficialCategoriesPage() {
             {category.icon_image_url ? (
               <img src={category.icon_image_url} alt="" className="size-full rounded-xl object-cover" />
             ) : category.custom_icon_label ? (
-              <span className="text-xs font-black">{category.custom_icon_label}</span>
+              <span className="text-xs font-semibold">{category.custom_icon_label}</span>
             ) : (() => {
               const Icon = iconFor(category.icon_key)
               return <Icon className="size-4" />
@@ -319,7 +349,7 @@ export default function OfficialCategoriesPage() {
         <div className="space-y-3 rounded-2xl border border-card-line bg-card p-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block">
-              <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+              <span className="text-[11px] font-bold text-muted-foreground">
                 Category name
               </span>
               <input
@@ -335,7 +365,7 @@ export default function OfficialCategoriesPage() {
               />
             </label>
             <label className="block">
-              <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+              <span className="text-[11px] font-bold text-muted-foreground">
                 Assigned Unit
               </span>
               <select
@@ -361,7 +391,7 @@ export default function OfficialCategoriesPage() {
           </div>
 
           <label className="block">
-            <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+            <span className="text-[11px] font-bold text-muted-foreground">
               What belongs here
             </span>
             <input
@@ -372,8 +402,30 @@ export default function OfficialCategoriesPage() {
             />
           </label>
 
+          <div className="space-y-2 rounded-2xl border border-card-line bg-canvas p-3">
+            <p className="text-[11px] font-bold text-muted-foreground">Report requirements</p>
+            <RequirementToggle
+              label="Description required"
+              hint="Residents must describe the issue before filing"
+              checked={draft.description_required ?? true}
+              onChange={(value) => setDraft({ ...draft, description_required: value })}
+            />
+            <RequirementToggle
+              label="Photo required"
+              hint="Residents must attach at least one photo"
+              checked={draft.photo_required ?? true}
+              onChange={(value) => setDraft({ ...draft, photo_required: value })}
+            />
+            <RequirementToggle
+              label="Location required"
+              hint="Residents must pin where the issue is"
+              checked={draft.location_required ?? true}
+              onChange={(value) => setDraft({ ...draft, location_required: value })}
+            />
+          </div>
+
           <div className="space-y-3 rounded-2xl border border-card-line bg-canvas p-3">
-            <p className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Icon</p>
+            <p className="text-[11px] font-bold text-muted-foreground">Icon</p>
             <div className="flex flex-wrap gap-2">
               {ICONS.map(([key, label, Icon]) => (
                 <button
@@ -388,7 +440,7 @@ export default function OfficialCategoriesPage() {
               ))}
             </div>
             <label className="block">
-              <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Custom icon text</span>
+              <span className="text-[11px] font-bold text-muted-foreground">Custom icon text</span>
               <input
                 value={draft.custom_icon_label ?? ""}
                 onChange={(event) => setDraft({ ...draft, custom_icon_label: event.target.value })}
@@ -398,7 +450,7 @@ export default function OfficialCategoriesPage() {
               />
             </label>
             <label className="block rounded-2xl border border-dashed border-brand-orange/40 bg-card p-3">
-              <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Custom image / .ico</span>
+              <span className="text-[11px] font-bold text-muted-foreground">Custom image / .ico</span>
               <div className="mt-2 flex flex-wrap items-center gap-3">
                 {draft.iconFile ? (
                   <img src={URL.createObjectURL(draft.iconFile)} alt="" className="size-12 rounded-xl object-cover" />

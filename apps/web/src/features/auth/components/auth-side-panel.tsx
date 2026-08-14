@@ -1,22 +1,8 @@
 import { Link } from "react-router-dom"
-import { useEffect, useState } from "react"
 import { useAuthPanelRotation } from "@/features/auth/hooks/use-auth-panel-rotation"
 
 export function AuthSidePanel() {
   const { slide, total, current, next } = useAuthPanelRotation()
-  const [animate, setAnimate] = useState(true)
-  const [prevCurrent, setPrevCurrent] = useState(current)
-
-  // Restart the crossfade when the carousel advances: reset the animation
-  // during render (React's "adjusting state when a prop changes" pattern)
-  // instead of a synchronous setState inside an effect.
-  if (current !== prevCurrent) {
-    setPrevCurrent(current)
-    setAnimate(false)
-  }
-  useEffect(() => {
-    if (!animate) requestAnimationFrame(() => setAnimate(true))
-  }, [animate])
 
   return (
     <section className="relative hidden flex-col overflow-hidden lg:flex lg:h-full lg:min-h-screen">
@@ -33,9 +19,8 @@ export function AuthSidePanel() {
       {/* Image area */}
       <div className="relative flex-1 overflow-hidden">
         <div
-          className={`h-full w-full bg-contain bg-bottom bg-no-repeat transition-opacity duration-700 ${
-            animate ? "opacity-100" : "opacity-0"
-          }`}
+          key={current}
+          className="h-full w-full animate-fade-in bg-contain bg-bottom bg-no-repeat"
           style={{ backgroundImage: `url(${slide.image})` }}
         />
       </div>
@@ -43,17 +28,12 @@ export function AuthSidePanel() {
       {/* Text area */}
       <div className="flex flex-col items-center gap-3 p-8 text-center md:p-10">
         <h2
-          className={`font-heading text-balance text-3xl leading-tight text-foreground transition-all duration-700 md:text-4xl font-medium ${
-            animate ? "opacity-100" : "opacity-0"
-          }`}
+          key={`${current}-title`}
+          className="font-heading animate-fade-in text-balance text-3xl font-medium leading-tight text-foreground md:text-4xl"
         >
           {slide.headline}
         </h2>
-        <p
-          className={`text-base text-muted-foreground transition-all duration-700 ${
-            animate ? "opacity-100" : "opacity-0"
-          }`}
-        >
+        <p key={`${current}-desc`} className="animate-fade-in text-base text-muted-foreground">
           {slide.description}
         </p>
 

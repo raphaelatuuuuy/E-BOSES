@@ -14,7 +14,7 @@ import { Empty } from "@/features/dashboard/components/responder/dispatch-surfac
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-t border-card-line py-3 first:border-t-0 first:pt-0">
-      <dt className="text-micro uppercase text-subtle-foreground">{label}</dt>
+      <dt className="text-micro text-subtle-foreground">{label}</dt>
       <dd className="min-w-0 max-w-[65%] text-right text-body text-foreground">{value}</dd>
     </div>
   )
@@ -47,9 +47,13 @@ export function DispatchDetails({ alert }: { alert: EmergencyAlert }) {
             value={`${alert.media.length} file${alert.media.length === 1 ? "" : "s"}`}
           />
         ) : null}
-        {triage.map(([key, value]) => (
-          <Row key={key} label={key.replace(/_/g, " ")} value={value} />
-        ))}
+        {triage.map(([key, value]) => {
+          const display =
+            typeof value === "string" && value.length > 0
+              ? value.charAt(0).toUpperCase() + value.slice(1)
+              : value
+          return <Row key={key} label={key.replace(/_/g, " ")} value={display} />
+        })}
       </dl>
 
       {alert.category_needs_confirmation ? (
@@ -60,7 +64,7 @@ export function DispatchDetails({ alert }: { alert: EmergencyAlert }) {
 
       {alert.unresolved_fields.length > 0 ? (
         <div className="mt-4">
-          <p className="text-micro uppercase text-subtle-foreground">Missing information</p>
+          <p className="text-micro text-subtle-foreground">Missing information</p>
           <p className="mt-1 text-body leading-6 text-muted-foreground">
             {alert.unresolved_fields.map((field) => field.replace(/_/g, " ")).join(", ")}
           </p>

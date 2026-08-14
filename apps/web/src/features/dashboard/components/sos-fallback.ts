@@ -229,11 +229,14 @@ export function deleteQueuedSosEmergency(id: string) {
   return withStore<undefined>("readwrite", (store) => store.delete(id) as IDBRequest<undefined>)
 }
 
-export function buildPinnedCoordinateAddress(lat: number, lng: number) {
-  const coordinates = `${lat.toFixed(6)}, ${lng.toFixed(6)}`
+export function buildPinnedCoordinateAddress(_lat: number, _lng: number) {
+  // Deliberately no raw numbers. When reverse geocoding can't name the spot,
+  // the resident still dropped a pin the responder can see on the map — a
+  // "14.648073, 121.119719" string in the address field only travelled through
+  // to officials as noise they could not read.
   return {
-    primary: "Pinned coordinates",
-    full: `Pinned coordinates: ${coordinates}`,
+    primary: "Pinned location",
+    full: "Pinned location on the map",
   }
 }
 

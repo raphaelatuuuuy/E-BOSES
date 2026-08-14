@@ -1,13 +1,8 @@
 import type { EmergencyAlert, EmergencyStatus } from "@/features/dashboard/emergency-api"
-
-/**
- * Shared formatting for the responder screens.
- *
- * Map, Shift and Profile all render the same clock, the same status wording and
- * the same relative timestamps. They used to each carry their own copy, which is
- * how the shift page ended up calling a resolved dispatch "responder routed"
- * while the map called it "Resolved".
- */
+import {
+  SETTLED_EMERGENCY_STATUSES,
+  STATUS_LABEL,
+} from "@/features/dashboard/components/record/status"
 
 /** Running clock for an open shift: mm:ss under an hour, h:mm:ss over. */
 export function formatElapsed(startedAt: string | null | undefined, now: number) {
@@ -169,17 +164,8 @@ export function formatDayTime(value: string | null | undefined) {
   }).format(new Date(value))
 }
 
-export const ACTIVE_EMERGENCY_STATUSES = new Set<string>([
-  "submitted",
-  "routed",
-  "acknowledged",
-  "en_route",
-  "nearby",
-  "arrived",
-])
-
 export function isSettled(status: string) {
-  return ["resolved", "cancelled", "false_alarm", "invalid"].includes(status)
+  return SETTLED_EMERGENCY_STATUSES.has(status)
 }
 
 /**
@@ -208,27 +194,7 @@ export function dotClass(tone: StateTone) {
   }[tone]
 }
 
-export const statusWords: Record<EmergencyStatus, string> = {
-  submitted: "Submitted",
-  routing: "Finding responder",
-  routed: "Routed to you",
-  awaiting_acknowledgment: "Awaiting responder",
-  acknowledged: "Automatically routed",
-  en_route: "En route",
-  nearby: "Nearby",
-  arrived: "Arrived",
-  resident_safe: "Resident safe",
-  backup_requested: "Backup requested",
-  backup_assigned: "Backup assigned",
-  in_progress: "In progress",
-  transfer_required: "Transfer required",
-  escalation_required: "Escalation required",
-  resolved: "Resolved",
-  closed: "Closed",
-  false_alarm: "False alarm",
-  invalid: "Invalid",
-  cancelled: "Cancelled",
-}
+export const statusWords: Record<EmergencyStatus, string> = STATUS_LABEL
 
 /**
  * How a dispatch reads to *this* responder, as a word plus a tone.

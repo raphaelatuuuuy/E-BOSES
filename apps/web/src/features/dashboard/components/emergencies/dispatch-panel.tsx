@@ -1,39 +1,88 @@
-import { useMemo, useState } from "react"
-import { AlertTriangleIcon, PhoneCallIcon, RefreshCwIcon, ShieldCheckIcon, UsersIcon } from "lucide-react"
+import { useEffect, useState } from "react"
+import { AlertTriangleIcon, LoaderCircleIcon, PhoneCallIcon, RefreshCwIcon, ShieldCheckIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
+import { Band, Surface } from "@/features/dashboard/components/workspace/band"
 import type { ActiveResponder } from "@/features/dashboard/api"
 import {
-  assignEmergency,
-  assignEmergencyResponders,
-  escalateOverdueEmergencies,
   getEmergency,
-  reassignEmergency,
-  removeEmergencyAssignment,
-  resolveEmergency,
+  requestEmergencyBackup,
+  setEmergencyDisposition,
   type EmergencyAlert,
 } from "@/features/dashboard/emergency-api"
-import { distanceKm, hasAutoRoute, responderName, unitLabel } from "./lib"
-import { SummaryBox } from "./queue-list"
+import { useReporterPhone } from "@/features/dashboard/lib/use-reporter-phone"
+import {
+  ResponderAssignment,
+  type AssignableResponder,
+} from "./responder-assignment"
 
-function ActionButton({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+/**
+ * A dispatch action.
+ *
+ * These were 64px-tall bordered tiles in a 2×2 grid — four boxes inside a box,
+ * taking a quarter of the pane to offer four verbs. A verb needs a row, not a
+ * card.
+ */
+function ActionButton({
+  icon,
+  label,
+  onClick,
+  disabled,
+  tone = "default",
+}: {
+  icon: React.ReactNode
+  label: string
+  onClick: () => void
+  disabled?: boolean
+  tone?: "default" | "danger"
+}) {
   return (
-    <button type="button" onClick={onClick} className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-panel border border-card-line bg-card-raised px-2 text-center text-xs font-semibold text-brand-navy transition-colors hover:border-brand-orange hover:text-brand-orange">
-      <span className="text-brand-orange">{icon}</span>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        "flex h-9 items-center justify-center gap-1.5 rounded-control border border-card-line px-2 text-[12px] font-semibold transition-colors disabled:opacity-50",
+        tone === "danger"
+          ? "text-severity-critical-ink hover:border-severity-critical/40 hover:bg-severity-critical-surface"
+          : "text-brand-navy hover:border-brand-orange hover:text-brand-orange",
+      )}
+    >
+      {icon}
       {label}
     </button>
   )
 }
 
+/** How long the incident has been open, in a compact "198h 31m" form. */
+function elapsedLabel(createdAt: string, now: number): string {
+  const ms = now - new Date(createdAt).getTime()
+  const minutes = Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 60_000) : 0
+  return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+}
+
+function toAssignable(responder: ActiveResponder): AssignableResponder {
+  return {
+    id: responder.id,
+    full_name: responder.full_name || "Responder",
+    responder_unit: responder.responder_unit || null,
+    is_on_duty: responder.is_on_duty,
+    initials: responder.initials,
+    latitude: responder.current_latitude,
+    longitude: responder.current_longitude,
+  }
+}
+
+type QuickAction = { kind: "escalate" } | { kind: "false-alarm" } | null
+
 /**
  * Official dispatch console: response team, responder assignment, and quick actions.
  *
- * Reassign isolation: `confirmTeamAction` below is the ONLY call site for
- * `reassignEmergency` / `removeEmergencyAssignment` anywhere in the emergencies split.
- * The backend contract is a single `responder_id` (+ reason + status_version) —
- * already what `emergency-api.ts` sends; do not add a second reassign call site.
+ * Escalate and False alarm both require a stated reason — escalation routes a
+ * backup responder onto this incident (never a queue-wide sweep), and a false
+ * alarm is a final disposition recorded on the record, not a resolve.
  */
 export function DispatchPanel({
   alert,
@@ -44,116 +93,61 @@ export function DispatchPanel({
   responders: ActiveResponder[]
   onChanged: (alert: EmergencyAlert) => void
 }) {
-  const [busyId, setBusyId] = useState<number | null>(null)
   const [busyAction, setBusyAction] = useState("")
-  const [selectedResponderIds, setSelectedResponderIds] = useState<number[]>([])
-  const [teamAction, setTeamAction] = useState<
-    | { kind: "replace"; responder: ActiveResponder }
-    | { kind: "remove"; assignmentId: number; responderName: string }
-    | null
-  >(null)
-  const [teamReason, setTeamReason] = useState("")
-  const activeAssignments = alert?.assignments.filter(
-    (assignment) => !["cancelled", "declined", "resolved"].includes(assignment.status),
-  ) ?? []
-  const sorted = useMemo(() => {
-    if (!alert) return responders
-    return responders.sort((a, b) => {
-      return (distanceKm(alert.latitude, alert.longitude, a.current_latitude, a.current_longitude) ?? 999) -
-        (distanceKm(alert.latitude, alert.longitude, b.current_latitude, b.current_longitude) ?? 999)
-    })
-  }, [alert, responders])
+  const [quickAction, setQuickAction] = useState<QuickAction>(null)
+  const [quickReason, setQuickReason] = useState("")
+  // Reveal-on-demand only: officials keep the number masked until they dial,
+  // so the privacy audit records one reveal per call, not one per view.
+  const { busy: dialBusy, call: callResident } = useReporterPhone(alert)
+  // The open duration lives on the Response team band's right side, so the
+  // dispatch pane no longer needs its own pinned header row.
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
-  // Selection state used to be cleared by an effect watching `alert?.id`, which
-  // meant every incident switch rendered once with the previous incident's
-  // selected responders before the reset landed. The call site now keys this
-  // component by incident id, so React remounts it and local state starts
-  // clean without a second render pass.
-
-  async function assign(responder: ActiveResponder) {
+  async function confirmEscalate() {
     if (!alert) return
-    setBusyId(responder.id)
-    try {
-      const next = await assignEmergency(alert.id, responder.id)
-      onChanged(next)
-      toast.success(`Assigned to ${responderName(responder)}`)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not assign responder.")
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  async function assignSelected() {
-    if (!alert || selectedResponderIds.length === 0) return
-    setBusyAction("assign-selected")
-    try {
-      const next = await assignEmergencyResponders(alert.id, selectedResponderIds)
-      onChanged(next)
-      toast.success("Selected responders assigned")
-      setSelectedResponderIds([])
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not assign responders.")
-    } finally {
-      setBusyAction("")
-    }
-  }
-
-  async function confirmTeamAction() {
-    if (!alert || !teamAction) return
-    const reason = teamReason.trim()
+    const reason = quickReason.trim()
     if (reason.length < 5) {
-      toast.error("Add a brief operational reason before changing the response team.")
+      toast.error("Say briefly why this incident needs escalation.")
       return
     }
-    setBusyAction("team-change")
-    try {
-      const next = teamAction.kind === "replace"
-        ? await reassignEmergency(alert.id, teamAction.responder.id, reason, alert.status_version)
-        : await removeEmergencyAssignment(alert.id, teamAction.assignmentId, {
-            reason,
-            status_version: alert.status_version,
-          })
-      onChanged(next)
-      toast.success(teamAction.kind === "replace" ? "Primary responder replaced" : "Support responder removed")
-      setTeamAction(null)
-      setTeamReason("")
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update the response team.")
-    } finally {
-      setBusyAction("")
-    }
-  }
-
-  async function escalate() {
     setBusyAction("escalate")
     try {
-      const result = await escalateOverdueEmergencies(5)
-      toast.success(result.escalated ? `${result.escalated} overdue emergency escalated` : "No overdue responders to escalate")
+      const next = await requestEmergencyBackup(alert.id, {
+        backup_type: "other",
+        reason,
+        urgency: "high",
+      })
+      onChanged(next)
+      toast.success("Backup support escalated for this incident")
+      setQuickAction(null)
+      setQuickReason("")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not escalate emergencies.")
+      toast.error(error instanceof Error ? error.message : "Could not escalate this incident.")
     } finally {
       setBusyAction("")
     }
   }
 
-  function callResident() {
-    if (!alert?.reporter_phone) {
-      toast.info("Resident phone is not available in this alert record yet.")
+  async function confirmFalseAlarm() {
+    if (!alert) return
+    const note = quickReason.trim()
+    if (note.length < 5) {
+      toast.error("Say briefly why this is not a real emergency.")
       return
     }
-    window.location.href = `tel:${alert.reporter_phone}`
-  }
-
-  async function markFalseAlarm() {
-    if (!alert) return
     setBusyAction("false-alarm")
     try {
-      const next = await resolveEmergency(alert.id, "Marked as false alarm by official.")
+      const next = await setEmergencyDisposition(alert.id, "false_alarm", note, alert.status_version)
       onChanged(next)
-      toast.success("Emergency marked as false alarm")
+      toast.success("Emergency recorded as a false alarm")
+      setQuickAction(null)
+      setQuickReason("")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not mark false alarm.")
+      toast.error(error instanceof Error ? error.message : "Could not record the false alarm.")
     } finally {
       setBusyAction("")
     }
@@ -173,175 +167,76 @@ export function DispatchPanel({
   }
 
   return (
-    <aside className="space-y-4">
-      <section className="rounded-panel border border-card-line bg-card p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-sm font-semibold text-brand-navy">Response team</p>
-            <p className="mt-1 text-xs font-semibold text-subtle-foreground">Add support, replace the team, or remove support with an audit reason.</p>
-          </div>
-          <span className="rounded-control bg-card-raised px-2 py-1 text-xs font-semibold text-brand-navy">{activeAssignments.length} active</span>
+    <Surface>
+      <Band
+        label="Response team"
+        action={
+          alert ? (
+            <span
+              className="text-[11px] font-semibold tabular-nums text-subtle-foreground"
+              title={`Received ${alert.created_at}`}
+            >
+              {elapsedLabel(alert.created_at, now)}
+            </span>
+          ) : undefined
+        }
+      >
+        <ResponderAssignment
+          alert={alert}
+          responders={responders.map(toAssignable)}
+          onChanged={onChanged}
+        />
+      </Band>
+
+      <Band label="Actions">
+        <div className="grid grid-cols-2 gap-2">
+          <ActionButton icon={<PhoneCallIcon className="size-4" />} label={dialBusy ? "Opening…" : "Call resident"} onClick={() => void callResident()} disabled={!alert || dialBusy} />
+          <ActionButton icon={<RefreshCwIcon className="size-4" />} label={busyAction === "refresh-team" ? "Refreshing" : "Refresh"} onClick={() => void refreshTeam()} disabled={!alert || Boolean(busyAction)} />
+          <ActionButton icon={<AlertTriangleIcon className="size-4" />} label={busyAction === "escalate" ? "Escalating" : "Escalate"} onClick={() => { setQuickAction({ kind: "escalate" }); setQuickReason("") }} disabled={!alert || Boolean(busyAction)} />
+          <ActionButton tone="danger" icon={<ShieldCheckIcon className="size-4" />} label={busyAction === "false-alarm" ? "Recording" : "False alarm"} onClick={() => { setQuickAction({ kind: "false-alarm" }); setQuickReason("") }} disabled={!alert || Boolean(busyAction)} />
         </div>
-        <div className="mt-3 grid gap-2">
-          {alert?.assignments.length ? alert.assignments.map((assignment) => {
-            const active = !["cancelled", "declined", "resolved"].includes(assignment.status)
-            return (
-              <div key={assignment.id} className={cn("flex items-center justify-between gap-2 rounded-panel border border-card-line px-3 py-2", !active && "bg-card-raised opacity-60")}>
-                <div className="min-w-0">
-                  <p className="truncate text-xs font-semibold text-brand-navy">{responderName(assignment.responder)}</p>
-                  <p className="mt-0.5 text-[11px] font-semibold capitalize text-subtle-foreground">{assignment.status.replace(/_/g, " ")}</p>
-                </div>
-                {active && activeAssignments.length > 1 ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={Boolean(busyAction)}
-                    onClick={() => {
-                      setTeamAction({ kind: "remove", assignmentId: assignment.id, responderName: responderName(assignment.responder) })
-                      setTeamReason("")
-                    }}
-                    className="h-8 border-severity-critical/40 text-xs text-severity-critical-ink hover:bg-severity-critical-surface"
-                  >
-                    Remove
-                  </Button>
-                ) : null}
-              </div>
-            )
-          }) : (
-            <p className="rounded-panel bg-card-raised p-3 text-xs font-semibold text-subtle-foreground">No response team has been assigned.</p>
-          )}
-        </div>
-        {teamAction ? (
-          <div className="mt-3 rounded-panel border border-severity-moderate/40 bg-severity-moderate-surface p-3">
+
+        {quickAction ? (
+          <div className="mt-3 rounded-control border border-severity-moderate/40 bg-severity-moderate-surface p-3">
             <p className="text-xs font-semibold text-severity-moderate-ink">
-              {teamAction.kind === "replace"
-                ? `Replace the active response team with ${responderName(teamAction.responder)}?`
-                : `Remove ${teamAction.responderName} from this response?`}
+              {quickAction.kind === "escalate"
+                ? "Escalate this incident — the next available on-duty responder is routed in as backup support."
+                : "Record this as a false alarm — the response team is stood down and the disposition is written to the record."}
             </p>
-            <label htmlFor={`dispatch-team-reason-${alert?.id ?? "none"}`} className="mt-2 block text-[11px] font-bold text-severity-moderate-ink">Operational reason</label>
+            <label htmlFor={`dispatch-reason-${alert?.id ?? "none"}`} className="mt-2 block text-[11px] font-bold text-severity-moderate-ink">
+              {quickAction.kind === "escalate" ? "Escalation reason" : "Why this is not an emergency"}
+            </label>
             <textarea
-              id={`dispatch-team-reason-${alert?.id ?? "none"}`}
-              value={teamReason}
-              onChange={(event) => setTeamReason(event.target.value)}
+              id={`dispatch-reason-${alert?.id ?? "none"}`}
+              value={quickReason}
+              onChange={(event) => setQuickReason(event.target.value)}
               rows={2}
               maxLength={255}
-              placeholder="Explain why this assignment is changing"
+              placeholder={quickAction.kind === "escalate" ? "Explain why backup support is needed" : "Explain why this is not a real emergency"}
               className="mt-1 w-full resize-none rounded-panel border border-severity-moderate/40 bg-card px-3 py-2 text-xs text-brand-navy outline-none focus:border-brand-orange"
             />
             <div className="mt-2 grid grid-cols-2 gap-2">
-              <Button type="button" size="sm" variant="outline" disabled={busyAction === "team-change"} onClick={() => { setTeamAction(null); setTeamReason("") }}>Keep team</Button>
-              <Button type="button" size="sm" disabled={busyAction === "team-change" || teamReason.trim().length < 5} onClick={() => void confirmTeamAction()} className="bg-brand-navy text-white hover:bg-brand-navy">
-                {busyAction === "team-change" ? "Updating" : "Confirm change"}
+              <Button type="button" size="sm" variant="outline" disabled={Boolean(busyAction)} onClick={() => { setQuickAction(null); setQuickReason("") }}>Cancel</Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={Boolean(busyAction) || quickReason.trim().length < 5}
+                onClick={() => void (quickAction.kind === "escalate" ? confirmEscalate() : confirmFalseAlarm())}
+                className="bg-brand-navy text-white hover:bg-brand-navy"
+              >
+                {busyAction === "escalate" || busyAction === "false-alarm"
+                  ? <span className="inline-flex items-center gap-1.5"><LoaderCircleIcon className="size-3.5 animate-spin" />{busyAction === "escalate" ? "Escalating" : "Recording"}</span>
+                  : quickAction.kind === "escalate" ? "Escalate incident" : "Record false alarm"}
               </Button>
             </div>
           </div>
         ) : null}
-      </section>
+      </Band>
 
-      <section className="rounded-panel border border-card-line bg-card p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-sm font-semibold text-brand-navy">Assign responder</p>
-            <p className="mt-1 text-xs font-semibold text-subtle-foreground">
-              Official dispatch rules decide eligibility. Manual assignment lists on-duty responders by distance.
-            </p>
-          </div>
-          <UsersIcon className="size-5 text-brand-orange" />
-        </div>
-        <div className="mt-4 space-y-3">
-          {sorted.length === 0 ? (
-            <p className="rounded-panel bg-card-raised p-3 text-xs font-semibold text-subtle-foreground">No on-duty responders with live location yet.</p>
-          ) : sorted.map((responder) => {
-            const km = alert ? distanceKm(alert.latitude, alert.longitude, responder.current_latitude, responder.current_longitude) : null
-            const assigned = activeAssignments.some((assignment) => assignment.responder.id === responder.id)
-            const selected = selectedResponderIds.includes(responder.id)
-            return (
-              <div key={responder.id} className={cn("rounded-panel border p-3", assigned ? "border-brand-orange bg-brand-orange-soft" : "border-card-line bg-card")}>
-                <div className="flex items-start gap-3">
-                  <input
-                    type="checkbox"
-                    checked={selected}
-                    disabled={assigned}
-                    onChange={(event) => {
-                      setSelectedResponderIds((current) => event.target.checked ? [...current, responder.id] : current.filter((id) => id !== responder.id))
-                    }}
-                    className="mt-3"
-                    aria-label={`Select ${responderName(responder)}`}
-                  />
-                  <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-navy text-xs font-semibold text-white">
-                    {responder.initials || responderName(responder).slice(0, 2).toUpperCase()}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-brand-navy">{responderName(responder)}</p>
-                    <p className="mt-1 text-xs font-semibold text-subtle-foreground">
-                      {unitLabel[responder.responder_unit || ""]} · {km == null ? "location pending" : `${km.toFixed(1)} km away`}
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {responder.is_on_duty ? <span className="rounded-full bg-status-closed-surface px-2 py-1 text-[10px] font-semibold text-status-closed-ink">On duty</span> : null}
-                    </div>
-                  </div>
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={!alert || Boolean(busyId) || assigned}
-                    onClick={() => assign(responder)}
-                    className="bg-brand-orange text-brand-orange-ink hover:bg-brand-orange-strong disabled:bg-card-line-strong disabled:text-subtle-foreground"
-                  >
-                    {busyId === responder.id ? "Adding" : assigned ? "Assigned" : "Add support"}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={!alert || Boolean(busyId) || assigned || activeAssignments.length === 0}
-                    onClick={() => {
-                      setTeamAction({ kind: "replace", responder })
-                      setTeamReason("")
-                    }}
-                    className="border-card-line-strong text-brand-orange"
-                  >
-                    Replace team
-                  </Button>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-        {sorted.length > 0 ? (
-          <Button
-            type="button"
-            variant="outline"
-            disabled={!alert || selectedResponderIds.length === 0 || busyAction === "assign-selected"}
-            onClick={() => void assignSelected()}
-            className="mt-3 w-full"
-          >
-            {busyAction === "assign-selected" ? "Assigning selected" : `Assign selected (${selectedResponderIds.length})`}
-          </Button>
-        ) : null}
-      </section>
-
-      <section className="rounded-panel border border-card-line bg-card p-4">
-        <p className="text-sm font-semibold text-brand-navy">Quick actions</p>
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <ActionButton icon={<PhoneCallIcon className="size-4" />} label="Call resident" onClick={callResident} />
-          <ActionButton icon={<RefreshCwIcon className="size-4" />} label={busyAction === "refresh-team" ? "Refreshing" : "Refresh team"} onClick={() => void refreshTeam()} />
-          <ActionButton icon={<AlertTriangleIcon className="size-4" />} label={busyAction === "escalate" ? "Escalating" : "Escalate"} onClick={() => void escalate()} />
-          <ActionButton icon={<ShieldCheckIcon className="size-4" />} label={busyAction === "false-alarm" ? "Closing" : "False alarm"} onClick={() => void markFalseAlarm()} />
-        </div>
-      </section>
-
-      <section className="rounded-panel border border-card-line bg-card p-4">
-        <p className="text-sm font-semibold text-brand-navy">Incident summary</p>
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <SummaryBox label="Active" value={alert ? "1" : "0"} />
-          <SummaryBox label="Responders" value={responders.length.toString()} />
-          <SummaryBox label="Auto route" value={alert && hasAutoRoute(alert) ? "Yes" : "No"} />
-          <SummaryBox label="Dispatch rule" value={alert ? "Official config" : "—"} />
-        </div>
-      </section>
-    </aside>
+      {/* The "Incident summary" band that used to close this pane is gone. It
+          reported Active 1, Responders N, Auto route Yes/No and "Dispatch rule:
+          Official config" — four values that never changed what a dispatcher
+          would do next, in a fifth bordered box. */}
+    </Surface>
   )
 }

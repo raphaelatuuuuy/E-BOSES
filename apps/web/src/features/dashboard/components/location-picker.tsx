@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
+import { toast } from "sonner"
 import { SearchIcon, XIcon } from "lucide-react"
 import type leaflet from "leaflet"
 
@@ -210,6 +211,43 @@ export default function LocationPickerModal({
       })
       L.control.zoom({ position: "topright" }).addTo(map)
       containerRef.current.querySelector(".leaflet-control-zoom")?.classList.add("eboses-map-zoom")
+
+      // Jump to the device's position — sits directly under the zoom buttons.
+      class LocateControl extends L.Control {
+        constructor() {
+          super({ position: "topright" })
+        }
+        override onAdd(_map: leaflet.Map) {
+          const btn = L.DomUtil.create("button", "eboses-map-locate")
+          btn.type = "button"
+          btn.setAttribute("aria-label", "Use my current location")
+          btn.title = "Use my current location"
+          btn.innerHTML =
+            '<svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>'
+          L.DomEvent.disableClickPropagation(btn)
+          L.DomEvent.on(btn, "click", () => {
+            if (!navigator.geolocation) {
+              toast.error("Location is not supported in this browser.")
+              return
+            }
+            navigator.geolocation.getCurrentPosition(
+              (position) => {
+                _map.setView(
+                  [position.coords.latitude, position.coords.longitude],
+                  Math.max(_map.getZoom(), 15),
+                  { animate: true },
+                )
+              },
+              () => {
+                toast.error("Could not get your location. Check the browser permission and try again.")
+              },
+              { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 },
+            )
+          })
+          return btn
+        }
+      }
+      new LocateControl().addTo(map)
 
       // Clean Carto light basemap (sign-up style — not busy)
       L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
@@ -422,6 +460,25 @@ export default function LocationPickerModal({
         }
         .eboses-map-zoom .leaflet-control-zoom-out { border-bottom: none !important; }
         .eboses-map-zoom a:hover { background: #f4f4f5 !important; color: #000 !important; }
+        .eboses-map-locate {
+          display: flex !important;
+          align-items: center;
+          justify-content: center;
+          width: 36px !important;
+          height: 36px !important;
+          color: #3f3f46 !important;
+          background: #fff !important;
+          border: none !important;
+          border-radius: 10px !important;
+          box-shadow: 0 4px 14px rgba(0,0,0,0.28) !important;
+          cursor: pointer;
+          outline: none;
+        }
+        .eboses-map-locate:hover { background: #f4f4f5 !important; color: #000 !important; }
+        .eboses-map-search-expanded .eboses-map-locate {
+          visibility: hidden !important;
+          pointer-events: none !important;
+        }
         .eboses-map-search-expanded .leaflet-control-zoom {
           visibility: hidden !important;
           pointer-events: none !important;
@@ -467,16 +524,16 @@ export default function LocationPickerModal({
               <div
                 className={cn(
                   "pointer-events-none absolute inset-x-0 z-[1100] flex flex-col items-center gap-2 px-4",
-                  sheetMode === "peek" ? "top-[calc(50%+24px)]" : "top-[calc(50%+36px)]",
+                  sheetMode === "peek" ? "bottom-[116px]" : "bottom-[88px]",
                 )}
               >
                 {locationClass?.warning ? (
-                  <p className="pointer-events-none max-w-[min(100%,320px)] rounded-xl bg-amber-50 px-3 py-2 text-center text-[12px] font-medium text-amber-800 shadow-sm ring-1 ring-amber-200/80">
+                  <p className="pointer-events-none max-w-[min(100%,320px)] rounded-xl bg-neutral-100 px-3 py-2 text-center text-[12px] font-medium text-neutral-600 shadow-sm ring-1 ring-neutral-200">
                     {locationClass.warning}
                   </p>
                 ) : null}
                 {locationClass && !locationClass.accepted ? (
-                  <p className="pointer-events-none max-w-[min(100%,320px)] rounded-xl bg-red-50 px-3 py-2 text-center text-[12px] font-medium text-red-700 shadow-sm ring-1 ring-red-200/80">
+                  <p className="pointer-events-none max-w-[min(100%,320px)] rounded-xl bg-sos/10 px-3 py-2 text-center text-[12px] font-medium text-sos shadow-sm ring-1 ring-sos/30/80">
                     {locationClass.message}
                   </p>
                 ) : null}
@@ -544,7 +601,7 @@ export default function LocationPickerModal({
 
             <ul
               className={cn(
-                "min-h-0 flex-1 list-none overflow-y-auto",
+                "scrollbar-hide min-h-0 flex-1 list-none overflow-y-auto",
                 sheetMode === "collapsed" && "hidden",
                 sheetMode === "peek" && "pointer-events-none select-none",
               )}

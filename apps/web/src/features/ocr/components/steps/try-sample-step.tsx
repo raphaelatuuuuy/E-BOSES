@@ -353,7 +353,7 @@ export function TrySampleStep(props: {
     if (failed.length > 0) {
       return {
         kind: "fail",
-        severity: failed.some((rule) => rule.on_failure === "manual_review")
+        severity: failed.some((rule) => rule.on_failure === "reject")
           ? "block"
           : "warning",
         messages: [

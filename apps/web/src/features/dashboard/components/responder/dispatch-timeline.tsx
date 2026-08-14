@@ -154,7 +154,7 @@ export function DispatchTimeline({
                 <p
                   className={cn(
                     "text-heading",
-                    entry.state === "upcoming" ? "text-faint-foreground" : "text-foreground",
+                    entry.state === "upcoming" ? "text-muted-foreground" : "text-foreground",
                   )}
                 >
                   {entry.label}
@@ -169,11 +169,8 @@ export function DispatchTimeline({
                     </span>
                   </p>
                 ) : (
-                  <p className="mt-0.5 text-body text-faint-foreground">Not yet reached</p>
+                  <p className="mt-0.5 text-body text-muted-foreground">Not yet reached</p>
                 )}
-                {entry.state === "current" && entry.detail ? (
-                  <p className="mt-1 text-body leading-6 text-muted-foreground">{entry.detail}</p>
-                ) : null}
               </div>
             </li>
           )

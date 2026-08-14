@@ -2,12 +2,19 @@
 
 import { useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import { ArrowLeftIcon, ChevronRightIcon, XIcon, MoreHorizontal, Flag } from "lucide-react"
+import { MoreHorizontal, Flag } from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
 
 import { flagConcern } from "@/features/dashboard/api"
+import {
+  SheetDialog,
+  SheetList,
+  SheetOptionRow,
+  SheetPrimaryButton,
+  SheetTextarea,
+} from "@/features/dashboard/components/sheet-dialog"
 
 /** Matches backend ContentFlag.Reason */
 export type FlagReasonCode =
@@ -173,47 +180,6 @@ type ReportPostDialogProps = {
   onSubmitted?: () => void
 }
 
-/** Soft pill row — same shape as Nextdoor sample options */
-function OptionRow({
-  title,
-  description,
-  onClick,
-  showChevron = false,
-}: {
-  title: string
-  description?: string
-  onClick: () => void
-  /** Big chevron on first-level options that open a sub-list (not “Something else”) */
-  showChevron?: boolean
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "flex w-full items-center gap-3 rounded-[18px] bg-neutral-100 px-5 py-4 text-left transition-colors",
-        "hover:bg-neutral-200/80 active:bg-neutral-200",
-      )}
-    >
-      <span className="min-w-0 flex-1 flex flex-col">
-        <span className="text-[16px] font-semibold leading-snug text-neutral-900">{title}</span>
-        {description ? (
-          <span className="mt-1 text-[14px] font-normal leading-snug text-neutral-500">
-            {description}
-          </span>
-        ) : null}
-      </span>
-      {showChevron ? (
-        <ChevronRightIcon
-          className="size-7 shrink-0 text-neutral-400"
-          strokeWidth={2.5}
-          aria-hidden
-        />
-      ) : null}
-    </button>
-  )
-}
-
 export function ReportPostDialog({
   open,
   concernId,
@@ -244,24 +210,6 @@ export function ReportPostDialog({
       setSubmitting(false)
     }
   }
-
-  useEffect(() => {
-    if (!open) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = "hidden"
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [open])
-
-  useEffect(() => {
-    if (!open) return
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose()
-    }
-    document.addEventListener("keydown", onKey)
-    return () => document.removeEventListener("keydown", onKey)
-  }, [open, onClose])
 
   function selectCategory(cat: ReportCategory) {
     setCategoryId(cat.id)
@@ -332,131 +280,59 @@ export function ReportPostDialog({
         ? (category?.title ?? "Report")
         : subReason?.title || category?.title || "Report"
 
-  return createPortal(
-    <div className="fixed inset-0 z-[400] flex items-end justify-center sm:items-center sm:p-4">
-      {/* Dim backdrop like sample */}
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} aria-hidden />
+  const headerDescription =
+    step === "subreason"
+      ? "Help us understand what’s happening"
+      : step === "details"
+        ? "Additional information can help determine if this content violates the community guidelines."
+        : undefined
 
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="report-post-title"
-        className={cn(
-          "relative z-10 flex w-full max-w-[440px] flex-col overflow-hidden bg-white shadow-2xl",
-          "max-h-[min(720px,92vh)] rounded-t-[28px] sm:rounded-[28px]",
-        )}
-      >
-        {/* Header — sample: back | title block | X */}
-        <div className="flex shrink-0 items-start gap-1 px-4 pb-2 pt-5">
-          {step !== "category" ? (
-            <button
-              type="button"
-              onClick={goBack}
-              className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-800 hover:bg-neutral-100"
-              aria-label="Back"
-            >
-              <ArrowLeftIcon className="size-6" strokeWidth={2.25} />
-            </button>
-          ) : (
-            <span className="size-2 shrink-0" aria-hidden />
-          )}
+  return (
+    <SheetDialog
+      open={open}
+      onClose={onClose}
+      onBack={step !== "category" ? goBack : undefined}
+      title={headerTitle}
+      description={headerDescription}
+      titleId="report-post-title"
+    >
+      {step === "category" ? (
+        <SheetList>
+          {REPORT_CATEGORIES.map((cat) => (
+            <SheetOptionRow
+              key={cat.id}
+              title={cat.title}
+              description={cat.description}
+              onClick={() => selectCategory(cat)}
+              showChevron={cat.children.length > 0}
+            />
+          ))}
+        </SheetList>
+      ) : null}
 
-          <div className="min-w-0 flex-1 px-1 pt-1">
-            <h2
-              id="report-post-title"
-              className="text-[22px] font-bold leading-[1.2] tracking-tight text-neutral-900"
-            >
-              {headerTitle}
-            </h2>
-            {step === "subreason" ? (
-              <p className="mt-1.5 text-[15px] leading-snug text-neutral-500">
-                Help us understand what&apos;s happening
-              </p>
-            ) : null}
-            {step === "details" ? (
-              <p className="mt-1.5 text-[14px] leading-snug text-neutral-500">
-                Additional information can help determine if this content violates the
-                community guidelines.
-              </p>
-            ) : null}
-          </div>
+      {step === "subreason" && category ? (
+        <SheetList>
+          {category.children.map((sub) => (
+            <SheetOptionRow
+              key={sub.id}
+              title={sub.title}
+              description={sub.description}
+              onClick={() => selectSubReason(sub)}
+              showChevron
+            />
+          ))}
+        </SheetList>
+      ) : null}
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-700 hover:bg-neutral-100"
-            aria-label="Close"
-          >
-            <XIcon className="size-6" strokeWidth={2.25} />
-          </button>
+      {step === "details" ? (
+        <div className="flex flex-col gap-4 pt-1">
+          <SheetTextarea value={note} onChange={setNote} max={NOTE_MAX} />
+          <SheetPrimaryButton disabled={submitting} onClick={() => void handleSubmit()}>
+            {submitting ? "Submitting…" : "Submit report"}
+          </SheetPrimaryButton>
         </div>
-
-        {/* Body */}
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-3">
-          {step === "category" ? (
-            <div className="flex flex-col gap-2.5">
-              {REPORT_CATEGORIES.map((cat) => (
-                <OptionRow
-                  key={cat.id}
-                  title={cat.title}
-                  description={cat.description}
-                  onClick={() => selectCategory(cat)}
-                  showChevron={cat.children.length > 0}
-                />
-              ))}
-            </div>
-          ) : null}
-
-          {step === "subreason" && category ? (
-            <div className="flex flex-col gap-2.5">
-              {category.children.map((sub) => (
-                <OptionRow
-                  key={sub.id}
-                  title={sub.title}
-                  description={sub.description}
-                  onClick={() => selectSubReason(sub)}
-                />
-              ))}
-            </div>
-          ) : null}
-
-          {step === "details" ? (
-            <div className="flex flex-col gap-4 pt-1">
-              <div className="relative">
-                <textarea
-                  value={note}
-                  onChange={(e) => setNote(e.target.value.slice(0, NOTE_MAX))}
-                  rows={6}
-                  placeholder=""
-                  className={cn(
-                    "w-full resize-none rounded-[18px] border-[1.5px] border-neutral-300 bg-white px-4 py-3.5 pb-9 text-[16px] text-neutral-900 outline-none",
-                    "focus:border-neutral-400",
-                  )}
-                />
-                <span className="pointer-events-none absolute bottom-3 right-4 text-[13px] tabular-nums text-neutral-400">
-                  {note.length}/{NOTE_MAX}
-                </span>
-              </div>
-
-              <button
-                type="button"
-                disabled={submitting}
-                onClick={() => void handleSubmit()}
-                className={cn(
-                  "flex h-[52px] w-full items-center justify-center rounded-full text-[17px] font-semibold transition-colors",
-                  submitting
-                    ? "cursor-not-allowed bg-neutral-200 text-neutral-400"
-                    : "bg-neutral-200 text-neutral-900 hover:bg-neutral-300 active:scale-[0.99]",
-                )}
-              >
-                {submitting ? "Submitting…" : "Submit report"}
-              </button>
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </div>,
-    document.body,
+      ) : null}
+    </SheetDialog>
   )
 }
 
@@ -594,7 +470,7 @@ export function CommentMoreMenu({
             <button
               type="button"
               role="menuitem"
-              className="flex w-full rounded-lg px-3 py-2 text-left text-[13px] font-semibold text-red-600 hover:bg-red-50"
+              className="flex w-full rounded-lg px-3 py-2 text-left text-[13px] font-semibold text-sos hover:bg-sos/10"
               onClick={() => {
                 onOpenChange(false)
                 window.setTimeout(() => onDelete(), 0)

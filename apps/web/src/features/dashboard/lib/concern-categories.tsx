@@ -26,6 +26,9 @@ export interface ConcernCategoryOption {
   icon_key?: string
   custom_icon_label?: string
   icon_image_url?: string
+  photo_required: boolean
+  description_required: boolean
+  location_required: boolean
   department: { id: number; name: string; short_name: string } | null
 }
 

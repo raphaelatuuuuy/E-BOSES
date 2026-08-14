@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react"
 import { ChevronDownIcon } from "lucide-react"
 
+import { cn } from "@workspace/ui/lib/utils"
 import type { RecordSection as RecordSectionData } from "./types"
 
 /**
@@ -31,7 +32,14 @@ function persist(key: string, open: boolean) {
   }
 }
 
-export function RecordSection({ section }: { section: RecordSectionData }) {
+export function RecordSection({
+  section,
+  embedded = false,
+}: {
+  section: RecordSectionData
+  /** Render as a band inside a unified dossier card, without its own border. */
+  embedded?: boolean
+}) {
   const fallback = section.defaultOpen ?? false
   // Lazy initialiser rather than a setState-in-effect: the stored preference is
   // known before first paint, so the section does not flash shut then open.
@@ -48,7 +56,7 @@ export function RecordSection({ section }: { section: RecordSectionData }) {
   const contentId = `record-section-${section.key}`
 
   return (
-    <section className="overflow-hidden rounded-panel border border-card-line bg-card">
+    <section className={cn("overflow-hidden bg-card", !embedded && "rounded-panel border border-card-line")}>
       <h3>
         <button
           type="button"

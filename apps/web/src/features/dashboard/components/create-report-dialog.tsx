@@ -23,6 +23,11 @@ import {
   createConcern,
   precheckConcern,
   type Concern,
+  type ConcernActiveDuplicate,
+  type ConcernEmergencyTriage,
+  type ConcernPhotoVerdict,
+  type ConcernPrecheckResult,
+  type ConcernResolvedMatch,
   type ConcernVisibility,
 } from "@/features/dashboard/api"
 import { Dialog, DialogBody } from "@/features/dashboard/components/dialog"
@@ -33,8 +38,6 @@ import { useCategoryOptions } from "@/features/dashboard/lib/concern-categories"
 
 const LocationPickerModal = lazy(() => import("@/features/dashboard/components/location-picker"))
 
-/** Icons per known category code; anything an official adds later falls back to
- *  a neutral icon rather than rendering blank. */
 const CATEGORY_ICONS: Record<string, typeof TrafficConeIcon> = {
   infrastructure: TrafficConeIcon,
   environment: LeafIcon,
@@ -53,14 +56,10 @@ interface ConcernOption {
 
 const ALLOWED_TYPES = ["image/png", "image/jpeg"]
 const ACCEPT_STRING = ".png,.jpg,.jpeg," + ALLOWED_TYPES.join(",")
-const MAX_FILE_SIZE = 2 * 1024 * 1024
+const MAX_FILE_SIZE = 10 * 1024 * 1024
 const MAX_FILES = 5
 const descriptionMax = 1500
 
-/**
- * Backend still requires a `title` field; residents only type description.
- * Auto-fill a short internal label from the description (not shown as a separate UI field).
- */
 function titleFromDescription(text: string, max = 80): string {
   const cleaned = text.trim().replace(/\s+/g, " ")
   if (!cleaned) return "Community report"
@@ -75,12 +74,7 @@ function titleFromDescription(text: string, max = 80): string {
 const DRAFT_DB = "eboses-resident-drafts"
 const DRAFT_STORE = "report-drafts"
 const DRAFT_KEY = "current-report"
-/**
- * After the user confirms close once this session:
- * - no more “Close without reporting?” sheet
- * - no more “Draft saved.” toast
- * Draft still saves silently on close.
- */
+
 const DRAFT_CLOSE_ACK_KEY = "eboses-draft-close-ack"
 
 function hasAcknowledgedDraftClose() {
@@ -95,7 +89,7 @@ function markDraftCloseAcknowledged() {
   try {
     sessionStorage.setItem(DRAFT_CLOSE_ACK_KEY, "1")
   } catch {
-    /* private mode / blocked storage */
+    void 0
   }
 }
 
@@ -168,8 +162,7 @@ export function CreateReportDialog({
 } = {}) {
   const navigate = useNavigate()
   const { user } = useAuthSession()
-  // Categories come from Configuration, so adding or renaming one there
-  // changes this form without a code change.
+
   const { categories: categoryOptions } = useCategoryOptions()
   const concernConfig: ConcernOption[] = categoryOptions.map((category) => ({
     label: category.name,
@@ -209,9 +202,20 @@ export function CreateReportDialog({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [precheckNotice, setPrecheckNotice] = useState("")
   const [draftRestored, setDraftRestored] = useState(false)
-  /** Confirm sheet when leaving with a draft */
+  const [resolvedMatch, setResolvedMatch] = useState<ConcernResolvedMatch | null>(null)
+  const [emergencyConfirm, setEmergencyConfirm] = useState<ConcernEmergencyTriage | null>(null)
+  const [duplicateConfirm, setDuplicateConfirm] = useState<ConcernActiveDuplicate | null>(null)
+  const [categoryConfirm, setCategoryConfirm] = useState<{ code: string; label: string } | null>(null)
+  const [photoVerdicts, setPhotoVerdicts] = useState<ConcernPhotoVerdict[]>([])
+  const [privacyPreview, setPrivacyPreview] = useState<{ state: string; detected_classes: string[]; protected_image: string } | null>(null)
+
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false)
   const clientRequestIdRef = useRef(crypto.randomUUID())
+  const recurrenceOfRef = useRef<number | null>(null)
+  const duplicateOfRef = useRef<number | null>(null)
+  const categoryOverrideRef = useRef<string | null>(null)
+  const resolvedAddressRef = useRef<{ address: string; primary: string; secondary: string } | null>(null)
+  const pendingPrecheckRef = useRef<ConcernPrecheckResult | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const previewUrls = useMemo(
     () => mediaFiles.map((file) => URL.createObjectURL(file)),
@@ -233,7 +237,6 @@ export function CreateReportDialog({
 
   useEffect(() => () => previewUrls.forEach((url) => URL.revokeObjectURL(url)), [previewUrls])
 
-  // Escape on the confirm sheet = “Keep reporting”
   useEffect(() => {
     if (!closeConfirmOpen) return
     function onKey(e: KeyboardEvent) {
@@ -254,7 +257,7 @@ export function CreateReportDialog({
         setConcern(draft.concern)
         setDescription(draft.description)
         setAddress(draft.address)
-        // Best-effort split for older drafts (single string)
+
         const parts = draft.address.split(",").map((p) => p.trim())
         setAddressPrimary(parts[0] || draft.address)
         setAddressSecondary(parts.slice(1).join(", "))
@@ -294,6 +297,17 @@ export function CreateReportDialog({
     setLocationOpen(false)
     setVisibilityMenuOpen(false)
     setCloseConfirmOpen(false)
+    setResolvedMatch(null)
+    setEmergencyConfirm(null)
+    setDuplicateConfirm(null)
+    setCategoryConfirm(null)
+    setPhotoVerdicts([])
+    setPrivacyPreview(null)
+    setPrecheckNotice("")
+    recurrenceOfRef.current = null
+    duplicateOfRef.current = null
+    categoryOverrideRef.current = null
+    resolvedAddressRef.current = null
     clientRequestIdRef.current = crypto.randomUUID()
     setDraftRestored(false)
   }
@@ -327,7 +341,6 @@ export function CreateReportDialog({
     }
   }
 
-  /** X / overlay / Escape — confirm only the first time with content this session */
   function requestClose() {
     if (isSubmitting) return
     setMoreOpen(false)
@@ -341,7 +354,6 @@ export function CreateReportDialog({
       return
     }
 
-    // Already confirmed once this session → save + close, no dialog/toast
     if (hasAcknowledgedDraftClose()) {
       void saveDraftQuietly()
         .catch(() => undefined)
@@ -355,7 +367,7 @@ export function CreateReportDialog({
   async function confirmCloseAndSaveDraft() {
     try {
       await saveDraftQuietly()
-      // First confirmation only: toast once, then never prompt again this session
+
       if (!hasAcknowledgedDraftClose()) {
         toast.success("Draft saved.")
         markDraftCloseAcknowledged()
@@ -372,28 +384,31 @@ export function CreateReportDialog({
   function keepReporting() {
     setCloseConfirmOpen(false)
   }
-  // Alias: older HMR bundles may still call keepPosting
+
   const keepPosting = keepReporting
 
   function validate() {
     const errors: Record<string, string> = {}
     if (!concern) errors.concern = "Choose a category."
-    if (!description.trim()) errors.description = "Describe what happened."
-    if (description.trim().length < 20)
+    const requirements = categoryRequirements()
+    if (requirements.description_required && !description.trim())
+      errors.description = "Describe what happened."
+    if (requirements.description_required && description.trim().length < 20)
       errors.description = "Please provide at least 20 characters for context."
-    if (!locationPin || !address.trim()) errors.address = "Pin a location for this report."
-    if (!mediaFiles.length) errors.media = "Add at least one clear photo as evidence."
+    if (requirements.location_required && (!locationPin || !address.trim()))
+      errors.address = "Pin a location for this report."
+    if (requirements.photo_required && !mediaFiles.length)
+      errors.media = "Add at least one clear photo as evidence."
     setFieldErrors(errors)
     return Object.keys(errors).length === 0
   }
 
-  /** Normalize media-check / API errors to clean user-facing text only */
   function cleanMediaErrorMessage(raw: string): string {
     let text = raw.trim()
-    // "filename.png: ['AI-generated media is not allowed.']"
+
     const afterColon = text.includes(":") ? text.slice(text.lastIndexOf(":") + 1).trim() : text
     text = afterColon || text
-    // "['message']" or '["message"]'
+
     if (
       (text.startsWith("[") && text.endsWith("]")) ||
       (text.startsWith("('") && text.endsWith("')"))
@@ -433,7 +448,7 @@ export function CreateReportDialog({
         continue
       }
       if (file.size > MAX_FILE_SIZE) {
-        errors.push("File must be 2 MB or smaller.")
+        errors.push("File must be 10 MB or smaller.")
         continue
       }
       if (
@@ -466,38 +481,52 @@ export function CreateReportDialog({
     setIsCheckingMedia(false)
   }
 
-  async function handleSubmit() {
-    if (!validate()) return
+  function selectedCategoryCode() {
+    return categoryOverrideRef.current ?? (concernConfig.find((c) => c.label === concern)?.value ?? "others")
+  }
 
+  function categoryRequirements() {
+    const code = selectedCategoryCode()
+    return (
+      categoryOptions.find((option) => option.code === code) ?? {
+        photo_required: true,
+        description_required: true,
+        location_required: true,
+      }
+    )
+  }
+
+  function buildSubmitFormData(): FormData | null {
     const title = titleFromDescription(description)
     const formData = new FormData()
     formData.append("client_request_id", clientRequestIdRef.current)
     formData.append("title", title)
     formData.append("description", description.trim())
-    formData.append(
-      "category",
-      concernConfig.find((c) => c.label === concern)?.value ?? "others",
-    )
+    formData.append("category", selectedCategoryCode())
     formData.append("visibility", visibility)
-    // Persist the human street line with the report (DB Concern.address).
-    // Prefer primary street from the map picker; never store raw "Lat: …" alone.
-    {
-      const primary = (addressPrimary || address).trim().split(",")[0]?.trim() || address.trim()
-      const secondary = addressSecondary.trim()
-      const looksLikeCoords =
-        !primary ||
-        /^lat\b/i.test(primary) ||
-        /^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(primary)
-      if (looksLikeCoords) {
-        setFieldErrors((prev) => ({
-          ...prev,
-          address: "Pin a location with a street name before submitting.",
-        }))
-        return
-      }
-      const storedAddress = secondary ? `${primary}, ${secondary}` : primary
-      formData.append("address", storedAddress.slice(0, 255))
+    if (!categoryRequirements().location_required && !locationPin) {
+      formData.append("address", "")
+      for (const file of mediaFiles) formData.append("media", file)
+      return formData
     }
+    // The address is the street line the server resolved from the pin. The
+    // typed text is only a fallback for a pin the geocoder could not place.
+    const resolved = resolvedAddressRef.current
+    const primary = resolved?.primary || (addressPrimary || address).trim().split(",")[0]?.trim() || address.trim()
+    const secondary = resolved?.secondary ?? addressSecondary.trim()
+    const looksLikeCoords =
+      !primary ||
+      /^lat\b/i.test(primary) ||
+      /^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(primary)
+    if (looksLikeCoords) {
+      setFieldErrors((prev) => ({
+        ...prev,
+        address: "Pin a location with a street name before submitting.",
+      }))
+      return null
+    }
+    const storedAddress = resolved?.address || (secondary ? `${primary}, ${secondary}` : primary)
+    formData.append("address", storedAddress.slice(0, 255))
     if (locationPin) {
       formData.append("latitude", locationPin.lat.toFixed(7))
       formData.append("longitude", locationPin.lng.toFixed(7))
@@ -507,40 +536,33 @@ export function CreateReportDialog({
       }
     }
     for (const file of mediaFiles) formData.append("media", file)
+    return formData
+  }
 
+  async function finalizeSubmit(options?: { escalate?: boolean; emergencyType?: string }) {
+    const formData = buildSubmitFormData()
+    if (!formData) return
     setIsSubmitting(true)
     try {
-      const precheckData = new FormData()
-      precheckData.append("title", title)
-      precheckData.append("description", description.trim())
-      precheckData.append("category", concernConfig.find((c) => c.label === concern)?.value ?? "others")
-      if (locationPin) {
-        precheckData.append("latitude", locationPin.lat.toFixed(7))
-        precheckData.append("longitude", locationPin.lng.toFixed(7))
-      }
-      if (mediaFiles[0]) precheckData.append("media", mediaFiles[0])
-      const precheck = await precheckConcern(precheckData)
-      const previousNotice = precheckNotice
-      setPrecheckNotice(precheck.message || "")
-      if (!precheck.can_submit || (precheck.needs_revision && precheck.message !== previousNotice)) {
-        setFieldErrors((current) => ({
-          ...current,
-          ...precheck.field_errors,
-          precheck: precheck.can_submit ? `${precheck.message} Press Report again to continue.` : precheck.message,
-        }))
-        setIsSubmitting(false)
-        return
-      }
-      setFieldErrors((current) => {
-        const { precheck: _, ...rest } = current
-        return rest
+      const report = await createConcern(formData, {
+        escalate: options?.escalate,
+        emergencyType: options?.emergencyType,
+        recurrenceOf: recurrenceOfRef.current ?? undefined,
+        duplicateOf: duplicateOfRef.current ?? undefined,
       })
-      const report = await createConcern(formData)
       await deleteDraft()
       setSubmittedReport(report)
       setOpen(false)
       window.dispatchEvent(new Event("eboses:report-created"))
     } catch (submitError) {
+      if (submitError instanceof ApiError && submitError.status === 409) {
+        const detail =
+          (submitError.data && typeof submitError.data === "object"
+            ? (submitError.data as { detail?: string }).detail
+            : undefined) || "You already have an active emergency."
+        toast.error(detail)
+        return
+      }
       if (submitError instanceof ApiError && submitError.data && typeof submitError.data === "object") {
         const nextErrors: Record<string, string> = {}
         for (const [key, value] of Object.entries(submitError.data)) {
@@ -549,6 +571,100 @@ export function CreateReportDialog({
         }
         setFieldErrors(nextErrors)
       }
+      toast.error(
+        submitError instanceof ApiError
+          ? submitError.message
+          : "Could not submit report. Try again.",
+      )
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  /**
+   * Walk the confirmations the resident still owes, in order, from the one
+   * pre-check result. Answering one never re-runs the model — the inference
+   * happens once per press of Report and is reused for the whole chain.
+   */
+  async function advance(stage: "duplicate" | "resolved" | "emergency" | "submit") {
+    const precheck = pendingPrecheckRef.current
+    if (!precheck) return
+    if (stage === "duplicate") {
+      if (precheck.active_duplicate) {
+        setDuplicateConfirm(precheck.active_duplicate)
+        return
+      }
+      stage = "resolved"
+    }
+    if (stage === "resolved") {
+      if (precheck.resolved_match) {
+        setResolvedMatch(precheck.resolved_match)
+        return
+      }
+      stage = "emergency"
+    }
+    if (stage === "emergency" && precheck.emergency_triage?.is_emergency) {
+      setEmergencyConfirm(precheck.emergency_triage)
+      return
+    }
+    await finalizeSubmit()
+  }
+
+  /**
+   * The gate. A blocked report cannot be submitted — there is no second press
+   * that gets past it, and nothing unresolved is handed to an official.
+   */
+  async function handleSubmit() {
+    if (!validate()) return
+    recurrenceOfRef.current = null
+    duplicateOfRef.current = null
+    setIsSubmitting(true)
+    try {
+      const precheckData = new FormData()
+      precheckData.append("client_request_id", clientRequestIdRef.current)
+      precheckData.append("title", titleFromDescription(description))
+      precheckData.append("description", description.trim())
+      precheckData.append("category", selectedCategoryCode())
+      if (locationPin) {
+        precheckData.append("latitude", locationPin.lat.toFixed(7))
+        precheckData.append("longitude", locationPin.lng.toFixed(7))
+      }
+      for (const file of mediaFiles) precheckData.append("media", file)
+
+      const precheck = await precheckConcern(precheckData)
+      setPrecheckNotice(precheck.message || "")
+      setPhotoVerdicts(precheck.photo_verdicts || [])
+      setPrivacyPreview(precheck.privacy_preview ?? null)
+
+      if (precheck.resolved_address) {
+        resolvedAddressRef.current = {
+          address: precheck.resolved_address.address,
+          primary: precheck.resolved_address.address_primary,
+          secondary: precheck.resolved_address.address_secondary,
+        }
+        setAddress(precheck.resolved_address.address)
+        setAddressPrimary(precheck.resolved_address.address_primary)
+        setAddressSecondary(precheck.resolved_address.address_secondary)
+      }
+
+      if (!precheck.can_submit) {
+        setFieldErrors((current) => ({ ...current, ...precheck.field_errors }))
+        setIsSubmitting(false)
+        return
+      }
+      setFieldErrors({})
+
+      pendingPrecheckRef.current = precheck
+      if (precheck.category_confirm_required && precheck.suggested_category) {
+        setCategoryConfirm({
+          code: precheck.suggested_category,
+          label: precheck.suggested_category_label || precheck.suggested_category.replace(/_/g, " "),
+        })
+        setIsSubmitting(false)
+        return
+      }
+      await advance("duplicate")
+    } catch (submitError) {
       toast.error(
         submitError instanceof ApiError
           ? submitError.message
@@ -675,7 +791,7 @@ export function CreateReportDialog({
               </div>
 
               {/* Scrollable body — description / media / location chip only */}
-              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-4 sm:px-5">
+              <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-4 sm:px-5">
                 <textarea
                   value={description}
                   maxLength={descriptionMax}
@@ -707,10 +823,16 @@ export function CreateReportDialog({
                       {hasMedia
                         ? mediaFiles.map((file, index) => {
                             const url = previewUrls[index]
+                            const rejected = Boolean(
+                              photoVerdicts.find((verdict) => verdict.index === index)?.message,
+                            )
                             return (
                               <div
                                 key={`${file.name}-${index}`}
-                                className="relative h-[148px] w-[148px] overflow-hidden rounded-2xl bg-neutral-100 shadow-sm ring-1 ring-black/5 sm:h-[168px] sm:w-[168px]"
+                                className={cn(
+                                  "relative h-[148px] w-[148px] overflow-hidden rounded-2xl bg-neutral-100 shadow-sm sm:h-[168px] sm:w-[168px]",
+                                  rejected ? "ring-2 ring-destructive" : "ring-1 ring-black/5",
+                                )}
                               >
                                 <button
                                   type="button"
@@ -734,6 +856,17 @@ export function CreateReportDialog({
                           })
                         : null}
                     </div>
+
+                    {hasMedia ? (
+                      <p className="mt-2.5 text-[12px] leading-relaxed text-neutral-500">
+                        Photos are checked by automated services that may run on
+                        third-party AI infrastructure; any sensitive parts
+                        (faces, plates) found are blurred and are never
+                        displayed or shared publicly. By submitting you consent
+                        to this processing under the Data Privacy Act of 2012
+                        (RA 10173).
+                      </p>
+                    ) : null}
 
                     {locationPin && address ? (
                       <div className="mt-3 flex items-center gap-3 rounded-md border border-neutral-300 bg-white px-3.5 py-2.5">
@@ -794,9 +927,28 @@ export function CreateReportDialog({
                   )
                 })()}
                 {precheckNotice ? (
-                  <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium leading-relaxed text-amber-900">
+                  <p className="mt-2 rounded-lg bg-neutral-100 px-3 py-2 text-xs font-medium leading-relaxed text-neutral-700">
                     {precheckNotice}
                   </p>
+                ) : null}
+                {privacyPreview?.protected_image ? (
+                  <div className="mt-2 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+                    <p className="text-xs font-semibold text-neutral-800">
+                      Private details will be blurred
+                    </p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-neutral-500">
+                      This is the version the community will see
+                      {privacyPreview.detected_classes.length
+                        ? ` — ${privacyPreview.detected_classes.join(", ")} hidden`
+                        : ""}
+                      . Officials still see the original.
+                    </p>
+                    <img
+                      src={privacyPreview.protected_image}
+                      alt=""
+                      className="mt-2 h-32 w-full rounded-lg object-cover"
+                    />
+                  </div>
                 ) : null}
               </div>
 
@@ -863,7 +1015,7 @@ export function CreateReportDialog({
                     <div className="flex items-center px-4 pb-1 pt-2">
                       <h3 className="text-[15px] font-semibold text-neutral-900">Category</h3>
                     </div>
-                    <div className="max-h-[40svh] space-y-1 overflow-y-auto overscroll-contain px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+                    <div className="scrollbar-hide max-h-[40svh] space-y-1 overflow-y-auto overscroll-contain px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
                       {concernConfig.map((item) => {
                         const Icon = item.icon
                         const selected = concern === item.label
@@ -884,7 +1036,7 @@ export function CreateReportDialog({
                             {item.iconImageUrl ? (
                               <img src={item.iconImageUrl} alt="" className="size-8 shrink-0 rounded-lg object-cover" />
                             ) : item.customIconLabel ? (
-                              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-xs font-black text-neutral-700">{item.customIconLabel}</span>
+                              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-xs font-semibold text-neutral-700">{item.customIconLabel}</span>
                             ) : (
                               <Icon className="size-5 shrink-0 text-neutral-600" strokeWidth={1.75} />
                             )}
@@ -937,7 +1089,7 @@ export function CreateReportDialog({
                           {item.iconImageUrl ? (
                             <img src={item.iconImageUrl} alt="" className="size-8 shrink-0 rounded-lg object-cover" />
                           ) : item.customIconLabel ? (
-                            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-xs font-black text-neutral-700">{item.customIconLabel}</span>
+                            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-xs font-semibold text-neutral-700">{item.customIconLabel}</span>
                           ) : (
                             <Icon className="size-5 shrink-0 text-neutral-600" strokeWidth={1.75} />
                           )}
@@ -1035,6 +1187,199 @@ export function CreateReportDialog({
               className="mt-3 flex h-11 w-full items-center justify-center rounded-full text-[15px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50"
             >
               Keep reporting
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {resolvedMatch ? (
+        <div
+          className="fixed inset-0 z-[260] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="resolved-match-title"
+        >
+          <div className="absolute inset-0 bg-black/45" onClick={() => setResolvedMatch(null)} aria-hidden />
+          <div className="relative z-10 w-full max-w-[360px] rounded-2xl border border-neutral-200 bg-white px-6 pb-6 pt-7 shadow-2xl">
+            <h2
+              id="resolved-match-title"
+              className="text-center text-[20px] font-semibold tracking-tight text-neutral-900"
+            >
+              This may already be resolved
+            </h2>
+            <p className="mt-2 text-center text-[13px] leading-snug text-neutral-500">
+              A similar report
+              {resolvedMatch.resolved_at ? ` from ${new Date(resolvedMatch.resolved_at).toLocaleDateString()}` : ""} was
+              already marked resolved.
+            </p>
+            {resolvedMatch.preview_url ? (
+              <img src={resolvedMatch.preview_url} alt="" className="mt-4 h-40 w-full rounded-xl object-cover" />
+            ) : null}
+            {resolvedMatch.summary ? (
+              <p className="mt-3 rounded-xl bg-neutral-50 px-3 py-2 text-[13px] leading-snug text-neutral-700">
+                {resolvedMatch.summary}
+              </p>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                recurrenceOfRef.current = resolvedMatch.concern_id
+                setResolvedMatch(null)
+                void advance("emergency")
+              }}
+              className="mt-6 flex h-12 w-full items-center justify-center rounded-full bg-primary text-[16px] font-semibold text-white transition-colors hover:bg-brand-orange-strong active:scale-[0.99]"
+            >
+              It&apos;s still not fixed
+            </button>
+            <button
+              type="button"
+              onClick={() => setResolvedMatch(null)}
+              className="mt-3 flex h-11 w-full items-center justify-center rounded-full text-[15px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50"
+            >
+              Never mind, it&apos;s handled
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {categoryConfirm ? (
+        <div
+          className="fixed inset-0 z-[260] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="category-confirm-title"
+        >
+          <div className="absolute inset-0 bg-black/45" aria-hidden />
+          <div className="relative z-10 w-full max-w-[360px] rounded-2xl border border-neutral-200 bg-white px-6 pb-6 pt-7 shadow-2xl">
+            <h2
+              id="category-confirm-title"
+              className="text-center text-[20px] font-semibold tracking-tight text-neutral-900"
+            >
+              Is this the right category?
+            </h2>
+            <p className="mt-2 text-center text-[13px] leading-snug text-neutral-500">
+              What you described sounds like <span className="font-semibold capitalize">{categoryConfirm.label}</span>.
+              Choosing the right one sends it to the right barangay unit.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                categoryOverrideRef.current = categoryConfirm.code
+                const match = concernConfig.find((item) => item.value === categoryConfirm.code)
+                if (match) setConcern(match.label)
+                setCategoryConfirm(null)
+                void advance("duplicate")
+              }}
+              className="mt-6 flex h-12 w-full items-center justify-center rounded-full bg-primary text-[16px] font-semibold capitalize text-white transition-colors hover:bg-brand-orange-strong active:scale-[0.99]"
+            >
+              Use {categoryConfirm.label}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                categoryOverrideRef.current = null
+                setCategoryConfirm(null)
+                void advance("duplicate")
+              }}
+              className="mt-3 flex h-11 w-full items-center justify-center rounded-full text-[15px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50"
+            >
+              Keep {concern || "my choice"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {duplicateConfirm ? (
+        <div
+          className="fixed inset-0 z-[260] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="duplicate-confirm-title"
+        >
+          <div className="absolute inset-0 bg-black/45" onClick={() => setDuplicateConfirm(null)} aria-hidden />
+          <div className="relative z-10 w-full max-w-[360px] rounded-2xl border border-neutral-200 bg-white px-6 pb-6 pt-7 shadow-2xl">
+            <h2
+              id="duplicate-confirm-title"
+              className="text-center text-[20px] font-semibold tracking-tight text-neutral-900"
+            >
+              Neighbours already reported this
+            </h2>
+            <p className="mt-2 text-center text-[13px] leading-snug text-neutral-500">
+              {duplicateConfirm.reporter_count === 1
+                ? "1 resident has"
+                : `${duplicateConfirm.reporter_count} residents have`}{" "}
+              reported the same issue nearby. Adding yours to the same incident helps the
+              barangay see how many people it affects.
+            </p>
+            {duplicateConfirm.summary ? (
+              <p className="mt-3 rounded-xl bg-neutral-50 px-3 py-2 text-[13px] leading-snug text-neutral-700">
+                {duplicateConfirm.summary}
+              </p>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                duplicateOfRef.current = duplicateConfirm.concern_id
+                setDuplicateConfirm(null)
+                void advance("resolved")
+              }}
+              className="mt-6 flex h-12 w-full items-center justify-center rounded-full bg-primary text-[16px] font-semibold text-white transition-colors hover:bg-brand-orange-strong active:scale-[0.99]"
+            >
+              Add to the same incident
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                duplicateOfRef.current = null
+                setDuplicateConfirm(null)
+                void advance("resolved")
+              }}
+              className="mt-3 flex h-11 w-full items-center justify-center rounded-full text-[15px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50"
+            >
+              Mine is a different issue
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {emergencyConfirm ? (
+        <div
+          className="fixed inset-0 z-[260] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="emergency-confirm-title"
+        >
+          <div className="absolute inset-0 bg-black/45" onClick={() => setEmergencyConfirm(null)} aria-hidden />
+          <div className="relative z-10 w-full max-w-[360px] rounded-2xl border border-neutral-200 bg-white px-6 pb-6 pt-7 shadow-2xl">
+            <h2
+              id="emergency-confirm-title"
+              className="text-center text-[20px] font-semibold tracking-tight text-neutral-900"
+            >
+              This looks like an emergency
+            </h2>
+            <p className="mt-2 text-center text-[13px] leading-snug text-neutral-500">
+              {emergencyConfirm.reason || "Send it straight to Emergency Response, or submit it as a normal report."}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                const type = emergencyConfirm.types[0] || "disaster"
+                setEmergencyConfirm(null)
+                void finalizeSubmit({ escalate: true, emergencyType: type })
+              }}
+              className="mt-6 flex h-12 w-full items-center justify-center rounded-full bg-sos text-[16px] font-semibold text-white transition-colors hover:bg-sos active:scale-[0.99]"
+            >
+              Send to Emergency Response now
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEmergencyConfirm(null)
+                void finalizeSubmit()
+              }}
+              className="mt-3 flex h-11 w-full items-center justify-center rounded-full text-[15px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50"
+            >
+              Submit as a normal report
             </button>
           </div>
         </div>

@@ -1120,8 +1120,6 @@ export function useOcrTemplateState() {
       (rule) => rule.field_key !== fieldKey
     )
     const built: OcrRuleDefinition[] = []
-    // Resident-facing copy: missing OCR value and form mismatch both say "ID mismatched."
-    const mismatchMessage = "ID mismatched."
     if (next.required) {
       built.push({
         key: `${fieldKey}_required`,
@@ -1132,8 +1130,7 @@ export function useOcrTemplateState() {
         value: { field: fieldKey, fields: [fieldKey] },
         threshold: null,
         enabled: true,
-        on_failure: "manual_review",
-        message: mismatchMessage,
+        on_failure: "reject",
         order: built.length,
       })
     }
@@ -1145,10 +1142,9 @@ export function useOcrTemplateState() {
         rule_type: "profile_match",
         operator: "matches_profile",
         value: { field: fieldKey, profile },
-        threshold: profile === "address" ? 0.8 : 0.85,
+        threshold: null,
         enabled: true,
-        on_failure: "manual_review",
-        message: mismatchMessage,
+        on_failure: "reject",
         order: built.length,
       })
     }
@@ -1162,14 +1158,10 @@ export function useOcrTemplateState() {
         value: { field: fieldKey },
         threshold: null,
         enabled: true,
-        on_failure: "manual_review",
+        on_failure: "reject",
         order: built.length,
       })
     }
-    // When date_of_birth matching is turned on, ensure the field is typed as
-    // "date" so the DOB parse heuristic (`_field_is_dob`) and ISO normalizer
-    // fire at sign-up. Keeps behavior consistent across every proof type — a
-    // Barangay ID DOB field validates the same as a National ID DOB field.
     const wantsDobMatch = next.matchProfiles.includes("date_of_birth")
     updateSelectedDocument((doc) => ({
       ...doc,
@@ -2048,8 +2040,8 @@ export function useOcrTemplateState() {
       // Prefer the worst severity when the same rule differs across sides.
       if (
         !existing ||
-        (existing.on_failure !== "manual_review" &&
-          rule.on_failure === "manual_review")
+        (existing.on_failure !== "reject" &&
+          rule.on_failure === "reject")
       ) {
         dedupedFailedByKey.set(key, rule)
       }
@@ -2058,7 +2050,7 @@ export function useOcrTemplateState() {
     let hasBlock = false
     let hasWarning = false
     for (const rule of failedRules) {
-      if (rule.on_failure === "manual_review") hasBlock = true
+      if (rule.on_failure === "reject") hasBlock = true
       else hasWarning = true
     }
     const tested = Object.values(testResultsBySide).some(Boolean)

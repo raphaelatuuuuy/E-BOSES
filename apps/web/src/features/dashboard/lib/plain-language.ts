@@ -41,13 +41,13 @@ function lookup(map: Record<string, PlainTerm>, value: string | null | undefined
  * labels, and filter chips); these are the canonical words.
  */
 export const CONCERN_STATUS: Record<string, PlainTerm> = {
-  submitted: { label: "New", help: "Just received. Nobody has looked at it yet." },
-  under_review: { label: "Being checked", help: "An official is reviewing the details." },
-  assigned: { label: "Assigned", help: "Given to a person or department to handle." },
+  submitted: { label: "Received", help: "Logged and waiting for an officer. Not yet routed to a unit." },
+  under_review: { label: "Being checked", help: "An officer is confirming the category and details." },
+  assigned: { label: "Reassigned to another unit", help: "Routed to a barangay unit that now owns it." },
   in_progress: { label: "Being worked on", help: "Work has started on the ground." },
   resolved: { label: "Resolved", help: "Finished, with proof attached." },
-  rejected: { label: "Not accepted", help: "Turned down. The resident was given a reason." },
-  appealed: { label: "Resident objected", help: "The resident asked you to look at this again." },
+  rejected: { label: "Denied appeal", help: "Declined. The resident was given a reason." },
+  appealed: { label: "Under appeal", help: "The resident objected. It is back with an officer." },
 }
 
 export function concernStatus(value: string | null | undefined): PlainTerm {

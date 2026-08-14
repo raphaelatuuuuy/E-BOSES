@@ -6,7 +6,6 @@ import "@workspace/ui/globals.css"
 import { Toaster } from "@workspace/ui/components/sonner"
 
 import App from "./App"
-import { ThemeProvider } from "./components/theme-provider"
 import { registerAppServiceWorker } from "./lib/pwa"
 
 const rootElement = document.getElementById("root")
@@ -19,12 +18,9 @@ void registerAppServiceWorker()
 
 createRoot(rootElement).render(
   <BrowserRouter>
-    <ThemeProvider defaultTheme="light">
-      <App />
-      {/* Default app toasts (top-right on desktop) */}
-      <Toaster />
-      {/* Centered toasts — use toast(..., { toasterId: "center" }) */}
-      <Toaster id="center" position="top-center" />
-    </ThemeProvider>
+    <App />
+    <Toaster />
+    <Toaster variant="responder" id="responder" />
+    <Toaster id="center" position="top-center" />
   </BrowserRouter>,
 )

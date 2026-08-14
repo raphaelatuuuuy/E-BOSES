@@ -37,9 +37,13 @@ interface NotificationContextValue {
   notifications: NotificationItem[]
   unreadCount: number
   loading: boolean
+  /** Set when the list could not be fetched; empty list must not read as "no
+   * news" when the request itself failed. */
+  loadError: string
   connectionState: "connecting" | "live" | "degraded"
   markAsRead: (id: number) => Promise<void>
   markAllAsRead: () => Promise<void>
+  archiveAllRead: () => Promise<void>
   refresh: () => Promise<void>
 }
 
@@ -55,9 +59,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const [notifications, setNotifications] = React.useState<NotificationItem[]>([])
   const [unreadCount, setUnreadCount] = React.useState(0)
   const [loading, setLoading] = React.useState(true)
+  const [loadError, setLoadError] = React.useState("")
   const [connectionState, setConnectionState] = React.useState<"connecting" | "live" | "degraded">("connecting")
   const socketLiveRef = React.useRef(false)
   const lastBrowserNotifRef = React.useRef(0)
+  const seenIdsRef = React.useRef(new Set<number>())
 
   async function fetchAll() {
     try {
@@ -66,9 +72,13 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         apiRequest<{ count: number }>("/notifications/unread-count/"),
       ])
       setNotifications(list ?? [])
+      for (const item of list ?? []) seenIdsRef.current.add(item.id)
       setUnreadCount(countRes?.count ?? 0)
+      setLoadError("")
     } catch {
-      // silently fail — notifications aren't critical
+      // Notifications are not critical, but a silent empty list reads as "no
+      // news" — surface the failure instead of pretending the inbox is empty.
+      setLoadError("Notifications could not be loaded. Check your connection.")
     } finally {
       setLoading(false)
     }
@@ -86,6 +96,13 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     await apiRequest("/notifications/read-all/", { method: "POST" })
     setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })))
     setUnreadCount(0)
+  }
+
+  async function archiveAllRead() {
+    await apiRequest("/notifications/archive-all/", { method: "POST" })
+    setNotifications((prev) =>
+      prev.map((n) => (n.is_read && !n.is_archived ? { ...n, is_archived: true } : n)),
+    )
   }
 
   React.useEffect(() => {
@@ -148,13 +165,12 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           const message = JSON.parse(event.data) as { type?: string; payload?: NotificationItem }
           if (message.type !== "notification.created" || !message.payload) return
           const payload = message.payload
+          if (seenIdsRef.current.has(payload.id)) return
+          seenIdsRef.current.add(payload.id)
           window.dispatchEvent(
             new CustomEvent("eboses:notification-created", { detail: payload }),
           )
-          setNotifications((prev) => {
-            if (prev.some((item) => item.id === payload.id)) return prev
-            return [payload, ...prev].slice(0, 20)
-          })
+          setNotifications((prev) => [payload, ...prev].slice(0, 20))
           if (!payload.is_read) {
             setUnreadCount((prev) => prev + 1)
             const nowTs = Date.now()
@@ -208,9 +224,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         notifications,
         unreadCount,
         loading,
+        loadError,
         connectionState,
         markAsRead,
         markAllAsRead,
+        archiveAllRead,
         refresh: fetchAll,
       }}
     >

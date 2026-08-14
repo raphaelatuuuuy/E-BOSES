@@ -105,18 +105,15 @@ export function DataTable<Row>({
       {(searchMatches || filters) && (
         <div className="flex flex-wrap items-center gap-2">
           {searchMatches ? (
-            <label className="relative min-w-56 flex-1">
+            <label className="flex min-w-56 flex-1 items-center gap-3 border-b border-neutral-300 pb-3">
               <span className="sr-only">{searchPlaceholder}</span>
-              <SearchIcon
-                aria-hidden
-                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-              />
+              <SearchIcon aria-hidden className="size-5 shrink-0 text-neutral-400" strokeWidth={2} />
               <input
                 type="search"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder={searchPlaceholder}
-                className="w-full rounded-panel border border-card-line bg-card py-2.5 pl-9 pr-3 text-sm font-medium text-foreground outline-none transition placeholder:text-muted-foreground focus:border-brand-orange"
+                className="min-w-0 flex-1 bg-transparent text-read text-foreground outline-none placeholder:text-neutral-400"
               />
             </label>
           ) : null}
@@ -131,13 +128,13 @@ export function DataTable<Row>({
                 aria-pressed={active}
                 className={
                   active
-                    ? "inline-flex items-center gap-1.5 rounded-full bg-brand-navy px-3 py-1.5 text-xs font-bold text-white"
-                    : "inline-flex items-center gap-1.5 rounded-full border border-card-line bg-card px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-tint"
+                    ? "inline-flex items-center gap-1.5 rounded-full bg-brand-navy px-4 py-2 text-meta font-semibold text-white"
+                    : "inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-meta font-medium text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-brand-navy"
                 }
               >
                 {chip.label}
                 {typeof chip.count === "number" ? (
-                  <span className={active ? "opacity-80" : "text-muted-foreground"}>{chip.count}</span>
+                  <span className={active ? "opacity-70" : "text-neutral-400"}>{chip.count}</span>
                 ) : null}
               </button>
             )
@@ -145,10 +142,10 @@ export function DataTable<Row>({
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-panel border border-card-line bg-card">
+      <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-card">
         <table className="w-full min-w-full border-collapse text-left">
           <thead>
-            <tr className="border-b border-card-line">
+            <tr className="border-b border-neutral-200">
               {columns.map((column) => (
                 <th
                   key={column.key}
@@ -160,7 +157,7 @@ export function DataTable<Row>({
                         : "descending"
                       : undefined
                   }
-                  className={`px-4 py-3 text-[11px] font-bold uppercase tracking-wide text-muted-foreground ${
+                  className={`px-6 py-4 text-meta font-medium text-neutral-400 ${
                     column.align === "right" ? "text-right" : ""
                   } ${column.hideOnMobile ? "hidden md:table-cell" : ""}`}
                 >
@@ -168,14 +165,14 @@ export function DataTable<Row>({
                     <button
                       type="button"
                       onClick={() => toggleSort(column.key)}
-                      className="inline-flex items-center gap-1 transition hover:text-foreground"
+                      className="inline-flex items-center gap-1.5 transition-colors hover:text-brand-navy"
                     >
                       {column.header}
                       {sort?.key === column.key ? (
                         sort.direction === "asc" ? (
-                          <ArrowUpIcon className="size-3" aria-hidden />
+                          <ArrowUpIcon className="size-4" aria-hidden />
                         ) : (
-                          <ArrowDownIcon className="size-3" aria-hidden />
+                          <ArrowDownIcon className="size-4" aria-hidden />
                         )
                       ) : null}
                     </button>
@@ -191,23 +188,23 @@ export function DataTable<Row>({
               // Skeleton rows rather than a spinner: the table does not jump
               // when the data lands.
               Array.from({ length: 4 }).map((_, index) => (
-                <tr key={`skeleton-${index}`} className="border-b border-card-line last:border-0">
+                <tr key={`skeleton-${index}`} className="border-b border-neutral-200 last:border-0">
                   {columns.map((column) => (
                     <td
                       key={column.key}
-                      className={`px-4 py-4 ${column.hideOnMobile ? "hidden md:table-cell" : ""}`}
+                      className={`px-6 py-5 ${column.hideOnMobile ? "hidden md:table-cell" : ""}`}
                     >
-                      <span className="block h-3 w-24 animate-pulse rounded-full bg-chart-track" />
+                      <span className="block h-3 w-24 animate-pulse rounded-full bg-neutral-200" />
                     </td>
                   ))}
                 </tr>
               ))
             ) : visible.length === 0 ? (
               <tr>
-                <td colSpan={columns.length} className="px-4 py-12 text-center">
-                  <p className="text-sm font-bold text-foreground">{emptyTitle}</p>
+                <td colSpan={columns.length} className="px-6 py-16 text-center">
+                  <p className="text-row font-semibold text-brand-navy">{emptyTitle}</p>
                   {emptyHint ? (
-                    <p className="mt-1 text-sm font-medium text-muted-foreground">{emptyHint}</p>
+                    <p className="mt-2 text-read text-neutral-500">{emptyHint}</p>
                   ) : null}
                 </td>
               </tr>
@@ -216,14 +213,14 @@ export function DataTable<Row>({
                 <tr
                   key={rowKey(row)}
                   onClick={onRowSelect ? () => onRowSelect(row) : undefined}
-                  className={`border-b border-card-line last:border-0 ${
-                    onRowSelect ? "cursor-pointer transition hover:bg-tint" : ""
+                  className={`border-b border-neutral-200 last:border-0 ${
+                    onRowSelect ? "cursor-pointer transition-colors hover:bg-neutral-100" : ""
                   }`}
                 >
                   {columns.map((column) => (
                     <td
                       key={column.key}
-                      className={`px-4 py-3 text-sm text-foreground ${
+                      className={`px-6 py-5 text-read text-foreground ${
                         column.align === "right" ? "text-right" : ""
                       } ${column.hideOnMobile ? "hidden md:table-cell" : ""}`}
                     >
@@ -238,7 +235,7 @@ export function DataTable<Row>({
       </div>
 
       {!loading && visible.length > 0 ? (
-        <p className="text-xs font-medium text-muted-foreground">
+        <p className="text-meta text-neutral-400">
           {visible.length === rows.length
             ? `${rows.length} ${rows.length === 1 ? "entry" : "entries"}`
             : `${visible.length} of ${rows.length} shown`}

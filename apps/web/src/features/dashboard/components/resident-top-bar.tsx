@@ -1,9 +1,13 @@
+import { useState } from "react"
 import { Link } from "react-router-dom"
 
-import { NotificationPopover } from "@/features/dashboard/components/notification-popover"
-import { ProfileAccountMenu } from "@/features/dashboard/components/profile-account-menu"
-import { useResidentSearch } from "@/features/dashboard/components/resident-search-context"
-import { RotatingSearchField } from "@/features/dashboard/components/rotating-search-field"
+import { initials } from "@/lib/initials"
+import { useAuthSession } from "@/features/auth/auth-session"
+import {
+  ResidentNotificationsButton,
+  ResidentProfileDialog,
+} from "@/features/dashboard/components/resident/resident-account-dialogs"
+import { openSettingsDialog } from "@/features/dashboard/components/settings/settings-event"
 import {
   CONTENT_GAP,
   CONTENT_MAX,
@@ -64,35 +68,60 @@ export function ResidentContentGrid({
 }
 
 /**
- * Main top chrome (desktop):
- * Search centered over feed column · bell + avatar on the right
+ * Resident mobile header (shell) — brand logo + bell + avatar, so the left
+ * sidebar does not duplicate account access on the phone. Mirrors the staff
+ * mobile header; home ships its own header (live map dot + search) instead.
  */
-export function ResidentMainTopBar() {
-  const { search, setSearch } = useResidentSearch()
+export function ResidentMobileHeader({ homeTo = "/dashboard/home" }: { homeTo?: string }) {
+  const { user } = useAuthSession()
+  const [profileOpen, setProfileOpen] = useState(false)
+  const avatarInitials = initials(user?.full_name || "Resident")
 
   return (
-    <header className="sticky top-0 z-40 h-14 w-full shrink-0 bg-white">
-      <div className="relative flex h-14 w-full items-center">
-        <div className="pointer-events-none absolute inset-0 flex justify-center">
-          <ResidentContentGrid className="h-14" align="center">
-            <div className="pointer-events-auto flex min-w-0 items-center justify-center">
-              <RotatingSearchField
-                value={search}
-                onChange={setSearch}
-                maxWidth={RESIDENT_SEARCH_MAX}
-              />
-            </div>
-            <div aria-hidden className="min-w-0" />
-          </ResidentContentGrid>
+    <header className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-neutral-200 bg-white px-3">
+      <Link to={homeTo} className="flex min-w-0 items-center gap-2 no-underline">
+        <img
+          src="/contents/logo.webp"
+          alt="Boses Marikina Heights"
+          className="size-8 shrink-0 object-contain"
+        />
+        <div className="flex flex-col">
+          <span className="truncate text-[18px] font-bold leading-none tracking-tight text-brand-orange">
+            Boses
+          </span>
+          <span className="text-[9px] font-bold leading-tight tracking-wide text-brand-navy">
+            Marikina Heights
+          </span>
         </div>
-
-        <div className="relative z-10 ml-auto flex shrink-0 items-center gap-0.5 pr-4">
-          <NotificationPopover />
-          <ProfileAccountMenu placeLabel="Marikina Heights" />
-        </div>
+      </Link>
+      <div className="flex items-center gap-0.5">
+        <ResidentNotificationsButton />
+        <button
+          type="button"
+          onClick={() => setProfileOpen(true)}
+          aria-label="Open profile"
+          className="flex size-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-neutral-50"
+        >
+          <span className="flex size-8 items-center justify-center rounded-full bg-neutral-100 text-[11px] font-semibold text-neutral-700">
+            {avatarInitials}
+          </span>
+        </button>
       </div>
+      <ResidentProfileDialog
+        open={profileOpen}
+        onOpenChange={setProfileOpen}
+        onOpenSettings={(closeDialog) => {
+          closeDialog()
+          openSettingsDialog()
+        }}
+      />
     </header>
   )
+}
+
+/** @deprecated resident should not used to be a shell top bar — see ResidentMobileHeader. */
+export function ResidentTopBar() {
+  return <ResidentMobileHeader />
 }
 
 /** Logo block — same horizontal inset as sidebar nav buttons */
@@ -149,39 +178,4 @@ export function ResidentLogoBar({
       </Link>
     </div>
   )
-}
-
-/**
- * Official / responder top chrome (desktop):
- * Page title left · bell + avatar right — same white bar as residents.
- */
-export function OfficialMainTopBar() {
-  const { search, setSearch } = useResidentSearch()
-
-  return (
-    <header className="sticky top-0 z-40 h-14 w-full shrink-0 border-b border-neutral-100 bg-white">
-      <div className="relative flex h-14 w-full items-center">
-        <div className="pointer-events-none absolute inset-0 flex justify-center">
-          <div className="flex h-14 w-full max-w-md items-center justify-center px-4 sm:px-6">
-            <div className="pointer-events-auto w-full">
-              <RotatingSearchField
-                value={search}
-                onChange={setSearch}
-                maxWidth={RESIDENT_SEARCH_MAX}
-              />
-            </div>
-          </div>
-        </div>
-        <div className="relative z-10 ml-auto flex shrink-0 items-center gap-0.5 pr-4 sm:pr-6">
-          <NotificationPopover />
-          <ProfileAccountMenu placeLabel="Marikina Heights" />
-        </div>
-      </div>
-    </header>
-  )
-}
-
-/** @deprecated use ResidentMainTopBar */
-export function ResidentTopBar() {
-  return <ResidentMainTopBar />
 }

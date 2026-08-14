@@ -83,7 +83,7 @@ export function ReportIcon({
 
   if (report.category_ref?.custom_icon_label) {
     return (
-      <span className={cn("flex shrink-0 items-center justify-center rounded-full bg-neutral-100 text-xs font-black text-neutral-700", size === "sm" ? "size-9" : "size-10")}>
+      <span className={cn("flex shrink-0 items-center justify-center rounded-full bg-neutral-100 text-xs font-semibold text-neutral-700", size === "sm" ? "size-9" : "size-10")}>
         {report.category_ref.custom_icon_label}
       </span>
     )

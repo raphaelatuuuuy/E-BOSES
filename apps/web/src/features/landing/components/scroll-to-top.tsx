@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { ArrowUp } from "@phosphor-icons/react"
+import { ArrowUpIcon } from "lucide-react"
 
 export function ScrollToTop() {
   const [visible, setVisible] = useState(false)
@@ -21,11 +21,11 @@ export function ScrollToTop() {
       type="button"
       onClick={scrollUp}
       aria-label="Back to top"
-      className={`fixed bottom-6 right-6 z-30 flex size-12 items-center justify-center rounded-full bg-accent text-white transition-all duration-200 hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground motion-reduce:transition-none ${
+      className={`fixed bottom-[6.25rem] right-6 z-30 flex size-14 items-center justify-center rounded-full bg-accent text-white transition-all duration-200 hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground motion-reduce:transition-none ${
         visible ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-4 opacity-0"
       }`}
     >
-      <ArrowUp className="size-5" />
+      <ArrowUpIcon className="size-5" strokeWidth={1.5} />
     </button>
   )
 }

@@ -52,10 +52,10 @@ export function DutyHoursDialog({
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="duty-hours-title"
-        className="z-10 w-full max-w-md rounded-t-3xl border border-amber-400/30 bg-brand-navy p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] text-white shadow-2xl sm:rounded-3xl"
+        className="z-10 w-full max-w-md rounded-t-3xl border border-neutral-400/30 bg-brand-navy p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] text-white shadow-2xl sm:rounded-3xl"
       >
         <div className="flex items-start justify-between gap-3">
-          <h2 id="duty-hours-title" className="text-[17px] font-bold text-amber-300">
+          <h2 id="duty-hours-title" className="text-[17px] font-bold text-white">
             Outside barangay duty hours
           </h2>
           <button
@@ -81,7 +81,7 @@ export function DutyHoursDialog({
               className="flex min-h-[3.25rem] items-center justify-between gap-3 rounded-2xl border border-white/20 bg-white/10 px-4 text-white hover:bg-white/15"
             >
               <span className="text-[14px] font-semibold">{hotline.label}</span>
-              <span className="flex items-center gap-2 text-[16px] font-bold tabular-nums text-amber-300">
+              <span className="flex items-center gap-2 text-[16px] font-bold tabular-nums text-white">
                 <PhoneCallIcon className="size-4" aria-hidden="true" />
                 {hotline.number}
               </span>

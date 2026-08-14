@@ -1,10 +1,12 @@
-import { Button } from "@workspace/ui/components/button"
-import {
-  ToggleRow,
-  type SettingKey,
-} from "@/features/dashboard/components/settings/settings-primitives"
+import type { SettingKey } from "@/features/dashboard/components/settings/settings-primitives"
 import type { ResidentSettings } from "@/features/auth/api"
 import type { BrowserNotificationState } from "@/features/dashboard/browser-notifications"
+import {
+  SheetList,
+  SheetOptionRow,
+  SheetSectionLabel,
+  SheetToggleRow,
+} from "@/features/dashboard/components/sheet-dialog"
 
 export function NotificationsPanel({
   settings,
@@ -43,43 +45,48 @@ export function NotificationsPanel({
           ? "This browser is subscribed for background report and SOS updates."
           : "Subscribe this browser for urgent report and SOS updates."
 
-  return (
-    <div className="mt-4">
-      <div className="mb-4 flex flex-col gap-3 rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
-          <p className="text-[15px] font-medium text-neutral-900">{browserTitle}</p>
-          <p className="mt-1 text-[13px] leading-5 text-neutral-500">{browserDescription}</p>
-        </div>
-        <Button
-          type="button"
-          disabled={
-            browserBusy ||
-            !browserState.supported ||
-            browserState.permission === "denied" ||
-            !browserState.serverConfigured
-          }
-          onClick={
-            browserState.subscribed
-              ? onDisableBrowserNotifications
-              : onEnableBrowserNotifications
-          }
-          className="h-10 shrink-0 rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong"
-        >
-          {browserBusy ? "Working" : browserState.subscribed ? "Disable" : "Enable"}
-        </Button>
-      </div>
+  const pushDisabled =
+    browserBusy ||
+    !browserState.supported ||
+    browserState.permission === "denied" ||
+    !browserState.serverConfigured
 
-      <div className="border-t border-neutral-200">
-        <ToggleRow
+  return (
+    <>
+      <SheetList>
+        <SheetOptionRow
+          title={browserTitle}
+          description={browserDescription}
+          trailing={
+            <button
+              type="button"
+              disabled={pushDisabled}
+              onClick={
+                browserState.subscribed
+                  ? onDisableBrowserNotifications
+                  : onEnableBrowserNotifications
+              }
+              // Same pill as the notifications pop-up, both directions.
+              className="shrink-0 rounded-full border border-brand-orange px-4 py-1.5 text-[14px] font-semibold text-brand-orange transition-colors hover:bg-brand-orange hover:text-brand-orange-ink disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {browserBusy ? "Working…" : browserState.subscribed ? "Disable" : "Enable"}
+            </button>
+          }
+        />
+      </SheetList>
+
+      <SheetSectionLabel>What you get notified about</SheetSectionLabel>
+      <SheetList>
+        <SheetToggleRow
           id="push_alerts"
           label="In-app alerts"
-          description="Show notification bell updates while you use E-Boses."
+          description="Bell updates while you use E-Boses."
           checked={settings?.push_alerts ?? false}
           disabled={!settings}
           busy={savingSetting === "push_alerts"}
           onChange={(value) => onSettingChange("push_alerts", value)}
         />
-        <ToggleRow
+        <SheetToggleRow
           id="report_updates"
           label="Report updates"
           description="Status changes and new comments on your reports."
@@ -88,7 +95,7 @@ export function NotificationsPanel({
           busy={savingSetting === "report_updates"}
           onChange={(value) => onSettingChange("report_updates", value)}
         />
-      </div>
-    </div>
+      </SheetList>
+    </>
   )
 }

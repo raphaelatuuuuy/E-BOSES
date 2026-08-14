@@ -3,6 +3,7 @@ import { Link } from "react-router-dom"
 import { ArrowUpRightIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
+import { FilterChip } from "@/features/dashboard/components/record/filter-chip"
 
 /**
  * Shared surface primitives for the staff (official/responder) dashboard.
@@ -104,7 +105,7 @@ export function SeriesKey({ items }: { items: ReadonlyArray<{ label: string; col
             className="size-1.5 shrink-0 rounded-full"
             style={{ backgroundColor: item.color }}
           />
-          <span className="text-[9.5px] font-semibold uppercase tracking-[0.1em] text-subtle-foreground">
+          <span className="text-[9.5px] font-semibold tracking-[0.1em] text-subtle-foreground">
             {item.label}
           </span>
         </span>
@@ -125,30 +126,15 @@ export function FilterChips<T extends string>({
 }) {
   return (
     <div className="flex flex-wrap gap-1.5">
-      {options.map((option) => {
-        const selected = option.value === value
-        return (
-          <button
-            key={option.value}
-            type="button"
-            onClick={() => onChange(option.value)}
-            aria-pressed={selected}
-            className={cn(
-              "flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-bold transition-colors",
-              selected
-                ? "bg-brand-navy text-white"
-                : "border border-card-line text-subtle-foreground hover:border-brand-navy/25 hover:text-brand-navy",
-            )}
-          >
-            {option.label}
-            {option.count != null && option.count > 0 ? (
-              <span className={cn("tabular-nums", selected ? "text-white/60" : "text-subtle-foreground")}>
-                {option.count}
-              </span>
-            ) : null}
-          </button>
-        )
-      })}
+      {options.map((option) => (
+        <FilterChip
+          key={option.value}
+          label={option.label}
+          active={option.value === value}
+          count={option.count}
+          onClick={() => onChange(option.value)}
+        />
+      ))}
     </div>
   )
 }
@@ -165,7 +151,7 @@ export function PanelFooterLink({ to, children }: { to: string; children: ReactN
   )
 }
 
-/** Small uppercase section marker. */
+/** Small section marker. */
 export function Eyebrow({
   children,
   tone = "muted",
@@ -178,7 +164,7 @@ export function Eyebrow({
   return (
     <p
       className={cn(
-        "text-[10px] font-semibold uppercase tracking-[0.12em]",
+        "text-[10px] font-semibold tracking-[0.12em]",
         tone === "alarm" ? "text-sos" : "text-subtle-foreground",
         className,
       )}

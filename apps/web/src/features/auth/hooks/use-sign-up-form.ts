@@ -159,11 +159,27 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
   const [ocrFields, setOcrFields] = useState<string[]>([])
   const [proofOptions, setProofOptions] = useState<ResidenceProofOption[]>([])
   const [proofOptionsLoading, setProofOptionsLoading] = useState(true)
+  const proofOptionsMounted = useRef(true)
 
   async function refreshProofOptions() {
     setProofOptionsLoading(true)
+    let options: ResidenceProofOption[] = []
+    let failed = false
     try {
-      const options = await listResidenceProofOptions()
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          options = await listResidenceProofOptions()
+          break
+        } catch {
+          failed = true
+          if (attempt >= 2 || !proofOptionsMounted.current) break
+          await new Promise((resolve) => window.setTimeout(resolve, 1500 * (attempt + 1)))
+        }
+      }
+      if (failed && import.meta.env.DEV) {
+        console.warn("[sign-up] Failed to load residence proof options")
+      }
+      if (!proofOptionsMounted.current) return options
       setProofOptions(options)
       setValues((current) => {
         const stillValid = options.some((item) => item.key === current.proofType)
@@ -173,23 +189,18 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
         }
       })
       return options
-    } catch {
-      // Don't surface infrastructure/system errors to residents.
-      // Empty options list is handled gently in the proof step UI.
-      if (import.meta.env.DEV) {
-        console.warn("[sign-up] Failed to load residence proof options")
-      }
-      return [] as ResidenceProofOption[]
     } finally {
-      setProofOptionsLoading(false)
+      if (proofOptionsMounted.current) setProofOptionsLoading(false)
     }
   }
 
   useEffect(() => {
-    // Fire-and-forget options load; deferred one macrotask so the mount
-    // render settles first (the loading flag already starts true).
+    proofOptionsMounted.current = true
     const id = window.setTimeout(() => void refreshProofOptions(), 0)
-    return () => window.clearTimeout(id)
+    return () => {
+      proofOptionsMounted.current = false
+      window.clearTimeout(id)
+    }
   }, [])
 
   // Reset the phone cooldown display whenever the resend window closes —

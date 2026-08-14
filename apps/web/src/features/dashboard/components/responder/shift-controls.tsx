@@ -6,8 +6,13 @@ import { cn } from "@workspace/ui/lib/utils"
 import type { PublicUser } from "@/features/dashboard/api"
 import type { ResponderShift } from "@/features/dashboard/emergency-api"
 import type { ResponderUnitView } from "@/features/dashboard/hooks/use-responder-unit"
-import { formatClock, formatElapsed } from "@/features/dashboard/lib/responder-format"
 import { State } from "@/features/dashboard/components/responder/dispatch-surface"
+import {
+  dotClass,
+  formatClock,
+  formatElapsed,
+  toneClass,
+} from "@/features/dashboard/lib/responder-format"
 
 export type ResponderUnit = NonNullable<PublicUser["responder_unit"]>
 
@@ -96,8 +101,33 @@ function EndShiftButton({
 }
 
 /**
- * Duty band — who the responder is, and the one control that changes their
+ * Duty chip — off duty is the quiet idle dot; on duty is a live console
+ * signal, the same dot with an expanding ping halo.
+ */
+function DutyState({ onDuty }: { onDuty: boolean }) {
+  if (!onDuty) {
+    return <State label="Off duty" tone="idle" />
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 text-label">
+      <span className="relative flex size-2.5" aria-hidden>
+        <span className="absolute inline-flex size-full animate-ping rounded-full bg-status-closed opacity-60" />
+        <span className={cn("relative inline-flex size-2.5 rounded-full", dotClass("settled"))} />
+      </span>
+      <span className={cn("tracking-wider", toneClass("settled"))}>On duty</span>
+    </span>
+  )
+}
+
+/**
+ * Duty band — who the responder is and the one control that changes their
  * availability. The dominant region on the Shift screen.
+ *
+ * The band carries the console treatment: while on duty a brand-orange scan
+ * line runs across its top edge, the shift clock is large and ticking, the
+ * duty dot pulses, and the live counters (active, resolved, routed, en
+ * route) sit on a hairline row at the band's own foot — so the numbers and
+ * the control live in one place instead of a second card.
  *
  * The unit is a readout, not a picker. It used to be a `<select>` whose value
  * was sent on shift start and written straight to the account, which meant a
@@ -125,13 +155,20 @@ export function ShiftControls({
   const working = Boolean(busy)
 
   return (
-    <section className="overflow-hidden rounded-3xl border border-card-line bg-card">
+    <section className="relative overflow-hidden rounded-3xl border border-card-line bg-card">
+      {isOnDuty ? (
+        <div
+          aria-hidden
+          className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-transparent via-brand-orange to-transparent"
+        />
+      ) : null}
+
       <div className="grid gap-6 p-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-end md:p-6">
         <div className="min-w-0">
-          <p className="text-micro uppercase tracking-wide text-subtle-foreground">
+          <p className="text-micror text-subtle-foreground">
             Response unit
           </p>
-          <p className="mt-1.5 truncate text-[22px] font-bold leading-tight tracking-tight text-foreground">
+          <p className="mt-1.5 text-pretty text-[22px] font-bold leading-tight tracking-tight text-foreground">
             {unit.name}
           </p>
           <p className="mt-1 text-body leading-6 text-muted-foreground">
@@ -141,10 +178,7 @@ export function ShiftControls({
           </p>
 
           <p className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1">
-            <State
-              label={isOnDuty ? "On duty" : "Off duty"}
-              tone={isOnDuty ? "settled" : "idle"}
-            />
+            <DutyState onDuty={isOnDuty} />
             {activeShift ? (
               <span className="text-body text-subtle-foreground">
                 since {formatClock(activeShift.started_at)}
@@ -155,10 +189,10 @@ export function ShiftControls({
 
         <div className="flex flex-col gap-3 md:items-end">
           <div className="md:text-right">
-            <p className="text-micro uppercase tracking-wide text-subtle-foreground">
+            <p className="text-micror text-subtle-foreground">
               Shift time
             </p>
-            <p className="mt-1 text-4xl font-bold leading-none tabular-nums text-foreground">
+            <p className="mt-1 text-[44px] font-bold leading-none tabular-nums text-foreground md:text-[52px]">
               {formatElapsed(activeShift?.started_at ?? null, now)}
             </p>
           </div>

@@ -27,6 +27,7 @@ import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { DataTable, type Column } from "@/features/dashboard/components/record/data-table"
 import { ConfigAlarm, ConfigHeroAction, ConfigShell } from "@/features/dashboard/components/config/config-shell"
 import type { EmergencyCategory } from "@/features/dashboard/emergency-api"
+import { StateMarker } from "@/components/ui/state-marker"
 
 const ICONS = [
   ["siren", "Siren", SirenIcon],
@@ -201,7 +202,7 @@ export default function OfficialDispatchRulesPage() {
         return (
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-orange-soft text-brand-navy ring-1 ring-brand-orange/15">
-              {category.icon_image_url ? <img src={category.icon_image_url} alt="" className="size-full rounded-xl object-cover" /> : category.custom_icon_label ? <span className="text-xs font-black">{category.custom_icon_label}</span> : <Icon className="size-4" />}
+              {category.icon_image_url ? <img src={category.icon_image_url} alt="" className="size-full rounded-xl object-cover" /> : category.custom_icon_label ? <span className="text-xs font-semibold">{category.custom_icon_label}</span> : <Icon className="size-4" />}
             </div>
             <div className="min-w-0">
               <p className="truncate font-semibold text-foreground">{category.label}</p>
@@ -254,9 +255,10 @@ export default function OfficialDispatchRulesPage() {
       render: (category) => {
         const covered = explicitRules(category.code).length > 0 || declaringUnits(category.code).length > 0
         return (
-          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-black ${!category.is_active ? "bg-slate-100 text-slate-500" : covered ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-            {!category.is_active ? "Inactive" : covered ? "Covered" : "No unit"}
-          </span>
+          <StateMarker
+            tone={!category.is_active ? "closed" : covered ? "active" : "open"}
+            label={!category.is_active ? "Inactive" : covered ? "Covered" : "No unit"}
+          />
         )
       },
     },
@@ -267,7 +269,7 @@ export default function OfficialDispatchRulesPage() {
       render: (category) => (
         <span className="flex justify-end gap-1">
           <Button type="button" size="sm" variant="outline" onClick={() => setDraft(category)}>Edit</Button>
-          <Button type="button" size="sm" variant="outline" onClick={() => void removeCategory(category)} className="border-red-200 text-red-700">Remove</Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => void removeCategory(category)} className="text-destructive">Remove</Button>
         </span>
       ),
     },
@@ -301,7 +303,7 @@ export default function OfficialDispatchRulesPage() {
             <Field label="Custom icon text" value={draft.custom_icon_label || ""} onChange={(custom_icon_label) => setDraft((current) => ({ ...current, custom_icon_label }))} />
           </div>
           <div className="mt-3">
-            <p className="text-xs font-bold uppercase text-muted-foreground">Icon</p>
+            <p className="text-xs font-bold text-muted-foreground">Icon</p>
             <div className="mt-2 flex flex-wrap gap-2">
               {ICONS.map(([key, label, Icon]) => (
                 <button key={key} type="button" onClick={() => setDraft((current) => ({ ...current, icon_key: key }))} className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-2 text-xs font-bold ${draft.icon_key === key ? "border-brand-orange bg-brand-orange-soft text-brand-navy" : "border-card-line bg-canvas text-muted-foreground"}`}>
@@ -311,7 +313,7 @@ export default function OfficialDispatchRulesPage() {
             </div>
           </div>
           <label className="mt-4 block rounded-2xl border border-dashed border-brand-orange/40 bg-white/70 p-4">
-            <span className="text-xs font-bold uppercase text-muted-foreground">Custom image / .ico</span>
+            <span className="text-xs font-bold text-muted-foreground">Custom image / .ico</span>
             <div className="mt-2 flex flex-wrap items-center gap-3">
               {draft.iconFile ? (
                 <img src={URL.createObjectURL(draft.iconFile)} alt="" className="size-12 rounded-xl object-cover" />
@@ -352,7 +354,7 @@ export default function OfficialDispatchRulesPage() {
 function Field({ label, value, disabled, onChange }: { label: string; value: string; disabled?: boolean; onChange: (value: string) => void }) {
   return (
     <label className="block">
-      <span className="text-xs font-bold uppercase text-muted-foreground">{label}</span>
+      <span className="text-xs font-bold text-muted-foreground">{label}</span>
       <input value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-xl border border-card-line bg-canvas px-3 py-2 text-sm font-semibold text-foreground outline-none focus:border-brand-orange disabled:opacity-60" />
     </label>
   )

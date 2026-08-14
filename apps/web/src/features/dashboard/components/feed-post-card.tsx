@@ -2,534 +2,111 @@
  * Shared feed post card — same markup as Home feed (avatar, body, media, votes, comments).
  * Used by Home and Resident Alerts Map expanded panel.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { GlobeIcon, SendIcon, MessageCircleIcon, CircleArrowUp } from "lucide-react"
+import { useEffect, useState, type ReactNode } from "react"
+import {
+  BadgeCheckIcon,
+  CheckCircle2Icon,
+  CircleArrowUp,
+  GlobeIcon,
+  MapPinIcon,
+  MessageCircleIcon,
+  UsersIcon,
+} from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import {
+  categoryLabel,
   concernBodyText,
-  feedTimeAgo,
-  feedCategoryLabel,
-  streetLabelFromAddress,
 } from "@/features/dashboard/components/feed-post-text"
-import type { Concern, ConcernComment, PublicUser } from "@/features/dashboard/api"
+import { streetSegment } from "@/features/dashboard/lib/location-text"
+import { timeAgo } from "@/features/dashboard/lib/format"
+import { mediaDisplaySource } from "@/features/dashboard/lib/authenticated-media"
+import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
+import { statusGroupOf, statusLabelOf } from "@/features/dashboard/lib/status-vocabulary"
+import { FS, IC, STROKE } from "@/features/dashboard/components/home/home-style"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
+import type { Concern, PublicUser } from "@/features/dashboard/api"
 import {
   collectThreadMentionUsers,
   firstNameOf,
   mentionToken,
-  renderCommentBody,
   toMentionUser,
-  type MentionUser,
 } from "@/features/dashboard/components/comment-mentions"
-import { MentionTextField } from "@/features/dashboard/components/mention-text-field"
 import {
-  CommentMoreMenu,
   PostMoreMenu,
   ReportPostDialog,
 } from "@/features/dashboard/components/report-post-dialog"
+import {
+  CommentThread,
+  fromConcernComment,
+} from "@/features/dashboard/components/comments"
 
-const BARANGAY = "Marikina Heights"
-const STROKE = 1.5
-
-const FS = {
-  author: "text-[16px]",
-  meta: "text-[14px]",
-  body: "text-[16px]",
-} as const
-
-const IC = {
-  xxs: "size-4",
-} as const
-
-function commentPlaceLabel(author: PublicUser) {
-  const street =
-    streetLabelFromAddress(author.street) ||
-    (author.street && author.street.toLowerCase() !== "pending" ? author.street : null)
-  if (street && street.toLowerCase() !== "marikina heights") return street
-  if (author.barangay && author.barangay.toLowerCase() !== "pending") return author.barangay
-  return BARANGAY
-}
-
-/** Letter avatar — matches Home feed (no portrait images) */
-export function FeedUserAvatar({
-  user,
-  size = "md",
-  className,
-}: {
-  user?: PublicUser | null
-  size?: "sm" | "md" | "lg"
-  className?: string
-}) {
-  const sizeClass =
-    size === "sm" ? "size-9 text-[16px]" : size === "lg" ? "size-11 text-[18px]" : "size-10 text-[17px]"
-  const letter = (user?.full_name?.[0] || user?.initials?.[0] || "?").toUpperCase()
-  return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-soft font-semibold text-navy-muted",
-        sizeClass,
-        className,
-      )}
-    >
-      {letter}
-    </span>
-  )
-}
-
-function FeedCommentItem({
-  comment,
-  isReply = false,
-  rootCommentId,
-  replyOpenId,
-  replyDraft,
-  onToggleReply,
-  onReplyDraftChange,
-  onSubmitReply,
-  sessionUser,
-  mentionUsers,
-  menuOpenId,
-  onMenuOpenChange,
-  editingId,
-  editDraft,
-  onStartEdit,
-  onEditDraftChange,
-  onCancelEdit,
-  onSaveEdit,
-  onDelete,
-}: {
-  comment: ConcernComment
-  isReply?: boolean
-  rootCommentId: number
-  replyOpenId: number | null
-  replyDraft: string
-  onToggleReply: (comment: ConcernComment) => void
-  onReplyDraftChange: (value: string) => void
-  onSubmitReply: (rootParentId: number) => void
-  sessionUser: PublicUser | null
-  mentionUsers: MentionUser[]
-  menuOpenId: number | null
-  onMenuOpenChange: (id: number | null) => void
-  editingId: number | null
-  editDraft: string
-  onStartEdit: (comment: ConcernComment) => void
-  onEditDraftChange: (value: string) => void
-  onCancelEdit: () => void
-  onSaveEdit: (commentId: number) => void
-  onDelete: (commentId: number) => void
-}) {
-  const isOwn = sessionUser != null && comment.author.id === sessionUser.id
-  const isReplying = replyOpenId === comment.id
-  const isEditing = editingId === comment.id
-  const menuOpen = menuOpenId === comment.id
-  const place = commentPlaceLabel(comment.author)
-  const [showOriginal, setShowOriginal] = useState(false)
-  const isEdited = Boolean(comment.is_edited)
-  const originalText = (comment.original_body || "").trim()
-
-  // Reset the "show original" toggle whenever the comment content changes —
-  // render-adjust instead of a sync setState effect.
-  const commentKey = `${comment.id}|${comment.body}|${comment.is_edited}`
-  const [prevCommentKey, setPrevCommentKey] = useState(commentKey)
-  if (prevCommentKey !== commentKey) {
-    setPrevCommentKey(commentKey)
-    setShowOriginal(false)
-  }
-
-  const hasReplies = !isReply && comment.replies.length > 0
-  const threadRootRef = useRef<HTMLDivElement>(null)
-  const lastReplyAvatarRef = useRef<HTMLDivElement>(null)
-  const [threadBox, setThreadBox] = useState({ top: 32, height: 80, left: 15, width: 29 })
-
-  useLayoutEffect(() => {
-    if (!hasReplies) return
-    function measure() {
-      const rootEl = threadRootRef.current
-      const avEl = lastReplyAvatarRef.current
-      if (!rootEl || !avEl) return
-      const rootRect = rootEl.getBoundingClientRect()
-      const avRect = avEl.getBoundingClientRect()
-      const avCenterY = avRect.top + avRect.height / 2
-      const top = 32
-      const height = Math.max(24, avCenterY - rootRect.top - top)
-      const left = 15
-      const avLeft = avRect.left - rootRect.left
-      const width = Math.max(20, avLeft - left)
-      setThreadBox({ top, height, left, width })
-    }
-    measure()
-    const raf = window.requestAnimationFrame(measure)
-    const rootEl = threadRootRef.current
-    const ro =
-      typeof ResizeObserver !== "undefined" && rootEl ? new ResizeObserver(() => measure()) : null
-    if (rootEl && ro) ro.observe(rootEl)
-    window.addEventListener("resize", measure)
-    return () => {
-      window.cancelAnimationFrame(raf)
-      ro?.disconnect()
-      window.removeEventListener("resize", measure)
-    }
-  }, [hasReplies, comment.replies.length, comment.replies])
-
-  const commentMain = (
-    <>
-      <div className="flex items-start gap-0.5">
-        <div className="min-w-0 flex-1">
-          <p className="m-0 text-[13px] font-normal leading-[1.3] text-neutral-400">
-            <span className="font-bold text-neutral-900">{comment.author.full_name}</span>
-            <span className="mx-1">·</span>
-            <span>{feedTimeAgo(comment.created_at)}</span>
-            {place ? (
-              <>
-                <span className="mx-1">·</span>
-                <span>{place}</span>
-              </>
-            ) : null}
-            {isEdited ? (
-              <>
-                <span className="mx-1">·</span>
-                <button
-                  type="button"
-                  onClick={() => originalText && setShowOriginal((v) => !v)}
-                  className={cn(
-                    "inline p-0 font-medium text-neutral-400 align-baseline",
-                    originalText && "hover:text-neutral-700 hover:underline",
-                  )}
-                  title={originalText ? "View original comment" : undefined}
-                >
-                  (edited)
-                </button>
-              </>
-            ) : null}
-          </p>
-
-          {isEditing ? (
-            <div className="mt-1 space-y-2">
-              <textarea
-                value={editDraft}
-                onChange={(e) => onEditDraftChange(e.target.value.slice(0, 1000))}
-                rows={2}
-                autoFocus
-                className={cn(
-                  "w-full resize-none rounded-xl border border-neutral-200 bg-white px-3 py-2 text-[15px] text-neutral-900 outline-none",
-                  "focus:border-neutral-300 focus:ring-2 focus:ring-neutral-100",
-                )}
-              />
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  disabled={!editDraft.trim()}
-                  onClick={() => onSaveEdit(comment.id)}
-                  className={cn(
-                    "rounded-full px-3.5 py-1.5 text-[13px] font-semibold",
-                    editDraft.trim()
-                      ? "bg-neutral-900 text-white hover:bg-neutral-800"
-                      : "cursor-not-allowed bg-neutral-200 text-neutral-400",
-                  )}
-                >
-                  Save
-                </button>
-                <button
-                  type="button"
-                  onClick={onCancelEdit}
-                  className="rounded-full px-3 py-1.5 text-[13px] font-semibold text-neutral-600 hover:bg-neutral-100"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <p className="m-0 whitespace-pre-wrap break-words text-[15px] font-normal leading-[1.35] text-neutral-800">
-                {renderCommentBody(comment.body)}
-              </p>
-              {isEdited && showOriginal && originalText ? (
-                <div className="mt-1.5 rounded-lg bg-neutral-50 px-2.5 py-1.5 ring-1 ring-neutral-100">
-                  <p className="m-0 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
-                    Original comment
-                  </p>
-                  <p className="m-0 mt-0.5 whitespace-pre-wrap break-words text-[14px] leading-snug text-neutral-600">
-                    {renderCommentBody(originalText)}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setShowOriginal(false)}
-                    className="mt-0.5 text-[12px] font-semibold text-neutral-500 hover:text-neutral-800"
-                  >
-                    Hide original
-                  </button>
-                </div>
-              ) : null}
-            </>
-          )}
-        </div>
-
-        {isOwn ? (
-          <div className="-mt-0.5 shrink-0">
-            <CommentMoreMenu
-              open={menuOpen}
-              onOpenChange={(open) => onMenuOpenChange(open ? comment.id : null)}
-              onEdit={() => onStartEdit(comment)}
-              onDelete={() => onDelete(comment.id)}
-            />
-          </div>
-        ) : null}
-      </div>
-
-      {!isEditing ? (
-        <div className="mt-2 flex flex-wrap items-center gap-3 leading-none">
-          <button
-            type="button"
-            onClick={() => onToggleReply(comment)}
-            className="text-[13px] font-semibold text-neutral-500 transition-colors hover:text-neutral-800"
-          >
-            {isReplying ? "Cancel" : "Reply"}
-          </button>
-          {!isReply && comment.replies.length > 0 ? (
-            <span className="text-[12px] font-medium text-neutral-400">
-              {comment.replies.length} {comment.replies.length === 1 ? "reply" : "replies"}
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-
-      {isReplying ? (
-        <div className="mt-2 flex items-center gap-2">
-          <FeedUserAvatar user={sessionUser} size="sm" className="!size-7 !text-[12px]" />
-          <div className="relative min-w-0 flex-1">
-            <MentionTextField
-              autoFocus
-              compact
-              value={replyDraft}
-              onChange={onReplyDraftChange}
-              onSubmit={() => onSubmitReply(rootCommentId)}
-              placeholder={`Reply to ${firstNameOf(comment.author.full_name)}…`}
-              localUsers={mentionUsers}
-            />
-            <button
-              type="button"
-              disabled={!replyDraft.trim()}
-              onClick={() => onSubmitReply(rootCommentId)}
-              aria-label="Send reply"
-              className={cn(
-                "absolute right-1 top-1/2 z-10 flex size-7 -translate-y-1/2 items-center justify-center rounded-full transition-colors",
-                replyDraft.trim()
-                  ? "text-neutral-700 hover:bg-neutral-100"
-                  : "cursor-not-allowed text-neutral-300",
-              )}
-            >
-              <SendIcon className="size-4" />
-            </button>
-          </div>
-        </div>
-      ) : null}
-    </>
-  )
-
-  if (isReply) {
-    return <div className="min-w-0 flex-1">{commentMain}</div>
-  }
-
-  return (
-    <div ref={threadRootRef} className="relative">
-      <div className="flex items-start gap-2.5">
-        <FeedUserAvatar
-          user={comment.author}
-          size="sm"
-          className="relative z-10 !size-8 !text-[13px] leading-none !bg-slate-soft !text-navy-muted"
-        />
-        <div className="min-w-0 flex-1">{commentMain}</div>
-      </div>
-
-      {hasReplies ? (
-        <>
-          <div
-            aria-hidden
-            className="pointer-events-none absolute z-0 rounded-bl-[14px] border-b-[1.5px] border-l-[1.5px] border-neutral-300"
-            style={{
-              left: threadBox.left,
-              top: threadBox.top,
-              width: threadBox.width,
-              height: threadBox.height,
-            }}
-          />
-          <div className="relative z-[1] space-y-3 pl-10 pt-3">
-            {comment.replies.map((reply, index) => {
-              const isLast = index === comment.replies.length - 1
-              return (
-                <div key={reply.id} className="flex items-start gap-2.5">
-                  <div ref={isLast ? lastReplyAvatarRef : undefined} className="shrink-0">
-                    <FeedUserAvatar
-                      user={reply.author}
-                      size="sm"
-                      className="!size-8 !text-[13px] leading-none !bg-slate-soft !text-navy-muted"
-                    />
-                  </div>
-                  <FeedCommentItem
-                    comment={reply}
-                    isReply
-                    rootCommentId={rootCommentId}
-                    replyOpenId={replyOpenId}
-                    replyDraft={replyDraft}
-                    onToggleReply={onToggleReply}
-                    onReplyDraftChange={onReplyDraftChange}
-                    onSubmitReply={onSubmitReply}
-                    sessionUser={sessionUser}
-                    mentionUsers={mentionUsers}
-                    menuOpenId={menuOpenId}
-                    onMenuOpenChange={onMenuOpenChange}
-                    editingId={editingId}
-                    editDraft={editDraft}
-                    onStartEdit={onStartEdit}
-                    onEditDraftChange={onEditDraftChange}
-                    onCancelEdit={onCancelEdit}
-                    onSaveEdit={onSaveEdit}
-                    onDelete={onDelete}
-                  />
-                </div>
-              )
-            })}
-          </div>
-        </>
-      ) : null}
-    </div>
-  )
-}
-
+/**
+ * Real comments are rendered by the shared `CommentThread`, so a concern, an
+ * announcement and an emergency all use one row, one composer, one official
+ * badge and one timestamp format.
+ *
+ * The resolution banner and the "neighbours also reported this" roll-up stay
+ * local: they look like comments but are not, so they keep their own row and
+ * are passed in as the thread's header.
+ */
 function PostCommentsBlock({
   post,
   isExpanded,
-  showAllComments,
-  onToggleShowAll,
   commentInput,
   onCommentInputChange,
   onSubmitTopLevel,
-  replyOpenId,
-  replyDraft,
-  onToggleReply,
-  onReplyDraftChange,
   onSubmitReply,
   sessionUser,
-  menuOpenId,
-  onMenuOpenChange,
-  editingId,
-  editDraft,
-  onStartEdit,
-  onEditDraftChange,
-  onCancelEdit,
-  onSaveEdit,
+  onEdit,
   onDelete,
   commentFieldId,
+  onQuoteReply,
 }: {
   post: Concern
   isExpanded: boolean
-  showAllComments: boolean
-  onToggleShowAll: () => void
   commentInput: string
   onCommentInputChange: (value: string) => void
   onSubmitTopLevel: () => void
-  replyOpenId: number | null
-  replyDraft: string
-  onToggleReply: (comment: ConcernComment) => void
-  onReplyDraftChange: (value: string) => void
-  onSubmitReply: (parentId: number) => void
+  onSubmitReply: (body: string, parentId: number) => void
   sessionUser: PublicUser | null
-  menuOpenId: number | null
-  onMenuOpenChange: (id: number | null) => void
-  editingId: number | null
-  editDraft: string
-  onStartEdit: (comment: ConcernComment) => void
-  onEditDraftChange: (value: string) => void
-  onCancelEdit: () => void
-  onSaveEdit: (commentId: number) => void
+  onEdit: (commentId: number, body: string) => void
   onDelete: (commentId: number) => void
   commentFieldId: string
+  onQuoteReply: (name: string) => void
 }) {
   if (!isExpanded) return null
 
-  const roots = post.comments
-  const hiddenCount = Math.max(0, roots.length - 1)
-  const visibleRoots = showAllComments || roots.length <= 1 ? roots : roots.slice(-1)
   const mentionUsers = collectThreadMentionUsers(post, sessionUser)
+  const unified = post.comments.map((comment) => fromConcernComment(comment, sessionUser))
 
   return (
-    <div className="space-y-3 pt-1">
-      {roots.length > 0 ? (
-        <div className="space-y-3.5">
-          {hiddenCount > 0 && !showAllComments ? (
-            <button
-              type="button"
-              onClick={onToggleShowAll}
-              className="text-[13px] font-semibold text-neutral-600 transition-colors hover:text-neutral-900"
-            >
-              See previous comments ({hiddenCount})
-            </button>
-          ) : null}
-          {showAllComments && roots.length > 1 ? (
-            <button
-              type="button"
-              onClick={onToggleShowAll}
-              className="text-[13px] font-semibold text-neutral-500 transition-colors hover:text-neutral-800"
-            >
-              Show less
-            </button>
-          ) : null}
-
-          {visibleRoots.map((c) => (
-            <FeedCommentItem
-              key={c.id}
-              comment={c}
-              rootCommentId={c.id}
-              replyOpenId={replyOpenId}
-              replyDraft={replyDraft}
-              onToggleReply={onToggleReply}
-              onReplyDraftChange={onReplyDraftChange}
-              onSubmitReply={onSubmitReply}
-              sessionUser={sessionUser}
-              mentionUsers={mentionUsers}
-              menuOpenId={menuOpenId}
-              onMenuOpenChange={onMenuOpenChange}
-              editingId={editingId}
-              editDraft={editDraft}
-              onStartEdit={onStartEdit}
-              onEditDraftChange={onEditDraftChange}
-              onCancelEdit={onCancelEdit}
-              onSaveEdit={onSaveEdit}
-              onDelete={onDelete}
-            />
-          ))}
-        </div>
-      ) : null}
-
-      <div className="flex items-center gap-2 pt-0.5">
-        <FeedUserAvatar user={sessionUser} size="sm" className="size-8 text-[14px]" />
-        <div className="relative min-w-0 flex-1">
-          <MentionTextField
-            id={commentFieldId}
-            value={commentInput}
-            onChange={onCommentInputChange}
-            onSubmit={onSubmitTopLevel}
-            placeholder="Add a comment"
-            localUsers={mentionUsers}
-          />
-          <button
-            type="button"
-            disabled={!commentInput.trim()}
-            onClick={onSubmitTopLevel}
-            aria-label="Send comment"
-            className={cn(
-              "absolute right-1.5 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full transition-colors",
-              commentInput.trim()
-                ? "text-neutral-700 hover:bg-neutral-100 hover:text-neutral-900"
-                : "cursor-not-allowed text-neutral-300",
-            )}
-          >
-            <SendIcon className="size-7" />
-          </button>
-        </div>
-      </div>
-    </div>
+    <CommentThread
+      className="pt-1"
+      comments={unified}
+      sessionUser={sessionUser}
+      mentionUsers={mentionUsers}
+      composerId={commentFieldId}
+      collapseToLatest
+      allowReplies
+      value={commentInput}
+      onValueChange={onCommentInputChange}
+      onSubmit={(body: string, parentId: number | null) => {
+        if (parentId == null) onSubmitTopLevel()
+        else onSubmitReply(body, parentId)
+      }}
+      onEdit={onEdit}
+      onDelete={onDelete}
+      header={
+        <>
+          <ResolutionBanner post={post} onReply={onQuoteReply} />
+          <RelatedReports post={post} onReply={onQuoteReply} />
+        </>
+      }
+    />
   )
 }
+
 
 export type FeedPostCardProps = {
   post: Concern
@@ -551,6 +128,187 @@ export type FeedPostCardProps = {
 /**
  * Exact Home-feed post layout: header, body, media, vote/comment, threaded comments.
  */
+const AVATAR_CLASS = "!size-8 !text-[13px] leading-none !bg-slate-soft !text-navy-muted"
+
+function CommentRow({
+  avatar,
+  name,
+  meta,
+  badge,
+  onReply,
+  children,
+}: {
+  avatar: ReactNode
+  name: string
+  meta: string
+  badge?: ReactNode
+  onReply?: () => void
+  children: ReactNode
+}) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <div className="relative shrink-0">{avatar}</div>
+      <div className="min-w-0 flex-1">
+        <p className="flex flex-wrap items-center gap-x-1.5 text-[13px] leading-snug">
+          <span className="font-semibold text-neutral-900">{name}</span>
+          {badge}
+          <span className="text-neutral-500">· {meta}</span>
+        </p>
+        {children}
+        {onReply ? (
+          <button
+            type="button"
+            onClick={onReply}
+            className="mt-1 text-[12px] font-semibold text-neutral-500 transition-colors hover:text-neutral-800"
+          >
+            Reply
+          </button>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function ResolutionBanner({ post, onReply }: { post: Concern; onReply?: (prefix: string) => void }) {
+  const group = statusGroupOf(post.status)
+  if (group !== "closed") return null
+
+  const evidence = (post.resolution_evidence ?? []).filter((item) =>
+    item.mime_type?.startsWith("image/"),
+  )
+  const closingEvent = [...(post.status_events ?? [])]
+    .reverse()
+    .find((event) => event.status === post.status)
+  const detail = (post.update_text || "").trim() || closingEvent?.note || ""
+  const official = evidence[0]?.uploaded_by ?? closingEvent?.actor ?? null
+  const when = closingEvent?.created_at ?? post.updated_at
+
+  const officialName = official?.full_name || "Barangay Hall"
+  const replyPrefix = official?.id
+    ? mentionToken(toMentionUser(official))
+    : firstNameOf(officialName)
+
+  return (
+    <div>
+      <p className="mb-1.5 flex items-center gap-1 text-[11px] font-semibold text-neutral-500">
+        <CheckCircle2Icon className="size-3 shrink-0" strokeWidth={2.4} />
+        {statusLabelOf(post.status, "resident", "concern")}
+      </p>
+
+      <CommentRow
+        avatar={
+          official ? (
+            <>
+              <UserAvatar user={official} size="sm" className={AVATAR_CLASS} />
+              <BadgeCheckIcon
+                aria-label="Verified barangay official"
+                className="absolute -bottom-0.5 -right-0.5 size-3.5 rounded-full bg-white text-brand-navy"
+                strokeWidth={2.4}
+              />
+            </>
+          ) : (
+            <>
+              <span className="flex size-8 items-center justify-center rounded-full bg-brand-navy text-[12px] font-bold text-white">
+                BH
+              </span>
+              <BadgeCheckIcon
+                aria-label="Verified barangay official"
+                className="absolute -bottom-0.5 -right-0.5 size-3.5 rounded-full bg-white text-brand-navy"
+                strokeWidth={2.4}
+              />
+            </>
+          )
+        }
+        name={officialName}
+        meta={`${timeAgo(when)} · Official update`}
+        onReply={onReply ? () => onReply(replyPrefix) : undefined}
+      >
+        {detail ? (
+          <p className="mt-0.5 text-[14px] leading-relaxed text-neutral-900">{detail}</p>
+        ) : null}
+        {evidence.length ? (
+          <div className="mt-1.5 flex gap-1.5 overflow-x-auto">
+            {evidence.slice(0, 3).map((item) => (
+              <AuthenticatedMediaImage
+                key={item.id}
+                src={mediaDisplaySource(item)}
+                alt="Proof of the completed work"
+                className="h-24 w-32 shrink-0 rounded-xl object-cover"
+              />
+            ))}
+          </div>
+        ) : null}
+      </CommentRow>
+    </div>
+  )
+}
+
+function RelatedReports({ post, onReply }: { post: Concern; onReply?: (prefix: string) => void }) {
+  const [open, setOpen] = useState(true)
+  const incident = post.community_incident
+  const linked = incident?.reports?.filter((entry) => !entry.is_primary) ?? []
+  if (linked.length === 0) return null
+
+  const photosFor = (reportId: number) =>
+    (incident?.photos ?? []).filter(
+      (photo) => photo.report_id === reportId && photo.mime_type?.startsWith("image/"),
+    )
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        className="flex items-center gap-1.5 text-[12px] font-semibold text-neutral-600 transition-colors hover:text-neutral-900"
+      >
+        <UsersIcon className="size-3.5 shrink-0" strokeWidth={2.2} />
+        {linked.length === 1
+          ? "1 neighbour also reported this"
+          : `${linked.length} neighbours also reported this`}
+        <span className="text-neutral-400">{open ? "· Hide" : "· Show"}</span>
+      </button>
+
+      {open ? (
+        <div className="mt-2.5 space-y-3.5">
+          {linked.map((entry) => {
+            const photos = photosFor(entry.id)
+            return (
+              <CommentRow
+                key={entry.id}
+                avatar={
+                  <span className="flex size-8 items-center justify-center rounded-full bg-slate-soft text-[13px] font-semibold text-navy-muted">
+                    {entry.reporter_name.slice(0, 1).toUpperCase()}
+                  </span>
+                }
+                name={entry.reporter_name}
+                meta={`${timeAgo(entry.submitted_at)} · also reported this`}
+                onReply={onReply ? () => onReply(firstNameOf(entry.reporter_name)) : undefined}
+              >
+                <p className="mt-0.5 text-[14px] leading-relaxed text-neutral-900">
+                  {entry.description}
+                </p>
+                {photos.length ? (
+                  <div className="mt-1.5 flex gap-1.5 overflow-x-auto">
+                    {photos.slice(0, 3).map((photo) => (
+                      <AuthenticatedMediaImage
+                        key={photo.id}
+                        src={mediaDisplaySource(photo)}
+                        alt=""
+                        className="h-24 w-32 shrink-0 rounded-xl object-cover"
+                      />
+                    ))}
+                  </div>
+                ) : null}
+              </CommentRow>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export function FeedPostCard({
   post,
   sessionUser,
@@ -571,17 +329,11 @@ export function FeedPostCard({
     if (commentsExpandedProp === undefined) setInternalExpanded(open)
   }
 
-  const [showAllComments, setShowAllComments] = useState(false)
   const [commentInput, setCommentInput] = useState("")
-  const [replyOpenId, setReplyOpenId] = useState<number | null>(null)
-  const [replyDraft, setReplyDraft] = useState("")
-  const [menuOpenId, setMenuOpenId] = useState<number | null>(null)
-  const [editingId, setEditingId] = useState<number | null>(null)
-  const [editDraft, setEditDraft] = useState("")
   const [menuOpenPost, setMenuOpenPost] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
 
-  const reporterStreet = streetLabelFromAddress(post.reporter.street)
+  const incidentStreet = streetSegment(post.address) || streetSegment(post.reporter.street)
   const commentFieldId = `feed-post-comment-${post.id}`
 
   useEffect(() => {
@@ -602,12 +354,9 @@ export function FeedPostCard({
     setCommentInput("")
   }
 
-  async function submitReply(parentId: number) {
-    const body = replyDraft.trim()
-    if (!body) return
+  async function submitReply(body: string, parentId: number) {
+    if (!body.trim()) return
     await onComment(post.id, body, parentId)
-    setReplyDraft("")
-    setReplyOpenId(null)
   }
 
   return (
@@ -619,7 +368,7 @@ export function FeedPostCard({
         )}
       >
         <div className="flex gap-2.5 p-3.5 pb-0">
-          <FeedUserAvatar user={post.reporter} size="lg" />
+          <UserAvatar user={post.reporter} size="lg" />
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
@@ -632,20 +381,44 @@ export function FeedPostCard({
                     FS.meta,
                   )}
                 >
-                  {reporterStreet ? (
+                  {incidentStreet ? (
                     <>
-                      <span className="min-w-0 truncate">{reporterStreet}</span>
+                      <MapPinIcon
+                        className="size-3 shrink-0 text-neutral-400"
+                        strokeWidth={2.3}
+                        aria-hidden
+                      />
+                      <span className="min-w-0 truncate">{incidentStreet}</span>
                       <span className="shrink-0" aria-hidden>
                         ·
                       </span>
                     </>
                   ) : null}
-                  <span className="shrink-0">{feedCategoryLabel(post.category)}</span>
+                  <span className="shrink-0">{categoryLabel(post.category)}</span>
                   <span className="shrink-0" aria-hidden>
                     ·
                   </span>
-                  <span className="shrink-0">{feedTimeAgo(post.created_at)}</span>
+                  <span className="shrink-0">{timeAgo(post.created_at)}</span>
                   <GlobeIcon className={cn(IC.xxs, "shrink-0")} strokeWidth={STROKE} />
+                  {statusGroupOf(post.status) === "closed" ? (
+                    <>
+                      <span className="shrink-0" aria-hidden>
+                        ·
+                      </span>
+                      <span className="inline-flex shrink-0 items-center gap-1 font-semibold text-neutral-600">
+                        <span
+                          aria-hidden
+                          className={cn(
+                            "size-1.5 rounded-full",
+                            post.status === "resolved" || post.status === "partially_resolved"
+                              ? "bg-status-closed"
+                              : "bg-neutral-400",
+                          )}
+                        />
+                        {statusLabelOf(post.status, "resident", "concern")}
+                      </span>
+                    </>
+                  ) : null}
                 </p>
               </div>
               {!hideMoreMenu ? (
@@ -670,6 +443,8 @@ export function FeedPostCard({
             <img
               src={post.media[0].preview_url}
               alt=""
+              loading="lazy"
+              decoding="async"
               className="max-h-80 w-full object-cover"
             />
           </div>
@@ -689,7 +464,7 @@ export function FeedPostCard({
                 post.user_vote === 1 && "bg-neutral-200/90 text-neutral-800",
               )}
             >
-              <CircleArrowUp className="size-7 shrink-" strokeWidth={STROKE} />
+              <CircleArrowUp className="size-7 shrink-0" strokeWidth={STROKE} />
               {post.vote_count > 0 ? (
                 <span className="pr-0.5 text-[13px] font-semibold tabular-nums">
                   {post.vote_count}
@@ -726,48 +501,20 @@ export function FeedPostCard({
           <PostCommentsBlock
             post={post}
             isExpanded={isExpanded}
-            showAllComments={showAllComments}
-            onToggleShowAll={() => setShowAllComments((v) => !v)}
             commentInput={commentInput}
             onCommentInputChange={setCommentInput}
             onSubmitTopLevel={() => void submitTopLevel()}
-            replyOpenId={replyOpenId}
-            replyDraft={replyDraft}
-            onToggleReply={(c) => {
-              setReplyOpenId((cur) => {
-                if (cur === c.id) {
-                  setReplyDraft("")
-                  return null
-                }
-                setReplyDraft(`${mentionToken(toMentionUser(c.author))} `)
-                return c.id
-              })
-            }}
-            onReplyDraftChange={setReplyDraft}
-            onSubmitReply={(parentId) => void submitReply(parentId)}
+            onSubmitReply={(body, parentId) => void submitReply(body, parentId)}
             sessionUser={sessionUser}
-            menuOpenId={menuOpenId}
-            onMenuOpenChange={setMenuOpenId}
-            editingId={editingId}
-            editDraft={editDraft}
-            onStartEdit={(c) => {
-              setEditingId(c.id)
-              setEditDraft(c.body)
-              setReplyOpenId(null)
-            }}
-            onEditDraftChange={setEditDraft}
-            onCancelEdit={() => {
-              setEditingId(null)
-              setEditDraft("")
-            }}
-            onSaveEdit={(commentId) => {
-              void onEditComment(post.id, commentId, editDraft.trim()).then(() => {
-                setEditingId(null)
-                setEditDraft("")
-              })
-            }}
+            onEdit={(commentId, body) => void onEditComment(post.id, commentId, body)}
             onDelete={(commentId) => void onDeleteComment(post.id, commentId)}
             commentFieldId={commentFieldId}
+            onQuoteReply={(prefix) => {
+              setCommentInput((current) => (current.trim() ? current : `${prefix} `))
+              window.requestAnimationFrame(() => {
+                document.getElementById(commentFieldId)?.focus()
+              })
+            }}
           />
         </div>
       </article>

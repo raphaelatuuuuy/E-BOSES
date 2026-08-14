@@ -3,6 +3,7 @@ import { useMemo } from "react"
 import { GroupedBars, type GroupedBarPoint } from "@/features/dashboard/components/charts"
 import { Panel, PanelHeader, PeriodChip, SeriesKey } from "@/features/dashboard/components/staff/panel"
 import type { Concern } from "@/features/dashboard/api"
+import { statusGroupOf } from "@/features/dashboard/lib/status-vocabulary"
 
 const DAYS = 7
 const FILED_COLOR = "var(--color-brand-navy)"
@@ -62,9 +63,7 @@ export function ConcernTrendCard({
       const opened = indexOf(concern.created_at)
       if (opened >= 0) points[opened].a += 1
 
-      // Closed concerns count on the day they were last touched, which is the
-      // closest thing the payload has to a resolution timestamp.
-      if (concern.status === "resolved" || concern.status === "rejected") {
+      if (statusGroupOf(concern.status) === "closed") {
         const done = indexOf(concern.updated_at)
         if (done >= 0) points[done].b += 1
       }

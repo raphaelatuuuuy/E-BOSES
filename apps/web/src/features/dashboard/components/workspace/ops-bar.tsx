@@ -13,10 +13,9 @@ import { cn } from "@workspace/ui/lib/utils"
  * The counters survive because they were the only load-bearing part of the
  * hero. They just don't need 200px to say "2".
  *
- * Tone is semantic, following the console's warm/cold rule:
- *   alert — a human must act (unassigned, overdue)
- *   live  — the system is reporting (en route, on duty)
- *   good  — nothing needed
+ * Only one tone is coloured: `alert`, meaning a human must act. The console
+ * used to paint `live` cyan and `good` green as well, so three of four counters
+ * were competing and the one that needed someone did not stand out.
  */
 
 export type OpsCounterTone = "default" | "alert" | "live" | "good"
@@ -30,17 +29,17 @@ export interface OpsCounter {
 
 const toneValueClass: Record<OpsCounterTone, string> = {
   default: "text-foreground",
-  alert: "text-severity-critical",
-  live: "text-ice",
-  good: "text-status-closed",
+  alert: "text-sos",
+  live: "text-foreground",
+  good: "text-subtle-foreground",
 }
 
 function Counter({ counter }: { counter: OpsCounter }) {
   const tone = counter.tone ?? "default"
   const content = (
     <>
-      <span className={cn("text-numeric tabular-nums", toneValueClass[tone])}>{counter.value}</span>
-      <span className="text-micro uppercase text-subtle-foreground">{counter.label}</span>
+      <span className={cn("text-row tabular-nums", toneValueClass[tone])}>{counter.value}</span>
+      <span className="text-meta text-subtle-foreground">{counter.label}</span>
     </>
   )
 

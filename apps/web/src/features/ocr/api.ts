@@ -11,7 +11,6 @@ export type VerificationCaseStatus =
   | "awaiting_email"
   | "queued"
   | "processing"
-  | "manual_review"
   | "approved"
   | "rejected"
 
@@ -81,7 +80,6 @@ export interface OcrFieldDefinition {
   /** Backend field sides (front / back / single). Kept in sync with extraction_hints.side. */
   sides?: ProofSide[]
   order: number
-  min_confidence?: number
   normalization?: string
   format?: string
   extraction_hints?: OcrFieldHints
@@ -133,7 +131,7 @@ export interface OcrRuleDefinition {
   value?: string | number | boolean | string[] | Record<string, unknown> | null
   threshold?: number | null
   enabled: boolean
-  on_failure?: "manual_review" | "warning"
+  on_failure?: "reject" | "warning"
   message?: string
   order: number
 }
@@ -159,9 +157,7 @@ export interface OcrDocumentType {
   template_name?: string
   template_version?: string
   expected_title?: string
-  min_ocr_confidence?: number
   accept_rotated?: boolean
-  accept_scanned_pdf?: boolean
   sample_url?: string | null
   sample_original_filename?: string
   /** Per-side canvas samples (front / back / single). */
@@ -176,15 +172,10 @@ export interface OcrDocumentType {
 }
 
 export interface OcrAdvancedSettings {
-  confidence_threshold: number
-  name_similarity_threshold: number
-  address_similarity_threshold: number
   document_recency_days: number
   reject_blurry_images: boolean
-  send_uncertain_to_manual_review: boolean
-  auto_approve_when_all_rules_pass: boolean
   outage_retry_enabled: boolean
-  failure_action: "manual_review" | "reject" | "request_resubmission"
+  failure_action: "reject" | "request_resubmission"
 }
 
 export interface OcrConfiguration {
@@ -353,7 +344,7 @@ export interface VerificationRuleResult {
   operator?: string
   /** For profile_match rules: which resident profile key this rule compares to. */
   profile?: string | null
-  on_failure?: "warning" | "manual_review" | string
+  on_failure?: "warning" | "reject" | string
   passed: boolean | null
   score?: number | null
   message?: string
@@ -384,31 +375,6 @@ export interface VerificationAttempt {
   started_at?: string | null
   completed_at?: string | null
   created_at?: string
-}
-
-export interface ResidenceVerificationCase {
-  id: number
-  reference?: string
-  status: VerificationCaseStatus
-  reason_code?: string
-  reason?: string
-  review_reason?: string
-  resident: VerificationResident
-  document_type?: { key?: string; code?: string; name: string } | string | null
-  configuration_version?: number | null
-  confidence?: number | null
-  proofs: VerificationProof[]
-  extracted_fields: VerificationExtractedField[] | Record<string, { label?: string; value?: string; confidence?: number | null }>
-  rule_results: VerificationRuleResult[]
-  attempts: VerificationAttempt[]
-  latest_attempt?: VerificationAttempt | null
-  official_note?: string
-  decided_by?: string | null
-  queued_at?: string | null
-  created_at?: string
-  updated_at?: string
-  decided_at?: string | null
-  can_retry?: boolean
 }
 
 export interface OcrAuditEntry {
@@ -493,7 +459,6 @@ function normalizeConfiguration(raw: RawJson): OcrConfiguration {
         order: field.order ?? field.display_order ?? 0,
         aliases: field.aliases ?? [],
         sides: sides.length ? sides : [resolvedSide],
-        min_confidence: field.min_confidence != null ? Number(field.min_confidence) : 0.8,
         normalization: field.normalization ?? "none",
         format: field.format ?? "none",
         extraction_hints: hints,
@@ -518,16 +483,14 @@ function normalizeConfiguration(raw: RawJson): OcrConfiguration {
         ? 2
         : 1,
     ),
-    max_file_size_bytes: document.max_file_size_bytes ?? 2 * 1024 * 1024,
-    accepted_extensions: document.accepted_extensions ?? ["png", "jpg", "jpeg"],
+    max_file_size_bytes: document.max_file_size_bytes ?? 10 * 1024 * 1024,
+    accepted_extensions: document.accepted_extensions ?? ["png", "jpg", "jpeg", "webp"],
     keywords: document.keywords ?? [],
     provider_keywords: document.provider_keywords ?? document.provider_names ?? [],
     template_name: document.template_name || document.name,
     template_version: document.template_version || "v1.0",
     expected_title: document.expected_title || "",
-    min_ocr_confidence: document.min_ocr_confidence != null ? Number(document.min_ocr_confidence) : 0.9,
     accept_rotated: document.accept_rotated !== false,
-    accept_scanned_pdf: document.accept_scanned_pdf !== false,
     sample_url: document.sample_url ?? null,
     sample_original_filename: document.sample_original_filename || "",
     samples: Array.isArray(document.samples)
@@ -563,7 +526,7 @@ function normalizeConfiguration(raw: RawJson): OcrConfiguration {
       key: rule.key ?? rule.code,
       name: rule.name ?? rule.code ?? "Validation rule",
       rule_type: rule.rule_type ?? "required",
-      on_failure: rule.on_failure ?? "manual_review",
+      on_failure: rule.on_failure ?? "reject",
       threshold: rule.threshold ?? null,
       field_key: rule.field_key ?? rule.field?.code ?? fieldById.get(rule.field_id) ?? (typeof rule.value === "object" && rule.value ? rule.value.field ?? "" : ""),
       order: rule.order ?? rule.display_order ?? 0,
@@ -575,17 +538,17 @@ function normalizeConfiguration(raw: RawJson): OcrConfiguration {
     ...raw,
     document_types: documentTypes,
     settings: {
-      confidence_threshold: settings.confidence_threshold ?? 0.8,
-      name_similarity_threshold: settings.name_similarity_threshold ?? 0.85,
-      address_similarity_threshold: settings.address_similarity_threshold ?? 0.8,
       document_recency_days: settings.document_recency_days ?? settings.recency_days ?? 90,
       reject_blurry_images: settings.reject_blurry_images !== false,
-      send_uncertain_to_manual_review: settings.send_uncertain_to_manual_review !== false,
-      auto_approve_when_all_rules_pass: settings.auto_approve_when_all_rules_pass ?? settings.auto_approve_on_all_required_pass ?? true,
       outage_retry_enabled: settings.outage_retry_enabled !== false,
-      failure_action: settings.failure_action ?? "manual_review",
+      failure_action: normalizeFailureAction(settings.failure_action),
     },
   }
+}
+
+function normalizeFailureAction(value: unknown): OcrAdvancedSettings["failure_action"] {
+  if (value === "reject" || value === "request_resubmission") return value
+  return "reject"
 }
 
 function serializeConfiguration(configuration: OcrConfiguration) {
@@ -593,14 +556,7 @@ function serializeConfiguration(configuration: OcrConfiguration) {
     revision: configuration.revision,
     notes: (configuration as OcrConfiguration & { notes?: string }).notes,
     settings: {
-      confidence_threshold: configuration.settings.confidence_threshold,
-      name_similarity_threshold: configuration.settings.name_similarity_threshold,
-      address_similarity_threshold: configuration.settings.address_similarity_threshold,
       recency_days: configuration.settings.document_recency_days,
-      manual_review_on_low_confidence: configuration.settings.send_uncertain_to_manual_review,
-      manual_review_on_missing_fields: true,
-      manual_review_on_rule_mismatch: true,
-      auto_approve_on_all_required_pass: configuration.settings.auto_approve_when_all_rules_pass,
       failure_action: configuration.settings.failure_action,
     },
     document_types: configuration.document_types.map((document) => {
@@ -621,24 +577,22 @@ function serializeConfiguration(configuration: OcrConfiguration) {
         required_sides: sides,
         requires_front: sides.includes("front"),
         requires_back: sides.includes("back"),
-        min_files: needsBoth ? Math.max(document.min_files ?? 2, 2) : document.min_files ?? 1,
-        max_files: needsBoth ? Math.max(document.max_files ?? 2, 2) : document.max_files ?? 1,
+        min_files: needsBoth ? Math.min(Math.max(document.min_files ?? 2, 2), 2) : Math.min(document.min_files ?? 1, 2),
+        max_files: needsBoth ? Math.min(Math.max(document.max_files ?? 2, 2), 2) : Math.min(document.max_files ?? 1, 2),
         max_file_size_bytes: document.max_file_size_bytes ?? 10 * 1024 * 1024,
         accepted_mime_types: document.accepted_mime_types?.length
           ? document.accepted_mime_types
-          : ["image/jpeg", "image/png"],
+          : ["image/jpeg", "image/png", "image/webp"],
         accepted_extensions: document.accepted_extensions?.length
           ? document.accepted_extensions
-          : ["jpg", "jpeg", "png"],
+          : ["jpg", "jpeg", "png", "webp"],
         keywords: document.keywords ?? [],
         provider_names: document.provider_keywords ?? [],
         provider_keywords: document.provider_keywords ?? [],
         template_name: document.template_name || document.name,
         template_version: document.template_version || "v1.0",
         expected_title: document.expected_title || "",
-        min_ocr_confidence: document.min_ocr_confidence ?? 0.9,
         accept_rotated: document.accept_rotated !== false,
-        accept_scanned_pdf: document.accept_scanned_pdf !== false,
         template_settings: document.template_settings || {},
         fields: document.fields.map((field) => {
           const side = resolveFieldSide(field)
@@ -659,7 +613,6 @@ function serializeConfiguration(configuration: OcrConfiguration) {
             sides: [side],
             display_order: field.order,
             order: field.order,
-            min_confidence: field.min_confidence ?? 0.8,
             normalization: field.normalization ?? "none",
             format: field.format ?? "none",
             extraction_hints: hints,
@@ -689,7 +642,7 @@ function serializeConfiguration(configuration: OcrConfiguration) {
             value: rule.value ?? null,
             threshold: rule.threshold ?? null,
             enabled: rule.enabled !== false,
-            on_failure: rule.on_failure ?? "manual_review",
+            on_failure: rule.on_failure ?? "reject",
             display_order: rule.order,
             order: rule.order,
             document_type: document.key,
@@ -722,13 +675,13 @@ function proofOptionsFrom(payload: ResidenceProofOption[] | ListEnvelope<Residen
       enabled: option.enabled !== false,
       min_files: option.min_files ?? (needsBoth ? 2 : 1),
       max_files: Math.max(option.max_files ?? 1, needsBoth ? 2 : 1, required_sides.length || 1),
-      max_file_size_bytes: option.max_file_size_bytes ?? 2 * 1024 * 1024,
+      max_file_size_bytes: option.max_file_size_bytes ?? 10 * 1024 * 1024,
       accepted_mime_types: option.accepted_mime_types?.length
         ? option.accepted_mime_types
-        : ["image/png", "image/jpeg"],
+        : ["image/png", "image/jpeg", "image/webp"],
       accepted_extensions: option.accepted_extensions?.length
         ? option.accepted_extensions
-        : ["png", "jpg", "jpeg"],
+        : ["png", "jpg", "jpeg", "webp"],
       required_fields: option.required_fields?.length
         ? option.required_fields
         : (backend.fields ?? [])
@@ -893,41 +846,6 @@ export async function fetchTemplateSampleBlob(sampleUrl: string) {
 export async function listOcrTests() {
   const payload = await apiRequest<OcrTestResult[] | ListEnvelope<OcrTestResult>>("/auth/ocr/tests/")
   return listFrom(payload)
-}
-
-export async function listVerificationCases(filters: { status?: string; search?: string } = {}) {
-  const params = new URLSearchParams()
-  if (filters.status && filters.status !== "all") params.set("status", filters.status)
-  if (filters.search?.trim()) params.set("search", filters.search.trim())
-  const query = params.toString() ? `?${params.toString()}` : ""
-  const payload = await apiRequest<ResidenceVerificationCase[] | ListEnvelope<ResidenceVerificationCase>>(
-    `/auth/ocr/verification-cases/${query}`,
-  )
-  return listFrom(payload)
-}
-
-export function getVerificationCase(id: number | string) {
-  return apiRequest<ResidenceVerificationCase>(`/auth/ocr/verification-cases/${id}/`)
-}
-
-export function approveVerificationCase(id: number, note: string) {
-  return apiRequest<ResidenceVerificationCase>(`/auth/ocr/verification-cases/${id}/decision/`, {
-    method: "POST",
-    body: JSON.stringify({ decision: "approve", reason: note }),
-  })
-}
-
-export function rejectVerificationCase(id: number, reason: string) {
-  return apiRequest<ResidenceVerificationCase>(`/auth/ocr/verification-cases/${id}/decision/`, {
-    method: "POST",
-    body: JSON.stringify({ decision: "reject", reason }),
-  })
-}
-
-export function retryVerificationCase(id: number) {
-  return apiRequest<ResidenceVerificationCase>(`/auth/ocr/verification-cases/${id}/retry/`, {
-    method: "POST",
-  })
 }
 
 export async function listOcrAudit() {

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { ChevronLeftIcon, XIcon } from "lucide-react"
+import { ChevronLeftIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, XIcon } from "lucide-react"
 
 import { Sheet, SheetContent } from "@workspace/ui/components/sheet"
 import { cn } from "@workspace/ui/lib/utils"
@@ -16,10 +16,13 @@ import { useIsDesktop } from "@/features/dashboard/lib/shell"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { websocketTicket, websocketUrl } from "@/lib/api"
 
+import { streetOnly } from "@/features/dashboard/lib/location-text"
+
 import { AlertsLeafletMap } from "@/features/dashboard/components/alerts-map/leaflet-map"
 import { DetailPanel } from "@/features/dashboard/components/alerts-map/detail-panel"
 import {
   isActiveConcern,
+  isResolvedRecord,
   isActiveEmergency,
   defaultLayers,
   formatTime,
@@ -58,8 +61,8 @@ function AlertsList({
     return (
       <div className="flex min-h-0 flex-col text-white">
         <div className="shrink-0 px-4 pb-2 pt-0.5 text-center">
-          <p className="text-[10px] font-black uppercase tracking-[0.16em] text-white/50">
-            Marikina Heights
+          <p className="text-[10px] font-semibold text-white/50">
+            Alerts in Marikina Heights
           </p>
         </div>
       </div>
@@ -69,8 +72,8 @@ function AlertsList({
   return (
     <div className="flex min-h-0 flex-col text-white">
       <div className="shrink-0 px-4 pt-3.5 text-center">
-        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-white/40">
-          Marikina Heights
+        <p className="text-[10px] font-semibold text-white/40">
+          Alerts in Marikina Heights
         </p>
       </div>
 
@@ -157,6 +160,7 @@ export default function AlertsMapPage() {
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState("")
   const [layers, setLayers] = useState(defaultLayers)
+  const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [selected, setSelected] = useState<Selection>(() => {
     const alertId = Number(new URLSearchParams(window.location.search).get("alert"))
     return Number.isInteger(alertId) && alertId > 0 ? { kind: "emergency", id: alertId } : null
@@ -181,6 +185,14 @@ export default function AlertsMapPage() {
   function onSheetPointerMove(event: React.PointerEvent<HTMLButtonElement>) {
     const drag = dragRef.current
     if (!drag) return
+    // Guard against a stale drag: if no button is held, the pointer is only
+    // hovering, and the sheet must not follow the cursor. This is the bug where
+    // the sheet "moved on its own" — the drag ref outlived the press.
+    if (event.buttons === 0) {
+      dragRef.current = null
+      setDragging(false)
+      return
+    }
     // Dragging up grows the sheet, so the delta is inverted.
     const delta = drag.startY - event.clientY
     if (Math.abs(delta) > 4) drag.moved = true
@@ -192,6 +204,17 @@ export default function AlertsMapPage() {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
+    const drag = dragRef.current
+    // A tap (no real movement) toggles between the two useful snap points
+    // instead of leaving the sheet wherever a stray pixel of drag left it.
+    if (drag && !drag.moved) {
+      const { min, max } = sheetBounds()
+      const expanded = Math.round(max * 0.6)
+      setSheetHeight((current) => (current > min + 24 ? min : expanded))
+    }
+    // Always clear the drag ref, so a later hover over the grab bar cannot move
+    // the sheet.
+    dragRef.current = null
     setDragging(false)
   }
 
@@ -264,27 +287,43 @@ export default function AlertsMapPage() {
 
   // Memoised: this was recomputed on every render, handing a fresh array
   // identity to the two useMemos below and stopping either from ever hitting.
-  const visibleConcerns = useMemo(
-    () => snapshot?.concerns.filter(isActiveConcern) ?? [],
+  const resolvedRecords = useMemo(
+    () => ({
+      concerns: snapshot?.concerns.filter(isResolvedRecord) ?? [],
+      emergencies: snapshot?.emergencies.filter(isResolvedRecord) ?? [],
+    }),
     [snapshot],
   )
-  const visibleEmergencies = useMemo(
-    () => snapshot?.emergencies.filter(isActiveEmergency) ?? [],
-    [snapshot],
-  )
+  const visibleConcerns = useMemo(() => {
+    const active = snapshot?.concerns.filter(isActiveConcern) ?? []
+    return layers.resolved ? [...active, ...resolvedRecords.concerns] : active
+  }, [snapshot, layers.resolved, resolvedRecords])
+  const visibleEmergencies = useMemo(() => {
+    const active = snapshot?.emergencies.filter(isActiveEmergency) ?? []
+    return layers.resolved ? [...active, ...resolvedRecords.emergencies] : active
+  }, [snapshot, layers.resolved, resolvedRecords])
   const mapSelectedStreetNames = useMemo(() => new Set<string>(), [])
 
-  function toggleLayer(key: LayerKey) {
+  const toggleLayer = useCallback((key: LayerKey) => {
     setLayers((current) => ({ ...current, [key]: !current[key] }))
-  }
+  }, [])
 
-  function updateEmergency(next: LiveMapEmergency) {
+  const resetLayers = useCallback(() => setLayers(defaultLayers), [])
+
+  const selectOnMap = useCallback((next: Selection) => {
+    setPanelCollapsed(false)
+    setSelected(next)
+  }, [])
+
+  const clearSelection = useCallback(() => setSelected(null), [])
+
+  const updateEmergency = useCallback((next: LiveMapEmergency) => {
     setSnapshot((current) => current ? { ...current, emergencies: current.emergencies.map((item) => item.id === next.id ? next : item) } : current)
-  }
+  }, [])
 
-  function updatePolicy(next: MapDispatchPolicy) {
+  const updatePolicy = useCallback((next: MapDispatchPolicy) => {
     setSnapshot((current) => current ? { ...current, map: { ...current.map, dispatch_policy: next } } : current)
-  }
+  }, [])
 
   const filteredConcerns = useMemo(() => {
     if (!snapshot) return []
@@ -301,12 +340,12 @@ export default function AlertsMapPage() {
       // Was iterating snapshot.emergencies raw, so resolved and cancelled
       // incidents stayed in the live feed alongside active ones.
       for (const em of visibleEmergencies) {
-        items.push({ kind: "emergency", id: em.id, title: `${em.type} emergency`, sub: em.address || em.barangay, time: em.created_at })
+        items.push({ kind: "emergency", id: em.id, title: `${em.type} emergency`, sub: streetOnly(em.address?.trim()) || (em.barangay ? `In ${em.barangay}` : ""), time: em.created_at })
       }
     }
     if (feedChip !== "emergencies") {
       for (const c of filteredConcerns) {
-        items.push({ kind: "concern", id: c.id, title: c.title, sub: c.address || c.barangay, time: c.created_at, priority: c.priority })
+        items.push({ kind: "concern", id: c.id, title: c.title, sub: streetOnly(c.address?.trim()) || (c.barangay ? `In ${c.barangay}` : ""), time: c.created_at, priority: c.priority })
       }
     }
     items.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
@@ -335,9 +374,10 @@ export default function AlertsMapPage() {
       officials: byRole("barangay_official"),
       emergencies: visibleEmergencies.length,
       concerns: visibleConcerns.length,
-      routes: snapshot.routes.filter((route) => route.status === "ok").length,
+      advisories: (snapshot.advisories ?? []).length,
+      resolved: resolvedRecords.concerns.length + resolvedRecords.emergencies.length,
     }
-  }, [snapshot, visibleConcerns, visibleEmergencies])
+  }, [snapshot, visibleConcerns, visibleEmergencies, resolvedRecords])
 
   if (!loaded) {
     // Needs `h-full` for the same reason the real return below does (see the
@@ -350,22 +390,22 @@ export default function AlertsMapPage() {
   // Gated on the JS `isDesktop` flag (not just the `lg:block` CSS class) so the
   // DetailPanel — which fetches incident details and mounts the chat panel — isn't
   // double-mounted alongside the mobile Sheet's DetailPanel below.
-  const desktopPanelBody = !isDesktop ? null : selected ? (
+  const desktopPanelBody = !isDesktop || panelCollapsed ? null : selected ? (
     selected.kind === "emergency" || selected.kind === "concern" ? (
       <div className="flex min-h-0 flex-col">
         <div className="flex shrink-0 items-center gap-1 border-b border-white/10 px-2 py-2">
-          <button type="button" onClick={() => setSelected(null)} className="flex size-8 shrink-0 items-center justify-center rounded-lg text-white/60 transition-colors hover:bg-white/10 hover:text-white" aria-label="Back to the alert list"><ChevronLeftIcon className="size-4.5" strokeWidth={2.25} /></button>
-          <p className="min-w-0 flex-1 truncate text-left text-[13px] font-bold text-white/70">{selected.kind === "emergency" ? "Emergency" : "Concern"}</p>
-          <button type="button" onClick={() => setSelected(null)} className="flex size-8 shrink-0 items-center justify-center rounded-lg text-white/60 transition-colors hover:bg-white/10 hover:text-white" aria-label="Close"><XIcon className="size-4" /></button>
+          <button type="button" onClick={clearSelection} className="flex size-8 shrink-0 items-center justify-center rounded-lg text-white/60 transition-colors hover:bg-white/10 hover:text-white" aria-label="Back to the alert list"><ChevronLeftIcon className="size-4.5" strokeWidth={2.25} /></button>
+          <p className="min-w-0 flex-1 truncate text-left text-[13px] font-semibold text-white/60">{selected.kind === "emergency" ? "Emergency" : "Concern"}</p>
+          <button type="button" onClick={clearSelection} className="flex size-8 shrink-0 items-center justify-center rounded-lg text-white/60 transition-colors hover:bg-white/10 hover:text-white" aria-label="Close"><XIcon className="size-4" /></button>
         </div>
-        {/* The detail panel is built for a light surface, so it keeps its own
-            white card rather than inheriting the glass. */}
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white p-2 [scrollbar-width:thin]">
-          {snapshot ? <DetailPanel selected={selected} snapshot={snapshot} onClose={() => setSelected(null)} onEmergencyUpdated={updateEmergency} /> : null}
+        {/* The panel sits directly on the glass. It used to draw a white card
+            inside the navy rail, which is what made it read as cramped. */}
+        <div className="staff-dark min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-width:thin]">
+          {snapshot ? <DetailPanel selected={selected} snapshot={snapshot} onClose={clearSelection} onEmergencyUpdated={updateEmergency} /> : null}
         </div>
       </div>
     ) : (
-      snapshot ? <div className="min-h-0 overflow-y-auto bg-white p-2">{<DetailPanel selected={selected} snapshot={snapshot} onClose={() => setSelected(null)} onEmergencyUpdated={updateEmergency} />}</div> : null
+      snapshot ? <div className="staff-dark min-h-0 overflow-y-auto">{<DetailPanel selected={selected} snapshot={snapshot} onClose={clearSelection} onEmergencyUpdated={updateEmergency} />}</div> : null
     )
   ) : (
     <AlertsList feedChips={feedChips} feedChip={feedChip} onFeedChipChange={setFeedChip} feedItems={feedItems} onSelect={setSelected} />
@@ -400,9 +440,9 @@ export default function AlertsMapPage() {
           layers={layers}
           selected={selected}
           selectedStreetNames={mapSelectedStreetNames}
-          onSelect={setSelected}
+          onSelect={selectOnMap}
           onToggleLayer={toggleLayer}
-          onResetLayers={() => setLayers(defaultLayers)}
+          onResetLayers={resetLayers}
           onPolicyUpdated={updatePolicy}
           counts={mapCounts}
         />
@@ -418,10 +458,33 @@ export default function AlertsMapPage() {
       ) : null}
 
       {/* Desktop: the feed floats over the map instead of cutting a rail. */}
-      <div className="pointer-events-none absolute inset-y-3 left-3 z-[600] hidden w-[19rem] lg:block">
-        <div className="pointer-events-auto flex max-h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-nav-bg/85 backdrop-blur-md">
-          {desktopPanelBody}
-        </div>
+      <div className="pointer-events-none absolute inset-y-3 left-3 z-[600] hidden lg:block">
+        {panelCollapsed ? (
+          <button
+            type="button"
+            onClick={() => setPanelCollapsed(false)}
+            aria-label="Show the alert list"
+            aria-expanded={false}
+            className="pointer-events-auto flex size-10 items-center justify-center rounded-xl border border-white/10 bg-nav-bg/85 text-white/75 backdrop-blur-md transition-colors hover:bg-nav-raised/80 hover:text-white"
+          >
+            <PanelLeftOpenIcon className="size-5" strokeWidth={2.1} />
+          </button>
+        ) : (
+          <div className="pointer-events-auto flex max-h-full min-h-0 w-[19rem] flex-col overflow-hidden rounded-2xl border border-white/10 bg-nav-bg/85 backdrop-blur-md">
+            <div className="flex shrink-0 items-center justify-end border-b border-white/10 px-2 py-1.5">
+              <button
+                type="button"
+                onClick={() => setPanelCollapsed(true)}
+                aria-label="Hide the alert list"
+                aria-expanded
+                className="flex size-7 items-center justify-center rounded-lg text-white/55 transition-colors hover:bg-white/10 hover:text-white"
+              >
+                <PanelLeftCloseIcon className="size-4.5" strokeWidth={2.1} />
+              </button>
+            </div>
+            {desktopPanelBody}
+          </div>
+        )}
       </div>
 
       {/* Mobile: back out of the map without hunting for the bottom nav, which
@@ -481,9 +544,9 @@ export default function AlertsMapPage() {
               no way to reach it, which read as the details failing to load.
               `overscroll-contain` stops the scroll chaining through to the map
               underneath once the body hits its end. */}
-          <SheetContent side="bottom" className="flex max-h-[85vh] flex-col">
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4">
-              {snapshot && selected ? <DetailPanel selected={selected} snapshot={snapshot} onClose={() => setSelected(null)} onEmergencyUpdated={updateEmergency} /> : null}
+          <SheetContent side="bottom" className="staff-dark flex max-h-[85vh] flex-col border-card-line bg-nav-bg">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4">
+              {snapshot && selected ? <DetailPanel selected={selected} snapshot={snapshot} onClose={clearSelection} onEmergencyUpdated={updateEmergency} /> : null}
             </div>
           </SheetContent>
         </Sheet>

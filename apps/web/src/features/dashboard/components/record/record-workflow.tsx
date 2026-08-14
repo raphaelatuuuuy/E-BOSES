@@ -1,5 +1,6 @@
 import { UserCheckIcon } from "lucide-react"
 
+import { cn } from "@workspace/ui/lib/utils"
 import type { RecordAction, RecordTrackStep, RecordView } from "./types"
 
 /**
@@ -36,8 +37,8 @@ function Track({ steps }: { steps: RecordTrackStep[] }) {
               <span
                 className={
                   current
-                    ? "text-[10px] font-bold uppercase tracking-wide text-brand-orange-strong"
-                    : "text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+                    ? "text-[10px] font-bold text-brand-orange-strong"
+                    : "text-[10px] font-semibold text-muted-foreground"
                 }
               >
                 {step.label}
@@ -95,6 +96,7 @@ export function RecordWorkflow({
   record,
   showAssignee = true,
   showTrack = true,
+  embedded = false,
 }: {
   record: RecordView
   /**
@@ -105,11 +107,15 @@ export function RecordWorkflow({
    */
   showAssignee?: boolean
   showTrack?: boolean
+  /** Render as a band inside a unified dossier card, without its own border. */
+  embedded?: boolean
 }) {
   const [primary, ...rest] = record.actions
+  // Nothing to render — don't draw an empty band inside the unified card.
+  if (!showTrack && !showAssignee && record.actions.length === 0) return null
 
   return (
-    <section className="space-y-4 rounded-panel border border-card-line bg-card p-4">
+    <section className={cn("space-y-4 bg-card p-4", !embedded && "rounded-panel border border-card-line")}>
       {showTrack ? <Track steps={record.track} /> : null}
 
       {showAssignee ? (

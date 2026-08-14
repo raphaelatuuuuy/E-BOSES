@@ -1,16 +1,31 @@
-import { useCallback, useEffect, useRef, useState } from "react"
-import { DownloadIcon, Loader2Icon, PaperclipIcon, SendIcon, UsersIcon, XIcon } from "lucide-react"
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import {
+  ChevronUpIcon,
+  Loader2Icon,
+  MicIcon,
+  PaperclipIcon,
+  PlayIcon,
+  SendIcon,
+  SquareIcon,
+  XIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
+import { initialsFor, roleLabel } from "@/features/dashboard/lib/people"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Message, MessageAvatar, MessageContent, MessageFooter } from "@/components/ui/message"
 import { websocketTicket, websocketUrl } from "@/lib/api"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { checkConcernMedia, type PublicUser } from "@/features/dashboard/api"
-import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
-import { openAuthenticatedMedia } from "@/features/dashboard/lib/authenticated-media"
+import { checkConcernMedia } from "@/features/dashboard/api"
+import {
+  AuthenticatedMediaImage,
+  MediaLightbox,
+} from "@/features/dashboard/components/authenticated-media"
+import { type MediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
+import { VoiceNoteBubble } from "@/features/dashboard/components/voice-note-bubble"
+import { useVoiceRecorder, formatVoiceTime } from "@/features/dashboard/lib/use-voice-recorder"
 import {
   listEmergencyChat,
   sendEmergencyChat,
@@ -24,35 +39,17 @@ function formatChatTime(value: string) {
   }).format(new Date(value))
 }
 
-function unitLabel(unit?: string) {
-  if (unit === "tanod") return "Tanod"
-  if (unit === "bhw") return "BHW"
-  if (unit === "bdrrmo") return "BDRRMO"
-  return ""
-}
-
-function roleLabel(user?: PublicUser | null) {
-  if (!user) return ""
-  if (user.role === "resident") return "Resident"
-  const unit = unitLabel(user.responder_unit)
-  if (unit) return unit
-  if (user.role === "first_responder") return "Responder"
-  if (user.role === "barangay_official") return "Official"
-  return user.role?.replace(/_/g, " ") || ""
-}
-function initialsFor(user?: PublicUser | null) {
-  return (user?.initials || user?.full_name?.split(/\s+/).map((part) => part[0]).join("") || "U").slice(0, 2).toUpperCase()
-}
+const HISTORY_PAGE_SIZE = 30
 
 export function EmergencyChatPanel({
    alertId,
    open,
    disabled,
    incomingMessage,
-   participantHint,
    realtime = true,
    theme = "dark",
    scrollable = true,
+   bare = false,
    className,
  }: {
    alertId: number
@@ -61,29 +58,29 @@ export function EmergencyChatPanel({
    disabled?: boolean
    /** Real-time message from websocket parent */
    incomingMessage?: EmergencyChatMessage | null
-   /** e.g. "2 responders in this room" */
-   participantHint?: string
    /** Disable when a parent tracking socket already supplies incomingMessage. */
    realtime?: boolean
    /** dark = resident SOS dock; light = responder/official ops */
    theme?: "dark" | "light"
-   /** When false, remove scroll constraints (for SOS dialog context). */
+   /** When false, cap the thread at a fixed 340px with its own scrollbar. */
   scrollable?: boolean
+  /** Bare = host surface already supplies the chrome; drop the card wrapper. */
+  bare?: boolean
   className?: string
 }) {
   const { user } = useAuthSession()
   const [messages, setMessages] = useState<EmergencyChatMessage[]>([])
   const [draft, setDraft] = useState("")
   const [loading, setLoading] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [hasOlder, setHasOlder] = useState(false)
   const [loadError, setLoadError] = useState("")
-  const [connectionState, setConnectionState] = useState<"connecting" | "live" | "polling">("connecting")
   const [sending, setSending] = useState(false)
   const [attachment, setAttachment] = useState<File | null>(null)
-  const [previewMedia, setPreviewMedia] = useState<{ src: string; filename: string } | null>(null)
+  const [previewMedia, setPreviewMedia] = useState<MediaPreviewItem | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const isDark = theme === "dark"
   const userId = user?.id
-
   const isMine = useCallback(
     (msg: EmergencyChatMessage) => {
       if (userId != null && msg.sender?.id != null) {
@@ -105,8 +102,9 @@ export function EmergencyChatPanel({
     setLoading(true)
     setLoadError("")
     try {
-      const next = await listEmergencyChat(alertId)
+      const next = await listEmergencyChat(alertId, { limit: HISTORY_PAGE_SIZE })
       setMessages(next)
+      setHasOlder(next.length === HISTORY_PAGE_SIZE)
       scrollToBottom()
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not load chat."
@@ -116,6 +114,20 @@ export function EmergencyChatPanel({
       setLoading(false)
     }
   }, [alertId, open, scrollToBottom])
+
+  const loadOlder = useCallback(async () => {
+    if (!messages.length || loadingOlder) return
+    setLoadingOlder(true)
+    try {
+      const older = await listEmergencyChat(alertId, { beforeId: messages[0].id, limit: HISTORY_PAGE_SIZE })
+      setMessages((prev) => [...older, ...prev])
+      setHasOlder(older.length === HISTORY_PAGE_SIZE)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not load earlier messages.")
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [alertId, loadingOlder, messages])
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0)
@@ -130,7 +142,6 @@ export function EmergencyChatPanel({
     let attempts = 0
 
     async function connect() {
-      setConnectionState("connecting")
       try {
         const ticket = await websocketTicket()
         if (closed) return
@@ -138,14 +149,12 @@ export function EmergencyChatPanel({
           websocketUrl(`/ws/emergencies/${alertId}/tracking/?ticket=${encodeURIComponent(ticket)}`),
         )
       } catch {
-        setConnectionState("polling")
         attempts += 1
         reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** attempts))
         return
       }
       socket.onopen = () => {
         attempts = 0
-        setConnectionState("live")
       }
       socket.onmessage = (event) => {
         try {
@@ -160,7 +169,6 @@ export function EmergencyChatPanel({
       }
       socket.onclose = () => {
         if (closed) return
-        setConnectionState("polling")
         attempts += 1
         reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** attempts))
       }
@@ -182,7 +190,8 @@ export function EmergencyChatPanel({
         .then((next) => {
           setMessages((prev) => {
             if (next.length === prev.length && next.at(-1)?.id === prev.at(-1)?.id) return prev
-            return next
+            const knownIds = new Set(prev.map((message) => message.id))
+            return [...prev, ...next.filter((message) => !knownIds.has(message.id))]
           })
         })
         .catch(() => {
@@ -208,12 +217,11 @@ export function EmergencyChatPanel({
     scrollToBottom()
   }, [messages.length, scrollToBottom])
 
-  async function handleSend() {
-    const body = draft.trim()
-    if ((!body && !attachment) || sending || disabled) return
+  async function sendMessage(bodyText: string, file: File | null): Promise<boolean> {
+    if ((!bodyText.trim() && !file) || sending || disabled) return false
     setSending(true)
     try {
-      const created = await sendEmergencyChat(alertId, body, attachment)
+      const created = await sendEmergencyChat(alertId, bodyText, file)
       setDraft("")
       setAttachment(null)
       setLoadError("")
@@ -222,11 +230,34 @@ export function EmergencyChatPanel({
         return [...prev, created]
       })
       scrollToBottom()
+      return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not send message.")
+      return false
     } finally {
       setSending(false)
     }
+  }
+
+  async function handleSend() {
+    await sendMessage(draft, attachment)
+  }
+
+  const {
+    recording,
+    recordSeconds,
+    levels,
+    readyFile,
+    durationSeconds,
+    startRecording,
+    stopRecording,
+    cancelRecording,
+    discardRecording,
+  } = useVoiceRecorder()
+
+  async function sendReadyVoiceNote() {
+    if (!readyFile) return
+    if (await sendMessage("", readyFile)) discardRecording()
   }
 
   async function chooseAttachment(file: File | null) {
@@ -249,54 +280,38 @@ export function EmergencyChatPanel({
       toast.error(error instanceof Error ? error.message : "This media failed authenticity checks and cannot be sent.")
     }
   }
+
   return (
     <div
       className={cn(
-        "flex max-h-[400px] flex-col overflow-hidden rounded-xl border",
-        isDark ? "border-white/10 bg-white/10" : "border-slate-200 bg-white",
+        "flex min-h-0 flex-col",
+        !bare && "overflow-hidden rounded-xl border",
+        !bare && (isDark ? "border-white/10 bg-white/10" : "border-slate-200 bg-white"),
         className,
       )}
     >
-      <div
-        className={cn(
-          "flex items-center justify-between gap-2 border-b px-3 py-2.5",
-          isDark ? "border-white/10" : "border-slate-100",
-        )}
-      >
-        <div className="min-w-0">
-          <p
-            className={cn(
-              "text-[12px] font-semibold tracking-wide uppercase",
-              isDark ? "text-white/60" : "text-subtle-foreground",
-            )}
-          >
-            Live chat
-          </p>
-          <p
-            className={cn(
-              "flex items-center gap-1 text-[11px]",
-              isDark ? "text-white/45" : "text-subtle-foreground",
-            )}
-          >
-            <UsersIcon className="size-3 shrink-0" />
-            <span className="truncate">
-              {participantHint || "Group room · resident + assigned responders"}
-            </span>
-            <span aria-hidden="true"> · </span>
-            <span>{!realtime ? "Live tracking" : connectionState === "live" ? "Live" : connectionState === "connecting" ? "Connecting" : "Polling"}</span>
-          </p>
-        </div>
-        {loading ? (
-          <Loader2Icon
-            className={cn("size-4 animate-spin", isDark ? "text-white/50" : "text-slate-400")}
-          />
+      <div className={cn("scrollbar-hide min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 py-3", !scrollable && "max-h-[340px]")}>
+        {hasOlder ? (
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={() => void loadOlder()}
+              disabled={loadingOlder}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-semibold transition-colors disabled:opacity-60",
+                isDark
+                  ? "border-white/15 text-white/75 hover:border-white/35 hover:text-white"
+                  : "border-neutral-200 text-neutral-600 hover:border-neutral-400 hover:text-neutral-900",
+              )}
+            >
+              {loadingOlder ? <Loader2Icon className="size-3.5 animate-spin" /> : <ChevronUpIcon className="size-3.5" />}
+              {loadingOlder ? "Loading..." : "Load previous messages"}
+            </button>
+          </div>
         ) : null}
-      </div>
-
-       <div className={cn("min-h-0 flex-1 space-y-3 px-3 py-3", scrollable && "overflow-y-auto max-h-[400px]")}>
         {loadError && messages.length === 0 && !loading ? (
           <div className="py-6 text-center">
-            <p className={cn("text-[12px]", isDark ? "text-red-200" : "text-red-600")}>{loadError}</p>
+            <p className={cn("text-[12px]", isDark ? "text-sos" : "text-sos")}>{loadError}</p>
             <button type="button" onClick={() => void load()} className={cn("mt-2 rounded-lg border px-3 py-1.5 text-xs font-bold", isDark ? "border-white/20 text-white" : "border-slate-200 text-brand-navy")}>Try again</button>
           </div>
         ) : messages.length === 0 && !loading ? (
@@ -316,48 +331,96 @@ export function EmergencyChatPanel({
           const name = msg.sender?.full_name || "User"
           const role = roleLabel(msg.sender)
           const footer = [mine ? "You" : name, !mine && role ? role : "", formatChatTime(msg.created_at)].filter(Boolean).join(" · ")
-          if (!msg.body && msg.attachment && msg.attachment.authenticity !== "clear") return null
+          if (!msg.body && msg.attachment && msg.attachment.media_type !== "audio" && msg.attachment.authenticity !== "clear") return null
+          const attachment = msg.attachment
+          const attachmentVisible = Boolean(
+            attachment && (attachment.authenticity === "clear" || attachment.media_type === "audio"),
+          )
+          const mediaBlock = attachmentVisible ? (
+            <div className={cn(msg.body ? "mt-2" : undefined, "space-y-1")}>
+              {attachment!.media_type === "image" ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPreviewMedia({
+                      src: attachment!.preview_url || attachment!.raw_url,
+                      filename: attachment!.original_filename,
+                      kind: "image",
+                    })
+                  }
+                  className="block overflow-hidden rounded-lg text-left"
+                >
+                  <AuthenticatedMediaImage
+                    src={attachment!.preview_url || attachment!.raw_url}
+                    alt="Message attachment"
+                    className="max-h-40 max-w-full object-cover"
+                  />
+                </button>
+              ) : attachment!.media_type === "video" ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPreviewMedia({
+                      src: attachment!.raw_url,
+                      filename: attachment!.original_filename,
+                      kind: "video",
+                    })
+                  }
+                  className="text-current underline-offset-2 hover:underline"
+                >
+                  <PlayIcon className="size-3.5" />
+                  Preview video
+                </button>
+              ) : (
+                <VoiceNoteBubble
+                  url={attachment!.raw_url}
+                  filename={attachment!.original_filename}
+                  mine={mine}
+                  isDark={isDark}
+                  flat
+                />
+              )}
+              {attachment!.media_type !== "audio" ? (
+                <p className="text-[10px] opacity-70">
+                  Media review: {attachment!.authenticity}
+                </p>
+              ) : null}
+            </div>
+          ) : null
+
+          let content: ReactNode
+          if (!msg.body && attachment?.media_type === "audio") {
+            content = (
+              <VoiceNoteBubble
+                url={attachment.raw_url}
+                filename={attachment.original_filename}
+                mine={mine}
+                isDark={isDark}
+              />
+            )
+          } else {
+            content = (
+              <Bubble
+                variant={mine ? "default" : "muted"}
+                className={!mine && isDark ? "border-white/10 bg-white text-neutral-900" : undefined}
+              >
+                <BubbleContent>
+                  {msg.body ? <p>{msg.body}</p> : null}
+                  {mediaBlock}
+                </BubbleContent>
+              </Bubble>
+            )
+          }
+
           return (
             <Message key={msg.id} align={mine ? "end" : "start"}>
               <MessageAvatar>
-                <Avatar className={isDark ? "bg-white/15" : undefined}>                  <AvatarFallback className={isDark ? "bg-white/20 text-white" : undefined}>{initialsFor(msg.sender)}</AvatarFallback>
+                <Avatar className={isDark ? "bg-white/15" : undefined}>
+                  <AvatarFallback className={isDark ? "bg-white/20 text-white" : undefined}>{initialsFor(msg.sender)}</AvatarFallback>
                 </Avatar>
               </MessageAvatar>
               <MessageContent className={mine ? "items-end" : "items-start"}>
-                <Bubble
-                  variant={mine ? "default" : "muted"}
-                  className={!mine && isDark ? "border-white/10 bg-white text-neutral-900" : undefined}
-                >
-                  <BubbleContent>
-                    {msg.body ? <p>{msg.body}</p> : null}
-                    {msg.attachment && msg.attachment.authenticity === "clear" ? (
-                      <div className="mt-2 space-y-1">
-                        {msg.attachment.media_type === "image" && msg.attachment.preview_url ? (
-                          <button
-                            type="button"
-                            onClick={() => setPreviewMedia({ src: msg.attachment!.preview_url || msg.attachment!.raw_url, filename: msg.attachment!.original_filename })}
-                            className="block overflow-hidden rounded-lg text-left"
-                          >
-                            <AuthenticatedMediaImage
-                              src={msg.attachment.preview_url}
-                              alt={msg.attachment.original_filename}
-                              className="max-h-40 max-w-full object-cover"
-                            />
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className="text-left text-[12px] underline"
-                            onClick={() => void openAuthenticatedMedia(msg.attachment!.raw_url, msg.attachment!.original_filename)}
-                          >
-                            Open {msg.attachment.original_filename}
-                          </button>
-                        )}
-                        <p className="text-[10px] opacity-70">Media review: {msg.attachment.authenticity}</p>
-                      </div>
-                    ) : null}
-                  </BubbleContent>
-                </Bubble>
+                {content}
                 <MessageFooter className={cn(mine ? "text-right" : "text-left", isDark && "text-white/40")}>{footer}</MessageFooter>
               </MessageContent>
             </Message>
@@ -366,15 +429,7 @@ export function EmergencyChatPanel({
         <div ref={bottomRef} />
       </div>
       {previewMedia ? (
-        <div className="fixed inset-0 z-[260] flex items-center justify-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Emergency chat image preview" onClick={() => setPreviewMedia(null)}>
-          <div className="flex max-h-[90vh] max-w-[92vw] flex-col items-center gap-3" onClick={(event) => event.stopPropagation()}>
-            <AuthenticatedMediaImage src={previewMedia.src} alt={previewMedia.filename} className="max-h-[78vh] max-w-[90vw] rounded-xl object-contain" />
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={() => void openAuthenticatedMedia(previewMedia.src, previewMedia.filename)} className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white hover:bg-white/20"><DownloadIcon className="size-4" />Download</button>
-              <button type="button" onClick={() => setPreviewMedia(null)} className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white hover:bg-white/20"><XIcon className="size-4" />Close</button>
-            </div>
-          </div>
-        </div>
+        <MediaLightbox items={[previewMedia]} index={0} onClose={() => setPreviewMedia(null)} />
       ) : null}
 
       {!disabled ? (
@@ -384,6 +439,63 @@ export function EmergencyChatPanel({
             isDark ? "border-white/10" : "border-slate-100",
           )}
         >
+          {recording || readyFile ? (
+            <>
+              <div
+                className={cn(
+                  "flex h-12 min-w-0 flex-1 items-center gap-3 rounded-xl border px-4",
+                  recording
+                    ? isDark ? "border-sos/40 bg-sos/10 text-sos" : "border-sos/30 bg-sos/10 text-sos"
+                    : isDark ? "border-brand-orange/40 bg-brand-orange/10 text-brand-orange" : "border-brand-orange/30 bg-brand-orange/5 text-brand-orange",
+                )}
+                aria-label={recording ? `Recording ${formatVoiceTime(recordSeconds)}` : `Voice note ready, ${formatVoiceTime(durationSeconds)}`}
+              >
+                <span className={cn("size-2 shrink-0 rounded-full", recording ? (isDark ? "animate-pulse bg-sos" : "animate-pulse bg-sos") : "bg-brand-orange")} aria-hidden />
+                <span className="flex h-8 min-w-0 flex-1 items-center gap-[2px] overflow-hidden">
+                  {(levels.length ? levels : [0.2, 0.2, 0.2, 0.2]).map((level, index) => (
+                    <span key={index} className="w-[3px] shrink-0 rounded-full bg-current transition-[height] duration-100 ease-out" style={{ height: `${3 + level * 22}px` }} />
+                  ))}
+                </span>
+                <span className={cn("shrink-0 font-mono text-[13px] font-semibold tabular-nums", recording ? (isDark ? "text-sos" : "text-sos") : isDark ? "text-white" : "text-brand-navy")}>
+                  {formatVoiceTime(recording ? recordSeconds : durationSeconds)}
+                </span>
+              </div>
+              {recording ? (
+                <button
+                  type="button"
+                  onClick={() => void stopRecording()}
+                  aria-label="Stop recording"
+                  title="Stop recording"
+                  className="flex size-10 shrink-0 items-center justify-center rounded-full bg-sos text-white hover:bg-sos-bright"
+                >
+                  <SquareIcon className="size-4" fill="currentColor" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={sending}
+                  onClick={() => void sendReadyVoiceNote()}
+                  aria-label="Send voice note"
+                  className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
+                >
+                  {sending ? <Loader2Icon className="size-4 animate-spin" /> : <SendIcon className="size-4" />}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => (recording ? cancelRecording() : discardRecording())}
+                aria-label="Cancel voice note"
+                title="Cancel voice note"
+                className={cn(
+                  "flex size-10 shrink-0 items-center justify-center rounded-full",
+                  isDark ? "text-white/60 hover:bg-white/10 hover:text-white" : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700",
+                )}
+              >
+                <XIcon className="size-5" />
+              </button>
+            </>
+          ) : (
+            <>
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -394,14 +506,27 @@ export function EmergencyChatPanel({
               }
             }}
             rows={1}
-            placeholder="Message the group…"
+            placeholder="Enter a message"
             className={cn(
-              "max-h-24 min-h-10 flex-1 resize-none rounded-xl border px-3 py-2.5 text-[13px] outline-none focus:border-brand-orange",
+              "max-h-24 min-h-10 flex-1 resize-none rounded-xl border px-3 py-2.5 text-[13px] outline-none transition-all focus:border-brand-orange focus:ring-2 focus:ring-brand-orange/25",
               isDark
                 ? "border-white/15 bg-black/25 text-white placeholder:text-white/40"
                 : "border-slate-200 bg-canvas text-brand-navy placeholder:text-slate-400",
             )}
           />
+          <button
+            type="button"
+            onClick={() => void startRecording()}
+            disabled={sending}
+            aria-label="Record a voice note"
+            title="Record a voice note"
+            className={cn(
+              "flex size-10 shrink-0 items-center justify-center rounded-full disabled:opacity-50",
+              isDark ? "text-white/70 hover:bg-white/10" : "text-slate-500 hover:bg-slate-100",
+            )}
+          >
+            <MicIcon className="size-4" />
+          </button>
           <input
             id={`emergency-chat-media-${alertId}`}
             type="file"
@@ -414,7 +539,10 @@ export function EmergencyChatPanel({
           />
           <label
             htmlFor={`emergency-chat-media-${alertId}`}
-            className="flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-full border border-slate-200 text-slate-500 hover:bg-slate-50"
+            className={cn(
+              "flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-full",
+              isDark ? "text-white/70 hover:bg-white/10" : "text-slate-500 hover:bg-slate-100",
+            )}
             aria-label="Attach image or video"
           >
             <PaperclipIcon className="size-4" />
@@ -436,13 +564,15 @@ export function EmergencyChatPanel({
           ) : null}
           <button
             type="button"
-            disabled={sending || (!draft.trim() && !attachment)}
+            disabled={sending || recording || (!draft.trim() && !attachment)}
             onClick={() => void handleSend()}
             className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
             aria-label="Send message"
           >
             {sending ? <Loader2Icon className="size-4 animate-spin" /> : <SendIcon className="size-4" />}
           </button>
+            </>
+          )}
         </div>
       ) : (
         <p
@@ -457,11 +587,3 @@ export function EmergencyChatPanel({
     </div>
   )
 }
-
-
-
-
-
-
-
-

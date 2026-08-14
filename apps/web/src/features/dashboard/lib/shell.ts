@@ -18,28 +18,24 @@ export const SHELL_MAX_RESIDENT = 1600
 /** Official/responder ("staff") shell max width. */
 export const SHELL_MAX_STAFF = 1800
 
-/** Preferred (max) sidebar width at full size — resident feed shell. */
-export const SIDEBAR_W = 360
-/** Floor when zooming / narrow CSS viewport — keep nav readable without eating the main pane. */
-export const SIDEBAR_MIN = 220
+/**
+ * Unified sidebar width — resident, official and responder all share one fixed
+ * 248px rail. Three separate widths is what made the roles look different; the
+ * sidebar rewrite deliberately collapsed them into a single column.
+ */
+export const SIDEBAR_W = 248
+
+/** @deprecated every role now uses the single `SIDEBAR_W` column. */
+export const SIDEBAR_MIN = SIDEBAR_W
 
 /**
- * Staff (official/responder) sidebar: a fixed 232px navy panel with full text
- * labels, section headings and an account block pinned to the bottom.
- *
- * Labels (not an icon rail) because barangay staff are volunteers trained only
- * on Word and Excel (research.md, "Peopleware/Manpower") — icon-only navigation
- * would make them guess. 232px is wide enough for "Configuration" plus a count
- * badge and still leaves the resident shell's wider feed nav untouched.
+ * @deprecated the official and responder rails merged into the shared
+ * `SIDEBAR_W` / `SIDEBAR_MIN` column width.
  */
-export const SIDEBAR_W_STAFF = 232
+export const SIDEBAR_W_STAFF = SIDEBAR_W
 
-/**
- * Responder sidebar — wider than the official's 232px because it hosts the
- * identity block (avatar + name + position) and the centred nav group, which
- * need a little more air than the official's text rows.
- */
-export const SIDEBAR_W_RESPONDER = 248
+/** @deprecated see `SIDEBAR_W_STAFF`. */
+export const SIDEBAR_W_RESPONDER = SIDEBAR_W
 
 /**
  * Vertical space the mobile nav row occupies, including its safe-area padding.
@@ -67,24 +63,24 @@ export const CONTENT_MAX = FEED_MAX + CONTENT_GAP + RAIL_W
 /** Soft shell min at preferred sizes (not forced — see dashboard zoom min). */
 export const LAYOUT_MIN = SIDEBAR_W + CONTENT_MAX
 
-/**
- * Desktop vs. mobile shell hook — matchMedia(`min-width: DESKTOP_MIN_PX`).
- * Moved from dashboard.tsx's `useResidentDesktop` (identical behavior).
- */
-export function useIsDesktop() {
-  const [isDesktop, setIsDesktop] = React.useState(() =>
-    typeof window !== "undefined" ? window.innerWidth >= DESKTOP_MIN_PX : true,
+export function useMinWidth(px: number) {
+  const [matches, setMatches] = React.useState(() =>
+    typeof window !== "undefined" ? window.innerWidth >= px : true,
   )
 
   React.useEffect(() => {
-    const mq = window.matchMedia(`(min-width: ${DESKTOP_MIN_PX}px)`)
-    const apply = () => setIsDesktop(mq.matches)
+    const mq = window.matchMedia(`(min-width: ${px}px)`)
+    const apply = () => setMatches(mq.matches)
     apply()
     mq.addEventListener("change", apply)
     return () => mq.removeEventListener("change", apply)
-  }, [])
+  }, [px])
 
-  return isDesktop
+  return matches
+}
+
+export function useIsDesktop() {
+  return useMinWidth(DESKTOP_MIN_PX)
 }
 
 export type ShellRole = "resident" | "official" | "responder"
@@ -92,8 +88,6 @@ export type ShellRole = "resident" | "official" | "responder"
 export interface RouteChrome {
   /** Route renders a back-chevron chrome (settings/profile/notifications). */
   backChrome: boolean
-  /** Route is part of the account verification wizard (own full-bleed flow). */
-  accountWizard: boolean
   /** Route wants edge-to-edge map chrome (no page padding / bottom-nav gap). */
   fullBleedMap: boolean
   /** Bottom MobileNav should be hidden for this route. */
@@ -128,15 +122,10 @@ export function getRouteChrome(pathname: string): RouteChrome {
   const fullBleedMap = isAlertsMapRoute
 
   const backChrome =
-    pathname.startsWith("/dashboard/settings") ||
     pathname.startsWith("/dashboard/profile") ||
     pathname.startsWith("/dashboard/notifications")
 
-  const accountWizard =
-    pathname.startsWith("/dashboard/settings/reverify/") ||
-    pathname === "/dashboard/settings/change-password"
-
-  const hideMobileNav = backChrome || accountWizard || fullBleedMap
+  const hideMobileNav = backChrome || fullBleedMap
 
   // Triage surfaces. Desktop only — below the desktop breakpoint these fall
   // back to a single scrolling column with list<->detail navigation, so the
@@ -153,5 +142,5 @@ export function getRouteChrome(pathname: string): RouteChrome {
     pathname === "/dashboard/responders/dispatch" ||
     isAlertsMapRoute
 
-  return { backChrome, accountWizard, fullBleedMap, hideMobileNav, workspace }
+  return { backChrome, fullBleedMap, hideMobileNav, workspace }
 }

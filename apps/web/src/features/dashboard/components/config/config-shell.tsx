@@ -2,16 +2,18 @@ import { type ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { ArrowLeftIcon, type LucideIcon } from "lucide-react"
 
+import { cn } from "@workspace/ui/lib/utils"
+
 /**
  * Shared chrome for every configuration screen.
  *
- * The config screens were reading as a stack of grey boxes because each one
- * re-invented its own header. This gives them the same editorial treatment the
- * rest of the official side uses: one ink hero carrying the page's headline
- * number, then content on the canvas beneath it.
+ * This was a dark "ink hero" slab carrying a blurred orange bloom, an eyebrow,
+ * an icon well and a row of four stat tiles — a lot of furniture above content
+ * the official actually came for. It is now a breadcrumb, a large title and a
+ * plain line of counts, on the same white ground as the rest of the page.
  *
- * The hero is the only dark surface on the page — that is what makes it read as
- * deliberate rather than decorative.
+ * Emphasis is still available: a count that means someone must act is the only
+ * coloured thing on the screen.
  */
 
 export interface ConfigStat {
@@ -40,75 +42,56 @@ export function ConfigShell({
   children: ReactNode
 }) {
   return (
-    <div className="space-y-5 p-4 md:p-6">
-      <section className="relative overflow-hidden rounded-3xl bg-ink p-5 text-white md:p-6">
-        {/* A single soft bloom rather than a gradient wash: it gives the slab
-            depth without putting text on a busy background. */}
-        <span
-          aria-hidden
-          className="pointer-events-none absolute -right-16 -top-24 size-64 rounded-full bg-brand-orange/20 blur-3xl"
-        />
+    <div className="mx-auto w-full max-w-[1100px] px-6 pb-28 pt-10 sm:px-10">
+      <Link
+        to="/dashboard/configuration"
+        className="inline-flex items-center gap-2 text-meta text-neutral-500 no-underline transition-colors hover:text-accent"
+      >
+        <ArrowLeftIcon className="size-4" strokeWidth={2} aria-hidden />
+        Configuration
+      </Link>
 
-        <div className="relative">
-          <Link
-            to="/dashboard/configuration"
-            className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-white/55 transition hover:text-white"
-          >
-            <ArrowLeftIcon className="size-3.5" aria-hidden />
-            Configuration
-          </Link>
-
-          <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
-            <div className="flex min-w-0 items-start gap-4">
-              <span className="hidden shrink-0 rounded-2xl bg-white/10 p-3 sm:block">
-                <Icon className="size-6" aria-hidden />
-              </span>
-              <div className="min-w-0">
-                <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/55">
-                  {eyebrow}
-                </p>
-                <h1 className="mt-1 font-heading text-2xl font-bold leading-tight md:text-3xl">
-                  {title}
-                </h1>
-                <p className="mt-2 max-w-2xl text-sm font-medium leading-relaxed text-white/70">
-                  {description}
-                </p>
-              </div>
-            </div>
-
-            {action ? <div className="shrink-0">{action}</div> : null}
+      <header className="mt-8 flex flex-wrap items-start justify-between gap-x-8 gap-y-5">
+        <div className="flex min-w-0 flex-1 items-start gap-6">
+          <span className="hidden size-16 shrink-0 items-center justify-center rounded-2xl bg-brand-navy text-white sm:flex">
+            <Icon className="size-7" strokeWidth={1.7} aria-hidden />
+          </span>
+          <div className="min-w-0">
+            <p className="text-meta text-neutral-400">{eyebrow}</p>
+            <h1 className="mt-1 text-page-title text-brand-navy">{title}</h1>
+            <p className="mt-3 max-w-2xl text-read leading-relaxed text-neutral-500">
+              {description}
+            </p>
           </div>
-
-          {stats && stats.length > 0 ? (
-            <dl className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-              {stats.map((stat) => (
-                <div
-                  key={stat.label}
-                  className={`rounded-2xl px-4 py-3 ${
-                    stat.alarm ? "bg-severity-critical/20" : "bg-ink-raised"
-                  }`}
-                >
-                  <dd className="font-heading text-2xl font-bold tabular-nums">{stat.value}</dd>
-                  <dt
-                    className={`mt-0.5 text-[10px] font-bold uppercase tracking-wide ${
-                      stat.alarm ? "text-severity-critical-surface" : "text-white/55"
-                    }`}
-                  >
-                    {stat.label}
-                  </dt>
-                </div>
-              ))}
-            </dl>
-          ) : null}
         </div>
-      </section>
 
-      {children}
+        {action ? <div className="shrink-0">{action}</div> : null}
+      </header>
+
+      {stats && stats.length > 0 ? (
+        <dl className="mt-10 flex flex-wrap gap-x-12 gap-y-6">
+          {stats.map((stat) => (
+            <div key={stat.label} className="min-w-0">
+              <dd
+                className={cn(
+                  "text-section tabular-nums",
+                  stat.alarm ? "text-sos" : "text-brand-navy",
+                )}
+              >
+                {stat.value}
+              </dd>
+              <dt className="mt-1 text-meta text-neutral-500">{stat.label}</dt>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+
+      <div className="mt-12 space-y-12">{children}</div>
     </div>
   )
 }
 
-/** Primary action styled for the ink hero. */
+/** Primary action for the page header. */
 export function ConfigHeroAction({
   onClick,
   icon: Icon,
@@ -122,15 +105,15 @@ export function ConfigHeroAction({
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-2 rounded-xl bg-brand-orange px-4 py-2.5 text-sm font-semibold text-brand-orange-ink transition hover:bg-brand-orange-strong"
+      className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-2.5 text-read font-semibold text-white transition-colors hover:bg-accent"
     >
-      {Icon ? <Icon className="size-4" aria-hidden /> : null}
+      {Icon ? <Icon className="size-5" strokeWidth={1.9} aria-hidden /> : null}
       {children}
     </button>
   )
 }
 
-/** A content block on the canvas, with an optional lead-in line. */
+/** A content block, with an optional lead-in line. */
 export function ConfigPanel({
   title,
   hint,
@@ -141,15 +124,11 @@ export function ConfigPanel({
   children: ReactNode
 }) {
   return (
-    <section className="space-y-3">
+    <section className="space-y-6">
       {title ? (
         <div>
-          <h2 className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-            {title}
-          </h2>
-          {hint ? (
-            <p className="mt-0.5 text-xs font-medium text-muted-foreground">{hint}</p>
-          ) : null}
+          <h2 className="text-section text-brand-navy">{title}</h2>
+          {hint ? <p className="mt-2 max-w-2xl text-meta text-neutral-500">{hint}</p> : null}
         </div>
       ) : null}
       {children}
@@ -158,12 +137,13 @@ export function ConfigPanel({
 }
 
 /** Inline warning used when configuration is incomplete in a way that breaks
- *  routing. Loud on purpose — these are silent failures otherwise. */
+ *  routing. These are silent failures otherwise, so this is the one place on a
+ *  configuration screen where colour is allowed to shout. */
 export function ConfigAlarm({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-start gap-3 rounded-2xl border border-status-open bg-status-open-surface p-3.5">
-      <span className="mt-0.5 size-2 shrink-0 rounded-full bg-status-open" aria-hidden />
-      <p className="text-sm font-semibold leading-relaxed text-status-open-ink">{children}</p>
+    <div className="flex items-start gap-3 rounded-xl border border-neutral-200 px-5 py-4">
+      <span className="mt-2 size-2 shrink-0 rounded-full bg-sos" aria-hidden />
+      <p className="text-read leading-relaxed text-brand-navy">{children}</p>
     </div>
   )
 }

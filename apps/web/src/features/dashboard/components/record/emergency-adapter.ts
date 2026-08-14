@@ -1,5 +1,6 @@
 import type { EmergencyAlert } from "@/features/dashboard/emergency-api"
 
+import { looksLikeCoordinates } from "@/features/dashboard/lib/location-text"
 import { deriveEmergencySeverity, derivePriority, severityLevel, type Severity } from "./severity"
 import { toStatusView } from "./status"
 import type { RecordAction, RecordFact, RecordSection, RecordTrackStep, RecordView } from "./types"
@@ -35,6 +36,15 @@ const TRACK: { key: string; label: string; reached: string[] }[] = [
   { key: "arrived", label: "Arrived", reached: ["arrived", "resolved"] },
   { key: "resolved", label: "Resolved", reached: ["resolved"] },
 ]
+
+/** First candidate that reads as a real place, or null if none does. */
+function readablePlace(...candidates: Array<string | null | undefined>): string | null {
+  for (const candidate of candidates) {
+    const value = (candidate || "").trim()
+    if (value && !looksLikeCoordinates(value)) return value
+  }
+  return null
+}
 
 export function formatElapsed(fromIso: string, now: number): string {
   const seconds = Math.max(0, Math.floor((now - new Date(fromIso).getTime()) / 1000))
@@ -145,24 +155,27 @@ export function toEmergencyRecordView(
   const status = toStatusView(alert.status)
   const assignment = alert.current_assignment
 
+  // The reporter's name, not their phone number. `reporter_phone` is a masked
+  // string that told a responder nothing about *who* filed the report; when a
+  // resident profile exists the name is what identifies them. An SMS from an
+  // unrecognised number has no name, so it says so plainly instead of showing a
+  // system-account string. `reporter_display` is "" exactly in that case.
+  const reporterName = alert.reporter_is_anonymous_intake
+    ? "Unidentified caller"
+    : alert.reporter_display || alert.reporter?.full_name || null
+
   const facts: RecordFact[] = [
     {
       label: "Reported by",
-      value: alert.reporter_phone || null,
-      emptyHint: "Reporter contact withheld",
-    },
-    {
-      label: "Nearby residents alerted",
-      // Distinguishes "nobody was near" from "the alert never fired".
-      value: alert.witness_notification_summary?.triggered
-        ? `${witnessCount} notified`
-        : "Not triggered",
-    },
-    {
-      label: "Location source",
-      value: alert.location_source === "gps" ? "GPS" : alert.location_source === "manual_pin" ? "Pinned manually" : alert.location_source.toUpperCase(),
+      value: reporterName,
+      emptyHint: "Reporter identity unavailable",
     },
   ]
+
+  // "Location source: Pinned manually / GPS / SMS" is removed: it is a data-
+  // provenance detail a responder never acts on, and its raw values ("SMS",
+  // ".toUpperCase()") leaked machine vocabulary into the summary. The location
+  // itself is already the headline in the record header.
 
   if (options.etaLabel) {
     facts.push({ label: "ETA", value: options.etaLabel })
@@ -182,7 +195,10 @@ export function toEmergencyRecordView(
       hoursSinceStatusChange: (options.now - new Date(alert.updated_at).getTime()) / 3_600_000,
     }),
     title: alert.note?.trim() || `${TYPE_LABEL[alert.type] ?? alert.type} emergency`,
-    address: alert.address?.trim() || alert.barangay || null,
+    // Never a raw coordinate string; a bare barangay reads as a heading, so it
+    // gets the "In …" prefix. `display_location` is the server's sanitised
+    // choice; `address` is filtered in case it holds "Pinned coordinates: …".
+    address: readablePlace(alert.display_location, alert.address) ?? (alert.barangay ? `In ${alert.barangay}` : null),
     elapsedLabel: formatElapsed(alert.created_at, options.now),
     distanceLabel: options.distanceLabel ?? null,
     facts,

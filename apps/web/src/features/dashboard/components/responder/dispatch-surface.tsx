@@ -129,7 +129,7 @@ export function Pane({
             {title}
           </h2>
           {subtitle ? (
-            <span className="shrink-0 truncate text-micro uppercase text-subtle-foreground">
+            <span className="shrink-0 truncate text-micro text-subtle-foreground">
               {subtitle}
             </span>
           ) : null}
@@ -183,13 +183,13 @@ export function State({
   return (
     <span className={cn("inline-flex items-center gap-1.5 text-label", className)}>
       <span className={cn("size-1.5 shrink-0 rounded-pill", dotClass(tone))} aria-hidden />
-      <span className={cn("uppercase tracking-wide", toneClass(tone))}>{label}</span>
+      <span className={cn("tracking-wide", toneClass(tone))}>{label}</span>
     </span>
   )
 }
 
 /**
- * Two-option segmented control.
+ * Segmented control. Sizes itself to however many options it is given.
  *
  * Generic over the option id so callers get a narrowed `onChange` instead of a
  * bare string.
@@ -201,7 +201,7 @@ export function Segmented<T extends string>({
   label,
   className,
 }: {
-  options: ReadonlyArray<{ id: T; label: string }>
+  options: ReadonlyArray<{ id: T; label: string; badge?: boolean }>
   value: T
   onChange: (id: T) => void
   label: string
@@ -234,6 +234,12 @@ export function Segmented<T extends string>({
             )}
           >
             {option.label}
+            {option.badge === true ? (
+              <span
+                aria-label="New chat messages"
+                className="ml-1.5 size-1.5 shrink-0 rounded-pill bg-brand-orange"
+              />
+            ) : null}
           </button>
         )
       })}
@@ -304,7 +310,7 @@ export function MetricTile({
           </span>
         ) : null}
       </p>
-      <p className="mt-1.5 truncate text-micro uppercase text-subtle-foreground">{label}</p>
+      <p className="mt-1.5 truncate text-micro text-subtle-foreground">{label}</p>
     </div>
   )
 }
@@ -316,6 +322,11 @@ export function MetricTile({
  * A collapsed region has to stay visible as *something*, or the only way back
  * is a reset button the responder has to know exists. 44px is the pointer
  * floor, so the whole strip is the target.
+ *
+ * The strip is deliberately not a floating card: it is transparent (the
+ * workspace canvas shows through) with square corners and a full-height
+ * border, so a collapsed column reads as a continuous edge of the layout
+ * rather than a separate pill sitting on top of it.
  */
 export function CollapsedStrip({
   label,
@@ -333,13 +344,13 @@ export function CollapsedStrip({
       aria-label={`Expand ${label}`}
       title={`Expand ${label}`}
       className={cn(
-        "flex w-11 shrink-0 flex-col items-center gap-3 rounded-3xl border border-card-line bg-card py-4 text-subtle-foreground transition-colors hover:bg-card-raised hover:text-foreground",
+        "flex w-11 shrink-0 flex-col items-center gap-3 rounded-none border border-card-line bg-transparent py-4 text-subtle-foreground transition-colors hover:bg-card-raised/50 hover:text-foreground",
         className,
       )}
     >
       <ChevronDownIcon className="size-4 shrink-0 -rotate-90" strokeWidth={2.4} />
       <span
-        className="whitespace-nowrap text-micro uppercase"
+        className="whitespace-nowrap text-micro"
         style={{ writingMode: "vertical-rl" }}
       >
         {label}

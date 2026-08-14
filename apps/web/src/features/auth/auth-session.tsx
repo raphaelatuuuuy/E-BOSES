@@ -3,6 +3,7 @@ import * as React from "react"
 
 import { getMe, type AuthUser, type UserStatus } from "@/features/auth/api"
 import { ApiError, clearAuthTokens, getAccessToken, logoutSession, refreshSession, setAuthTokens } from "@/lib/api"
+import { clearLastKnownPositions } from "@/features/dashboard/lib/last-known-position"
 
 interface AuthSessionContextValue {
   user: AuthUser | null
@@ -40,6 +41,9 @@ export function AuthSessionProvider({ children }: { children: React.ReactNode })
 
   const clearSession = React.useCallback(() => {
     clearAuthTokens()
+    // A remembered GPS fix must not outlive the session that produced it —
+    // responders share devices.
+    clearLastKnownPositions()
     setUser(null)
   }, [])
 

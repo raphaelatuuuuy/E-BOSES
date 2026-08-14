@@ -335,7 +335,7 @@ export function RulesStep(props: {
                     PROOF_THEME.muted
                   )}
                 >
-                  Shown when this field fails. Default: ID is mismatched.
+                  Shown when this field fails. Leave blank for the default message.
                 </span>
               </label>
 

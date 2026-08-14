@@ -1,7 +1,16 @@
 import { apiRequest } from "@/lib/api"
+import type { EmergencyAlert } from "./emergency-api"
 
 export type ConcernCategory = "infrastructure" | "environment" | "public_safety" | "others"
-export type ConcernStatus = "submitted" | "under_review" | "assigned" | "in_progress" | "resolved" | "rejected" | "appealed"
+export type ConcernStatus =
+  | "submitted"
+  | "under_review"
+  | "assigned"
+  | "in_progress"
+  | "resolved"
+  | "rejected"
+  | "appealed"
+  | (string & {})
 export type ConcernVisibility = "private" | "community"
 export type ConcernValidationStatus = "pending" | "accepted" | "rejected"
 
@@ -14,7 +23,7 @@ export interface PublicUser {
   responder_unit?: "tanod" | "bhw" | "bdrrmo" | ""
   is_on_duty?: boolean
   avatar?: string
-  /** Street line from residence (e.g. "123 Champaca Street") */
+
   street?: string
   barangay?: string
 }
@@ -25,11 +34,6 @@ export interface ActiveResponder extends PublicUser {
   location_updated_at?: string | null
 }
 
-/**
- * Where a photo is in the privacy pipeline. Only `not_required` and `protected`
- * are publicly displayable; the rest mean the protected copy is restricted to
- * authorized officials.
- */
 export type ConcernMediaPrivacyState =
   | "not_required"
   | "queued"
@@ -58,9 +62,12 @@ export interface ConcernMedia {
   validation_detail: string
   privacy_state: ConcernMediaPrivacyState
   public_visible: boolean
-  /** What was blurred ("human face", "license plate"). Never coordinates. */
+
   privacy_detected_classes: string[]
-  /** Official-drawn blur boxes. Empty for anyone who is not an official. */
+
+  relevance_state: "relevant" | "unrelated" | "unclear" | "unsupported" | "unverified"
+  relevance_reason: string
+
   redactions: ConcernMediaRedaction[]
   uploaded_at: string
 }
@@ -73,6 +80,9 @@ export interface ConcernResolutionEvidence {
   file_size: number
   note: string
   raw_url: string
+  preview_url: string
+  privacy_state: string
+  privacy_detected_classes: string[]
   created_at: string
 }
 
@@ -102,21 +112,17 @@ export type ConcernRecommendedAction =
 
 export interface ConcernAiAssessment {
   status: "pending" | "completed" | "failed" | "not_configured"
-  /** Soft validation gate — true when this concern needs an official ai-review decision. */
+
   flagged?: boolean
-  /** Reasons the soft validation gate flagged this concern (string or {reason} entries). */
+
   flag_reasons?: unknown[]
-  /** Plain-language object names seen in the photo. Empty when none was read. */
+
   detected_objects: string[]
   severity_estimate: string
   nlp_validity: string
   nlp_confidence: number | null
   category_match: boolean | null
-  /**
-   * `null` when no photo was submitted, `false` when one was submitted but
-   * could not be reviewed. The distinction is what keeps "No photo was
-   * submitted" off a report that has one.
-   */
+
   image_review_succeeded: boolean | null
   evidence_relationship: ConcernEvidenceRelationship | ""
   privacy_scan_required: boolean
@@ -130,6 +136,8 @@ export interface ConcernAiAssessment {
   photo_assessment: string
   possible_categories: string[]
   suggested_category: string
+
+  suggested_category_name: string
   possible_duplicate: boolean
   duplicate_similarity: number | null
   duplicate_distance_meters: number | null
@@ -210,7 +218,7 @@ export interface ConcernComment {
   author: PublicUser
   parent: number | null
   body: string
-  /** Present after first edit — original text before any changes */
+
   original_body?: string
   is_edited?: boolean
   created_at: string
@@ -230,11 +238,14 @@ export interface ConcernChatAttachment {
   id: number
   original_filename: string
   mime_type: string
-  kind: "image" | "video"
+  kind: "image" | "video" | "audio"
   file_size: number
   authenticity_status: "clear" | "flagged" | "review_required"
   authenticity_detail: string
   raw_url: string
+  preview_url: string
+  privacy_state: string
+  privacy_detail: string
   created_at: string
 }
 
@@ -256,13 +267,13 @@ export interface Concern {
   tracking_id: string
   validation_status: ConcernValidationStatus
   validation_summary: string
+  summary: string
   rejection_code: string
   status_version: number
   reporter: PublicUser
   title: string
   description: string
-  /** Legacy enum kept for compatibility. Prefer `category_ref` for display:
-   *  it is the row officials can rename, route and add to. */
+
   category: ConcernCategory
   category_ref: {
     id: number
@@ -273,7 +284,7 @@ export interface Concern {
     custom_icon_label: string
     icon_image_url: string
   } | null
-  /** The barangay unit handling this concern, or null when nobody routed it. */
+
   assigned_department: BarangayUnit | null
   status: ConcernStatus
   address: string
@@ -298,8 +309,58 @@ export interface Concern {
   comment_count: number
   priority_score: number
   user_vote: 0 | 1
+  also_reported_count: number
+  also_reported_by: string[] | null
+  recurrence_of: { id: number; tracking_id: string; status: ConcernStatus } | null
+  official_title: string
+  community_incident: CommunityIncident
+  archived_at: string | null
+  reopened_at: string | null
+  reopen_count: number
   created_at: string
   updated_at: string
+}
+
+export interface CommunityIncidentReport {
+  id: number
+  public_id: string
+  tracking_id: string
+  reporter_name: string
+  is_primary: boolean
+  description: string
+  category: ConcernCategory
+  latitude: string | null
+  longitude: string | null
+  photo_count: number
+  submitted_at: string
+}
+
+export type CommunityIncidentPhoto = ConcernMedia & {
+  report_id: number
+  report_tracking_id: string
+  reporter_name: string
+}
+
+export interface CommunityIncident {
+  primary_id: number
+  primary_public_id: string
+  title: string
+  status: ConcernStatus
+  category: ConcernCategory
+  assigned_unit: BarangayUnit | null
+  visibility: ConcernVisibility
+  publication_block_reason: string
+  summary: string
+  observed: string[]
+  address: string
+  report_count: number
+  resident_count: number
+  withheld_report_count: number
+  photo_count: number
+  first_reported_at: string | null
+  latest_reported_at: string | null
+  reports: CommunityIncidentReport[]
+  photos: CommunityIncidentPhoto[]
 }
 
 export interface DashboardSummary {
@@ -320,9 +381,9 @@ export interface ResidentRoleSummary extends CommonRoleSummary {
   reports_active: number
   reports_resolved: number
   reports_appealed: number
-  /** User's own active emergencies */
+
   active_emergencies: number
-  /** Barangay-wide active emergencies (home rail / feed banner) */
+
   barangay_active_emergencies?: number
   has_ongoing_emergencies?: boolean
   emergencies_resolved: number
@@ -331,6 +392,7 @@ export interface ResidentRoleSummary extends CommonRoleSummary {
 
 export interface OfficialRoleSummary extends CommonRoleSummary {
   pending_reviews: number
+  open_reports: number
   active_reports: number
   appealed_reports: number
   pending_appeals: number
@@ -342,11 +404,6 @@ export interface OfficialRoleSummary extends CommonRoleSummary {
   pending_account_requests: number
 }
 
-/**
- * The unit a responder belongs to, resolved from the barangay's Units registry
- * rather than the legacy `responder_unit` enum — so a unit an official created
- * appears under its real name. Null when nobody has placed them in one yet.
- */
 export interface ResponderAssignedUnit {
   code: string
   name: string
@@ -383,8 +440,20 @@ export interface Announcement {
   notification_sent_at: string | null
   image_url: string | null
   image_alt: string
+
+  affected_streets: string[]
+
+  area_geometry: GeoJsonPolygon | null
+  /** Real OSM lines for the affected streets, sent only when there is no corridor. */
+  street_geometries?: LiveMapGeometry[]
+  /** Optional single point for advisories about one place, not a corridor. */
+  latitude: string | null
+  longitude: string | null
+  place_label: string
   date_label: string
   status_label: "draft" | "scheduled" | "published" | "expired"
+  created_at: string
+  updated_at: string
 }
 
 export interface BarangayEvent {
@@ -395,14 +464,80 @@ export interface BarangayEvent {
   starts_at: string
   ends_at: string | null
   is_published: boolean
+
+  affected_streets: string[]
+  area_geometry: GeoJsonPolygon | null
   time_label: string
+  created_at: string
+  updated_at: string
 }
 
-export function createConcern(formData: FormData) {
-  return apiRequest<Concern>("/concerns/", {
+export interface GeoJsonPolygon {
+  type: "Polygon"
+  coordinates: [number, number][][]
+}
+
+export interface AnnouncementAreaContext {
+  boundary: {
+    osm_relation_id: number
+    name: string
+    geometry?: LiveMapGeometry | null
+  }
+  streets: {
+    streets: LiveMapStreet[]
+    groups: Record<string, LiveMapStreet[]>
+  }
+}
+
+export function createConcern(formData: FormData, options?: { escalate?: boolean; emergencyType?: string; recurrenceOf?: number; duplicateOf?: number }) {
+  const query = options?.escalate ? "?escalate=1" : ""
+  if (options?.escalate && options.emergencyType) formData.append("emergency_type", options.emergencyType)
+  if (options?.recurrenceOf) formData.append("recurrence_of", String(options.recurrenceOf))
+  if (options?.duplicateOf) formData.append("duplicate_of", String(options.duplicateOf))
+  return apiRequest<Concern & { escalated_alert?: EmergencyAlert }>(`/concerns/${query}`, {
     method: "POST",
     body: formData,
   })
+}
+
+export interface ConcernResolvedMatch {
+  concern_id: number
+  tracking_id: string
+  summary: string
+  resolved_at: string | null
+  preview_url: string
+}
+
+export interface ConcernEmergencyTriage {
+  is_emergency: boolean
+  types: string[]
+  confidence: number
+  reason: string
+  escalation_offered: boolean
+}
+
+export interface ConcernPhotoVerdict {
+  index: number
+  state: "relevant" | "unrelated" | "unclear" | "unsupported"
+  message: string
+}
+
+export interface ConcernResolvedAddress {
+  address: string
+  address_primary: string
+  address_secondary: string
+  latitude: number
+  longitude: number
+}
+
+export interface ConcernActiveDuplicate {
+  concern_id: number
+  tracking_id: string
+  title: string
+  summary: string
+  reporter_count: number
+  distance_meters: number | null
+  status: string
 }
 
 export interface ConcernPrecheckResult {
@@ -411,7 +546,21 @@ export interface ConcernPrecheckResult {
   field_errors: Record<string, string>
   message: string
   suggested_category: string
+  suggested_category_label: string
+  category_confirm_required: boolean
+  photo_required: boolean
+  photo_verdicts: ConcernPhotoVerdict[]
+  resolved_address?: ConcernResolvedAddress | null
+  privacy_preview?: {
+    state: string
+    detected_classes: string[]
+    protected_image: string
+  }
+  active_duplicate?: ConcernActiveDuplicate | null
+  assigned_unit?: { code: string; name: string } | null
   photo_feedback: string
+  emergency_triage?: ConcernEmergencyTriage | null
+  resolved_match?: ConcernResolvedMatch | null
   result?: {
     classification?: string
     evidence_relationship?: string
@@ -484,17 +633,9 @@ export function getConcern(id: number | string) {
   return apiRequest<Concern>(path)
 }
 
-/**
- * One "Save Update" is one request.
- *
- * Category, unit and internal note are optional and travel with the status
- * change rather than as three follow-up calls, so an official's decision lands
- * as a single atomic change with a single audit trail. `applied_ai_suggestion`
- * records only that the official pressed Apply Suggestion before saving — the
- * suggestion itself never saves anything.
- */
 export interface ConcernStatusUpdatePayload {
-  status: ConcernStatus
+
+  status: string
   note?: string
   status_version?: number
   resolution_evidence?: File[]
@@ -534,7 +675,6 @@ export function updateConcernStatus(id: number, payload: ConcernStatusUpdatePayl
   })
 }
 
-/** Blur one or more areas an official picked out of a photo. */
 export function addConcernMediaRedactions(
   mediaId: number,
   regions: Array<{ x: number; y: number; width: number; height: number; label?: string }>,
@@ -557,7 +697,10 @@ export function reprocessConcernMediaPrivacy(mediaId: number) {
   })
 }
 
-export function assignConcern(id: number, payload: { assignee_id?: number | null; office?: string; note?: string }) {
+export function assignConcern(
+  id: number,
+  payload: { department_id?: number | null; assignee_id?: number | null; office?: string; note?: string },
+) {
   return apiRequest<ConcernAssignment>(`/concerns/${id}/assign/`, {
     method: "POST",
     body: JSON.stringify(payload),
@@ -626,9 +769,11 @@ export interface ConcernChatMessage {
   is_mine: boolean
 }
 
-export function listConcernChat(concernId: number, afterId?: number) {
+export function listConcernChat(concernId: number, options: { afterId?: number; beforeId?: number; limit?: number } = {}) {
   const params = new URLSearchParams()
-  if (afterId) params.set("after", String(afterId))
+  if (options.afterId) params.set("after", String(options.afterId))
+  if (options.beforeId) params.set("before", String(options.beforeId))
+  if (options.limit) params.set("limit", String(options.limit))
   const q = params.toString() ? `?${params.toString()}` : ""
   return apiRequest<ConcernChatMessage[]>(`/concerns/${concernId}/chat/${q}`)
 }
@@ -706,17 +851,15 @@ export function getOfficialDashboardSummary() {
   return apiRequest<OfficialRoleSummary>("/dashboard/official/summary/")
 }
 
-/* ── Barangay units (Department on the API) ─────────────────────────────── */
-
 export interface BarangayUnit {
   id: number
   name: string
   code: string
-  /** Compact form for tables and pins. Falls back to `name` server-side. */
+
   short_name: string
-  /** What kinds of concerns this unit takes. */
+
   description: string
-  /** Its duty when an emergency is called. */
+
   emergency_role: string
   sort_order: number
   is_active: boolean
@@ -731,7 +874,6 @@ export type BarangayUnitDraft = Partial<
   >
 >
 
-/** Result of DELETE — a unit still owning concerns is deactivated, not removed. */
 export interface BarangayUnitDeleteResult {
   deleted: boolean
   deactivated: boolean
@@ -769,6 +911,10 @@ export function getResponderDashboardSummary() {
 
 export function listAnnouncements() {
   return apiRequest<Announcement[]>("/announcements/")
+}
+
+export function getAnnouncementAreaContext() {
+  return apiRequest<AnnouncementAreaContext>("/announcements/area-context/")
 }
 
 export function listManagedAnnouncements() {
@@ -813,6 +959,10 @@ export function reviewContentFlag(id: number, payload: { status: Exclude<Content
 
 export function listTodayBarangayEvents() {
   return apiRequest<BarangayEvent[]>("/barangay-events/today/")
+}
+
+export function listBarangayEventCalendar(days = 60) {
+  return apiRequest<BarangayEvent[]>(`/barangay-events/calendar/?days=${days}`)
 }
 
 export function listManagedBarangayEvents() {
@@ -882,6 +1032,8 @@ export interface LiveMapConcern {
   created_at: string
   updated_at: string
   priority: "high" | "normal"
+  preview_url: string
+  media_count: number
 }
 
 export interface LiveMapEmergency {
@@ -905,14 +1057,38 @@ export interface LiveMapEmergency {
   resolved_at: string | null
 }
 
+export type TravelProfile = "car" | "bike" | "foot"
+
+export interface RouteGeoJson {
+  type: "LineString"
+  coordinates: [number, number][]
+}
+
+export interface RouteSnap {
+  latitude: number
+  longitude: number
+  meters: number | null
+}
+
+export interface RouteApproach {
+  geometry: RouteGeoJson | null
+  distance_meters: number | null
+  residual_meters: number | null
+}
+
 export interface LiveMapRoute {
   alert_id: number
   assignment_id: number
   responder_id: number
-  status: "ok" | "unavailable"
+  status: "ok" | "stale" | "unavailable"
+  profile: TravelProfile
   distance_meters: number | null
   eta_seconds: number | null
-  geometry: { type: "LineString"; coordinates: [number, number][] } | null
+  geometry: RouteGeoJson | null
+  summary: string
+  origin_snap: RouteSnap | null
+  destination_snap: RouteSnap | null
+  approach: RouteApproach | null
 }
 
 export interface MapDispatchPolicy {
@@ -924,10 +1100,24 @@ export interface MapDispatchPolicy {
   out_of_zone_action: "block" | "warn" | "review"
   witness_radius_meters: number
   responder_nearby_radius_meters: number
-  /** SMS fallback destination for residents with no mobile data. Blank
-   *  means the SOS screen offers no SMS option. */
+
   emergency_sms_number: string
   updated_at: string | null
+}
+
+export interface LiveMapAdvisory {
+  id: number
+  title: string
+  body: string
+  tag: string
+  urgency: string
+  is_pinned: boolean
+  affected_streets: string[]
+  area_geometry: GeoJsonPolygon | null
+  /** Real OSM lines for the affected streets, sent only when there is no corridor. */
+  street_geometries: LiveMapGeometry[]
+  starts_at: string | null
+  expires_at: string | null
 }
 
 export interface LiveMapSnapshot {
@@ -942,6 +1132,7 @@ export interface LiveMapSnapshot {
   concerns: LiveMapConcern[]
   emergencies: LiveMapEmergency[]
   routes: LiveMapRoute[]
+  advisories: LiveMapAdvisory[]
   summary: {
     active_alerts: number
     concerns: number
@@ -977,7 +1168,6 @@ export function getOfficialLiveMap() {
   return apiRequest<LiveMapSnapshot>("/dashboard/official/live-map/")
 }
 
-/** Public community concern pin on resident alerts map */
 export interface ResidentMapConcern {
   id: number
   tracking_id: string
@@ -997,7 +1187,6 @@ export interface ResidentMapConcern {
   kind: "concern"
 }
 
-/** Active emergency pin — no reporter / responder GPS */
 export interface ResidentMapEmergency {
   id: number
   type: string
@@ -1057,3 +1246,138 @@ export function sendLocationPing(payload: { latitude: number; longitude: number;
     body: JSON.stringify(payload),
   })
 }
+
+export interface MergeCandidateBrief {
+  id: number
+  tracking_id: string
+  title: string
+  description: string
+  status: ConcernStatus
+  category: ConcernCategory
+  address: string
+  created_at: string
+  photo_count: number
+  reporter_name: string
+}
+
+export interface MergeSuggestion {
+  id: number
+  concern: MergeCandidateBrief
+  primary: MergeCandidateBrief
+  confidence: number
+  method: string
+  distance_meters: number | null
+  rationale: string
+  status: string
+  created_at: string
+}
+
+export interface MergeEvent {
+  id: number
+  action: string
+  actor_name: string
+  confidence: number | null
+  method: string
+  reason: string
+  concern_tracking_id: string
+  primary_tracking_id: string
+  created_at: string
+}
+
+export function listMergeSuggestions() {
+  return apiRequest<MergeSuggestion[]>("/concerns/merge-suggestions/")
+}
+
+export function decideMergeSuggestion(id: number, decision: "approve" | "reject", note?: string) {
+  return apiRequest<MergeSuggestion>(`/concerns/merge-suggestions/${id}/decide/`, {
+    method: "POST",
+    body: JSON.stringify({ decision, note: note ?? "" }),
+    headers: { "Content-Type": "application/json" },
+  })
+}
+
+export function mergeConcern(id: number, primaryId: number, reason: string) {
+  return apiRequest<{ detail: string }>(`/concerns/${id}/merge/`, {
+    method: "POST",
+    body: JSON.stringify({ primary_id: primaryId, reason }),
+    headers: { "Content-Type": "application/json" },
+  })
+}
+
+export function unmergeConcern(id: number, reason: string) {
+  return apiRequest<{ detail: string }>(`/concerns/${id}/unmerge/`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+    headers: { "Content-Type": "application/json" },
+  })
+}
+
+export function setConcernPrimary(id: number) {
+  return apiRequest<{ detail: string }>(`/concerns/${id}/set-primary/`, {
+    method: "POST",
+    body: JSON.stringify({}),
+    headers: { "Content-Type": "application/json" },
+  })
+}
+
+export function listMergeHistory(id: number) {
+  return apiRequest<MergeEvent[]>(`/concerns/${id}/merge-history/`)
+}
+
+export function requestConcernReopen(id: number, reason: string) {
+  return apiRequest<Concern>(`/concerns/${id}/reopen-request/`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+    headers: { "Content-Type": "application/json" },
+  })
+}
+
+export function cancelConcern(id: number, reason: string) {
+  return apiRequest<Concern>(`/concerns/${id}/cancel/`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+    headers: { "Content-Type": "application/json" },
+  })
+}
+
+export interface AnnouncementComment {
+  id: number
+  announcement: number
+  parent: number | null
+  body: string
+  status: "visible" | "hidden" | "removed"
+  is_official_reply: boolean
+  author_label: string
+  author: { id: number; full_name: string }
+  is_mine: boolean
+  created_at: string
+  replies?: AnnouncementComment[]
+  announcement_title?: string
+}
+
+export function listAnnouncementComments(announcementId: number) {
+  return apiRequest<AnnouncementComment[]>(`/announcements/${announcementId}/comments/`)
+}
+
+export function addAnnouncementComment(
+  announcementId: number,
+  body: string,
+  parent: number | null = null,
+) {
+  return apiRequest<AnnouncementComment>(`/announcements/${announcementId}/comments/`, {
+    method: "POST",
+    body: JSON.stringify({ body, parent }),
+  })
+}
+
+export function removeAnnouncementComment(
+  announcementId: number,
+  commentId: number,
+  reason = "",
+) {
+  return apiRequest<void>(`/announcements/${announcementId}/comments/${commentId}/`, {
+    method: "DELETE",
+    body: JSON.stringify({ reason }),
+  })
+}
+

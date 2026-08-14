@@ -10,6 +10,7 @@ import {
   Dialog,
   DialogContent,
 } from "@workspace/ui/components/dialog"
+import { Button } from "@workspace/ui/components/button"
 import { FieldError } from "@workspace/ui/components/field"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -109,6 +110,7 @@ export function ProofStep({
   onChange,
   onSetFieldError,
   onContinue,
+  onRefreshProofOptions,
   proofDetect,
   onProofDetectChange,
   title = "One quick check that you live in this area.",
@@ -435,9 +437,19 @@ export function ProofStep({
         {proofOptionsLoading ? (
           <p className="text-sm text-muted-foreground">Loading document types…</p>
         ) : proofOptions.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            Document choices are loading. If nothing appears, go back and try again in a moment.
-          </p>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Document choices are loading. If nothing appears, go back and try again in a moment.
+            </p>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => void onRefreshProofOptions()}
+              className="h-10 rounded-full px-6 text-sm font-semibold"
+            >
+              Try again
+            </Button>
+          </div>
         ) : (
           <div className="flex flex-col gap-2.5" role="radiogroup" aria-label="Document type">
             {proofOptions.map((option) => {

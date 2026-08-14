@@ -1,5 +1,12 @@
 import { apiRequest } from "@/lib/api"
-import type { PublicUser } from "@/features/dashboard/api"
+import type {
+  PublicUser,
+  RouteApproach,
+  RouteSnap,
+  TravelProfile,
+} from "@/features/dashboard/api"
+
+export type { TravelProfile } from "@/features/dashboard/api"
 
 function normalizeCoordinate(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return value
@@ -103,6 +110,14 @@ export interface EmergencyMedia {
 export interface EmergencyAssignment {
   id: number
   responder: PublicUser
+  /** The full configured unit handling this alert, e.g. "Barangay Disaster
+   *  Risk Reduction and Management Committee (BDRRMC)" — not the legacy
+   *  short responder_unit code. Null when the responder has no unit. */
+  assigned_unit?: {
+    code: string
+    name: string
+    short_name: string
+  } | null
   status: string
   source: "auto" | "manual" | "escalation" | "claim"
   status_note: string
@@ -111,6 +126,7 @@ export interface EmergencyAssignment {
   arrived_at: string | null
   last_location: EmergencyLocationPing | null
   location_history: EmergencyLocationPing[]
+  travel_profile: TravelProfile
   route: EmergencyRoute | null
 }
 
@@ -150,14 +166,50 @@ export interface EmergencyAssignmentLog {
   created_at: string
 }
 
+/** Raw OSRM maneuver; the sentence is built in lib/route-instructions.ts. */
+export interface EmergencyRouteStep {
+  type: string
+  modifier: string
+  bearing_after: number | null
+  exit: number | null
+  name: string
+  ref: string
+  distance: number | null
+  duration: number | null
+  /** Where the turn happens; drives active-step tracking. */
+  latitude: number | null
+  longitude: number | null
+}
+
 export interface EmergencyRoute {
   alert_id: number
   assignment_id: number
   responder_id: number
-  status: "ok" | "unavailable"
+  status: "ok" | "stale" | "unavailable"
+  profile: TravelProfile
   distance_meters: number | null
   eta_seconds: number | null
   geometry: unknown
+  summary: string
+  origin_snap: RouteSnap | null
+  destination_snap: RouteSnap | null
+  approach: RouteApproach | null
+  /** Only populated by getEmergencyRoute({ steps: true }). */
+  steps: EmergencyRouteStep[]
+}
+
+export interface EmergencyTimelineEntry {
+  key: string
+  event_key: string
+  title: string
+  description: string
+  at: string
+  actor_label: string
+  note: string
+  milestone: string
+  elapsed_label: string
+  elapsed_seconds: number | null
+  source_event_ids: number[]
 }
 
 export interface EmergencyStatusEvent {
@@ -175,6 +227,14 @@ export interface EmergencyAlert {
   public_id: string
   reporter: PublicUser
   reporter_phone: string
+  /**
+   * The caller's name, or "" when there is genuinely none to show — an SMS from
+   * an unrecognised number is filed against a shared system account. Read this
+   * instead of `reporter.full_name`, which for that account derives a name from
+   * its mailbox and produced "sms-intake" on screen.
+   */
+  reporter_display: string
+  reporter_is_anonymous_intake: boolean
   type: EmergencyType
   note: string
   status: EmergencyStatus
@@ -201,8 +261,12 @@ export interface EmergencyAlert {
   status_version: number
   route: EmergencyRoute | null
   current_assignment: EmergencyAssignment | null
+  /** The unit that answers this emergency type — known before anyone is assigned. */
+  responding_unit: { id: number; code: string; name: string; short_name: string } | null
   assignments: EmergencyAssignment[]
   status_events: EmergencyStatusEvent[]
+  timeline: EmergencyTimelineEntry[]
+  timeline_role: "resident" | "responder" | "official"
   appeals: EmergencyAppeal[]
   escalations: EmergencyEscalation[]
   assignment_logs: EmergencyAssignmentLog[]
@@ -265,8 +329,15 @@ export function listMyEmergencies() {
   return apiRequest<EmergencyAlert[]>("/emergencies/mine/")
 }
 
-export function listEmergencyQueue() {
-  return apiRequest<EmergencyAlert[]>("/emergencies/queue/")
+/**
+ * The dispatch queue. `scope: "all"` includes finished incidents (resolved,
+ * cancelled, false alarm) so the console's closed filters have content; the
+ * server bounds it to the last 30 days. Omit it for the active-only queue.
+ */
+export function listEmergencyQueue(scope?: "active" | "all") {
+  return apiRequest<EmergencyAlert[]>(
+    scope === "all" ? "/emergencies/queue/?scope=all" : "/emergencies/queue/",
+  )
 }
 
 export function listAssignedEmergencies() {
@@ -341,8 +412,25 @@ export function getEmergency(id: number) {
   return apiRequest<EmergencyAlert>(`/emergencies/${id}/`)
 }
 
-export function getEmergencyRoute(id: number) {
-  return apiRequest<EmergencyRoute>(`/emergencies/${id}/route/`)
+/**
+ * `steps` is the only way to get turn-by-turn; bulk payloads never carry it.
+ * `refresh` bypasses the server's route cache — assigned responder only, and
+ * throttled, so it is for deviation re-routing, not for polling.
+ */
+export function getEmergencyRoute(id: number, { steps = false, refresh = false } = {}) {
+  const query = new URLSearchParams()
+  if (steps) query.set("steps", "1")
+  if (refresh) query.set("refresh", "1")
+  const suffix = query.toString()
+  return apiRequest<EmergencyRoute>(`/emergencies/${id}/route/${suffix ? `?${suffix}` : ""}`)
+}
+
+/** Sets the profile on the caller's own assignment, and returns the new leg. */
+export function setEmergencyRouteProfile(id: number, profile: TravelProfile) {
+  return apiRequest<EmergencyRoute>(`/emergencies/${id}/route/`, {
+    method: "POST",
+    body: JSON.stringify({ profile }),
+  })
 }
 
 export interface EmergencyChatMessage {
@@ -352,7 +440,7 @@ export interface EmergencyChatMessage {
   body: string
   attachment: {
     id: number
-    media_type: "image" | "video"
+    media_type: "image" | "video" | "audio" | "audio" | "audio"
     original_filename: string
     mime_type: string
     analysis_status: string
@@ -365,9 +453,11 @@ export interface EmergencyChatMessage {
   is_mine: boolean
 }
 
-export function listEmergencyChat(alertId: number, afterId?: number) {
+export function listEmergencyChat(alertId: number, options: { afterId?: number; beforeId?: number; limit?: number } = {}) {
   const params = new URLSearchParams()
-  if (afterId) params.set("after", String(afterId))
+  if (options.afterId) params.set("after", String(options.afterId))
+  if (options.beforeId) params.set("before", String(options.beforeId))
+  if (options.limit) params.set("limit", String(options.limit))
   const q = params.toString() ? `?${params.toString()}` : ""
   return apiRequest<EmergencyChatMessage[]>(`/emergencies/${alertId}/chat/${q}`)
 }
@@ -395,13 +485,6 @@ export function assignEmergency(id: number, responderId: number) {
   return apiRequest<EmergencyAlert>(`/emergencies/${id}/assign/`, {
     method: "POST",
     body: JSON.stringify({ responder_id: responderId }),
-  })
-}
-
-export function assignEmergencyResponders(id: number, responderIds: number[]) {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/assign/`, {
-    method: "POST",
-    body: JSON.stringify({ responder_ids: responderIds }),
   })
 }
 
@@ -444,10 +527,24 @@ export function reviewEmergencyAppeal(appealId: number, payload: { status: "appr
   })
 }
 
-export function escalateOverdueEmergencies(minutes = 5) {
-  return apiRequest<{ escalated: number }>("/emergencies/escalate-overdue/", {
+/**
+ * Record a final disposition — false alarm or invalid — for one emergency.
+ * `note` must be at least 5 characters; `status_version` is sent so a stale
+ * view cannot silently overwrite a newer status.
+ */
+export function setEmergencyDisposition(
+  id: number,
+  status: "false_alarm" | "invalid",
+  note: string,
+  statusVersion?: number,
+) {
+  return apiRequest<EmergencyAlert>(`/emergencies/${id}/disposition/`, {
     method: "POST",
-    body: JSON.stringify({ minutes }),
+    body: JSON.stringify({
+      status,
+      note,
+      ...(statusVersion != null ? { status_version: statusVersion } : {}),
+    }),
   })
 }
 
@@ -484,5 +581,46 @@ export function resolveEmergency(id: number, note = "") {
   return apiRequest<EmergencyAlert>(`/emergencies/${id}/resolve/`, {
     method: "POST",
     body: JSON.stringify({ note }),
+  })
+}
+
+export interface EmergencyCommunityComment {
+  id: number
+  parent: number | null
+  body: string
+  status: "visible" | "hidden" | "removed"
+  is_official_update: boolean
+  author_label: string
+  author: { id: number; full_name: string }
+  is_mine: boolean
+  created_at: string
+  replies?: EmergencyCommunityComment[]
+}
+
+export function listEmergencyCommunityComments(alertId: number) {
+  return apiRequest<EmergencyCommunityComment[]>(
+    `/emergencies/${alertId}/community-comments/`,
+  )
+}
+
+export function addEmergencyCommunityComment(
+  alertId: number,
+  body: string,
+  parent: number | null = null,
+) {
+  return apiRequest<EmergencyCommunityComment>(
+    `/emergencies/${alertId}/community-comments/`,
+    { method: "POST", body: JSON.stringify({ body, parent }) },
+  )
+}
+
+export function removeEmergencyCommunityComment(
+  alertId: number,
+  commentId: number,
+  reason = "",
+) {
+  return apiRequest<void>(`/emergencies/${alertId}/community-comments/${commentId}/`, {
+    method: "DELETE",
+    body: JSON.stringify({ reason }),
   })
 }

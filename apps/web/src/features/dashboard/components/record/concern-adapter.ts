@@ -9,21 +9,6 @@ import {
 import { toStatusView } from "./status"
 import type { RecordAction, RecordFact, RecordSection, RecordView } from "./types"
 
-/**
- * Maps a concern onto the shared record shape.
- *
- * Severity comes from the AI assessment — the review model's severity
- * judgement, floored by category and lifted to critical by an urgent-attention
- * flag. It deliberately ignores vote count and anything about the reporter,
- * because the whole point of AI severity in this project is to rank on
- * objective evidence rather than on who reported it or where they live.
- *
- * Community support still influences ordering, but only through `priority`, and
- * only inside a severity band (see `rankConcerns`).
- */
-
-/** Fallback only. The category row on the concern is preferred, so a renamed
- *  or newly added category shows correctly without touching this file. */
 const LEGACY_CATEGORY_LABEL: Record<string, string> = {
   infrastructure: "Infrastructure",
   environment: "Environment",
@@ -58,8 +43,7 @@ export function concernSeverityOf(concern: Concern): { severity: Severity; asses
 
   return deriveConcernSeverity({
     category: concern.category,
-    // Left null until the assessment completes, which makes the badge read
-    // "pending" rather than presenting a category floor as a measurement.
+
     severityEstimate: completed ? (assessment?.severity_estimate ?? null) : null,
     urgentAttention: completed ? (assessment?.urgent_attention ?? false) : false,
     relevance: completed ? (assessment?.nlp_confidence ?? null) : null,
@@ -73,14 +57,6 @@ export interface RankedConcern {
   priority: number
 }
 
-/**
- * Rank a concern queue: severity band first, priority within it.
- *
- * The band comparison is the equity guarantee. No amount of community support
- * can lift a low-severity concern above a high-severity one, which is what the
- * research requires; support still decides ordering among concerns of equal
- * severity, which is what civic participation is meant to influence.
- */
 export function rankConcerns(concerns: readonly Concern[], now: number): RankedConcern[] {
   return concerns
     .map((concern) => {
@@ -113,34 +89,21 @@ export function toConcernRecordView(concern: Concern, options: ConcernAdapterOpt
   const status = toStatusView(concern.status)
   const assessment = concern.ai_assessment
 
-  /**
-   * Two facts, not five.
-   *
-   * Dropped, and why:
-   *  · Category      — the header already prints it as the type badge, so the
-   *                    card was showing "Others" twice, two lines apart.
-   *  · Validation    — "Accepted" restated what the status badge above it
-   *                    already said, in different words.
-   *  · Tracking no.  — an audit identifier, not something an official decides
-   *                    on. It belongs where someone looks a report up (search,
-   *                    which already matches on it), not on the record they are
-   *                    currently reading.
-   *
-   * What survives is what actually changes a decision: who is handling it, and
-   * how many neighbours are behind it.
-   */
   const facts: RecordFact[] = [
     {
       label: "Assigned unit",
       value: concern.assigned_department?.short_name || concern.assigned_department?.name || null,
-      // Distinguishes "nobody has it" from a rendering failure.
+
       emptyHint: "Not routed to a unit yet",
     },
-    {
+  ]
+
+  if (concern.visibility === "community") {
+    facts.push({
       label: "Community support",
       value: `${concern.vote_count} ${concern.vote_count === 1 ? "vote" : "votes"}`,
-    },
-  ]
+    })
+  }
 
   if (assessment?.possible_duplicate) {
     facts.push({
@@ -181,7 +144,7 @@ export function toConcernRecordView(concern: Concern, options: ConcernAdapterOpt
       hoursSinceStatusChange: (options.now - new Date(concern.updated_at).getTime()) / 3_600_000,
       voteCount: concern.vote_count,
     }),
-    title: concern.title,
+    title: concern.official_title || concern.title,
     address: concern.address?.trim() || concern.barangay || null,
     elapsedLabel: `Reported ${shortDate(concern.created_at)}`,
     facts,

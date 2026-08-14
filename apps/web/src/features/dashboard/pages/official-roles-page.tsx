@@ -101,7 +101,7 @@ function RoleEditor({
   return (
     <div className="space-y-4 rounded-2xl border border-card-line bg-card p-4">
       <label className="block sm:max-w-sm">
-        <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+        <span className="text-[11px] font-bold text-muted-foreground">
           Position name
         </span>
         <input
@@ -118,7 +118,7 @@ function RoleEditor({
       <div className="space-y-4">
         {GROUPS.map((group) => (
           <fieldset key={group.title}>
-            <legend className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+            <legend className="text-[11px] font-bold text-muted-foreground">
               {group.title}
             </legend>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">

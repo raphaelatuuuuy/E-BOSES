@@ -1,44 +1,8 @@
 import * as React from "react"
-import { XIcon, type LucideIcon } from "lucide-react"
+import { ChevronDownIcon, XIcon, type LucideIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
-
-/**
- * OpsWorkspace — the container both triage screens are built on.
- *
- * ## Why this exists
- *
- * Emergencies and Concerns are the same shape: a queue you triage from, the
- * record you selected, and the actions you take on it. They were built twice,
- * by hand, as fixed-width columns on a scrolling document — and they drifted.
- * The concern view ended up at `xl:grid-cols-[420px_minmax(0,1fr)_420px]`,
- * which at a 1280px viewport leaves the *primary* column 128px after the two
- * rails and the page padding take their cut.
- *
- * Two structural fixes, both of which this component owns so neither screen
- * can regress:
- *
- * 1. **Fill the viewport, don't scroll the document.** Three columns sharing
- *    one scrollbar means the tallest one pushes the page down and the shortest
- *    one wastes the fold. Here the workspace is exactly viewport-height and
- *    each pane scrolls independently.
- *
- * 2. **Widths are the official's, not ours.** Any fixed number we pick is
- *    wrong on somebody's monitor. Panes are drag-resizable and persist per
- *    user, and the clamp guarantees the detail pane never drops below its
- *    declared minimum no matter where the handles are dragged.
- *
- * ## Responsive ladder
- *
- * | Width      | Layout                                    | Detail pane |
- * |------------|-------------------------------------------|-------------|
- * | >= 1440    | list + detail + aside inline              | ~506px      |
- * | 1024-1439  | list + detail, aside in a slide-over      | ~707-866px  |
- * | < 1024     | one pane (list or detail), aside in sheet | full width  |
- *
- * The 1440 threshold is derived, not chosen: below it, three inline panes
- * would push the detail pane under its 420px minimum.
- */
+import { CollapsedStrip } from "@/features/dashboard/components/responder/dispatch-surface"
 
 export type OpsPaneRole = "list" | "detail" | "aside"
 
@@ -46,24 +10,28 @@ export interface OpsPaneSpec {
   id: string
   role: OpsPaneRole
   node: React.ReactNode
-  /** Starting width in px. Ignored for the `detail` pane, which grows. */
+
   initial?: number
-  /** Floor. For `detail` this is enforced against every drag on every pane. */
+
   min?: number
   max?: number
-  /** Shown on the slide-over header and its trigger button. */
+
   label?: string
   icon?: LucideIcon
+
+  collapsible?: boolean
+  collapsed?: boolean
+  onCollapsedChange?: (next: boolean) => void
 }
 
 export interface OpsWorkspaceProps {
-  /** Namespaces persisted pane widths. Use the page name. */
+
   id: string
   bar?: React.ReactNode
   panes: OpsPaneSpec[]
-  /** Below 1024px, which single pane is showing. */
+
   mobileView?: "list" | "detail"
-  /** Below 1440px, whether the aside slide-over is open. */
+
   asideOpen?: boolean
   onAsideOpenChange?: (open: boolean) => void
   className?: string
@@ -71,6 +39,8 @@ export interface OpsWorkspaceProps {
 
 const DIVIDER_PX = 9
 const KEYBOARD_STEP_PX = 16
+
+const COLLAPSED_PANE_WIDTH = 68
 
 function storageKey(workspaceId: string, paneId: string) {
   return `eboses:ws:${workspaceId}:${paneId}`
@@ -89,17 +59,10 @@ function writeStoredWidth(workspaceId: string, paneId: string, width: number) {
   try {
     window.localStorage.setItem(storageKey(workspaceId, paneId), String(width))
   } catch {
-    // Private mode / quota. Widths are a convenience, never load-bearing.
+    void 0
   }
 }
 
-/**
- * Layout tier. Deliberately three, not four: an intermediate tier collapsing
- * the aside to a ~48px icon strip was considered and dropped — measured out,
- * a 48px strip at 1280px leaves the detail pane 656px, while simply moving the
- * aside into the slide-over leaves it 707px. The simpler ladder is also the
- * roomier one.
- */
 function useWorkspaceTier(): "wide" | "mid" | "mobile" {
   const [tier, setTier] = React.useState<"wide" | "mid" | "mobile">(() => {
     if (typeof window === "undefined") return "wide"
@@ -123,7 +86,6 @@ function useWorkspaceTier(): "wide" | "mid" | "mobile" {
   return tier
 }
 
-/** Measures the pane row so drag clamps can be computed against real space. */
 function useMeasuredWidth<T extends HTMLElement>() {
   const ref = React.useRef<T | null>(null)
   const [width, setWidth] = React.useState(0)
@@ -162,15 +124,20 @@ function PaneShell({
   )
 }
 
-/**
- * The resize handle. The visible 1px line is decoration; the control is the
- * 9px hit area around it (see `.ops-divider` in globals.css).
- *
- * It is a real ARIA separator, not a decorative div with a mousedown handler:
- * focusable, arrow-key operable, and double-click resets to the default. A
- * dispatcher on a trackpad should not be the only person who can lay out
- * their own console.
- */
+function CollapsedPane({
+  label,
+  onExpand,
+}: {
+  label: string
+  onExpand: () => void
+}) {
+  return (
+    <div className="flex h-full shrink-0 items-stretch" style={{ width: COLLAPSED_PANE_WIDTH }}>
+      <CollapsedStrip label={label} onExpand={onExpand} className="h-full w-full" />
+    </div>
+  )
+}
+
 function Divider({
   label,
   value,
@@ -184,29 +151,15 @@ function Divider({
   value: number
   min: number
   max: number
-  /** +1 when the resized pane is left of the handle, -1 when it is right. */
+
   direction: 1 | -1
   onResize: (nextWidth: number) => void
   onReset: () => void
 }) {
   const [dragging, setDragging] = React.useState(false)
 
-  /**
-   * The pointermove listener is registered once per gesture, so it closes over
-   * the render that started the drag. Reading props through a ref keeps it on
-   * the current ones.
-   *
-   * This is the bug that made the handle feel broken: the previous version
-   * emitted a *delta* into a callback that closed over the pane width at
-   * pointerdown, so every move recomputed `staleWidth + oneFrameDelta`. The
-   * pane jumped once on the first move and then sat still for the rest of the
-   * drag. Widths are now absolute — measured from the gesture origin, which
-   * also means no accumulated rounding drift over a long drag.
-   */
   const latest = React.useRef({ value, direction, onResize })
-  // Written after commit rather than during render: a ref mutated in the render
-  // body is unsafe under concurrent rendering. Nothing reads this during
-  // render — only the pointer and keyboard handlers, which run post-commit.
+
   React.useEffect(() => {
     latest.current = { value, direction, onResize }
   })
@@ -238,8 +191,7 @@ function Divider({
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    // Arrow keys move the separator, so the pane grows or shrinks depending on
-    // which side of the handle it sits.
+
     if (event.key === "ArrowLeft") {
       event.preventDefault()
       onResize(value - KEYBOARD_STEP_PX * direction)
@@ -276,10 +228,6 @@ function Divider({
   )
 }
 
-/** In-tree slide-over. Deliberately not the shared `Sheet`: that portals to
- *  `document.body`, which escapes the `.staff-dark` token scope and would also
- *  overlay the nav rail. Anchored inside the workspace, it covers only the
- *  work area, which is what an official expects when opening dispatch. */
 function AsideOverlay({
   open,
   onClose,
@@ -303,12 +251,14 @@ function AsideOverlay({
   if (!open) return null
 
   return (
-    <div className="absolute inset-0 z-30 flex justify-end">
+
+    <div className="absolute inset-0 z-[1100] flex justify-end">
       <button
         type="button"
         aria-label={`Close ${label}`}
         onClick={onClose}
-        className="absolute inset-0 bg-black/55 backdrop-blur-[2px]"
+
+        className="absolute inset-0 bg-black/65"
       />
       <aside
         role="dialog"
@@ -359,55 +309,57 @@ export function OpsWorkspace({
     () => (aside ? readStoredWidth(id, aside.id) : null) ?? asideInitial,
   )
 
-  const asideInline = tier === "wide" && aside != null
+  const asideInline = tier !== "mobile" && aside != null
 
-  /**
-   * Clamp a pane against its own bounds AND against the space the detail pane
-   * is owed. Without the second half, dragging the queue rail right on a
-   * narrow monitor would recreate the exact 128px column this component was
-   * built to eliminate.
-   */
+  const listCollapsed = Boolean(list?.collapsible && list.collapsed)
+  const detailCollapsed = Boolean(detail?.collapsible && detail.collapsed)
+  const asideCollapsed = Boolean(aside?.collapsible && aside.collapsed)
+  const listShown = list != null && !listCollapsed
+  const detailShown = detail != null && !detailCollapsed
+  const asideShown = aside != null && asideInline && !asideCollapsed
+
+  const dividersListDetail = listShown && detailShown ? 1 : 0
+  const dividersDetailAside = detailShown && asideShown ? 1 : 0
+  const totalDividers = dividersListDetail + dividersDetailAside
+
   const clampPane = React.useCallback(
     (pane: OpsPaneSpec | null, next: number, otherPaneWidth: number, dividers: number) => {
       if (!pane) return next
       const lower = pane.min ?? 200
       const upper = pane.max ?? 640
-      const available = rowWidth - otherPaneWidth - dividers * DIVIDER_PX - detailMin
+      const available = rowWidth - otherPaneWidth - dividers * DIVIDER_PX - (detailShown ? detailMin : 0)
       const ceiling = rowWidth > 0 ? Math.min(upper, Math.max(lower, available)) : upper
       return Math.round(Math.min(ceiling, Math.max(lower, next)))
     },
-    [rowWidth, detailMin],
+    [rowWidth, detailMin, detailShown],
   )
 
-  /**
-   * State holds the width the official *asked for*; these hold the width that
-   * actually fits right now. Deriving rather than clamping the stored value has
-   * a real behavioural payoff: shrinking the window squeezes the queue rail,
-   * and widening it again restores the width they chose instead of leaving them
-   * stuck at whatever the narrow viewport allowed.
-   */
   const effectiveAsideWidth = React.useMemo(
-    () => (aside ? clampPane(aside, asideWidth, listWidth, 2) : 0),
-    [aside, asideWidth, clampPane, listWidth],
+    () =>
+      asideShown
+        ? clampPane(
+            aside,
+            asideWidth,
+            list ? (listShown ? listWidth : COLLAPSED_PANE_WIDTH) : 0,
+            totalDividers,
+          )
+        : 0,
+    [aside, asideShown, asideWidth, clampPane, list, listShown, listWidth, totalDividers],
   )
 
   const effectiveListWidth = React.useMemo(
     () =>
-      clampPane(
-        list,
-        listWidth,
-        asideInline ? effectiveAsideWidth : 0,
-        asideInline ? 2 : 1,
-      ),
-    [asideInline, clampPane, effectiveAsideWidth, list, listWidth],
+      listShown
+        ? clampPane(
+            list,
+            listWidth,
+            aside ? (asideShown ? effectiveAsideWidth : COLLAPSED_PANE_WIDTH) : 0,
+            totalDividers,
+          )
+        : 0,
+    [listShown, list, listWidth, aside, asideShown, effectiveAsideWidth, clampPane, totalDividers],
   )
 
-  /**
-   * Stored widths are clamped to the pane's own bounds but NOT to the space
-   * currently available — that second clamp lives in the derived values above.
-   * Persisting the preference rather than the fitted result is what lets a
-   * narrow window squeeze the rail and a wide one give it back.
-   */
   const commitList = React.useCallback(
     (next: number) => {
       if (!list) return
@@ -433,14 +385,18 @@ export function OpsWorkspace({
   if (tier === "mobile") {
     const active = mobileView === "detail" ? detail : list
     return (
-      <div className={cn("flex min-h-0 w-full flex-col bg-canvas", className)}>
+
+      <div className={cn("flex min-h-0 w-full flex-1 flex-col bg-canvas", className)}>
         {bar}
-        <div className="ops-pane flex-1">{active?.node}</div>
-        {aside ? (
-          <AsideOverlay open={asideOpen} onClose={closeAside} label={aside.label ?? "Actions"}>
-            {aside.node}
-          </AsideOverlay>
-        ) : null}
+        {}
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div className="ops-pane flex-1">{active?.node}</div>
+          {aside ? (
+            <AsideOverlay open={asideOpen} onClose={closeAside} label={aside.label ?? "Actions"}>
+              {aside.node}
+            </AsideOverlay>
+          ) : null}
+        </div>
       </div>
     )
   }
@@ -456,15 +412,31 @@ export function OpsWorkspace({
 
       <div ref={rowRef} className="relative flex min-h-0 overflow-hidden">
         {list ? (
-          <PaneShell style={{ flex: "none", width: effectiveListWidth }}>{list.node}</PaneShell>
+          listShown ? (
+
+            <PaneShell
+              style={
+                detailShown
+                  ? { flex: "none", width: effectiveListWidth }
+                  : { flex: "1 1 0%", minWidth: 0 }
+              }
+            >
+              {list.node}
+            </PaneShell>
+          ) : (
+            <CollapsedPane
+              label={list.label ?? "List"}
+              onExpand={() => list.onCollapsedChange?.(false)}
+            />
+          )
         ) : null}
 
-        {list && detail ? (
+        {dividersListDetail ? (
           <Divider
-            label="Resize queue"
+            label={`Resize ${list?.label ?? "queue"}`}
             value={effectiveListWidth}
-            min={list.min ?? 200}
-            max={list.max ?? 640}
+            min={list?.min ?? 200}
+            max={list?.max ?? 640}
             direction={1}
             onResize={commitList}
             onReset={() => commitList(listInitial)}
@@ -472,25 +444,40 @@ export function OpsWorkspace({
         ) : null}
 
         {detail ? (
-          <PaneShell style={{ flex: "1 1 0%", minWidth: 0 }}>{detail.node}</PaneShell>
-        ) : null}
-
-        {asideInline && aside ? (
-          <>
-            <Divider
-              label={`Resize ${aside.label ?? "actions"}`}
-              value={effectiveAsideWidth}
-              min={aside.min ?? 260}
-              max={aside.max ?? 520}
-              direction={-1}
-              onResize={commitAside}
-              onReset={() => commitAside(asideInitial)}
+          detailShown ? (
+            <PaneShell style={{ flex: "1 1 0%", minWidth: 0 }}>{detail.node}</PaneShell>
+          ) : (
+            <CollapsedPane
+              label={detail.label ?? "Details"}
+              onExpand={() => detail.onCollapsedChange?.(false)}
             />
-            <PaneShell style={{ flex: "none", width: effectiveAsideWidth }}>{aside.node}</PaneShell>
-          </>
+          )
         ) : null}
 
-        {!asideInline && aside ? (
+        {dividersDetailAside ? (
+          <Divider
+            label={`Resize ${aside?.label ?? "actions"}`}
+            value={effectiveAsideWidth}
+            min={aside?.min ?? 260}
+            max={aside?.max ?? 520}
+            direction={-1}
+            onResize={commitAside}
+            onReset={() => commitAside(asideInitial)}
+          />
+        ) : null}
+
+        {aside && asideInline ? (
+          asideShown ? (
+            <PaneShell style={{ flex: "none", width: effectiveAsideWidth }}>{aside.node}</PaneShell>
+          ) : (
+            <CollapsedPane
+              label={aside.label ?? "Actions"}
+              onExpand={() => aside.onCollapsedChange?.(false)}
+            />
+          )
+        ) : null}
+
+        {aside && !asideInline ? (
           <AsideOverlay open={asideOpen} onClose={closeAside} label={aside.label ?? "Actions"}>
             {aside.node}
           </AsideOverlay>
@@ -500,21 +487,21 @@ export function OpsWorkspace({
   )
 }
 
-/**
- * Sticky pane header. Scrolled content passes *under* it rather than being
- * clipped by it, which is what makes a pane read as a surface with depth
- * instead of a cropped box.
- */
 export function OpsPaneHeader({
   title,
   meta,
   action,
   className,
+  collapsed,
+  onToggleCollapse,
 }: {
   title: string
   meta?: React.ReactNode
   action?: React.ReactNode
   className?: string
+
+  collapsed?: boolean
+  onToggleCollapse?: () => void
 }) {
   return (
     <header
@@ -523,10 +510,31 @@ export function OpsPaneHeader({
         className,
       )}
     >
-      <div className="flex min-w-0 items-baseline gap-2.5">
-        <h2 className="text-micro uppercase text-subtle-foreground">{title}</h2>
-        {meta ? <span className="truncate text-micro text-faint-foreground">{meta}</span> : null}
-      </div>
+      {}
+      {onToggleCollapse ? (
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? `Expand ${title}` : `Minimize ${title}`}
+          title={collapsed ? "Expand" : "Minimize"}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+        >
+          <ChevronDownIcon
+            className={cn(
+              "size-3.5 shrink-0 text-subtle-foreground transition-transform duration-200",
+              collapsed && "-rotate-90",
+            )}
+          />
+          <h2 className="truncate text-micro text-subtle-foreground">{title}</h2>
+          {meta ? <span className="truncate text-micro text-faint-foreground">{meta}</span> : null}
+        </button>
+      ) : (
+        <div className="flex min-w-0 items-center gap-1.5">
+          <h2 className="truncate text-micro text-subtle-foreground">{title}</h2>
+          {meta ? <span className="truncate text-micro text-faint-foreground">{meta}</span> : null}
+        </div>
+      )}
       {action}
     </header>
   )

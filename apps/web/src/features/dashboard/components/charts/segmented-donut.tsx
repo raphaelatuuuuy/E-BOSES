@@ -13,7 +13,7 @@ export interface SegmentedDonutProps {
   slices: readonly DonutSlice[]
   /** Big number in the middle. Defaults to the sum of the slices. */
   centerValue?: number
-  /** Small uppercase word under the number. */
+  /** Small word under the number. */
   centerLabel: string
   size?: number
   className?: string
@@ -89,7 +89,7 @@ export function SegmentedDonut({
         <span className="text-[26px] font-semibold leading-none tracking-tight text-brand-navy tabular-nums">
           {centerValue ?? total}
         </span>
-        <span className="mt-1 text-[9px] font-semibold uppercase tracking-[0.16em] text-subtle-foreground">
+        <span className="mt-1 text-[9px] font-semibold text-subtle-foreground">
           {centerLabel}
         </span>
       </div>
@@ -114,7 +114,7 @@ export function DonutLegend({
             className="size-1.5 shrink-0 rounded-full"
             style={{ backgroundColor: slice.color }}
           />
-          <dt className="min-w-0 flex-1 truncate text-[9.5px] font-bold uppercase tracking-[0.08em] text-subtle-foreground">
+          <dt className="min-w-0 flex-1 truncate text-[9.5px] font-bold tracking-[0.08em] text-subtle-foreground">
             {slice.label}
           </dt>
           <dd className="shrink-0 text-[10.5px] font-semibold text-brand-navy tabular-nums">

@@ -6,6 +6,7 @@ import { Sparkline } from "@/features/dashboard/components/charts"
 import { Panel, PanelEmpty, PanelHeader, PeriodChip } from "@/features/dashboard/components/staff/panel"
 import { categoryLabels } from "@/features/dashboard/components/concerns/concern-display"
 import { dailyCounts } from "@/features/dashboard/lib/overview-series"
+import { statusGroupOf } from "@/features/dashboard/lib/status-vocabulary"
 import { NO_UNIT, unitLabel, unitOf } from "@/features/dashboard/lib/units"
 import type { Concern, ConcernCategory } from "@/features/dashboard/api"
 
@@ -42,10 +43,8 @@ export function CategoryTable({
 
     return Array.from(categories.entries())
       .map(([category, list]) => {
-        const open = list.filter((c) => c.status !== "resolved" && c.status !== "rejected").length
+        const open = list.filter((c) => statusGroupOf(c.status) !== "closed").length
         const resolved = list.filter((c) => c.status === "resolved").length
-        // Only one name is shown when every routed concern in the category
-        // agrees; a mix prints the count instead of picking a winner.
         const assigned = new Set(
           list
             .map((concern) => {
@@ -56,7 +55,6 @@ export function CategoryTable({
         )
         return {
           category,
-          // Named from the category row so a renamed category renames here too.
           label: list[0]?.category_ref?.name ?? categoryLabels[category] ?? category,
           unit:
             assigned.size === 0
@@ -101,7 +99,7 @@ export function CategoryTable({
                         : undefined
                     }
                     className={cn(
-                      "pb-2 text-[9.5px] font-semibold uppercase tracking-[0.1em] text-subtle-foreground",
+                      "pb-2 text-[9.5px] font-semibold tracking-[0.1em] text-subtle-foreground",
                       column.align === "left" && "text-left",
                       column.align === "right" && "text-right",
                       column.align === "center" && "px-3 text-center",

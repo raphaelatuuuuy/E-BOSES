@@ -256,7 +256,7 @@ export function AddressConfirmFlow({
         : "Neighborhood"
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-white">
+    <div className="fixed inset-0 z-[500] flex flex-col bg-white">
       {/* Sign-up style: centered column only — no sidebar / shell chrome */}
       <div className="mx-auto flex h-full w-full max-w-[600px] flex-col px-5 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.5rem))] pt-[max(0.5rem,env(safe-area-inset-top))] md:px-0 md:pt-6">
         <header className="relative mb-1 flex h-12 shrink-0 items-center justify-center">
@@ -275,7 +275,7 @@ export function AddressConfirmFlow({
           ) : null}
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {/* ── Confirm ── */}
           {step === "confirm" ? (
             <div className="flex flex-col pt-4">
@@ -377,7 +377,7 @@ export function AddressConfirmFlow({
                       <div
                         id="settings-street-listbox"
                         role="listbox"
-                        className="absolute z-20 mt-1.5 max-h-72 w-full overflow-auto rounded-2xl border border-neutral-200/80 bg-white py-1 shadow-[0_8px_30px_rgba(15,23,42,0.12)]"
+                        className="absolute z-20 mt-1.5 max-h-72 w-full overflow-auto scrollbar-hide rounded-2xl border border-neutral-200/80 bg-white py-1 shadow-[0_8px_30px_rgba(15,23,42,0.12)]"
                       >
                         {!hasQuery ? (
                           <>

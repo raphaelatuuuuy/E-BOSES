@@ -1,14 +1,6 @@
 @import "tailwindcss";
 
 @font-face {
-  font-family: "BubbleBoom";
-  src: url("/fonts/bubble-boom-regular.ttf") format("truetype");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
   font-family: "Saans";
   src: url("/fonts/saans/Saans-TRIAL-Regular.otf") format("opentype");
   font-weight: 400;
@@ -32,7 +24,6 @@
   font-display: swap;
 }
 
-/* Landing page fonts (lenol.co style) */
 @font-face {
   font-family: "omegaSans";
   src: url("/fonts/landing/omegasans-regular.ttf") format("truetype");
@@ -74,10 +65,6 @@
     U+20AB;
 }
 
-/* Scopes the lenol fonts to the landing page only.
-   The @theme inline block hardcodes Saans into the font utilities, so we
-   override the utilities directly (higher specificity) instead of relying on
-   the --font-* variables alone. */
 .landing-fonts {
   --font-heading: "omegaSans", "Saans", "Epilogue", sans-serif;
   --font-sans: "Quicksand", "Saans", "Mulish", sans-serif;
@@ -121,7 +108,6 @@
   --civic-primary-strong: #ff5003;
   --radius: 0.75rem;
 
-  /* Shell chrome tokens (brand hexes used across dashboard shell/nav) */
   --color-brand-navy: #07145f;
   --color-brand-orange: #ff6a1a;
   --color-brand-orange-strong: #ea6f24;
@@ -130,9 +116,6 @@
   --color-sos-bright: #ff625a;
   --color-shell-border: #f5f5f5;
 
-  /* ── Staff navigation rail (dark navy) ─────────────────────────────
-     Deep navy derived from --color-brand-navy. The rail is the only
-     dark surface in the staff shell; content stays on --color-canvas. */
   --color-nav-bg: #050d33;
   --color-nav-raised: #0a1650;
   --color-nav-active: #142465;
@@ -141,22 +124,14 @@
   --color-nav-text-active: #ffffff;
   --color-nav-muted: rgba(255, 255, 255, 0.46);
 
-  /* ── Content canvas ───────────────────────────────────────────────
-     Cards sit on this; gives white cards definition without shadows. */
   --color-canvas: #f6f7f9;
   --color-card-line: #e7e9ee;
 
-  /* ── Bento accent surfaces ────────────────────────────────────────
-     `ink` is the near-black hero/map card; `tint` is the soft navy
-     card that breaks up a run of white panels. */
   --color-ink: #0b1020;
   --color-ink-raised: #161d33;
   --color-ink-line: rgba(255, 255, 255, 0.1);
   --color-tint: #eef1fa;
 
-  /* ── Data visualisation ───────────────────────────────────────────
-     Ordered categorical ramp. 1-2 carry the brand; 5 = resolved/good,
-     6 = emergency/bad. Never reorder — charts index into this. */
   --color-chart-1: #ff5003;
   --color-chart-2: #07145f;
   --color-chart-3: #1f6c98;
@@ -166,13 +141,6 @@
   --color-chart-track: #e8eaef;
   --color-chart-grid: #eef0f4;
 
-  /* ── Severity ─────────────────────────────────────────────────────
-     Derived from the chart ramp so a severity badge and a chart segment
-     for the same record agree. Severity is NEVER encoded by colour
-     alone: records pair these with a fixed-weight rule and an uppercase
-     label, so meaning survives colour blindness, greyscale and glare.
-     `-surface` is the tint behind a badge; `-ink` is text on that tint,
-     held at AA contrast against it. */
   --color-severity-critical: #f23b35;
   --color-severity-critical-surface: #fdecec;
   --color-severity-critical-ink: #8f1410;
@@ -186,11 +154,6 @@
   --color-severity-low-surface: #eaf2f8;
   --color-severity-low-ink: #14455f;
 
-  /* ── Status groups ────────────────────────────────────────────────
-     Eight emergency statuses and seven concern statuses collapse into
-     three groups. The group drives colour and sort order; the specific
-     status still prints as the label. An official scanning a queue needs
-     "does this need me?" answered before "what exact state is it in". */
   --color-status-open: #f23b35;
   --color-status-open-surface: #fdecec;
   --color-status-open-ink: #8f1410;
@@ -201,109 +164,38 @@
   --color-status-closed-surface: #e8f5f0;
   --color-status-closed-ink: #17513d;
 
-  /* ── Ops console additions ────────────────────────────────────────
-     Light-mode values. The staff console overrides every one of these
-     in `.staff-dark` below; they are defined here so the utilities
-     exist and so any shared component rendered on a light surface
-     (resident pages, landing) still resolves. */
-
-  /* Fourth surface step — nested panel, hover, active row. */
   --color-card-raised: #f2f4f8;
-  /* Divider between resizable panes; heavier than a card hairline. */
   --color-card-line-strong: #d4d9e4;
 
-  /* Text ramp. `subtle` is the floor for anything load-bearing;
-     `faint` is disabled/placeholder ONLY and never carries meaning. */
   --color-subtle-foreground: #6b7280;
   --color-faint-foreground: #9ca3af;
 
-  /* COLD accent — "the system is observing": live telemetry, routes,
-     timers, en-route states. Pairs with brand orange, which means
-     "a human must act". Never use ice for a button.
-
-     Deliberately the same blue as --color-severity-low and
-     --color-status-active rather than a new hue: on the light palette
-     the console should read navy + orange + this one blue, not navy +
-     orange + a teal nobody else uses. */
   --color-ice: #1f6c98;
   --color-ice-soft: rgba(31, 108, 152, 0.1);
   --color-ice-dim: #5f8fa3;
 
-  /* Text colour for filled-orange controls.
-     NOTE: white on #ff6a1a is 2.86:1 and fails WCAG AA outright — no
-     orange in the brand passes AA with white at normal text size
-     (even the darker #ff5003 only reaches 3.28:1). White is kept here
-     because it is the established brand appearance; switching this to
-     #0a0a0a raises it to 6.91:1 and is a one-line change if wanted. */
   --color-brand-orange-ink: #ffffff;
 
-  /* Official pages palette. These four consolidate a drifted hex palette
-     (#dfe7f5/#cbd8ee/#e7edf8, #43507f/#2c3a5a/#48547b, #145be7/#2447b3/#2b7fff,
-     #c5d0e6/#9eb3c9) into purpose-aligned tokens: hairline on tinted cards,
-     muted navy headings, the interactive blue, and soft slate fills. */
   --color-line-tint: #dfe7f5;
   --color-navy-muted: #43507f;
   --color-brand-blue: #145be7;
   --color-slate-soft: #c5d0e6;
 
-  /* Landing page palette (cinematic dark + citrus accent). `bg` absorbs the
-     near-black scene surfaces (#00001c/#050203/#07070b/#0b0b10) so a single
-     token keeps the dark scenes consistent; `cream` is the flag-page text. */
   --color-landing-bg: #00001c;
   --color-landing-cream: #f5f2ec;
   --color-landing-sky: #4da3ff;
 
-  /* Overlay elevation. Tinted with the brand navy rather than neutral
-     black — a pure-black shadow on a navy-and-white palette reads grey
-     and cheap. Dark surfaces override this with a black shadow plus an
-     inset top highlight, which is what separates a floating panel from
-     a flat one when there is no light to cast. */
   --shadow-overlay: 0 20px 40px -12px rgba(2, 12, 78, 0.18),
     0 2px 8px rgba(2, 12, 78, 0.06);
 
-  /* ── Map pins ─────────────────────────────────────────────────────
-     Deliberately NOT theme-scoped. The staff basemap is inverted to
-     navy on every palette (`.eboses-map-dark`), so pins are drawn
-     against a dark ground even on the light theme — routing them
-     through the page accents would sink the responder pin into the
-     tiles. Bright enough to stay legible over inverted street tiles. */
   --color-map-incident: #ff5a52;
   --color-map-responder: #4dc4ff;
   --color-map-trail: #2f7fa6;
-  /* A route nobody is travelling any more: stopped and out of the way. The
-     colour change is the point — a still blue dashed line still looks like a
-     live route that happens to have paused. */
   --color-map-route-idle: #78849f;
+  --color-map-route-casing: #0a1024;
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   STAFF OPS CONSOLE — dark scope
-   ══════════════════════════════════════════════════════════════════
-   Applied by dashboard.tsx to the staff shell wrapper, NOT to :root.
-   Two reasons it is scoped to a subtree rather than being a global
-   dark-mode flip:
-
-   1. Residents and the landing page stay light. They share components
-      with staff, so a global flip would drag them along.
-   2. `ThemeProvider` (main.tsx) already owns the `.dark` class on the
-      root element. Defining these on a descendant means the two never
-      fight — the nearer scope simply wins for its subtree.
-
-   Because these redefine the SAME semantic token names the light
-   theme uses, every component already written against `bg-card`,
-   `border-card-line`, `text-muted-foreground` etc. inverts with no
-   edit. Only components that hardcoded hex or raw Tailwind palette
-   classes need migrating.
-
-   Contrast figures below are measured against --color-canvas.
-   ══════════════════════════════════════════════════════════════════ */
 .staff-dark {
-  /* ── Surfaces: a five-step ladder ────────────────────────────────
-     On dark, elevation is surface lightness + a hairline, NEVER a
-     shadow — drop shadows do not read against a dark ground. The one
-     exception is overlays (see --shadow-overlay). Note the rail sits
-     *below* the canvas rather than above it, so the content plane
-     reads as floating over the chrome. */
   --color-nav-bg: #050914;
   --color-nav-raised: #0e1424;
   --color-nav-active: rgba(255, 255, 255, 0.06);
@@ -323,21 +215,11 @@
   --secondary: #151c2e;
   --muted: #151c2e;
 
-  /* Ink/tint were the light theme's "dark accent" surfaces. On a dark
-     ground they invert roles: ink becomes the deepest well, tint the
-     raised panel. Kept so existing `bg-ink` / `bg-tint` consumers do
-     not break. */
   --color-ink: #050914;
   --color-ink-raised: #151c2e;
   --color-ink-line: rgba(255, 255, 255, 0.07);
   --color-tint: #151c2e;
 
-  /* ── Text ramp, with measured contrast on #070b18 ────────────────
-     foreground 18.0:1 · muted 8.1:1 · subtle 5.3:1
-     `subtle` was originally #6b7794, which computes to 4.40:1 and
-     fails AA for the 10.5px uppercase micro labels it is used on.
-     #78849f clears it at 5.25:1. Do not darken it again.
-     `faint` is 2.9:1 — disabled and placeholder text only. */
   --foreground: #f2f5fa;
   --card-foreground: #f2f5fa;
   --popover-foreground: #f2f5fa;
@@ -345,17 +227,11 @@
   --civic-heading: #f2f5fa;
   --muted-foreground: #9ba6be;
   --color-subtle-foreground: #78849f;
-  --color-faint-foreground: #4a5570;
+  --color-faint-foreground: #5d6b8a;
 
   --border: rgba(255, 255, 255, 0.07);
   --input: rgba(255, 255, 255, 0.13);
 
-  /* ── Accents ─────────────────────────────────────────────────────
-     WARM = act · press · focus · you
-     COLD = live · track · measure · it
-     The split is semantic, not decorative: an official learns the
-     console in seconds because orange always means "you do something"
-     and ice always means "the system is reporting". */
   --color-brand-orange: #ff6a1a;
   --color-brand-orange-strong: #ff8133;
   --color-brand-orange-soft: rgba(255, 106, 26, 0.12);
@@ -366,7 +242,7 @@
   --accent-foreground: #0a0a0a;
   --ring: #ff6a1a;
 
-  --color-ice: #4de1ff; /* 12.7:1 */
+  --color-ice: #4de1ff;
   --color-ice-soft: rgba(77, 225, 255, 0.12);
   --color-ice-dim: #2a8da6;
 
@@ -376,17 +252,7 @@
   --color-sos-bright: #ff625a;
   --destructive: #ff4d45;
 
-  /* ── Severity ────────────────────────────────────────────────────
-      The light ramp's `-ink` values are dark-on-light and invert wrong,
-      so the whole ramp is restated rather than filtered. Surfaces are
-      translucent so a severity tint composites correctly over ANY of
-      the five surface steps instead of only over --card.
-
-      The light theme's rule still holds and is not negotiable: severity
-      is never encoded by colour alone. Every severity badge pairs these
-      with a fixed-weight bar and an uppercase label so meaning survives
-      colour blindness, greyscale and glare. */
-  --color-severity-critical: #ff4d45; /* 6.0:1 */
+  --color-severity-critical: #ff4d45;
   --color-severity-critical-surface: rgba(255, 77, 69, 0.13);
   --color-severity-critical-ink: #ffb3ae;
   --color-severity-high: #ff8a3d;
@@ -399,9 +265,6 @@
   --color-severity-low-surface: rgba(90, 169, 219, 0.13);
   --color-severity-low-ink: #b3d9f0;
 
-  /* ── Responder map chrome ────────────────────────────────────────
-      Glass surfaces, glow shadows, and rail lines for the dark
-      operations-center map screen. */
   --color-nav-glass: rgba(5, 9, 20, 0.82);
   --color-rail-glass: rgba(5, 9, 20, 0.78);
   --color-map-overlay: rgba(5, 9, 20, 0.65);
@@ -409,10 +272,6 @@
   --shadow-glow-red: 0 0 18px rgba(242, 59, 53, 0.35);
   --shadow-glow-orange: 0 0 14px rgba(255, 106, 26, 0.25);
 
-  /* ── Status groups ───────────────────────────────────────────────
-     `active` moves from the light theme's blue to ice, folding
-     "live / in progress" into the cold semantic so the warm/cold rule
-     holds without exception across the console. */
   --color-status-open: #ff4d45;
   --color-status-open-surface: rgba(255, 77, 69, 0.13);
   --color-status-open-ink: #ffb3ae;
@@ -423,9 +282,6 @@
   --color-status-closed-surface: rgba(62, 213, 152, 0.12);
   --color-status-closed-ink: #a8ecd0;
 
-  /* ── Data visualisation ──────────────────────────────────────────
-     Re-ramped for luminance separation on a dark ground. Order is
-     load-bearing — charts index into this by position. */
   --color-chart-1: #ff6a1a;
   --color-chart-2: #4de1ff;
   --color-chart-3: #8b7bff;
@@ -438,33 +294,10 @@
   --color-shell-border: rgba(255, 255, 255, 0.07);
   --civic-panel: #151c2e;
 
-  /* On a dark ground there is no light to cast, so elevation comes from
-     the inset top highlight rather than the drop shadow. */
   --shadow-overlay: 0 24px 48px -12px rgba(0, 0, 0, 0.7),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
 
   color-scheme: dark;
-}
-
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
 }
 
 @theme inline {
@@ -536,9 +369,6 @@
   --color-status-closed-surface: var(--color-status-closed-surface);
   --color-status-closed-ink: var(--color-status-closed-ink);
 
-  /* Ops console additions. Declared with var() indirection like every
-     token above, so `.staff-dark` re-scopes them without Tailwind
-     needing to know a second theme exists. */
   --color-card-raised: var(--color-card-raised);
   --color-card-line-strong: var(--color-card-line-strong);
   --color-subtle-foreground: var(--color-subtle-foreground);
@@ -561,71 +391,73 @@
   --shadow-glow-red: var(--shadow-glow-red);
   --shadow-glow-orange: var(--shadow-glow-orange);
 
-  /* ── Type scale ───────────────────────────────────────────────────
-     Seven steps, each with a weight baked in. This exists to end the
-     `font-black` + `font-extrabold` + `font-bold` pileup in the concern
-     and emergency views: when everything is emphasised, nothing is.
-
-     Two rules the components enforce:
-       · at most two weights visible in any one component
-       · at most one uppercase `micro` run per panel
-
-     `numeric` is tabular so timers and counts do not reflow as digits
-     tick — the single most visible cheapness tell in an ops console. */
   --text-display: 2.5rem;
   --text-display--line-height: 1;
   --text-display--font-weight: 600;
   --text-display--letter-spacing: -0.022em;
 
-  --text-title: 1.25rem;
+  --text-title: 1.375rem;
   --text-title--line-height: 1.3;
   --text-title--font-weight: 600;
   --text-title--letter-spacing: -0.014em;
 
-  --text-heading: 0.9375rem;
+  --text-heading: 1.0625rem;
   --text-heading--line-height: 1.4;
   --text-heading--font-weight: 600;
   --text-heading--letter-spacing: -0.006em;
 
-  --text-body: 0.84375rem;
-  --text-body--line-height: 1.55;
+  --text-body: 0.9375rem;
+  --text-body--line-height: 1.6;
   --text-body--font-weight: 450;
 
-  --text-label: 0.75rem;
+  --text-label: 0.8125rem;
   --text-label--line-height: 1.3;
   --text-label--font-weight: 550;
 
-  --text-micro: 0.65625rem;
-  --text-micro--line-height: 1.2;
-  --text-micro--font-weight: 600;
-  --text-micro--letter-spacing: 0.08em;
+  --text-micro: 0.8125rem;
+  --text-micro--line-height: 1.35;
+  --text-micro--font-weight: 500;
 
-  --text-numeric: 0.8125rem;
+  --text-numeric: 0.9375rem;
   --text-numeric--line-height: 1.2;
   --text-numeric--font-weight: 500;
+
+  --text-page-title: 2.125rem;
+  --text-page-title--line-height: 1.15;
+  --text-page-title--font-weight: 700;
+  --text-page-title--letter-spacing: -0.02em;
+
+  --text-section: 1.375rem;
+  --text-section--line-height: 1.2;
+  --text-section--font-weight: 700;
+  --text-section--letter-spacing: -0.012em;
+
+  --text-row: 1.1875rem;
+  --text-row--line-height: 1.35;
+  --text-row--font-weight: 500;
+
+  --text-read: 1.0625rem;
+  --text-read--line-height: 1.6;
+  --text-read--font-weight: 400;
+
+  --text-meta: 0.9375rem;
+  --text-meta--line-height: 1.45;
+  --text-meta--font-weight: 400;
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 
-  /* Three radii, replacing the md/lg/xl/2xl/3xl/full mix that currently
-     appears within single views. Panel for surfaces, control for
-     interactive elements, pill for badges and chips. */
   --radius-panel: 14px;
   --radius-control: 10px;
   --radius-pill: 999px;
 
-  /* Motion. Only two things in the console animate unprompted — the
-     live status pulse and en-route route dashes. Everything else moves
-     only in response to input. */
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --duration-micro: 120ms;
   --duration-panel: 200ms;
   --duration-overlay: 320ms;
 
-  /* Overlays only. Declared with var() indirection like the colour
-     tokens so each palette supplies its own elevation. */
   --shadow-overlay: var(--shadow-overlay);
   --font-sans:
     "Saans", "Mulish", -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -633,6 +465,10 @@
   --font-heading:
     "Saans", "Epilogue", "Clash Display", -apple-system,
     BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  --animate-fade-in: fadeIn 0.7s ease-out both;
   --animate-fade-slide-up: fadeSlideUp 0.5s ease-out both;
   --animate-sos-drop: sosDrop 0.6s ease-out both;
   --animate-sos-ping: sosPing 2s cubic-bezier(0, 0, 0.2, 1) infinite;
@@ -692,12 +528,19 @@
   50% { box-shadow: 0 8px 26px rgba(242, 59, 53, 0.5), 0 0 0 10px rgba(242, 59, 53, 0.1); transform: scale(1.04); }
 }
 
-/* Blink for wide, rectangular Dispatch controls (sidebar row / mobile tab).
-   The fab version above scales, which looks right on a circle but janky on a
-   full-width button — so this one pulses the red glow only. */
 @keyframes sosGlowBlink {
   0%, 100% { box-shadow: 0 2px 10px rgba(242, 59, 53, 0.35); }
   50% { box-shadow: 0 2px 18px rgba(242, 59, 53, 0.6), 0 0 0 8px rgba(242, 59, 53, 0.08); }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes fadeSlideUp {
@@ -721,7 +564,6 @@
     @apply bg-background text-foreground font-sans;
   }
 
-  /* Hide browser's native password reveal so our custom eye icon is the only one */
   input[type="password"]::-ms-reveal,
   input[type="password"]::-ms-clear {
     display: none;
@@ -731,7 +573,6 @@
   }
 }
 
-/* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
@@ -741,9 +582,6 @@
   }
 }
 
-/* Live-map pins (Leaflet divIcon). The pulse marks an active emergency only —
-   if every pin moved, the movement would stop meaning "someone needs help".
-   The reduced-motion block above already stops the ripple. */
 .eboses-pin__wrap {
   position: relative;
   display: flex;
@@ -779,10 +617,6 @@
   }
 }
 
-/* ── Alert map: dark operations theme ─────────────────────────────────────
-   The basemap is a light raster tile inverted and re-tinted in CSS rather
-   than a second tile subscription: it keeps street labels legible, costs no
-   extra requests, and stays on our navy instead of a generic grey. */
 .eboses-map-dark .leaflet-tile-pane {
   filter: invert(1) hue-rotate(190deg) brightness(0.92) contrast(0.9) saturate(0.55);
 }
@@ -796,9 +630,6 @@
 .eboses-map-dark .leaflet-control-attribution a {
   color: rgb(255 255 255 / 0.55);
 }
-/* Leaflet's default zoom control is white-on-white against the dark
-   basemap, which is the one surface that stays dark on the light
-   palette. */
 .eboses-map-dark .leaflet-bar a {
   background: #0a1650;
   color: #ffffff;
@@ -809,7 +640,6 @@
   color: #ffffff;
 }
 
-/* Tooltips on the dark basemap */
 .eboses-map-dark .leaflet-tooltip {
   background: rgba(5, 9, 20, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -825,7 +655,6 @@
   border-top-color: rgba(5, 9, 20, 0.9);
 }
 
-/* Incident pins: a core plus a bloom, so a cluster reads as intensity. */
 .eboses-map-pin {
   position: relative;
   display: flex;
@@ -870,7 +699,49 @@
   }
 }
 
-/* Hide scrollbar */
+.sos-timeline__ahead {
+  background-image: linear-gradient(
+    to bottom,
+    rgb(255 255 255 / 0.28) 0 3px,
+    transparent 3px 7px
+  );
+  background-size: 1px 7px;
+  background-repeat: repeat-y;
+}
+
+@keyframes sosTimelineBreathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgb(255 106 26 / 0.3);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgb(255 106 26 / 0.12);
+  }
+}
+.sos-timeline__now {
+  animation: sosTimelineBreathe 2.4s ease-in-out infinite;
+}
+
+@keyframes sosTimelineArrive {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.sos-timeline__row {
+  animation: sosTimelineArrive 0.32s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sos-timeline__now {
+    animation: none;
+    box-shadow: 0 0 0 4px rgb(255 106 26 / 0.25);
+  }
+  .sos-timeline__row {
+    animation: none;
+  }
+}
+
 .scrollbar-hide {
   -ms-overflow-style: none;
   scrollbar-width: none;
@@ -879,22 +750,6 @@
   display: none;
 }
 
-/* ── Ops workspace ────────────────────────────────────────────────────
-   Support styles for the OpsWorkspace primitive. Everything here is
-   presentation the primitive cannot express in utility classes. */
-
-/* Independently scrolling pane.
-
-   The scrollbar is hidden outright rather than styled thin. On the ops
-   console every pane scrolls, so a visible track on each one drew four
-   grey slabs down a screen whose whole job is a map and an incident —
-   they read as UI furniture and stole horizontal room from the
-   narrowest column. Scrolling itself is untouched: wheel, trackpad,
-   touch, keyboard (the panes stay focusable) and programmatic
-   scrollIntoView all behave exactly as before.
-
-   The `.ops-pane-fade` mask below is what tells a responder there is
-   more content, which is why removing the visual track costs nothing. */
 .ops-pane {
   min-height: 0;
   overflow-y: auto;
@@ -908,9 +763,6 @@
   display: none;
 }
 
-/* Same treatment for every other scroller inside the dark ops shell —
-   the sidebar nav, the queue sheet, the comms list — so no single
-   screen shows a track while its neighbours do. */
 .staff-dark ::-webkit-scrollbar {
   width: 0;
   height: 0;
@@ -921,10 +773,6 @@
   -ms-overflow-style: none;
 }
 
-/* ── Resizable split handle ───────────────────────────────────────────
-   The grab strip between two ops panes. It is 11px of hit area with a
-   1px line painted down the middle, so the target clears the pointer
-   floor without a fat gutter appearing in the layout. */
 .ops-resizer {
   position: relative;
   flex: none;
@@ -969,8 +817,6 @@
 .ops-resizer:focus-visible {
   outline: none;
 }
-/* While a drag is live the pointer must not turn into a text caret as it
-   crosses labels, and nothing underneath may take the selection. */
 body[data-ops-resizing="vertical"],
 body[data-ops-resizing="horizontal"] {
   user-select: none;
@@ -982,17 +828,11 @@ body[data-ops-resizing="horizontal"] * {
   cursor: row-resize !important;
 }
 
-/* Signals "there is more below" without depending on a scrollbar being
-   visible. Applied to the pane's inner wrapper, not the scroller, so it
-   does not clip the sticky header. */
 .ops-pane-fade {
   mask-image: linear-gradient(to top, transparent 0, black 24px);
   -webkit-mask-image: linear-gradient(to top, transparent 0, black 24px);
 }
 
-/* Resize divider. The 1px line is decoration; the ~9px hit area is the
-   actual control. Widening the visible line on hover/drag is the only
-   feedback — no cursor tricks, no colour change on the panes. */
 .ops-divider {
   position: relative;
   flex: none;
@@ -1023,7 +863,6 @@ body[data-ops-resizing="horizontal"] * {
 .ops-divider:focus-visible {
   outline: none;
 }
-/* While dragging, kill text selection and pointer noise across the app. */
 body[data-ops-resizing="true"] {
   cursor: col-resize;
   user-select: none;
@@ -1033,32 +872,10 @@ body[data-ops-resizing="true"] .leaflet-container {
   pointer-events: none;
 }
 
-/* Leaflet's internal panes run up to z-index 700; without an explicit clamp
-   they will punch through sibling cards (notification dropdowns, sticky
-   action bars, toasts) whenever the surrounding container is stacked at
-   `auto`. Scoping this to `.responder-map-scope` keeps it local to the
-   dispatch console — resident/official maps keep their existing behaviour. */
 .responder-map-scope .leaflet-container {
   z-index: 0 !important;
 }
 
-/* The second of the two permitted unprompted motions: a responder's
-   projected route crawls toward the incident. Direction carries the
-   meaning — a still dashed line would just be a line. The reduced-motion
-   block above already stops it. */
-@keyframes opsRouteDash {
-  to {
-    stroke-dashoffset: -18;
-  }
-}
-.ops-route-dash {
-  animation: opsRouteDash 1.1s linear infinite;
-}
-
-/* The live pulse. This and the en-route route dash are the ONLY two
-   things in the console that animate without user input — that scarcity
-   is what makes the pulse mean "someone needs help" instead of
-   meaning "this is a website". */
 @keyframes opsPulse {
   0% {
     transform: scale(0.7);
@@ -1071,8 +888,6 @@ body[data-ops-resizing="true"] .leaflet-container {
   }
 }
 
-/* Subtle glow pulse for active emergency FAB / lockdown banner.
-   Scoped to the ops console so residents never see it. */
 @keyframes glowPulse {
   0%, 100% { box-shadow: 0 0 12px rgba(242, 59, 53, 0.25); }
   50% { box-shadow: 0 0 22px rgba(242, 59, 53, 0.45); }
@@ -1089,13 +904,6 @@ body[data-ops-resizing="true"] .leaflet-container {
   animation: opsPulse 2s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
 
-/* The three ops animations run without user input and run forever, which
-   is exactly the pattern that triggers vestibular symptoms. Under
-   reduced-motion each one degrades to the *steady* form of the same
-   signal rather than disappearing — a responder who has asked for less
-   motion still has to be able to tell a live dispatch from a closed one,
-   so the meaning is carried by a static ring, a fixed glow and a solid
-   route line instead of by movement. */
 @media (prefers-reduced-motion: reduce) {
   .ops-pulse::before {
     animation: none;
@@ -1107,18 +915,12 @@ body[data-ops-resizing="true"] .leaflet-container {
     animation: none;
     box-shadow: 0 0 18px rgba(242, 59, 53, 0.35);
   }
-
-  .ops-route-dash {
-    animation: none;
-  }
 }
 
-/* Sonner toast layout — respect data-x-position from sonner */
 [data-sonner-toaster] {
   --toast-width: 356px;
 }
 
-/* Centered toasts (position="top-center" / "bottom-center") */
 [data-sonner-toaster][data-x-position="center"] {
   left: 50% !important;
   right: auto !important;
@@ -1137,7 +939,6 @@ body[data-ops-resizing="true"] .leaflet-container {
   margin-right: auto !important;
 }
 
-/* Mobile: center every toaster so toasts stay on-screen */
 @media (max-width: 767px) {
   [data-sonner-toaster] {
     left: 50% !important;
@@ -1155,7 +956,6 @@ body[data-ops-resizing="true"] .leaflet-container {
   }
 }
 
-/* Desktop: top-right only for right-aligned toasters (default) */
 @media (min-width: 768px) {
   [data-sonner-toaster][data-x-position="right"] {
     top: 1.5rem !important;
@@ -1172,16 +972,11 @@ body[data-ops-resizing="true"] .leaflet-container {
   }
 }
 
-/* Green checkmark */
 [data-sonner-toaster] [data-type="success"] [data-icon] svg {
   color: #16a34a;
   stroke: #16a34a;
 }
 
-/*
- * Close X inside the toast flex row (right side), vertically aligned with title text.
- * Static + order/margin so it matches align-items: center on the toast.
- */
 [data-sonner-toast][data-styled="true"] [data-close-button],
 [data-sonner-toast] [data-close-button] {
   position: static !important;
@@ -1216,8 +1011,62 @@ body[data-ops-resizing="true"] .leaflet-container {
   height: 0.875rem !important;
 }
 
-/* Keep title/content from colliding with the close control */
 [data-sonner-toast][data-styled="true"] [data-content] {
   min-width: 0 !important;
   flex: 1 1 auto !important;
+}
+
+:root[data-ops-contrast="high"] .staff-dark {
+  --color-nav-bg: #04060d;
+  --color-nav-raised: #131b2e;
+  --color-nav-active: rgba(255, 255, 255, 0.14);
+  --color-nav-border: rgba(255, 255, 255, 0.18);
+  --color-nav-text: #ccd6ea;
+  --color-nav-text-active: #ffffff;
+  --color-nav-muted: #b3bed6;
+
+  --color-canvas: #04060d;
+  --card: #121a2e;
+  --color-card-raised: #1e2742;
+  --color-card-line: rgba(255, 255, 255, 0.18);
+  --color-card-line-strong: rgba(255, 255, 255, 0.32);
+
+  --background: #04060d;
+  --popover: #1e2742;
+  --secondary: #1e2742;
+  --muted: #1e2742;
+
+  --color-ink: #04060d;
+  --color-ink-raised: #1e2742;
+  --color-ink-line: rgba(255, 255, 255, 0.18);
+  --color-tint: #1e2742;
+
+  --foreground: #ffffff;
+  --card-foreground: #ffffff;
+  --popover-foreground: #ffffff;
+  --secondary-foreground: #ffffff;
+  --civic-heading: #ffffff;
+  --muted-foreground: #d7deec;
+  --color-subtle-foreground: #c7d2e6;
+  --color-faint-foreground: #aeb8d2;
+
+  --border: rgba(255, 255, 255, 0.18);
+  --input: rgba(255, 255, 255, 0.32);
+
+  --color-brand-orange-soft: rgba(255, 106, 26, 0.22);
+  --color-ice-soft: rgba(77, 225, 255, 0.22);
+  --color-ice-dim: #6ed5ef;
+
+  --color-severity-critical-surface: rgba(255, 77, 69, 0.22);
+  --color-severity-high-surface: rgba(255, 138, 61, 0.22);
+  --color-severity-moderate-surface: rgba(255, 194, 77, 0.2);
+  --color-severity-low-surface: rgba(90, 169, 219, 0.22);
+
+  --color-nav-glass: rgba(4, 6, 13, 0.9);
+  --color-rail-glass: rgba(4, 6, 13, 0.88);
+  --color-map-overlay: rgba(4, 6, 13, 0.82);
+  --color-rail-line: rgba(255, 255, 255, 0.16);
+
+  --shadow-glow-red: 0 0 18px rgba(242, 59, 53, 0.5);
+  --shadow-glow-orange: 0 0 20px rgba(255, 106, 26, 0.38);
 }

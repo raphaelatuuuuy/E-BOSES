@@ -1,18 +1,18 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   CrosshairIcon,
   HomeIcon,
-  LayersIcon,
   MinusIcon,
   NavigationIcon,
   PlusIcon,
+  XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@workspace/ui/components/button"
-import { cn } from "@workspace/ui/lib/utils"
 import {
   updateMapDispatchPolicy,
+  type LiveMapEmergency,
   type LiveMapSnapshot,
   type MapDispatchPolicy,
 } from "@/features/dashboard/api"
@@ -20,13 +20,26 @@ import {
   MapWeatherDetails,
   useMapWeather,
 } from "@/features/dashboard/components/map-weather"
-import { applyRouteMotion, routeLineStyle } from "@/features/dashboard/lib/route-line"
+import { connectorLineStyle, drawRoute, routeRenderGeometry } from "@/features/dashboard/lib/route-line"
+import {
+  geoJsonToRing,
+  polygonCentroid,
+} from "@/features/dashboard/components/community-content/area-lib"
+import { advisoryMarkerHtml, advisoryMeta } from "@/features/dashboard/components/community-content/advisory-tags"
+import type { GeoJsonPolygon } from "@/features/dashboard/api"
+import {
+  MapChip,
+  MapControlButton,
+  MapControlStack,
+} from "@/features/dashboard/components/map/map-chrome"
+import { MapLegend, type MapLegendRow } from "@/features/dashboard/components/map/map-legend"
 import {
   type LayerKey,
   type Selection,
   type StreetLine,
   geoJsonToLines,
   isActiveConcern,
+  isResolvedRecord,
   isActiveEmergency,
   MAP_COLORS,
   markerDotHtml,
@@ -36,7 +49,7 @@ import {
 
 import type leaflet from "leaflet"
 
-export function AlertsLeafletMap({
+function AlertsLeafletMapInner({
   snapshot,
   layers,
   selected,
@@ -55,7 +68,7 @@ export function AlertsLeafletMap({
   onToggleLayer: (key: LayerKey) => void
   onResetLayers: () => void
   onPolicyUpdated: (policy: MapDispatchPolicy) => void
-  counts: { residents: number; responders: number; officials: number; emergencies: number; concerns: number; routes: number }
+  counts: { residents: number; responders: number; officials: number; emergencies: number; concerns: number; advisories: number; resolved?: number }
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
@@ -76,9 +89,52 @@ export function AlertsLeafletMap({
    */
   const alertLayersRef = useRef<leaflet.LayerGroup | null>(null)
   const peopleLayersRef = useRef<leaflet.LayerGroup | null>(null)
+  const streetLayersRef = useRef<leaflet.LayerGroup | null>(null)
+  const routeLayersRef = useRef<leaflet.LayerGroup | null>(null)
+  const advisoryLayersRef = useRef<leaflet.LayerGroup | null>(null)
+  const advisoryRoadsRef = useRef<
+    Map<number, { roads: Array<{ casing: leaflet.Polyline; core: leaflet.Polyline }>; wide: string | null }>
+  >(new Map())
+  const highlightGroupRef = useRef<leaflet.LayerGroup | null>(null)
+  const hoverIdRef = useRef<number | null>(null)
+  const focusIdRef = useRef<number | null>(null)
   const boundaryRef = useRef<leaflet.GeoJSON | null>(null)
   const myLocationRef = useRef<leaflet.Marker | null>(null)
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
+
+  // Advisory pin hover/focus: dimmed roads at rest; on focus the advisory's
+  // roads go full-strength and a barangay-wide advisory fills the boundary.
+  const applyAdvisoryFocus = useCallback(
+    (id: number | null) => {
+      const L = LRef.current
+      const highlight = highlightGroupRef.current
+      if (!L || !highlight) return
+      highlight.clearLayers()
+      for (const [key, entry] of advisoryRoadsRef.current) {
+        const strong = id != null && key === id
+        for (const { casing, core } of entry.roads) {
+          casing.setStyle({ opacity: strong ? 0.95 : 0.5 })
+          core.setStyle({ opacity: strong ? 0.95 : 0.35 })
+        }
+      }
+      const entry = id != null ? advisoryRoadsRef.current.get(id) : null
+      if (entry?.wide) {
+        const geometry = snapshot.map.boundary.geometry as GeoJsonPolygon | null
+        const ring = geometry ? geoJsonToRing(geometry) : []
+        if (ring.length >= 3) {
+          L.polygon(ring, {
+            color: entry.wide,
+            weight: 2,
+            opacity: 0.9,
+            fillColor: entry.wide,
+            fillOpacity: 0.15,
+            interactive: false,
+          }).addTo(highlight)
+        }
+      }
+    },
+    [snapshot.map.boundary.geometry],
+  )
   // Whether the view has been framed against a container that actually had
   // a size. Guards the one-time re-fit in the ResizeObserver below.
   const framedRef = useRef(false)
@@ -92,7 +148,6 @@ export function AlertsLeafletMap({
   // Both overlay panels start collapsed to an icon. On a phone the expanded
   // pair covered most of the map, which is the one thing this screen exists
   // to show.
-  const [legendOpen, setLegendOpen] = useState(false)
   const [zoneOpen, setZoneOpen] = useState(false)
   const [zoneDraft, setZoneDraft] = useState<MapDispatchPolicy>(snapshot.map.dispatch_policy)
   const [zoneSaving, setZoneSaving] = useState(false)
@@ -228,11 +283,18 @@ export function AlertsLeafletMap({
         markerZoomAnimation: false,
       })
       containerRef.current.classList.add("eboses-map-dark")
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
         attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
         maxZoom: 20,
         subdomains: "abcd",
+        keepBuffer: 6,
+        updateWhenIdle: true,
       }).addTo(map)
+      streetLayersRef.current = L.layerGroup().addTo(map)
+      // Hover-only barangay fill: sits beneath every advisory road/marker.
+      highlightGroupRef.current = L.layerGroup().addTo(map)
+      advisoryLayersRef.current = L.layerGroup().addTo(map)
+      routeLayersRef.current = L.layerGroup().addTo(map)
       alertLayersRef.current = L.layerGroup().addTo(map)
       peopleLayersRef.current = L.layerGroup().addTo(map)
       mapRef.current = map
@@ -422,9 +484,194 @@ export function AlertsLeafletMap({
     mapReady,
   ])
 
-  // Alerts + reference geometry. Deps are the individual snapshot slices rather
-  // than the snapshot object, so a location ping (which only replaces `people`)
-  // leaves all of this mounted.
+  // Streets are reference geometry: hundreds of polylines that change only when
+  // the OSM catalog does. They own their own group so a location ping or a
+  // selection can never rebuild them.
+  useEffect(() => {
+    const L = LRef.current
+    const group = streetLayersRef.current
+    if (!L || !group) return
+    group.clearLayers()
+    if (!layers.streets) return
+    for (const { name, line } of streetLines) {
+      const selectedStreet = selectedStreetNames.has(name)
+      if (selectedStreetNames.size && !selectedStreet) continue
+      L.polyline(line, {
+        color: selectedStreet ? MAP_COLORS.concern : MAP_COLORS.structure,
+        opacity: selectedStreet ? 0.9 : 0.28,
+        weight: selectedStreet ? 3 : 1.2,
+      }).addTo(group)
+    }
+  }, [layers.streets, selectedStreetNames, streetLines, mapReady])
+
+  // Routes follow their emergency: there is no separate Routes toggle, because a
+  // journey with no incident on the map means nothing. The route to the selected
+  // incident is drawn at full weight and the rest are dimmed.
+  useEffect(() => {
+    const L = LRef.current
+    const group = routeLayersRef.current
+    if (!L || !group) return
+    group.clearLayers()
+    if (!layers.emergencies) return
+
+    const byId = new Map(snapshot.emergencies.map((item) => [item.id, item]))
+    const liveAlertIds = new Set(
+      snapshot.emergencies.filter(isActiveEmergency).map((emergency) => emergency.id),
+    )
+    const focusId = selected?.kind === "emergency" ? selected.id : null
+
+    for (const route of snapshot.routes) {
+      if (route.status === "unavailable" || !route.geometry) continue
+      const incident = byId.get(route.alert_id)
+      if (!incident) continue
+      if (!isActiveEmergency(incident) && !layers.resolved) continue
+      const live = liveAlertIds.has(route.alert_id)
+      const focused = focusId === route.alert_id
+      const { road, approach, connectors } = routeRenderGeometry(route, {
+        destination: validCoord(incident.latitude, incident.longitude),
+      })
+      drawRoute(L, group, {
+        road,
+        approach,
+        connectors,
+        live,
+        weight: focused ? 8 : 5,
+        dim: focusId != null && !focused,
+      })
+    }
+  }, [
+    snapshot.routes,
+    snapshot.emergencies,
+    layers.emergencies,
+    layers.resolved,
+    selected?.kind,
+    selected?.id,
+    mapReady,
+  ])
+
+  // Advisory areas: the same street corridors the Community tab publishes, not
+  // a shape invented for the map. An advisory with no corridor (one street, or
+  // none) highlights its street lines instead of drawing an arbitrary blob.
+  useEffect(() => {
+    const L = LRef.current
+    const group = advisoryLayersRef.current
+    if (!L || !group) return
+    group.clearLayers()
+    advisoryRoadsRef.current.clear()
+    highlightGroupRef.current?.clearLayers()
+    hoverIdRef.current = null
+    focusIdRef.current = null
+    if (!layers.advisories) return
+
+    const bindAdvisoryFocus = (id: number, marker: leaflet.Marker) => {
+      marker.on("mouseover", () => {
+        hoverIdRef.current = id
+        applyAdvisoryFocus(id)
+      })
+      marker.on("mouseout", () => {
+        hoverIdRef.current = null
+        applyAdvisoryFocus(focusIdRef.current)
+      })
+      const icon = marker.getElement()
+      if (icon) {
+        icon.addEventListener("focus", () => {
+          focusIdRef.current = id
+          applyAdvisoryFocus(id)
+        })
+        icon.addEventListener("blur", () => {
+          focusIdRef.current = null
+          applyAdvisoryFocus(hoverIdRef.current)
+        })
+      }
+    }
+
+    for (const advisory of snapshot.advisories ?? []) {
+      const tagColor = advisoryMeta(advisory.tag).color
+      const ring = geoJsonToRing(advisory.area_geometry)
+      if (ring.length >= 3) {
+        L.polygon(ring, {
+          color: tagColor,
+          weight: 1.25,
+          opacity: 0.55,
+          fillColor: tagColor,
+          fillOpacity: 0.16,
+          interactive: false,
+        }).addTo(group)
+        const centroid = polygonCentroid(advisory.area_geometry)
+        if (centroid) {
+          const marker = L.marker(centroid, {
+            icon: L.divIcon({
+              className: "",
+              html: advisoryMarkerHtml(advisory.tag, 26),
+              iconSize: [26, 26],
+              iconAnchor: [13, 13],
+            }),
+            keyboard: true,
+          }).addTo(group)
+          bindAdvisoryFocus(advisory.id, marker)
+        }
+        continue
+      }
+      const roads: Array<{ casing: leaflet.Polyline; core: leaflet.Polyline }> = []
+      let anchor: leaflet.LatLngTuple | null = null
+      for (const geometry of advisory.street_geometries ?? []) {
+        const runs = geoJsonToLines(geometry)
+        for (const line of runs) {
+          const casing = L.polyline(line, {
+            color: "#ffffff",
+            weight: 7,
+            opacity: 0.5,
+            lineCap: "round",
+            lineJoin: "round",
+            interactive: false,
+          }).addTo(group)
+          const core = L.polyline(line, {
+            color: tagColor,
+            weight: 2.5,
+            opacity: 0.35,
+            lineCap: "round",
+            lineJoin: "round",
+            interactive: false,
+          }).addTo(group)
+          roads.push({ casing, core })
+          if (!anchor && line.length > 0) anchor = line[Math.floor(line.length / 2)] ?? null
+        }
+      }
+      if (!anchor) {
+        const bGeometry = snapshot.map.boundary.geometry as GeoJsonPolygon | null
+        const ring = bGeometry ? geoJsonToRing(bGeometry) : []
+        const centroid = ring.length > 2 ? polygonCentroid(bGeometry) : null
+        const marker = L.marker(centroid ?? [snapshot.map.center.latitude, snapshot.map.center.longitude], {
+          icon: L.divIcon({
+            className: "",
+            html: advisoryMarkerHtml(advisory.tag, 26),
+            iconSize: [26, 26],
+            iconAnchor: [13, 13],
+          }),
+          keyboard: true,
+        }).addTo(group)
+        bindAdvisoryFocus(advisory.id, marker)
+        advisoryRoadsRef.current.set(advisory.id, { roads: [], wide: tagColor })
+      } else {
+        const marker = L.marker(anchor, {
+          icon: L.divIcon({
+            className: "",
+            html: advisoryMarkerHtml(advisory.tag, 26),
+            iconSize: [26, 26],
+            iconAnchor: [13, 13],
+          }),
+          zIndexOffset: 600,
+          keyboard: true,
+        }).addTo(group)
+        bindAdvisoryFocus(advisory.id, marker)
+        if (roads.length > 0) advisoryRoadsRef.current.set(advisory.id, { roads, wide: null })
+      }
+    }
+  }, [snapshot.advisories, layers.advisories, mapReady, snapshot.map.boundary.geometry, snapshot.map.center.latitude, snapshot.map.center.longitude, applyAdvisoryFocus])
+
+  // Incident pins. Deps are the individual snapshot slices rather than the
+  // snapshot object, so a location ping (which only replaces `people`) leaves
+  // all of this mounted.
   useEffect(() => {
     const L = LRef.current
     const group = alertLayersRef.current
@@ -432,46 +679,15 @@ export function AlertsLeafletMap({
     const cleanups: Array<() => void> = []
     group.clearLayers()
 
-    if (layers.streets) {
-      for (const { name, line } of streetLines) {
-        const selectedStreet = selectedStreetNames.has(name)
-        if (selectedStreetNames.size && !selectedStreet) continue
-        L.polyline(line, {
-          color: selectedStreet ? MAP_COLORS.concern : MAP_COLORS.structure,
-          opacity: selectedStreet ? 0.9 : 0.28,
-          weight: selectedStreet ? 3 : 1.2,
-        }).addTo(group)
-      }
-    }
-
-    if (layers.routes) {
-      // A route is live only while its incident is still open. Previously every
-      // route in the snapshot drew the same solid orange dash forever, so the
-      // map kept showing journeys to emergencies that had already been resolved
-      // exactly as prominently as the one crew currently driving.
-      const liveAlertIds = new Set(
-        snapshot.emergencies.filter(isActiveEmergency).map((emergency) => emergency.id),
-      )
-      for (const route of snapshot.routes) {
-        if (route.status === "ok" && route.geometry) {
-          const live = liveAlertIds.has(route.alert_id)
-          const line = L.polyline(
-            route.geometry.coordinates.map(([lng, lat]) => [lat, lng] as leaflet.LatLngTuple),
-            routeLineStyle({ live }),
-          ).addTo(group)
-          applyRouteMotion(line, live)
-        }
-      }
-    }
-
     for (const concern of snapshot.concerns) {
       if (!layers.concerns) continue
       // The snapshot keeps closed records so an open detail panel does not
       // blank out when its subject resolves; the map only ever draws open ones.
-      if (!isActiveConcern(concern)) continue
+      const concernResolved = isResolvedRecord(concern)
+      if (!isActiveConcern(concern) && !(layers.resolved && concernResolved)) continue
       const coord = validCoord(concern.latitude, concern.longitude)
       if (!coord) continue
-      const color = MAP_COLORS.concern
+      const color = concernResolved ? MAP_COLORS.resolved : MAP_COLORS.concern
       const marker = L.marker(coord, {
         icon: L.divIcon({ className: "", html: markerDotHtml(color), iconSize: [30, 30], iconAnchor: [15, 15] }),
       })
@@ -485,23 +701,25 @@ export function AlertsLeafletMap({
       if (!layers.emergencies) continue
       // Same rule as concerns: a resolved or cancelled emergency must not keep
       // drawing a pulsing alarm pin. The pulse means "someone needs help now".
-      if (!isActiveEmergency(emergency)) continue
+      const emergencyResolved = isResolvedRecord(emergency)
+      if (!isActiveEmergency(emergency) && !(layers.resolved && emergencyResolved)) continue
       const coord = validCoord(emergency.latitude, emergency.longitude)
       if (!coord) continue
       const marker = L.marker(coord, {
-        icon: L.divIcon({ className: "", html: markerDotHtml(MAP_COLORS.emergency, true), iconSize: [30, 30], iconAnchor: [15, 15] }),
+        icon: L.divIcon({
+          className: "",
+          html: markerDotHtml(
+            emergencyResolved ? MAP_COLORS.resolved : MAP_COLORS.emergency,
+            !emergencyResolved,
+          ),
+          iconSize: [30, 30],
+          iconAnchor: [15, 15],
+        }),
       })
       const handleClick = () => onSelect({ kind: "emergency", id: emergency.id })
       marker.on("click", handleClick)
       cleanups.push(() => marker.off("click", handleClick))
       marker.addTo(group)
-    }
-
-    if (selected?.kind === "emergency") {
-      const emergency = snapshot.emergencies.find((item) => item.id === selected.id)
-      const coord = emergency ? validCoord(emergency.latitude, emergency.longitude) : null
-      const map = mapRef.current
-      if (coord && map) map.setView(coord, Math.max(map.getZoom(), 16), { animate: true })
     }
 
     return () => {
@@ -510,15 +728,29 @@ export function AlertsLeafletMap({
   }, [
     snapshot.concerns,
     snapshot.emergencies,
-    snapshot.routes,
-    layers,
-    selected?.kind,
-    selected?.id,
-    selectedStreetNames,
-    streetLines,
+    layers.concerns,
+    layers.emergencies,
+    layers.resolved,
     onSelect,
     mapReady,
   ])
+
+  // Framing the selected incident is a viewport action, not a layer action. It
+  // used to live inside the layer effect, so every websocket tick yanked the
+  // map back to the selection with an animation. Reading the incident through a
+  // ref keeps this effect keyed to the selection alone.
+  const emergenciesRef = useRef(snapshot.emergencies)
+  useEffect(() => {
+    emergenciesRef.current = snapshot.emergencies
+  }, [snapshot.emergencies])
+  useEffect(() => {
+    if (selected?.kind !== "emergency") return
+    const map = mapRef.current
+    if (!map) return
+    const emergency = emergenciesRef.current.find((item) => item.id === selected.id)
+    const coord = emergency ? validCoord(emergency.latitude, emergency.longitude) : null
+    if (coord) map.setView(coord, Math.max(map.getZoom(), 16), { animate: true })
+  }, [selected?.kind, selected?.id, mapReady])
 
   // People. Re-runs on every location ping, which is why it owns its own layer
   // group and touches nothing else on the map.
@@ -529,13 +761,17 @@ export function AlertsLeafletMap({
     const cleanups: Array<() => void> = []
     group.clearLayers()
 
-    // Who is committed to the incident on screen. Drives the assigned-responder
-    // pin below and the link line to the incident.
-    const selectedEmergency =
-      selected?.kind === "emergency"
-        ? snapshot.emergencies.find((item) => item.id === selected.id) ?? null
-        : null
-    const assignedResponderId = selectedEmergency?.current_assignment?.responder.id ?? null
+    // Every responder committed to an open incident, not only the one on the
+    // selected incident. A dispatcher must be able to see who is going where
+    // without clicking each emergency in turn; selection only decides which leg
+    // is lifted and which are held back.
+    const assignmentByResponder = new Map<number, LiveMapEmergency>()
+    for (const emergency of snapshot.emergencies) {
+      if (!isActiveEmergency(emergency)) continue
+      const responderId = emergency.current_assignment?.responder.id
+      if (responderId != null) assignmentByResponder.set(responderId, emergency)
+    }
+    const focusId = selected?.kind === "emergency" ? selected.id : null
 
     for (const person of snapshot.people) {
       const coord = validCoord(person.latitude, person.longitude)
@@ -545,7 +781,9 @@ export function AlertsLeafletMap({
       if (person.role === "first_responder" && !layers.responders) continue
 
       const isResponder = person.role === "first_responder"
-      const isAssigned = isResponder && person.id === assignedResponderId
+      const incident = isResponder ? assignmentByResponder.get(person.id) ?? null : null
+      const isAssigned = incident != null
+      const isFocused = isAssigned && incident.id === focusId
 
       // Residents and officials are context. Responders are the resource a
       // dispatcher allocates, so they get their own hue, and the one assigned
@@ -561,33 +799,35 @@ export function AlertsLeafletMap({
       const marker = L.marker(coord, {
         icon: L.divIcon({
           className: "",
-          html: markerDotHtml(color, isAssigned),
+          html: markerDotHtml(color, isFocused),
           iconSize: [30, 30],
           iconAnchor: [15, 15],
         }),
         title: isResponder
           ? `${person.full_name}${person.is_on_duty ? "" : " (off duty)"}`
           : person.full_name,
-        zIndexOffset: isAssigned ? 500 : 0,
+        zIndexOffset: isFocused ? 500 : isAssigned ? 250 : 0,
       })
       const handleClick = () => onSelect({ kind: "person", id: person.id })
       marker.on("click", handleClick)
       cleanups.push(() => marker.off("click", handleClick))
       marker.addTo(group)
 
-      // A line from the assigned responder to the incident, so "who is going to
-      // this" is answered by looking at the map rather than reading a panel.
-      if (isAssigned && selectedEmergency) {
-        const target = validCoord(selectedEmergency.latitude, selectedEmergency.longitude)
-        if (target) {
-          // Straight-line bearing, not a road route — thinner and fainter, and
-          // it only crawls while the incident is still open.
-          const live = isActiveEmergency(selectedEmergency)
-          const link = L.polyline(
-            [coord, target],
-            routeLineStyle({ live, approximate: true }),
-          ).addTo(group)
-          applyRouteMotion(link, live)
+      // The leg from a committed responder to their incident, so "who is going
+      // to this" is answered by looking at the map rather than reading a panel.
+      // It lives here rather than with the route because it has to follow the
+      // responder's position, which updates on every ping.
+      if (incident) {
+        // Onto the route when there is one, straight to the incident when
+        // there is not.
+        const assignedRoute = snapshot.routes.find(
+          (item) => item.responder_id === person.id && item.alert_id === incident.id,
+        )
+        const target = validCoord(incident.latitude, incident.longitude)
+        const { connectors } = routeRenderGeometry(assignedRoute, { origin: coord })
+        const link = connectors[0] ?? (target ? [coord, target] : null)
+        if (link) {
+          L.polyline(link, connectorLineStyle(focusId != null && !isFocused)).addTo(group)
         }
       }
     }
@@ -598,6 +838,7 @@ export function AlertsLeafletMap({
   }, [
     snapshot.people,
     snapshot.emergencies,
+    snapshot.routes,
     layers.residents,
     layers.officials,
     layers.responders,
@@ -608,131 +849,20 @@ export function AlertsLeafletMap({
   ])
 
 
-  const layerRows: Array<{ key: LayerKey; label: string; count?: number; tone: string }> = [
-    { key: "emergencies", label: "Emergencies", count: counts.emergencies, tone: MAP_COLORS.emergency },
-    { key: "concerns", label: "Concerns", count: counts.concerns, tone: MAP_COLORS.concern },
-    { key: "responders", label: "Responders", count: counts.responders, tone: MAP_COLORS.responder },
-    { key: "residents", label: "Residents", count: counts.residents, tone: MAP_COLORS.structure },
+  const layerRows: MapLegendRow<LayerKey>[] = [
+    { key: "emergencies", label: "Emergencies", hint: "Live incidents and their routes", count: counts.emergencies, tone: MAP_COLORS.emergency },
+    { key: "concerns", label: "Concerns", hint: "Reports neighbours have filed", count: counts.concerns, tone: MAP_COLORS.concern },
+    { key: "responders", label: "Responders", hint: "Crews on and off duty", count: counts.responders, tone: MAP_COLORS.responder },
+    { key: "residents", label: "Residents", hint: "Devices reporting a location", count: counts.residents, tone: MAP_COLORS.structure },
     { key: "officials", label: "Officials", count: counts.officials, tone: MAP_COLORS.structure },
-    { key: "routes", label: "Routes", count: counts.routes, tone: MAP_COLORS.route },
+    { key: "advisories", label: "Advisory areas", hint: "Streets a barangay advisory covers", count: counts.advisories, tone: MAP_COLORS.advisory },
+    { key: "resolved", label: "Resolved", hint: "Closed records, kept off the map by default", count: counts.resolved ?? 0, tone: MAP_COLORS.resolved },
   ]
-  const referenceRows: Array<{ key: LayerKey; label: string }> = [
-    { key: "boundary", label: "Barangay boundary" },
+  const referenceRows: MapLegendRow<LayerKey>[] = [
+    { key: "boundary", label: "Boundary" },
     { key: "streets", label: "Streets" },
     { key: "acceptance_zone", label: "Acceptance zone" },
   ]
-  const peak = Math.max(1, counts.emergencies, counts.concerns, counts.responders, counts.residents)
-
-  /**
-   * The layer panel, rendered in two places: bottom-right on desktop, and
-   * stacked under the acceptance zone on mobile where the bottom edge
-   * belongs to the alert sheet. Collapsed it is a single icon in the same
-   * 40px glass style as the controls.
-   */
-  function renderLayerPanel() {
-    return (
-      <>
-          {!legendOpen ? (
-            <button
-              type="button"
-              onClick={() => setLegendOpen(true)}
-              aria-label="Show the map layers"
-              title="Layers"
-              className="flex size-10 items-center justify-center rounded-panel border border-white/10 bg-nav-bg/80 text-white/70 backdrop-blur-md transition-colors hover:bg-nav-raised/80 hover:text-white"
-            >
-              <LayersIcon className="size-4" />
-            </button>
-          ) : (
-          <div className="w-[min(15.5rem,calc(100vw-1.5rem))] overflow-hidden rounded-panel border border-white/10 bg-nav-bg/85 backdrop-blur-md">
-            <div className="flex items-center justify-between gap-2 px-3.5 pt-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/45">
-                On the map
-              </span>
-              <span className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={onResetLayers}
-                  className="text-[10.5px] font-bold text-brand-orange transition-opacity hover:opacity-80"
-                >
-                  Reset
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLegendOpen(false)}
-                  aria-label="Hide the map layers"
-                  className="-mr-1 flex size-6 shrink-0 items-center justify-center rounded-control text-white/40 transition-colors hover:bg-card/10 hover:text-white"
-                >
-                  <MinusIcon className="size-3.5" strokeWidth={2.6} />
-                </button>
-              </span>
-            </div>
-
-            <div className="px-3.5 pb-3.5 pt-2">
-              {layerRows.map((row) => (
-                <button
-                  key={row.key}
-                  type="button"
-                  onClick={() => onToggleLayer(row.key)}
-                  aria-pressed={layers[row.key]}
-                  className="group flex w-full flex-col gap-1 py-[5px] text-left"
-                >
-                  <span className="flex items-center justify-between gap-2">
-                    <span
-                      className={cn(
-                        "truncate text-[11.5px] font-bold transition-colors",
-                        layers[row.key] ? "text-white/85" : "text-white/25",
-                      )}
-                    >
-                      {row.label}
-                    </span>
-                    <span
-                      className={cn(
-                        "shrink-0 text-[11.5px] font-semibold tabular-nums transition-colors",
-                        layers[row.key] ? "text-white" : "text-white/25",
-                      )}
-                    >
-                      {row.count ?? 0}
-                    </span>
-                  </span>
-                  {/* The bar IS the legend swatch: colour identifies the layer,
-                      length compares it to the busiest one. */}
-                  <span className="h-[3px] w-full overflow-hidden rounded-full bg-card/8">
-                    <span
-                      className="block h-full rounded-full transition-[width,opacity] duration-500"
-                      style={{
-                        width: `${Math.max(((row.count ?? 0) / peak) * 100, row.count ? 6 : 0)}%`,
-                        backgroundColor: row.tone,
-                        opacity: layers[row.key] ? 1 : 0.25,
-                      }}
-                    />
-                  </span>
-                </button>
-              ))}
-
-              <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-white/10 pt-2.5">
-                {referenceRows.map((row) => (
-                  <button
-                    key={row.key}
-                    type="button"
-                    onClick={() => onToggleLayer(row.key)}
-                    aria-pressed={layers[row.key]}
-                    className={cn(
-                      "rounded-full px-2 py-1 text-[10px] font-bold transition-colors",
-                      layers[row.key]
-                        ? "bg-card/12 text-white/80"
-                        : "bg-card/5 text-white/30 hover:text-white/55",
-                    )}
-                  >
-                    {row.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-          )}
-      </>
-    )
-  }
 
   return (
     // `absolute inset-0`, not `size-full`. A percentage height only resolves
@@ -744,71 +874,72 @@ export function AlertsLeafletMap({
     <div className="absolute inset-0 overflow-hidden bg-nav-bg">
       <div ref={containerRef} className="absolute inset-0" />
 
-      {/* One control column, not five scattered clusters. Zoom sits at the
-          bottom of the same stack so the whole set is one target area. */}
+      {/* One control column, same order and geometry as the resident map:
+          Home, Locate, Zoom, then weather. The official surface adds the
+          acceptance-zone editor below them. */}
       <div className="absolute right-3 top-3 z-[600] flex flex-col items-end gap-2">
-        <div className="flex flex-col overflow-hidden rounded-panel border border-white/10 bg-nav-bg/80 backdrop-blur-md">
-          <GlassControl label="Frame the barangay" onClick={goHomeOnMap}>
-            <HomeIcon className="size-4" />
-          </GlassControl>
-          <GlassControl label="My current location" onClick={goToCurrentLocation} busy={locating}>
-            <NavigationIcon className="size-4" />
-          </GlassControl>
-          <GlassControl label="Zoom in" onClick={() => mapRef.current?.zoomIn()}>
-            <PlusIcon className="size-4" />
-          </GlassControl>
-          <GlassControl label="Zoom out" onClick={() => mapRef.current?.zoomOut()} last>
-            <MinusIcon className="size-4" />
-          </GlassControl>
-        </div>
+        <MapControlStack tone="dark">
+          <MapControlButton tone="dark" label="Frame the barangay" onClick={goHomeOnMap}>
+            <HomeIcon className="size-5" strokeWidth={1.9} />
+          </MapControlButton>
+          <MapControlButton
+            tone="dark"
+            divider
+            label="Current location"
+            onClick={goToCurrentLocation}
+            loading={locating}
+          >
+            <NavigationIcon className="size-5" strokeWidth={1.9} />
+          </MapControlButton>
+          <MapControlButton tone="dark" divider label="Zoom in" onClick={() => mapRef.current?.zoomIn()}>
+            <PlusIcon className="size-5" strokeWidth={2.1} />
+          </MapControlButton>
+          <MapControlButton tone="dark" divider label="Zoom out" onClick={() => mapRef.current?.zoomOut()}>
+            <MinusIcon className="size-5" strokeWidth={2.1} />
+          </MapControlButton>
+        </MapControlStack>
 
-        <button
-          type="button"
+        <MapChip
+          tone="dark"
+          label="Weather"
+          expanded={weatherOpen}
           onClick={() => setWeatherOpen((value) => !value)}
-          aria-expanded={weatherOpen}
-          className="flex items-center gap-1.5 rounded-panel border border-white/10 bg-nav-bg/80 px-2.5 py-2 text-[12px] font-bold text-white backdrop-blur-md transition-colors hover:bg-nav-raised/80"
         >
-          <span className="text-brand-orange">{Math.round(weather.temperature ?? 0)}&deg;</span>
-          <span className="text-white/50">C</span>
-        </button>
+          <span>{weather.temperature != null ? `${Math.round(weather.temperature)}°C` : "—"}</span>
+        </MapChip>
 
         {weatherOpen ? (
-          <div className="w-[min(19rem,calc(100vw-1.5rem))] rounded-panel border border-white/10 bg-nav-bg/95 p-4 text-white backdrop-blur-md">
-            <p className="text-[14px] font-semibold">{weather.placeName}</p>
-            <p className="text-[11px] font-semibold text-white/45">Live barangay weather</p>
+          <div className="w-[min(19rem,calc(100vw-1.5rem))] rounded-xl border border-white/10 bg-nav-bg/95 p-4 text-white shadow-lg backdrop-blur-md">
+            <p className="text-[15px] font-semibold">{weather.placeName}</p>
+            <p className="mt-0.5 text-[13px] text-white/50">Live barangay weather</p>
             <div className="mt-3 [&_*]:!text-white/70">
               <MapWeatherDetails weather={weather} />
             </div>
           </div>
         ) : null}
 
-        {/* Collapses to a single icon in the same 40px glass style as the
-            controls above it, so a collapsed panel reads as another button in
-            the stack rather than as a shrunken card. */}
         {layers.acceptance_zone ? (
           zoneOpen ? (
-            <div className="w-[min(15rem,calc(100vw-1.5rem))] overflow-hidden rounded-panel border border-white/10 bg-nav-bg/85 backdrop-blur-md">
-              <div className="flex items-start gap-2 px-3 pt-2.5">
+            <div className="w-[min(16rem,calc(100vw-1.5rem))] overflow-hidden rounded-xl border border-white/10 bg-nav-bg/85 shadow-lg backdrop-blur-md">
+              <div className="flex items-start gap-2 border-b border-white/10 px-3.5 py-3">
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[9.5px] font-semibold uppercase tracking-[0.14em] text-white/40">
-                    Acceptance zone
-                  </span>
-                  <span className="mt-0.5 block text-[17px] font-semibold leading-none text-white tabular-nums">
+                  <span className="block text-[13px] font-semibold text-white">Acceptance zone</span>
+                  <span className="mt-1 block text-[19px] font-semibold leading-none tabular-nums text-white">
                     {Math.round(Number(zoneDraft.acceptance_radius_meters) || 0)}
-                    <span className="ml-1 text-[11px] font-bold text-white/50">m</span>
+                    <span className="ml-1 text-[13px] font-medium text-white/50">m</span>
                   </span>
                 </span>
                 <button
                   type="button"
                   onClick={() => setZoneOpen(false)}
                   aria-label="Collapse the acceptance zone panel"
-                  className="-mr-1 flex size-6 shrink-0 items-center justify-center rounded-control text-white/40 transition-colors hover:bg-card/10 hover:text-white"
+                  className="-mr-1 flex size-7 shrink-0 items-center justify-center rounded-lg text-white/50 transition-colors hover:bg-white/10 hover:text-white"
                 >
-                  <MinusIcon className="size-3.5" strokeWidth={2.6} />
+                  <XIcon className="size-4" strokeWidth={2.2} />
                 </button>
               </div>
-              <div className="px-3 pb-3 pt-2">
-                <p className="text-[11px] font-medium leading-snug text-white/45">
+              <div className="px-3.5 py-3">
+                <p className="text-[13px] leading-relaxed text-white/50">
                   Drag the centre or the edge handle on the map, then save.
                 </p>
                 <Button
@@ -816,7 +947,7 @@ export function AlertsLeafletMap({
                   size="sm"
                   disabled={!zoneDirty || zoneSaving}
                   onClick={() => void saveZoneDraft()}
-                  className="mt-2.5 h-8 w-full rounded-control bg-brand-orange text-[12px] font-semibold text-brand-orange-ink hover:bg-brand-orange-strong disabled:bg-card/10 disabled:text-white/35"
+                  className="mt-3 h-9 w-full rounded-lg bg-brand-orange text-[13px] font-semibold text-brand-orange-ink hover:bg-brand-orange-strong disabled:bg-white/10 disabled:text-white/35"
                 >
                   {zoneSaving ? "Saving" : zoneDirty ? "Save zone" : "Saved"}
                 </Button>
@@ -828,57 +959,34 @@ export function AlertsLeafletMap({
               onClick={() => setZoneOpen(true)}
               aria-label="Open the acceptance zone panel"
               title="Acceptance zone"
-              className="relative flex size-10 items-center justify-center rounded-panel border border-white/10 bg-nav-bg/80 text-white/70 backdrop-blur-md transition-colors hover:bg-nav-raised/80 hover:text-white"
+              className="relative flex size-10 items-center justify-center rounded-xl border border-white/10 bg-nav-bg/85 text-white shadow-md backdrop-blur-md transition-colors hover:bg-white/10"
             >
-              <CrosshairIcon className="size-4" />
+              <CrosshairIcon className="size-5" strokeWidth={1.9} />
               {zoneDirty ? (
                 <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-brand-orange" />
               ) : null}
             </button>
           )
         ) : null}
-
-        {/* On phones the bottom edge belongs to the alert sheet, so the
-            layer panel stacks under the acceptance zone instead. */}
-        <div className="flex flex-col items-end gap-2 lg:hidden">{renderLayerPanel()}</div>
       </div>
 
-      {/* Layer panel. Counts double as the bar chart, so the legend and the
-          summary are one object instead of two competing cards. */}
-      <div className="absolute bottom-3 right-3 z-[500] hidden justify-end lg:flex">
-        {renderLayerPanel()}
+      {/* Below the map, clear of the control column. Collapsed it is one icon,
+          so the legend never covers the barangay. */}
+      <div className="absolute bottom-3 right-3 z-[500] flex flex-col items-end">
+        <MapLegend
+          tone="dark"
+          rows={layerRows}
+          reference={referenceRows}
+          active={layers}
+          onToggle={onToggleLayer}
+          onReset={onResetLayers}
+        />
       </div>
     </div>
   )
 }
 
-/** One row of the control stack. Hairline divider except on the last. */
-function GlassControl({
-  label,
-  onClick,
-  children,
-  busy = false,
-  last = false,
-}: {
-  label: string
-  onClick: () => void
-  children: ReactNode
-  busy?: boolean
-  last?: boolean
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      className={cn(
-        "flex size-10 items-center justify-center text-white/70 transition-colors hover:bg-card/10 hover:text-white",
-        !last && "border-b border-white/10",
-        busy && "animate-pulse text-brand-orange",
-      )}
-    >
-      {children}
-    </button>
-  )
-}
+// Memoised because it owns the Leaflet instance: an unmemoised parent render
+// used to re-run every layer effect and rebuild every polyline and pin.
+export const AlertsLeafletMap = memo(AlertsLeafletMapInner)
+

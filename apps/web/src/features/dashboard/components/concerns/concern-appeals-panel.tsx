@@ -106,7 +106,7 @@ export function ConcernAppealsPanel({
               {editable ? (
                 <>
                   <label className="mt-3 block">
-                    <span className="text-micro uppercase tracking-wide text-subtle-foreground">
+                    <span className="text-micro text-subtle-foreground">
                       Reason for your decision
                     </span>
                     <textarea

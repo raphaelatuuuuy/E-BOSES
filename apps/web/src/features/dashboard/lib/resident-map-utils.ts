@@ -8,23 +8,15 @@ import type {
 
 import type leaflet from "leaflet"
 
-/**
- * Coordinate, feed-merge, and emergency-brief utilities shared by
- * `pages/resident-alerts-map.tsx` and `components/resident-map/*`.
- * Pulled out per the D1.2 extraction brief so the leaflet map component and
- * the page don't duplicate this logic.
- */
-
-/** Default pin for Marikina Heights (used until map meta loads). */
 export const BARANGAY_CENTER = { lat: 14.6507, lng: 121.1133 }
-/** Loose Marikina City bbox — pins outside this are treated as invalid. */
+
 export const MAP_BOUNDS = {
   minLat: 14.58,
   maxLat: 14.72,
   minLng: 121.05,
   maxLng: 121.18,
 }
-/** Max distance from barangay center to treat device GPS as local. */
+
 export const LOCAL_GPS_MAX_M = 25_000
 
 export const categoryMeta: Record<ConcernCategory, { label: string; color: string; bg: string }> = {
@@ -44,21 +36,9 @@ export function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: 
   return 2 * r * Math.asin(Math.sqrt(a))
 }
 
-export function timeAgo(value?: string | null) {
-  if (!value) return ""
-  const diffMs = Date.now() - new Date(value).getTime()
-  const minutes = Math.max(1, Math.floor(diffMs / 60000))
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h`
-  const days = Math.floor(hours / 24)
-  if (days < 7) return `${days}d`
-  return `${Math.floor(days / 7)}w`
-}
-
 export function formatDistance(meters: number | null) {
   if (meters == null || !Number.isFinite(meters)) return null
-  // Absurd distances (wrong GPS origin) — hide rather than show 13000 km
+
   if (meters > 80_000) return null
   if (meters < 1000) return `${Math.round(meters)} m away`
   return `${(meters / 1000).toFixed(1)} km away`
@@ -73,19 +53,12 @@ export function inMapBounds(lat: number, lng: number) {
   )
 }
 
-/**
- * Normalize report coordinates for Leaflet [lat, lng].
- * - Rejects NaN / out-of-range
- * - Auto-swaps if values were stored as [lng, lat] (common PH bug: 121 / 14)
- * - Rejects pins far outside Marikina so markers don't "teleport" across the world
- */
 export function validCoord(lat?: string | number | null, lng?: string | number | null) {
   if (lat == null || lng == null || lat === "" || lng === "") return null
   let latitude = Number(lat)
   let longitude = Number(lng)
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
 
-  // Classic swap: longitude-looking value in latitude field
   if (
     Math.abs(latitude) > 90 &&
     Math.abs(longitude) <= 90 &&
@@ -107,7 +80,6 @@ export function hasMapCoords(post: Concern) {
   return Boolean(validCoord(post.latitude, post.longitude))
 }
 
-/** Prefer device GPS only when it is near Marikina Heights. */
 export function isLocalGps(pos: { lat: number; lng: number } | null) {
   if (!pos) return false
   if (inMapBounds(pos.lat, pos.lng)) return true
@@ -115,10 +87,6 @@ export function isLocalGps(pos: { lat: number; lng: number } | null) {
   return d <= LOCAL_GPS_MAX_M
 }
 
-/**
- * Community feed intentionally masks lat/lng (privacy_safe).
- * Resident alerts-map snapshot still exposes public pin coords — merge them back.
- */
 export function mergeFeedWithMapCoords(
   feed: Concern[],
   mapConcerns: ResidentMapConcern[] | undefined,
@@ -142,12 +110,11 @@ export function mergeFeedWithMapCoords(
       ...post,
       latitude: coords.latitude,
       longitude: coords.longitude,
-      // Keep barangay-level address from feed privacy, but prefer map street if present
+
       address: coords.address || post.address,
     }
   })
 
-  // Map-only pins (not in feed payload) still show as lightweight list/map items
   for (const c of mapConcerns ?? []) {
     if (feedById.has(c.id)) continue
     if (!validCoord(c.latitude, c.longitude)) continue
@@ -164,8 +131,13 @@ export function mapConcernToFeedPost(c: ResidentMapConcern): Concern {
     tracking_id: c.tracking_id,
     validation_status: "accepted",
     validation_summary: "",
+    summary: "",
     rejection_code: "",
     status_version: 0,
+    also_reported_count: 0,
+    also_reported_by: null,
+    recurrence_of: null,
+    community_incident: null as never,
     reporter: {
       id: c.reporter.id,
       full_name: c.reporter.full_name,
@@ -177,10 +149,7 @@ export function mapConcernToFeedPost(c: ResidentMapConcern): Concern {
     title: c.title,
     description: c.description || "",
     category: c.category,
-    // The live-map payload is deliberately slim and carries neither the
-    // category row nor the routed unit. Both are nullable on Concern, so null
-    // is the accurate value here rather than a fabricated placeholder — a
-    // map-only pin genuinely has not been routed to a department.
+
     category_ref: null,
     assigned_department: null,
     status: c.status as ConcernStatus,
@@ -192,6 +161,10 @@ export function mapConcernToFeedPost(c: ResidentMapConcern): Concern {
     barangay: c.barangay,
     update_text: "",
     visibility: "community",
+    official_title: "",
+    archived_at: null,
+    reopened_at: null,
+    reopen_count: 0,
     media: c.preview_url
       ? [
           {
@@ -203,13 +176,12 @@ export function mapConcernToFeedPost(c: ResidentMapConcern): Concern {
             raw_url: c.preview_url,
             validation_status: "accepted" as const,
             validation_detail: "",
-            // The live-map payload only ever carries a preview URL the server
-            // already decided was publicly displayable, so by construction this
-            // pin's image is a cleared one. There is no privacy pipeline detail
-            // in the payload to report beyond that.
+
             privacy_state: "protected" as const,
             public_visible: true,
             privacy_detected_classes: [],
+            relevance_state: "unverified",
+            relevance_reason: "",
             redactions: [],
             uploaded_at: c.created_at,
           },
@@ -226,7 +198,6 @@ export function mapConcernToFeedPost(c: ResidentMapConcern): Concern {
   }
 }
 
-/** Human-readable SOS / emergency pipeline status — resident-facing wording */
 export function emergencyStatusLabel(status: string): { label: string; live: boolean } {
   const s = status.toLowerCase()
   if (s === "submitted") return { label: "Alert sent", live: true }

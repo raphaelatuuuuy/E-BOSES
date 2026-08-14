@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { useLocation } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import {
+  ArrowLeftIcon,
   LoaderCircleIcon,
   MapIcon,
-  MessagesSquareIcon,
   ShieldCheckIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -11,12 +11,16 @@ import { toast } from "sonner"
 import { cn } from "@workspace/ui/lib/utils"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { MOBILE_BAR_CLEARANCE } from "@/features/dashboard/lib/shell"
 import { distanceKm } from "@/features/dashboard/lib/responder-format"
+import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/record/status"
 import {
+  getEmergencyRoute,
   listAssignedEmergencies,
   sendEmergencyLocationPing,
+  setEmergencyRouteProfile,
   type EmergencyAlert,
+  type EmergencyRoute,
+  type TravelProfile,
 } from "@/features/dashboard/emergency-api"
 import {
   listAssignedConcerns,
@@ -24,9 +28,9 @@ import {
   type Concern,
 } from "@/features/dashboard/api"
 import { ResponderLeafletMap } from "@/features/dashboard/components/responder/responder-leaflet-map"
+import { OpsContrastToggle } from "@/features/dashboard/components/responder/ops-contrast-toggle"
+import { DutyToggle } from "@/features/dashboard/components/responder/duty-toggle"
 import { DispatchOverviewCard } from "@/features/dashboard/components/responder/dispatch-header"
-import { DispatchComms } from "@/features/dashboard/components/responder/dispatch-comms"
-import { DispatchQueueRail } from "@/features/dashboard/components/responder/dispatch-queue-rail"
 import {
   BackupFab,
   DispatchActionBar,
@@ -37,7 +41,24 @@ import {
   Pane,
 } from "@/features/dashboard/components/responder/dispatch-surface"
 import { usePaneCollapse } from "@/features/dashboard/components/responder/pane-collapse"
+import {
+  drainGpsPings,
+  enqueueGpsPing,
+} from "@/features/dashboard/lib/offline-gps-queue"
+import {
+  isPositionStale,
+  readLastKnownPosition,
+  writeLastKnownPosition,
+  type KnownPosition,
+} from "@/features/dashboard/lib/last-known-position"
+import { latLngsFromGeoJson } from "@/features/dashboard/lib/route-line"
+import {
+  offRouteMeters,
+  stepProgress,
+  type StepProgress,
+} from "@/features/dashboard/lib/route-progress"
 import { ResizableSplit } from "@/features/dashboard/components/workspace/resizable-split"
+import { MOBILE_NAV_CLEARANCE, useIsDesktop } from "@/features/dashboard/lib/shell"
 import { useIncidentActions } from "@/features/dashboard/components/responder/use-incident-actions"
 
 /**
@@ -57,26 +78,11 @@ import { useIncidentActions } from "@/features/dashboard/components/responder/us
 
 const SELECTED_DISPATCH_KEY = "eboses:responder-dispatch-id"
 
-// Active means "not settled": an emergency is still live through arrival, in
-// progress, backup and escalation — only resolved/closed/cancelled/false
-// alarm/invalid read as done. Mirrors ACTIVE_DISPATCH_STATUSES in
-// use-assigned-dispatches.ts so the header count and the sidebar alarm agree.
-const ACTIVE_STATUSES = new Set([
-  "submitted",
-  "routing",
-  "routed",
-  "awaiting_acknowledgment",
-  "acknowledged",
-  "en_route",
-  "nearby",
-  "arrived",
-  "resident_safe",
-  "backup_requested",
-  "backup_assigned",
-  "in_progress",
-  "transfer_required",
-  "escalation_required",
-])
+/** Past this the responder is not on the planned line any more. */
+const OFF_ROUTE_METERS = 40
+/** Consecutive fixes required, so one wide reading is not a wrong turn. */
+const OFF_ROUTE_FIXES = 2
+const REROUTE_COOLDOWN_MS = 20_000
 
 function locationFailureMessage(error: unknown) {
   if (error instanceof Error && error.message) return error.message
@@ -90,6 +96,7 @@ function locationFailureMessage(error: unknown) {
 export default function ResponderDispatchPage() {
   usePageTitle("Dispatch")
   const location = useLocation()
+  const navigate = useNavigate()
   const { user } = useAuthSession()
   const viewerId = user?.id ?? null
 
@@ -98,7 +105,9 @@ export default function ResponderDispatchPage() {
   const [assignedConcerns, setAssignedConcerns] = useState<Concern[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [selectedConcernId, setSelectedConcernId] = useState<number | null>(null)
-  const [userPos, setUserPos] = useState<GeolocationPosition | null>(null)
+  // Seeded from the last stored fix so a responder who opens the console
+  // without a signal still sees where they were, and their route with it.
+  const [userPos, setUserPos] = useState<KnownPosition | null>(() => readLastKnownPosition(viewerId))
   const [loading, setLoading] = useState(true)
   const [locating, setLocating] = useState(false)
   const [now, setNow] = useState(() => Date.now())
@@ -142,41 +151,44 @@ export default function ResponderDispatchPage() {
     [selected],
   )
 
-  const selectedRouteGeometry = useMemo(() => {
-    const ownAssignment = selectedActiveTeam.find(
-      (assignment) => assignment.responder.id === viewerId,
-    )
-    return ownAssignment?.route?.geometry ?? selectedActiveTeam[0]?.route?.geometry ?? null
-  }, [selectedActiveTeam, viewerId])
+  const ownAssignment = useMemo(
+    () => selectedActiveTeam.find((assignment) => assignment.responder.id === viewerId) ?? null,
+    [selectedActiveTeam, viewerId],
+  )
+
+  const listRoute = useMemo(
+    () => ownAssignment?.route ?? selectedActiveTeam[0]?.route ?? null,
+    [ownAssignment, selectedActiveTeam],
+  )
+
+  const [routeDetail, setRouteDetail] = useState<EmergencyRoute | null>(null)
+  const [travelProfileBusy, setTravelProfileBusy] = useState(false)
+  // Held only while a switch is in flight; the assignment is the source of truth.
+  const [profileOverride, setProfileOverride] = useState<TravelProfile | null>(null)
+
+  const selectedId_ = selected?.id ?? null
+  const travelProfile = profileOverride ?? ownAssignment?.travel_profile ?? "car"
+  const route = (routeDetail?.alert_id === selectedId_ ? routeDetail : null) ?? listRoute
+
+  const positionStale = isPositionStale(userPos, now)
 
   const selectedDistance = useMemo(() => {
     if (!selected || !userPos) return null
     return distanceKm(
-      userPos.coords.latitude,
-      userPos.coords.longitude,
+      userPos.latitude,
+      userPos.longitude,
       selected.latitude,
       selected.longitude,
     )
   }, [selected, userPos])
-
-  const awaitingAckCount = useMemo(() => {
-    if (viewerId == null) return 0
-    return alerts.filter(
-      (alert) =>
-        alert.status === "routed" &&
-        alert.assignments.some(
-          (assignment) => assignment.responder.id === viewerId && assignment.acknowledged_at == null,
-        ),
-    ).length
-  }, [alerts, viewerId])
 
   /** Community concerns within range of the responder. */
   const nearbyConcerns = useMemo(() => {
     if (!userPos) return concerns
     return concerns.filter((concern) => {
       const distance = distanceKm(
-        userPos.coords.latitude,
-        userPos.coords.longitude,
+        userPos.latitude,
+        userPos.longitude,
         concern.latitude,
         concern.longitude,
       )
@@ -213,6 +225,19 @@ export default function ResponderDispatchPage() {
     window.localStorage.setItem(SELECTED_DISPATCH_KEY, String(alertId))
     setSelectedId(alertId)
   }, [])
+
+  // Back from a focused dispatch behaves like every other page: return to the
+  // previous tab (Shift holds the pill's anchor). The old in-page "queue
+  // list" landing was removed — the queue count lives on the bottom-nav badge
+  // and the focused dispatch is the tab's whole content.
+  const backToPreviousPage = useCallback(() => {
+    const historyState = window.history.state as { idx?: number } | null
+    if (historyState && typeof historyState.idx === "number" && historyState.idx > 0) {
+      navigate(-1)
+    } else {
+      navigate("/dashboard/responders/shift", { replace: true })
+    }
+  }, [navigate])
 
   const selectConcernFromMap = useCallback((concernId: number) => {
     setSelectedConcernId(concernId)
@@ -261,11 +286,21 @@ export default function ResponderDispatchPage() {
   }, [refresh])
 
   useEffect(() => {
+    function handleOnline() {
+      void refresh().catch(() => {})
+    }
+    window.addEventListener("online", handleOnline)
+    return () => window.removeEventListener("online", handleOnline)
+  }, [refresh])
+
+  useEffect(() => {
     let cancelled = false
     if (!navigator.geolocation) return
+    // A failed read never clears the position. The last fix is kept and shown
+    // as remembered instead, so losing signal does not blank the map.
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        if (!cancelled) setUserPos(position)
+        if (!cancelled) setUserPos(writeLastKnownPosition(position, viewerId))
       },
       (positionError) => {
         if (!cancelled) reportGeoError(locationFailureMessage(positionError))
@@ -274,7 +309,7 @@ export default function ResponderDispatchPage() {
     )
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
-        if (!cancelled) setUserPos(position)
+        if (!cancelled) setUserPos(writeLastKnownPosition(position, viewerId))
       },
       (positionError) => {
         if (!cancelled) reportGeoError(locationFailureMessage(positionError))
@@ -285,7 +320,102 @@ export default function ResponderDispatchPage() {
       cancelled = true
       navigator.geolocation.clearWatch(watchId)
     }
-  }, [reportGeoError])
+  }, [reportGeoError, viewerId])
+
+  // Turn-by-turn comes only from the single-alert endpoint, on the same 15s
+  // cadence as the GPS loop below that moves the route's start point.
+  useEffect(() => {
+    if (selectedId_ == null) return
+    let cancelled = false
+    const load = async () => {
+      try {
+        const next = await getEmergencyRoute(selectedId_, { steps: true })
+        if (!cancelled) setRouteDetail(next ?? null)
+      } catch {
+        // Keep the list route on screen rather than blanking the map.
+      }
+    }
+    void load()
+    const timer = window.setInterval(() => void load(), 15_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [selectedId_])
+
+  const routeGeometry = route?.geometry
+  const routeSteps = route?.steps
+  const roadPoints = useMemo(() => latLngsFromGeoJson(routeGeometry), [routeGeometry])
+
+  const offRoute = useMemo(() => {
+    if (!userPos || positionStale) return null
+    return offRouteMeters(roadPoints, [userPos.latitude, userPos.longitude])
+  }, [roadPoints, userPos, positionStale])
+
+  const progress = useMemo(() => {
+    if (!userPos || positionStale || !routeSteps?.length) return null
+    return stepProgress(roadPoints, routeSteps, [userPos.latitude, userPos.longitude])
+  }, [roadPoints, routeSteps, userPos, positionStale])
+
+  /**
+   * Re-route when the responder has actually left the line.
+   *
+   * Two consecutive readings, because a single wide fix in an urban canyon is
+   * not a wrong turn. The ping goes first so the router plans from where they
+   * are now rather than from the last 15s ping, and the cooldown means a
+   * drifting GPS cannot turn this into a request loop.
+   */
+  const offRouteStreakRef = useRef(0)
+  const lastRerouteRef = useRef(0)
+  useEffect(() => {
+    if (selectedId_ == null || offRoute == null || !userPos) return
+    if (offRoute <= OFF_ROUTE_METERS) {
+      offRouteStreakRef.current = 0
+      return
+    }
+    offRouteStreakRef.current += 1
+    if (offRouteStreakRef.current < OFF_ROUTE_FIXES) return
+    if (Date.now() - lastRerouteRef.current < REROUTE_COOLDOWN_MS) return
+
+    offRouteStreakRef.current = 0
+    lastRerouteRef.current = Date.now()
+    const alertId = selectedId_
+    void (async () => {
+      try {
+        await sendEmergencyLocationPing(alertId, {
+          latitude: userPos.latitude,
+          longitude: userPos.longitude,
+          accuracy: userPos.accuracy ?? undefined,
+        }).catch(() => {})
+        const next = await getEmergencyRoute(alertId, { steps: true, refresh: true })
+        setRouteDetail(next ?? null)
+      } catch {
+        // Throttled or offline: the next deviation attempt will retry.
+      }
+    })()
+  }, [offRoute, selectedId_, userPos])
+
+  const changeTravelProfile = useCallback(
+    async (next: TravelProfile) => {
+      if (selectedId_ == null || next === travelProfile || travelProfileBusy) return
+      setProfileOverride(next)
+      setTravelProfileBusy(true)
+      try {
+        const updated = await setEmergencyRouteProfile(selectedId_, next)
+        setRouteDetail(updated ?? null)
+        await refresh().catch(() => {})
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : "Could not switch the travel profile.",
+          { id: "travel-profile" },
+        )
+      } finally {
+        setProfileOverride(null)
+        setTravelProfileBusy(false)
+      }
+    },
+    [selectedId_, travelProfile, travelProfileBusy, refresh],
+  )
 
   // En-route is display-only in the timeline — this loop is the sole source of
   // the routed/acknowledged -> en_route/nearby transition. It keeps publishing
@@ -297,6 +427,9 @@ export default function ResponderDispatchPage() {
     if (
       !selected ||
       !userPos ||
+      // A remembered fix is kept on the map but never published: telling the
+      // server you are somewhere you left minutes ago is worse than silence.
+      isPositionStale(userPos) ||
       !["routed", "acknowledged", "en_route", "nearby"].includes(selected.status)
     ) {
       return
@@ -313,18 +446,39 @@ export default function ResponderDispatchPage() {
       autoPingInFlightRef.current = true
       try {
         const next = await sendEmergencyLocationPing(alertId, {
-          latitude: userPos.coords.latitude,
-          longitude: userPos.coords.longitude,
-          accuracy: userPos.coords.accuracy,
+          latitude: userPos.latitude,
+          longitude: userPos.longitude,
+          accuracy: userPos.accuracy ?? undefined,
         })
         if (cancelled) return
+        gpsToastShownRef.current = false
+        // Connection is back: replay any positions buffered while offline so
+        // the server catches up to where the responder travelled.
+        for (const ping of drainGpsPings(alertId)) {
+          await sendEmergencyLocationPing(alertId, {
+            latitude: ping.latitude,
+            longitude: ping.longitude,
+            accuracy: ping.accuracy,
+          }).catch(() => {})
+        }
         lastAutoPingRef.current[alertId] = Date.now()
         setAlerts((current) => current.map((alert) => (alert.id === next.id ? next : alert)))
-        gpsToastShownRef.current = false
       } catch {
-        if (!cancelled && !gpsToastShownRef.current) {
-          gpsToastShownRef.current = true
-          toast.error("Live GPS could not sync to this dispatch.", { id: "gps-sync" })
+        if (!cancelled) {
+          // Keep the latest fix so a patch of dead signal does not cost the
+          // journey; the queue flushes on the next successful sync.
+          enqueueGpsPing({
+            alertId,
+            latitude: userPos.latitude,
+            longitude: userPos.longitude,
+            accuracy: userPos.accuracy ?? undefined,
+          })
+          if (!gpsToastShownRef.current) {
+            gpsToastShownRef.current = true
+            toast.error("Live GPS could not sync. It will resend when the connection returns.", {
+              id: "gps-sync",
+            })
+          }
         }
       } finally {
         autoPingInFlightRef.current = false
@@ -352,7 +506,7 @@ export default function ResponderDispatchPage() {
           timeout: 20000,
         })
       })
-      setUserPos(pos)
+      setUserPos(writeLastKnownPosition(pos, viewerId))
       toast.success("Location updated", { id: "locate" })
     } catch (positionError) {
       toast.error(locationFailureMessage(positionError), { id: "locate" })
@@ -362,61 +516,81 @@ export default function ResponderDispatchPage() {
   }
 
   const activeCount = useMemo(
-    () => alerts.filter((alert) => ACTIVE_STATUSES.has(alert.status)).length,
+    () => alerts.filter((alert) => ACTIVE_EMERGENCY_STATUSES.has(alert.status)).length,
     [alerts],
   )
 
   const mapSurface = (
     <ResponderLeafletMap
       // The dispatch map shows exactly the incident being worked, not the
-      // whole assignment list — that list lives in the queue rail, and a map
-      // with pins for every assignment competes with the one that matters.
-      // The full set of pins is on the responder Map screen instead.
+      // whole assignment list. The full set of pins is on the responder Map
+      // screen instead.
       alerts={selected ? [selected] : []}
       concerns={mapConcerns}
       selectedId={selected?.id ?? null}
       selectedConcernId={selectedConcernId}
-      userPos={userPos}
-      routeGeometry={selectedRouteGeometry}
+      position={userPos}
+      positionStale={positionStale}
+      route={route}
       onSelect={selectDispatch}
       onSelectConcern={selectConcernFromMap}
       onLocateMe={() => void locateMe()}
       locating={locating}
-      overlay={
-        <DispatchQueueRail
-          alerts={alerts}
-          selectedId={selected?.id ?? null}
-          viewerId={viewerId}
-          awaitingAckCount={awaitingAckCount}
-          onSelect={selectDispatch}
-          onRefresh={() => void refresh().catch(() => toast.error("Could not refresh dispatches.", { id: "refresh" }))}
-        />
-      }
     />
   )
 
-  // The empty state has no incident column to split against, so the map keeps
-  // its plain card here, with the "all clear" reading as a badge over it.
-  const mapCard = (
-    <DispatchCard padded={false} className="relative isolate z-0 h-[360px] sm:h-[420px] lg:h-full">
-      {mapSurface}
-      <div className="pointer-events-none absolute left-3 top-3 z-[1000] flex items-center gap-1.5 rounded-full bg-emerald-600 px-3 py-1.5 shadow-lg">
-        <ShieldCheckIcon className="size-4" />
-        <span className="text-[12.5px] font-bold leading-none text-white">All clear</span>
-      </div>
-    </DispatchCard>
+  /**
+   * Nothing assigned. This used to be a fixed-height map with a floating "all
+   * clear" chip and nothing under it, which on a phone left most of the screen
+   * blank. Now the state says what it means in a card of its own and the map
+   * takes every pixel that is left.
+   */
+  const emptyState = (
+    <div className="mx-auto flex min-h-0 w-full min-w-0 max-w-2xl flex-1 flex-col gap-3 lg:max-w-none">
+      <DispatchCard className="shrink-0">
+        <div className="flex items-start gap-3">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white/10 text-white">
+            <ShieldCheckIcon className="size-5" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-[22px] font-bold leading-tight tracking-tight text-foreground">
+              All clear
+            </h2>
+            <p className="mt-1 text-body leading-6 text-muted-foreground">
+              No emergency is assigned to you. You will be alerted here the moment one is.
+            </p>
+            {assignedConcerns.length > 0 ? (
+              <p className="mt-2 text-body text-subtle-foreground">
+                {assignedConcerns.length} community{" "}
+                {assignedConcerns.length === 1 ? "report is" : "reports are"} assigned to you.
+              </p>
+            ) : null}
+          </div>
+        </div>
+        <DutyToggle className="mt-4" />
+      </DispatchCard>
+      <DispatchCard
+        padded={false}
+        className="relative isolate z-0 min-h-[260px] flex-1 overflow-hidden"
+      >
+        {mapSurface}
+      </DispatchCard>
+    </div>
   )
 
   if (loading) {
     return (
-      <div className="flex min-h-[60svh] items-center justify-center lg:h-full">
+      <div className="flex min-h-[60svh] flex-1 items-center justify-center lg:h-full">
         <LoaderCircleIcon className="size-8 animate-spin text-subtle-foreground" />
       </div>
     )
   }
 
   return (
-    <div className="min-w-0 p-4 lg:h-full lg:overflow-hidden lg:p-6">
+    // flex-1 so the empty state can fill the shell's mobile column instead of
+    // ending at a fixed height with blank canvas under it. Inert on desktop,
+    // where the shell's main is not a flex container and lg:h-full governs.
+    <div className="flex min-w-0 flex-1 flex-col p-4 lg:h-full lg:overflow-hidden lg:p-6">
       {selected ? (
         <DispatchBody
           alert={selected}
@@ -424,12 +598,18 @@ export default function ResponderDispatchPage() {
           activeCount={activeCount}
           selectedDistance={selectedDistance}
           now={now}
+          route={route}
+          progress={progress}
+          travelProfile={travelProfile}
+          onTravelProfileChange={(next) => void changeTravelProfile(next)}
+          travelProfileBusy={travelProfileBusy}
           onAlertChanged={applyAlertChange}
           onRefresh={refresh}
           mapSurface={mapSurface}
+          onMobileBack={backToPreviousPage}
         />
       ) : (
-        <div className="mx-auto min-w-0 max-w-2xl lg:h-full lg:max-w-none">{mapCard}</div>
+        emptyState
       )}
     </div>
   )
@@ -441,19 +621,17 @@ export default function ResponderDispatchPage() {
  *
  * Desktop layout is two nested splits rather than a fixed grid:
  *
- *   ┌──────────────┬──────────────────────────┐
- *   │              │           Map            │
- *   │   Incident   ├ ─ ─ ─ drag ─ ─ ─ ─ ─ ─ ─ ┤
- *   │              │          Comms           │
- *   └──────╫───────┴──────────────────────────┘
+ *   ┌──────────────┬──────────────────────┐
+ *   │              │         Map          │
+ *   │   Incident   ├ ─ ─ ─ drag ─ ─ ─ ─ ─ ┤
+ *   │   (card)     │                      │
+ *   └──────╫───────┴──────────────────────┘
  *          drag
  *
- * Every divider is draggable and remembers where it was left; every region
- * minimises and gives its space to its neighbour. The old layout hard-coded
- * `minmax(360px,400px)` for the incident column and a 3:2 flex ratio for the
- * map and comms, which is why nothing on the screen could be made bigger —
- * the chat in particular was stuck at two fifths of the right column no matter
- * how much of it a responder needed to read.
+ * The divider is draggable and remembers where it was left; the incident
+ * column minimises and gives its space to the map. The chat is not a pane
+ * of its own anymore — it moved into the incident card's Chat tab, so the
+ * right column is the map and nothing else.
  *
  * Below the desktop breakpoint this reverts to one scrolling column: a phone
  * has no space to divide, and drag handles on a touch screen would fight the
@@ -465,18 +643,30 @@ function DispatchBody({
   activeCount,
   selectedDistance,
   now,
+  route,
+  progress,
+  travelProfile,
+  onTravelProfileChange,
+  travelProfileBusy,
   onAlertChanged,
   onRefresh,
   mapSurface,
+  onMobileBack,
 }: {
   alert: EmergencyAlert
   viewerId: number | null
   activeCount: number
   selectedDistance: number | null
   now: number
+  route: EmergencyRoute | null
+  progress: StepProgress | null
+  travelProfile: TravelProfile
+  onTravelProfileChange: (next: TravelProfile) => void
+  travelProfileBusy: boolean
   onAlertChanged: (next: EmergencyAlert) => void
   onRefresh: () => Promise<void>
   mapSurface: React.ReactNode
+  onMobileBack: () => void
 }) {
   const actions = useIncidentActions({
     alert,
@@ -485,15 +675,12 @@ function DispatchBody({
     onRefresh,
   })
 
+  const isDesktop = useIsDesktop()
+
   const [incidentCollapsed, setIncidentCollapsed] = usePaneCollapse(
     "eboses:dispatch-pane-incident",
   )
   const [mapCollapsed, setMapCollapsed] = usePaneCollapse("eboses:dispatch-pane-map")
-  const [commsCollapsed, setCommsCollapsed] = usePaneCollapse("eboses:dispatch-pane-comms")
-
-  const activeTeamSize = alert.assignments.filter(
-    (assignment) => !["cancelled", "declined", "resolved"].includes(assignment.status),
-  ).length
 
   const incidentColumn = (
     <div className="ops-pane flex w-full min-w-0 flex-col gap-3 lg:pr-1">
@@ -502,6 +689,11 @@ function DispatchBody({
         viewerId={viewerId}
         distance={selectedDistance}
         now={now}
+        route={route}
+        progress={progress}
+        travelProfile={travelProfile}
+        onTravelProfileChange={onTravelProfileChange}
+        travelProfileBusy={travelProfileBusy}
         onMinimise={() => setIncidentCollapsed(true)}
         className="shrink-0"
       />
@@ -510,7 +702,7 @@ function DispatchBody({
           stops the column scrolling visibly under the pill. */}
       <DispatchActionBar
         actions={actions}
-        className="sticky bottom-0 z-[800] hidden bg-canvas pb-3 pt-3 lg:block"
+        className="sticky bottom-0 z-30 hidden bg-canvas pb-3 pt-3 lg:block"
       />
     </div>
   )
@@ -522,7 +714,7 @@ function DispatchBody({
       collapsed={mapCollapsed}
       onCollapsedChange={setMapCollapsed}
       padded={false}
-      bodyClassName="relative overflow-hidden"
+      bodyClassName="relative overflow-hidden isolate"
       className="w-full"
     >
       {mapSurface}
@@ -530,107 +722,85 @@ function DispatchBody({
     </Pane>
   )
 
-  const commsPane = (
-    <Pane
-      title="Communication"
-      icon={MessagesSquareIcon}
-      collapsed={commsCollapsed}
-      onCollapsedChange={setCommsCollapsed}
-      padded={false}
-      bodyClassName="flex flex-col overflow-hidden p-4"
-      className="w-full"
-    >
-      <DispatchComms
-        alert={alert}
-        activeTeamSize={activeTeamSize}
-        className="min-h-0 flex-1"
-      />
-    </Pane>
+  // The map owns the right column — communication moved into the dispatch
+  // card's Chat tab, so there is nothing left to split against.
+  const rightColumn = (
+    <div className="flex min-h-0 w-full flex-col gap-3">
+      <div className={cn("flex min-h-0", mapCollapsed ? "shrink-0" : "flex-1")}>{mapPane}</div>
+    </div>
   )
 
-  // A minimised pane shrinks to its 56px header rather than disappearing, so
-  // the chevron that restores it is always on screen.
-  const rightColumn =
-    mapCollapsed || commsCollapsed ? (
-      <div className="flex min-h-0 w-full flex-col gap-3">
-        <div className={cn("flex min-h-0", mapCollapsed ? "shrink-0" : "flex-1")}>{mapPane}</div>
-        <div className={cn("flex min-h-0", commsCollapsed ? "shrink-0" : "flex-1")}>
-          {commsPane}
+  return isDesktop ? (
+    <div className="flex h-full min-h-0 gap-3">
+      {incidentCollapsed ? (
+        <>
+          <CollapsedStrip label="Incident" onExpand={() => setIncidentCollapsed(false)} />
+          <div className="flex min-h-0 min-w-0 flex-1">{rightColumn}</div>
+        </>
+      ) : (
+        <ResizableSplit
+          orientation="vertical"
+          label="Resize incident column"
+          storageKey="eboses:dispatch-split-main"
+          defaultSize={32}
+          minSize={22}
+          maxSize={55}
+          className="h-full flex-1"
+          first={incidentColumn}
+          second={rightColumn}
+        />
+      )}
+    </div>
+  ) : (
+    <div
+      className="fixed inset-x-0 top-14 z-10 flex flex-col bg-canvas"
+      style={{ bottom: MOBILE_NAV_CLEARANCE }}
+    >
+      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-card-line bg-canvas px-3">
+        <button
+          type="button"
+          onClick={onMobileBack}
+          aria-label="Back to previous page"
+          className="flex size-10 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-card-raised"
+        >
+          <ArrowLeftIcon className="size-5" />
+        </button>
+        <span className="min-w-0 flex-1 truncate text-heading font-semibold capitalize text-foreground">
+          {alert.type} dispatch
+        </span>
+        <DutyToggle />
+        <OpsContrastToggle />
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4 pt-3">
+        <div className="mx-auto flex min-w-0 max-w-2xl flex-col gap-3">
+          <DispatchOverviewCard
+            alert={alert}
+            viewerId={viewerId}
+            distance={selectedDistance}
+            now={now}
+            route={route}
+            progress={progress}
+            travelProfile={travelProfile}
+            onTravelProfileChange={onTravelProfileChange}
+            travelProfileBusy={travelProfileBusy}
+            showDutyToggle={false}
+          />
+          <DispatchCard padded={false} className="relative isolate z-0 h-[360px] overflow-hidden sm:h-[420px]">
+            {mapSurface}
+            <BackupFab actions={actions} className="absolute bottom-4 left-4 z-[601]" />
+          </DispatchCard>
         </div>
       </div>
-    ) : (
-      <ResizableSplit
-        orientation="horizontal"
-        label="Resize map and comms"
-        storageKey="eboses:dispatch-split-right"
-        defaultSize={58}
-        minSize={22}
-        maxSize={78}
-        className="w-full flex-1"
-        first={mapPane}
-        second={commsPane}
-      />
-    )
 
-  return (
-    <>
-      {/* Desktop: two nested splits. */}
-      <div className="hidden lg:flex lg:h-full lg:min-h-0 lg:gap-3">
-        {incidentCollapsed ? (
-          <>
-            <CollapsedStrip label="Incident" onExpand={() => setIncidentCollapsed(false)} />
-            <div className="flex min-h-0 min-w-0 flex-1">{rightColumn}</div>
-          </>
-        ) : (
-          <ResizableSplit
-            orientation="vertical"
-            label="Resize incident column"
-            storageKey="eboses:dispatch-split-main"
-            defaultSize={32}
-            minSize={22}
-            maxSize={55}
-            className="h-full flex-1"
-            first={incidentColumn}
-            second={rightColumn}
-          />
-        )}
-      </div>
-
-      {/* Mobile / tablet: one scrolling column, no handles. */}
-      <div className="mx-auto flex min-w-0 max-w-2xl flex-col gap-3 lg:hidden">
-        <DispatchOverviewCard
-          alert={alert}
-          viewerId={viewerId}
-          distance={selectedDistance}
-          now={now}
-        />
-        <DispatchCard padded={false} className="relative isolate z-0 h-[360px] overflow-hidden sm:h-[420px]">
-          {mapSurface}
-          <BackupFab actions={actions} className="absolute bottom-4 left-4 z-[601]" />
-        </DispatchCard>
-        <DispatchCard className="flex min-h-[420px] min-w-0 flex-col overflow-hidden">
-          <DispatchComms
-            alert={alert}
-            activeTeamSize={activeTeamSize}
-            className="min-h-0 flex-1"
-          />
-        </DispatchCard>
-      </div>
-
-      {/* Mobile: one action, always in the same place, above the nav bar. */}
-      <div
-        className={cn(
-          "sticky z-[800] -mx-4 mt-3 border-t border-card-line bg-canvas/95 px-4 pb-3 pt-3 backdrop-blur lg:hidden",
-        )}
-        style={{ bottom: MOBILE_BAR_CLEARANCE }}
-      >
+      <div className="shrink-0 border-t border-card-line bg-canvas/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur">
         <DispatchActionBar actions={actions} />
         {activeCount > 1 ? (
-          <p className="mt-2 text-center text-micro uppercase text-subtle-foreground">
+          <p className="mt-2 text-center text-micro text-subtle-foreground">
             {activeCount} active dispatches assigned to you
           </p>
         ) : null}
       </div>
-    </>
+    </div>
   )
 }

@@ -52,7 +52,6 @@ async function submitAppeal() {
         ) : null}
 {appealHistory.length ? (
           <div className="space-y-3">
-            <p className="text-[12px] font-semibold tracking-wide text-neutral-500 uppercase">Appeal history</p>
             {appealHistory.map((appeal) => (
               <div
                 key={appeal.id}

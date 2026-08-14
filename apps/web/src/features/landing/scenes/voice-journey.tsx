@@ -2,7 +2,7 @@
 import { useRef } from "react"
 import gsap from "gsap"
 import { useGSAP } from "@gsap/react"
-import { Camera, MapPin } from "@phosphor-icons/react"
+import { CameraIcon, MapPinIcon } from "lucide-react"
 
 import { MM } from "../landing-theme"
 
@@ -191,7 +191,7 @@ export function VoiceJourney() {
           {/* Phone mock: photo under review, highlighted description, location, severity */}
           <div className="vj-phone mx-auto mt-8 w-64 rounded-3xl border border-white/15 bg-white/[0.04] p-4 shadow-2xl backdrop-blur-sm md:mx-0">
             <div className="vj-photo relative flex h-24 items-center justify-center overflow-hidden rounded-xl bg-white/10">
-              <Camera className="vj-cam size-8 text-white/40 opacity-0" aria-hidden />
+              <CameraIcon className="vj-cam size-8 text-white/40 opacity-0" strokeWidth={1.5} aria-hidden />
               <div
                 aria-hidden
                 className="vj-box absolute left-[12%] top-[38%] h-[45%] w-[46%] border border-accent shadow-[0_0_6px_rgba(255,80,3,0.35)]"
@@ -229,7 +229,7 @@ export function VoiceJourney() {
               </div>
             </div>
             <div className="vj-pin mt-4 flex items-center gap-2 rounded-lg bg-accent/15 px-3 py-2 text-sm text-primary">
-              <MapPin className="size-4" aria-hidden /> Marikina Heights
+              <MapPinIcon className="size-4" strokeWidth={1.5} aria-hidden /> Marikina Heights
             </div>
             <div className="vj-severity mt-3 flex items-center justify-between border-t border-white/10 pt-2.5">
               <span className="font-mono text-[9px] uppercase tracking-[0.25em] text-white/50">

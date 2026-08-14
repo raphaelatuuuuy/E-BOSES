@@ -1,7 +1,7 @@
 ﻿// apps/web/src/features/landing/scenes/hero-reach.tsx
 import { Fragment, useRef } from "react"
 import { Link } from "react-router-dom"
-import { ArrowRight } from "@phosphor-icons/react"
+import { ArrowRightIcon } from "lucide-react"
 import gsap from "gsap"
 import { useGSAP } from "@gsap/react"
 
@@ -119,7 +119,7 @@ export function HeroReach() {
             to="/sign-up"
             className="inline-flex min-h-12 items-center gap-3 bg-accent px-7 font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
           >
-            Create an account to report <ArrowRight aria-hidden className="size-5" />
+            Create an account to report <ArrowRightIcon aria-hidden className="size-5" strokeWidth={1.5} />
           </Link>
           <a
             href="#emergency-help"

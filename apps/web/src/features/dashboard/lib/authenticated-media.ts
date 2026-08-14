@@ -20,3 +20,32 @@ export async function openAuthenticatedMedia(src: string, filename: string) {
   link.click()
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000)
 }
+
+export type MediaPreviewItem = {
+  src: string
+  filename: string
+  kind: "image" | "video" | "file"
+}
+
+/**
+ * Maps a backend media type ("image/jpeg", "video/mp4", "audio/ogg", or the
+ * chat-style shorthand "video") to the preview kind. Unknown types fall back
+ * to a file tile — the lightbox still offers the download for those.
+ */
+export function toMediaPreviewItem(
+  src: string,
+  filename: string,
+  mimeOrKind?: string | null,
+): MediaPreviewItem {
+  const value = mimeOrKind || ""
+  if (value.startsWith("video/") || value === "video") return { src, filename, kind: "video" }
+  if (value.startsWith("image/") || value === "image" || !value) return { src, filename, kind: "image" }
+  return { src, filename, kind: "file" }
+}
+
+export function mediaDisplaySource(media: {
+  preview_url?: string | null
+  raw_url?: string | null
+}): string {
+  return media.preview_url || media.raw_url || ""
+}

@@ -58,7 +58,7 @@ const HOLDING: Record<string, { label: string; icon: LucideIcon }> = {
   backup_assigned: { label: "Backup responder on the way", icon: RadioIcon },
   transfer_required: { label: "Transfer requested", icon: ArrowLeftRightIcon },
   escalation_required: { label: "Escalation pending", icon: ShieldAlertIcon },
-  in_progress: { label: "On scene — incident in progress", icon: MapPinIcon },
+  in_progress: { label: "On scene, incident in progress", icon: MapPinIcon },
   resident_safe: { label: "Resident safe", icon: ShieldCheckIcon },
 }
 
@@ -154,7 +154,17 @@ export function DispatchActionBar({
       {backupPending && !action.quiet ? (
         <p className="flex items-center justify-center gap-1.5 text-body text-subtle-foreground">
           <RadioIcon className="size-3.5" />
-          Backup requested — other responders alerted
+          Backup requested. Other responders alerted
+        </p>
+      ) : null}
+      {!action.quiet && actions.lastConfirmed ? (
+        <p
+          key={actions.lastConfirmed.at}
+          role="status"
+          className="flex items-center justify-center gap-1.5 text-body font-medium text-subtle-foreground"
+        >
+          <CheckIcon className="size-3.5 text-white/70" aria-hidden />
+          {actions.lastConfirmed.label}
         </p>
       ) : null}
     </div>

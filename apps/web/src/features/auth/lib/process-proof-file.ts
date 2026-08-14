@@ -134,24 +134,7 @@ export function humanizeProofError(message: string, _side?: ProofSide | null): s
       "Could not verify this photo. Please try a clearer one.",
     )
 
-  // Strip technical fragments
-  text = text
-    .replace(/\bvalue\s+[“"][^”"]+[”"]\s*/gi, "")
-    .replace(/\bdoes not match the required pattern\.?/gi, "could not be read clearly.")
-    .replace(/\brequired pattern\b/gi, "expected format")
-    .replace(/\bregex\b/gi, "")
-    .replace(/\bpattern_ok\b/gi, "")
-    .replace(/^ID mismatched\.?$/gi, "This ID is mismatched. Please use a valid one.")
-    .replace(/\bID mismatched\.?/gi, "does not match your details.")
-    .replace(/\s{2,}/g, " ")
-    .trim()
-
-  // Soften remaining technical phrases
-  if (/pattern|regex|threshold|similarity|alphanumeric|format_name/i.test(text)) {
-    return "Could not read this part of your ID clearly. Please retake a clearer photo."
-  }
-
-  return text
+  return text.replace(/\s{2,}/g, " ").trim()
 }
 
 async function fileDigest(file: File) {

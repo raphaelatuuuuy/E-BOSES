@@ -1,6 +1,12 @@
 import type { ReactNode } from "react"
 
 import type { Concern, PublicUser } from "@/features/dashboard/api"
+import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
+import {
+  toMediaPreviewItem,
+  type MediaPreviewItem,
+} from "@/features/dashboard/lib/authenticated-media"
+import { roleLabel } from "@/features/dashboard/lib/people"
 
 /**
  * Timeline vocabulary: types, accent styling and entry building.
@@ -29,14 +35,6 @@ export type ConcernTimelineEntry = {
   content: ReactNode
   state?: ConcernTimelineState
   accent?: ConcernTimelineAccent
-}
-
-function roleLabel(user?: PublicUser | null) {
-  if (!user) return "System"
-  if (user.role === "resident") return "Resident"
-  if (user.role === "barangay_official") return "Official"
-  if (user.role === "first_responder") return "Responder"
-  return user.role?.replace(/_/g, " ") || "User"
 }
 
 /**
@@ -81,13 +79,13 @@ export function concernTimelineDotTone(accent: ConcernTimelineAccent = "neutral"
 }
 
 export function concernTimelineStatusLabel(status: string) {
-  if (status === "submitted") return "New"
-  if (status === "under_review") return "Under Review"
-  if (status === "assigned") return "Assigned"
-  if (status === "in_progress") return "In Progress"
+  if (status === "submitted") return "Your concern is now under review"
+  if (status === "under_review") return "Update"
+  if (status === "assigned") return "Reassigned to another unit"
+  if (status === "in_progress") return "Being worked on"
   if (status === "resolved") return "Resolved"
-  if (status === "rejected") return "Rejected"
-  if (status === "appealed") return "Appealed"
+  if (status === "rejected") return "Denied appeal"
+  if (status === "appealed") return "Under appeal"
   return status.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
@@ -102,43 +100,104 @@ export function concernTimelineStatusAccent(status: string): ConcernTimelineAcce
   return "neutral"
 }
 
-function timelineContentForEvent(status: string, note: string, actor: PublicUser | null) {
-  if (status === "under_review") {
+const SUBMITTED_WELCOME_NOTES = new Set([
+  "Report submitted.",
+  "Received. A barangay officer will review this shortly.",
+  "Received. We're confirming the location before routing this.",
+])
+
+const AUTO_UNDER_REVIEW_NOTES = new Set([
+  "An officer is checking the details of this report.",
+  "Report submitted and accepted for routing.",
+])
+
+function actorLine(actor: PublicUser | null) {
+  if (!actor?.full_name) return null
+  return (
+    <p className="text-[13px] font-semibold text-subtle-foreground">
+      {actor.full_name} <span className="text-subtle-foreground">·</span> {roleLabel(actor) || "System"}
+    </p>
+  )
+}
+
+function timelineContentForEvent(status: string, note: string, actor: PublicUser | null, departmentName: string) {
+  const text = note.trim()
+  if (status === "submitted" && SUBMITTED_WELCOME_NOTES.has(text)) {
     return (
-      <p className="font-medium text-muted-foreground">
-        Your concern is under review. Thanks for your patience.
-      </p>
+      <div className="space-y-1">
+        <p className="font-medium text-muted-foreground">Thank you for your patience.</p>
+        {actorLine(actor)}
+      </div>
     )
   }
-
-  const message = note.trim() || "Status updated."
+  if (status === "assigned") {
+    const autoAssigned = /^(Assigned to |Reassigned to another unit)/.test(text)
+    return (
+      <div className="space-y-1">
+        {text && !autoAssigned ? <p className="font-medium text-muted-foreground">{text}</p> : null}
+        {departmentName ? <p className="font-medium text-muted-foreground">{departmentName}</p> : null}
+        {actorLine(actor)}
+      </div>
+    )
+  }
   return (
     <div className="space-y-1">
-      <p className="font-medium text-muted-foreground">{message}</p>
-      {actor?.full_name ? (
-        <p className="text-[13px] font-semibold text-subtle-foreground">
-          {actor.full_name} <span className="text-subtle-foreground">·</span> {roleLabel(actor)}
-        </p>
-      ) : null}
+      <p className="font-medium text-muted-foreground">{text || "Status updated."}</p>
+      {actorLine(actor)}
     </div>
   )
 }
 
-export function buildConcernTimelineEntries(report: Concern): ConcernTimelineEntry[] {
+export function buildConcernTimelineEntries(
+  report: Concern,
+  onOpenProof?: (items: MediaPreviewItem[], index: number) => void,
+): ConcernTimelineEntry[] {
   const events = [...(report.status_events ?? [])].sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
   )
+  const departmentName = report.assigned_department?.name ?? ""
+  const visibleEvents = events.filter(
+    (event) =>
+      !(event.status === "under_review" && AUTO_UNDER_REVIEW_NOTES.has(event.note.trim())),
+  )
 
-  // Annotated so the object literal is checked against the entry type. Without
-  // it TS widens `"current" | "done"` to `string` and the array stops being
-  // assignable to ConcernTimelineEntry[].
-  const entries: ConcernTimelineEntry[] = events.map((event, index, list) => ({
+  const proof = (report.resolution_evidence ?? []).filter((item) =>
+    item.mime_type.startsWith("image/"),
+  )
+  const proofPreview = proof.map((item) =>
+    toMediaPreviewItem(item.preview_url || item.raw_url, item.original_filename, item.mime_type),
+  )
+
+  const entries: ConcernTimelineEntry[] = visibleEvents.map((event, index, list) => ({
     id: String(event.id),
     badge: concernTimelineStatusLabel(event.status),
     time: event.created_at,
     state: index === list.length - 1 ? "current" : "done",
     accent: concernTimelineStatusAccent(event.status),
-    content: timelineContentForEvent(event.status, event.note, event.status === "under_review" ? null : event.actor),
+    content: (
+      <div className="space-y-2">
+        {timelineContentForEvent(event.status, event.note, event.actor, departmentName)}
+        {event.status === "resolved" && proof.length ? (
+          <div className="grid grid-cols-2 gap-2">
+            {proof.map((item, proofIndex) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onOpenProof?.(proofPreview, proofIndex)}
+                className="overflow-hidden rounded-control border border-card-line bg-canvas text-left"
+                title={item.original_filename}
+              >
+                <AuthenticatedMediaImage
+                  src={item.preview_url || item.raw_url}
+                  alt={item.original_filename}
+                  className="h-24 w-full object-cover"
+                />
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    ),
   }))
 
   if (entries.length > 0) return entries
@@ -146,11 +205,11 @@ export function buildConcernTimelineEntries(report: Concern): ConcernTimelineEnt
   return [
     {
       id: "submitted",
-      badge: "New",
+      badge: "Your concern is now under review",
       time: report.created_at,
       state: "current",
-      accent: "danger",
-      content: timelineContentForEvent("submitted", "Report submitted.", null),
+      accent: "info",
+      content: timelineContentForEvent("submitted", "Report submitted.", null, ""),
     },
   ]
 }

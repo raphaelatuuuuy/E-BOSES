@@ -8,10 +8,8 @@ import {
   MapPinnedIcon,
   MoreHorizontalIcon,
   Settings2Icon,
-  SirenIcon,
   TriangleAlert,
   UserCircleIcon,
-  UserCogIcon,
   UsersIcon,
 } from "lucide-react"
 
@@ -121,17 +119,10 @@ const residentReportsMobile: NavItemConfig = {
   label: "Reports",
 }
 
-const residentSettings: NavItemConfig = {
-  key: "settings",
-  label: "Settings",
-  to: "/dashboard/settings",
-  icon: Settings2Icon,
-  isActive: (pathname) => matches(pathname, "/dashboard/settings"),
-}
-
 const residentNav: RoleNavConfig = {
   items: [residentHome, residentAlerts, residentReports],
-  footer: [residentSettings],
+  footer: [],
+
   // Mirrors current mobile-nav.tsx order: Home, Reports, Alerts.
   mobileItems: [residentHome, residentReportsMobile, residentAlerts],
 }
@@ -168,7 +159,7 @@ const officialEmergencies: NavItemConfig = {
   key: "emergencies",
   label: "Emergencies",
   to: "/dashboard/emergencies",
-  icon: SirenIcon,
+  icon: TriangleAlert,
   isActive: (pathname) => matches(pathname, "/dashboard/emergencies"),
   section: "Operations",
 }
@@ -222,48 +213,37 @@ const officialProfile: NavItemConfig = {
   isActive: (pathname) => matches(pathname, "/dashboard/profile"),
 }
 
-// Phase B: officials-facing settings — mirrors the resident footer item.
-const officialSettings: NavItemConfig = {
-  key: "settings",
-  label: "Settings",
-  to: "/dashboard/settings",
-  icon: UserCogIcon,
-  isActive: (pathname) => matches(pathname, "/dashboard/settings"),
-}
-
 // The mobile pill gives each tab ~72px, so the long sidebar labels are
 // shortened rather than allowed to wrap or clip.
 const officialOperationsMapMobile: NavItemConfig = { ...officialOperationsMap, label: "Alerts" }
-const officialEmergenciesMobile: NavItemConfig = { ...officialEmergencies, label: "SOS" }
+const officialEmergenciesMobile: NavItemConfig = { ...officialEmergencies, label: "Emergencies" }
 
 const officialMoreItems: NavItemConfig[] = [
   officialCommunity,
   officialConfiguration,
   officialNotifications,
   officialProfile,
-  officialSettings,
 ]
 
 const officialNav: RoleNavConfig = {
   items: [
+    officialEmergencies,
     officialOverview,
     officialOperationsMap,
-    officialEmergencies,
     officialConcerns,
     officialCommunity,
     officialConfiguration,
   ],
-  // Nothing sits below the nav list: the account block owns profile,
-  // notifications and settings, so Settings is no longer a top-level item.
+  // Nothing sits below the nav list: the account block owns profile and
+  // notifications, and Settings lives behind the profile pop-up's gear icon.
   footer: [],
   account: [
     officialNotifications,
-    officialSettings,
   ],
   mobileItems: [
+    officialEmergenciesMobile,
     officialOverview,
     officialOperationsMapMobile,
-    officialEmergenciesMobile,
     officialConcerns,
   ],
   more: {
@@ -276,8 +256,8 @@ const officialNav: RoleNavConfig = {
 
 // ---------------------------------------------------------------------------
 // Responder — Dispatch is the job; Map answers "where is everything"; Shift is
-// the record of the day. Profile is personal, so it sits behind the account
-// block like the official's does, not in the nav.
+// the record of the day. Profile and Notifications are personal, so they sit
+// behind the account block like the official's do, not in the nav.
 // ---------------------------------------------------------------------------
 
 export const responderDispatch: NavItemConfig = {
@@ -313,14 +293,18 @@ const responderNotifications: NavItemConfig = {
 }
 
 const responderNav: RoleNavConfig = {
-  // Dispatch sits above Shift as a regular nav item — the map is embedded in
-  // the dispatch surface, so there is no dedicated map tab any more.
-  items: [responderDispatch, responderShift, responderNotifications],
+  items: [responderDispatch, responderShift],
   footer: [],
-  account: [{ ...responderProfile, label: "View profile" }],
-  // Shift | Dispatch | Profile — dispatch centred so it stays the anchor,
-  // profile promoted into the bar now that the map tab is gone.
-  mobileItems: [responderShift, responderDispatch, responderProfile],
+  // Personal destinations, revealed by the account block: Profile first,
+  // Notifications below it (both open as dialogs on desktop).
+  account: [
+    { ...responderProfile, label: "View profile" },
+    responderNotifications,
+  ],
+  // The mobile pill carries exactly the job tabs — Shift | Dispatch — each a
+  // circle at rest, an oblong when its page is open, and Dispatch turns
+  // SOS-red while a dispatch is assigned.
+  mobileItems: [responderShift, responderDispatch],
 }
 
 export const navigationByRole: Record<Role, RoleNavConfig> = {

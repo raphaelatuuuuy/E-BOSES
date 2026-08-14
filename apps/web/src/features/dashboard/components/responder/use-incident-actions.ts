@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { toast } from "sonner"
 
 import {
@@ -46,6 +46,14 @@ export function useIncidentActions({
   onRefresh: () => Promise<void>
 }) {
   const [busy, setBusy] = useState("")
+  const [lastConfirmed, setLastConfirmed] = useState<{ label: string; at: number } | null>(null)
+  const confirmTimerRef = useRef<number | null>(null)
+
+  function confirm(label: string) {
+    setLastConfirmed({ label, at: Date.now() })
+    if (confirmTimerRef.current != null) window.clearTimeout(confirmTimerRef.current)
+    confirmTimerRef.current = window.setTimeout(() => setLastConfirmed(null), 6000)
+  }
 
   const ownAssignment =
     alert.assignments.find((assignment) => assignment.responder.id === viewerId) ??
@@ -101,6 +109,7 @@ export function useIncidentActions({
       const next = await acknowledgeEmergency(alert.id)
       onChanged(next)
       toast.success("Dispatch acknowledged", { id: "ack" })
+      confirm("Dispatch acknowledged")
     } catch (err) {
       // Revert the optimistic guess immediately, then resync to whatever the
       // server actually has — a 409 here usually means the status already
@@ -108,7 +117,11 @@ export function useIncidentActions({
       // location ping auto-acknowledged it), so the stale local snapshot
       // must not be left in place: re-tapping it would just 409 forever.
       onChanged(previous)
-      toast.error(err instanceof Error ? err.message : "Could not acknowledge dispatch.", { id: "ack-err" })
+      // Failure toasts match the warning style used elsewhere in the console
+      // ("New dispatch assigned to you" etc.) — these are live-state conflicts
+      // the responder can act on, not hard failures, and warning keeps the
+      // amber look consistent across the dispatch flow.
+      toast.warning(err instanceof Error ? err.message : "Could not acknowledge dispatch.", { id: "ack-err" })
     } finally {
       setBusy("")
     }
@@ -126,8 +139,9 @@ export function useIncidentActions({
       const next = await markEmergencyArrived(alert.id)
       onChanged(next)
       toast.success("Marked arrived on scene", { id: "arrived" })
+      confirm("Marked arrived on scene")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not update arrival.", { id: "arrived-err" })
+      toast.warning(err instanceof Error ? err.message : "Could not update arrival.", { id: "arrived-err" })
       await onRefresh().catch(() => {})
     } finally {
       setBusy("")
@@ -141,8 +155,9 @@ export function useIncidentActions({
       const next = await resolveEmergency(alert.id, "Incident resolved by responder.")
       onChanged(next)
       toast.success("Incident resolved", { id: "resolve" })
+      confirm("Incident resolved")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not resolve incident.", { id: "resolve-err" })
+      toast.warning(err instanceof Error ? err.message : "Could not resolve incident.", { id: "resolve-err" })
       await onRefresh().catch(() => {})
     } finally {
       setBusy("")
@@ -164,7 +179,7 @@ export function useIncidentActions({
       // out. Reassignment/escalation happens server-side.
       toast.success("Other responders alerted.", { id: "backup" })
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not request backup.", { id: "backup-err" })
+      toast.warning(err instanceof Error ? err.message : "Could not request backup.", { id: "backup-err" })
       await onRefresh().catch(() => {})
     } finally {
       setBusy("")
@@ -173,6 +188,7 @@ export function useIncidentActions({
 
   return {
     busy,
+    lastConfirmed,
     isCancelled,
     resolvedReached,
     canAcknowledge,

@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode, useState } from "react"
-import { Navigate, Route, Routes, useNavigate } from "react-router-dom"
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom"
 import { LoaderCircle } from "lucide-react"
 import { toast } from "sonner"
 
@@ -29,22 +29,15 @@ const ProfilePage = lazy(() => import("@/features/dashboard/pages/profile"))
 const ResponderDispatchPage = lazy(() => import("@/features/dashboard/pages/responder-dispatch"))
 const ResponderProfilePage = lazy(() => import("@/features/dashboard/pages/responder-profile"))
 const ResponderShiftPage = lazy(() => import("@/features/dashboard/pages/responder-shift"))
-const ResponderNotificationsPage = lazy(() => import("@/features/dashboard/pages/responder-notifications"))
 const ReportsPage = lazy(() => import("@/features/dashboard/pages/reports"))
-const SettingsPage = lazy(() => import("@/features/dashboard/pages/settings"))
-const OfficialSettingsPage = lazy(() => import("@/features/dashboard/pages/official-settings"))
-const ChangePasswordPage = lazy(() => import("@/features/dashboard/pages/change-password"))
-const AccountReverifyNamePage = lazy(() => import("@/features/dashboard/pages/account-reverify-name"))
-const AccountReverifyPhonePage = lazy(() => import("@/features/dashboard/pages/account-reverify-phone"))
-const AccountReverifyEmailPage = lazy(() => import("@/features/dashboard/pages/account-reverify-email"))
 const NotificationsPage = lazy(() => import("@/features/dashboard/pages/notifications"))
 const EmergencyHistoryPage = lazy(() => import("@/features/dashboard/pages/emergency-history"))
 const OfficialIdProofWorkspacePage = lazy(() => import("@/features/dashboard/pages/official-id-proof-workspace"))
-const OcrConfigurationPage = lazy(() => import("@/features/ocr/ocr-configuration-page"))
 const ConcernClassificationPage = lazy(() => import("@/features/classification/concern-classification-page"))
 const OfficialConfigurationHubPage = lazy(() => import("@/features/dashboard/pages/official-configuration-hub"))
 const OfficialUnitsPage = lazy(() => import("@/features/dashboard/pages/official-units-page"))
 const OfficialRolesPage = lazy(() => import("@/features/dashboard/pages/official-roles-page"))
+const NotFoundPage = lazy(() => import("@/features/dashboard/pages/not-found"))
 const OfficialUsersManagePage = lazy(() => import("@/features/dashboard/pages/official-users-manage-page"))
 const OfficialCategoriesPage = lazy(() => import("@/features/dashboard/pages/official-categories-page"))
 const OfficialDispatchRulesPage = lazy(() => import("@/features/dashboard/pages/official-dispatch-rules-page"))
@@ -52,6 +45,10 @@ const OfficialCommunityContentPage = lazy(() => import("@/features/dashboard/pag
 const OfficialMapDispatchPolicyPage = lazy(() => import("@/features/dashboard/pages/official-map-dispatch-policy-page"))
 const OfficialPrivacyRequestsPage = lazy(() => import("@/features/dashboard/pages/official-privacy-requests-page"))
 const LandingPage = lazy(() => import("@/features/landing/landing-page"))
+const HelpPage = lazy(() => import("@/features/help/help-page"))
+const HelpCollectionPage = lazy(() => import("@/features/help/help-collection-page"))
+const HelpArticlePage = lazy(() => import("@/features/help/help-article-page"))
+const AssistantWidget = lazy(() => import("@/features/assistant/assistant-widget"))
 
 function ProtectedDashboard() {
   const { loading, user } = useAuthSession()
@@ -168,20 +165,6 @@ function AlertsMapRoute() {
   return <ResidentAlertsMapPage />
 }
 
-function SettingsRoute() {
-  const { user } = useAuthSession()
-  if (user?.role === "resident") return <SettingsPage />
-  if (isOfficialUser(user)) return <OfficialSettingsPage />
-  // Responders have no settings page today — unchanged behavior.
-  return <Navigate to="/dashboard" replace />
-}
-
-function ChangePasswordRoute() {
-  const { user } = useAuthSession()
-  const allowed = user?.role === "resident" || isOfficialUser(user)
-  return allowed ? <ChangePasswordPage /> : <Navigate to="/dashboard" replace />
-}
-
 function EmergencyOpsRoute({ children }: { children: ReactNode }) {
   const { user } = useAuthSession()
   if (isOfficialUser(user)) return children
@@ -267,7 +250,6 @@ function AppRoutes() {
         <Route path="configuration/privacy" element={<OfficialRoute><Navigate to="/dashboard/configuration/privacy-requests" replace /></OfficialRoute>} />
         <Route path="verification-queue" element={<OfficialRoute><Navigate to="/dashboard/configuration/id-proof-template" replace /></OfficialRoute>} />
         <Route path="ocr-templates" element={<OfficialRoute><Navigate to="/dashboard/configuration/id-proof-template" replace /></OfficialRoute>} />
-        <Route path="ocr-configuration" element={<OfficialRoute><OcrConfigurationPage /></OfficialRoute>} />
         <Route path="concern-classification" element={<OfficialRoute><Navigate to="/dashboard/configuration/classification" replace /></OfficialRoute>} />
         <Route path="configuration" element={<OfficialRoute><OfficialConfigurationHubPage /></OfficialRoute>} />
         <Route path="configuration/units" element={<OfficialRoute><OfficialUnitsPage /></OfficialRoute>} />
@@ -286,17 +268,12 @@ function AppRoutes() {
         <Route path="responders/map" element={<Navigate to="/dashboard/responders/dispatch" replace />} />
         <Route path="responders/shift" element={<ResponderRoute><ResponderShiftPage /></ResponderRoute>} />
         <Route path="responders/profile" element={<ResponderRoute><ResponderProfilePage /></ResponderRoute>} />
-        <Route path="responders/notifications" element={<ResponderRoute><ResponderNotificationsPage /></ResponderRoute>} />
         <Route path="reports" element={<ConcernWorkspaceRoute />} />
         <Route path="reports/:reportId" element={<ConcernWorkspaceRoute />} />
         <Route path="notifications" element={<StaffProfileRoute><NotificationsPage /></StaffProfileRoute>} />
         <Route path="emergency-history" element={<ResidentRoute><EmergencyHistoryPage /></ResidentRoute>} />
         <Route path="profile" element={<StaffProfileRoute><ProfilePage /></StaffProfileRoute>} />
-        <Route path="settings" element={<SettingsRoute />} />
-        <Route path="settings/change-password" element={<ChangePasswordRoute />} />
-        <Route path="settings/reverify/name" element={<ResidentRoute><AccountReverifyNamePage /></ResidentRoute>} />
-        <Route path="settings/reverify/phone" element={<ResidentRoute><AccountReverifyPhonePage /></ResidentRoute>} />
-        <Route path="settings/reverify/email" element={<ResidentRoute><AccountReverifyEmailPage /></ResidentRoute>} />
+        <Route path="settings" element={<Navigate to="/dashboard" replace />} />
       </Route>
 
       {/* Onboarding */}
@@ -399,7 +376,34 @@ function AppRoutes() {
           }}
         />
       } />
+
+      <Route path="/privacy" element={<Navigate to="/help/a/privacy-policy" replace />} />
+      <Route path="/help" element={<HelpPage />} />
+      <Route path="/help/c/:collectionSlug" element={<HelpCollectionPage />} />
+      <Route path="/help/a/:articleSlug" element={<HelpArticlePage />} />
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
+  )
+}
+
+const ASSISTANT_PATHS = [
+  "/",
+  "/sign-in",
+  "/sign-up",
+  "/sign-up-otp",
+  "/forgot-password",
+  "/forgot-password-otp",
+  "/new-password",
+]
+
+function AssistantMount() {
+  const { pathname } = useLocation()
+  const enabled = ASSISTANT_PATHS.includes(pathname) || pathname.startsWith("/help")
+  if (!enabled) return null
+  return (
+    <Suspense fallback={null}>
+      <AssistantWidget onDark={pathname === "/"} />
+    </Suspense>
   )
 }
 
@@ -417,6 +421,7 @@ export default function App() {
       <Suspense fallback={<PageLoader />}>
         <AppRoutes />
       </Suspense>
+      <AssistantMount />
     </AuthSessionProvider>
   )
 }

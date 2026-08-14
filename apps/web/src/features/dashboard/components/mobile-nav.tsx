@@ -1,25 +1,18 @@
 import { useEffect, useState } from "react"
 import { Link, useLocation } from "react-router-dom"
-import { PhoneIcon } from "lucide-react"
+import { PhoneIcon, type LucideIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@workspace/ui/components/sheet"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import { getActiveEmergency } from "@/features/dashboard/emergency-api"
-import { useAssignedDispatches } from "@/features/dashboard/hooks/use-assigned-dispatches"
 import { getRoleNav } from "@/features/dashboard/lib/navigation"
+import { useAssignedDispatches } from "@/features/dashboard/hooks/use-assigned-dispatches"
+import { useOfficialBadges } from "@/features/dashboard/hooks/use-official-badges"
+import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/record/status"
 
-const ACTIVE_EMERGENCY = new Set([
-  "submitted",
-  "routed",
-  "acknowledged",
-  "en_route",
-  "nearby",
-  "arrived",
-])
-
-function SosFab() {
+function SosTab() {
   const [activeEmergency, setActiveEmergency] = useState(false)
 
   useEffect(() => {
@@ -29,7 +22,7 @@ function SosFab() {
         const alert = await getActiveEmergency()
         if (!cancelled) {
           setActiveEmergency(
-            Boolean(alert && ACTIVE_EMERGENCY.has(String(alert.status))),
+            Boolean(alert && ACTIVE_EMERGENCY_STATUSES.has(String(alert.status))),
           )
         }
       } catch {
@@ -51,36 +44,18 @@ function SosFab() {
     <button
       type="button"
       onClick={() => window.dispatchEvent(new CustomEvent("eboses:open-sos"))}
-      className="pointer-events-auto flex w-14 shrink-0 items-end justify-center"
       aria-label="SOS"
+      className={cn(
+        "flex size-12 shrink-0 items-center justify-center rounded-full transition-all duration-200",
+        "bg-gradient-to-b from-sos-bright to-sos text-white shadow-[0_6px_20px_rgba(242,59,53,0.38)]",
+        activeEmergency && "animate-sos-fab-blink",
+      )}
     >
-      <span
-        className={cn(
-          "flex size-14 flex-col items-center justify-center gap-0.5 rounded-full bg-gradient-to-b from-sos-bright to-sos text-white shadow-[0_6px_20px_rgba(242,59,53,0.38)]",
-          activeEmergency && "animate-sos-fab-blink",
-        )}
-      >
-        <PhoneIcon className="size-5 shrink-0" fill="currentColor" />
-        <span className="text-[10px] font-extrabold leading-none tracking-wide text-white">
-          SOS
-        </span>
-      </span>
+      <PhoneIcon className="size-5 shrink-0" fill="currentColor" />
     </button>
   )
 }
 
-/**
- * The responder's bottom bar.
- *
- * A flush, full-width dark bar with four equal tabs — the reference layout —
- * replacing the floating two-item pill that had the Dispatch button hanging
- * off its side. The active tab is a filled orange block with the icon over its
- * label, and Dispatch turns red and carries its live count when something is
- * assigned, which is how urgency survives folding that button into the bar.
- *
- * Filled-orange text is `brand-orange-ink` (near-black): white on #ff6a1a is
- * 2.86:1 and fails AA. See globals.css.
- */
 function ResponderBar() {
   const location = useLocation()
   const navItems = getRoleNav("responder").mobileItems
@@ -88,63 +63,127 @@ function ResponderBar() {
   const liveCount = activeAlerts.length
 
   return (
-    <nav
-      aria-label="Primary"
-      className="pointer-events-auto flex h-16 w-full items-stretch gap-1 border-t border-nav-border bg-nav-bg px-2 pb-[env(safe-area-inset-bottom)]"
-    >
-      {navItems.map((item) => {
-        const active = item.isActive(location.pathname)
-        const Icon = item.icon
-        const isDispatch = item.key === "dispatch"
-        const alarm = isDispatch && liveCount > 0
-        // Dispatch keeps its red identity in both active and idle-alarm states;
-        // it never turns brand-orange, which would let it get lost in the row.
-        const activeClass = isDispatch
-          ? "bg-sos/20 text-sos ring-1 ring-sos/40"
-          : "bg-nav-raised text-nav-text-active"
-        const alarmClass = "animate-sos-glow-blink bg-sos/15 text-sos"
+    <div className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 lg:hidden">
+      <div className="pointer-events-none flex items-end justify-center px-4 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))]">
+        <nav
+          aria-label="Primary"
+          className={cn(
+            "pointer-events-auto flex h-[3.75rem] w-auto shrink-0 items-center gap-1 rounded-full border border-nav-border bg-nav-raised px-2 shadow-[0_10px_32px_rgba(15,23,42,0.18)]",
+          )}
+        >
+          {navItems.map((item) => {
+            const active = item.isActive(location.pathname)
+            const Icon = item.icon
+            const alarmed = item.key === "dispatch" && liveCount > 0
 
-        return (
-          <Link
-            key={item.key}
-            to={item.to}
-            aria-current={active ? "page" : undefined}
-            aria-label={
-              alarm ? `${item.label}, ${liveCount} active` : item.label
-            }
-            className={cn(
-              "relative my-2 flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-2xl transition-colors",
-              active
-                ? activeClass
-                : alarm
-                  ? alarmClass
-                  : "text-nav-muted active:bg-nav-raised",
-            )}
-          >
-            <span className="relative">
-              <Icon
-                className="size-5"
-                strokeWidth={active || alarm ? 2.2 : 1.8}
-                fill="none"
-              />
-              {alarm && !active ? (
-                <span className="absolute -right-2 -top-1.5 flex size-4 min-w-4 items-center justify-center rounded-full bg-sos px-1 text-[10px] font-black leading-none text-white tabular-nums">
-                  {liveCount > 9 ? "9+" : liveCount}
+            return (
+              <Link
+                key={item.key}
+                to={item.to}
+                aria-current={active ? "page" : undefined}
+                aria-label={item.label}
+                className={cn(
+                  "flex h-12 shrink-0 items-center justify-center rounded-full transition-all duration-200",
+                  active ? "gap-1.5 px-4" : "w-12",
+                  alarmed
+                    ? cn(
+                        "bg-gradient-to-b from-sos-bright to-sos text-white shadow-[0_6px_20px_rgba(242,59,53,0.38)]",
+                        "animate-sos-glow-blink",
+                      )
+                    : active
+                      ? "bg-nav-active text-nav-text-active"
+                      : "bg-card-raised text-nav-muted hover:bg-nav-active hover:text-nav-text-active",
+                )}
+              >
+                <Icon
+                  className="size-5 shrink-0"
+                  strokeWidth={active || alarmed ? 2.4 : 1.8}
+                  fill="none"
+                />
+                <span
+                  className={cn(
+                    "overflow-hidden whitespace-nowrap text-[10.5px] font-bold leading-none transition-all duration-200",
+                    active ? "max-w-24 opacity-100" : "max-w-0 opacity-0",
+                  )}
+                >
+                  {item.label}
                 </span>
-              ) : null}
-            </span>
-            <span
-              className={cn(
-                "max-w-full truncate text-[10.5px] leading-none",
-                active || alarm ? "font-bold" : "font-medium",
-              )}
-            >
-              {item.label}
-            </span>
-          </Link>
-        )
-      })}
-    </nav>
+              </Link>
+            )
+          })}
+        </nav>
+      </div>
+    </div>
+  )
+}
+
+function PillTab({
+  label,
+  icon: Icon,
+  to,
+  active,
+  onClick,
+  open = false,
+  ariaLabel,
+  compact = false,
+  alarmed = false,
+}: {
+  label: string
+  icon: LucideIcon
+  to?: string
+  active: boolean
+  onClick?: () => void
+  open?: boolean
+  ariaLabel?: string
+  compact?: boolean
+  alarmed?: boolean
+}) {
+  const className = cn(
+    "flex h-12 shrink-0 items-center justify-center rounded-full transition-all duration-200",
+    alarmed
+      ? "bg-gradient-to-b from-sos-bright to-sos text-white shadow-[0_6px_20px_rgba(242,59,53,0.38)] animate-sos-glow-blink gap-1.5 px-4"
+      : active
+        ? cn("gap-1.5 bg-brand-navy text-white", compact ? "px-3" : "px-4")
+        : cn(
+            "text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700",
+            compact ? "w-11" : "w-12",
+          ),
+  )
+  const labelSpan = (
+    <span
+      className={cn(
+        "overflow-hidden whitespace-nowrap text-[10.5px] font-bold leading-none transition-all duration-200",
+        (active || alarmed) ? (compact ? "max-w-20 opacity-100" : "max-w-24 opacity-100") : "max-w-0 opacity-0",
+      )}
+    >
+      {label}
+    </span>
+  )
+  if (to) {
+    return (
+      <Link
+        to={to}
+        aria-current={active ? "page" : undefined}
+        aria-label={ariaLabel ?? label}
+        className={className}
+      >
+        <Icon className="size-5 shrink-0" strokeWidth={active || alarmed ? 2.4 : 1.8} fill="none" />
+        {(active || alarmed) ? labelSpan : null}
+      </Link>
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-haspopup="dialog"
+      aria-expanded={open ?? false}
+      aria-label={ariaLabel ?? label}
+      className={className}
+    >
+      <Icon className="size-5 shrink-0" strokeWidth={active || alarmed ? 2.4 : 1.8} fill="none" />
+      {(active || alarmed) ? labelSpan : null}
+    </button>
   )
 }
 
@@ -162,73 +201,51 @@ export function MobileNav() {
   const more = nav.more
   const moreActive = more ? more.isActive(location.pathname) : false
 
-  // The responder bar is flush to the viewport floor and full width, so it
-  // does not share the floating-pill container the other two roles use.
+  const activeEmergencies = useOfficialBadges(isOfficialRole).emergencies ?? 0
+
   if (isResponderRole) {
-    return (
-      <div className="fixed bottom-0 left-0 right-0 z-30 lg:hidden">
-        <ResponderBar />
-      </div>
-    )
+    return <ResponderBar />
   }
 
   return (
     <>
       <div className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 lg:hidden">
-        <div className="pointer-events-none flex items-end justify-center gap-3 px-4 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))]">
-          {/*
-            The resident sizes the pill to its content so the SOS button sits
-            beside it on the same line. The official's four tabs need the
-            width, so theirs stays a full bar.
-          */}
+        <div className="pointer-events-none flex items-end justify-center px-4 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))]">
+
           <nav
-            className={cn(
-              "pointer-events-auto flex h-[3.75rem] items-center gap-1 rounded-full px-2",
-              "border-2 border-neutral-300/90 bg-chart-grid shadow-[0_10px_32px_rgba(15,23,42,0.18)]",
-              isResident ? "w-auto shrink-0" : "w-full max-w-lg justify-evenly gap-0.5 px-1.5",
-            )}
+            className="pointer-events-auto flex h-[3.75rem] items-center gap-1 rounded-full bg-chart-grid px-2 shadow-[0_10px_32px_rgba(15,23,42,0.18)]"
             aria-label="Primary"
           >
             {navItems.map((item) => {
               const active = item.isActive(location.pathname)
-              const Icon = item.icon
+              const isEmergencies = item.key === "emergencies" && isOfficialRole
+              const hasActiveEmergency = isEmergencies && activeEmergencies > 0
               return (
-                <Link
+                <PillTab
                   key={item.key}
+                  label={item.label}
+                  icon={item.icon}
                   to={item.to}
-                  aria-current={active ? "page" : undefined}
-                  className={cn(
-                    "group flex h-12 flex-col items-center justify-center gap-0.5 rounded-full transition-colors",
-                    isResident ? "w-auto shrink-0 px-4" : "min-w-0 flex-1 px-1",
-                    active
-                      ? "text-brand-navy"
-                      : "text-neutral-500 hover:text-neutral-700",
-                  )}
-                >
-                  <Icon className="size-5" />
-                  <span className="text-[10px] font-medium leading-none">{item.label}</span>
-                </Link>
+                  active={active}
+                  compact={!isResident}
+                  alarmed={hasActiveEmergency}
+                />
               )
             })}
 
             {more ? (
-              <button
-                type="button"
+              <PillTab
+                label={more.label}
+                icon={more.icon}
+                active={moreActive}
+                open={moreOpen}
                 onClick={() => setMoreOpen(true)}
-                aria-haspopup="dialog"
-                aria-expanded={moreOpen}
-                className={cn(
-                  "group flex h-12 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-full px-1 transition-colors",
-                  moreActive ? "text-brand-navy" : "text-neutral-500 hover:text-neutral-700",
-                )}
-              >
-                <more.icon className="size-5" />
-                <span className="text-[10px] font-medium leading-none">{more.label}</span>
-              </button>
+                compact={!isResident}
+              />
             ) : null}
-          </nav>
 
-          {isResident ? <SosFab /> : null}
+            {isResident ? <SosTab /> : null}
+          </nav>
         </div>
       </div>
 

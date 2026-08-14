@@ -1,8 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from "react"
-import { DownloadIcon, FileImageIcon, Loader2Icon, MessageCircleIcon, PaperclipIcon, SendIcon, VideoIcon, XIcon } from "lucide-react"
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import {
+  ChevronUpIcon,
+  Loader2Icon,
+  MessageCircleIcon,
+  MicIcon,
+  PaperclipIcon,
+  PlayIcon,
+  SendIcon,
+  SquareIcon,
+  XIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
+import { initialsFor, roleLabel } from "@/features/dashboard/lib/people"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Marker, MarkerContent } from "@/components/ui/marker"
@@ -12,12 +23,16 @@ import {
   listConcernChat,
   sendConcernChat,
   type ConcernChatMessage,
-  type PublicUser,
 } from "@/features/dashboard/api"
 import { checkConcernMedia } from "@/features/dashboard/api"
-import { ApiError } from "@/lib/api"
-import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
-import { openAuthenticatedMedia } from "@/features/dashboard/lib/authenticated-media"
+import { ApiError, websocketTicket, websocketUrl } from "@/lib/api"
+import {
+  AuthenticatedMediaImage,
+  MediaLightbox,
+} from "@/features/dashboard/components/authenticated-media"
+import { type MediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
+import { VoiceNoteBubble } from "@/features/dashboard/components/voice-note-bubble"
+import { useVoiceRecorder, formatVoiceTime } from "@/features/dashboard/lib/use-voice-recorder"
 
 function formatChatTime(value: string) {
   return new Intl.DateTimeFormat("en", {
@@ -26,16 +41,7 @@ function formatChatTime(value: string) {
   }).format(new Date(value))
 }
 
-function roleLabel(user?: PublicUser | null) {
-  if (!user) return ""
-  if (user.role === "resident") return "Resident"
-  if (user.role === "barangay_official") return "Official"
-  if (user.role === "first_responder") return "Responder"
-  return user.role?.replace(/_/g, " ") || ""
-}
-function initialsFor(user?: PublicUser | null) {
-  return (user?.initials || user?.full_name?.split(/\s+/).map((part) => part[0]).join("") || "U").slice(0, 2).toUpperCase()
-}
+const HISTORY_PAGE_SIZE = 30
 
 export function ReportChatPanel({
   concernId,
@@ -43,19 +49,25 @@ export function ReportChatPanel({
   disabled,
   title = "Report chat",
   subtitle = "Private thread · you and barangay staff",
-  emptyMessage = "Message the barangay team about this report — updates and questions stay here.",
+  emptyMessage = "Message the barangay team about this report. Updates and questions stay here.",
   showHistory = true,
+  realtime = true,
+  plain = false,
   onMessageSent,
   className,
 }: {
   concernId: number
   open?: boolean
-  /** When true, hide composer (e.g. rejected-only view) */
+
   disabled?: boolean
   title?: string
   subtitle?: string
   emptyMessage?: string
   showHistory?: boolean
+
+  realtime?: boolean
+
+  plain?: boolean
   onMessageSent?: () => void | Promise<void>
   className?: string
 }) {
@@ -64,8 +76,10 @@ export function ReportChatPanel({
   const [draft, setDraft] = useState("")
   const [attachment, setAttachment] = useState<File | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
-  const [previewMedia, setPreviewMedia] = useState<{ src: string; filename: string } | null>(null)
+  const [previewMedia, setPreviewMedia] = useState<MediaPreviewItem | null>(null)
   const [loading, setLoading] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [hasOlder, setHasOlder] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -89,8 +103,9 @@ export function ReportChatPanel({
     setLoading(true)
     setLoadError(null)
     try {
-      const next = await listConcernChat(concernId)
+      const next = await listConcernChat(concernId, { limit: HISTORY_PAGE_SIZE })
       setMessages(next)
+      setHasOlder(next.length === HISTORY_PAGE_SIZE)
       scrollToBottom()
     } catch (error) {
       const message = error instanceof ApiError && error.status === 403
@@ -103,10 +118,74 @@ export function ReportChatPanel({
     }
   }, [concernId, open, scrollToBottom, showHistory])
 
+  const loadOlder = useCallback(async () => {
+    if (!messages.length || loadingOlder) return
+    setLoadingOlder(true)
+    try {
+      const older = await listConcernChat(concernId, { beforeId: messages[0].id, limit: HISTORY_PAGE_SIZE })
+      setMessages((prev) => [...older, ...prev])
+      setHasOlder(older.length === HISTORY_PAGE_SIZE)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not load earlier messages.")
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [concernId, loadingOlder, messages])
+
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0)
     return () => window.clearTimeout(timer)
   }, [load])
+
+  useEffect(() => {
+    if (!open || !concernId || !realtime) return
+    let socket: WebSocket | null = null
+    let reconnectTimer: number | undefined
+    let closed = false
+    let attempts = 0
+
+    async function connect() {
+      try {
+        const ticket = await websocketTicket()
+        if (closed) return
+        socket = new WebSocket(
+          websocketUrl(`/ws/concerns/${concernId}/tracking/?ticket=${encodeURIComponent(ticket)}`),
+        )
+      } catch {
+        attempts += 1
+        reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** attempts))
+        return
+      }
+      socket.onopen = () => {
+        attempts = 0
+      }
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data) as { type?: string; payload?: ConcernChatMessage }
+          if (message.type !== "concern.chat" || !message.payload || message.payload.concern !== concernId) return
+
+          setMessages((current) => current.some((item) => item.id === message.payload!.id)
+            ? current
+            : [...current, message.payload!])
+        } catch {
+          void 0
+        }
+      }
+      socket.onclose = () => {
+        if (closed) return
+        attempts += 1
+        reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** attempts))
+      }
+      socket.onerror = () => socket?.close()
+    }
+
+    void connect()
+    return () => {
+      closed = true
+      if (reconnectTimer) window.clearTimeout(reconnectTimer)
+      socket?.close()
+    }
+  }, [concernId, open, realtime])
 
   useEffect(() => {
     if (!open || !concernId || !showHistory) return
@@ -115,11 +194,12 @@ export function ReportChatPanel({
         .then((next) => {
           setMessages((prev) => {
             if (next.length === prev.length && next.at(-1)?.id === prev.at(-1)?.id) return prev
-            return next
+            const knownIds = new Set(prev.map((message) => message.id))
+            return [...prev, ...next.filter((message) => !knownIds.has(message.id))]
           })
         })
       .catch(() => {
-          /* A failed refresh should not erase a working conversation. */
+
         })
     }, 6000)
     return () => window.clearInterval(id)
@@ -154,6 +234,46 @@ export function ReportChatPanel({
     }
   }
 
+  async function sendVoiceNote(file: File): Promise<boolean> {
+    if (sending || disabled) return false
+    setSending(true)
+    try {
+      const created = await sendConcernChat(concernId, "", file)
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === created.id)) return prev
+        return [...prev, created]
+      })
+      await onMessageSent?.()
+      scrollToBottom()
+      return true
+    } catch (error) {
+      const message = error instanceof ApiError && error.status === 403
+        ? "You do not have permission to send messages in this report."
+        : error instanceof Error ? error.message : "Could not send the voice note."
+      toast.error(message)
+      return false
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const {
+    recording,
+    recordSeconds,
+    levels,
+    readyFile,
+    durationSeconds,
+    startRecording,
+    stopRecording,
+    cancelRecording,
+    discardRecording,
+  } = useVoiceRecorder()
+
+  async function sendReadyVoiceNote() {
+    if (!readyFile) return
+    if (await sendVoiceNote(readyFile)) discardRecording()
+  }
+
   async function chooseAttachment(file: File | undefined) {
     if (!file) return
     if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
@@ -180,32 +300,52 @@ export function ReportChatPanel({
   return (
     <div
       className={cn(
-        "flex flex-col overflow-hidden",
-        showHistory && "max-h-[400px]",
+        "flex min-h-0 flex-col",
+        !plain && "overflow-hidden rounded-xl border border-slate-200 bg-white",
+        showHistory && !plain && "max-h-[400px]",
         className,
       )}
     >
-      <div className="flex items-center justify-between gap-2 border-b border-neutral-100 px-4 py-3">
-        <div className="min-w-0">
-          <p className="flex items-center gap-1.5 text-[13px] font-bold text-neutral-900">
-            <MessageCircleIcon className="size-4 shrink-0 text-brand-orange" strokeWidth={2.25} />
-            {title}
-          </p>
-          <p className="mt-0.5 text-[12px] font-medium text-neutral-500">
-            {subtitle}
-          </p>
+      {!plain ? (
+        <div className="flex items-center justify-between gap-2 border-b border-neutral-100 px-4 py-3">
+          <div className="min-w-0">
+            <p className="flex items-center gap-1.5 text-[13px] font-bold text-neutral-900">
+              <MessageCircleIcon className="size-4 shrink-0 text-brand-orange" strokeWidth={2.25} />
+              {title}
+            </p>
+            <p className="mt-0.5 text-[12px] font-medium text-neutral-500">
+              {subtitle}
+            </p>
+          </div>
+          {loading ? <Loader2Icon className="size-4 animate-spin text-neutral-400" /> : null}
         </div>
-        {loading ? <Loader2Icon className="size-4 animate-spin text-neutral-400" /> : null}
-      </div>
+      ) : null}
 
-      {showHistory ? <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3 sm:px-4">
+      {showHistory ? <div className={cn("scrollbar-hide min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 py-3", plain && "max-h-[340px]")}>
+        {hasOlder ? (
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={() => void loadOlder()}
+              disabled={loadingOlder}
+              className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 px-3 py-1.5 text-[12px] font-semibold text-neutral-600 transition-colors hover:border-neutral-400 hover:text-neutral-900 disabled:opacity-60"
+            >
+              {loadingOlder ? <Loader2Icon className="size-3.5 animate-spin" /> : <ChevronUpIcon className="size-3.5" />}
+              {loadingOlder ? "Loading..." : "Load previous messages"}
+            </button>
+          </div>
+        ) : null}
         {messages.length === 0 && !loading ? (
           loadError ? (
             <div className="py-8 text-center">
-              <p className="text-[13px] leading-5 text-red-600">{loadError}</p>
+              <p className="text-[13px] leading-5 text-sos">{loadError}</p>
               <button type="button" onClick={() => void load()} className="mt-3 rounded-full border border-neutral-200 px-3 py-1.5 text-xs font-bold text-neutral-700 hover:bg-neutral-50">Try again</button>
             </div>
-          ) : <Marker role="status"><MarkerContent>{emptyMessage}</MarkerContent></Marker>
+          ) : plain ? (
+            <p className="py-8 text-center text-[13px] leading-5 text-neutral-400">{emptyMessage}</p>
+          ) : (
+            <Marker role="status"><MarkerContent>{emptyMessage}</MarkerContent></Marker>
+          )
         ) : null}
 
         {messages.map((msg) => {
@@ -214,6 +354,54 @@ export function ReportChatPanel({
           const role = roleLabel(msg.sender)
           const footer = [mine ? "You" : name, !mine && role ? role : "", formatChatTime(msg.created_at)].filter(Boolean).join(" · ")
           if (!msg.body && msg.attachment && msg.attachment.authenticity_status !== "clear") return null
+          const attachment = msg.attachment
+          const attachmentVisible = Boolean(
+            attachment && (attachment.authenticity_status === "clear" || attachment.kind === "audio"),
+          )
+          const mediaBlock = attachmentVisible ? (
+            <div className={cn(msg.body ? "mt-2" : undefined, "space-y-1")}>
+              {attachment!.kind === "image" ? (
+                <button type="button" onClick={() => setPreviewMedia({ src: attachment!.preview_url, filename: attachment!.original_filename, kind: "image" })} className="block overflow-hidden rounded-lg text-left"><AuthenticatedMediaImage src={attachment!.preview_url} alt={attachment!.original_filename} className="max-h-40 max-w-full object-cover" /></button>
+              ) : attachment!.kind === "audio" ? (
+                <VoiceNoteBubble
+                  url={attachment!.raw_url}
+                  filename={attachment!.original_filename}
+                  mine={mine}
+                  flat
+                />
+              ) : (
+                <button type="button" onClick={() => setPreviewMedia({ src: attachment!.raw_url, filename: attachment!.original_filename, kind: "video" })} className="text-current underline-offset-2 hover:underline">
+                  <PlayIcon className="size-3.5" />
+                  Preview video
+                </button>
+              )}
+              {attachment!.kind !== "audio" ? (
+                <p className="text-[10px] opacity-70">
+                  Media review: {attachment!.authenticity_status === "clear" ? "clear" : attachment!.authenticity_status === "flagged" ? "flagged" : "review required"}
+                </p>
+              ) : null}
+            </div>
+          ) : null
+
+          let content: ReactNode
+          if (!msg.body && msg.attachment?.kind === "audio") {
+            content = (
+              <VoiceNoteBubble
+                url={msg.attachment.raw_url}
+                filename={msg.attachment.original_filename}
+                mine={mine}
+              />
+            )
+          } else {
+            content = (
+              <Bubble variant={mine ? "default" : "muted"}>
+                <BubbleContent>
+                  {msg.body ? <p>{msg.body}</p> : null}
+                  {mediaBlock}
+                </BubbleContent>
+              </Bubble>
+            )
+          }
           return (
             <Message key={msg.id} align={mine ? "end" : "start"}>
               <MessageAvatar>
@@ -221,26 +409,7 @@ export function ReportChatPanel({
                 </Avatar>
               </MessageAvatar>
               <MessageContent className={mine ? "items-end" : "items-start"}>
-                <Bubble variant={mine ? "default" : "muted"}>
-                  <BubbleContent>
-                    {msg.body ? <p>{msg.body}</p> : null}
-                    {msg.attachment && msg.attachment.authenticity_status === "clear" ? (
-                      <div className={cn(msg.body && "mt-2", "space-y-2")}>
-                        {msg.attachment.kind === "image" ? (
-                          <button type="button" onClick={() => setPreviewMedia({ src: msg.attachment!.raw_url, filename: msg.attachment!.original_filename })} className="block w-full overflow-hidden rounded-xl text-left"><AuthenticatedMediaImage src={msg.attachment.raw_url} alt={msg.attachment.original_filename} className="max-h-48 w-full object-cover" /></button>
-                        ) : (
-                          <button type="button" onClick={() => void openAuthenticatedMedia(msg.attachment!.raw_url, msg.attachment!.original_filename)} className="flex w-full items-center gap-2 rounded-xl border border-current/20 px-3 py-3 text-left text-xs font-bold hover:bg-white/10">
-                            <VideoIcon className="size-5 shrink-0" /> Open video attachment
-                          </button>
-                        )}
-                        <p className="flex items-center gap-1 text-[11px] font-semibold opacity-80">
-                          {msg.attachment.kind === "image" ? <FileImageIcon className="size-3.5" /> : <VideoIcon className="size-3.5" />}
-                          {msg.attachment.authenticity_status === "clear" ? "No obvious edit detected" : msg.attachment.authenticity_status === "flagged" ? "Potentially edited media · review manually" : "Authenticity review required"}
-                        </p>
-                      </div>
-                    ) : null}
-                  </BubbleContent>
-                </Bubble>
+                {content}
                 <MessageFooter className={mine ? "text-right" : "text-left"}>{footer}</MessageFooter>
               </MessageContent>
             </Message>
@@ -249,72 +418,123 @@ export function ReportChatPanel({
         <div ref={bottomRef} />
       </div> : null}
       {previewMedia ? (
-        <div className="fixed inset-0 z-[260] flex items-center justify-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Chat image preview" onClick={() => setPreviewMedia(null)}>
-          <div className="flex max-h-[90vh] max-w-[92vw] flex-col items-center gap-3" onClick={(event) => event.stopPropagation()}>
-            <AuthenticatedMediaImage src={previewMedia.src} alt={previewMedia.filename} className="max-h-[78vh] max-w-[90vw] rounded-xl object-contain" />
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={() => void openAuthenticatedMedia(previewMedia.src, previewMedia.filename)} className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white hover:bg-white/20"><DownloadIcon className="size-4" />Download</button>
-              <button type="button" onClick={() => setPreviewMedia(null)} className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white hover:bg-white/20"><XIcon className="size-4" />Close</button>
-            </div>
-          </div>
-        </div>
+        <MediaLightbox items={[previewMedia]} index={0} onClose={() => setPreviewMedia(null)} />
       ) : null}
 
       {!disabled ? (
-        <div className="border-t border-neutral-100 p-2.5 sm:p-3">
-          {attachment ? (
+        <div className="relative border-t border-slate-100 p-2.5">
+          {attachment && !recording && !readyFile ? (
             <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-line-tint bg-canvas px-3 py-2 text-xs font-semibold text-brand-navy">
               <span className="flex min-w-0 items-center gap-2 truncate"><PaperclipIcon className="size-4 shrink-0" />{attachment.name}</span>
               <button type="button" onClick={() => setAttachment(null)} className="rounded-full p-1 hover:bg-white" aria-label="Remove attachment"><XIcon className="size-4" /></button>
             </div>
           ) : null}
-          {attachmentError ? <p className="mb-2 text-xs font-semibold text-red-600">{attachmentError}</p> : null}
+          {attachmentError ? <p className="mb-2 text-xs font-semibold text-sos">{attachmentError}</p> : null}
           <div className="flex items-end gap-2">
-          <label className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full border border-neutral-200 text-neutral-500 hover:bg-neutral-50" aria-label="Attach image or video">
-            <PaperclipIcon className="size-4" />
-            <input type="file" accept="image/*,video/mp4,video/webm,video/quicktime" className="sr-only" onChange={(event) => { void chooseAttachment(event.target.files?.[0]); event.currentTarget.value = "" }} />
-          </label>
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault()
-                void handleSend()
-              }
-            }}
-            rows={1}
-            placeholder="Write a message…"
-            className="max-h-28 min-h-11 flex-1 resize-none rounded-xl border border-neutral-200 bg-canvas px-3 py-2.5 text-[14px] text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-brand-orange"
-          />
-          <button
-            type="button"
-            disabled={sending || (!draft.trim() && !attachment)}
-            onClick={() => void handleSend()}
-            className="flex size-11 shrink-0 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
-            aria-label="Send message"
-          >
-            {sending ? (
-              <Loader2Icon className="size-4 animate-spin" />
-            ) : (
-              <SendIcon className="size-4" strokeWidth={2.25} />
-            )}
-          </button>
+          {recording || readyFile ? (
+            <>
+              <div
+                className={cn(
+                  "flex h-12 min-w-0 flex-1 items-center gap-3 rounded-xl border px-4",
+                  recording ? "border-sos/30 bg-sos/10 text-sos" : "border-brand-orange/30 bg-brand-orange/5 text-brand-orange",
+                )}
+                aria-label={recording ? `Recording ${formatVoiceTime(recordSeconds)}` : `Voice note ready, ${formatVoiceTime(durationSeconds)}`}
+              >
+                <span className={cn("size-2 shrink-0 rounded-full", recording ? "animate-pulse bg-sos" : "bg-brand-orange")} aria-hidden />
+                <span className="flex h-8 min-w-0 flex-1 items-center gap-[2px] overflow-hidden">
+                  {(levels.length ? levels : [0.2, 0.2, 0.2, 0.2]).map((level, index) => (
+                    <span key={index} className="w-[3px] shrink-0 rounded-full bg-current transition-[height] duration-100 ease-out" style={{ height: `${3 + level * 22}px` }} />
+                  ))}
+                </span>
+                <span className={cn("shrink-0 font-mono text-[13px] font-semibold tabular-nums", recording ? "text-sos" : "text-brand-navy")}>
+                  {formatVoiceTime(recording ? recordSeconds : durationSeconds)}
+                </span>
+              </div>
+              {recording ? (
+                <button
+                  type="button"
+                  onClick={() => void stopRecording()}
+                  aria-label="Stop recording"
+                  title="Stop recording"
+                  className="flex size-10 shrink-0 items-center justify-center rounded-full bg-sos text-white hover:bg-sos-bright"
+                >
+                  <SquareIcon className="size-4" fill="currentColor" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={sending}
+                  onClick={() => void sendReadyVoiceNote()}
+                  aria-label="Send voice note"
+                  className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
+                >
+                  {sending ? <Loader2Icon className="size-4 animate-spin" /> : <SendIcon className="size-4" />}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => (recording ? cancelRecording() : discardRecording())}
+                aria-label="Cancel voice note"
+                title="Cancel voice note"
+                className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+              >
+                <XIcon className="size-5" />
+              </button>
+            </>
+          ) : (
+            <>
+            <button
+              type="button"
+              onClick={() => void startRecording()}
+              disabled={sending}
+              aria-label="Record a voice note"
+              title="Record a voice note"
+              className={cn(
+                "flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-500 disabled:opacity-50",
+                "hover:bg-neutral-100",
+              )}
+            >
+              <MicIcon className="size-4" />
+            </button>
+            <label className={cn("flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-full text-neutral-500 hover:bg-neutral-100")} aria-label="Attach image or video">
+              <PaperclipIcon className="size-4" />
+              <input type="file" accept="image/*,video/mp4,video/webm,video/quicktime" className="sr-only" onChange={(event) => { void chooseAttachment(event.target.files?.[0]); event.currentTarget.value = "" }} />
+            </label>
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault()
+                  void handleSend()
+                }
+              }}
+              rows={1}
+              placeholder="Enter a message"
+              className="max-h-28 min-h-10 flex-1 resize-none rounded-xl border border-neutral-200 bg-canvas px-3 py-2 text-[14px] text-neutral-900 outline-none transition-all placeholder:text-neutral-400 focus:border-brand-orange focus:ring-2 focus:ring-brand-orange/25"
+            />
+            <button
+              type="button"
+              disabled={sending || recording || (!draft.trim() && !attachment)}
+              onClick={() => void handleSend()}
+              className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
+              aria-label="Send message"
+            >
+              {sending ? (
+                <Loader2Icon className="size-4 animate-spin" />
+              ) : (
+                <SendIcon className="size-4" />
+              )}
+            </button>
+            </>
+          )}
           </div>
         </div>
       ) : (
-        <p className="border-t border-neutral-100 px-3 py-2.5 text-center text-[12px] text-neutral-400">
+        <p className="border-t border-slate-100 px-3 py-2.5 text-center text-[12px] text-neutral-400">
           Chat is closed for this report.
         </p>
       )}
     </div>
   )
 }
-
-
-
-
-
-
-
-

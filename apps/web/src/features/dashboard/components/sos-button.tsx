@@ -216,7 +216,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
           className={cn(
             "group flex items-center gap-2 rounded-full bg-gradient-to-b from-sos-bright to-sos py-2 pr-4 pl-2 text-white shadow-[0_10px_24px_rgba(248,69,63,0.28)] transition-all hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98] disabled:cursor-wait disabled:opacity-80",
             // Amber, never disabled: the button always sends.
-            offDuty && "from-amber-400 to-amber-500",
+            offDuty && "from-neutral-400 to-neutral-500",
             hasActiveEmergency && "sos-glow"
           )}
           aria-label={offDuty ? "SOS (outside barangay duty hours)" : "SOS"}

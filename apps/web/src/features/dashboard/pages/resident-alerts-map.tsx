@@ -14,6 +14,7 @@ import {
 } from "react"
 import {
   AlertTriangleIcon,
+  BellIcon,
   ChevronLeftIcon,
   CloudRainIcon,
   CloudSunIcon,
@@ -22,6 +23,7 @@ import {
   LeafIcon,
   LoaderCircleIcon,
   MapPinIcon,
+  MegaphoneIcon,
   MinusIcon,
   PlusIcon,
   SearchIcon,
@@ -42,9 +44,11 @@ import {
   deleteConcernComment,
   getConcern,
   getResidentAlertsMap,
+  listAnnouncements,
   listFeedConcerns,
   updateConcernComment,
   voteConcern,
+  type Announcement,
   type Concern,
   type ConcernCategory,
   type PublicUser,
@@ -53,10 +57,13 @@ import {
   type ResidentMapEmergency,
 } from "@/features/dashboard/api"
 import { FeedPostCard } from "@/features/dashboard/components/feed-post-card"
+import { EmptyState } from "@/features/dashboard/components/record/empty-state"
 import {
   concernBodyText,
   streetLabelFromAddress,
 } from "@/features/dashboard/components/feed-post-text"
+import { advisoryMeta } from "@/features/dashboard/components/community-content/advisory-tags"
+import { AnnouncementComments } from "@/features/dashboard/components/home/announcement-comments"
 import {
   EmergencyBanner,
   EmergencyDetailPanel,
@@ -64,26 +71,43 @@ import {
 } from "@/features/dashboard/components/resident-map/emergency-strip"
 import {
   ResidentLeafletMap,
+
   type MapApi,
 } from "@/features/dashboard/components/resident-map/resident-leaflet-map"
 import { useBarangayWeather, type WeatherState } from "@/features/dashboard/hooks/use-barangay-weather"
+import { getConcernClassificationConfig } from "@/features/classification/api"
+import {
+  MapChip,
+  MapControlButton,
+  MapControlStack,
+} from "@/features/dashboard/components/map/map-chrome"
+import { MapLegend, type MapLegendRow } from "@/features/dashboard/components/map/map-legend"
+import { MAP_COLORS } from "@/features/dashboard/components/alerts-map/lib"
+import {
+  defaultResidentLayers,
+  type ResidentMapLayers,
+} from "@/features/dashboard/lib/resident-map-layers"
 import { usePageTitle } from "@/hooks/use-page-title"
 import {
   BARANGAY_CENTER,
-  categoryMeta,
   formatDistance,
   haversineMeters,
   hasMapCoords,
   isLocalGps,
   mergeFeedWithMapCoords,
-  timeAgo,
   validCoord,
 } from "@/features/dashboard/lib/resident-map-utils"
+import { timeAgo } from "@/features/dashboard/lib/format"
 import { useIsDesktop } from "@/features/dashboard/lib/shell"
+import {
+  readLastKnownPosition,
+  writeLastKnownPosition,
+} from "@/features/dashboard/lib/last-known-position"
 import { websocketTicket, websocketUrl } from "@/lib/api"
 import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
 
-type ChipKey = "all" | "emergencies" | ConcernCategory
+type ChipKey = "all" | "emergencies" | (string & {})
+type CategoryChip = { key: string; label: string }
 
 const BARANGAY = "Marikina Heights"
 
@@ -110,15 +134,6 @@ function WeatherIcon({ code, className = "size-5" }: { code: number | null; clas
   return <CloudSunIcon className={className} />
 }
 
-const CHIPS: { key: ChipKey; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "emergencies", label: "Emergencies" },
-  { key: "public_safety", label: "Safety" },
-  { key: "infrastructure", label: "Infrastructure" },
-  { key: "environment", label: "Environment" },
-  { key: "others", label: "Others" },
-]
-
 /**
  * Map badge labels — same groups as My reports filters
  * (Active / Resolved / Rejected / Appealed).
@@ -138,12 +153,15 @@ function CategoryIcon({ category, className }: { category: ConcernCategory; clas
   return <SearchIcon className={className} />
 }
 
+/** A static filter chip (All / Emergencies) plus the categories configured by officials. */
 function CategoryFilterChips({
+  chips,
   chip,
   filterLoading,
   onSelect,
   className,
 }: {
+  chips: CategoryChip[]
   chip: ChipKey
   filterLoading: boolean
   onSelect: (key: ChipKey) => void
@@ -159,7 +177,7 @@ function CategoryFilterChips({
       role="tablist"
       aria-label="Categories"
     >
-      {CHIPS.map((c) => (
+      {chips.map((c) => (
         <button
           key={c.key}
           type="button"
@@ -232,12 +250,12 @@ function WeatherDetails({ weather }: { weather: WeatherState }) {
               className="grid grid-cols-[40px_minmax(0,1fr)_auto_36px] items-center gap-2 text-sm"
             >
               <span className="font-bold text-neutral-800">{day.day}</span>
-              <WeatherIcon code={day.code} className="size-5 text-amber-500" />
+              <WeatherIcon code={day.code} className="size-5 text-neutral-500" />
               <span className="font-bold text-neutral-800">
                 {Math.round(day.high)}°{" "}
                 <span className="font-medium text-neutral-400">{Math.round(day.low)}°</span>
               </span>
-              <span className="text-right text-sky-600">{day.rain}%</span>
+              <span className="text-right text-neutral-600">{day.rain}%</span>
             </div>
           ))}
         </div>
@@ -261,7 +279,6 @@ function FeedPreviewCard({
   onWrite: () => void
 }) {
   const st = statusLabel(post.status)
-  const meta = categoryMeta[post.category]
   const dist = formatDistance(distance)
   const ago = timeAgo(post.created_at)
   const snippet = concernBodyText(post)
@@ -275,11 +292,8 @@ function FeedPreviewCard({
     >
       <button type="button" onClick={onOpen} className="w-full px-3 py-3 text-left sm:px-3.5">
         <div className="flex items-start gap-2.5 sm:gap-3">
-          <span
-            className="flex size-9 shrink-0 items-center justify-center rounded-full sm:size-10"
-            style={{ background: meta?.bg, color: meta?.color }}
-          >
-            <CategoryIcon category={post.category} className="size-4 sm:size-5" />
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-600 sm:size-10">
+            <CategoryIcon category={post.category} className="size-5" />
           </span>
           <div className="min-w-0 flex-1 overflow-hidden">
             <div className="flex items-start justify-between gap-2">
@@ -296,8 +310,8 @@ function FeedPreviewCard({
               <span
                 className={cn(
                   "shrink-0 text-[11px] font-semibold sm:text-[12px]",
-                  st.tone === "active" && "text-red-500",
-                  st.tone === "appealed" && "text-amber-600",
+                  st.tone === "active" && "text-sos",
+                  st.tone === "appealed" && "text-neutral-600",
                   st.tone === "closed" && "text-neutral-400",
                 )}
               >
@@ -332,12 +346,153 @@ function FeedPreviewCard({
   )
 }
 
+/**
+ * Compact announcement card for the alerts list.
+ *
+ * Same header, same meta format and same neutral icon well as the feed
+ * carousel, so one announcement does not read as two different objects
+ * depending on where it is seen. No urgency badge and no street chips: the
+ * source, the date and the streets are one plain line.
+ */
+function AnnouncementListItem({
+  announcement,
+  expanded,
+  onOpen,
+  onWrite,
+}: {
+  announcement: Announcement
+  expanded: boolean
+  onOpen: () => void
+  onWrite: () => void
+}) {
+  const TagIcon = advisoryMeta(announcement.tag).icon
+  const place =
+    announcement.place_label ||
+    (announcement.affected_streets?.length ? announcement.affected_streets.join(" · ") : "")
+
+  return (
+    <div
+      className={cn(
+        "rounded-2xl border bg-white transition-colors",
+        expanded ? "border-neutral-300 bg-neutral-50 shadow-sm" : "border-neutral-200",
+      )}
+    >
+      <button type="button" onClick={onOpen} className="w-full px-3 py-3 text-left sm:px-3.5">
+        <div className="flex items-start gap-2.5 sm:gap-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-600 sm:size-10">
+            <TagIcon className="size-4 sm:size-5" strokeWidth={1.9} />
+          </span>
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <p className="truncate text-[15px] font-semibold text-neutral-900">Barangay Hall</p>
+            <p className="mt-0.5 text-meta text-neutral-500">
+              {[announcement.date_label, place].filter(Boolean).join(" · ")}
+            </p>
+            <p className="mt-2 break-words text-row font-semibold leading-snug text-neutral-900">
+              {announcement.title}
+            </p>
+            {announcement.body ? (
+              <p className="mt-1.5 line-clamp-2 break-words text-read leading-relaxed text-neutral-600">
+                {announcement.body}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </button>
+
+      <div className="border-t border-neutral-100 px-3 py-2 sm:px-3.5 sm:py-2.5">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onWrite()
+          }}
+          className="flex h-9 w-full items-center justify-center rounded-full border border-neutral-300 bg-white px-3 text-[12px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50 sm:text-[13px]"
+        >
+          Write about this alert
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** Expanded advisory in the left panel — full body, image, and its comments. */
+function AnnouncementDetailPanel({
+  announcement,
+  onBack,
+  focusComment,
+}: {
+  announcement: Announcement
+  onBack: () => void
+  focusComment: boolean
+}) {
+  const TagIcon = advisoryMeta(announcement.tag).icon
+  const place =
+    announcement.place_label ||
+    (announcement.affected_streets?.length ? announcement.affected_streets.join(" · ") : "")
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-white text-neutral-900">
+      <div className="flex shrink-0 items-center gap-1 px-2 pb-1 pt-3">
+        <button
+          type="button"
+          onClick={onBack}
+          className="flex size-9 shrink-0 items-center justify-center rounded-full text-neutral-700 hover:bg-neutral-100"
+          aria-label="Back to list"
+        >
+          <ChevronLeftIcon className="size-5" strokeWidth={2.25} />
+        </button>
+        <p className="min-w-0 flex-1 truncate text-left text-[15px] font-semibold text-neutral-600">
+          Announcement
+        </p>
+      </div>
+
+      <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6">
+        <div className="flex items-start gap-3">
+          <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-600">
+            <TagIcon className="size-6" strokeWidth={1.9} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[15px] font-semibold text-neutral-900">Barangay Hall</p>
+            <p className="mt-0.5 text-meta text-neutral-500">
+              {[announcement.date_label, place].filter(Boolean).join(" · ")}
+            </p>
+          </div>
+        </div>
+
+        <h2 className="mt-5 break-words text-section text-neutral-900">{announcement.title}</h2>
+
+        {announcement.image_url ? (
+          <img
+            src={announcement.image_url}
+            alt={announcement.image_alt || ""}
+            className="mt-4 w-full rounded-2xl object-cover"
+          />
+        ) : null}
+
+        {announcement.body ? (
+          <p className="mt-4 whitespace-pre-wrap break-words text-read leading-relaxed text-neutral-800">
+            {announcement.body}
+          </p>
+        ) : null}
+
+        <div className="mt-6">
+          <AnnouncementComments
+            announcementId={announcement.id}
+            autoFocusComposer={focusComment}
+          />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ResidentAlertsMapPage() {
   usePageTitle("Alerts Map")
   const navigate = useNavigate()
   const { user } = useAuthSession()
   const [posts, setPosts] = useState<Concern[]>([])
   const [emergencies, setEmergencies] = useState<ResidentMapEmergency[]>([])
+  const [announcements, setAnnouncements] = useState<Announcement[]>([])
   // Mount map immediately with barangay defaults — don't wait on API (slow OSM/POI path)
   const [mapMeta, setMapMeta] = useState<ResidentAlertsMapSnapshot["map"]>(() => ({
     provider: "OpenStreetMap",
@@ -354,10 +509,16 @@ export default function ResidentAlertsMapPage() {
   const [chip, setChip] = useState<ChipKey>("all")
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [selectedEmergencyId, setSelectedEmergencyId] = useState<number | null>(null)
+  const [selectedAnnouncementId, setSelectedAnnouncementId] = useState<number | null>(null)
   const [expandedPost, setExpandedPost] = useState<Concern | null>(null)
   const [expandLoading, setExpandLoading] = useState(false)
   const [focusComment, setFocusComment] = useState(false)
-  const [userPos, setUserPos] = useState<{ lat: number; lng: number } | null>(null)
+  const [userPos, setUserPos] = useState<{ lat: number; lng: number } | null>(() => {
+    const stored = readLastKnownPosition(user?.id ?? null)
+    if (!stored) return null
+    const seed = { lat: stored.latitude, lng: stored.longitude }
+    return isLocalGps(seed) ? seed : null
+  })
   /** Mobile sheet: full list, peek preview bar, or fully tucked while using the map */
   const [sheetMode, setSheetMode] = useState<"expanded" | "peek" | "hidden">("expanded")
   const [sheetHeight, setSheetHeight] = useState(() =>
@@ -374,6 +535,15 @@ export default function ResidentAlertsMapPage() {
   const [weatherOpen, setWeatherOpen] = useState(false)
   const weatherPanelRef = useRef<HTMLDivElement>(null)
   const [locating, setLocating] = useState(false)
+  /** Officially-configured concern categories (filter chips), from the classification config. */
+  const [filterCats, setFilterCats] = useState<CategoryChip[]>([])
+  /** Desktop left alerts panel collapsed vs open. */
+  const [alertsOpen, setAlertsOpen] = useState(true)
+  /** Epoch ms of the last stored GPS fix — shown under the user pin. */
+  const [userKnownAt, setUserKnownAt] = useState<number | null>(() => {
+    const stored = readLastKnownPosition(user?.id ?? null)
+    return stored ? stored.at : null
+  })
 
   // Desktop weather: close when clicking outside (loses focus)
   useEffect(() => {
@@ -493,6 +663,37 @@ export default function ResidentAlertsMapPage() {
   })()
   const weather = useBarangayWeather(weatherLat, weatherLng, weatherPlace)
 
+  // Filter chips come from the classification config officials maintain, not a hardcoded list
+  useEffect(() => {
+    let mounted = true
+    getConcernClassificationConfig()
+      .then((config) => {
+        if (!mounted) return
+        setFilterCats(
+          (config.categories ?? [])
+            .filter((c) => c.enabled)
+            .map((c) => ({ key: c.key, label: c.label })),
+        )
+      })
+      .catch(() => {
+        /* keep the static All / Emergencies chips if the config fetch fails */
+      })
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  const chips = useMemo<CategoryChip[]>(
+    () => [
+      { key: "all", label: "All" },
+      { key: "posts", label: "Concerns" },
+      { key: "announcements", label: "Announcements" },
+      { key: "emergencies", label: "Emergencies" },
+      ...filterCats,
+    ],
+    [filterCats],
+  )
+
   const load = useCallback(async (soft = false) => {
     if (!soft) setError("")
     try {
@@ -504,10 +705,19 @@ export default function ResidentAlertsMapPage() {
         })
         .catch(() => null)
       const feedPromise = listFeedConcerns("all").catch(() => [] as Concern[])
+      const announcementsPromise = listAnnouncements().catch(() => [] as Announcement[])
 
-      const [mapSnap, feed] = await Promise.all([mapSnapPromise, feedPromise])
+      const [mapSnap, feed, nextAnnouncements] = await Promise.all([
+        mapSnapPromise,
+        feedPromise,
+        announcementsPromise,
+      ])
       const withPins = mergeFeedWithMapCoords(feed, mapSnap?.concerns)
       setPosts(withPins)
+      // Keep every published advisory: the list shows them all, and the map
+      // skips the ones without a drawn area (the map already guards on
+      // `area_geometry`), so a barangay-wide notice still belongs in the feed.
+      setAnnouncements(nextAnnouncements.filter((item) => item.is_published))
       setEmergencies(
         (mapSnap?.emergencies ?? []).filter((em) => validCoord(em.latitude, em.longitude)),
       )
@@ -620,12 +830,20 @@ export default function ResidentAlertsMapPage() {
       (pos) => {
         const next = { lat: pos.coords.latitude, lng: pos.coords.longitude }
         // Ignore GPS outside the area — caused "13000 km away" labels
-        setUserPos(isLocalGps(next) ? next : null)
+        if (isLocalGps(next)) {
+          writeLastKnownPosition(pos, user?.id ?? null)
+          setUserPos(next)
+          setUserKnownAt(pos.timestamp || Date.now())
+        } else {
+          setUserPos(null)
+        }
       },
-      () => setUserPos(null),
+      // Keep whatever was seeded from the last stored fix; dropping the pin
+      // on a failed read is what made distances fall back to barangay centre.
+      () => {},
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 60_000 },
     )
-  }, [])
+  }, [user?.id])
 
   // Distance origin: local GPS when near MH, else barangay center (never far-away device GPS)
   const origin = useMemo(() => {
@@ -636,17 +854,33 @@ export default function ResidentAlertsMapPage() {
     return { ...BARANGAY_CENTER }
   }, [userPos, mapMeta])
 
+  const [layers, setLayers] = useState<ResidentMapLayers>(defaultResidentLayers)
+
   const filtered = useMemo(() => {
-    if (chip === "emergencies") return [] as Concern[]
-    const base = chip === "all" ? posts : posts.filter((p) => p.category === chip)
+    if (!layers.concerns) return [] as Concern[]
+    if (chip === "emergencies" || chip === "announcements") return [] as Concern[]
+    const base =
+      chip === "all" || chip === "posts" ? posts : posts.filter((p) => p.category === chip)
     // Drop posts with invalid / out-of-area coordinates (no random far pins)
     return base.filter((p) => hasMapCoords(p))
-  }, [posts, chip])
+  }, [posts, chip, layers.concerns])
 
   const filteredEmergencies = useMemo(() => {
+    if (!layers.emergencies) return [] as ResidentMapEmergency[]
     if (chip !== "all" && chip !== "emergencies") return [] as ResidentMapEmergency[]
     return emergencies
-  }, [emergencies, chip])
+  }, [emergencies, chip, layers.emergencies])
+
+  // Advisories show under the default view and the dedicated Announcements
+  // chip — the Emergencies / Posts / category chips are about reports, so a
+  // water-outage notice should not leak into those.
+  const visibleAnnouncements = useMemo(
+    () =>
+      layers.advisories && (chip === "all" || chip === "announcements")
+        ? announcements
+        : ([] as Announcement[]),
+    [chip, announcements, layers.advisories],
+  )
 
   const distanceFor = useCallback(
     (post: Concern) => {
@@ -666,8 +900,19 @@ export default function ResidentAlertsMapPage() {
     [origin],
   )
 
+  function openAnnouncement(id: number, write = false) {
+    setSelectedId(null)
+    setExpandedPost(null)
+    setSelectedEmergencyId(null)
+    setSelectedAnnouncementId(id)
+    setFocusComment(write)
+    setWeatherOpen(false)
+    if (!isDesktop) snapSheetTo("expanded")
+  }
+
   async function openPost(id: number, write = false) {
     setSelectedEmergencyId(null)
+    setSelectedAnnouncementId(null)
     setSelectedId(id)
     setWeatherOpen(false)
     snapSheetTo("expanded")
@@ -693,6 +938,7 @@ export default function ResidentAlertsMapPage() {
     setExpandedPost(null)
     setFocusComment(false)
     setSelectedEmergencyId(null)
+    setSelectedAnnouncementId(null)
   }
 
   function closePost() {
@@ -700,14 +946,20 @@ export default function ResidentAlertsMapPage() {
     if (!isDesktop) snapSheetTo("peek")
   }
 
-  function openEmergency(id: number) {
+  function openEmergency(id: number, write = false) {
     setSelectedId(null)
     setExpandedPost(null)
-    setFocusComment(false)
+    setFocusComment(write)
+    setSelectedAnnouncementId(null)
     setSelectedEmergencyId(id)
     setWeatherOpen(false)
     if (!isDesktop) snapSheetTo("expanded")
   }
+
+  const selectedAnnouncement =
+    selectedAnnouncementId != null
+      ? (announcements.find((item) => item.id === selectedAnnouncementId) ?? null)
+      : null
 
   const selectedEmergency =
     selectedEmergencyId != null
@@ -750,6 +1002,7 @@ export default function ResidentAlertsMapPage() {
           return
         }
         setUserPos(next)
+        setUserKnownAt(pos.timestamp || Date.now())
         window.setTimeout(() => {
           mapApiRef.current?.invalidateSize()
           mapApiRef.current?.flyTo(next.lat, next.lng, 17)
@@ -799,11 +1052,43 @@ export default function ResidentAlertsMapPage() {
     )[0]
   }, [filteredEmergencies, distanceForEmergency])
 
-  const mapItemCount = filtered.length + filteredEmergencies.length
+  const nearestAnnouncement = useMemo(() => {
+    if (visibleAnnouncements.length === 0) return null
+    return visibleAnnouncements[0]
+  }, [visibleAnnouncements])
+
+  // Announcements carry map areas too, so they count toward the badge and the
+  // mobile sheet's "N on the map" summary.
+  const mapItemCount =
+    filtered.length + filteredEmergencies.length + visibleAnnouncements.length
+
+  const legendRows: MapLegendRow<keyof ResidentMapLayers>[] = [
+    {
+      key: "emergencies",
+      label: "Ongoing emergencies",
+      hint: "Live incidents responders are handling",
+      count: emergencies.length,
+      tone: MAP_COLORS.emergency,
+    },
+    {
+      key: "concerns",
+      label: "Community reports",
+      hint: "Concerns neighbours have filed",
+      count: posts.filter((post) => hasMapCoords(post)).length,
+      tone: MAP_COLORS.concern,
+    },
+    {
+      key: "advisories",
+      label: "Advisory areas",
+      hint: "Streets, areas and barangay-wide notices",
+      count: announcements.length,
+      tone: MAP_COLORS.advisory,
+    },
+  ]
 
   if (loading && posts.length === 0 && emergencies.length === 0) {
     return (
-      <div className="relative h-full min-h-[60vh] w-full bg-canvas">
+      <div className="relative h-full min-h-[60svh] w-full flex-1 bg-canvas">
         <Skeleton className="h-full w-full rounded-none" />
       </div>
     )
@@ -812,6 +1097,7 @@ export default function ResidentAlertsMapPage() {
   const listEmpty =
     filtered.length === 0 &&
     filteredEmergencies.length === 0 &&
+    visibleAnnouncements.length === 0 &&
     !filterLoading
 
   const panelBody = (
@@ -821,6 +1107,13 @@ export default function ResidentAlertsMapPage() {
           emergency={selectedEmergency}
           distance={distanceForEmergency(selectedEmergency)}
           onBack={closePost}
+          focusComment={focusComment}
+        />
+      ) : selectedAnnouncement ? (
+        <AnnouncementDetailPanel
+          announcement={selectedAnnouncement}
+          onBack={closePost}
+          focusComment={focusComment}
         />
       ) : selectedId != null && (expandedPost || expandLoading) ? (
         expandLoading && !expandedPost ? (
@@ -844,7 +1137,7 @@ export default function ResidentAlertsMapPage() {
                 Report
               </p>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3">
+            <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3">
               <FeedPostCard
                 post={expandedPost}
                 sessionUser={sessionUserAsPublic}
@@ -905,36 +1198,45 @@ export default function ResidentAlertsMapPage() {
 
           <div className="relative shrink-0 px-3 pb-2 sm:pb-3">
             <CategoryFilterChips
+              chips={chips}
               chip={chip}
               filterLoading={filterLoading}
               onSelect={(key) => void applyChip(key)}
             />
           </div>
 
-          <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4">
+          <div className="scrollbar-hide relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4">
             {filterLoading ? (
               <div className="flex flex-col items-center justify-center gap-2 py-14 sm:py-16">
                 <LoaderCircleIcon className="size-8 animate-spin text-neutral-400" />
                 <p className="text-[13px] font-medium text-neutral-500">Loading…</p>
               </div>
             ) : listEmpty ? (
-              <div className="flex flex-col items-center px-4 py-10 text-center sm:py-12">
-                {chip === "emergencies" ? (
-                  <AlertTriangleIcon className="mb-2 size-10 text-neutral-300" />
-                ) : (
-                  <MapPinIcon className="mb-2 size-10 text-neutral-300" />
-                )}
-                <p className="text-[14px] font-semibold text-neutral-800 sm:text-[15px]">
-                  {chip === "emergencies"
+              <EmptyState
+                icon={
+                  chip === "emergencies" ? (
+                    <AlertTriangleIcon className="size-10" />
+                  ) : chip === "announcements" ? (
+                    <MegaphoneIcon className="size-10" />
+                  ) : (
+                    <MapPinIcon className="size-10" />
+                  )
+                }
+                title={
+                  chip === "emergencies"
                     ? "No ongoing emergencies"
-                    : "No feed posts on the map"}
-                </p>
-                <p className="mt-1 text-[12px] text-neutral-500 sm:text-[13px]">
-                  {chip === "emergencies"
+                    : chip === "announcements"
+                      ? "No announcements yet"
+                      : "No concerns on the map"
+                }
+                body={
+                  chip === "emergencies"
                     ? "Active SOS alerts in Marikina Heights will show here."
-                    : "Community posts with a location appear here."}
-                </p>
-              </div>
+                    : chip === "announcements"
+                      ? "Official barangay advisories will appear here."
+                      : "Concerns with a location appear here."
+                }
+              />
             ) : (
               <ul className="flex flex-col gap-2">
                 {/* Emergencies first when All / Emergencies filter */}
@@ -950,9 +1252,21 @@ export default function ResidentAlertsMapPage() {
                         distance={distanceForEmergency(em)}
                         expanded={selectedEmergencyId === em.id}
                         onOpen={() => openEmergency(em.id)}
+                        onWrite={() => openEmergency(em.id, true)}
                       />
                     </li>
                   ))}
+                {/* Official advisories under All and the Announcements filter */}
+                {visibleAnnouncements.map((announcement) => (
+                  <li key={`ann-${announcement.id}`}>
+                    <AnnouncementListItem
+                      announcement={announcement}
+                      expanded={selectedAnnouncementId === announcement.id}
+                      onOpen={() => openAnnouncement(announcement.id, false)}
+                      onWrite={() => openAnnouncement(announcement.id, true)}
+                    />
+                  </li>
+                ))}
                 {[...filtered]
                   .sort((a, b) => (distanceFor(a) ?? 1e9) - (distanceFor(b) ?? 1e9))
                   .map((post) => (
@@ -978,7 +1292,11 @@ export default function ResidentAlertsMapPage() {
     <div
       className={cn(
         "relative w-full overflow-hidden bg-canvas",
-        isDesktop ? "h-[calc(100svh-3.5rem)]" : "h-[calc(100svh-5rem)]",
+        // Full-bleed route: no shell header and no bottom nav are rendered, so
+        // the map owns the whole viewport. The old `calc(100svh - Xrem)`
+        // offsets left a dead strip at the bottom and the sheet's `bottom-0`
+        // stopped short of the screen floor.
+        isDesktop ? "h-full" : "h-svh",
       )}
     >
       {mapMeta ? (
@@ -987,13 +1305,17 @@ export default function ResidentAlertsMapPage() {
           boundary={mapMeta.boundary}
           posts={filtered}
           emergencies={filteredEmergencies}
+          announcements={visibleAnnouncements}
           selectedId={selectedId}
           selectedEmergencyId={selectedEmergencyId}
+          selectedAnnouncementId={selectedAnnouncementId}
           userPos={userPos}
+          userPosAt={userKnownAt}
           onSelect={(id) => {
             void openPost(id, false)
           }}
           onSelectEmergency={(id) => openEmergency(id)}
+          onSelectAnnouncement={(id) => openAnnouncement(id, false)}
           onMapInteract={collapseSheetForMap}
           onReady={(api) => {
             mapApiRef.current = api
@@ -1001,12 +1323,12 @@ export default function ResidentAlertsMapPage() {
         />
       ) : null}
 
-      {/* Ongoing emergency banner when any SOS is in the current filter */}
-      <EmergencyBanner emergencies={filteredEmergencies} selectedEmergency={selectedEmergency} />
+      {/* Selected-emergency brief over the map (no count badge) */}
+      <EmergencyBanner selectedEmergency={selectedEmergency} />
 
       {error ? (
-        <div className="absolute inset-x-4 top-1/3 z-30 mx-auto max-w-sm rounded-2xl border border-red-200 bg-white p-4 text-center shadow-xl">
-          <p className="text-sm font-semibold text-red-700">{error}</p>
+        <div className="absolute inset-x-4 top-1/3 z-30 mx-auto max-w-sm rounded-2xl border border-sos/30 bg-white p-4 text-center shadow-xl">
+          <p className="text-sm font-semibold text-sos">{error}</p>
           <button
             type="button"
             className="mt-3 rounded-full bg-brand-navy px-4 py-2 text-sm font-bold text-white"
@@ -1031,7 +1353,8 @@ export default function ResidentAlertsMapPage() {
         </div>
       ) : null}
 
-      {/* Map controls (right): Home → Location → Weather → Zoom */}
+      {/* One control column, same order and geometry as the official map:
+          Home, Locate, Zoom, then weather. */}
       <div
         ref={isDesktop ? weatherPanelRef : undefined}
         className={cn(
@@ -1039,108 +1362,94 @@ export default function ResidentAlertsMapPage() {
           isDesktop ? "right-4 top-4" : "right-3 top-3",
         )}
       >
-          <button
-            type="button"
-            onClick={goHomeOnMap}
-            className={cn(
-              "inline-flex h-10 w-fit shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-800 shadow-md",
-              isDesktop ? "gap-1.5 px-2.5 text-[13px] font-semibold" : "size-10 p-0",
-            )}
-            aria-label="Home"
-            title="Home"
-          >
-            <HomeIcon className="size-5 shrink-0" strokeWidth={2} />
-            {isDesktop ? <span className="whitespace-nowrap">Home</span> : null}
-          </button>
-          <button
-            type="button"
+        <MapControlStack tone="light">
+          <MapControlButton tone="light" label="Frame the barangay" onClick={goHomeOnMap}>
+            <HomeIcon className="size-5" strokeWidth={1.9} />
+          </MapControlButton>
+          <MapControlButton
+            tone="light"
+            divider
+            label="Current location"
             onClick={goMyLocation}
-            disabled={locating}
-            className={cn(
-              "inline-flex h-10 w-fit shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-800 shadow-md disabled:opacity-70",
-              isDesktop ? "gap-1.5 px-2.5 text-[13px] font-semibold" : "size-10 p-0",
-            )}
-            aria-label="Current location"
-            title="Current location"
+            loading={locating}
           >
-            {locating ? (
-              <LoaderCircleIcon className="size-5 shrink-0 animate-spin" strokeWidth={2} />
+            <MapPinIcon className="size-5" strokeWidth={1.9} />
+          </MapControlButton>
+          <MapControlButton
+            tone="light"
+            divider
+            label="Zoom in"
+            onClick={() => mapApiRef.current?.zoomIn()}
+          >
+            <PlusIcon className="size-5" strokeWidth={2.1} />
+          </MapControlButton>
+          <MapControlButton
+            tone="light"
+            divider
+            label="Zoom out"
+            onClick={() => mapApiRef.current?.zoomOut()}
+          >
+            <MinusIcon className="size-5" strokeWidth={2.1} />
+          </MapControlButton>
+        </MapControlStack>
+
+        <div className="relative flex flex-col items-end">
+          <MapChip
+            tone="light"
+            label="Weather"
+            expanded={weatherOpen}
+            onClick={() => {
+              setWeatherOpen((value) => !value)
+              if (!isDesktop) snapSheetTo("hidden")
+            }}
+          >
+            {weather.loading ? (
+              <LoaderCircleIcon className="size-4 animate-spin text-neutral-400" />
             ) : (
-              <MapPinIcon className="size-5 shrink-0" strokeWidth={2} />
+              <WeatherIcon code={weather.code} className="size-5 text-neutral-500" />
             )}
-            {isDesktop ? <span className="whitespace-nowrap">Current location</span> : null}
-          </button>
+            <span>
+              {weather.temperature != null ? `${Math.round(weather.temperature)}°C` : "—"}
+            </span>
+          </MapChip>
 
-          <div className="relative flex flex-col items-end">
-            <button
-              type="button"
-              onClick={() => {
-                setWeatherOpen((value) => !value)
-                if (!isDesktop) snapSheetTo("hidden")
-              }}
-              className="inline-flex h-10 w-fit shrink-0 items-center justify-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 text-[13px] font-bold text-neutral-900 shadow-md"
-              aria-label="Open weather"
-              aria-expanded={weatherOpen}
-            >
-              {weather.loading ? (
-                <LoaderCircleIcon className="size-4 animate-spin text-neutral-400" />
-              ) : (
-                <WeatherIcon code={weather.code} className="size-5 text-amber-500" />
-              )}
-              <span>
-                {weather.temperature != null
-                  ? `${Math.round(weather.temperature)}°C`
-                  : "—"}
-              </span>
-            </button>
-
-            {/* Desktop: popover under weather chip — closes on outside click / Escape */}
-            {weatherOpen && isDesktop ? (
-              <section className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-[min(calc(100vw-1.5rem),340px)] rounded-2xl border border-neutral-200 bg-white p-4 text-neutral-900 shadow-[0_12px_34px_rgba(15,23,42,.16)]">
-                <div className="flex items-start justify-between gap-3 border-b border-neutral-100 pb-3">
-                  <div className="min-w-0">
-                    <h2 className="truncate text-base font-bold sm:text-lg">
-                      {weather.placeName}
-                    </h2>
-                    <p className="text-xs text-neutral-500">Current weather</p>
-                  </div>
-                  {weather.loading ? (
-                    <LoaderCircleIcon className="size-7 shrink-0 animate-spin text-neutral-400" />
-                  ) : (
-                    <WeatherIcon
-                      code={weather.code}
-                      className="size-8 shrink-0 text-amber-500"
-                    />
-                  )}
+          {/* Desktop: popover under weather chip — closes on outside click / Escape */}
+          {weatherOpen && isDesktop ? (
+            <section className="scrollbar-hide absolute right-0 top-[calc(100%+0.5rem)] z-40 max-h-[min(70svh,520px)] w-[min(calc(100vw-1.5rem),340px)] overflow-y-auto overscroll-contain rounded-xl border border-neutral-200 bg-white p-4 text-neutral-900 shadow-lg">
+              <div className="flex items-start justify-between gap-3 border-b border-neutral-200 pb-3">
+                <div className="min-w-0">
+                  <h2 className="truncate text-[15px] font-semibold">{weather.placeName}</h2>
+                  <p className="mt-0.5 text-[13px] text-neutral-500">Current weather</p>
                 </div>
-                <WeatherDetails weather={weather} />
-              </section>
-            ) : null}
-          </div>
-
-          {/* +/- zoom directly under weather */}
-          <div className="flex w-10 flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-md">
-            <button
-              type="button"
-              onClick={() => mapApiRef.current?.zoomIn()}
-              className="flex h-10 items-center justify-center text-neutral-800 hover:bg-neutral-50"
-              aria-label="Zoom in"
-              title="Zoom in"
-            >
-              <PlusIcon className="size-5" strokeWidth={2.25} />
-            </button>
-            <div className="h-px w-full bg-neutral-200" />
-            <button
-              type="button"
-              onClick={() => mapApiRef.current?.zoomOut()}
-              className="flex h-10 items-center justify-center text-neutral-800 hover:bg-neutral-50"
-              aria-label="Zoom out"
-              title="Zoom out"
-            >
-              <MinusIcon className="size-5" strokeWidth={2.25} />
-            </button>
-          </div>
+                {weather.loading ? (
+                  <LoaderCircleIcon className="size-7 shrink-0 animate-spin text-neutral-400" />
+                ) : (
+                  <WeatherIcon code={weather.code} className="size-8 shrink-0 text-neutral-500" />
+                )}
+              </div>
+              <WeatherDetails weather={weather} />
+            </section>
+          ) : null}
         </div>
+      </div>
+
+      {/* Below the map, clear of the control column, so the legend never covers
+          the barangay. Collapsed it is one icon. */}
+      {mapMeta ? (
+        <div
+          className={cn(
+            "absolute z-30 flex flex-col items-end",
+            isDesktop ? "bottom-4 right-4" : "bottom-[calc(56px+0.75rem)] right-3",
+          )}
+        >
+          <MapLegend
+            tone="light"
+            rows={legendRows}
+            active={layers}
+            onToggle={(key) => setLayers((current) => ({ ...current, [key]: !current[key] }))}
+          />
+        </div>
+      ) : null}
 
       {/* Mobile weather sheet — E-Boses white style, close (X) on the right */}
       {!isDesktop && weatherOpen ? (
@@ -1153,7 +1462,7 @@ export default function ResidentAlertsMapPage() {
             onClick={() => setWeatherOpen(false)}
           />
           <section
-            className="absolute bottom-0 left-0 right-0 z-40 max-h-[min(78svh,640px)] overflow-y-auto overscroll-contain rounded-t-3xl border border-neutral-200 border-b-0 bg-white px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 text-neutral-900 shadow-[0_-12px_40px_rgba(15,23,42,.14)]"
+            className="scrollbar-hide absolute bottom-0 left-0 right-0 z-40 max-h-[min(78svh,640px)] overflow-y-auto overscroll-contain rounded-t-3xl border border-neutral-200 border-b-0 bg-white px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 text-neutral-900 shadow-[0_-12px_40px_rgba(15,23,42,.14)]"
             role="dialog"
             aria-modal="true"
             aria-label="Weather"
@@ -1193,7 +1502,7 @@ export default function ResidentAlertsMapPage() {
                 {/* Condition */}
                 <div className="mb-3 flex items-center gap-2 text-[15px] font-semibold text-neutral-900">
                   <span>{weatherLabel(weather.code)}</span>
-                  <WeatherIcon code={weather.code} className="size-5 text-amber-500" />
+                  <WeatherIcon code={weather.code} className="size-5 text-neutral-500" />
                 </div>
 
                 {/* Main grid — photo layout, E-Boses light chrome */}
@@ -1264,7 +1573,7 @@ export default function ResidentAlertsMapPage() {
                         <span className="font-bold text-neutral-900">{day.day}</span>
                         <WeatherIcon
                           code={day.code}
-                          className="size-5 text-amber-500"
+                          className="size-5 text-neutral-500"
                         />
                         <span className="font-semibold text-neutral-900">
                           {Math.round(day.high)}°
@@ -1273,7 +1582,7 @@ export default function ResidentAlertsMapPage() {
                           <WindIcon className="size-3.5 shrink-0 text-neutral-400" />
                           {Math.round(day.low)}°
                         </span>
-                        <span className="inline-flex items-center justify-end gap-0.5 font-semibold text-sky-600">
+                        <span className="inline-flex items-center justify-end gap-0.5 font-semibold text-neutral-600">
                           <DropletsIcon className="size-3.5 shrink-0" />
                           {day.rain}%
                         </span>
@@ -1283,14 +1592,50 @@ export default function ResidentAlertsMapPage() {
                 ) : null}
               </>
             )}
+
+            {/* Bottom fade — signals there's more below without a scrollbar.
+                Sticky (not absolute) so it stays pinned to the sheet's bottom
+                edge while the content scrolls under it. */}
+            <div
+              aria-hidden
+              className="pointer-events-none sticky bottom-0 -mt-12 h-12 shrink-0 bg-gradient-to-t from-white via-white/70 to-transparent"
+            />
           </section>
         </>
       ) : null}
 
       {isDesktop ? (
-        <aside className="absolute left-4 top-4 z-20 flex w-[min(100%,380px)] max-h-[min(72vh,620px)] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)]">
-          {panelBody}
-        </aside>
+        alertsOpen ? (
+          <aside className="absolute left-4 top-4 z-20 flex w-[min(100%,380px)] max-h-[min(72vh,620px)] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)]">
+            <div className="flex shrink-0 items-center gap-1.5 border-b border-neutral-100 px-3 py-2">
+              <BellIcon className="size-4 shrink-0 text-neutral-600" strokeWidth={2.25} />
+              <span className="text-[11px] font-bold tracking-wide text-neutral-500">
+                Alerts
+              </span>
+              <button
+                type="button"
+                onClick={() => setAlertsOpen(false)}
+                className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100"
+                aria-label="Collapse alerts"
+                title="Collapse alerts"
+              >
+                <ChevronLeftIcon className="size-4" strokeWidth={2.25} />
+              </button>
+            </div>
+            {panelBody}
+          </aside>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setAlertsOpen(true)}
+            className="absolute left-4 top-4 z-20 inline-flex h-10 items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 text-[13px] font-semibold text-neutral-800 shadow-md"
+            aria-label="Open alerts"
+            title="Open alerts"
+          >
+            <BellIcon className="size-5 shrink-0 text-neutral-600" strokeWidth={2.25} />
+            <span className="whitespace-nowrap">Alerts</span>
+          </button>
+        )
       ) : weatherOpen ? null : (
         /* Mobile draggable sheet — solid white so map content never shows through */
         <div
@@ -1359,6 +1704,7 @@ export default function ResidentAlertsMapPage() {
                       </p>
                     </button>
                     <CategoryFilterChips
+                      chips={chips}
                       chip={chip}
                       filterLoading={filterLoading}
                       onSelect={(key) => void applyChip(key)}
@@ -1367,7 +1713,7 @@ export default function ResidentAlertsMapPage() {
                 ) : null}
 
                 {!showFull ? (
-                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white px-3 pb-3 pt-2">
+                  <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white px-3 pb-3 pt-2">
                     {filterLoading ? (
                       <div className="flex flex-col items-center justify-center gap-2 py-8">
                         <LoaderCircleIcon className="size-7 animate-spin text-neutral-400" />
@@ -1379,6 +1725,13 @@ export default function ResidentAlertsMapPage() {
                         distance={distanceForEmergency(nearestEmergency)}
                         expanded={false}
                         onOpen={() => openEmergency(nearestEmergency.id)}
+                      />
+                    ) : nearestAnnouncement ? (
+                      <AnnouncementListItem
+                        announcement={nearestAnnouncement}
+                        expanded={false}
+                        onOpen={() => openAnnouncement(nearestAnnouncement.id, false)}
+                        onWrite={() => openAnnouncement(nearestAnnouncement.id, true)}
                       />
                     ) : nearestPreview ? (
                       <FeedPreviewCard
@@ -1392,7 +1745,9 @@ export default function ResidentAlertsMapPage() {
                       <p className="pb-3 text-center text-[13px] text-neutral-500">
                         {chip === "emergencies"
                           ? "No ongoing emergencies"
-                          : "No alerts with a location"}
+                          : chip === "announcements"
+                            ? "No announcements yet"
+                            : "No alerts with a location"}
                       </p>
                     )}
                   </div>
@@ -1400,30 +1755,38 @@ export default function ResidentAlertsMapPage() {
                   <div className="h-full min-h-0 overflow-hidden bg-white">{panelBody}</div>
                 ) : (
                   /* Expanded list: filters already shown above — list only */
-                  <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4 pt-2">
+                  <div className="scrollbar-hide relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4 pt-2">
                     {filterLoading ? (
                       <div className="flex flex-col items-center justify-center gap-2 py-14">
                         <LoaderCircleIcon className="size-8 animate-spin text-neutral-400" />
                         <p className="text-[13px] font-medium text-neutral-500">Loading…</p>
                       </div>
                     ) : listEmpty ? (
-                      <div className="flex flex-col items-center px-4 py-10 text-center">
-                        {chip === "emergencies" ? (
-                          <AlertTriangleIcon className="mb-2 size-10 text-neutral-300" />
-                        ) : (
-                          <MapPinIcon className="mb-2 size-10 text-neutral-300" />
-                        )}
-                        <p className="text-[14px] font-semibold text-neutral-800">
-                          {chip === "emergencies"
+                      <EmptyState
+                        icon={
+                          chip === "emergencies" ? (
+                            <AlertTriangleIcon className="size-10" />
+                          ) : chip === "announcements" ? (
+                            <MegaphoneIcon className="size-10" />
+                          ) : (
+                            <MapPinIcon className="size-10" />
+                          )
+                        }
+                        title={
+                          chip === "emergencies"
                             ? "No ongoing emergencies"
-                            : "No feed posts on the map"}
-                        </p>
-                        <p className="mt-1 text-[12px] text-neutral-500">
-                          {chip === "emergencies"
-                            ? "Active SOS alerts will show here."
-                            : "Community posts with a location appear here."}
-                        </p>
-                      </div>
+                            : chip === "announcements"
+                              ? "No announcements yet"
+                              : "No concerns on the map"
+                        }
+                        body={
+                          chip === "emergencies"
+                            ? "Active SOS alerts in Marikina Heights will show here."
+                            : chip === "announcements"
+                              ? "Official barangay advisories will appear here."
+                              : "Concerns with a location appear here."
+                        }
+                      />
                     ) : (
                       <ul className="flex flex-col gap-2">
                         {[...filteredEmergencies]
@@ -1442,6 +1805,17 @@ export default function ResidentAlertsMapPage() {
                               />
                             </li>
                           ))}
+                        {/* Official advisories under All and the Announcements filter */}
+                        {visibleAnnouncements.map((announcement) => (
+                          <li key={`ann-${announcement.id}`}>
+                            <AnnouncementListItem
+                              announcement={announcement}
+                              expanded={selectedAnnouncementId === announcement.id}
+                              onOpen={() => openAnnouncement(announcement.id, false)}
+                              onWrite={() => openAnnouncement(announcement.id, true)}
+                            />
+                          </li>
+                        ))}
                         {[...filtered]
                           .sort(
                             (a, b) =>

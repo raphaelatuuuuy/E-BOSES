@@ -33,16 +33,16 @@ export function SosConfirmStep({
     return (
       <div className="flex min-h-[320px] flex-col items-center justify-center px-4 text-center">
         <div className="relative flex size-36 items-center justify-center">
-          <span className="absolute inset-0 rounded-full bg-red-500/15" />
-          <span className="absolute inset-3 rounded-full bg-red-500/20" />
+          <span className="absolute inset-0 rounded-full bg-sos/15" />
+          <span className="absolute inset-3 rounded-full bg-sos/20" />
           <p
-            className="relative text-6xl font-black text-red-300 tabular-nums"
+            className="relative text-6xl font-semibold text-sos tabular-nums"
             aria-hidden="true"
           >
             {submitting ? "…" : dispatchCountdown}
           </p>
         </div>
-        <p className="mt-5 text-[12px] font-bold tracking-wide text-white/55 uppercase">
+        <p className="mt-5 text-[12px] font-bold tracking-wide text-white/55">
           {submitting ? "Sending alert…" : "Broadcasting in"}
         </p>
         <p className="mt-2 max-w-xs text-[15px] font-medium text-white">
@@ -68,12 +68,12 @@ export function SosConfirmStep({
     <div className="space-y-3">
       {!isOnline ? (
         <div
-          className="rounded-xl border border-amber-300/60 bg-amber-400/15 p-4 text-amber-50"
+          className="rounded-xl border border-neutral-400/60 bg-neutral-500/15 p-4 text-white/90"
           role="status"
           aria-live="polite"
         >
           <p className="text-[14px] font-semibold">You’re offline</p>
-          <p className="mt-1 text-[13px] leading-5 text-amber-50/80">
+          <p className="mt-1 text-[13px] leading-5 text-white/70">
             Your entries remain on this screen. Reconnect to use online
             responder routing
             {emergencySmsHref ? ", or open the SMS backup below." : "."}
@@ -93,13 +93,13 @@ export function SosConfirmStep({
       ) : null}
       {submitError ? (
         <div
-          className="rounded-xl border border-red-400/50 bg-red-500/15 p-4"
+          className="rounded-xl border border-sos/50 bg-sos/15 p-4"
           role="alert"
         >
-          <p className="text-[14px] font-semibold text-red-100">
+          <p className="text-[14px] font-semibold text-sos">
             Alert was not sent
           </p>
-          <p className="mt-1 text-[13px] leading-5 text-red-100/80">
+          <p className="mt-1 text-[13px] leading-5 text-sos/80">
             {submitError}
           </p>
           <p className="mt-2 text-[12px] leading-5 text-white/65">
@@ -125,7 +125,7 @@ export function SosConfirmStep({
         </div>
       ) : null}
       <div className="rounded-xl border border-white/15 bg-white/10 p-4">
-        <p className="text-[11px] font-semibold tracking-wide text-white/55 uppercase">
+        <p className="text-[11px] font-semibold tracking-wide text-white/55">
           Emergency type
         </p>
         <p className="mt-1 text-[15px] font-semibold text-white">
@@ -133,7 +133,7 @@ export function SosConfirmStep({
         </p>
       </div>
       <div className="rounded-xl border border-white/15 bg-white/10 p-4">
-        <p className="text-[11px] font-semibold tracking-wide text-white/55 uppercase">
+        <p className="text-[11px] font-semibold tracking-wide text-white/55">
           Location
         </p>
         <p className="mt-1 text-[15px] font-semibold text-white">
@@ -141,7 +141,7 @@ export function SosConfirmStep({
         </p>
       </div>
       <div className="rounded-xl border border-white/15 bg-white/10 p-4">
-        <p className="text-[11px] font-semibold tracking-wide text-white/55 uppercase">
+        <p className="text-[11px] font-semibold tracking-wide text-white/55">
           Situation
         </p>
         <p className="mt-1 text-[15px] font-semibold text-white">
@@ -153,7 +153,7 @@ export function SosConfirmStep({
           </p>
         ) : null}
       </div>
-      <div className="rounded-xl border border-amber-400/40 bg-amber-500/15 px-4 py-3 text-[13px] leading-5 text-amber-100">
+      <div className="rounded-xl border border-neutral-400/40 bg-neutral-500/15 px-4 py-3 text-[13px] leading-5 text-white/90">
         False or misleading alerts are logged. Repeated abuse can suspend
         your account. Accidental alerts can be cancelled afterward with a
         reason.

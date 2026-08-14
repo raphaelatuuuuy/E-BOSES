@@ -16,6 +16,7 @@ import { useAuthSession } from "@/features/auth/auth-session"
 import { useIsDesktop } from "@/features/dashboard/lib/shell"
 import {
   createEmergency,
+  sendEmergencyChat,
   getActiveEmergency,
   listEmergencyCategories,
   type EmergencyAlert,
@@ -189,7 +190,7 @@ function SosShell({
         {/* Red urgency header — full-screen mobile gets top safe-area padding (notch/status bar) */}
         <header
           className={cn(
-            "flex shrink-0 items-center gap-1 bg-gradient-to-r from-red-800 via-red-600 to-red-700 px-3 sm:px-4",
+            "flex shrink-0 items-center gap-1 bg-sos px-3 sm:px-4",
             !isDesktop
               ? "pt-[max(0.625rem,env(safe-area-inset-top))] pb-2.5"
               : "py-2.5"
@@ -215,7 +216,7 @@ function SosShell({
             </button>
           )}
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[11px] font-bold tracking-wide text-white/80 uppercase">
+            <p className="truncate text-[11px] font-bold tracking-wide text-white/80">
               Emergency SOS
             </p>
             <p
@@ -310,6 +311,7 @@ export function SosWizard({
   }, [open])
   const [emergency, setEmergency] = useState<EmergencyType | "">("")
   const [note, setNote] = useState("")
+  const [photo, setPhoto] = useState<File | null>(null)
   const [location, setLocation] = useState<SosLocationValue | null>(null)
   const [triage, setTriage] = useState<SosTriageAnswers>({})
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
@@ -531,6 +533,16 @@ export function SosWizard({
       })
 
       const alert = await createEmergency(formData)
+      if (photo || note.trim()) {
+        await sendEmergencyChat(
+          alert.id,
+          note.trim() || "Photo from the moment the alert was sent.",
+          photo,
+        ).catch(() => {
+          toast.warning("The alert was sent, but your note could not be posted to the chat.")
+        })
+      }
+      setPhoto(null)
       resetWizard()
       setStatusAnnouncement(
         "Emergency alert sent. Responder routing has started."
@@ -686,7 +698,7 @@ export function SosWizard({
           toast.info("Alert cancelled before sending.")
         }}
         disabled={submitting}
-        className="h-11 w-full rounded-full border border-white/25 bg-white text-[14px] font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
+        className="h-11 w-full rounded-full border border-white/25 bg-white text-[14px] font-semibold text-sos hover:bg-sos/10 disabled:opacity-60"
       >
         {submitting ? "Sending…" : "Cancel before send"}
       </button>
@@ -742,7 +754,7 @@ export function SosWizard({
                     <span
                       className={cn(
                         "flex size-7 items-center justify-center rounded-full text-[11px] font-bold",
-                        done && "bg-emerald-500 text-white",
+                        done && "bg-brand-navy text-white",
                         active &&
                           "bg-brand-orange text-white shadow-[0_0_0_3px_rgba(255,106,26,0.28)]",
                         !done &&
@@ -807,7 +819,7 @@ export function SosWizard({
             />
             {fieldErrors.location ? (
               <p
-                className="mt-2 text-[13px] font-medium text-red-300"
+                className="mt-2 text-[13px] font-medium text-sos"
                 role="alert"
               >
                 {fieldErrors.location}
@@ -825,7 +837,7 @@ export function SosWizard({
         ) : null}
 
         {step === "details" ? (
-          <SosDetailsStep note={note} onNoteChange={setNote} />
+          <SosDetailsStep note={note} onNoteChange={setNote} photo={photo} onPhotoChange={setPhoto} online={isOnline} />
         ) : null}
 
         {step === "review" || step === "countdown" ? (

@@ -120,7 +120,7 @@ export function AccountLifecycleFlow({
         : "Deactivate account"
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-white">
+    <div className="fixed inset-0 z-[500] flex flex-col bg-white">
       <div className="mx-auto flex h-full w-full max-w-lg flex-col px-4 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.5rem))] pt-[max(0.5rem,env(safe-area-inset-top))] sm:px-6">
         {step !== "deleteSuccess" ? (
           <header className="relative mb-1 flex h-12 shrink-0 items-center justify-center">
@@ -138,7 +138,7 @@ export function AccountLifecycleFlow({
           </header>
         ) : null}
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {/* ── Reason ── */}
           {step === "reason" ? (
             <div className="flex flex-col items-center pt-6">
@@ -175,7 +175,7 @@ export function AccountLifecycleFlow({
                 </button>
 
                 {reasonOpen ? (
-                  <div className="absolute left-0 right-0 top-full z-20 mt-1.5 max-h-[min(50vh,360px)] overflow-y-auto rounded-2xl border border-neutral-200 bg-white py-1 shadow-[0_12px_40px_rgba(15,23,42,0.14)]">
+                  <div className="absolute left-0 right-0 top-full z-20 mt-1.5 max-h-[min(50vh,360px)] overflow-y-auto scrollbar-hide rounded-2xl border border-neutral-200 bg-white py-1 shadow-[0_12px_40px_rgba(15,23,42,0.14)]">
                     <p className="px-4 pb-1 pt-3 text-[13px] font-semibold text-neutral-500">
                       Reasons for deactivating
                     </p>
@@ -273,7 +273,7 @@ export function AccountLifecycleFlow({
                 <button
                   type="button"
                   onClick={() => setStep("deleteConfirm")}
-                  className="font-semibold text-neutral-800 underline underline-offset-2 hover:text-red-700"
+                  className="font-semibold text-neutral-800 underline underline-offset-2 hover:text-sos"
                 >
                   click here
                 </button>
@@ -306,7 +306,7 @@ export function AccountLifecycleFlow({
                 type="button"
                 disabled={busy}
                 onClick={() => void handleDeactivate()}
-                className="mt-6 flex h-12 w-full items-center justify-center rounded-full bg-red-600 text-[15px] font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+                className="mt-6 flex h-12 w-full items-center justify-center rounded-full bg-sos text-[15px] font-semibold text-white transition-colors hover:bg-sos disabled:opacity-60"
               >
                 {busy ? (
                   <>
@@ -352,7 +352,7 @@ export function AccountLifecycleFlow({
                   type="button"
                   disabled={busy}
                   onClick={() => void handleDeleteRequest()}
-                  className="inline-flex h-11 items-center justify-center rounded-full bg-red-600 px-6 text-[15px] font-semibold text-white hover:bg-red-700 disabled:opacity-60"
+                  className="inline-flex h-11 items-center justify-center rounded-full bg-sos px-6 text-[15px] font-semibold text-white hover:bg-sos disabled:opacity-60"
                 >
                   {busy ? (
                     <Loader2Icon className="size-4 animate-spin" />

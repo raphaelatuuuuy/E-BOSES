@@ -12,6 +12,7 @@ import {
 } from "@/features/dashboard/emergency-api"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
+import { statusLabelOf } from "@/features/dashboard/lib/status-vocabulary"
 
 type FilterKey = "all" | "active" | "resolved" | "closed"
 
@@ -22,30 +23,8 @@ const filters: { key: FilterKey; label: string }[] = [
   { key: "closed", label: "Closed" },
 ]
 
-const statusLabels: Record<EmergencyStatus, string> = {
-  submitted: "Alert sent",
-  routing: "Finding help",
-  routed: "Responder assigned",
-  awaiting_acknowledgment: "Awaiting help",
-  acknowledged: "Responder on the way",
-  en_route: "On the way",
-  nearby: "Nearby",
-  arrived: "On scene",
-  resident_safe: "Resident safe",
-  backup_requested: "Additional help requested",
-  backup_assigned: "Additional help on the way",
-  in_progress: "In progress",
-  transfer_required: "Transferring",
-  escalation_required: "Escalated for further help",
-  resolved: "Resolved",
-  closed: "Closed",
-  invalid: "Invalid",
-  cancelled: "Cancelled",
-  false_alarm: "False alarm",
-}
-
 function statusLabel(status: EmergencyStatus) {
-  return statusLabels[status] || status.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())
+  return statusLabelOf(status, "resident", "emergency")
 }
 
 function statusChip(status: EmergencyStatus) {
@@ -138,7 +117,7 @@ export default function EmergencyHistoryPage() {
           </div>
 
           {error ? (
-            <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+            <div role="alert" className="mt-4 rounded-xl border border-sos/30 bg-sos/10 p-4 text-sm text-sos">
               {error}
             </div>
           ) : null}
@@ -169,7 +148,7 @@ export default function EmergencyHistoryPage() {
                     onClick={() => openAlert(alert)}
                     className="flex min-h-[72px] w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-neutral-50"
                   >
-                    <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-600">
+                    <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-sos/10 text-sos">
                       <SirenIcon className="size-5" />
                     </span>
                     <span className="min-w-0 flex-1">

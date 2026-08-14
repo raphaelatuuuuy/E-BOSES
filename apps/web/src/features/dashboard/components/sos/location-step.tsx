@@ -120,7 +120,7 @@ export function SosLocationStep({
           setGeocoding(false)
           setGpsBusy(false)
           setError(
-            street.primary === "Pinned coordinates"
+            street.primary === "Pinned location"
               ? "Street lookup is unavailable. Your exact pinned coordinates can still be sent."
               : ""
           )
@@ -217,7 +217,7 @@ export function SosLocationStep({
             const street = await reverseStreet(c.lat, c.lng)
             setGeocoding(false)
             setError(
-              street.primary === "Pinned coordinates"
+              street.primary === "Pinned location"
                 ? "Street lookup is unavailable. Your exact pinned coordinates can still be sent."
                 : ""
             )
@@ -262,7 +262,7 @@ export function SosLocationStep({
     <div className={cn("flex min-h-0 flex-1 flex-col gap-3", className)}>
       {!isOnline ? (
         <div
-          className="rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-3 text-[13px] leading-5 text-amber-900"
+          className="rounded-xl border border-white/20 bg-white/10 px-3.5 py-3 text-[13px] leading-5 text-white/85"
           role="status"
           aria-live="polite"
         >
@@ -338,7 +338,7 @@ export function SosLocationStep({
       </div>
 
       {error ? (
-        <p className="text-[13px] font-medium text-amber-700" role="alert">
+        <p className="text-[13px] font-medium text-neutral-600" role="alert">
           {error}
         </p>
       ) : null}

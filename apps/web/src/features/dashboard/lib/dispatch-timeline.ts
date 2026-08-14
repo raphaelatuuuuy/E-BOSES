@@ -2,23 +2,8 @@ import type {
   EmergencyAlert,
   EmergencyStatus,
 } from "@/features/dashboard/emergency-api"
-import { isSettled, statusWords, type StateTone } from "@/features/dashboard/lib/responder-format"
-
-/**
- * The dispatch timeline — one merged, reverse-chronological rail.
- *
- * The responder screen used to show a forward 4-step stepper with no
- * timestamps, while `status_events` and `assignment_logs` came down on every
- * payload and were never rendered. This merges what actually happened with
- * what is still to come, newest first, so the rail reads like every delivery
- * tracker a responder already uses: the remaining journey above the current
- * position, the history below it.
- *
- * The merge mirrors `components/emergencies/incident-board.tsx`'s
- * `IncidentChronology` rather than introducing a second chronology algorithm —
- * the difference is that this one is milestone-shaped (one row per state
- * reached) instead of log-shaped (one row per write).
- */
+import { statusLabelOf } from "@/features/dashboard/components/record/status"
+import { isSettled, type StateTone } from "@/features/dashboard/lib/responder-format"
 
 export type TimelineState = "upcoming" | "current" | "done"
 
@@ -26,40 +11,19 @@ export interface TimelineEntry {
   key: string
   status: EmergencyStatus
   label: string
-  /** ISO timestamp. Null on upcoming milestones, which have not happened yet. */
   at: string | null
   detail: string
   state: TimelineState
   tone: StateTone
 }
 
-/**
- * The milestones a responder moves through, in order. `nearby` collapses into
- * `en_route` and `in_progress` into `arrived`: they are the same position on
- * the rail, and giving each its own row would make the ladder read as if the
- * responder had skipped a step whenever the server chose the other word.
- */
-const LADDER: Array<{ status: EmergencyStatus; label: string }> = [
-  { status: "routed", label: "Routed to you" },
-  { status: "acknowledged", label: "Acknowledged" },
-  { status: "en_route", label: "En route" },
-  { status: "arrived", label: "On scene" },
-  { status: "resolved", label: "Resolved" },
+const LADDER: EmergencyStatus[] = [
+  "routed",
+  "acknowledged",
+  "en_route",
+  "arrived",
+  "resolved",
 ]
-
-/**
- * Ladder rungs win over `statusWords` when naming a row.
- *
- * Without this the same milestone changes name as it passes: `acknowledged`
- * reads "Acknowledged" while it is still ahead of the responder and
- * "Automatically routed" (the queue-wide wording) once it is behind them, so
- * the rail looked like it had two different steps.
- */
-const LADDER_LABELS = new Map(LADDER.map((step) => [step.status, step.label]))
-
-function labelFor(status: EmergencyStatus) {
-  return LADDER_LABELS.get(status) ?? statusWords[status] ?? status.replace(/_/g, " ")
-}
 
 const RANK: Partial<Record<EmergencyStatus, number>> = {
   submitted: 0,
@@ -79,7 +43,6 @@ const RANK: Partial<Record<EmergencyStatus, number>> = {
   closed: 4,
 }
 
-/** How far along the ladder a status sits. Terminal-but-unresolved returns 3. */
 function rankOf(status: EmergencyStatus) {
   return RANK[status] ?? 3
 }
@@ -99,15 +62,11 @@ export function buildDispatchTimeline(
     alert.current_assignment ??
     null
 
-  // One row per state actually reached. Keyed by status so a status event and
-  // the assignment milestone that produced it collapse into a single row —
-  // otherwise acknowledging shows up twice, once from each source.
   const history = new Map<string, { at: string; detail: string; status: EmergencyStatus }>()
 
   const record = (status: EmergencyStatus, at: string | null, detail: string) => {
     if (!at) return
     const existing = history.get(status)
-    // Earliest wins: the first time a state was reached is when it happened.
     if (existing && new Date(existing.at).getTime() <= new Date(at).getTime()) {
       if (!existing.detail && detail) existing.detail = detail
       return
@@ -131,7 +90,7 @@ export function buildDispatchTimeline(
     .map((row) => ({
       key: `done-${row.status}`,
       status: row.status,
-      label: labelFor(row.status),
+      label: statusLabelOf(row.status),
       at: row.at,
       detail: row.detail,
       state: "done" as TimelineState,
@@ -139,21 +98,18 @@ export function buildDispatchTimeline(
     }))
     .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
 
-  // Everything on the ladder the alert has not reached yet, furthest goal
-  // first, so "Resolved" sits at the top of the rail the way the destination
-  // does on a delivery tracker.
   const reached = rankOf(alert.status)
   const upcoming: TimelineEntry[] = LADDER
-    .filter((step) => rankOf(step.status) > reached)
+    .filter((status) => rankOf(status) > reached)
     .reverse()
-    .map((step) => ({
-      key: `next-${step.status}`,
-      status: step.status,
-      label: step.label,
+    .map((status) => ({
+      key: `next-${status}`,
+      status,
+      label: statusLabelOf(status),
       at: null,
       detail: "",
       state: "upcoming" as TimelineState,
-      tone: toneFor(step.status, "upcoming"),
+      tone: toneFor(status, "upcoming"),
     }))
 
   if (done.length === 0) return upcoming

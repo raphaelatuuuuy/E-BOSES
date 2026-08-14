@@ -7,25 +7,15 @@ import {
   type Concern,
   type OfficialRoleSummary,
 } from "@/features/dashboard/api"
-import { ActionQueue } from "@/features/dashboard/components/overview/action-queue"
 import { CategoryTable } from "@/features/dashboard/components/overview/category-table"
 import { ConcernTrendCard } from "@/features/dashboard/components/overview/insights"
 import { KpiRow } from "@/features/dashboard/components/overview/kpi-row"
 import { MiniAlertsMap } from "@/features/dashboard/components/overview/mini-alerts-map"
 import { LatestConcernsCard, OutcomesCard } from "@/features/dashboard/components/overview/outcomes"
-import { UnitLoadCard } from "@/features/dashboard/components/overview/unit-load"
 import { dailyCounts } from "@/features/dashboard/lib/overview-series"
+import { isMergedChild } from "@/features/dashboard/lib/status-vocabulary"
 import { usePageTitle } from "@/hooks/use-page-title"
 
-/**
- * The one loud element on the page: the barangay's state, right now.
- *
- * An emergency console should answer "is anything happening" before it answers
- * anything else, so the status line sits above the page title rather than being
- * buried in a card. It is the only place on the page that changes colour, and
- * the only thing that moves. When nothing is wrong it stays quiet and green;
- * the alarm state earns its weight because it is rare.
- */
 function StatusMasthead({
   live,
   responders,
@@ -45,7 +35,7 @@ function StatusMasthead({
         <div className="min-w-0">
           <p
             className={cn(
-              "flex items-center gap-2 text-micro uppercase",
+              "flex items-center gap-2 text-micro",
               alarm ? "text-severity-critical" : "text-status-closed",
             )}
           >
@@ -88,16 +78,6 @@ function StatusMasthead({
   )
 }
 
-/**
- * Official landing page ("Administrative Dashboard" in the research spec).
- *
- * Laid out on the reference board's rhythm: a strip of three short KPI cards,
- * then a wide chart flanked by two narrow cards, then the working queue beside
- * the map. Card headers carry a title and one control, never a paragraph.
- *
- * Data + realtime refresh live here; presentation is delegated to
- * components/overview/*.
- */
 export default function OfficialOverviewPage() {
   usePageTitle("Overview")
   const [summary, setSummary] = useState<OfficialRoleSummary | null>(null)
@@ -106,10 +86,6 @@ export default function OfficialOverviewPage() {
 
   const now = new Date()
 
-  // Initial load + realtime refresh in one effect (mirrors the load-effect
-  // pattern already used on pages/emergencies.tsx): a cheap refetch whenever
-  // the notification socket (or its polling fallback) signals something an
-  // official cares about changed.
   useEffect(() => {
     let cancelled = false
     async function load() {
@@ -122,7 +98,7 @@ export default function OfficialOverviewPage() {
         setSummary(nextSummary)
         setConcerns(nextConcerns)
       } catch {
-        // Keep whatever we last had — the page still renders with stale data.
+        void 0
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -142,12 +118,17 @@ export default function OfficialOverviewPage() {
     }
   }, [])
 
+  const incidents = useMemo(
+    () => concerns.filter((concern) => !isMergedChild(concern) && !concern.archived_at),
+    [concerns],
+  )
+
   const weekDelta = useMemo(() => {
-    const fortnight = dailyCounts(concerns, 14)
+    const fortnight = dailyCounts(incidents, 14)
     const thisWeek = fortnight.slice(7).reduce((sum, point) => sum + point.value, 0)
     const lastWeek = fortnight.slice(0, 7).reduce((sum, point) => sum + point.value, 0)
     return thisWeek - lastWeek
-  }, [concerns])
+  }, [incidents])
 
   return (
     <div className="px-4 pb-12 pt-5 md:px-6 md:pt-6 lg:px-8">
@@ -158,27 +139,22 @@ export default function OfficialOverviewPage() {
         now={now}
       />
 
-      <KpiRow summary={summary} concerns={concerns} loading={loading} weekDelta={weekDelta} />
+      <KpiRow summary={summary} concerns={incidents} loading={loading} weekDelta={weekDelta} />
 
-      {/* Wide chart, then two narrow cards. */}
-      <div className="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-[1.35fr_0.95fr_1fr]">
+            <div className="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-[1.35fr_0.95fr_1fr]">
         <div className="min-w-0 lg:col-span-2 xl:col-span-1">
-          <ConcernTrendCard concerns={concerns} loading={loading} />
+          <ConcernTrendCard concerns={incidents} loading={loading} />
         </div>
-        <OutcomesCard concerns={concerns} loading={loading} />
-        <LatestConcernsCard concerns={concerns} loading={loading} />
+        <OutcomesCard concerns={incidents} loading={loading} />
+        <LatestConcernsCard concerns={incidents} loading={loading} />
       </div>
 
-      {/* The map gets the larger half now that it carries real pins. */}
-      <div className="mt-3 grid gap-3 xl:grid-cols-[1fr_1.25fr]">
-        <ActionQueue concerns={concerns} loading={loading} />
+            <div className="mt-3">
         <MiniAlertsMap />
       </div>
 
-      {/* Unit workload grid + the category breakdown. */}
-      <div className="mt-3 grid gap-3 xl:grid-cols-[1fr_1.4fr]">
-        <UnitLoadCard concerns={concerns} loading={loading} />
-        <CategoryTable concerns={concerns} loading={loading} />
+            <div className="mt-3">
+        <CategoryTable concerns={incidents} loading={loading} />
       </div>
     </div>
   )

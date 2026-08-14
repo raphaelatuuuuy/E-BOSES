@@ -218,7 +218,7 @@ function UserDrawer({
         <div className="mt-4 space-y-3 rounded-2xl border border-card-line bg-card p-3">
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block">
-              <span className="text-[11px] font-bold uppercase text-muted-foreground">Role</span>
+              <span className="text-[11px] font-bold text-muted-foreground">Role</span>
               <select
                 value={role}
                 onChange={(event) => setRole(toManagedRole(event.target.value, role))}
@@ -232,7 +232,7 @@ function UserDrawer({
             </label>
 
             <label className="block">
-              <span className="text-[11px] font-bold uppercase text-muted-foreground">Status</span>
+              <span className="text-[11px] font-bold text-muted-foreground">Status</span>
               <select
                 value={accountStatus}
                 onChange={(event) => setAccountStatus(event.target.value)}
@@ -251,7 +251,7 @@ function UserDrawer({
               required as soon as the role becomes responder. */}
           {role === "first_responder" ? (
             <label className="block">
-              <span className="text-[11px] font-bold uppercase text-muted-foreground">
+              <span className="text-[11px] font-bold text-muted-foreground">
                 Responder unit
               </span>
               <select
@@ -331,7 +331,7 @@ function UserDrawer({
 
           <div className="mt-3 space-y-2 rounded-xl border border-card-line bg-card p-3">
             <label className="block">
-              <span className="text-[11px] font-bold uppercase text-muted-foreground">Unit</span>
+              <span className="text-[11px] font-bold text-muted-foreground">Unit</span>
               <select
                 value={departmentId}
                 onChange={(event) => setDepartmentId(event.target.value)}
@@ -349,7 +349,7 @@ function UserDrawer({
             </label>
 
             <label className="block">
-              <span className="text-[11px] font-bold uppercase text-muted-foreground">
+              <span className="text-[11px] font-bold text-muted-foreground">
                 Position
               </span>
               <select

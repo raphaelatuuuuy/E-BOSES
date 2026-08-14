@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react"
-import { Link } from "react-router-dom"
 import {
   AlertTriangleIcon,
   BrainCircuitIcon,
-  ChevronRightIcon,
   FileLock2Icon,
   MapIcon,
   ShieldCheckIcon,
@@ -16,6 +14,9 @@ import {
 
 import { apiRequest } from "@/lib/api"
 import { CAPABILITIES } from "@/features/dashboard/lib/capabilities"
+import { HairlineList, HairlineRow } from "@/components/ui/hairline-list"
+import { PageHeader, PageSection } from "@/components/ui/page-header"
+import { Note } from "@/components/ui/note"
 
 /**
  * Configuration hub.
@@ -128,8 +129,8 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
     sections: [
       {
         key: "verification",
-        label: "ID verification",
-        description: "Resident ID and residence proof",
+        label: "Automatic ID checks",
+        description: "Resident ID and residence proof, checked automatically",
         icon: ShieldCheckIcon,
         to: "/dashboard/configuration/id-proof-template",
         capability: CAPABILITIES.reviewVerification,
@@ -146,7 +147,16 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
   },
 ]
 
-function SectionCard({
+/**
+ * One hairline row per section.
+ *
+ * This used to be a grid of bordered status cards, each drawing its own box
+ * with an icon well, a title, a description, an attention pill and a divided
+ * status footer — eleven boxes competing for the same attention. A row states
+ * the section, what it is for, and where it stands, and the only thing that
+ * breaks the rhythm is a section that actually needs someone.
+ */
+function SectionRow({
   section,
   state,
   loading,
@@ -158,73 +168,49 @@ function SectionCard({
   const Icon = section.icon
   const built = Boolean(section.to)
 
-  const body = (
-    <>
-      <div className="flex items-start gap-3">
-        <span className="mt-0.5 rounded-xl bg-tint p-2 text-brand-navy">
-          <Icon className="size-4" aria-hidden />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <p className="truncate text-sm font-bold text-foreground">{section.label}</p>
-            {state?.needs_attention ? (
-              <span
-                className="inline-flex items-center gap-1 rounded-full bg-status-open-surface px-2 py-0.5 text-[10px] font-bold text-status-open-ink"
-                title="Needs attention"
-              >
-                <AlertTriangleIcon className="size-3" aria-hidden />
-                Attention
-              </span>
-            ) : null}
-          </div>
-          <p className="mt-0.5 truncate text-xs font-medium text-muted-foreground">
-            {section.description}
-          </p>
-        </div>
-        {built ? (
-          <ChevronRightIcon className="mt-1 size-4 shrink-0 text-muted-foreground" aria-hidden />
-        ) : null}
-      </div>
-
-      <div className="mt-3 border-t border-card-line pt-2.5">
-        {loading ? (
-          <span className="block h-3 w-32 animate-pulse rounded-full bg-chart-track" />
-        ) : (
-          <>
-            <p className="truncate text-sm font-bold tabular-nums text-foreground">
-              {state?.status ?? (built ? "Status unavailable" : "Not configured")}
-            </p>
-            {state?.detail ? (
-              <p className="mt-0.5 truncate text-[11px] font-medium text-muted-foreground">
-                {state.detail}
-              </p>
-            ) : null}
-          </>
-        )}
-      </div>
-    </>
+  const leading = (
+    <span className="flex size-12 items-center justify-center rounded-2xl bg-neutral-100 text-brand-navy">
+      <Icon className="size-6" strokeWidth={1.7} aria-hidden />
+    </span>
   )
 
-  const shell = "rounded-2xl border border-card-line bg-card p-4 text-left"
+  const meta = loading ? (
+    <span className="block h-3 w-24 animate-pulse rounded-full bg-neutral-200" />
+  ) : (
+    <span className="block text-right">
+      <span className="block text-row text-brand-navy">
+        {state?.status ?? (built ? "—" : "Not configured")}
+      </span>
+      {state?.detail ? (
+        <span className="mt-1 block text-meta text-neutral-400">{state.detail}</span>
+      ) : null}
+    </span>
+  )
+
+  const title = state?.needs_attention ? (
+    <span className="flex items-center gap-2">
+      {section.label}
+      <span className="inline-flex items-center gap-1 text-meta font-medium text-sos">
+        <AlertTriangleIcon className="size-4" strokeWidth={2} aria-hidden />
+        Needs attention
+      </span>
+    </span>
+  ) : (
+    section.label
+  )
 
   // Sections without a screen yet are shown, not hidden: a visible
-  // "Not configured" card is more honest than a feature nobody can find, and
+  // "Not configured" row is more honest than a feature nobody can find, and
   // it makes the remaining work legible inside the product.
-  if (!built) {
-    return (
-      <div className={`${shell} opacity-75`} aria-disabled>
-        {body}
-        <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Screen not built yet
-        </p>
-      </div>
-    )
-  }
-
   return (
-    <Link to={section.to!} className={`${shell} block transition hover:border-brand-orange`}>
-      {body}
-    </Link>
+    <HairlineRow
+      leading={leading}
+      title={title}
+      subtitle={built ? section.description : `${section.description} · Screen not built yet`}
+      meta={meta}
+      to={section.to ?? undefined}
+      className={built ? undefined : "opacity-60"}
+    />
   )
 }
 
@@ -241,7 +227,7 @@ export default function OfficialConfigurationHubPage() {
       })
       .catch(() => {
         // Configuration must stay reachable when a status query breaks, so the
-        // cards still render with their labels and no status.
+        // rows still render with their labels and no status.
         if (!cancelled) setError("Live status is unavailable right now.")
       })
       .finally(() => {
@@ -258,27 +244,21 @@ export default function OfficialConfigurationHubPage() {
   ).length
 
   return (
-    <div className="space-y-6 p-4 md:p-6">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="font-heading text-2xl font-bold text-foreground">Configuration</h1>
-          <p className="mt-1 text-sm font-medium text-muted-foreground">
-            How this barangay routes concerns, dispatches responders and verifies residents.
-          </p>
-        </div>
-        {!loading && attentionCount > 0 ? (
-          <span className="inline-flex items-center gap-2 rounded-full bg-status-open-surface px-3 py-1.5 text-xs font-bold text-status-open-ink">
-            <AlertTriangleIcon className="size-3.5" aria-hidden />
-            {attentionCount} {attentionCount === 1 ? "section needs" : "sections need"} attention
-          </span>
-        ) : null}
-      </header>
+    <div className="mx-auto w-full max-w-[1100px] px-6 pb-28 pt-12 sm:px-10">
+      <PageHeader
+        title="Configuration"
+        subtitle="How this barangay routes concerns, dispatches responders and verifies residents."
+        actions={
+          !loading && attentionCount > 0 ? (
+            <span className="inline-flex items-center gap-2 text-read font-medium text-sos">
+              <AlertTriangleIcon className="size-5" strokeWidth={2} aria-hidden />
+              {attentionCount} {attentionCount === 1 ? "section needs" : "sections need"} attention
+            </span>
+          ) : null
+        }
+      />
 
-      {error ? (
-        <p className="rounded-xl border border-card-line bg-tint px-3 py-2 text-sm font-semibold text-muted-foreground">
-          {error}
-        </p>
-      ) : null}
+      {error ? <Note className="mt-8">{error}</Note> : null}
 
       {GROUPS.map((group) => {
         // Sections the official has no capability for are omitted, matching
@@ -290,26 +270,23 @@ export default function OfficialConfigurationHubPage() {
         if (visible.length === 0) return null
 
         return (
-          <section key={group.title} className="space-y-3">
-            <h2 className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-              {group.title}
-            </h2>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <PageSection key={group.title} title={group.title}>
+            <HairlineList>
               {visible.map((section) => (
-                <SectionCard
+                <SectionRow
                   key={section.key}
                   section={section}
                   state={summary?.sections[section.key]}
                   loading={loading}
                 />
               ))}
-            </div>
-          </section>
+            </HairlineList>
+          </PageSection>
         )
       })}
 
       {!loading && granted?.length === 0 ? (
-        <p className="rounded-2xl border border-card-line bg-card p-6 text-center text-sm font-semibold text-muted-foreground">
+        <p className="mt-14 text-center text-read text-neutral-500">
           You do not have access to any configuration section. Ask the Barangay Captain to assign
           you a position.
         </p>

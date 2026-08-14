@@ -69,7 +69,7 @@ function UnitEditor({
     <div className="space-y-4 rounded-2xl border border-card-line bg-card p-4">
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="block">
-          <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+          <span className="text-[11px] font-bold text-muted-foreground">
             Unit name
           </span>
           <input
@@ -86,7 +86,7 @@ function UnitEditor({
         </label>
 
         <label className="block">
-          <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+          <span className="text-[11px] font-bold text-muted-foreground">
             Short name
           </span>
           <input
@@ -102,7 +102,7 @@ function UnitEditor({
       </div>
 
       <label className="block">
-        <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+        <span className="text-[11px] font-bold text-muted-foreground">
           What this unit handles
         </span>
         <input
@@ -172,7 +172,7 @@ function UnitEditor({
       </div>
 
       <label className="block sm:max-w-xs">
-        <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+        <span className="text-[11px] font-bold text-muted-foreground">
           Contact number
         </span>
         <input

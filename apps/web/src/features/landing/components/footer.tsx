@@ -1,11 +1,14 @@
 import { Link } from "react-router-dom"
-import { MapPin, Phone } from "@phosphor-icons/react"
+import { MapPinIcon, PhoneIcon } from "lucide-react"
 
-const PLATFORM_LINKS = [
+type PlatformLink = { label: string; href?: string; to?: string }
+
+const PLATFORM_LINKS: PlatformLink[] = [
   { label: "How it Works", href: "#how-it-works" },
   { label: "Community", href: "#community" },
   { label: "Resident Benefits", href: "#impact" },
   { label: "Contact", href: "#contact" },
+  { label: "Help Center", to: "/help" },
 ]
 
 export function Footer() {
@@ -68,9 +71,15 @@ export function Footer() {
                 <ul className="space-y-4 text-sm text-white/50">
                   {PLATFORM_LINKS.map((link) => (
                     <li key={link.label}>
-                      <a className="transition-colors hover:text-primary" href={link.href}>
-                        {link.label}
-                      </a>
+                      {link.to ? (
+                        <Link className="transition-colors hover:text-primary" to={link.to}>
+                          {link.label}
+                        </Link>
+                      ) : (
+                        <a className="transition-colors hover:text-primary" href={link.href}>
+                          {link.label}
+                        </a>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -90,11 +99,11 @@ export function Footer() {
             <h4 className="mb-6 font-bold text-white">Contact</h4>
             <ul className="space-y-4 text-sm text-white/50">
               <li className="flex items-start gap-3">
-                <MapPin className="mt-0.5 size-4 shrink-0" />
+                <MapPinIcon className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
                 <span>Barangay Hall, Marikina Heights, Marikina City</span>
               </li>
               <li className="flex items-start gap-3">
-                <Phone className="mt-0.5 size-4 shrink-0" />
+                <PhoneIcon className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
                 <span>Marikina City hotline 161</span>
               </li>
             </ul>

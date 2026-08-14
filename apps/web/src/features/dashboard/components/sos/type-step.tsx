@@ -4,6 +4,7 @@ import { cn } from "@workspace/ui/lib/utils"
 import type { EmergencyType } from "@/features/dashboard/emergency-api"
 import {
   emergencies,
+  SOS_ICON_WELL,
   type SosEmergencyOption,
 } from "@/features/dashboard/components/sos/emergency-catalog"
 
@@ -44,10 +45,10 @@ export function SosTypeStep({
               {item.iconImageUrl ? (
                 <img src={item.iconImageUrl} alt="" className="size-11 shrink-0 rounded-lg object-cover" />
               ) : item.customIconLabel ? (
-                <span className={cn("flex size-11 shrink-0 items-center justify-center rounded-lg text-sm font-black", item.iconBg, item.iconColor)}>{item.customIconLabel}</span>
+                <span className={cn("flex size-11 shrink-0 items-center justify-center rounded-lg text-sm font-semibold", SOS_ICON_WELL)}>{item.customIconLabel}</span>
               ) : (
                 <Icon
-                  className={cn("size-11 shrink-0 rounded-lg p-2", item.iconBg, item.iconColor)}
+                  className={cn("size-11 shrink-0 rounded-lg p-2", SOS_ICON_WELL)}
                   strokeWidth={2}
                 />
               )}
@@ -76,7 +77,7 @@ export function SosTypeStep({
         })}
       </div>
       {error ? (
-        <p className="text-[13px] font-medium text-red-300" role="alert">
+        <p className="text-[13px] font-medium text-sos-bright" role="alert">
           {error}
         </p>
       ) : null}

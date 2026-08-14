@@ -1,6 +1,5 @@
 import { ChevronRightIcon } from "lucide-react"
 
-import { Checkbox } from "@workspace/ui/components/checkbox"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 
 /**
@@ -39,10 +38,12 @@ export function SettingsSkeleton() {
 export function HubRow({
   icon: Icon,
   label,
+  description,
   onClick,
 }: {
   icon: React.ComponentType<{ className?: string; strokeWidth?: number }>
   label: string
+  description?: string
   onClick: () => void
 }) {
   return (
@@ -52,47 +53,14 @@ export function HubRow({
       className="flex min-h-[56px] w-full items-center gap-3.5 border-b border-neutral-200 px-1 py-3.5 text-left transition-colors hover:bg-neutral-50"
     >
       <Icon className="size-5 shrink-0 text-neutral-800" strokeWidth={1.75} />
-      <span className="min-w-0 flex-1 text-[16px] font-normal text-neutral-900">{label}</span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="text-[16px] font-normal text-neutral-900">{label}</span>
+        {description ? (
+          <span className="mt-0.5 text-[13px] text-neutral-500">{description}</span>
+        ) : null}
+      </span>
       <ChevronRightIcon className="size-5 shrink-0 text-neutral-400" strokeWidth={2} />
     </button>
-  )
-}
-
-export function ToggleRow({
-  id,
-  label,
-  description,
-  checked,
-  disabled,
-  busy,
-  onChange,
-}: {
-  id: string
-  label: string
-  description: string
-  checked: boolean
-  disabled?: boolean
-  busy?: boolean
-  onChange: (value: boolean) => void
-}) {
-  return (
-    <div className="flex items-start justify-between gap-4 border-b border-neutral-200 py-4 last:border-b-0">
-      <div className="min-w-0 flex-1">
-        <label htmlFor={id} className="block text-[15px] font-medium text-neutral-900">
-          {label}
-        </label>
-        <p className="mt-1 text-[13px] leading-5 text-neutral-500">{description}</p>
-      </div>
-      <Checkbox
-        id={id}
-        checked={checked}
-        disabled={disabled || busy}
-        aria-busy={busy}
-        aria-label={label}
-        onChange={(event) => onChange(event.currentTarget.checked)}
-        className="mt-0.5"
-      />
-    </div>
   )
 }
 

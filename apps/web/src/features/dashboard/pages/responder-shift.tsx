@@ -1,23 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
-import { ClipboardListIcon, LoaderCircleIcon } from "lucide-react"
-import { toast } from "sonner"
+import { useCallback, useEffect, useState } from "react"
+import { ChartLineIcon, ClipboardListIcon, LoaderCircleIcon } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 
 import { useAuthSession } from "@/features/auth/auth-session"
 import {
   listAssignedEmergencies,
   type EmergencyAlert,
-  type ResponderShift,
-  endResponderShift,
-  getActiveResponderShift,
   listResponderShifts,
-  startResponderShift,
+  type ResponderShift,
 } from "@/features/dashboard/emergency-api"
 import { usePageTitle } from "@/hooks/use-page-title"
-import { useResponderUnit } from "@/features/dashboard/hooks/use-responder-unit"
-import { ShiftStats } from "@/features/dashboard/components/responder/shift-stats"
-import { ShiftControls } from "@/features/dashboard/components/responder/shift-controls"
-import { ShiftHistory } from "@/features/dashboard/components/responder/shift-history"
+import { useResponderDuty } from "@/features/dashboard/hooks/use-responder-duty"
+import {
+  ShiftControls,
+} from "@/features/dashboard/components/responder/shift-controls"
+import { ShiftHistoryList } from "@/features/dashboard/components/responder/shift-history"
 import { DutyRhythm, ResponseTrend } from "@/features/dashboard/components/responder/shift-insights"
 import { Pane, State } from "@/features/dashboard/components/responder/dispatch-surface"
 import { MOBILE_BAR_CLEARANCE } from "@/features/dashboard/lib/shell"
@@ -27,15 +24,12 @@ import { cn } from "@workspace/ui/lib/utils"
 export default function ResponderShiftPage() {
   usePageTitle("Responder Shift")
   const navigate = useNavigate()
-  const { user, refreshUser } = useAuthSession()
+  const { user } = useAuthSession()
   const viewerId = user?.id ?? null
-  const unit = useResponderUnit()
-  const [isOnDuty, setIsOnDuty] = useState(Boolean(user?.is_on_duty))
-  const [activeShift, setActiveShift] = useState<ResponderShift | null>(null)
+  const { unit, isOnDuty, busy, activeShift, startDuty, endDuty } = useResponderDuty()
   const [shiftHistory, setShiftHistory] = useState<ResponderShift[]>([])
   const [alerts, setAlerts] = useState<EmergencyAlert[]>([])
   const [loading, setLoading] = useState(true)
-  const [busy, setBusy] = useState("")
   const [now, setNow] = useState(() => Date.now())
   const [error, setError] = useState("")
 
@@ -46,15 +40,12 @@ export default function ResponderShiftPage() {
 
   const load = useCallback(async () => {
     setError("")
-    const [nextAlerts, nextActiveShift, nextShiftHistory] = await Promise.all([
+    const [nextAlerts, nextShiftHistory] = await Promise.all([
       listAssignedEmergencies(),
-      getActiveResponderShift(),
       listResponderShifts(),
     ])
     setAlerts(nextAlerts)
-    setActiveShift(nextActiveShift)
     setShiftHistory(nextShiftHistory)
-    setIsOnDuty(Boolean(nextActiveShift))
   }, [])
 
   useEffect(() => {
@@ -73,78 +64,21 @@ export default function ResponderShiftPage() {
   }, [load])
 
   const summary = unit.summary
-  const stats = useMemo(() => {
-    const active = summary?.assigned_active_emergencies ?? alerts.length
-    const resolved = summary?.assigned_resolved_emergencies ?? alerts.filter((alert) => alert.status === "resolved").length
-    const routed = alerts.filter(
-      (alert) => ["routed", "acknowledged"].includes(alert.status) || alert.current_assignment?.status === "assigned",
-    ).length
-    const enRoute = alerts.filter((alert) => ["en_route", "nearby"].includes(alert.status)).length
-    return { active, resolved, routed, enRoute }
-  }, [alerts, summary])
 
   const hasDutyMismatch = !loading && !activeShift && Boolean(summary?.is_on_duty)
 
-  const requestPosition = useCallback(() => {
-    return new Promise<GeolocationPosition>((resolve, reject) => {
-      if (!navigator.geolocation) {
-        reject(new Error("GPS is not available on this device."))
-        return
-      }
-      navigator.geolocation.getCurrentPosition(resolve, reject, {
-        enableHighAccuracy: true,
-        timeout: 10000,
-      })
-    })
-  }, [])
-
-  async function updateDuty(nextDuty: boolean) {
-    setBusy(nextDuty ? "start" : "end")
-    try {
-      if (nextDuty) {
-        const pos = await requestPosition()
-        // The unit is deliberately not sent: the server reads it from the
-        // membership officials assigned, and ignores anything a responder
-        // client supplies.
-        const shift = await startResponderShift({
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-        })
-        setActiveShift(shift)
-        toast.success("Shift started")
-      } else {
-        let latitude: number | undefined
-        let longitude: number | undefined
-        try {
-          const pos = await requestPosition()
-          latitude = pos.coords.latitude
-          longitude = pos.coords.longitude
-        } catch {
-          // Ending a shift is allowed even if GPS is unavailable; the backend
-          // keeps the last known duty location.
-        }
-        const shift = await endResponderShift({ latitude, longitude })
-        setActiveShift(null)
-        setShiftHistory((current) => [shift, ...current.filter((item) => item.id !== shift.id)])
-        toast.success("Shift ended")
-      }
-      setIsOnDuty(nextDuty)
-      await refreshUser()
-      await Promise.all([load(), unit.reload()])
-    } catch (err) {
-      toast.error(
-        err instanceof Error
-          ? err.message
-          : "Could not update shift. Check GPS permission and try again.",
-      )
-    } finally {
-      setBusy("")
+  async function toggleDuty(nextDuty: boolean) {
+    if (nextDuty) {
+      await startDuty().catch(() => undefined)
+    } else {
+      await endDuty().catch(() => undefined)
     }
+    await load()
   }
 
   return (
     <div
-      className="min-h-full bg-canvas p-4 md:p-6 lg:p-8"
+      className="min-h-full flex-1 bg-canvas p-4 md:p-6 lg:p-8"
       style={{ paddingBottom: `calc(${MOBILE_BAR_CLEARANCE} + 1.5rem)` }}
     >
       <div className="mx-auto flex max-w-5xl flex-col gap-3">
@@ -154,8 +88,8 @@ export default function ResponderShiftPage() {
           busy={busy}
           activeShift={activeShift}
           now={now}
-          onStart={() => void updateDuty(true)}
-          onEnd={() => void updateDuty(false)}
+          onStart={() => void toggleDuty(true)}
+          onEnd={() => void toggleDuty(false)}
         />
 
         {!unit.loading && !unit.assigned ? (
@@ -178,20 +112,28 @@ export default function ResponderShiftPage() {
           </Notice>
         ) : null}
 
-        <ShiftStats loading={loading} stats={stats} />
+        <Pane title="Shift insights" icon={ChartLineIcon} padded={false} className="min-h-0">
+          <div className="grid divide-y divide-card-line lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+            <div className="p-5">
+              <DutyRhythm shifts={shiftHistory} />
+            </div>
+            <div className="p-5">
+              <ResponseTrend shifts={shiftHistory} />
+            </div>
+          </div>
+        </Pane>
 
-        <div className="grid gap-3 lg:grid-cols-2">
-          <DutyRhythm shifts={shiftHistory} />
-          <ResponseTrend shifts={shiftHistory} />
-        </div>
-
-        <Pane
-          title="Today's dispatch log"
-          icon={ClipboardListIcon}
-          subtitle={alerts.length > 0 ? `${alerts.length}` : undefined}
-          padded={false}
-          className="min-h-0"
-        >
+        <Pane title="Shift log" icon={ClipboardListIcon} padded={false} className="min-h-0">
+          <div className="flex items-baseline gap-2 border-b border-card-line px-5 py-4">
+            <h3 className="text-micror text-subtle-foreground">
+              Today's dispatch log
+            </h3>
+            {alerts.length > 0 ? (
+              <span className="text-body tabular-nums text-subtle-foreground">
+                {alerts.length}
+              </span>
+            ) : null}
+          </div>
           {loading ? (
             <div className="flex items-center justify-center py-10">
               <LoaderCircleIcon className="size-6 animate-spin text-subtle-foreground" />
@@ -229,9 +171,19 @@ export default function ResponderShiftPage() {
               })}
             </ul>
           )}
-        </Pane>
 
-        <ShiftHistory shifts={shiftHistory} />
+          <div className="flex items-baseline gap-2 border-b border-card-line px-5 py-4">
+            <h3 className="text-micror text-subtle-foreground">
+              Shift history
+            </h3>
+            {shiftHistory.length > 0 ? (
+              <span className="text-body tabular-nums text-subtle-foreground">
+                {shiftHistory.length}
+              </span>
+            ) : null}
+          </div>
+          <ShiftHistoryList shifts={shiftHistory} />
+        </Pane>
       </div>
     </div>
   )
