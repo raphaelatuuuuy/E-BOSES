@@ -110,7 +110,7 @@ function RoleEditor({
             const name = event.target.value
             onChange(isNew ? { ...draft, name, code: slugify(name) } : { ...draft, name })
           }}
-          className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-brand-orange"
+          className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
           placeholder="Barangay Secretary"
         />
       </label>
@@ -131,7 +131,7 @@ function RoleEditor({
                     type="checkbox"
                     checked={held.includes(capability)}
                     onChange={() => toggle(capability)}
-                    className="mt-0.5 size-4 accent-brand-orange"
+                    className="mt-0.5 size-4 accent-accent"
                   />
                   <span className="min-w-0">
                     <span className="block text-sm font-semibold text-foreground">
@@ -155,7 +155,7 @@ function RoleEditor({
           type="button"
           onClick={onSave}
           disabled={saving || !draft.name}
-          className="rounded-xl bg-brand-orange px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:opacity-55"
+          className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-55"
         >
           {saving ? "Saving…" : isNew ? "Create position" : "Save changes"}
         </button>

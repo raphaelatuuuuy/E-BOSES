@@ -235,7 +235,7 @@ export default function OfficialCategoriesPage() {
       sortValue: (category) => category.name.toLowerCase(),
       render: (category) => (
         <div className="flex min-w-0 items-center gap-3">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-orange-soft text-brand-navy ring-1 ring-brand-orange/15">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-brand-navy ring-1 ring-accent/15">
             {category.icon_image_url ? (
               <img src={category.icon_image_url} alt="" className="size-full rounded-xl object-cover" />
             ) : category.custom_icon_label ? (
@@ -267,7 +267,7 @@ export default function OfficialCategoriesPage() {
               <select
                 value={category.department ? String(category.department) : ""}
                 onChange={(event) => void route(category, event.target.value)}
-                className={`w-full rounded-lg border bg-card px-2 py-1.5 text-xs font-semibold outline-none focus:border-brand-orange ${
+                className={`w-full rounded-lg border bg-card px-2 py-1.5 text-xs font-semibold outline-none focus:border-accent ${
                   current
                     ? "border-card-line text-foreground"
                     : "border-status-open text-status-open-ink"
@@ -361,7 +361,7 @@ export default function OfficialCategoriesPage() {
                   )
                 }}
                 placeholder="Illegal dumping"
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-brand-orange"
+                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
               />
             </label>
             <label className="block">
@@ -376,7 +376,7 @@ export default function OfficialCategoriesPage() {
                     department: event.target.value ? Number(event.target.value) : null,
                   })
                 }
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-brand-orange"
+                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
               >
                 <option value="">Choose a unit</option>
                 {units
@@ -398,7 +398,7 @@ export default function OfficialCategoriesPage() {
               value={draft.description ?? ""}
               onChange={(event) => setDraft({ ...draft, description: event.target.value })}
               placeholder="Garbage dumped outside collection points"
-              className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-brand-orange"
+              className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
             />
           </label>
 
@@ -432,7 +432,7 @@ export default function OfficialCategoriesPage() {
                   key={key}
                   type="button"
                   onClick={() => setDraft({ ...draft, icon_key: key })}
-                  className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-2 text-xs font-bold ${draft.icon_key === key ? "border-brand-orange bg-brand-orange-soft text-brand-navy" : "border-card-line bg-card text-muted-foreground"}`}
+                  className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-2 text-xs font-bold ${draft.icon_key === key ? "border-accent bg-accent/10 text-brand-navy" : "border-card-line bg-card text-muted-foreground"}`}
                 >
                   <Icon className="size-4" />
                   {label}
@@ -446,10 +446,10 @@ export default function OfficialCategoriesPage() {
                 onChange={(event) => setDraft({ ...draft, custom_icon_label: event.target.value })}
                 placeholder="BD"
                 maxLength={8}
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-brand-orange"
+                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
               />
             </label>
-            <label className="block rounded-2xl border border-dashed border-brand-orange/40 bg-card p-3">
+            <label className="block rounded-2xl border border-dashed border-accent/40 bg-card p-3">
               <span className="text-[11px] font-bold text-muted-foreground">Custom image / .ico</span>
               <div className="mt-2 flex flex-wrap items-center gap-3">
                 {draft.iconFile ? (
@@ -473,7 +473,7 @@ export default function OfficialCategoriesPage() {
               type="button"
               onClick={() => void save()}
               disabled={saving || !draft.name}
-              className="rounded-xl bg-brand-orange px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:opacity-55"
+              className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-55"
             >
               {saving ? "Saving…" : draft.id ? "Save changes" : "Create category"}
             </button>

@@ -59,89 +59,69 @@ export function ProofTypeList(props: {
           </Button>
         </div>
       ) : (
-        <table className="w-full">
-            <thead>
-              <tr className="border-b border-card-line">
-                <th className="pb-3 pl-5 pt-4 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-                  Proof type
-                </th>
-                <th className="pb-3 pt-4 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-                  Details
-                </th>
-                <th className="pb-3 pt-4 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-                  Available on sign-up
-                </th>
-                <th className="pb-3 pr-5 pt-4 text-right text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {documents.map((doc) => {
-                const displayName =
-                  doc.template_name?.trim() || doc.name?.trim() || "Untitled proof"
-                const available = doc.enabled !== false
-                const sides = doc.required_sides ?? []
-                const needsBoth = sides.includes("front") && sides.includes("back")
+        /* A hairline list, not a four-column table: three of those columns were
+           facts about one row, and the header row cost more than it explained. */
+        <ul className="overflow-hidden rounded-xl border border-neutral-200">
+          {documents.map((doc) => {
+            const displayName =
+              doc.template_name?.trim() || doc.name?.trim() || "Untitled proof"
+            const available = doc.enabled !== false
+            const sides = doc.required_sides ?? []
+            const needsBoth = sides.includes("front") && sides.includes("back")
+            const fieldCount = doc.fields?.length ?? 0
 
-                return (
-                  <tr key={doc.key} className="border-b border-card-line last:border-b-0">
-                    <td className="py-4 pl-5">
-                      <span className={cn("font-semibold", PROOF_THEME.title)}>{displayName}</span>
-                    </td>
-                    <td className="py-4">
-                      <span className={cn("text-sm font-semibold", PROOF_THEME.muted)}>
-                        {needsBoth ? "Front & back required" : "Front only"}
-                        {doc.fields?.length
-                          ? ` · ${doc.fields.length} field${doc.fields.length === 1 ? "" : "s"}`
-                          : ""}
-                      </span>
-                    </td>
-                    <td className="py-4">
-                      <label className="inline-flex items-center gap-2">
-                        <Switch
-                          checked={available}
-                          disabled={saving}
-                          onCheckedChange={(enabled) => onToggleAvailable(doc.key, enabled)}
-                        />
-                        <span className={cn("text-xs font-semibold", PROOF_THEME.muted)}>
-                          {available
-                            ? "Residents can choose this proof"
-                            : "Hidden until you turn this on"}
-                        </span>
-                      </label>
-                    </td>
-                    <td className="py-4 pr-5">
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="font-bold text-white"
-                          style={{ backgroundColor: PROOF_THEME.primary }}
-                          onClick={() => onEdit(doc.key)}
-                          disabled={saving}
-                        >
-                          <Pencil className="size-3.5" />
-                          Edit
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          className="font-bold text-destructive hover:bg-destructive/10 hover:text-destructive"
-                          onClick={() => setPendingRemoveKey(doc.key)}
-                          disabled={saving || documents.length <= 1}
-                        >
-                          <Trash2 className="size-3.5" />
-                          Remove
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+            return (
+              <li
+                key={doc.key}
+                className="flex flex-wrap items-start gap-x-8 gap-y-4 border-b border-neutral-200 px-8 py-7 last:border-b-0"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-row text-foreground">{displayName}</p>
+                  <p className="mt-1 text-meta text-neutral-500">
+                    {needsBoth ? "Front and back required" : "Front only"}
+                    {fieldCount
+                      ? ` · ${fieldCount} field${fieldCount === 1 ? "" : "s"} read`
+                      : " · no fields configured yet"}
+                  </p>
+                  <label className="mt-3 inline-flex items-center gap-3">
+                    <Switch
+                      checked={available}
+                      disabled={saving}
+                      onCheckedChange={(enabled) => onToggleAvailable(doc.key, enabled)}
+                    />
+                    <span className="text-meta text-neutral-500">
+                      {available
+                        ? "Residents can choose this proof"
+                        : "Hidden until you turn this on"}
+                    </span>
+                  </label>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => onEdit(doc.key)}
+                    disabled={saving}
+                  >
+                    <Pencil className="size-3.5" />
+                    Edit
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => setPendingRemoveKey(doc.key)}
+                    disabled={saving || documents.length <= 1}
+                  >
+                    <Trash2 className="size-3.5" />
+                    Remove
+                  </Button>
+                </div>
+              </li>
+            )
+          })}
+        </ul>
       )}
 
       <Dialog

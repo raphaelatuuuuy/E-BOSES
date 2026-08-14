@@ -89,29 +89,13 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
     } catch (error) {
       const message = apiMessage(error, "Invalid email or password.")
       if (error instanceof ApiError && error.data) {
-        const detail = typeof error.data === "object" && error.data !== null
-          ? (error.data as Record<string, unknown>).detail
+        const code = typeof error.data === "object" && error.data !== null
+          ? (error.data as Record<string, unknown>).code
           : null
-        if (typeof detail === "string" && detail.toLowerCase().includes("suspended")) {
-          setErrors({
-            email: SILENT_SIGN_IN_ERROR,
-            password: "Account is inactive. Sign in again to reactivate, or contact your barangay office.",
-          })
-          setSubmitError("")
-          return
-        }
-        if (typeof detail === "string" && detail.toLowerCase().includes("rejected")) {
+        if (code === "account_rejected") {
           setErrors({
             email: SILENT_SIGN_IN_ERROR,
             password: "Account not approved. Contact your barangay administrator for details.",
-          })
-          setSubmitError("")
-          return
-        }
-        if (typeof detail === "string" && detail.toLowerCase().includes("pending")) {
-          setErrors({
-            email: SILENT_SIGN_IN_ERROR,
-            password: "Account still under verification. Please try again later.",
           })
           setSubmitError("")
           return

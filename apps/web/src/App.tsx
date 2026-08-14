@@ -8,6 +8,8 @@ import { AuthSessionProvider, getStatusPath, useAuthSession } from "@/features/a
 import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import DashboardLayout from "@/features/dashboard/dashboard"
 import { getAccessToken } from "@/lib/api"
+import { SystemTicker, useSystemStatus } from "@/features/dashboard/components/system-banner"
+import { MaintenancePage } from "@/features/dashboard/pages/maintenance"
 
 const AccountInactivePage = lazy(() => import("@/features/auth/account-inactive"))
 const AccountPendingPage = lazy(() => import("@/features/auth/account-pending"))
@@ -415,12 +417,33 @@ function PageLoader() {
   )
 }
 
+/**
+ * Maintenance locks residents out but never officials, and never the landing
+ * page: someone arriving mid-window still needs to see the hotlines.
+ */
+function MaintenanceGate({ children }: { children: ReactNode }) {
+  const status = useSystemStatus()
+  const { user } = useAuthSession()
+  const location = useLocation()
+
+  const staff = user?.role === "barangay_official"
+  const exempt = location.pathname === "/" || location.pathname.startsWith("/help")
+
+  if (status?.maintenance && !staff && !exempt) {
+    return <MaintenancePage />
+  }
+  return <>{children}</>
+}
+
 export default function App() {
   return (
     <AuthSessionProvider>
-      <Suspense fallback={<PageLoader />}>
-        <AppRoutes />
-      </Suspense>
+      <SystemTicker />
+      <MaintenanceGate>
+        <Suspense fallback={<PageLoader />}>
+          <AppRoutes />
+        </Suspense>
+      </MaintenanceGate>
       <AssistantMount />
     </AuthSessionProvider>
   )

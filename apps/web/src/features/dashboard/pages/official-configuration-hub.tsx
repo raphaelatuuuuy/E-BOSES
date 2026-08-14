@@ -12,11 +12,13 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
+import { cn } from "@workspace/ui/lib/utils"
 import { apiRequest } from "@/lib/api"
 import { CAPABILITIES } from "@/features/dashboard/lib/capabilities"
 import { HairlineList, HairlineRow } from "@/components/ui/hairline-list"
 import { PageHeader, PageSection } from "@/components/ui/page-header"
 import { Note } from "@/components/ui/note"
+import { ServiceStatusSection } from "@/features/dashboard/components/official/service-status-section"
 
 /**
  * Configuration hub.
@@ -168,9 +170,23 @@ function SectionRow({
   const Icon = section.icon
   const built = Boolean(section.to)
 
+  // Same icon treatment as the Help Center: a solid navy tile that lifts to the
+  // accent on hover, so a row reads as one target instead of a decorated line.
   const leading = (
-    <span className="flex size-12 items-center justify-center rounded-2xl bg-neutral-100 text-brand-navy">
-      <Icon className="size-6" strokeWidth={1.7} aria-hidden />
+    <span
+      className={cn(
+        "flex size-12 items-center justify-center rounded-2xl bg-brand-navy text-white transition-[background-color,box-shadow] duration-200 ease-out motion-reduce:transition-none",
+        built && "group-hover:bg-accent group-hover:shadow-lg"
+      )}
+    >
+      <Icon
+        className={cn(
+          "size-6 transition-transform duration-200 ease-out motion-reduce:transition-none",
+          built && "group-hover:scale-110 motion-reduce:group-hover:scale-100"
+        )}
+        strokeWidth={1.7}
+        aria-hidden
+      />
     </span>
   )
 
@@ -182,21 +198,31 @@ function SectionRow({
         {state?.status ?? (built ? "—" : "Not configured")}
       </span>
       {state?.detail ? (
-        <span className="mt-1 block text-meta text-neutral-400">{state.detail}</span>
+        <span className="mt-1 block text-meta text-neutral-400">
+          {state.detail}
+        </span>
       ) : null}
+    </span>
+  )
+
+  const label = (
+    <span
+      className={cn("transition-colors", built && "group-hover:text-accent")}
+    >
+      {section.label}
     </span>
   )
 
   const title = state?.needs_attention ? (
     <span className="flex items-center gap-2">
-      {section.label}
+      {label}
       <span className="inline-flex items-center gap-1 text-meta font-medium text-sos">
         <AlertTriangleIcon className="size-4" strokeWidth={2} aria-hidden />
         Needs attention
       </span>
     </span>
   ) : (
-    section.label
+    label
   )
 
   // Sections without a screen yet are shown, not hidden: a visible
@@ -206,7 +232,11 @@ function SectionRow({
     <HairlineRow
       leading={leading}
       title={title}
-      subtitle={built ? section.description : `${section.description} · Screen not built yet`}
+      subtitle={
+        built
+          ? section.description
+          : `${section.description} · Screen not built yet`
+      }
       meta={meta}
       to={section.to ?? undefined}
       className={built ? undefined : "opacity-60"}
@@ -240,57 +270,69 @@ export default function OfficialConfigurationHubPage() {
 
   const granted = summary?.capabilities
   const attentionCount = Object.values(summary?.sections ?? {}).filter(
-    (section) => section.needs_attention,
+    (section) => section.needs_attention
   ).length
 
   return (
-    <div className="mx-auto w-full max-w-[1100px] px-6 pb-28 pt-12 sm:px-10">
-      <PageHeader
-        title="Configuration"
-        subtitle="How this barangay routes concerns, dispatches responders and verifies residents."
-        actions={
-          !loading && attentionCount > 0 ? (
-            <span className="inline-flex items-center gap-2 text-read font-medium text-sos">
-              <AlertTriangleIcon className="size-5" strokeWidth={2} aria-hidden />
-              {attentionCount} {attentionCount === 1 ? "section needs" : "sections need"} attention
-            </span>
-          ) : null
-        }
-      />
-
-      {error ? <Note className="mt-8">{error}</Note> : null}
-
-      {GROUPS.map((group) => {
-        // Sections the official has no capability for are omitted, matching
-        // what their sidebar shows.
-        const visible = granted
-          ? group.sections.filter((section) => granted.includes(section.capability))
-          : group.sections
-
-        if (visible.length === 0) return null
-
-        return (
-          <PageSection key={group.title} title={group.title}>
-            <HairlineList>
-              {visible.map((section) => (
-                <SectionRow
-                  key={section.key}
-                  section={section}
-                  state={summary?.sections[section.key]}
-                  loading={loading}
+    <div className="min-h-full bg-white">
+      <div className="mx-auto w-full max-w-[1100px] px-6 pt-12 pb-28 sm:px-10">
+        <PageHeader
+          title="Configuration"
+          subtitle="How this barangay routes concerns, dispatches responders and verifies residents."
+          actions={
+            !loading && attentionCount > 0 ? (
+              <span className="inline-flex items-center gap-2 text-read font-medium text-sos">
+                <AlertTriangleIcon
+                  className="size-5"
+                  strokeWidth={2}
+                  aria-hidden
                 />
-              ))}
-            </HairlineList>
-          </PageSection>
-        )
-      })}
+                {attentionCount}{" "}
+                {attentionCount === 1 ? "section needs" : "sections need"}{" "}
+                attention
+              </span>
+            ) : null
+          }
+        />
 
-      {!loading && granted?.length === 0 ? (
-        <p className="mt-14 text-center text-read text-neutral-500">
-          You do not have access to any configuration section. Ask the Barangay Captain to assign
-          you a position.
-        </p>
-      ) : null}
+        {error ? <Note className="mt-8">{error}</Note> : null}
+
+        {GROUPS.map((group) => {
+          // Sections the official has no capability for are omitted, matching
+          // what their sidebar shows.
+          const visible = granted
+            ? group.sections.filter((section) =>
+                granted.includes(section.capability)
+              )
+            : group.sections
+
+          if (visible.length === 0) return null
+
+          return (
+            <PageSection key={group.title} title={group.title}>
+              <HairlineList>
+                {visible.map((section) => (
+                  <SectionRow
+                    key={section.key}
+                    section={section}
+                    state={summary?.sections[section.key]}
+                    loading={loading}
+                  />
+                ))}
+              </HairlineList>
+            </PageSection>
+          )
+        })}
+
+        {!loading && granted?.length === 0 ? (
+          <p className="mt-14 text-center text-read text-neutral-500">
+            You do not have access to any configuration section. Ask the
+            Barangay Captain to assign you a position.
+          </p>
+        ) : (
+          <ServiceStatusSection />
+        )}
+      </div>
     </div>
   )
 }

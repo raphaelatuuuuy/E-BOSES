@@ -25,6 +25,15 @@ def user_can_view_emergency(user, alert_id: int) -> bool:
     return bool(alert and can_view_alert(user, alert))
 
 
+@database_sync_to_async
+def user_can_chat_on_concern(user, concern_id: int) -> bool:
+    from apps.concerns.models import Concern
+    from apps.concerns.views import can_chat_on_concern
+
+    concern = Concern.objects.filter(pk=concern_id).first()
+    return bool(concern and can_chat_on_concern(user, concern))
+
+
 class AuthenticatedJsonConsumer(AsyncJsonWebsocketConsumer):
     user = None
 
@@ -78,6 +87,26 @@ class EmergencyTrackingConsumer(AuthenticatedJsonConsumer):
 
     async def emergency_chat(self, event):
         await self.send_json({"type": "emergency.chat", "payload": event["payload"]})
+
+
+class ConcernTrackingConsumer(AuthenticatedJsonConsumer):
+    async def connect(self):
+        if not await self.authenticate():
+            return
+        self.concern_id = int(self.scope["url_route"]["kwargs"]["concern_id"])
+        if not await user_can_chat_on_concern(self.user, self.concern_id):
+            await self.close(code=4403)
+            return
+        self.group_name = f"concern_{self.concern_id}"
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, code):
+        if getattr(self, "group_name", None):
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def concern_chat(self, event):
+        await self.send_json({"type": "concern.chat", "payload": event["payload"]})
 
 
 @database_sync_to_async

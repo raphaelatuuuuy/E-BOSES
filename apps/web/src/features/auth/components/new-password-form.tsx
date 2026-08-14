@@ -68,7 +68,7 @@ export function NewPasswordForm({
                       (passwordStrength.score <= 2
                         ? "bg-destructive"
                         : passwordStrength.score <= 4
-                          ? "bg-amber-500"
+                          ? "bg-neutral-1000"
                           : "bg-primary"),
                   )}
                 />

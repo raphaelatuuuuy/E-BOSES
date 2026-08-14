@@ -62,7 +62,7 @@ export function HairlineRow({
   )
 
   const inner = cn(
-    "flex w-full items-center gap-4 text-left no-underline transition-colors",
+    "group flex w-full items-center gap-4 text-left no-underline transition-colors",
     dense ? "px-6 py-5" : "px-8 py-7",
     interactive && "hover:bg-neutral-100",
     className,

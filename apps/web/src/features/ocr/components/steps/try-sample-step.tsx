@@ -1,20 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
-  AlertTriangle,
-  CheckCircle2,
   Download,
   Expand,
   ImagePlus,
-  Info,
   LoaderCircle,
   Play,
   X,
-  XCircle,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { cn } from "@workspace/ui/lib/utils"
+import { StateGlyph } from "@/components/ui/state-marker"
 
 import {
   normalizeExtractedFields,
@@ -545,12 +542,12 @@ export function TrySampleStep(props: {
                         className={cn(
                           "h-9 rounded-lg border bg-white text-xs font-medium text-brand-navy disabled:opacity-50",
                           dobError
-                            ? "border-rose-400 focus:border-rose-500"
+                            ? "border-sos focus:border-sos"
                             : "border-line-tint"
                         )}
                       />
                       {dobError ? (
-                        <span className="mt-1 block text-[11px] font-medium text-rose-600">
+                        <span className="mt-1 block text-[11px] font-medium text-sos">
                           {dobError}
                         </span>
                       ) : null}
@@ -681,7 +678,7 @@ export function TrySampleStep(props: {
                           type="button"
                           onClick={() => onClearSlot(side)}
                           disabled={testRunning}
-                          className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-rose-600 transition hover:bg-rose-50 disabled:opacity-50"
+                          className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-sos transition hover:bg-neutral-100 disabled:opacity-50"
                           aria-label="Remove test photo"
                         >
                           <X className="size-4" />
@@ -817,45 +814,31 @@ export function TrySampleStep(props: {
                                       {check.kind === "none" ? null : check.kind ===
                                         "not_tested" ? (
                                         <span
-                                          className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600"
+                                          className="inline-flex items-center gap-2 text-[13px] text-neutral-500"
                                           title={check.messages.join(", ")}
                                         >
-                                          <Info className="size-3.5" />
+                                          <StateGlyph tone="open" />
                                           {check.messages[0] ?? "Not tested"}
                                         </span>
                                       ) : check.kind === "pass" ? (
                                         <span
-                                          className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700"
+                                          className="inline-flex items-center gap-2 text-[13px] text-foreground"
                                           title={check.checkNames.join(", ")}
                                         >
-                                          <CheckCircle2 className="size-3.5" />
+                                          <StateGlyph tone="closed" />
                                           Passed
                                         </span>
                                       ) : (
-                                        <span
-                                          className={cn(
-                                            "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                                            check.severity === "block"
-                                              ? "bg-rose-50 text-rose-700"
-                                              : "bg-amber-50 text-amber-700"
-                                          )}
-                                        >
-                                          {check.severity === "block" ? (
-                                            <XCircle className="size-3.5 shrink-0" />
-                                          ) : (
-                                            <AlertTriangle className="size-3.5 shrink-0" />
-                                          )}
+                                        <span className="inline-flex items-start gap-2 text-[13px] text-foreground">
+                                          <StateGlyph
+                                            tone={check.severity === "block" ? "alarm" : "open"}
+                                            className="mt-1"
+                                          />
                                           <span className="min-w-0">
                                             {check.messages[0] ??
                                               "Check failed"}
                                             {check.messages.length > 1 ? (
-                                              <span
-                                                className={
-                                                  check.severity === "block"
-                                                    ? "text-rose-600"
-                                                    : "text-amber-600"
-                                                }
-                                              >
+                                              <span className="text-neutral-500">
                                                 {" "}
                                                 +{check.messages.length -
                                                   1}{" "}

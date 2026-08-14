@@ -75,6 +75,16 @@ export interface AccountRequest {
   staff_note: string
   created_at: string
   updated_at: string
+  /** Present on an open deletion request the server cannot action yet. */
+  blocked?: boolean
+  blocked_reasons?: string[]
+}
+
+export function withdrawAccountRequest(type?: AccountRequest["type"]) {
+  return apiRequest<{ withdrawn: number }>("/auth/account-requests/", {
+    method: "DELETE",
+    body: JSON.stringify(type ? { type } : {}),
+  })
 }
 
 export function registerResident(formData: FormData) {

@@ -33,3 +33,30 @@ def reverse_geocode_alert_task(alert_id):
     from apps.emergencies.location_services import resolve_alert_location
 
     return resolve_alert_location(alert_id)
+
+
+@shared_task(
+    bind=True,
+    max_retries=1,
+    default_retry_delay=5,
+    time_limit=45,
+    soft_time_limit=30,
+)
+def sms_ai_assist_task(self, alert_id):
+    """One AI pass on an SMS alert the parser could not fully read.
+
+    Runs after the alert is saved, routed and acknowledged, so a slow or
+    failing model call can never delay dispatch. A timeout gets one retry;
+    anything else is recorded in the alert's ``ai_assist`` field and dropped.
+    """
+    from apps.emergencies.models import EmergencyAlert
+
+    from .ai_assist import run_rescue
+
+    alert = EmergencyAlert.objects.filter(pk=alert_id).first()
+    if not alert:
+        return None
+    try:
+        return run_rescue(alert)
+    except TimeoutError as exc:
+        raise self.retry(exc=exc) from exc

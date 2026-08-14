@@ -130,7 +130,7 @@ The `.env.example` contains configuration scaffolding for:
 | <img src="https://img.shields.io/badge/Redis-DC382D?style=flat-square&logo=redis&logoColor=white" alt="Redis" /> | Redis | Caching & WebSocket layer |
 | <img src="https://img.shields.io/badge/Cloudinary-3448C5?style=flat-square&logo=cloudinary&logoColor=white" alt="Cloudinary" /> | Cloudinary | Media storage |
 | <img src="https://img.shields.io/badge/Turnstile-1D9B7A?style=flat-square&logo=cloudflare&logoColor=white" alt="Turnstile" /> | Turnstile (Cloudflare) | Bot protection |
-| <img src="https://img.shields.io/badge/Twilio%20%2F%20SMS-F22F46?style=flat-square&logo=twilio&logoColor=white" alt="Twilio" /> | Twilio / SMS | OTP & alert delivery |
+| <img src="https://img.shields.io/badge/Globe%20Labs-0066B3?style=flat-square&logo=globe&logoColor=white" alt="Globe Labs" /> | Globe Labs | OTP & alert delivery |
 | <img src="https://img.shields.io/badge/Render-000000?style=flat-square&logo=render&logoColor=white" alt="Render" /> | Render | Cloud deployment |
 | <img src="https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker" /> | Docker | Containerization |
 | <img src="https://img.shields.io/badge/PaddleOCR-2563EB?style=flat-square&logo=python&logoColor=white" alt="PaddleOCR" /> | PaddleOCR | Document OCR pipeline |

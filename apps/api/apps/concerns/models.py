@@ -73,6 +73,25 @@ class Concern(models.Model):
     barangay = models.CharField(max_length=120, default="Marikina Heights")
     update_text = models.CharField(max_length=255, blank=True)
     visibility = models.CharField(max_length=16, choices=Visibility.choices, default=Visibility.COMMUNITY)
+    official_title = models.CharField(max_length=140, blank=True)
+    summary = models.CharField(max_length=300, blank=True)
+    community_summary = models.TextField(blank=True)
+    community_observed = models.JSONField(default=list, blank=True)
+    publication_block_reason = models.CharField(max_length=64, blank=True)
+    duplicate_of = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="duplicates"
+    )
+    recurrence_of = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="recurrences"
+    )
+    archived_at = models.DateTimeField(null=True, blank=True)
+    reopen_count = models.PositiveSmallIntegerField(default=0)
+    reopened_at = models.DateTimeField(null=True, blank=True)
+    ip_country = models.CharField(max_length=2, blank=True)
+    ip_asn = models.CharField(max_length=16, blank=True)
+    ip_org = models.CharField(max_length=120, blank=True)
+    ip_verdict = models.CharField(max_length=24, blank=True)
+    ip_score = models.FloatField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -141,6 +160,8 @@ class ConcernMedia(models.Model):
     # Fail closed: an image is only publicly displayable once a privacy run has
     # explicitly cleared it.
     public_visible = models.BooleanField(default=False)
+    relevance_state = models.CharField(max_length=16, blank=True)
+    relevance_reason = models.CharField(max_length=255, blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
 
@@ -258,6 +279,9 @@ class ConcernCategory(models.Model):
     icon_image = models.FileField(storage=PublicMediaStorage(), upload_to="concern-category-icons/", blank=True)
     department = models.ForeignKey(Department, null=True, blank=True, on_delete=models.SET_NULL, related_name="categories")
     is_active = models.BooleanField(default=True)
+    photo_required = models.BooleanField(default=False)
+    description_required = models.BooleanField(default=True)
+    location_required = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -360,6 +384,13 @@ class ConcernResolutionEvidence(models.Model):
     original_filename = models.CharField(max_length=255)
     mime_type = models.CharField(max_length=120, blank=True)
     file_size = models.PositiveIntegerField(default=0)
+    preview_file = models.FileField(
+        storage=PublicMediaStorage(),
+        upload_to="previews/concern-resolution-evidence/%Y/%m/",
+        blank=True,
+    )
+    privacy_state = models.CharField(max_length=32, blank=True)
+    privacy_detected_classes = models.JSONField(default=list, blank=True)
     note = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -430,7 +461,17 @@ class Announcement(models.Model):
     expires_at = models.DateTimeField(null=True, blank=True)
     notification_sent_at = models.DateTimeField(null=True, blank=True)
     image = models.FileField(storage=PublicMediaStorage(), upload_to="announcements/%Y/%m/", blank=True)
+    original_image = models.FileField(
+        storage=PublicMediaStorage(), upload_to="announcements/original/%Y/%m/", blank=True
+    )
     image_alt = models.CharField(max_length=160, blank=True)
+    image_privacy_state = models.CharField(max_length=24, blank=True)
+    image_privacy_detail = models.CharField(max_length=255, blank=True)
+    place_label = models.CharField(max_length=160, blank=True)
+    latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    affected_streets = models.JSONField(default=list, blank=True)
+    area_geometry = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -445,6 +486,8 @@ class BarangayEvent(models.Model):
     starts_at = models.DateTimeField()
     ends_at = models.DateTimeField(null=True, blank=True)
     is_published = models.BooleanField(default=False)
+    affected_streets = models.JSONField(default=list, blank=True)
+    area_geometry = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -565,6 +608,8 @@ class ConcernClassificationConfiguration(models.Model):
     minimum_description_length = models.PositiveSmallIntegerField(default=20)
     mismatch_action = models.CharField(max_length=32, choices=MismatchAction.choices, default=MismatchAction.REVIEW)
     duplicate_detection_enabled = models.BooleanField(default=True)
+    resolved_match_detection_enabled = models.BooleanField(default=True)
+    resolved_match_lookback_days = models.PositiveIntegerField(default=90)
     flag_suspicious = models.BooleanField(default=True)
     flag_irrelevant = models.BooleanField(default=True)
     notify_reviewer = models.BooleanField(default=True)
@@ -707,6 +752,11 @@ class ConcernChatAttachment(models.Model):
     file_size = models.PositiveIntegerField(default=0)
     authenticity_status = models.CharField(max_length=24, choices=AuthenticityStatus.choices, default=AuthenticityStatus.REVIEW_REQUIRED)
     authenticity_detail = models.CharField(max_length=255, blank=True)
+    preview_file = models.FileField(
+        storage=PublicMediaStorage(), upload_to="previews/concern-chat/%Y/%m/", blank=True
+    )
+    privacy_state = models.CharField(max_length=24, blank=True)
+    privacy_detail = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -753,3 +803,184 @@ class DepartmentChatMessage(models.Model):
     class Meta:
         ordering = ["created_at", "id"]
         indexes = [models.Index(fields=["thread", "created_at"], name="dept_chat_thread_created")]
+
+
+class AnnouncementComment(models.Model):
+    class Status(models.TextChoices):
+        VISIBLE = "visible", "Visible"
+        HIDDEN = "hidden", "Hidden"
+        REMOVED = "removed", "Removed"
+
+    announcement = models.ForeignKey(
+        Announcement, on_delete=models.CASCADE, related_name="comments"
+    )
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="announcement_comments",
+    )
+    parent = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.CASCADE, related_name="replies"
+    )
+    body = models.TextField()
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.VISIBLE)
+    is_official_reply = models.BooleanField(default=False)
+    moderation_note = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(
+                fields=["announcement", "status", "created_at"],
+                name="ann_comment_status_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Comment {self.pk} on announcement {self.announcement_id}"
+
+
+class ConcernMergeSuggestion(models.Model):
+    """A proposal that `concern` is the same report as `primary`.
+
+    Kept separate from ConcernMergeEvent so a suggestion an official never
+    looked at is distinguishable from one they acted on.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACCEPTED = "accepted", "Accepted"
+        REJECTED = "rejected", "Rejected"
+        EXPIRED = "expired", "Expired"
+
+    concern = models.ForeignKey(
+        Concern, on_delete=models.CASCADE, related_name="merge_suggestions"
+    )
+    primary = models.ForeignKey(
+        Concern, on_delete=models.CASCADE, related_name="merge_suggestions_as_primary"
+    )
+    confidence = models.FloatField(default=0.0)
+    method = models.CharField(max_length=32, blank=True)
+    distance_meters = models.PositiveIntegerField(null=True, blank=True)
+    rationale = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="concern_merge_decisions",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-confidence", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["concern", "primary"], name="unique_concern_merge_suggestion"
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(concern=models.F("primary")),
+                name="merge_suggestion_not_self",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Suggest merging {self.concern_id} into {self.primary_id}"
+
+
+class ConcernMergeEvent(models.Model):
+    class Action(models.TextChoices):
+        MERGED = "merged", "Merged"
+        UNMERGED = "unmerged", "Unmerged"
+        PRIMARY_CHANGED = "primary_changed", "Primary changed"
+        SUGGESTION_REJECTED = "suggestion_rejected", "Suggestion rejected"
+
+    concern = models.ForeignKey(
+        Concern, on_delete=models.CASCADE, related_name="merge_events"
+    )
+    primary = models.ForeignKey(
+        Concern,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="merge_events_as_primary",
+    )
+    action = models.CharField(max_length=24, choices=Action.choices)
+    confidence = models.FloatField(null=True, blank=True)
+    method = models.CharField(max_length=32, blank=True)
+    reason = models.CharField(max_length=255, blank=True)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="concern_merge_events",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self):
+        return f"{self.action} on concern {self.concern_id}"
+
+
+class SystemBanner(models.Model):
+    """A scrolling notice, or the maintenance lock, set by an official."""
+
+    class Kind(models.TextChoices):
+        TICKER = "ticker", "Scrolling notice"
+        MAINTENANCE = "maintenance", "Maintenance mode"
+
+    class Tone(models.TextChoices):
+        INFO = "info", "Information"
+        WARNING = "warning", "Warning"
+        CRITICAL = "critical", "Critical"
+
+    kind = models.CharField(max_length=16, choices=Kind.choices, default=Kind.TICKER)
+    tone = models.CharField(max_length=16, choices=Tone.choices, default=Tone.INFO)
+    message = models.CharField(max_length=280)
+    detail = models.TextField(blank=True)
+    starts_at = models.DateTimeField(null=True, blank=True)
+    ends_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="system_banners",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [models.Index(fields=["kind", "is_active"], name="system_banner_live")]
+
+    def __str__(self):
+        return f"{self.kind}: {self.message[:40]}"
+
+    def is_live(self, now=None):
+        from django.utils import timezone as dj_timezone
+
+        if not self.is_active:
+            return False
+        moment = now or dj_timezone.now()
+        if self.starts_at and moment < self.starts_at:
+            return False
+        if self.ends_at and moment > self.ends_at:
+            return False
+        return True
+
+    @classmethod
+    def live(cls, kind, now=None):
+        for banner in cls.objects.filter(kind=kind, is_active=True):
+            if banner.is_live(now):
+                return banner
+        return None

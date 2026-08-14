@@ -734,6 +734,30 @@ class ConcernSerializer(serializers.ModelSerializer):
     # show it without recomputing, and so API ordering and UI ordering agree.
     severity = serializers.CharField(read_only=True, default="low")
     user_vote = serializers.IntegerField(read_only=True, default=0)
+    community_incident = serializers.SerializerMethodField()
+    recurrence_of = serializers.SerializerMethodField()
+    also_reported_count = serializers.SerializerMethodField()
+
+    def get_community_incident(self, obj):
+        from .community_incident import build
+
+        return build(obj, media_serializer=ConcernMediaSerializer, context=self.context)
+
+    def get_recurrence_of(self, obj):
+        previous = obj.recurrence_of
+        if previous is None:
+            return None
+        return {
+            "id": previous.pk,
+            "tracking_id": previous.tracking_id,
+            "status": previous.status,
+        }
+
+    def get_also_reported_count(self, obj):
+        from .community_incident import group_members
+
+        _, duplicates = group_members(obj)
+        return len(duplicates)
 
     class Meta:
         model = Concern
@@ -762,6 +786,13 @@ class ConcernSerializer(serializers.ModelSerializer):
             "barangay",
             "update_text",
             "visibility",
+            "official_title",
+            "community_incident",
+            "recurrence_of",
+            "also_reported_count",
+            "archived_at",
+            "reopened_at",
+            "reopen_count",
             "media",
             "status_events",
             "comments",

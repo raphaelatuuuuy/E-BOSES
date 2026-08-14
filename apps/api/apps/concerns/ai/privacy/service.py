@@ -133,6 +133,7 @@ def _restrict(media, *, state, reason: str) -> ConcernMedia:
     )
 
 
+
 def process_media_privacy(media, *, requested_classes: list[str], force: bool = False) -> ConcernMedia:
     """Run SAM3 for `requested_classes` and write the protected copy."""
     classes = list(requested_classes or [])

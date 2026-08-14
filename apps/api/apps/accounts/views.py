@@ -21,10 +21,16 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from apps.capabilities import MANAGE_USERS, capability_denied, user_has_capability
 from apps.concerns.units import sync_responder_designation
 from apps.emergencies.selectors import active_responder_shift_for_update
+from apps.system_state import maintenance_blocks
 
 from .models import AccountRequest, AuditLog, OTPChallenge, ResidenceProof, ResidentSettings
 from .permissions import user_has_role_permission
-from .privacy_services import PrivacyRequestConflict, anonymize_resident_account, build_account_data_export
+from .privacy_services import (
+    PrivacyRequestConflict,
+    anonymize_resident_account,
+    build_account_data_export,
+    deletion_blockers,
+)
 from .selectors import find_user_by_identifier, latest_active_otp_challenge
 from .serializers import (
     AccountEmailChangeRequestSerializer,
@@ -36,6 +42,7 @@ from .serializers import (
     AccountRequestReviewSerializer,
     AdminCreateUserSerializer,
     ChangePasswordSerializer,
+    LoginRejected,
     LoginSerializer,
     OTPResendSerializer,
     OTPVerifySerializer,
@@ -512,8 +519,46 @@ class LoginView(APIView):
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except LoginRejected as exc:
+            return Response(
+                {"detail": exc.detail, "code": exc.code},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         user = serializer.validated_data["user"]
+
+        maintenance = maintenance_blocks(user)
+        if maintenance:
+            return Response(
+                {
+                    "code": "maintenance",
+                    "detail": maintenance.message,
+                    "until": maintenance.ends_at,
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        from .ip_intel import evaluate_request, ip_blocked_response
+
+        ip, ip_meta, ip_reason = evaluate_request(request)
+        if ip_reason:
+            create_audit_log(
+                "auth.login_ip_blocked",
+                actor=user,
+                target_user=user,
+                metadata={"reason": ip_reason, "ip": ip},
+                request_meta=request_meta(request),
+            )
+            return ip_blocked_response(ip_reason)
+        if ip_meta:
+            get_user_model().objects.filter(pk=user.pk).update(
+                ip_asn=ip_meta.get("asn", ""),
+                ip_country=ip_meta.get("country", ""),
+                ip_org=ip_meta.get("org", ""),
+                ip_verdict=ip_meta.get("verdict", ""),
+                ip_score=ip_meta.get("score"),
+            )
         create_audit_log("auth.login_success", actor=user, target_user=user, request_meta=request_meta(request))
         return token_response(user)
 
@@ -628,7 +673,45 @@ class AccountRequestListCreateView(APIView):
     def get(self, request):
         touch_last_seen(request.user)
         requests = AccountRequest.objects.filter(user=request.user)
-        return Response(AccountRequestSerializer(requests, many=True).data)
+        payload = AccountRequestSerializer(requests, many=True).data
+        blockers = deletion_blockers(request.user)
+        for row in payload:
+            if row.get("type") == AccountRequest.Type.DELETION and row.get("status") in {
+                AccountRequest.Status.SUBMITTED,
+                AccountRequest.Status.REVIEWED,
+            }:
+                row["blocked"] = blockers["blocked"]
+                row["blocked_reasons"] = blockers["reasons"]
+        return Response(payload)
+
+    def delete(self, request):
+        """Withdraw a request the resident has changed their mind about."""
+        touch_last_seen(request.user)
+        pending = AccountRequest.objects.filter(
+            user=request.user,
+            status__in=[AccountRequest.Status.SUBMITTED, AccountRequest.Status.REVIEWED],
+        )
+        request_type = request.data.get("type") if isinstance(request.data, dict) else None
+        if request_type:
+            pending = pending.filter(type=request_type)
+        withdrawn = pending.count()
+        if not withdrawn:
+            return Response(
+                {"detail": "There is no open request to withdraw."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        pending.update(
+            status=AccountRequest.Status.REJECTED,
+            staff_note="Withdrawn by the resident.",
+        )
+        create_audit_log(
+            "account.request_withdrawn",
+            actor=request.user,
+            target_user=request.user,
+            metadata={"withdrawn": withdrawn},
+            request_meta=request_meta(request),
+        )
+        return Response({"withdrawn": withdrawn})
 
     def post(self, request):
         touch_last_seen(request.user)
@@ -655,6 +738,16 @@ class AccountRequestListCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         account_request = serializer.save(user=request.user)
+        # A resident asking for their own data back is not a decision an
+        # official needs to make, so the export completes immediately. Deletion
+        # still goes to a human because it anonymises shared records.
+        if (
+            request_type == AccountRequest.Type.DATA_EXPORT
+            and getattr(settings, "SELF_SERVICE_DATA_EXPORT", True)
+        ):
+            account_request.status = AccountRequest.Status.COMPLETED
+            account_request.staff_note = "Completed automatically: resident self-service export."
+            account_request.save(update_fields=["status", "staff_note", "updated_at"])
         create_audit_log(
             "account.request_submitted",
             actor=request.user,

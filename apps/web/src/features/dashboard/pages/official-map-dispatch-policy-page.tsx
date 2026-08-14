@@ -175,8 +175,8 @@ export default function OfficialMapDispatchPolicyPage() {
                   key={option.value}
                   className={`cursor-pointer rounded-xl border p-3 transition ${
                     draft.out_of_zone_action === option.value
-                      ? "border-brand-orange bg-brand-orange-soft"
-                      : "border-card-line bg-canvas hover:border-brand-orange/40"
+                      ? "border-accent bg-accent/10"
+                      : "border-card-line bg-canvas hover:border-accent/40"
                   }`}
                 >
                   <input
@@ -225,7 +225,7 @@ export default function OfficialMapDispatchPolicyPage() {
                   placeholder="+639XXXXXXXXX"
                   value={draft.emergency_sms_number}
                   onChange={(event) => patch({ emergency_sms_number: event.target.value })}
-                  className="h-11 w-full rounded-xl border border-card-line bg-card px-3 text-sm font-semibold text-foreground outline-none focus:border-brand-orange"
+                  className="h-11 w-full rounded-xl border border-card-line bg-card px-3 text-sm font-semibold text-foreground outline-none focus:border-accent"
                 />
               </label>
             </div>
@@ -240,7 +240,7 @@ export default function OfficialMapDispatchPolicyPage() {
             <Button
               type="submit"
               disabled={saving}
-              className="rounded-xl bg-brand-orange text-white hover:bg-brand-orange-strong"
+              className="rounded-xl bg-accent text-white hover:bg-accent/90"
             >
               <SaveIcon className="size-4" />
               {saving ? "Saving…" : "Save changes"}
@@ -316,7 +316,7 @@ function RadiusField({
         value={Number(value) || min}
         onChange={(event) => onChange(event.target.value)}
         aria-label={label}
-        className="mt-2 w-full accent-brand-orange"
+        className="mt-2 w-full accent-accent"
       />
       <span className="mt-1 block text-xs font-medium leading-relaxed text-muted-foreground">
         {hint}

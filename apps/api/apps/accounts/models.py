@@ -71,6 +71,11 @@ class User(AbstractUser):
     current_latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
     current_longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
     location_updated_at = models.DateTimeField(null=True, blank=True)
+    ip_country = models.CharField(max_length=2, blank=True)
+    ip_asn = models.CharField(max_length=16, blank=True)
+    ip_org = models.CharField(max_length=120, blank=True)
+    ip_verdict = models.CharField(max_length=24, blank=True)
+    ip_score = models.FloatField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     USERNAME_FIELD = "email"
@@ -109,6 +114,7 @@ class ResidentProfile(models.Model):
     barangay = models.CharField(max_length=120, default="Marikina Heights")
     gender = models.CharField(max_length=20, choices=Gender.choices, blank=True)
     avatar = models.CharField(max_length=30, blank=True)
+    profile_completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -586,6 +592,27 @@ class OCRServiceStatus(models.Model):
         return f"{self.provider}: {self.status}"
 
 
+class ServiceHealthDay(models.Model):
+    """One row per module per day, written by the service-status probes.
+
+    The status timeline reads only from here, so a day with no row is reported
+    as "no data" instead of being invented.
+    """
+
+    day = models.DateField()
+    module_key = models.SlugField(max_length=40)
+    severity = models.PositiveSmallIntegerField(default=0)
+    issues = models.JSONField(default=list, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("day", "module_key")
+        indexes = [models.Index(fields=["module_key", "day"])]
+
+    def __str__(self):
+        return f"{self.module_key} {self.day}: {self.severity}"
+
+
 class ResidenceVerificationCase(models.Model):
     class Status(models.TextChoices):
         AWAITING_EMAIL = "awaiting_email", "Awaiting email verification"
@@ -926,3 +953,40 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"audit {self.action} by {self.actor_id or 'system'} at {self.created_at:%Y-%m-%d %H:%M}"
+
+
+class VerificationOverride(models.Model):
+    """An official overruling the automatic verification result.
+
+    Kept separate from VerificationCheck so the machine's own conclusion is
+    never rewritten — the override sits alongside it and wins.
+    """
+
+    class Decision(models.TextChoices):
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+    user = models.ForeignKey(
+        django_settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="verification_overrides",
+    )
+    verification_check = models.ForeignKey(
+        "VerificationCheck",
+        on_delete=models.CASCADE,
+        related_name="overrides",
+    )
+    overridden_by = models.ForeignKey(
+        django_settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="verification_overrides_made",
+    )
+    decision = models.CharField(max_length=16, choices=Decision.choices)
+    reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self):
+        return f"{self.decision} override on check {self.verification_check_id}"

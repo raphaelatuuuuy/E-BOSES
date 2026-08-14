@@ -108,3 +108,95 @@ def notify_reporter(alert, body: str, *, key: str) -> None:
         )
     except Exception:
         logger.warning("Reporter SMS failed for alert %s.", alert.pk, exc_info=True)
+
+
+def notify_reporter_ack(alert, *, unit_name="", assigned=True) -> None:
+    """First reply to the resident, whatever channel the emergency came from.
+
+    Previously only reachable from the inbound-SMS router, so a resident who
+    pressed SOS in the app was never told their alert had landed.
+    """
+    surname = ""
+    profile = getattr(getattr(alert, "reporter", None), "resident_profile", None)
+    if profile:
+        surname = profile.last_name or ""
+    notify_reporter(
+        alert,
+        templates.emergency_ack(
+            alert, surname=surname, unit_name=unit_name, assigned=assigned
+        ),
+        key="ack",
+    )
+
+
+def notify_reporter_resolved(alert) -> None:
+    notify_reporter(alert, templates.resident_resolved_notice(alert), key="resolved")
+
+
+def notify_reporter_backup(alert) -> None:
+    notify_reporter(alert, templates.resident_backup_notice(alert), key="backup")
+
+
+def notify_responder_reassigned(alert, responder, *, reason="") -> None:
+    number = getattr(responder, "phone_number", "")
+    if not number:
+        return
+    try:
+        queue_sms(
+            number,
+            templates.reassigned_notice(alert, reason=reason),
+            purpose=SmsPurpose.DISPATCH,
+            idempotency_key=f"reassign:{alert.pk}:{responder.pk}",
+            alert=alert,
+            recipient=responder,
+        )
+    except Exception:
+        logger.warning("Reassignment SMS failed for alert %s.", alert.pk, exc_info=True)
+
+
+def notify_responder_backup_assigned(alert, responder, *, backup_type="", urgency="", reason="") -> None:
+    number = getattr(responder, "phone_number", "")
+    if not number:
+        return
+    try:
+        queue_sms(
+            number,
+            templates.backup_assigned_notice(
+                alert, backup_type=backup_type, urgency=urgency, reason=reason
+            ),
+            purpose=SmsPurpose.DISPATCH,
+            idempotency_key=f"backup:{alert.pk}:{responder.pk}",
+            alert=alert,
+            recipient=responder,
+        )
+    except Exception:
+        logger.warning("Backup SMS failed for alert %s.", alert.pk, exc_info=True)
+
+
+def notify_officials_new_emergency(alert, *, unit_name="", responder_name="") -> None:
+    from django.contrib.auth import get_user_model
+
+    User = get_user_model()
+    officials = User.objects.filter(
+        role=User.Role.BARANGAY_OFFICIAL,
+        status=User.Status.VERIFIED,
+    ).exclude(phone_number="")[:10]
+    body = templates.official_new_emergency(
+        alert, unit_name=unit_name, responder_name=responder_name
+    )
+    for official in officials:
+        try:
+            queue_sms(
+                official.phone_number,
+                body,
+                purpose=SmsPurpose.OFFICIAL_ALERT,
+                idempotency_key=f"newalert:{alert.pk}:{official.pk}",
+                alert=alert,
+                recipient=official,
+            )
+        except Exception:
+            continue
+
+
+def notify_off_duty(alert, hotlines=None) -> None:
+    notify_reporter(alert, templates.off_duty_notice(alert, hotlines), key="offduty")

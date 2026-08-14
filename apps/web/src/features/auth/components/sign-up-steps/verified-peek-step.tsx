@@ -8,6 +8,7 @@ import {
   MARIKINA_HEIGHTS_CENTER,
 } from "@/features/auth/lib/forward-geocode"
 import { apiRequest } from "@/lib/api"
+import { useWeather, weatherLabel } from "@/lib/weather"
 
 interface VerifiedPeekStepProps {
   street: string
@@ -32,20 +33,6 @@ function formatNeighborCount(n: number) {
   return String(n)
 }
 
-/** WMO weather codes → short label (Open-Meteo). */
-function weatherLabel(code: number | null | undefined) {
-  if (code == null || Number.isNaN(code)) return "Local weather"
-  if (code === 0) return "Clear"
-  if (code <= 3) return "Partly cloudy"
-  if (code <= 48) return "Foggy"
-  if (code <= 57) return "Drizzle"
-  if (code <= 67) return "Rain"
-  if (code <= 77) return "Snow"
-  if (code <= 82) return "Showers"
-  if (code <= 99) return "Thunderstorm"
-  return "Local weather"
-}
-
 export function NeighborhoodPeekCards({
   street,
   houseNumber,
@@ -61,10 +48,6 @@ export function NeighborhoodPeekCards({
   const [coords, setCoords] = React.useState<{ lat: number; lng: number } | null>(null)
   const [mapReady, setMapReady] = React.useState(false)
   const [neighbors, setNeighbors] = React.useState<number>(0)
-  const [weather, setWeather] = React.useState<{ tempC: number | null; label: string }>({
-    tempC: null,
-    label: "…",
-  })
 
   // Geocode street → pin on the actual road. The pin is cleared (loading) the
   // moment the street key changes — render-adjust instead of a sync setState
@@ -191,40 +174,12 @@ export function NeighborhoodPeekCards({
     }
   }, [])
 
-  // Live weather for Marikina Heights (Open-Meteo, no API key)
-  React.useEffect(() => {
-    let cancelled = false
-    const lat = coords?.lat ?? MARIKINA_HEIGHTS_CENTER.lat
-    const lng = coords?.lng ?? MARIKINA_HEIGHTS_CENTER.lng
-    void (async () => {
-      try {
-        const params = new URLSearchParams({
-          latitude: String(lat),
-          longitude: String(lng),
-          current: "temperature_2m,weather_code",
-          timezone: "Asia/Manila",
-        })
-        const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`)
-        if (!response.ok) throw new Error("weather failed")
-        const data = (await response.json()) as {
-          current?: { temperature_2m?: number; weather_code?: number }
-        }
-        if (cancelled) return
-        const temp = data.current?.temperature_2m
-        setWeather({
-          tempC: typeof temp === "number" ? Math.round(temp) : null,
-          label: weatherLabel(data.current?.weather_code),
-        })
-      } catch {
-        if (!cancelled) {
-          setWeather({ tempC: null, label: "Weather unavailable" })
-        }
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [coords?.lat, coords?.lng])
+  // Same forecast hook the alerts maps use, so all three report health.
+  const weather = useWeather(
+    coords?.lat ?? MARIKINA_HEIGHTS_CENTER.lat,
+    coords?.lng ?? MARIKINA_HEIGHTS_CENTER.lng,
+    "Marikina Heights",
+  )
 
   const cardClass =
     "flex min-h-[120px] flex-col items-center justify-center rounded-2xl bg-neutral-100/90 px-2 py-4 text-center sm:min-h-[160px]"
@@ -243,11 +198,11 @@ export function NeighborhoodPeekCards({
 
         <div className={cardClass}>
           <p className="text-[1.65rem] font-semibold leading-none tracking-tight text-foreground sm:text-[1.85rem]">
-            {weather.tempC != null ? `${weather.tempC}°C` : "—"}
+            {weather.temperature != null ? `${Math.round(weather.temperature)}°C` : "—"}
           </p>
           <div className="mt-1.5 flex items-center gap-1 text-sm text-muted-foreground">
-            <CloudSunIcon className="size-4 text-amber-500" />
-            <span>{weather.label}</span>
+            <CloudSunIcon className="size-4 text-accent" />
+            <span>{weather.error ?? (weather.loading ? "…" : weatherLabel(weather.code))}</span>
           </div>
         </div>
 

@@ -38,7 +38,7 @@ export function ProofEditorSection({
             aria-hidden
             className={cn(
               "flex size-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold leading-none",
-              done ? "bg-emerald-600 text-white" : "bg-tint text-brand-navy",
+              done ? "bg-brand-navy text-white" : "bg-tint text-brand-navy",
             )}
           >
             {done ? <CheckIcon className="size-3.5" /> : index}

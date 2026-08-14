@@ -449,6 +449,12 @@ def broadcast_notification(notification) -> None:
         )
     return push_result
 
+
+def broadcast_concern_chat(concern_id, payload: dict) -> None:
+    """Push a new report-chat message to everyone on that report's channel."""
+    _broadcast(f"concern_{concern_id}", "concern.chat", payload)
+
+
 def notification_url(notification) -> str:
     if notification.type == "witness_alert":
         return "/dashboard"

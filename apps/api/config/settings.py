@@ -76,6 +76,7 @@ THIRD_PARTY_APPS = [
 
 LOCAL_APPS = [
     "apps.accounts",
+    "apps.assistant.apps.AssistantConfig",
     "apps.concerns",
     "apps.emergencies.apps.EmergenciesConfig",
     "apps.notifications",
@@ -233,6 +234,14 @@ CELERY_TASK_SOFT_TIME_LIMIT = env.int("CELERY_TASK_SOFT_TIME_LIMIT", default=120
 # Task result keys expire after 6 hours instead of the Celery default of 24h.
 CELERY_RESULT_EXPIRES = env.int("CELERY_RESULT_EXPIRES", default=21600)
 CELERY_BEAT_SCHEDULE = {
+    # Status history is only as complete as the number of times we look. Probing
+    # on the request path alone means an overnight outage nobody was awake to
+    # see is never recorded at all.
+    "service-health-sample": {
+        "task": "apps.service_status.record_service_health_task",
+        "schedule": 300.0,
+        "options": {"queue": "eboses"},
+    },
     "ocr-health-canary": {
         "task": "apps.accounts.ocr_tasks.ocr_health_canary_task",
         "schedule": 300.0,
@@ -241,6 +250,19 @@ CELERY_BEAT_SCHEDULE = {
     "ocr-recovery": {
         "task": "apps.accounts.ocr_tasks.recover_ocr_cases_task",
         "schedule": 300.0,
+        "options": {"queue": "eboses"},
+    },
+    # Cases abandoned mid-run (worker died while QUEUED/PROCESSING) are invisible
+    # to ocr-recovery, so they sat in the officials' pipeline count forever.
+    "ocr-stuck-case-rescue": {
+        "task": "apps.accounts.ocr_tasks.rescue_stuck_verification_cases_task",
+        "schedule": 300.0,
+        "options": {"queue": "eboses"},
+    },
+    # Data minimisation: raw ID images are not kept once verification settles.
+    "purge-approved-id-images": {
+        "task": "apps.accounts.ocr_tasks.purge_approved_id_images_task",
+        "schedule": 24 * 60 * 60.0,
         "options": {"queue": "eboses"},
     },
     # 15s tick so a 45-second critical acknowledgment timeout is actually
@@ -325,6 +347,8 @@ REST_FRAMEWORK = {
         "login": "5/minute",
         "password_reset": "5/minute",
         "location_ping": "60/minute",
+        "assistant": "20/minute",
+        "weather_health": "12/minute",
     },
 }
 
@@ -334,6 +358,14 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
+    # Separate from SECRET_KEY so rotating one does not invalidate the other.
+    # HS256 needs >=32 bytes; a shorter key would silently weaken every token,
+    # so fall back rather than sign with it.
+    "SIGNING_KEY": (
+        env("JWT_SIGNING_KEY", default="")
+        if len(env("JWT_SIGNING_KEY", default="")) >= 32
+        else SECRET_KEY
+    ),
 }
 
 # Background GPS pings older than this many days are pruned by the daily
@@ -471,6 +503,11 @@ EMAIL_OTP_PROVIDER = env("EMAIL_OTP_PROVIDER", default="development" if IS_LOCAL
 # SMS codes go through the one barangay gateway (OUTBOUND_SMS_* below), so
 # "gateway" is the only meaningful value; "development" prints to the console.
 SMS_OTP_PROVIDER = env("SMS_OTP_PROVIDER", default="development" if IS_LOCAL_DEVELOPMENT else "gateway")
+if IS_TEST_RUN:
+    # Same rule as OUTBOUND_SMS_DRIVER below: a .env pointing at the live
+    # Resend account must never send mail from a test run.
+    EMAIL_OTP_PROVIDER = "development"
+    SMS_OTP_PROVIDER = "development"
 # Deprecated: no longer read. Configure OUTBOUND_SMS_URL instead.
 SMS_OTP_WEBHOOK_URL = env("SMS_OTP_WEBHOOK_URL", default="")
 SMS_OTP_WEBHOOK_TOKEN = env("SMS_OTP_WEBHOOK_TOKEN", default="")
@@ -487,25 +524,43 @@ SMS_EMERGENCY_WEBHOOK_TOKEN = env("SMS_EMERGENCY_WEBHOOK_TOKEN", default="")
 # body is built from OUTBOUND_SMS_PAYLOAD_TEMPLATE. If sending fails with a 4xx,
 # correct the template in .env rather than editing apps/sms/gateway.py.
 SMS_GATEWAY_NUMBER = env("SMS_GATEWAY_NUMBER", default="")
-OUTBOUND_SMS_DRIVER = env(
-    "OUTBOUND_SMS_DRIVER",
-    default="console" if (IS_LOCAL_DEVELOPMENT or IS_TEST_RUN) else "disabled",
-)
+
+# .env and .env.example document the SMS Gate handset with SMS_GATE_* names,
+# which is what an operator copies out of the app. The driver below reads the
+# older OUTBOUND_SMS_* names, so map one onto the other here instead of asking
+# anyone to keep two spellings of the same handset in sync.
+SMS_GATE_BASE_URL = env("SMS_GATE_BASE_URL", default="")
+SMS_GATE_USERNAME = env("SMS_GATE_USERNAME", default="")
+SMS_GATE_PASSWORD = env("SMS_GATE_PASSWORD", default="")
+SMS_GATE_SIM_NUMBER = env("SMS_GATE_SIM_NUMBER", default="")
+SMS_GATE_TIMEOUT_SECONDS = env.float("SMS_GATE_TIMEOUT_SECONDS", default=30.0)
+SMS_GATE_DRY_RUN = env.bool("SMS_GATE_DRY_RUN", default=IS_LOCAL_DEVELOPMENT)
+SMS_GATE_WEBHOOK_SIGNING_KEY = env("SMS_GATE_WEBHOOK_SIGNING_KEY", default="")
+
+_sms_gate_ready = bool(SMS_GATE_BASE_URL and SMS_GATE_USERNAME and SMS_GATE_PASSWORD)
+if SMS_GATE_DRY_RUN:
+    _sms_gate_default_driver = "console"
+elif _sms_gate_ready:
+    _sms_gate_default_driver = "android_sms_gateway"
+else:
+    _sms_gate_default_driver = "console" if (IS_LOCAL_DEVELOPMENT or IS_TEST_RUN) else "disabled"
+
+OUTBOUND_SMS_DRIVER = env("OUTBOUND_SMS_DRIVER", default=_sms_gate_default_driver)
 if IS_TEST_RUN:
     # A `.env` pointed at the barangay's live gateway must never dial out from
     # a test run. The console driver still records the OutboundSmsMessage row
     # tests assert, it just never touches the network.
     OUTBOUND_SMS_DRIVER = "console"
-OUTBOUND_SMS_URL = env("OUTBOUND_SMS_URL", default="")
+OUTBOUND_SMS_URL = env("OUTBOUND_SMS_URL", default=SMS_GATE_BASE_URL)
 # GET gateways take {to} and {body} in the URL itself; POST gateways take
 # OUTBOUND_SMS_PAYLOAD_TEMPLATE as the JSON body.
 OUTBOUND_SMS_METHOD = env("OUTBOUND_SMS_METHOD", default="POST")
 # android-sms-gateway uses HTTP Basic auth (Home screen username/password).
-OUTBOUND_SMS_USERNAME = env("OUTBOUND_SMS_USERNAME", default="")
-OUTBOUND_SMS_PASSWORD = env("OUTBOUND_SMS_PASSWORD", default="")
+OUTBOUND_SMS_USERNAME = env("OUTBOUND_SMS_USERNAME", default=SMS_GATE_USERNAME)
+OUTBOUND_SMS_PASSWORD = env("OUTBOUND_SMS_PASSWORD", default=SMS_GATE_PASSWORD)
 # Its webhooks are HMAC-signed with the key from Settings > Webhooks, since the
 # app cannot attach a custom auth header.
-SMS_WEBHOOK_SIGNING_KEY = env("SMS_WEBHOOK_SIGNING_KEY", default="")
+SMS_WEBHOOK_SIGNING_KEY = env("SMS_WEBHOOK_SIGNING_KEY", default=SMS_GATE_WEBHOOK_SIGNING_KEY)
 # Logs the raw webhook body and every candidate digest when a signature does not
 # verify. Off by default: the body contains SMS content.
 SMS_WEBHOOK_DEBUG = env.bool("SMS_WEBHOOK_DEBUG", default=False)
@@ -514,8 +569,13 @@ OUTBOUND_SMS_SECRET = env("OUTBOUND_SMS_SECRET", default="")
 OUTBOUND_SMS_SIGN_KEY = env("OUTBOUND_SMS_SIGN_KEY", default="")
 OUTBOUND_SMS_EXTRA_HEADERS = env("OUTBOUND_SMS_EXTRA_HEADERS", default="")
 OUTBOUND_SMS_PAYLOAD_TEMPLATE = env("OUTBOUND_SMS_PAYLOAD_TEMPLATE", default="")
-OUTBOUND_SMS_SIM_SLOT = env.int("OUTBOUND_SMS_SIM_SLOT", default=1)
-OUTBOUND_SMS_TIMEOUT_SECONDS = env.float("OUTBOUND_SMS_TIMEOUT_SECONDS", default=15.0)
+OUTBOUND_SMS_SIM_SLOT = env.int(
+    "OUTBOUND_SMS_SIM_SLOT",
+    default=int(SMS_GATE_SIM_NUMBER) if SMS_GATE_SIM_NUMBER.isdigit() else 1,
+)
+OUTBOUND_SMS_TIMEOUT_SECONDS = env.float(
+    "OUTBOUND_SMS_TIMEOUT_SECONDS", default=SMS_GATE_TIMEOUT_SECONDS
+)
 # Falls back to the legacy emergency token so an already-configured handset
 # keeps working through the rename.
 SMS_INBOUND_WEBHOOK_TOKEN = env("SMS_INBOUND_WEBHOOK_TOKEN", default="") or SMS_EMERGENCY_WEBHOOK_TOKEN
@@ -523,6 +583,64 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@localhost")
 WEB_PUSH_PUBLIC_KEY = env("WEB_PUSH_PUBLIC_KEY", default="")
 WEB_PUSH_PRIVATE_KEY = env("WEB_PUSH_PRIVATE_KEY", default="")
 WEB_PUSH_SUBJECT = env("WEB_PUSH_SUBJECT", default=f"mailto:{DEFAULT_FROM_EMAIL}")
+
+SUPPORT_EMAIL = env("SUPPORT_EMAIL", default=DEFAULT_FROM_EMAIL)
+
+# Media storage. With CLOUDINARY_URL set, uploads go to Cloudinary and survive
+# a redeploy; without it they stay on local disk. Private files upload as
+# type=authenticated either way, and are still only readable through the
+# authenticated proxy views.
+CLOUDINARY_URL = env("CLOUDINARY_URL", default="")
+if CLOUDINARY_URL:
+    os.environ.setdefault("CLOUDINARY_URL", CLOUDINARY_URL)
+    THIRD_PARTY_APPS = [*THIRD_PARTY_APPS, "cloudinary", "cloudinary_storage"]
+    INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
+CLOUDINARY_PRIVATE_URL_TTL_SECONDS = env.int("CLOUDINARY_PRIVATE_URL_TTL_SECONDS", default=300)
+
+# Raw government ID images are deleted this long after verification settles.
+# Nothing reads them after that; the hashes that detect duplicates and ID reuse
+# are DB columns and survive the deletion.
+ID_IMAGE_RETENTION_DAYS = env.int("ID_IMAGE_RETENTION_DAYS", default=30)
+
+# IP reputation gate on login, concern creation and emergency creation.
+# Fail-open: an outage or an unreadable reply always allows the request, because
+# a blocked SOS is far worse than a VPN slipping through.
+IP_INTEL_COUNTRY = env("IP_INTEL_COUNTRY", default="PH")
+# PLDT, Globe, DITO, Starlink PH. An allowlisted network is trusted even when
+# the provider flags it, because these carry ordinary residents.
+IP_INTEL_ALLOWED_ASNS = env.list(
+    "IP_INTEL_ALLOWED_ASNS", default=["AS9299", "AS4775", "AS139831", "AS14593"]
+)
+# X-Forwarded-For is honoured only from these peers; anything else could pick
+# its own verdict by setting the header.
+TRUSTED_PROXY_IPS = env.list("TRUSTED_PROXY_IPS", default=["127.0.0.1", "::1"])
+
+# A verification case still QUEUED/PROCESSING after this long has lost its
+# worker and is requeued by the stuck-case sweeper.
+OCR_STUCK_CASE_MINUTES = env.int("OCR_STUCK_CASE_MINUTES", default=15)
+# Residents get their own data back without an official approving it; deletion
+# still needs a human because it anonymises records other people rely on.
+SELF_SERVICE_DATA_EXPORT = env.bool("SELF_SERVICE_DATA_EXPORT", default=True)
+
+RESEND_API_KEY = env("RESEND_API_KEY", default="")
+RESEND_API_URL = env("RESEND_API_URL", default="https://api.resend.com/emails")
+RESEND_FROM_EMAIL = env("RESEND_FROM_EMAIL", default=DEFAULT_FROM_EMAIL)
+RESEND_FROM_NAME = env("RESEND_FROM_NAME", default="E-Boses")
+RESEND_REPLY_TO = env("RESEND_REPLY_TO", default="")
+RESEND_DELIVERY_TIMEOUT_SECONDS = env.float("RESEND_DELIVERY_TIMEOUT_SECONDS", default=20.0)
+OTP_EMAIL_LOGO_URL = env("OTP_EMAIL_LOGO_URL", default="")
+OTP_EMAIL_EXPIRY_TEXT = env("OTP_EMAIL_EXPIRY_TEXT", default="This code expires in 10 minutes.")
+
+ASSISTANT_ENABLED = env.bool("ASSISTANT_ENABLED", default=False)
+ASSISTANT_API_KEY = env("ASSISTANT_API_KEY", default="")
+ASSISTANT_BASE_URL = env("ASSISTANT_BASE_URL", default="")
+ASSISTANT_MODEL = env("ASSISTANT_MODEL", default="")
+ASSISTANT_TIMEOUT_SECONDS = env.float("ASSISTANT_TIMEOUT_SECONDS", default=30.0)
+ASSISTANT_MAX_TOKENS = env.int("ASSISTANT_MAX_TOKENS", default=220)
+ASSISTANT_SESSION_BUDGET = env.int("ASSISTANT_SESSION_BUDGET", default=8)
+ASSISTANT_SESSION_BUDGET_WINDOW_SECONDS = env.int(
+    "ASSISTANT_SESSION_BUDGET_WINDOW_SECONDS", default=600
+)
 
 # Gemma (Ollama Cloud) — the only model that reads report text and photos.
 OLLAMA_API_KEY = env("OLLAMA_API_KEY", default="")
@@ -543,6 +661,37 @@ OLLAMA_IMAGE_MIN_SIDE = env.int("OLLAMA_IMAGE_MIN_SIDE", default=512)
 OLLAMA_IMAGE_MAX_SIDE = env.int("OLLAMA_IMAGE_MAX_SIDE", default=1024)
 OLLAMA_IMAGE_JPEG_QUALITY = env.int("OLLAMA_IMAGE_JPEG_QUALITY", default=82)
 OLLAMA_IMAGE_MAX_BYTES = env.int("OLLAMA_IMAGE_MAX_BYTES", default=0)
+
+# SMS AI assist — best-effort rescue of messages the fast parser cannot fully
+# read (typos, natural Filipino, landmark-only locations). Purely additive: if
+# it is off, slow or wrong, SMS behaves exactly as it does without it. The
+# alert is always saved, routed and acknowledged first; this runs afterwards.
+SMS_AI_ASSIST_ENABLED = env.bool("SMS_AI_ASSIST_ENABLED", default=False)
+SMS_AI_TIMEOUT_SECONDS = env.float("SMS_AI_TIMEOUT_SECONDS", default=2.5)
+SMS_AI_MIN_CONFIDENCE = env.float("SMS_AI_MIN_CONFIDENCE", default=0.6)
+
+# IP intelligence — fail-open gate on login, concern filing and emergency
+# alerts. When IP_INTEL_URL is empty the feature is off entirely. In dev the
+# loopback address is a trusted proxy so X-Forwarded-For works with the mock
+# (scripts/mock_iplogs.py); in production set the actual proxy CIDRs.
+IP_INTEL_URL = env("IP_INTEL_URL", default="") or env("IP2GEO_API_URL", default="")
+IP_INTEL_API_KEY = env("IP_INTEL_API_KEY", default="") or env("IP2GEO_API_KEY", default="")
+if IS_TEST_RUN:
+    # Same rule as the SMS and email providers: a test run must never reach the
+    # live intel service. Tests that exercise the gate override this explicitly.
+    IP_INTEL_URL = ""
+IP_INTEL_TIMEOUT_SECONDS = env.float("IP_INTEL_TIMEOUT_SECONDS", default=2.5)
+IP_INTEL_CACHE_SECONDS = env.int("IP_INTEL_CACHE_SECONDS", default=900)
+# "ip2geoapi" (GET /ip/<addr>?key=) or "iplogs" (POST {"ip": ...}), the shape
+# scripts/mock_iplogs.py speaks. Auto-detected from the URL when unset.
+IP_INTEL_PROVIDER = env("IP_INTEL_PROVIDER", default="")
+# ip2geoapi trustScore is 0-100, higher is safer.
+IP_INTEL_MIN_TRUST_SCORE = env.int("IP_INTEL_MIN_TRUST_SCORE", default=30)
+IP_INTEL_TRUSTED_PROXIES = [
+    value.strip()
+    for value in env("IP_INTEL_TRUSTED_PROXIES", default="127.0.0.1").split(",")
+    if value.strip()
+]
 
 # SAM3 privacy segmentation (Roboflow serverless). Runs only when Gemma asks
 # for a privacy scan. The key is server-side only and never serialized.

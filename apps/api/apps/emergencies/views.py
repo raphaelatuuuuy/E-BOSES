@@ -1,4 +1,5 @@
 from datetime import timedelta
+import logging
 from math import asin, cos, radians, sin, sqrt
 import re
 
@@ -145,6 +146,9 @@ UNIT_BY_EMERGENCY_TYPE = {
 # Prefer responders with GPS updated within this window when ranking
 RESPONDER_LOCATION_FRESH_MINUTES = 30
 WITNESS_LOCATION_FRESH_MINUTES = 15
+
+
+logger = logging.getLogger(__name__)
 
 
 def log_assignment_action(*, alert, action, assignment=None, responder=None, actor=None, old_status="", new_status="", note="", metadata=None):
@@ -670,6 +674,30 @@ def _reassign_unacknowledged(alert, assignment, *, waited, triggered_by, audit_r
     return escalation
 
 
+def send_app_emergency_sms(alert):
+    """Acknowledge the reporter and alert officials for an in-app emergency.
+
+    Best-effort: a gateway problem must never surface as a failed SOS.
+    """
+    try:
+        from apps.sms.notify import notify_officials_new_emergency, notify_reporter_ack
+
+        assignment = alert.assignments.select_related("responder").first()
+        unit_name = ""
+        responder_name = ""
+        if assignment and assignment.responder:
+            unit_name = assignment.responder.get_responder_unit_display() or ""
+            profile = getattr(assignment.responder, "resident_profile", None)
+            if profile:
+                responder_name = f"{profile.first_name} {profile.last_name}".strip()
+        notify_reporter_ack(alert, unit_name=unit_name, assigned=bool(assignment))
+        notify_officials_new_emergency(
+            alert, unit_name=unit_name, responder_name=responder_name
+        )
+    except Exception:
+        logger.warning("Emergency SMS fan-out failed for alert %s.", alert.pk, exc_info=True)
+
+
 def notify_officials_no_responder(alert):
     User = get_user_model()
     preferred = preferred_departments_for(alert.type)
@@ -1023,6 +1051,11 @@ class EmergencyCreateView(APIView):
         touch_last_seen(request.user)
         if not user_has_role_permission(request.user, "emergencies.create"):
             return Response({"detail": "Only residents can send emergency alerts."}, status=status.HTTP_403_FORBIDDEN)
+        from apps.accounts.ip_intel import evaluate_request, ip_blocked_response
+
+        _, ip_meta, ip_reason = evaluate_request(request)
+        if ip_reason:
+            return ip_blocked_response(ip_reason)
         serializer = EmergencyCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         client_request_id = serializer.validated_data.get("client_request_id")
@@ -1085,6 +1118,11 @@ class EmergencyCreateView(APIView):
             reporter_contact_number=getattr(request.user, "phone_number", "") or "",
             media_warnings=media_warnings,
             barangay=getattr(profile, "barangay", "") or "Marikina Heights",
+            ip_asn=ip_meta.get("asn", ""),
+            ip_country=ip_meta.get("country", ""),
+            ip_org=ip_meta.get("org", ""),
+            ip_verdict=ip_meta.get("verdict", ""),
+            ip_score=ip_meta.get("score"),
         )
         alert.location_confidence = classify_location_confidence(alert)
         alert.save(update_fields=["location_confidence"])
@@ -1116,6 +1154,9 @@ class EmergencyCreateView(APIView):
         from apps.live_map import emergency_payload, route_for_assignment
         from apps.notifications.services import broadcast_live_map_event
         transaction.on_commit(lambda: broadcast_live_map_event("emergency.created", {"emergency": emergency_payload(alert), "route": route_for_assignment(alert)}))
+        # An emergency raised in the app gets the same SMS acknowledgement as
+        # one texted in, so a resident who loses data still knows it landed.
+        transaction.on_commit(lambda: send_app_emergency_sms(alert))
         return Response(serialize_alert(alert, request), status=status.HTTP_201_CREATED)
 
 
@@ -2649,6 +2690,16 @@ class AssignmentActionMixin:
             alert.save(update_fields=["status", "status_version", "updated_at"])
         create_status_event(alert, self.target_status, request.user, note)
         notify_emergency_status(alert, type=self.target_status, body=note)
+        if self.target_status == EmergencyAlert.Status.RESOLVED:
+            def send_resolved_sms():
+                try:
+                    from apps.sms.notify import notify_reporter_resolved
+
+                    notify_reporter_resolved(alert)
+                except Exception:
+                    logger.warning("Resolved SMS failed for alert %s.", alert.pk, exc_info=True)
+
+            transaction.on_commit(send_resolved_sms)
         # Auto chat updates for the resident group room
         if self.target_status == EmergencyAlert.Status.ACKNOWLEDGED:
             post_responder_chat(

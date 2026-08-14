@@ -65,10 +65,10 @@ const defaults: ConcernClassificationConfig = {
   categories: [],
 }
 
-const SERVICE_STATUS_COPY: Record<string, { label: string; tone: string }> = {
-  available: { label: "Available", tone: "bg-status-closed-surface text-status-closed-ink" },
-  limited: { label: "Limited", tone: "bg-severity-moderate-surface text-severity-moderate-ink" },
-  unavailable: { label: "Unavailable", tone: "bg-severity-critical-surface text-severity-critical-ink" },
+const SERVICE_STATUS_COPY: Record<string, { label: string; dot: string; text: string }> = {
+  available: { label: "Working", dot: "bg-status-closed", text: "text-status-closed-ink" },
+  limited: { label: "Slow", dot: "bg-severity-moderate", text: "text-severity-moderate-ink" },
+  unavailable: { label: "Not working", dot: "bg-severity-critical", text: "text-severity-critical-ink" },
 }
 
 function ServiceRow({
@@ -82,12 +82,13 @@ function ServiceRow({
 }) {
   const copy = SERVICE_STATUS_COPY[status?.status ?? "unavailable"] ?? SERVICE_STATUS_COPY.unavailable
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-card-line bg-canvas px-3 py-2.5">
+    <div className="flex items-center gap-3 rounded-xl border border-card-line bg-canvas px-3 py-3">
+      <span className={cn("size-2.5 shrink-0 rounded-full", copy.dot)} />
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-bold text-foreground">{title}</p>
-        <p className="mt-0.5 text-xs font-medium text-muted-foreground">{detail}</p>
+        <p className="text-sm font-semibold text-foreground">{title}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">{detail}</p>
       </div>
-      <span className={cn("shrink-0 rounded-full px-2.5 py-1 text-xs font-bold", copy.tone)}>{copy.label}</span>
+      <span className={cn("shrink-0 text-xs font-semibold", copy.text)}>{copy.label}</span>
     </div>
   )
 }
@@ -297,7 +298,7 @@ export default function ConcernClassificationPage() {
   if (loading) {
     return (
       <div className="flex min-h-[70vh] items-center justify-center">
-        <LoaderCircleIcon className="size-8 animate-spin text-brand-orange" />
+        <LoaderCircleIcon className="size-8 animate-spin text-accent" />
       </div>
     )
   }
@@ -322,7 +323,7 @@ export default function ConcernClassificationPage() {
         <Button
           onClick={() => void save()}
           disabled={Boolean(busy)}
-          className="rounded-xl bg-brand-orange text-white hover:bg-brand-orange-strong"
+          className="rounded-xl bg-accent text-white hover:bg-accent/90"
         >
           <SaveIcon className="size-4" />
           {busy === "save" ? "Saving…" : "Save"}
@@ -346,8 +347,8 @@ export default function ConcernClassificationPage() {
                 className={cn(
                   "rounded-2xl border p-4 text-left transition",
                   active
-                    ? "border-brand-orange bg-brand-orange-soft"
-                    : "border-card-line bg-card hover:border-brand-orange/40",
+                    ? "border-accent bg-accent/10"
+                    : "border-card-line bg-card hover:border-accent/40",
                 )}
               >
                 <span className="flex items-center gap-2">
@@ -355,7 +356,7 @@ export default function ConcernClassificationPage() {
                     aria-hidden
                     className={cn(
                       "size-3 rounded-full border-2",
-                      active ? "border-brand-orange bg-brand-orange" : "border-card-line",
+                      active ? "border-accent bg-accent" : "border-card-line",
                     )}
                   />
                   <span className="text-sm font-bold text-foreground">{preset.label}</span>
@@ -389,8 +390,8 @@ export default function ConcernClassificationPage() {
                 className={cn(
                   "cursor-pointer rounded-xl border p-3 transition",
                   config.mismatch_action === option.value
-                    ? "border-brand-orange bg-brand-orange-soft"
-                    : "border-card-line bg-canvas hover:border-brand-orange/40",
+                    ? "border-accent bg-accent/10"
+                    : "border-card-line bg-canvas hover:border-accent/40",
                 )}
               >
                 <input
@@ -437,7 +438,7 @@ export default function ConcernClassificationPage() {
                 onClick={() => update("report_duplicate_action", value as ConcernClassificationConfig["report_duplicate_action"])}
                 className={cn(
                   "rounded-xl border p-3 text-left transition",
-                  active ? "border-brand-orange bg-brand-orange-soft" : "border-card-line bg-canvas hover:border-brand-orange/40",
+                  active ? "border-accent bg-accent/10" : "border-card-line bg-canvas hover:border-accent/40",
                 )}
               >
                 <span className="block text-sm font-bold text-foreground">{label}</span>
@@ -485,12 +486,12 @@ export default function ConcernClassificationPage() {
           <div className="space-y-2">
             <ServiceRow
               title="Report review"
-              detail="Text and photo analysis"
+              detail="Checks report text and photo before it reaches you"
               status={config.services?.report_review}
             />
             <ServiceRow
-              title="Media protection"
-              detail="Face and license-plate protection, sensitive-content review"
+              title="Privacy protection"
+              detail="Hides faces and plates in photos before publishing"
               status={config.services?.media_protection}
             />
           </div>
@@ -515,7 +516,7 @@ export default function ConcernClassificationPage() {
           <select
             value={selectedCategory}
             onChange={(event) => setSelectedCategory(event.target.value)}
-            className="mt-1 h-10 w-full rounded-xl border border-card-line bg-card px-3 text-sm font-semibold text-foreground outline-none focus:border-brand-orange"
+            className="mt-1 h-10 w-full rounded-xl border border-card-line bg-card px-3 text-sm font-semibold text-foreground outline-none focus:border-accent"
           >
             {activeCategories.map((category) => (
               <option key={category.key} value={category.key}>
@@ -537,7 +538,7 @@ export default function ConcernClassificationPage() {
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            className="mt-3 flex min-h-32 w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-card-line bg-canvas p-4 text-center transition hover:border-brand-orange"
+            className="mt-3 flex min-h-32 w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-card-line bg-canvas p-4 text-center transition hover:border-accent"
           >
             {imagePreview ? (
               <img
@@ -547,7 +548,7 @@ export default function ConcernClassificationPage() {
               />
             ) : (
               <>
-                <UploadCloudIcon className="size-7 text-brand-orange" />
+                <UploadCloudIcon className="size-7 text-accent" />
                 <span className="mt-2 text-sm font-bold text-foreground">Choose a photo</span>
                 <span className="text-xs font-medium text-muted-foreground">JPG or PNG</span>
               </>
@@ -567,7 +568,7 @@ export default function ConcernClassificationPage() {
                   setDescription(sample)
                   setReportResult(null)
                 }}
-                className="rounded-full border border-card-line bg-canvas px-3 py-1 text-xs font-bold text-foreground hover:border-brand-orange"
+                className="rounded-full border border-card-line bg-canvas px-3 py-1 text-xs font-bold text-foreground hover:border-accent"
               >
                 {label}
               </button>
@@ -580,7 +581,7 @@ export default function ConcernClassificationPage() {
               setReportResult(null)
             }}
             placeholder="Describe what happened, where it is, and what needs attention."
-            className="mt-3 min-h-32 w-full rounded-xl border border-card-line bg-card p-3 text-sm font-medium text-foreground outline-none focus:border-brand-orange"
+            className="mt-3 min-h-32 w-full rounded-xl border border-card-line bg-card p-3 text-sm font-medium text-foreground outline-none focus:border-accent"
           />
           <div className="mt-1 text-right text-xs font-medium text-muted-foreground">
             {description.length} characters · {config.minimum_description_length} needed
@@ -762,7 +763,7 @@ export default function ConcernClassificationPage() {
         <Button
           onClick={() => void save()}
           disabled={Boolean(busy)}
-          className="h-11 w-full rounded-xl bg-brand-orange text-white hover:bg-brand-orange-strong"
+          className="h-11 w-full rounded-xl bg-accent text-white hover:bg-accent/90"
         >
           <SaveIcon className="size-4" /> {busy === "save" ? "Saving…" : "Save"}
         </Button>

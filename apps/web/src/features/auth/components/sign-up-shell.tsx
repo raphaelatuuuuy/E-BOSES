@@ -79,7 +79,7 @@ export function SignUpShell({
                   showBack && onBack ? "mt-3 md:mt-4" : "mt-1",
                 )}
               >
-                <div className="h-[5px] w-full overflow-hidden rounded-full bg-orange-100 md:h-[7px]">
+                <div className="h-[5px] w-full overflow-hidden rounded-full bg-brand-orange-soft md:h-[7px]">
                   <div
                     className="h-full rounded-full bg-primary transition-all duration-300 ease-out"
                     style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
@@ -114,7 +114,7 @@ export function SignUpShell({
             </header>
             {showProgress ? (
               <div className={cn("mx-auto w-full px-5 pb-3", contentMax, "md:px-0")}>
-                <div className="h-[5px] w-full overflow-hidden rounded-full bg-orange-100">
+                <div className="h-[5px] w-full overflow-hidden rounded-full bg-brand-orange-soft">
                   <div
                     className="h-full rounded-full bg-primary transition-all duration-300 ease-out"
                     style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}

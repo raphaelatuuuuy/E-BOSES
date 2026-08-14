@@ -223,7 +223,7 @@ function UserDrawer({
                 value={role}
                 onChange={(event) => setRole(toManagedRole(event.target.value, role))}
                 disabled={busy}
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-semibold text-foreground outline-none focus:border-brand-orange disabled:opacity-60"
+                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-semibold text-foreground outline-none focus:border-accent disabled:opacity-60"
               >
                 <option value="resident">Resident</option>
                 <option value="first_responder">Responder</option>
@@ -237,7 +237,7 @@ function UserDrawer({
                 value={accountStatus}
                 onChange={(event) => setAccountStatus(event.target.value)}
                 disabled={busy}
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-semibold text-foreground outline-none focus:border-brand-orange disabled:opacity-60"
+                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-semibold text-foreground outline-none focus:border-accent disabled:opacity-60"
               >
                 <option value="verified">Verified</option>
                 <option value="pending_verification">Pending verification</option>
@@ -258,7 +258,7 @@ function UserDrawer({
                 value={responderUnit}
                 onChange={(event) => setResponderUnit(event.target.value)}
                 disabled={busy}
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-semibold text-foreground outline-none focus:border-brand-orange disabled:opacity-60"
+                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-semibold text-foreground outline-none focus:border-accent disabled:opacity-60"
               >
                 <option value="">Choose a unit</option>
                 <option value="tanod">Tanod</option>
@@ -273,7 +273,7 @@ function UserDrawer({
               type="button"
               onClick={() => void saveAccount()}
               disabled={busy || (role === "first_responder" && !responderUnit)}
-              className="w-full rounded-xl bg-brand-orange px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:opacity-55"
+              className="w-full rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-55"
             >
               {busy ? "Saving…" : "Save role & status"}
             </button>
@@ -335,7 +335,7 @@ function UserDrawer({
               <select
                 value={departmentId}
                 onChange={(event) => setDepartmentId(event.target.value)}
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-brand-orange"
+                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
               >
                 <option value="">Select a unit</option>
                 {departments
@@ -355,7 +355,7 @@ function UserDrawer({
               <select
                 value={positionId}
                 onChange={(event) => setPositionId(event.target.value)}
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-brand-orange"
+                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
               >
                 <option value="">Select a position</option>
                 {positions
@@ -372,7 +372,7 @@ function UserDrawer({
               type="button"
               disabled={busy || !departmentId || !positionId}
               onClick={() => void addDesignation()}
-              className="w-full rounded-xl bg-brand-orange px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:opacity-55"
+              className="w-full rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-55"
             >
               Assign unit
             </button>

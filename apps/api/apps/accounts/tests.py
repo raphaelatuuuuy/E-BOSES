@@ -876,6 +876,48 @@ class AuthAPITests(APITestCase):
         self.assertIn("eboses_refresh_token", response.cookies)
         self.assertTrue(response.cookies["eboses_refresh_token"]["httponly"])
 
+    def test_bad_password_returns_a_machine_readable_code(self):
+        get_user_model().objects.create_user(
+            email="wrongpass@example.com",
+            phone_number="+639241234511",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+
+        response = self.client.post(
+            "/api/auth/login/",
+            {"identifier": "wrongpass@example.com", "password": "not-the-password"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "invalid_credentials")
+        self.assertIsInstance(response.data["detail"], str)
+
+    def test_rejected_account_is_distinguishable_from_a_bad_password(self):
+        get_user_model().objects.create_user(
+            email="rejected@example.com",
+            phone_number="+639241234512",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.REJECTED,
+        )
+
+        response = self.client.post(
+            "/api/auth/login/",
+            {"identifier": "rejected@example.com", "password": "Str0ng!Pass123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "account_rejected")
+
+    def test_missing_fields_still_return_field_errors(self):
+        response = self.client.post("/api/auth/login/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("identifier", response.data)
+        self.assertIn("password", response.data)
+
     def test_resident_can_update_profile_fields(self):
         user = get_user_model().objects.create_user(
             email="profile-update@example.com",
@@ -1347,12 +1389,12 @@ class PhaseOneBAccountAPITests(APITestCase):
 
         first = self.client.post(
             "/api/auth/account-requests/",
-            {"type": AccountRequest.Type.DATA_EXPORT, "note": "Please export my information."},
+            {"type": AccountRequest.Type.DELETION, "note": "Please delete my account."},
             format="json",
         )
         duplicate = self.client.post(
             "/api/auth/account-requests/",
-            {"type": AccountRequest.Type.DATA_EXPORT},
+            {"type": AccountRequest.Type.DELETION},
             format="json",
         )
         internal = self.client.post(

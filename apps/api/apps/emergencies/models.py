@@ -364,7 +364,24 @@ class EmergencyAlert(models.Model):
     unresolved_fields = models.JSONField(default=list, blank=True)
     media_warnings = models.JSONField(default=list, blank=True)
     resolution_report = models.TextField(blank=True)
+    resolution_submitted_at = models.DateTimeField(null=True, blank=True)
     status_version = models.PositiveIntegerField(default=0)
+    source_concern = models.ForeignKey(
+        "concerns.Concern",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="escalated_emergencies",
+    )
+    reopen_count = models.PositiveIntegerField(default=0)
+    reopen_reason = models.CharField(max_length=255, blank=True)
+    reopened_at = models.DateTimeField(null=True, blank=True)
+    ai_assist = models.JSONField(default=dict, blank=True)
+    ip_country = models.CharField(max_length=2, blank=True)
+    ip_asn = models.CharField(max_length=16, blank=True)
+    ip_org = models.CharField(max_length=120, blank=True)
+    ip_verdict = models.CharField(max_length=24, blank=True)
+    ip_score = models.FloatField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     routed_at = models.DateTimeField(null=True, blank=True)
@@ -504,6 +521,7 @@ class EmergencyResponderAssignment(models.Model):
     role_map = models.ForeignKey("EmergencyTypeRoleMap", null=True, blank=True, on_delete=models.SET_NULL, related_name="assignments")
     source = models.CharField(max_length=16, choices=Source.choices, default=Source.MANUAL)
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.ASSIGNED)
+    travel_profile = models.CharField(max_length=8, blank=True)
     assigned_at = models.DateTimeField(auto_now_add=True)
     acknowledged_at = models.DateTimeField(null=True, blank=True)
     arrived_at = models.DateTimeField(null=True, blank=True)
@@ -693,3 +711,44 @@ class EmergencyChatAttachment(models.Model):
     analysis_status = models.CharField(max_length=16, choices=AnalysisStatus.choices)
     analysis = models.JSONField(default=dict)
     uploaded_at = models.DateTimeField(auto_now_add=True)
+
+
+class EmergencyCommunityComment(models.Model):
+    class Status(models.TextChoices):
+        VISIBLE = "visible", "Visible"
+        HIDDEN = "hidden", "Hidden"
+        REMOVED = "removed", "Removed"
+
+    alert = models.ForeignKey(
+        EmergencyAlert, on_delete=models.CASCADE, related_name="community_comments"
+    )
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="emergency_community_comments",
+    )
+    parent = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.CASCADE, related_name="replies"
+    )
+    body = models.TextField()
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.VISIBLE)
+    is_official_update = models.BooleanField(default=False)
+    verified_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="verified_emergency_comments",
+    )
+    moderation_note = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(fields=["alert", "status", "created_at"], name="emerg_comment_alert_status"),
+        ]
+
+    def __str__(self):
+        return f"Comment {self.pk} on alert {self.alert_id}"

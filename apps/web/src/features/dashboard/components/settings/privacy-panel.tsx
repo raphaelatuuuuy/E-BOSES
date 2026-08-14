@@ -1,6 +1,7 @@
 import type { SettingKey } from "@/features/dashboard/components/settings/settings-primitives"
 import type { ResidentSettings } from "@/features/auth/api"
 import { SheetList, SheetToggleRow } from "@/features/dashboard/components/sheet-dialog"
+import { DataExportRow } from "@/features/dashboard/components/settings/data-export-row"
 
 export function PrivacyPanel({
   settings,
@@ -31,6 +32,7 @@ export function PrivacyPanel({
         busy={savingSetting === "location_confirmation"}
         onChange={(value) => onSettingChange("location_confirmation", value)}
       />
+      <DataExportRow />
     </SheetList>
   )
 }

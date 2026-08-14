@@ -97,7 +97,7 @@ export function ProofDetailsStep(props: {
             <div
               className={cn(
                 "mt-3 flex items-start gap-3 rounded-2xl border bg-white p-4",
-                document.enabled !== false ? "border-line-tint" : "border-amber-200 opacity-70",
+                document.enabled !== false ? "border-line-tint" : "border-neutral-200 opacity-70",
               )}
             >
               <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-tint text-brand-blue">
@@ -171,7 +171,7 @@ export function ProofDetailsStep(props: {
                     {option.hint}
                   </span>
                   {blockedByTwoSamples ? (
-                    <span className="mt-1 block text-[11px] font-bold text-amber-800">
+                    <span className="mt-1 block text-[11px] font-bold text-foreground">
                       Remove one sample photo first to switch.
                     </span>
                   ) : null}

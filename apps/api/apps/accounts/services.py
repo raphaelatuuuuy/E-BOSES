@@ -108,6 +108,73 @@ class DjangoEmailOTPProvider(BaseOTPProvider):
             raise OTPDeliveryError("Unable to deliver email OTP.")
 
 
+class ResendOTPProvider(BaseOTPProvider):
+    def deliver(self, destination, code, purpose):
+        api_key = getattr(settings, "RESEND_API_KEY", "")
+        if not api_key:
+            raise ImproperlyConfigured("RESEND_API_KEY is not configured.")
+
+        label = purpose.replace("_", " ")
+        sender_name = getattr(settings, "RESEND_FROM_NAME", "") or "E-Boses"
+        sender_email = getattr(settings, "RESEND_FROM_EMAIL", "") or settings.DEFAULT_FROM_EMAIL
+        expiry_text = getattr(settings, "OTP_EMAIL_EXPIRY_TEXT", "") or "This code expires shortly."
+
+        payload = {
+            "from": f"{sender_name} <{sender_email}>",
+            "to": [destination],
+            "subject": "Your E-Boses verification code",
+            "text": (
+                f"Your {label} verification code is {code}.\n\n"
+                f"{expiry_text}\n\n"
+                "If you did not request this code, you can ignore this message."
+            ),
+            "html": _otp_email_html(code, label, expiry_text),
+        }
+        reply_to = getattr(settings, "RESEND_REPLY_TO", "")
+        if reply_to:
+            payload["reply_to"] = [reply_to]
+
+        try:
+            response = httpx.post(
+                getattr(settings, "RESEND_API_URL", "https://api.resend.com/emails"),
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=getattr(settings, "RESEND_DELIVERY_TIMEOUT_SECONDS", 20.0),
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("resend delivery failed: %s", exc.__class__.__name__)
+            raise OTPDeliveryError("Unable to deliver email OTP.") from exc
+
+        if response.status_code >= 400:
+            logger.warning("resend returned HTTP %s", response.status_code)
+            raise OTPDeliveryError("Unable to deliver email OTP.")
+
+
+def _otp_email_html(code, label, expiry_text):
+    logo_url = getattr(settings, "OTP_EMAIL_LOGO_URL", "")
+    logo = (
+        f'<img src="{logo_url}" alt="E-Boses" height="40" style="display:block;margin-bottom:24px" />'
+        if logo_url
+        else ""
+    )
+    return (
+        '<div style="font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#1c1c1c;'
+        'max-width:480px;margin:0 auto;padding:32px 24px">'
+        f"{logo}"
+        '<p style="font-size:16px;line-height:1.6;margin:0 0 16px">'
+        f"Your {label} verification code is:</p>"
+        '<p style="font-size:34px;font-weight:700;letter-spacing:8px;margin:0 0 16px">'
+        f"{code}</p>"
+        f'<p style="font-size:14px;color:#6b6b6b;line-height:1.6;margin:0 0 24px">{expiry_text}</p>'
+        '<p style="font-size:13px;color:#8a8a8a;line-height:1.6;margin:0">'
+        "If you did not request this code, you can safely ignore this message.</p>"
+        "</div>"
+    )
+
+
 class GatewaySMSOTPProvider(BaseOTPProvider):
     """Send every SMS code through the one barangay gateway.
 
@@ -144,6 +211,7 @@ def get_otp_provider(channel):
     providers = {
         "development": DevelopmentOTPProvider,
         "django_email": DjangoEmailOTPProvider,
+        "resend": ResendOTPProvider,
         "http_sms": GatewaySMSOTPProvider,
         "gateway": GatewaySMSOTPProvider,
         "disabled": DisabledOTPProvider,

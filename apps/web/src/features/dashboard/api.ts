@@ -332,6 +332,8 @@ export interface CommunityIncidentReport {
   latitude: string | null
   longitude: string | null
   photo_count: number
+  /** Photos held back by the privacy pass, so the UI can say so. */
+  withheld_photo_count?: number
   submitted_at: string
 }
 

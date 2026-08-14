@@ -337,7 +337,7 @@ export function AccountLifecycleFlow({
               <p className="mt-3 text-[15px] leading-relaxed text-neutral-600">
                 This will permanently delete your account and associated data.
                 This cannot be undone. Our team will process your request within
-                72 hours.
+                once any reports you have open are closed.
               </p>
               <div className="mt-10 flex items-center justify-end gap-2">
                 <button
@@ -372,7 +372,7 @@ export function AccountLifecycleFlow({
               </h2>
               <p className="mt-4 text-[15px] leading-relaxed text-neutral-600">
                 We&apos;ve received your request to delete your account and will
-                process your request within 72 hours.
+                process your request within once any reports you have open are closed.
               </p>
               <button
                 type="button"

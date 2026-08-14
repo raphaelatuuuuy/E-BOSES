@@ -116,11 +116,11 @@ export default function OfficialPrivacyRequestsPage() {
   }
 
   return (
-    <main className="min-h-full flex-1 bg-canvas p-4 md:p-6 lg:p-8">
+    <main className="min-h-full flex-1 bg-white p-4 md:p-6 lg:p-8">
       <section className="rounded-2xl border border-line-tint bg-white p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <p className="text-[12px] font-semibold text-brand-orange">Configuration · Privacy</p>
+            <p className="text-[12px] font-semibold text-accent">Configuration · Privacy</p>
             <h1 className="mt-1 text-2xl font-semibold text-brand-navy">Resident privacy requests</h1>
             <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-subtle-foreground">
               Review data exports and deletion requests separately from user administration. Deletion preserves anonymized civic records and is deferred while a case remains active.
@@ -170,7 +170,7 @@ export default function OfficialPrivacyRequestsPage() {
               {!["completed", "rejected"].includes(request.status) ? (
                 <div className="mt-4">
                   <label htmlFor={`privacy-note-${request.id}`} className="text-[11px] font-semibold text-subtle-foreground">Official decision note</label>
-                  <textarea id={`privacy-note-${request.id}`} value={notes[request.id] || ""} onChange={(event) => setNotes((current) => ({ ...current, [request.id]: event.target.value }))} rows={3} placeholder={request.type === "deletion" ? "Record retention checks or the reason processing is deferred." : "Add preparation or rejection details."} className="mt-2 w-full resize-none rounded-xl border border-line-tint bg-white p-3 text-sm font-semibold text-brand-navy outline-none focus:border-brand-orange" />
+                  <textarea id={`privacy-note-${request.id}`} value={notes[request.id] || ""} onChange={(event) => setNotes((current) => ({ ...current, [request.id]: event.target.value }))} rows={3} placeholder={request.type === "deletion" ? "Record retention checks or the reason processing is deferred." : "Add preparation or rejection details."} className="mt-2 w-full resize-none rounded-xl border border-line-tint bg-white p-3 text-sm font-semibold text-brand-navy outline-none focus:border-accent" />
                   <div className="mt-3 grid gap-2 sm:grid-cols-3">
                     <Button type="button" variant="outline" disabled={busy === request.id} onClick={() => void decide(request, "reviewed")}>Under review</Button>
                     <Button type="button" disabled={busy === request.id} onClick={() => void decide(request, "completed")} className="bg-brand-navy text-white hover:bg-brand-navy/90">Complete</Button>

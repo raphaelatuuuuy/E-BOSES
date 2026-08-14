@@ -57,8 +57,8 @@ export function PasswordRequirementsList({ password, className }: PasswordRequir
         const tone = !hasInput
           ? "text-neutral-400"
           : met
-            ? "text-emerald-600"
-            : "text-red-500"
+            ? "text-foreground"
+            : "text-neutral-400"
 
         return (
           <li
@@ -68,8 +68,8 @@ export function PasswordRequirementsList({ password, className }: PasswordRequir
               !hasInput
                 ? "text-neutral-500"
                 : met
-                  ? "text-emerald-700"
-                  : "text-red-600",
+                  ? "text-foreground"
+                  : "text-sos",
             )}
           >
             <span className={cn("inline-flex size-4 shrink-0 items-center justify-center", tone)}>

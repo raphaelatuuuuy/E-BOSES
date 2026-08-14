@@ -1,5 +1,14 @@
 from django.urls import path
 
+from .community_api import ConcernCancelView, ConcernReopenRequestView
+from .merge_api import (
+    ConcernMergeHistoryView,
+    ConcernMergeView,
+    ConcernSetPrimaryView,
+    ConcernUnmergeView,
+    MergeSuggestionDecideView,
+    MergeSuggestionListView,
+)
 from .views import (
     AssignedConcernListView,
     ConcernAppealCreateView,
@@ -92,6 +101,12 @@ urlpatterns = [
     path("flags/<int:pk>/review/", ContentFlagReviewView.as_view(), name="content-flag-review"),
     path("feed/", ConcernFeedView.as_view(), name="concern-feed"),
     path("summary/", ConcernSummaryView.as_view(), name="concern-summary"),
+    path("merge-suggestions/", MergeSuggestionListView.as_view(), name="merge-suggestions"),
+    path(
+        "merge-suggestions/<int:pk>/decide/",
+        MergeSuggestionDecideView.as_view(),
+        name="merge-suggestion-decide",
+    ),
     path("by-public-id/<uuid:public_id>/", ConcernPublicDetailView.as_view(), name="concern-public-detail"),
     path("<uuid:public_id>/", ConcernPublicDetailView.as_view(), name="concern-public-detail-direct"),
     path("<int:pk>/", ConcernDetailView.as_view(), name="concern-detail"),
@@ -107,6 +122,12 @@ urlpatterns = [
     path("<int:pk>/chat/typing/", ConcernChatTypingView.as_view(), name="concern-chat-typing"),
     path("<int:pk>/timeline/", ConcernTimelineEntryView.as_view(), name="concern-timeline-entry"),
     path("chat-media/<int:pk>/", ConcernChatAttachmentRawView.as_view(), name="concern-chat-media-raw"),
+    path("<int:pk>/reopen-request/", ConcernReopenRequestView.as_view(), name="concern-reopen-request"),
+    path("<int:pk>/cancel/", ConcernCancelView.as_view(), name="concern-cancel"),
+    path("<int:pk>/merge/", ConcernMergeView.as_view(), name="concern-merge"),
+    path("<int:pk>/unmerge/", ConcernUnmergeView.as_view(), name="concern-unmerge"),
+    path("<int:pk>/set-primary/", ConcernSetPrimaryView.as_view(), name="concern-set-primary"),
+    path("<int:pk>/merge-history/", ConcernMergeHistoryView.as_view(), name="concern-merge-history"),
     path("<int:pk>/vote/", ConcernVoteView.as_view(), name="concern-vote"),
     path("<int:pk>/comments/", ConcernCommentCreateView.as_view(), name="concern-comment-create"),
     path(

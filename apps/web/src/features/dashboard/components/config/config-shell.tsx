@@ -1,6 +1,6 @@
 import { type ReactNode } from "react"
 import { Link } from "react-router-dom"
-import { ArrowLeftIcon, type LucideIcon } from "lucide-react"
+import { ChevronRightIcon, type LucideIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -24,6 +24,60 @@ export interface ConfigStat {
   alarm?: boolean
 }
 
+/** Where you are, not merely how to leave. Matches the Help Center trail. */
+export function ConfigBreadcrumb({
+  trail,
+  className,
+}: {
+  trail: Array<{ label: string; to?: string; onClick?: () => void }>
+  className?: string
+}) {
+  return (
+    <nav
+      aria-label="Breadcrumb"
+      className={cn("flex flex-wrap items-center gap-2 text-meta", className)}
+    >
+      {trail.map((crumb, index) => (
+        <span key={crumb.label} className="flex items-center gap-2">
+          {index > 0 ? (
+            <ChevronRightIcon
+              className="size-3.5 shrink-0 text-neutral-300"
+              strokeWidth={2.4}
+              aria-hidden
+            />
+          ) : null}
+          {crumb.to ? (
+            <Link
+              to={crumb.to}
+              className="text-neutral-500 no-underline transition-colors hover:text-accent"
+            >
+              {crumb.label}
+            </Link>
+          ) : crumb.onClick ? (
+            <button
+              type="button"
+              onClick={crumb.onClick}
+              className="text-neutral-500 transition-colors hover:text-accent"
+            >
+              {crumb.label}
+            </button>
+          ) : (
+            <span
+              className={
+                index === trail.length - 1
+                  ? "text-brand-navy"
+                  : "text-neutral-400"
+              }
+            >
+              {crumb.label}
+            </span>
+          )}
+        </span>
+      ))}
+    </nav>
+  )
+}
+
 export function ConfigShell({
   icon: Icon,
   eyebrow,
@@ -42,51 +96,57 @@ export function ConfigShell({
   children: ReactNode
 }) {
   return (
-    <div className="mx-auto w-full max-w-[1100px] px-6 pb-28 pt-10 sm:px-10">
-      <Link
-        to="/dashboard/configuration"
-        className="inline-flex items-center gap-2 text-meta text-neutral-500 no-underline transition-colors hover:text-accent"
-      >
-        <ArrowLeftIcon className="size-4" strokeWidth={2} aria-hidden />
-        Configuration
-      </Link>
+    // White ground, like the Help Center. The official shell paints `bg-canvas`
+    // (#f6f7f9) behind every page, which is so close to white that a
+    // configuration screen read as neither one thing nor the other.
+    <div className="min-h-full bg-white">
+      <div className="mx-auto w-full max-w-[1100px] px-6 pt-10 pb-28 sm:px-10">
+        <ConfigBreadcrumb
+          trail={[
+            { label: "Configuration", to: "/dashboard/configuration" },
+            { label: eyebrow },
+            { label: title },
+          ]}
+        />
 
-      <header className="mt-8 flex flex-wrap items-start justify-between gap-x-8 gap-y-5">
-        <div className="flex min-w-0 flex-1 items-start gap-6">
-          <span className="hidden size-16 shrink-0 items-center justify-center rounded-2xl bg-brand-navy text-white sm:flex">
-            <Icon className="size-7" strokeWidth={1.7} aria-hidden />
-          </span>
-          <div className="min-w-0">
-            <p className="text-meta text-neutral-400">{eyebrow}</p>
-            <h1 className="mt-1 text-page-title text-brand-navy">{title}</h1>
-            <p className="mt-3 max-w-2xl text-read leading-relaxed text-neutral-500">
-              {description}
-            </p>
-          </div>
-        </div>
-
-        {action ? <div className="shrink-0">{action}</div> : null}
-      </header>
-
-      {stats && stats.length > 0 ? (
-        <dl className="mt-10 flex flex-wrap gap-x-12 gap-y-6">
-          {stats.map((stat) => (
-            <div key={stat.label} className="min-w-0">
-              <dd
-                className={cn(
-                  "text-section tabular-nums",
-                  stat.alarm ? "text-sos" : "text-brand-navy",
-                )}
-              >
-                {stat.value}
-              </dd>
-              <dt className="mt-1 text-meta text-neutral-500">{stat.label}</dt>
+        <header className="mt-8 flex flex-wrap items-start justify-between gap-x-8 gap-y-5">
+          <div className="flex min-w-0 flex-1 items-start gap-6">
+            <span className="hidden size-16 shrink-0 items-center justify-center rounded-2xl bg-brand-navy text-white sm:flex">
+              <Icon className="size-7" strokeWidth={1.7} aria-hidden />
+            </span>
+            <div className="min-w-0">
+              <h1 className="text-page-title text-brand-navy">{title}</h1>
+              <p className="mt-3 max-w-2xl text-read leading-relaxed text-neutral-500">
+                {description}
+              </p>
             </div>
-          ))}
-        </dl>
-      ) : null}
+          </div>
 
-      <div className="mt-12 space-y-12">{children}</div>
+          {action ? <div className="shrink-0">{action}</div> : null}
+        </header>
+
+        {stats && stats.length > 0 ? (
+          <dl className="mt-10 flex flex-wrap gap-x-12 gap-y-6">
+            {stats.map((stat) => (
+              <div key={stat.label} className="min-w-0">
+                <dd
+                  className={cn(
+                    "text-section tabular-nums",
+                    stat.alarm ? "text-sos" : "text-brand-navy"
+                  )}
+                >
+                  {stat.value}
+                </dd>
+                <dt className="mt-1 text-meta text-neutral-500">
+                  {stat.label}
+                </dt>
+              </div>
+            ))}
+          </dl>
+        ) : null}
+
+        <div className="mt-12 space-y-12">{children}</div>
+      </div>
     </div>
   )
 }
@@ -128,7 +188,9 @@ export function ConfigPanel({
       {title ? (
         <div>
           <h2 className="text-section text-brand-navy">{title}</h2>
-          {hint ? <p className="mt-2 max-w-2xl text-meta text-neutral-500">{hint}</p> : null}
+          {hint ? (
+            <p className="mt-2 max-w-2xl text-meta text-neutral-500">{hint}</p>
+          ) : null}
         </div>
       ) : null}
       {children}

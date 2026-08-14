@@ -218,7 +218,24 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
     )
 
     _broadcast_created(alert)
+    _enqueue_ai_assist(alert)
     return SmsIntakeResult(alert=alert, responder=responder)
+
+
+def _enqueue_ai_assist(alert) -> None:
+    """Schedule the AI cleanup pass for messages the parser could not read.
+
+    Runs only after save + route + ack so a slow model call can never delay
+    dispatch. Off by default; a missing broker degrades to nothing at all.
+    """
+    try:
+        from apps.sms.ai_assist import should_run
+        from apps.sms.tasks import sms_ai_assist_task
+
+        if should_run(alert):
+            transaction.on_commit(lambda: sms_ai_assist_task.delay(alert.pk))
+    except Exception:
+        logger.debug("SMS AI assist not scheduled for alert %s.", alert.pk, exc_info=True)
 
 
 def _broadcast_created(alert) -> None:

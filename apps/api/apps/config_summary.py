@@ -1,18 +1,14 @@
 """Status for the Configuration hub cards.
 
-The hub shows eleven sections. Loading each card from its own endpoint would be
-eleven round trips before an official can see whether anything needs them, so
-this collapses the lot into one request.
+Loading each card from its own endpoint would be one round trip per section
+before an official can see whether anything needs them, so this collapses the
+lot into a single request.
 
 Each entry carries a `status` line for the card and a `needs_attention` flag.
 The flag is what drives the warning marker, and it is derived rather than
 decorative: an emergency type with no unit behind it, or a privacy request left
 open, is a real gap in barangay operations that should be visible without
 opening anything.
-
-Sections whose UI has not been built yet still report honestly — a card reading
-"Not configured" is better than a hidden feature, and it doubles as a roadmap
-inside the product.
 """
 
 from __future__ import annotations
@@ -100,28 +96,7 @@ def _categories():
     }
 
 
-def _routing():
-    categories = list(ConcernCategory.objects.filter(is_active=True))
-    routed_ids = set(
-        RoutingRule.objects.filter(is_active=True).values_list("category_id", flat=True)
-    )
-    unrouted = [c for c in categories if c.pk not in routed_ids]
-    total = len(categories)
-    return {
-        "status": f"{total - len(unrouted)}/{total} categories mapped" if total else "No categories",
-        # An unrouted category means concerns land with nobody responsible.
-        "detail": (
-            f"Unassigned: {', '.join(c.name for c in unrouted[:3])}"
-            if unrouted
-            else "Every category has a responsible unit"
-        ),
-        "needs_attention": bool(unrouted),
-    }
 
-
-# The card said "Relevance 0.65 · duplicate 0.85", which is the model's
-# vocabulary, not the barangay's. These bands mirror the three presets on the
-# screen itself so the card and the setting agree in plain words.
 def _strictness_label(relevance: float) -> str:
     if relevance >= 0.75:
         return "Checking carefully"
@@ -194,47 +169,61 @@ def _geography():
     }
 
 
-def _sms():
-    # Not built. The research frames SMS fallback as conditional on budget and
-    # provider terms, so the card states the truth rather than implying a
-    # feature that does not exist.
-    return {
-        "status": "Not configured",
-        "detail": "Fallback for residents without mobile data",
-        "needs_attention": True,
-        "available": False,
-    }
-
 
 def _verification():
-    # Only MANUAL_REVIEW needs a person. QUEUED and PROCESSING are the pipeline
-    # working through cases on its own, so counting them would show officials a
-    # backlog that is not theirs to clear.
+    # ID checks are automatic. A case only reaches an official when the machine
+    # could not decide, so MANUAL_REVIEW is the only number that is theirs to
+    # clear. QUEUED/PROCESSING is reported as pipeline activity, and only counts
+    # as attention when it has been stuck long enough for the sweeper to care.
+    from datetime import timedelta
+
+    from django.conf import settings
+    from django.utils import timezone
+
     waiting = ResidenceVerificationCase.objects.filter(
         status=ResidenceVerificationCase.Status.MANUAL_REVIEW
     ).count()
-    in_pipeline = ResidenceVerificationCase.objects.filter(
+    in_flight = ResidenceVerificationCase.objects.filter(
         status__in=[
             ResidenceVerificationCase.Status.QUEUED,
             ResidenceVerificationCase.Status.PROCESSING,
         ]
-    ).count()
+    )
+    in_pipeline = in_flight.count()
+    stale_cutoff = timezone.now() - timedelta(
+        minutes=getattr(settings, "OCR_STUCK_CASE_MINUTES", 15)
+    )
+    stuck = in_flight.filter(updated_at__lte=stale_cutoff).count()
+
+    if waiting:
+        status_text = f"{_plural(waiting, 'case')} the automatic check could not decide"
+    else:
+        status_text = "Running automatically"
+
+    if stuck:
+        detail = f"{stuck} stuck in the pipeline"
+    elif in_pipeline:
+        detail = f"{in_pipeline} being checked now"
+    else:
+        detail = "Resident ID and residence proof"
+
     return {
-        "status": f"{_plural(waiting, 'case')} awaiting review" if waiting else "Nothing to review",
-        "detail": f"{in_pipeline} still processing" if in_pipeline else "Resident ID and residence proof",
-        "needs_attention": waiting > 0,
+        "status": status_text,
+        "detail": detail,
+        "needs_attention": waiting > 0 or stuck > 0,
     }
 
 
 def _privacy():
-    # SUBMITTED is the only state that needs an official; REVIEWED has been
-    # actioned and is awaiting completion elsewhere.
+    # Data exports complete themselves, so only deletions reach an official.
+    # REVIEWED is counted too: nothing else finishes a reviewed request, and
+    # leaving it out meant a half-actioned deletion dropped off the board.
     open_requests = AccountRequest.objects.filter(
-        status=AccountRequest.Status.SUBMITTED
+        status__in=[AccountRequest.Status.SUBMITTED, AccountRequest.Status.REVIEWED]
     ).count()
     return {
         "status": _plural(open_requests, "open request") if open_requests else "No open requests",
-        "detail": "Data export, deactivation and deletion",
+        "detail": "Account deletion requests. Residents export their own data.",
         "needs_attention": open_requests > 0,
     }
 

@@ -186,6 +186,8 @@ class OutboundSmsMessage(models.Model):
     attempts = models.PositiveSmallIntegerField(default=0)
     last_error = models.CharField(max_length=255, blank=True)
     driver = models.CharField(max_length=32, blank=True)
+    provider_message_id = models.CharField(max_length=64, blank=True, db_index=True)
+    provider_state = models.CharField(max_length=24, blank=True)
     alert = models.ForeignKey(
         "emergencies.EmergencyAlert",
         null=True,

@@ -201,7 +201,7 @@ export default function OfficialDispatchRulesPage() {
         const Icon = iconFor(category.icon_key)
         return (
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-orange-soft text-brand-navy ring-1 ring-brand-orange/15">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-brand-navy ring-1 ring-accent/15">
               {category.icon_image_url ? <img src={category.icon_image_url} alt="" className="size-full rounded-xl object-cover" /> : category.custom_icon_label ? <span className="text-xs font-semibold">{category.custom_icon_label}</span> : <Icon className="size-4" />}
             </div>
             <div className="min-w-0">
@@ -222,7 +222,7 @@ export default function OfficialDispatchRulesPage() {
           <div className="space-y-2">
             <div className="flex max-w-xl flex-wrap gap-1.5">
               {respondingUnits.map((unit) => (
-                <label key={unit.id} className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs font-bold transition ${selected.has(unit.id) ? "border-brand-orange bg-brand-orange-soft text-brand-navy" : "border-card-line bg-canvas text-muted-foreground hover:border-brand-orange/40"}`}>
+                <label key={unit.id} className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs font-bold transition ${selected.has(unit.id) ? "border-accent bg-accent/10 text-brand-navy" : "border-card-line bg-canvas text-muted-foreground hover:border-accent/40"}`}>
                   <input
                     type="checkbox"
                     checked={selected.has(unit.id)}
@@ -295,7 +295,7 @@ export default function OfficialDispatchRulesPage() {
       ) : null}
 
       {draft ? (
-        <section className="overflow-hidden rounded-3xl border border-brand-orange/20 bg-gradient-to-br from-white via-brand-orange-soft to-tint p-4 shadow-sm">
+        <section className="overflow-hidden rounded-3xl border border-accent/20 bg-gradient-to-br from-white via-accent/10 to-tint p-4 shadow-sm">
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="Label" value={draft.label || ""} onChange={(label) => setDraft((current) => ({ ...current, label, code: current?.id ? current.code : slugify(label) }))} />
             <Field label="Code" value={draft.code || ""} onChange={(code) => setDraft((current) => ({ ...current, code: slugify(code) }))} disabled={Boolean(draft.id)} />
@@ -306,13 +306,13 @@ export default function OfficialDispatchRulesPage() {
             <p className="text-xs font-bold text-muted-foreground">Icon</p>
             <div className="mt-2 flex flex-wrap gap-2">
               {ICONS.map(([key, label, Icon]) => (
-                <button key={key} type="button" onClick={() => setDraft((current) => ({ ...current, icon_key: key }))} className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-2 text-xs font-bold ${draft.icon_key === key ? "border-brand-orange bg-brand-orange-soft text-brand-navy" : "border-card-line bg-canvas text-muted-foreground"}`}>
+                <button key={key} type="button" onClick={() => setDraft((current) => ({ ...current, icon_key: key }))} className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-2 text-xs font-bold ${draft.icon_key === key ? "border-accent bg-accent/10 text-brand-navy" : "border-card-line bg-canvas text-muted-foreground"}`}>
                   <Icon className="size-4" />{label}
                 </button>
               ))}
             </div>
           </div>
-          <label className="mt-4 block rounded-2xl border border-dashed border-brand-orange/40 bg-white/70 p-4">
+          <label className="mt-4 block rounded-2xl border border-dashed border-accent/40 bg-white/70 p-4">
             <span className="text-xs font-bold text-muted-foreground">Custom image / .ico</span>
             <div className="mt-2 flex flex-wrap items-center gap-3">
               {draft.iconFile ? (
@@ -355,7 +355,7 @@ function Field({ label, value, disabled, onChange }: { label: string; value: str
   return (
     <label className="block">
       <span className="text-xs font-bold text-muted-foreground">{label}</span>
-      <input value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-xl border border-card-line bg-canvas px-3 py-2 text-sm font-semibold text-foreground outline-none focus:border-brand-orange disabled:opacity-60" />
+      <input value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-xl border border-card-line bg-canvas px-3 py-2 text-sm font-semibold text-foreground outline-none focus:border-accent disabled:opacity-60" />
     </label>
   )
 }

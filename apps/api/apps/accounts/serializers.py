@@ -111,6 +111,13 @@ class RegisterSerializer(serializers.Serializer):
         return validate_residence_proof_file_light(value)
 
 
+class LoginRejected(Exception):
+    def __init__(self, code, detail):
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+
+
 class LoginSerializer(serializers.Serializer):
     identifier = serializers.CharField()
     password = serializers.CharField(write_only=True)
@@ -122,11 +129,11 @@ class LoginSerializer(serializers.Serializer):
         if user is None:
             user = get_user_model().objects.filter(phone_number=identifier).first()
         if user is None or not user.check_password(password):
-            raise serializers.ValidationError("Invalid credentials.")
+            raise LoginRejected("invalid_credentials", "Invalid email or password.")
         # Suspended (self-deactivated) users may sign in to reactivate.
         # Rejected accounts stay blocked.
         if user.status == User.Status.REJECTED:
-            raise serializers.ValidationError("This account was not approved.")
+            raise LoginRejected("account_rejected", "This account was not approved.")
         attrs["user"] = user
         return attrs
 

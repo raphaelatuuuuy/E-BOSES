@@ -1,0 +1,129 @@
+from django.shortcuts import get_object_or_404
+from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated
+from apps.accounts.permissions import user_has_role_permission
+
+from . import merge_services
+from .merge_serializers import (
+    MergeDecisionSerializer,
+    MergeEventSerializer,
+    MergeRequestSerializer,
+    MergeSuggestionSerializer,
+    UnmergeRequestSerializer,
+)
+from .models import Concern, ConcernMergeSuggestion
+
+
+def can_manage_merges(user):
+    return bool(
+        user
+        and user.is_authenticated
+        and (
+            user.is_staff
+            or user.is_superuser
+            or user_has_role_permission(user, "concerns.manage")
+        )
+    )
+
+
+class MergeManagementView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def deny(self):
+        return Response(
+            {"detail": "You do not have permission to manage duplicate reports."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    def conflict(self, exc):
+        return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+
+
+class MergeSuggestionListView(MergeManagementView):
+    def get(self, request):
+        if not can_manage_merges(request.user):
+            return self.deny()
+        suggestions = merge_services.pending_suggestions()
+        return Response(MergeSuggestionSerializer(suggestions, many=True).data)
+
+
+class MergeSuggestionDecideView(MergeManagementView):
+    def post(self, request, pk):
+        if not can_manage_merges(request.user):
+            return self.deny()
+        suggestion = get_object_or_404(ConcernMergeSuggestion, pk=pk)
+        serializer = MergeDecisionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            suggestion = merge_services.decide_suggestion(
+                suggestion,
+                serializer.validated_data["decision"],
+                actor=request.user,
+                note=serializer.validated_data.get("note", ""),
+            )
+        except merge_services.MergeConflict as exc:
+            return self.conflict(exc)
+        return Response(MergeSuggestionSerializer(suggestion).data)
+
+
+class ConcernMergeView(MergeManagementView):
+    def post(self, request, pk):
+        if not can_manage_merges(request.user):
+            return self.deny()
+        concern = get_object_or_404(Concern, pk=pk)
+        serializer = MergeRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        primary = get_object_or_404(Concern, pk=serializer.validated_data["primary_id"])
+        try:
+            merge_services.merge_concern(
+                concern,
+                primary,
+                actor=request.user,
+                reason=serializer.validated_data.get("reason", ""),
+                method="official",
+            )
+        except merge_services.MergeConflict as exc:
+            return self.conflict(exc)
+        return Response({"detail": f"Merged into {primary.tracking_id}."})
+
+
+class ConcernUnmergeView(MergeManagementView):
+    def post(self, request, pk):
+        if not can_manage_merges(request.user):
+            return self.deny()
+        concern = get_object_or_404(Concern, pk=pk)
+        serializer = UnmergeRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            merge_services.unmerge_concern(
+                concern,
+                actor=request.user,
+                reason=serializer.validated_data.get("reason", ""),
+            )
+        except merge_services.MergeConflict as exc:
+            return self.conflict(exc)
+        return Response({"detail": "Separated from its group."})
+
+
+class ConcernSetPrimaryView(MergeManagementView):
+    def post(self, request, pk):
+        if not can_manage_merges(request.user):
+            return self.deny()
+        concern = get_object_or_404(Concern, pk=pk)
+        try:
+            merge_services.set_primary(concern, actor=request.user)
+        except merge_services.MergeConflict as exc:
+            return self.conflict(exc)
+        return Response({"detail": f"{concern.tracking_id} is now the primary report."})
+
+
+class ConcernMergeHistoryView(MergeManagementView):
+    def get(self, request, pk):
+        if not can_manage_merges(request.user):
+            return self.deny()
+        concern = get_object_or_404(Concern, pk=pk)
+        events = concern.merge_events.select_related("actor", "primary", "concern")
+        return Response(MergeEventSerializer(events, many=True).data)

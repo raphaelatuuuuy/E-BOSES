@@ -126,6 +126,8 @@ class BeatScheduleTests(TestCase):
     EXPECTED_ENTRIES = {
         "ocr-health-canary",
         "ocr-recovery",
+        "ocr-stuck-case-rescue",
+        "purge-approved-id-images",
         "emergency-assignment-escalation",
         "refresh-map-service-pois",
         "periodic-housekeeping",

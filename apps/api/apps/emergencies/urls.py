@@ -1,5 +1,10 @@
 from django.urls import path
 
+from .community_api import (
+    EmergencyCommunityCommentDetailView,
+    EmergencyCommunityCommentListCreateView,
+)
+
 from .views import (
     EmergencyAcknowledgeView,
     EmergencyAppealCreateView,
@@ -75,6 +80,16 @@ urlpatterns = [
     path("<int:pk>/", EmergencyDetailView.as_view(), name="emergency-detail"),
     path("<int:pk>/route/", EmergencyRouteView.as_view(), name="emergency-route"),
     path("<int:pk>/reporter-contact/", EmergencyReporterContactView.as_view(), name="emergency-reporter-contact"),
+    path(
+        "<int:pk>/community-comments/",
+        EmergencyCommunityCommentListCreateView.as_view(),
+        name="emergency-community-comments",
+    ),
+    path(
+        "<int:pk>/community-comments/<int:comment_id>/",
+        EmergencyCommunityCommentDetailView.as_view(),
+        name="emergency-community-comment-detail",
+    ),
     path("<int:pk>/chat/", EmergencyChatView.as_view(), name="emergency-chat"),
     path("<int:pk>/assign/", EmergencyAssignView.as_view(), name="emergency-assign"),
     path(

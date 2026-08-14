@@ -1,4 +1,4 @@
-from datetime import timedelta
+﻿from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -217,3 +217,116 @@ class ConcernConversationContractTests(APITestCase):
         self.assertEqual(response.data["status_events"][0]["status"], Concern.Status.UNDER_REVIEW)
         self.assertEqual(response.data["status_events"][0]["note"], "")
         self.assertIsNone(response.data["status_events"][0]["actor"])
+
+
+class ConcernChatWebSocketTests(APITestCase):
+    """The report chat live channel delivers new messages over WebSocket."""
+
+    TEST_CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+
+    def setUp(self):
+        from django.test import override_settings
+
+        User = get_user_model()
+        self.owner = User.objects.create_user(
+            email="ws-owner@example.com",
+            phone_number="+639170001101",
+            password="pass",
+            status=User.Status.VERIFIED,
+        )
+        self.official = User.objects.create_user(
+            email="ws-official@example.com",
+            phone_number="+639170001102",
+            password="pass",
+            role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
+        )
+        self.concern = Concern.objects.create(
+            reporter=self.owner,
+            title="Fallen branch on the path",
+            description="A large branch fell and is blocking the walking path.",
+            category=Concern.Category.ENVIRONMENT,
+            status=Concern.Status.UNDER_REVIEW,
+        )
+
+    def test_new_chat_message_is_broadcast_to_the_reports_channel(self):
+        from unittest.mock import patch
+
+        from django.db import connection
+
+        def flush_on_commit():
+            callbacks = list(connection.run_on_commit)
+            connection.run_on_commit = []
+            for _, func, _ in callbacks:
+                func()
+
+        with patch("apps.notifications.services.broadcast_concern_chat") as mock_broadcast:
+            self.client.force_authenticate(self.official)
+            response = self.client.post(
+                f"/api/concerns/{self.concern.pk}/chat/",
+                {"body": "We are on it."},
+                format="json",
+            )
+            flush_on_commit()
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(mock_broadcast.called)
+        args, _ = mock_broadcast.call_args
+        self.assertEqual(args[0], self.concern.pk)
+        self.assertEqual(args[1]["body"], "We are on it.")
+
+    def test_connected_consumer_receives_messages_on_its_group(self):
+        from asgiref.sync import async_to_sync
+        from channels.testing import WebsocketCommunicator
+        from django.test import override_settings
+
+        from config.asgi import application
+        from apps.notifications.tickets import issue_websocket_ticket
+
+        with override_settings(CHANNEL_LAYERS=self.TEST_CHANNEL_LAYERS):
+            ticket = issue_websocket_ticket(self.owner)
+            communicator = WebsocketCommunicator(
+                application,
+                f"/ws/concerns/{self.concern.pk}/tracking/?ticket={ticket}",
+            )
+
+            def scenario():
+                async def run():
+                    connected, _ = await communicator.connect()
+                    assert connected
+                    from channels.layers import get_channel_layer
+
+                    await get_channel_layer().group_send(
+                        f"concern_{self.concern.pk}",
+                        {"type": "concern.chat", "payload": {"body": "We are on it."}},
+                    )
+                    return await communicator.receive_json_from(timeout=5)
+
+                return run()
+
+            event = async_to_sync(scenario)()
+            self.assertEqual(event["type"], "concern.chat")
+            self.assertEqual(event["payload"]["body"], "We are on it.")
+
+    def test_outsider_is_rejected(self):
+        from asgiref.sync import async_to_sync
+        from channels.testing import WebsocketCommunicator
+        from django.test import override_settings
+
+        from config.asgi import application
+        from apps.notifications.tickets import issue_websocket_ticket
+
+        User = get_user_model()
+        outsider = User.objects.create_user(
+            email="ws-outsider@example.com",
+            phone_number="+639170001103",
+            password="pass",
+            status=User.Status.VERIFIED,
+        )
+        with override_settings(CHANNEL_LAYERS=self.TEST_CHANNEL_LAYERS):
+            ticket = issue_websocket_ticket(outsider)
+            communicator = WebsocketCommunicator(
+                application,
+                f"/ws/concerns/{self.concern.pk}/tracking/?ticket={ticket}",
+            )
+            connected, _ = async_to_sync(communicator.connect)()
+            self.assertFalse(connected)

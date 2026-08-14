@@ -432,6 +432,11 @@ class ConcernListCreateView(APIView):
         touch_last_seen(request.user)
         if not user_has_role_permission(request.user, "concerns.create"):
             return Response({"detail": "Only residents can submit concerns."}, status=status.HTTP_403_FORBIDDEN)
+        from apps.accounts.ip_intel import evaluate_request, ip_blocked_response
+
+        _, ip_meta, ip_reason = evaluate_request(request)
+        if ip_reason:
+            return ip_blocked_response(ip_reason)
         serializer = ConcernCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         client_request_id = serializer.validated_data.get("client_request_id")
@@ -556,6 +561,11 @@ class ConcernListCreateView(APIView):
             validation_status=Concern.ValidationStatus.PENDING if pending_location_review else Concern.ValidationStatus.ACCEPTED,
             validation_summary=validation_summary,
             update_text="Report submitted for location review." if pending_location_review else "Report submitted and accepted for routing.",
+            ip_asn=ip_meta.get("asn", ""),
+            ip_country=ip_meta.get("country", ""),
+            ip_org=ip_meta.get("org", ""),
+            ip_verdict=ip_meta.get("verdict", ""),
+            ip_score=ip_meta.get("score"),
         )
         concern.tracking_number = f"RPT-{concern.created_at.year}-{concern.pk:06d}"
         concern.save(update_fields=["tracking_number"])
@@ -1326,6 +1336,17 @@ class ConcernChatView(APIView):
             metadata={"concern_id": concern.pk, "message_id": message.pk},
             request_meta=request_meta(request),
         )
+        try:
+            from django.db import transaction
+
+            from apps.notifications.services import broadcast_concern_chat
+
+            chat_payload = ConcernChatMessageSerializer(message, context={"request": request}).data
+            transaction.on_commit(lambda: broadcast_concern_chat(concern.pk, chat_payload))
+        except Exception:
+            # WebSocket delivery is an enhancement; the 6s polling fallback in
+            # the frontend keeps chat working without it.
+            pass
         return Response(
             ConcernChatMessageSerializer(message, context={"request": request}).data,
             status=status.HTTP_201_CREATED,

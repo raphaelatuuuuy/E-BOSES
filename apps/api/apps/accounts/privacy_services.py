@@ -175,3 +175,38 @@ def anonymize_resident_account(user):
         "email_verified_at", "phone_verified_at", "last_seen_at", "password", "updated_at",
     ])
     return user
+
+
+def deletion_blockers(user):
+    """What is stopping this account from being deleted right now.
+
+    The officials' console got a 409 and the resident got nothing, so someone
+    who asked to be deleted was never told why it had not happened.
+    """
+    active_concerns = list(
+        Concern.objects.filter(reporter=user)
+        .exclude(status__in=[Concern.Status.RESOLVED, Concern.Status.REJECTED])
+        .values_list("tracking_number", flat=True)[:10]
+    )
+    active_emergencies = EmergencyAlert.objects.filter(reporter=user).exclude(
+        status__in=[EmergencyAlert.Status.RESOLVED, EmergencyAlert.Status.CANCELLED]
+    ).count()
+
+    if not active_concerns and not active_emergencies:
+        return {"blocked": False, "reasons": [], "concerns": [], "emergencies": 0}
+
+    reasons = []
+    if active_concerns:
+        reasons.append(
+            f"{len(active_concerns)} report(s) are still open. They close first, then the account is removed."
+        )
+    if active_emergencies:
+        reasons.append(
+            f"{active_emergencies} emergency record(s) are still active."
+        )
+    return {
+        "blocked": True,
+        "reasons": reasons,
+        "concerns": [tracking for tracking in active_concerns if tracking],
+        "emergencies": active_emergencies,
+    }

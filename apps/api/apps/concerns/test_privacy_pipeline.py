@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import TestCase, override_settings, TransactionTestCase, override_settings
 from PIL import Image, ImageDraw
 from rest_framework import status
 from rest_framework.test import APITestCase

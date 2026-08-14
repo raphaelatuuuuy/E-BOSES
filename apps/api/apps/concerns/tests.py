@@ -1335,7 +1335,11 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(settings_response.data["sos_placement"], "compact")
         self.assertEqual(request_response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(list_response.data[0]["type"], "data_export")
-        self.assertEqual(AccountRequest.objects.get(user=self.resident).status, AccountRequest.Status.SUBMITTED)
+        # A self-service data export completes immediately (no official needed);
+        # deletions still go to a human reviewer.
+        account_request = AccountRequest.objects.get(user=self.resident)
+        self.assertEqual(account_request.status, AccountRequest.Status.COMPLETED)
+        self.assertEqual(account_request.staff_note, "Completed automatically: resident self-service export.")
 
     def test_content_flag_can_be_submitted_and_listed_by_official_only(self):
         concern = Concern.objects.create(

@@ -1,5 +1,6 @@
 // Same-origin `/api` goes through the Vite dev proxy (see vite.config.ts),
 // so HTTPS LAN demos avoid mixed-content blocks to plain HTTP Django.
+import { humanError } from "@/lib/error-messages"
 const DEFAULT_API_BASE_URL = "/api"
 const CSRF_COOKIE_NAME = "csrftoken"
 
@@ -122,6 +123,11 @@ export async function logoutSession() {
 
 function errorMessage(data: unknown, fallback: string) {
   if (data && typeof data === "object") {
+    // A known machine code becomes a sentence a resident can act on, so a raw
+    // "ip_blocked" can never reach the screen.
+    const mapped = humanError(data, "")
+    if (mapped) return mapped
+
     const detail = (data as { detail?: unknown }).detail
     if (typeof detail === "string") {
       return detail

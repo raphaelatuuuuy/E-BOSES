@@ -254,6 +254,27 @@ class HttpJsonSmsDriver(BaseSmsDriver):
             # The response body may echo the destination or the message; keep
             # only the status code so nothing sensitive reaches the log.
             raise SmsDeliveryError(f"Gateway rejected the request (HTTP {response.status_code}).")
+        if 300 <= response.status_code < 400:
+            # A redirect is not a delivery. Posting to the cloud API's bare host
+            # returns 301, and httpx does not follow redirects for POST, so
+            # treating 3xx as success silently dropped every message.
+            raise SmsDeliveryError(
+                f"Gateway redirected the request (HTTP {response.status_code}); "
+                "check OUTBOUND_SMS_URL points at the send endpoint."
+            )
+        return self.parse_receipt(response)
+
+    def parse_receipt(self, response):
+        try:
+            data = response.json()
+        except ValueError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        return {
+            "provider_message_id": str(data.get("id") or "")[:64],
+            "provider_state": str(data.get("state") or "")[:24],
+        }
 
 
 class SmsForwarderDriver(HttpJsonSmsDriver):
@@ -272,15 +293,51 @@ class SmsForwarderDriver(HttpJsonSmsDriver):
 
 
 class AndroidSmsGatewayDriver(HttpJsonSmsDriver):
-    """capcom6/android-sms-gateway running in Local server mode.
+    """capcom6/android-sms-gateway, in either Cloud or Local server mode.
 
-    Its send API is ``POST /message`` with HTTP Basic auth using the username
-    and password from the app's Home screen, and a `phoneNumbers` array rather
-    than a single string.
+    Send API is ``POST /3rdparty/v1/message`` on the cloud host and ``POST
+    /message`` on the handset's local server, with HTTP Basic auth using the
+    username and password from the app's Home screen and a `phoneNumbers`
+    array rather than a single string.
+
+    Configure OUTBOUND_SMS_URL as the *host* (https://api.sms-gate.app, or
+    http://<device-lan-ip>:8080); the endpoint path is appended here. Posting
+    to the bare cloud host returns 301, which is why the path matters.
     """
 
     name = "android_sms_gateway"
     default_template = '{"message": "{body}", "phoneNumbers": ["{to}"]}'
+    cloud_path = "/3rdparty/v1/message"
+    local_path = "/message"
+
+    def endpoint(self) -> str:
+        base = (getattr(settings, "OUTBOUND_SMS_URL", "") or "").rstrip("/")
+        if not base:
+            raise SmsConfigurationError("OUTBOUND_SMS_URL is required to send SMS.")
+        if any(base.endswith(path) for path in (self.cloud_path, self.local_path)):
+            return base
+        path = self.local_path if "sms-gate.app" not in base else self.cloud_path
+        return f"{base}{path}"
+
+    def send(self, destination: str, body: str):
+        timeout = float(getattr(settings, "OUTBOUND_SMS_TIMEOUT_SECONDS", 15))
+        try:
+            response = httpx.post(
+                self.endpoint(),
+                json=self._sign(self.build_payload(destination, body)),
+                headers=self._headers(),
+                timeout=timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise SmsDeliveryError(f"Gateway unreachable: {type(exc).__name__}") from exc
+        if response.status_code >= 400:
+            raise SmsDeliveryError(f"Gateway rejected the request (HTTP {response.status_code}).")
+        if 300 <= response.status_code < 400:
+            raise SmsDeliveryError(
+                f"Gateway redirected the request (HTTP {response.status_code}); "
+                "check OUTBOUND_SMS_URL points at the gateway host."
+            )
+        return self.parse_receipt(response)
 
     def _headers(self) -> dict[str, str]:
         headers = super()._headers()
@@ -400,7 +457,7 @@ def deliver(message_id: int, destination: str, body: str) -> str:
     message.save(update_fields=["status", "attempts", "driver"])
 
     try:
-        driver.send(destination, body)
+        receipt = driver.send(destination, body)
     except SmsConfigurationError as exc:
         message.status = OutboundSmsMessage.Status.SKIPPED
         message.last_error = str(exc)[:255]
@@ -419,7 +476,12 @@ def deliver(message_id: int, destination: str, body: str) -> str:
     message.status = OutboundSmsMessage.Status.SENT
     message.sent_at = timezone.now()
     message.last_error = ""
-    message.save(update_fields=["status", "sent_at", "last_error"])
+    updated = ["status", "sent_at", "last_error"]
+    if isinstance(receipt, dict):
+        message.provider_message_id = receipt.get("provider_message_id", "")
+        message.provider_state = receipt.get("provider_state", "")
+        updated += ["provider_message_id", "provider_state"]
+    message.save(update_fields=updated)
     return message.status
 
 

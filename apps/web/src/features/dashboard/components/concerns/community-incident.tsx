@@ -191,6 +191,11 @@ export function CommunityIncidentDetails({
                 >
                   Show {entry.photo_count} {entry.photo_count === 1 ? "photo" : "photos"}
                 </button>
+              ) : entry.withheld_photo_count ? (
+                <p className="mt-2 text-label text-subtle-foreground">
+                  {entry.withheld_photo_count === 1 ? "1 photo is" : `${entry.withheld_photo_count} photos are`}{" "}
+                  being checked for privacy
+                </p>
               ) : null}
             </li>
           ))}

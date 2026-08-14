@@ -494,7 +494,7 @@ export function ProofStep({
         )}
 
         {proofCaptureBlockedReason ? (
-          <p className="text-sm text-amber-800">{proofCaptureBlockedReason}</p>
+          <p className="text-sm text-foreground">{proofCaptureBlockedReason}</p>
         ) : null}
 
         {/* Rejection / field errors only (no check/X on the ID cards). */}
@@ -579,7 +579,7 @@ export function ProofStep({
                         "relative flex w-full cursor-pointer items-center rounded-xl border-2 px-3 py-3.5 transition-colors",
                         hasFile ? "gap-3 text-left" : "justify-center text-center",
                         showError
-                          ? "border-[3px] border-destructive bg-red-50/40"
+                          ? "border-[3px] border-destructive bg-neutral-100/40"
                           : "border-input",
                         busy && !isChecking
                           ? "cursor-not-allowed opacity-60"

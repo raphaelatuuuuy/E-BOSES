@@ -80,7 +80,7 @@ function UnitEditor({
               // code would orphan routing rules that point at it.
               onChange(isNew ? { ...draft, name, code: slugify(name) } : { ...draft, name })
             }}
-            className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-brand-orange"
+            className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
             placeholder="Barangay Health Workers"
           />
         </label>
@@ -92,7 +92,7 @@ function UnitEditor({
           <input
             value={draft.short_name ?? ""}
             onChange={(event) => onChange({ ...draft, short_name: event.target.value })}
-            className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-brand-orange"
+            className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
             placeholder="BHW"
           />
           <span className="mt-1 block text-[11px] font-medium text-muted-foreground">
@@ -108,12 +108,12 @@ function UnitEditor({
         <input
           value={draft.description ?? ""}
           onChange={(event) => onChange({ ...draft, description: event.target.value })}
-          className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-brand-orange"
+          className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
           placeholder="Health concerns, medical assistance, vaccinations"
         />
       </label>
 
-      <div className="rounded-2xl border border-brand-orange/15 bg-gradient-to-br from-brand-orange-soft to-tint p-4">
+      <div className="rounded-2xl border border-accent/15 bg-gradient-to-br from-accent/10 to-tint p-4">
         <label className="flex items-start gap-3">
           <input
             type="checkbox"
@@ -121,7 +121,7 @@ function UnitEditor({
             onChange={(event) =>
               onChange({ ...draft, responds_to_emergencies: event.target.checked })
             }
-            className="mt-1 size-4 accent-brand-orange"
+            className="mt-1 size-4 accent-accent"
           />
           <span>
             <span className="block text-sm font-bold text-foreground">
@@ -152,8 +152,8 @@ function UnitEditor({
                   }
                   className={
                     active
-                      ? "rounded-2xl border border-brand-orange bg-brand-orange-soft px-3 py-2 text-left text-xs font-bold text-brand-navy"
-                      : "rounded-2xl border border-card-line bg-white/70 px-3 py-2 text-left text-xs font-semibold text-foreground transition hover:border-brand-orange/40"
+                      ? "rounded-2xl border border-accent bg-accent/10 px-3 py-2 text-left text-xs font-bold text-brand-navy"
+                      : "rounded-2xl border border-card-line bg-white/70 px-3 py-2 text-left text-xs font-semibold text-foreground transition hover:border-accent/40"
                   }
                 >
                   <span className="block">{category.label}</span>
@@ -178,7 +178,7 @@ function UnitEditor({
         <input
           value={draft.contact_number ?? ""}
           onChange={(event) => onChange({ ...draft, contact_number: event.target.value })}
-          className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-brand-orange"
+          className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
           placeholder="+639XXXXXXXXX"
         />
         <span className="mt-1 block text-[11px] font-medium text-muted-foreground">
@@ -191,7 +191,7 @@ function UnitEditor({
           type="button"
           onClick={onSave}
           disabled={saving || !draft.name || (responds && (draft.emergency_types ?? []).length === 0)}
-          className="rounded-xl bg-brand-orange px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:opacity-55"
+          className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-55"
         >
           {saving ? "Saving…" : isNew ? "Create unit" : "Save changes"}
         </button>

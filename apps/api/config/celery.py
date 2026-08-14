@@ -14,7 +14,10 @@ app.autodiscover_tasks()
 # WORKER starts (after Django is fully ready), so the web server and check
 # never import models while the app registry is still loading. Without it the
 # 5-minute OCR canary/recovery beat schedules go into the void (KeyError).
-app.conf.imports = ("apps.accounts.ocr_tasks",)
+# apps.service_status is a bare module, not an app, so autodiscover misses its
+# task the same way. Without it the health sampler never registers and the
+# status timeline only fills in when somebody opens the page.
+app.conf.imports = ("apps.accounts.ocr_tasks", "apps.service_status")
 
 
 __all__ = ("app",)

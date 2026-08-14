@@ -1,6 +1,8 @@
 import { forwardRef, useImperativeHandle, useState } from "react"
 import { ArrowLeft, Check, LoaderCircle } from "lucide-react"
 
+import { ConfigBreadcrumb } from "@/features/dashboard/components/config/config-shell"
+
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -122,7 +124,7 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
     return (
       <div className={cn("flex min-h-full flex-col", PROOF_THEME.bg)}>
         <div
-          className="m-6 rounded-2xl border border-red-200 bg-red-50 p-6 text-red-700"
+          className="m-6 rounded-2xl border border-neutral-200 bg-neutral-100 p-6 text-sos"
           role="alert"
         >
           {error || "Proof templates are unavailable right now."}
@@ -163,7 +165,7 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
     return (
       <div className={cn("flex min-h-full flex-col", PROOF_THEME.bg)}>
         <div
-          className="m-6 space-y-4 rounded-2xl border border-red-200 bg-red-50 p-6 text-red-700"
+          className="m-6 space-y-4 rounded-2xl border border-neutral-200 bg-neutral-100 p-6 text-sos"
           role="alert"
         >
           <p>{error || "Select a proof type to continue setup."}</p>
@@ -195,14 +197,12 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
       <div className="space-y-4 p-4 md:p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <button
-              type="button"
-              onClick={() => void backToList()}
-              className="inline-flex items-center gap-1.5 text-xs font-bold text-muted-foreground transition hover:text-foreground"
-            >
-              <ArrowLeft className="size-3.5" />
-              All proof types
-            </button>
+            <ConfigBreadcrumb
+              trail={[
+                { label: "All proof types", onClick: () => void backToList() },
+                { label: proofDisplayName || "New proof type" },
+              ]}
+            />
             <h2 className="mt-2 font-heading text-xl font-semibold text-foreground">
               {proofDisplayName || "New proof type"}
             </h2>
@@ -211,9 +211,9 @@ const OcrTemplateBuilderPage = forwardRef<{ startAddProofType: () => void }, obj
                 className={cn(
                   "mt-1 inline-flex items-center gap-1 text-[11px] font-semibold",
                   autoSaveState === "error"
-                    ? "text-rose-600"
+                    ? "text-sos"
                     : autoSaveState === "saved"
-                      ? "text-emerald-600"
+                      ? "text-foreground"
                       : "text-muted-foreground",
                 )}
                 aria-live="polite"

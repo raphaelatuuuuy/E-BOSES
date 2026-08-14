@@ -336,15 +336,15 @@ export function MarkAreasStep(props: {
                       className={cn(
                         "rounded px-1.5 py-0.5 text-[10px] font-bold",
                         fieldSide === "back"
-                          ? "bg-violet-50 text-violet-700"
-                          : "bg-sky-50 text-sky-700",
+                          ? "bg-neutral-100 text-foreground"
+                          : "bg-neutral-100 text-neutral-500",
                       )}
                     >
                       {fieldSide === "back" ? "Back" : "Front"}
                     </span>
                   ) : null}
                   {field.required ? (
-                    <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-600">
+                    <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] font-bold text-sos">
                       Required
                     </span>
                   ) : null}
@@ -391,7 +391,7 @@ export function MarkAreasStep(props: {
             type="button"
             variant="ghost"
             size="icon"
-            className="size-8 hover:bg-rose-50"
+            className="size-8 hover:bg-neutral-100"
             title="Remove"
             onClick={() => onRemoveField(field.key)}
           >
@@ -445,7 +445,7 @@ export function MarkAreasStep(props: {
                 className={cn(
                   "space-y-2 rounded-xl p-2 transition-colors",
                   dragOverSide === "front" && dragKey
-                    ? "bg-sky-50/80 ring-2 ring-brand-blue/20"
+                    ? "bg-neutral-100/80 ring-2 ring-brand-blue/20"
                     : "",
                 )}
                 onDragOver={(e) => {
@@ -489,7 +489,7 @@ export function MarkAreasStep(props: {
                 className={cn(
                   "space-y-2 rounded-xl border-t border-line-tint p-2 pt-3 transition-colors",
                   dragOverSide === "back" && dragKey
-                    ? "bg-violet-50/80 ring-2 ring-violet-400/25"
+                    ? "bg-neutral-100/80 ring-2 ring-neutral-300"
                     : "",
                 )}
                 onDragOver={(e) => {
@@ -621,11 +621,11 @@ export function MarkAreasStep(props: {
                   >
                     {label}
                     {hasImage ? (
-                      <span className="ml-1.5 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">
+                      <span className="ml-1.5 rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-bold text-foreground">
                         Ready
                       </span>
                     ) : (
-                      <span className="ml-1.5 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
+                      <span className="ml-1.5 rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
                         Needed
                       </span>
                     )}
@@ -668,7 +668,7 @@ export function MarkAreasStep(props: {
                         type="button"
                         variant="outline"
                         size="sm"
-                        className="h-8 text-xs font-bold text-destructive hover:bg-rose-50 hover:text-destructive"
+                        className="h-8 text-xs font-bold text-destructive hover:bg-neutral-100 hover:text-destructive"
                         disabled={saving}
                         onClick={() => onRemoveSample(side)}
                       >
@@ -692,7 +692,7 @@ export function MarkAreasStep(props: {
             </p>
           )}
           {canvasSides.some((side) => !samplePreviewBySide[side]) ? (
-            <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] font-semibold text-amber-900">
+            <p className="mt-2 rounded-lg border border-neutral-200 bg-neutral-100 px-2.5 py-2 text-[11px] font-semibold text-foreground">
               Still needed:{" "}
               {canvasSides
                 .filter((side) => {
