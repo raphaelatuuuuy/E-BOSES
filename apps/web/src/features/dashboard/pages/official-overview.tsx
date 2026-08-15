@@ -42,7 +42,7 @@ function StatusMasthead({
             <span
               className={cn(
                 "relative flex size-2 shrink-0 rounded-pill",
-                alarm ? "bg-severity-critical" : "bg-status-closed",
+                alarm ? "bg-sos" : "bg-status-closed",
               )}
             >
               {alarm ? <span aria-hidden className="ops-pulse absolute inset-0 rounded-pill" /> : null}

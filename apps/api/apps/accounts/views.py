@@ -738,9 +738,14 @@ class AccountRequestListCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         account_request = serializer.save(user=request.user)
-        # A resident asking for their own data back is not a decision an
-        # official needs to make, so the export completes immediately. Deletion
-        # still goes to a human because it anonymises shared records.
+        # Neither of these is a decision an official gets to make. A resident
+        # asking for their own data back, or asking to leave, is exercising a
+        # right — the only real question is whether anything still blocks it.
+        #
+        # Deletion used to sit in a review queue. That queue's screen is gone
+        # (it is an audit log now), so a request parked there would wait for a
+        # person who has nowhere to act. It completes itself instead, and the
+        # sweeper finishes the ones that are blocked today.
         if (
             request_type == AccountRequest.Type.DATA_EXPORT
             and getattr(settings, "SELF_SERVICE_DATA_EXPORT", True)
@@ -748,6 +753,19 @@ class AccountRequestListCreateView(APIView):
             account_request.status = AccountRequest.Status.COMPLETED
             account_request.staff_note = "Completed automatically: resident self-service export."
             account_request.save(update_fields=["status", "staff_note", "updated_at"])
+        elif request_type == AccountRequest.Type.DELETION:
+            # Deliberately NOT immediate. Anonymising cannot be undone, so the
+            # resident keeps a grace period to change their mind — the withdraw
+            # path depends on the request still being open. The sweeper finishes
+            # it once the grace period passes and nothing blocks it.
+            blockers = deletion_blockers(request.user)
+            grace_days = getattr(settings, "ACCOUNT_DELETION_GRACE_DAYS", 7)
+            account_request.staff_note = (
+                " ".join(blockers["reasons"])
+                if blockers["blocked"]
+                else f"Scheduled automatically. Completes in {grace_days} days unless withdrawn."
+            )
+            account_request.save(update_fields=["staff_note", "updated_at"])
         create_audit_log(
             "account.request_submitted",
             actor=request.user,

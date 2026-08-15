@@ -171,16 +171,20 @@ def _geography():
 
 
 def _verification():
-    # ID checks are automatic. A case only reaches an official when the machine
-    # could not decide, so MANUAL_REVIEW is the only number that is theirs to
-    # clear. QUEUED/PROCESSING is reported as pipeline activity, and only counts
-    # as attention when it has been stuck long enough for the sweeper to care.
+    # ID checks are automatic and there is no verification queue screen — it was
+    # removed on purpose, because cases needing a human surface through normal
+    # account review instead.
+    #
+    # So MANUAL_REVIEW must not be reported as work for an official. It was, and
+    # it pointed at a screen that does not exist: the card said "1 case the
+    # automatic check could not decide" with nowhere to go and no way to clear
+    # it. What an official can actually act on is a stuck pipeline.
     from datetime import timedelta
 
     from django.conf import settings
     from django.utils import timezone
 
-    waiting = ResidenceVerificationCase.objects.filter(
+    resident_action = ResidenceVerificationCase.objects.filter(
         status=ResidenceVerificationCase.Status.MANUAL_REVIEW
     ).count()
     in_flight = ResidenceVerificationCase.objects.filter(
@@ -195,31 +199,64 @@ def _verification():
     )
     stuck = in_flight.filter(updated_at__lte=stale_cutoff).count()
 
-    if waiting:
-        status_text = f"{_plural(waiting, 'case')} the automatic check could not decide"
+    if stuck:
+        status_text = f"{_plural(stuck, 'check')} stuck in the pipeline"
+    elif in_pipeline:
+        status_text = f"{_plural(in_pipeline, 'ID')} being checked now"
     else:
         status_text = "Running automatically"
 
-    if stuck:
-        detail = f"{stuck} stuck in the pipeline"
-    elif in_pipeline:
-        detail = f"{in_pipeline} being checked now"
+    if resident_action:
+        detail = f"{_plural(resident_action, 'resident')} must upload a clearer photo"
     else:
         detail = "Resident ID and residence proof"
 
+    # Only a stuck pipeline is the barangay's problem. A resident who needs to
+    # re-upload is waiting on themselves, not on an official.
     return {
         "status": status_text,
         "detail": detail,
-        "needs_attention": waiting > 0 or stuck > 0,
+        "needs_attention": stuck > 0,
+    }
+
+
+def _audit():
+    """The audit card counts activity, never "work to do".
+
+    A log is a record, not a queue. Nothing here should ever ask for attention,
+    or officials learn to dismiss the one screen that must stay trustworthy.
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+    from apps.audit_log import SENSITIVE_ACTIONS
+    from apps.accounts.models import AuditLog
+
+    since = timezone.now() - timedelta(days=7)
+    recent = AuditLog.objects.filter(created_at__gte=since)
+    total = recent.count()
+    private = recent.filter(action__in=SENSITIVE_ACTIONS).count()
+
+    return {
+        "status": f"{total:,} action{'' if total == 1 else 's'} this week",
+        "detail": (
+            f"{private} touched private data" if private else "None touched private data"
+        ),
+        "needs_attention": False,
     }
 
 
 def _privacy():
     # Data exports complete themselves, so only deletions reach an official.
+    # The type filter used to be missing, so a resident's own export — which no
+    # official ever has to touch — sat on this card as "1 open request" that
+    # nothing could clear.
+    #
     # REVIEWED is counted too: nothing else finishes a reviewed request, and
     # leaving it out meant a half-actioned deletion dropped off the board.
     open_requests = AccountRequest.objects.filter(
-        status__in=[AccountRequest.Status.SUBMITTED, AccountRequest.Status.REVIEWED]
+        type=AccountRequest.Type.DELETION,
+        status__in=[AccountRequest.Status.SUBMITTED, AccountRequest.Status.REVIEWED],
     ).count()
     return {
         "status": _plural(open_requests, "open request") if open_requests else "No open requests",
@@ -240,6 +277,7 @@ SECTIONS = {
     "zones": (CONFIGURE_GEOGRAPHY, _geography),
     "verification": (REVIEW_VERIFICATION, _verification),
     "privacy": (HANDLE_PRIVACY, _privacy),
+    "audit": (MANAGE_USERS, _audit),
 }
 
 

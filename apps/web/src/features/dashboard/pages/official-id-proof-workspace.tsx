@@ -24,9 +24,9 @@ export default function OfficialIdProofWorkspacePage() {
   return (
     <ConfigShell
       icon={ShieldCheckIcon}
-      eyebrow="Trust & privacy"
-      title="ID & proof setup"
-      description="Which documents a resident can use to prove they live here, and which details are read from each one."
+      eyebrow="Operations"
+      title="Accepted ID documents"
+      description="Which documents prove a resident lives here, and which details are read from each one."
       action={
         <ConfigHeroAction
           icon={Plus}
@@ -36,9 +36,7 @@ export default function OfficialIdProofWorkspacePage() {
         </ConfigHeroAction>
       }
     >
-      <div className="overflow-hidden rounded-2xl border border-card-line bg-white">
-        <OcrTemplateBuilderPage ref={ocrRef} />
-      </div>
+      <OcrTemplateBuilderPage ref={ocrRef} />
     </ConfigShell>
   )
 }

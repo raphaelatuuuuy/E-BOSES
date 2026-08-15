@@ -49,7 +49,7 @@ class PrivacySelfServiceTests(APITestCase):
         request = AccountRequest.objects.get(pk=created.data["id"])
         self.assertEqual(request.status, AccountRequest.Status.SUBMITTED)
 
-    def test_deletion_still_requires_an_official(self):
+    def test_deletion_waits_out_a_grace_period_rather_than_an_official(self):
         created = self.client.post(
             "/api/auth/account-requests/", {"type": "deletion"}, format="json"
         )
@@ -169,5 +169,89 @@ class VerificationSummaryTests(APITestCase):
         from apps.config_summary import _verification
 
         summary = _verification()
-        self.assertIn("stuck", summary["detail"])
+        self.assertIn("stuck", summary["status"])
         self.assertTrue(summary["needs_attention"])
+
+    def test_a_resident_who_must_re_upload_is_not_official_work(self):
+        """Manual review belongs to the resident, not the barangay.
+
+        There is no verification queue screen, so counting these as attention
+        pointed officials at a page that does not exist.
+        """
+        User = get_user_model()
+        user = User.objects.create_user(
+            email="summary-resubmit@example.com",
+            phone_number="+639100000704",
+            password="pass",
+            status=User.Status.PENDING_VERIFICATION,
+        )
+        ResidenceVerificationCase.objects.create(
+            user=user,
+            status=ResidenceVerificationCase.Status.MANUAL_REVIEW,
+            retry_eligible=True,
+        )
+
+        from apps.config_summary import _verification
+
+        summary = _verification()
+        self.assertEqual(summary["status"], "Running automatically")
+        self.assertIn("upload", summary["detail"])
+        self.assertFalse(summary["needs_attention"])
+
+
+class SelfServiceDeletionTests(APITestCase):
+    """Deletion completes without an official, but never instantly.
+
+    Anonymising cannot be undone, so the grace period is the safety: it is the
+    window in which a resident who clicked by mistake can withdraw.
+    """
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(
+            email="leaving@example.com",
+            phone_number="+639100000801",
+            password="pass",
+            status=User.Status.VERIFIED,
+        )
+
+    def _request(self, age_days=0):
+        req = AccountRequest.objects.create(
+            user=self.user, type=AccountRequest.Type.DELETION, status=AccountRequest.Status.SUBMITTED
+        )
+        if age_days:
+            AccountRequest.objects.filter(pk=req.pk).update(
+                created_at=timezone.now() - timedelta(days=age_days)
+            )
+        return req
+
+    def test_a_fresh_request_is_left_alone_so_it_can_be_withdrawn(self):
+        from apps.accounts.privacy_tasks import complete_unblocked_deletions_task
+
+        req = self._request(age_days=0)
+        result = complete_unblocked_deletions_task()
+        req.refresh_from_db()
+        self.assertEqual(result["completed"], 0)
+        self.assertEqual(req.status, AccountRequest.Status.SUBMITTED)
+
+    def test_it_completes_itself_once_the_grace_period_passes(self):
+        from apps.accounts.privacy_tasks import complete_unblocked_deletions_task
+
+        req = self._request(age_days=30)
+        result = complete_unblocked_deletions_task()
+        req.refresh_from_db()
+        self.assertEqual(result["completed"], 1)
+        self.assertEqual(req.status, AccountRequest.Status.COMPLETED)
+
+    def test_an_open_report_still_blocks_it(self):
+        from apps.accounts.privacy_tasks import complete_unblocked_deletions_task
+
+        Concern.objects.create(
+            reporter=self.user, title="Open pothole", status=Concern.Status.SUBMITTED
+        )
+        req = self._request(age_days=30)
+        result = complete_unblocked_deletions_task()
+        req.refresh_from_db()
+        self.assertEqual(result["completed"], 0)
+        self.assertEqual(req.status, AccountRequest.Status.SUBMITTED)
+        self.assertIn("report", req.staff_note.lower())

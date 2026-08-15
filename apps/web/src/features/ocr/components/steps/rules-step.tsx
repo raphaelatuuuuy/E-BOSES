@@ -14,8 +14,6 @@ import {
 } from "@/features/ocr/components/proof-theme"
 import type { ProfileMatchKey } from "@/features/ocr/hooks/use-ocr-template-state"
 import {
-  fieldDisplayColor,
-  fieldDisplayNumber,
   hintsOf,
 } from "@/features/ocr/lib/create-document-defaults"
 
@@ -38,12 +36,14 @@ export function RulesStep(props: {
   fields: OcrFieldDefinition[]
   selectedField: OcrFieldDefinition | null
   selectedFieldIndex: number
+  /** The detail list is on-screen already, so the picker is off by default. */
+  showFieldPicker?: boolean
   onSelectField: (key: string) => void
   onUpdateField: (
     fieldKey: string,
     updater: (f: OcrFieldDefinition) => OcrFieldDefinition
   ) => void
-  onRenameField?: (fieldKey: string, label: string) => void
+  /** Renaming lives in the detail list; this panel only sets checks. */
   onUpdateHints: (fieldKey: string, patch: Partial<OcrFieldHints>) => void
   onSetValidationRules: (
     fieldKey: string,
@@ -62,7 +62,6 @@ export function RulesStep(props: {
     selectedField,
     onSelectField,
     onUpdateField,
-    onRenameField,
     onUpdateHints,
     onSetValidationRules,
     fieldMatchProfiles,
@@ -77,26 +76,9 @@ export function RulesStep(props: {
 
   return (
     <section className="flex flex-col">
-      <div
-        className={cn(
-          "flex flex-wrap items-center gap-2 border-b px-1 pb-3 md:px-1",
-          PROOF_THEME.border
-        )}
-      >
-        <label className={cn("text-xs font-semibold", PROOF_THEME.title)}>
-          Field
-        </label>
-        <span className="flex items-center gap-2">
-          {selectedField ? (
-            <span
-              className="flex size-6 shrink-0 items-center justify-center rounded-md text-[11px] font-semibold text-white"
-              style={{
-                backgroundColor: fieldDisplayColor(selectedField, fields),
-              }}
-            >
-              {fieldDisplayNumber(selectedField, fields)}
-            </span>
-          ) : null}
+      {props.showFieldPicker ? (
+        <div className="flex flex-wrap items-center gap-2 border-b border-neutral-200 pb-3">
+          <label className="text-meta text-neutral-500">Detail</label>
           <select
             className={proofSelectClass()}
             value={selectedField?.key ?? ""}
@@ -108,14 +90,14 @@ export function RulesStep(props: {
               </option>
             ))}
           </select>
-        </span>
-      </div>
+        </div>
+      ) : null}
 
       {!selectedField ? (
         <div className="px-1 pt-4 md:px-1">
           <p
             className={cn(
-              "rounded-xl border border-dashed border-line-tint px-3 py-10 text-center text-sm font-medium",
+              "rounded-xl border border-dashed border-neutral-200 px-3 py-10 text-center text-sm font-medium",
               PROOF_THEME.muted
             )}
           >
@@ -123,34 +105,8 @@ export function RulesStep(props: {
           </p>
         </div>
       ) : (
-        <div className="flex flex-col gap-4 px-1 pt-4 md:px-1">
-          <label className="block">
-            <span
-              className={cn(
-                "mb-1.5 block text-xs font-semibold",
-                PROOF_THEME.title
-              )}
-            >
-              Label
-            </span>
-            <Input
-              value={selectedField.label}
-              onChange={(event) => {
-                const next = event.target.value
-                if (onRenameField) {
-                  onRenameField(selectedField.key, next)
-                } else {
-                  onUpdateField(selectedField.key, (field) => ({
-                    ...field,
-                    label: next,
-                  }))
-                }
-              }}
-              className="h-10 font-medium"
-            />
-          </label>
-
-          <div className="flex flex-wrap gap-x-6 gap-y-3">
+        <div className="flex flex-col gap-5 pt-1">
+          <div className="flex flex-col gap-3">
             <label className="flex cursor-pointer items-center gap-2">
               <Switch
                 checked={selectedField.required}
@@ -166,10 +122,8 @@ export function RulesStep(props: {
                   })
                 }}
               />
-              <span
-                className={cn("text-xs font-medium", PROOF_THEME.title)}
-              >
-                Required
+              <span className="text-meta text-brand-navy">
+                Must be present
               </span>
             </label>
 
@@ -180,10 +134,8 @@ export function RulesStep(props: {
                   onUpdateHints(selectedField.key, { multi_line })
                 }
               />
-              <span
-                className={cn("text-xs font-medium", PROOF_THEME.title)}
-              >
-                Multi-line
+              <span className="text-meta text-brand-navy">
+                Can run over more than one line
               </span>
             </label>
 
@@ -199,25 +151,16 @@ export function RulesStep(props: {
                     })
                   }
                 />
-                <span className="block">
-                  <span
-                    className={cn("block text-xs font-medium", PROOF_THEME.title)}
-                  >
-                    Must not be expired
-                  </span>
+                <span className="text-meta text-brand-navy">
+                  Must not be expired
                 </span>
               </label>
             ) : null}
           </div>
 
           <div>
-            <p
-              className={cn(
-                "mb-2 text-xs font-semibold",
-                PROOF_THEME.title
-              )}
-            >
-              Match against form fields
+            <p className="mb-2 text-meta text-neutral-500">
+              Must match what the resident typed
             </p>
             <div className="flex flex-wrap gap-1.5">
               {MATCH_OPTIONS.map(([profileKey, label]) => {
@@ -237,10 +180,10 @@ export function RulesStep(props: {
                       })
                     }}
                     className={cn(
-                      "rounded-full border px-3 py-1 text-xs font-medium transition",
+                      "rounded-full px-3 py-1 text-meta transition-colors",
                       active
-                        ? "border-brand-blue bg-brand-blue text-white"
-                        : "border-line-tint bg-white text-navy-muted hover:border-brand-blue"
+                        ? "bg-brand-navy text-white"
+                        : "bg-neutral-100 text-neutral-600 hover:text-brand-navy"
                     )}
                   >
                     {label}

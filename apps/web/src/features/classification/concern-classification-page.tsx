@@ -66,9 +66,9 @@ const defaults: ConcernClassificationConfig = {
 }
 
 const SERVICE_STATUS_COPY: Record<string, { label: string; dot: string; text: string }> = {
-  available: { label: "Working", dot: "bg-status-closed", text: "text-status-closed-ink" },
-  limited: { label: "Slow", dot: "bg-severity-moderate", text: "text-severity-moderate-ink" },
-  unavailable: { label: "Not working", dot: "bg-severity-critical", text: "text-severity-critical-ink" },
+  available: { label: "Working", dot: "bg-status-closed", text: "text-neutral-500" },
+  limited: { label: "Slow", dot: "bg-severity-moderate", text: "text-neutral-600" },
+  unavailable: { label: "Not working", dot: "bg-sos", text: "text-sos" },
 }
 
 function ServiceRow({
@@ -146,9 +146,9 @@ function ResultBadges({ result }: { result: ReportValidationResult }) {
           key={badge.label}
           className={cn(
             "rounded-full px-2.5 py-1 text-[11px] font-bold",
-            badge.tone === "good" && "bg-status-closed-surface text-status-closed-ink",
-            badge.tone === "warn" && "bg-severity-moderate-surface text-severity-moderate-ink",
-            badge.tone === "alert" && "bg-severity-critical-surface text-severity-critical-ink",
+            badge.tone === "good" && "text-neutral-500",
+            badge.tone === "warn" && "text-neutral-600",
+            badge.tone === "alert" && "text-sos",
             badge.tone === "neutral" && "bg-canvas text-muted-foreground",
           )}
         >
@@ -306,7 +306,7 @@ export default function ConcernClassificationPage() {
   return (
     <ConfigShell
       icon={BrainCircuitIcon}
-      eyebrow="Intake & routing"
+      eyebrow="Operations"
       title="Report checking"
       description="Before a report reaches your queue, the system looks at the photo, reads the description, and checks whether the same thing was already reported. Anything it is unsure about waits for you instead of going straight through."
       stats={[
@@ -625,7 +625,7 @@ export default function ConcernClassificationPage() {
                         alt="The sample photo with sensitive areas blurred"
                         className="max-h-48 w-full rounded-xl border border-status-closed/40 object-contain"
                       />
-                      <figcaption className="mt-1 text-[11px] font-bold uppercase tracking-wide text-status-closed-ink">
+                      <figcaption className="mt-1 text-[11px] font-bold uppercase tracking-wide text-neutral-500">
                         What residents would see
                       </figcaption>
                     </figure>
@@ -641,7 +641,7 @@ export default function ConcernClassificationPage() {
                   only "could not be reviewed" next to a visibly blurred face
                   read as a contradiction. */}
               {reportResult.image_uploaded && reportResult.image_review_succeeded === false ? (
-                <div className="rounded-xl border border-severity-moderate-ink/20 bg-severity-moderate-surface p-3 text-xs font-medium leading-relaxed text-severity-moderate-ink">
+                <div className="rounded-xl border border-neutral-200 p-3 text-xs font-medium leading-relaxed text-neutral-600">
                   <span className="block font-bold">Photo could not be described</span>
                   The description below was written from the text alone.
                   {reportResult.privacy?.state === "protected"
@@ -711,7 +711,7 @@ export default function ConcernClassificationPage() {
                       {reportResult.privacy.detected_classes.map((item) => (
                         <span
                           key={item}
-                          className="rounded-full bg-status-closed-surface px-2.5 py-1 text-xs font-bold capitalize text-status-closed-ink"
+                          className="rounded-full px-2.5 py-1 text-xs font-bold capitalize text-neutral-600"
                         >
                           {item}
                         </span>

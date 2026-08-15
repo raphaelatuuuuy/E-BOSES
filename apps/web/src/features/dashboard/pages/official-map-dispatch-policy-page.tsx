@@ -96,8 +96,8 @@ export default function OfficialMapDispatchPolicyPage() {
   return (
     <ConfigShell
       icon={MapPinnedIcon}
-      eyebrow="Emergency response"
-      title="Zones, radius & SMS"
+      eyebrow="Operations"
+      title="Coverage & SMS fallback"
       description="Where reports are accepted, how far a neighbour alert reaches, and the SMS number residents fall back to when they have no mobile data."
       stats={
         draft
@@ -201,7 +201,7 @@ export default function OfficialMapDispatchPolicyPage() {
             className={`rounded-2xl border p-4 ${
               draft.emergency_sms_number
                 ? "border-card-line bg-card"
-                : "border-status-open bg-status-open-surface"
+                : "border-neutral-300 bg-neutral-50"
             }`}
           >
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -230,7 +230,7 @@ export default function OfficialMapDispatchPolicyPage() {
               </label>
             </div>
             {!draft.emergency_sms_number ? (
-              <p className="mt-3 text-xs font-bold text-status-open-ink">
+              <p className="mt-3 text-xs font-bold text-neutral-600">
                 Not set — a resident with no mobile data currently has no way to raise an SOS.
               </p>
             ) : null}

@@ -748,6 +748,21 @@ export function useOcrTemplateState() {
     }
   }
 
+  /**
+   * Open a proof type in the wizard.
+   *
+   * Reads `configurationRef` rather than the `configuration` captured when the
+   * list rendered. Publishing is asynchronous, so a row's Edit handler could be
+   * holding a snapshot from before the last save finished and open the wizard
+   * on fields that no longer exist.
+   */
+  function beginEditingDocument(docKey: string) {
+    const current = configurationRef.current
+    const doc = current?.document_types.find((item) => item.key === docKey)
+    setSelectedDocKey(docKey)
+    setSelectedFieldKey(doc?.fields[0]?.key ?? "")
+  }
+
   async function setProofAvailableOnSignup(docKey: string, enabled: boolean) {
     // Never let a proof go live on sign-up without its required sample photo(s).
     // Check the persisted samples only — local previews belong to the wizard's
@@ -813,7 +828,9 @@ export function useOcrTemplateState() {
         }
       }
       setConfiguration(next)
-      setSelectedDocKey(docKey)
+      // Deliberately NOT setSelectedDocKey here. Flipping availability on a row
+      // in the list used to move the wizard's cursor to that row, so opening
+      // Edit on a different proof showed the toggled one instead.
       await saveAndPublish(
         next,
         {
@@ -2106,6 +2123,7 @@ export function useOcrTemplateState() {
     load,
     saveAndPublish,
     persistWizardExit,
+    beginEditingDocument,
     setProofAvailableOnSignup,
     saveProofNameAndDescription,
     addDocumentType,

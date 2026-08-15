@@ -26,6 +26,7 @@ from apps.concerns.system_api import (
     SystemBannerManageView,
     SystemStatusView,
 )
+from apps.audit_log import AuditLogView
 from apps.service_status import ServiceStatusView, WeatherHealthReportView
 from apps.dashboard_views import OfficialDashboardSummaryView, ResidentDashboardSummaryView, ResponderDashboardSummaryView
 from apps.live_map import (
@@ -66,6 +67,7 @@ urlpatterns = [
     path("api/responders/active/", ActiveResponderListView.as_view(), name="active-responders"),
     path("api/config/summary/", ConfigurationSummaryView.as_view(), name="config-summary"),
     path("api/config/service-status/", ServiceStatusView.as_view(), name="config-service-status"),
+    path("api/config/audit-log/", AuditLogView.as_view(), name="config-audit-log"),
     path("api/config/weather-health/", WeatherHealthReportView.as_view(), name="config-weather-health"),
     path("api/system/status/", SystemStatusView.as_view(), name="system-status"),
     path("api/system/banners/", SystemBannerManageView.as_view(), name="system-banners"),

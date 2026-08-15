@@ -3,6 +3,7 @@ import { UserCogIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { apiRequest } from "@/lib/api"
+import { StateMarker, type StateTone } from "@/components/ui/state-marker"
 import { DataTable, type Column } from "@/features/dashboard/components/record/data-table"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { ConfigShell } from "@/features/dashboard/components/config/config-shell"
@@ -81,11 +82,20 @@ const ROLE_LABEL: Record<string, string> = {
   first_responder: "Responder",
 }
 
-const STATUS_TONE: Record<string, string> = {
-  verified: "bg-status-closed-surface text-status-closed-ink",
-  pending_verification: "bg-status-open-surface text-status-open-ink",
-  suspended: "bg-severity-critical-surface text-severity-critical-ink",
-  rejected: "bg-severity-critical-surface text-severity-critical-ink",
+// A status is a fact, not a badge. Four filled pills in a table column read as
+// four warnings; a marker and a word reads as information.
+const STATUS_LABEL: Record<string, string> = {
+  verified: "Verified",
+  pending_verification: "Waiting on ID check",
+  suspended: "Suspended",
+  rejected: "Rejected",
+}
+
+const STATUS_TONE: Record<string, StateTone> = {
+  verified: "closed",
+  pending_verification: "open",
+  suspended: "alarm",
+  rejected: "alarm",
 }
 
 function UserDrawer({
@@ -320,7 +330,7 @@ function UserDrawer({
                     type="button"
                     disabled={busy}
                     onClick={() => void removeDesignation(designation.id)}
-                    className="shrink-0 rounded-lg px-2 py-1 text-xs font-bold text-severity-critical-ink transition hover:bg-severity-critical-surface disabled:opacity-50"
+                    className="shrink-0 rounded-lg px-2 py-1 text-xs font-bold text-neutral-500 transition-colors hover:text-sos disabled:opacity-50"
                   >
                     Remove
                   </button>
@@ -464,13 +474,10 @@ export default function OfficialUsersManagePage() {
       hideOnMobile: true,
       sortValue: (user) => user.status,
       render: (user) => (
-        <span
-          className={`rounded-full px-2 py-0.5 text-[11px] font-bold capitalize ${
-            STATUS_TONE[user.status] ?? "bg-tint text-brand-navy"
-          }`}
-        >
-          {user.status.replace(/_/g, " ")}
-        </span>
+        <StateMarker
+          tone={STATUS_TONE[user.status] ?? "active"}
+          label={STATUS_LABEL[user.status] ?? user.status.replace(/_/g, " ")}
+        />
       ),
     },
     {

@@ -542,9 +542,19 @@ def _apply_draft_payload(configuration, payload):
                 doc.allowed_sides = _safe_list(item["allowed_sides"], label="allowed_sides", max_items=4)
             if "accepted_mime_types" in item:
                 allowed_mimes = _safe_list(item["accepted_mime_types"], label="accepted_mime_types", max_items=8)
-                if any(mime not in {"image/jpeg", "image/png", "application/pdf"} for mime in allowed_mimes):
-                    raise ValidationError({"accepted_mime_types": ["Only image/jpeg, image/png, or application/pdf are supported."]})
-                doc.accepted_mime_types = allowed_mimes
+                # Unsupported types are dropped, not rejected. This used to
+                # raise, which turned an official flicking a toggle into a
+                # failed save and a toast they could do nothing about — the
+                # list is built by the UI, not typed by hand, so a stray entry
+                # is our problem to normalise rather than theirs to fix.
+                aliases = {"image/jpg": "image/jpeg", "image/pjpeg": "image/jpeg"}
+                supported = {"image/jpeg", "image/png", "application/pdf"}
+                cleaned = []
+                for mime in allowed_mimes:
+                    mime = aliases.get(mime, mime)
+                    if mime in supported and mime not in cleaned:
+                        cleaned.append(mime)
+                doc.accepted_mime_types = cleaned or ["image/jpeg", "image/png"]
             if "accept_scanned_pdf" in item:
                 mimes = list(doc.accepted_mime_types or ["image/jpeg", "image/png"])
                 if item["accept_scanned_pdf"] and "application/pdf" not in mimes:

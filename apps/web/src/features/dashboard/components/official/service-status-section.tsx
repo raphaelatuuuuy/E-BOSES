@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { createPortal } from "react-dom"
-import { ActivityIcon, ChevronRightIcon } from "lucide-react"
+import { ActivityIcon, ChevronRightIcon, ScrollTextIcon } from "lucide-react"
 
 import { apiRequest } from "@/lib/api"
 import { cn } from "@workspace/ui/lib/utils"
@@ -266,8 +266,15 @@ function fetchStatus(refresh = false) {
   return apiRequest<ServiceStatus>(`/config/service-status/${refresh ? "?refresh=1" : ""}`)
 }
 
+interface AuditStatus {
+  status: string | null
+  detail: string
+  needs_attention: boolean
+}
+
 export function ServiceStatusSection() {
   const [status, setStatus] = useState<ServiceStatus | null>(null)
+  const [audit, setAudit] = useState<AuditStatus | null>(null)
   const [error, setError] = useState("")
   const [open, setOpen] = useState(false)
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
@@ -277,9 +284,14 @@ export function ServiceStatusSection() {
     let alive = true
     async function load() {
       try {
-        const next = await fetchStatus()
+        const [next, summary] = await Promise.all([
+          fetchStatus(),
+          apiRequest<{ sections: Record<string, AuditStatus> }> 
+            ("/config/summary/").catch(() => null),
+        ])
         if (alive) {
           setStatus(next)
+          setAudit(summary?.sections?.audit ?? null)
           setError("")
         }
       } catch {
@@ -339,47 +351,47 @@ export function ServiceStatusSection() {
 
   return (
     <PageSection title="Monitoring">
-      <div className="rounded-xl border border-neutral-200">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="group flex w-full items-center justify-between gap-4 rounded-xl px-8 py-7 text-left transition-colors hover:bg-neutral-100"
-        >
-          <div className="flex items-center gap-4">
-            <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-brand-navy text-white transition-[background-color,box-shadow] duration-200 ease-out group-hover:bg-accent group-hover:shadow-lg motion-reduce:transition-none">
-              <ActivityIcon
-                className="size-6 transition-transform duration-200 ease-out group-hover:scale-110 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
+      <ul className="overflow-hidden rounded-xl border border-neutral-200">
+        {/* System status row */}
+        <li className="border-b border-neutral-200 last:border-b-0">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="group flex w-full items-center justify-between gap-4 px-8 py-7 text-left transition-colors hover:bg-neutral-100"
+          >
+            <div className="flex items-center gap-4">
+              <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-brand-navy text-white transition-[background-color,box-shadow] duration-200 ease-out group-hover:bg-accent group-hover:shadow-lg motion-reduce:transition-none">
+                <ActivityIcon
+                  className="size-6 transition-transform duration-200 ease-out group-hover:scale-110 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
+                  strokeWidth={1.7}
+                  aria-hidden
+                />
+              </span>
+              <div>
+                <p className="text-row font-medium text-brand-navy transition-colors group-hover:text-accent">
+                  System status
+                </p>
+                <p className="mt-2 text-meta leading-relaxed text-neutral-500">
+                  Records, messaging, ID checks and map services
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <StatusMark severity={worst} className="size-5" />
+              <span className="text-row font-medium text-brand-navy transition-colors group-hover:text-accent">{summaryWord}</span>
+              <ChevronRightIcon
+                className={cn(
+                  "size-6 shrink-0 text-neutral-400 transition-colors duration-200 group-hover:text-accent",
+                  open && "rotate-90",
+                )}
                 strokeWidth={1.7}
                 aria-hidden
               />
-            </span>
-            <div>
-              <p className="text-row font-medium text-brand-navy transition-colors group-hover:text-accent">
-                System status
-              </p>
-              <p className="mt-2 text-meta leading-relaxed text-neutral-500">
-                Records, messaging, ID checks and map services
-              </p>
             </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <StatusMark severity={worst} className="size-5" />
-            <span className="text-meta font-medium text-foreground">{summaryWord}</span>
-            {/* Same chevron every other row uses: points right when closed,
-                turns down when open, and back again. */}
-            <ChevronRightIcon
-              className={cn(
-                "size-6 shrink-0 text-neutral-400 transition-transform duration-200",
-                open && "rotate-90",
-              )}
-              strokeWidth={1.7}
-              aria-hidden
-            />
-          </div>
-        </button>
+          </button>
 
-        {open && (
-          <div className="border-t border-neutral-200">
+          {open && (
+            <div className="border-t border-neutral-200">
             <div className="flex flex-wrap items-center justify-between gap-4 border-b border-neutral-200 px-8 py-5">
               <div className="flex items-center gap-3">
                 <StatusMark severity={error ? 1 : worst} className="size-6" />
@@ -462,13 +474,13 @@ export function ServiceStatusSection() {
                             {uptimeLabel(days)}
                           </span>
                           {group.worst > 0 && (
-                            <span className="text-meta font-medium text-foreground">
+                            <span className="text-meta font-medium text-foreground transition-colors group-hover:text-accent">
                               {GROUP_STATUS_WORD[group.worst]}
                             </span>
                           )}
                           <ChevronRightIcon
                             className={cn(
-                              "size-5 shrink-0 text-neutral-400 transition-transform duration-200",
+                              "size-5 shrink-0 text-neutral-400 transition-colors duration-200 group-hover:text-accent",
                               expanded && "rotate-90",
                             )}
                             strokeWidth={1.7}
@@ -492,7 +504,7 @@ export function ServiceStatusSection() {
                               <div key={mod.key}>
                                 <div className="flex items-center gap-2.5">
                                   <StatusMark severity={severityOf(mod.status)} />
-                                  <span className="text-row text-foreground">{mod.label}</span>
+                                  <span className="text-row text-foreground transition-colors group-hover:text-accent">{mod.label}</span>
                                   <span
                                     className={cn(
                                       "min-w-0 truncate text-meta leading-snug",
@@ -505,7 +517,7 @@ export function ServiceStatusSection() {
                                   </span>
                                   <span className="ml-auto flex shrink-0 items-center gap-3">
                                     {STATUS_WORD[mod.status] && (
-                                      <span className="text-meta font-medium text-foreground">
+                                      <span className="text-meta font-medium text-foreground transition-colors group-hover:text-accent">
                                         {STATUS_WORD[mod.status]}
                                       </span>
                                     )}
@@ -527,7 +539,51 @@ export function ServiceStatusSection() {
             )}
           </div>
         )}
-      </div>
+        </li>
+
+        {/* Audit log row */}
+        <li className="border-b border-neutral-200 last:border-b-0">
+          <a
+            href="/dashboard/configuration/audit-log"
+            className="group flex w-full items-center justify-between gap-4 px-8 py-7 text-left transition-colors hover:bg-neutral-100"
+          >
+            <div className="flex items-center gap-4">
+              <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-brand-navy text-white transition-[background-color,box-shadow] duration-200 ease-out group-hover:bg-accent group-hover:shadow-lg motion-reduce:transition-none">
+                <ScrollTextIcon
+                  className="size-6 transition-transform duration-200 ease-out group-hover:scale-110 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
+                  strokeWidth={1.7}
+                  aria-hidden
+                />
+              </span>
+              <div>
+                <p className="text-row font-medium text-brand-navy transition-colors group-hover:text-accent">
+                  Audit log
+                </p>
+                <p className="mt-2 text-meta leading-relaxed text-neutral-500">
+                  Who did what, including who opened private photos
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <span className="text-right">
+                <span className="block text-row font-medium text-brand-navy transition-colors group-hover:text-accent">
+                  {audit?.status ?? "Loading…"}
+                </span>
+                {audit?.detail ? (
+                  <span className="mt-1 block text-meta text-neutral-400">
+                    {audit.detail}
+                  </span>
+                ) : null}
+              </span>
+              <ChevronRightIcon
+                className="size-6 shrink-0 text-neutral-400 transition-colors duration-200 group-hover:text-accent"
+                strokeWidth={1.7}
+                aria-hidden
+              />
+            </div>
+          </a>
+        </li>
+      </ul>
     </PageSection>
   )
 }

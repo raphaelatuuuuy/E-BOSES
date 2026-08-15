@@ -461,7 +461,7 @@ export function TrySampleStep(props: {
         </Button>
 
         {profileKeys.length > 0 ? (
-          <div className="mt-4 rounded-xl border border-line-tint bg-white p-3">
+          <div className="mt-4 rounded-xl border border-neutral-200 bg-white p-3">
             <div className="flex items-center justify-between gap-2">
               <p
                 className={cn("text-xs font-semibold", PROOF_THEME.title)}
@@ -478,7 +478,7 @@ export function TrySampleStep(props: {
                     setDobError("")
                   }}
                   disabled={testRunning}
-                  className="text-[11px] font-semibold text-brand-blue transition hover:underline disabled:opacity-50"
+                  className="text-[11px] font-semibold text-accent transition hover:underline disabled:opacity-50"
                 >
                   Clear
                 </button>
@@ -505,7 +505,7 @@ export function TrySampleStep(props: {
                           onTestProfileChange(key, event.target.value)
                         }
                         disabled={testRunning}
-                        className="h-9 w-full rounded-lg border border-line-tint bg-white px-2.5 text-xs font-medium text-brand-navy transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:opacity-50"
+                        className="h-9 w-full rounded-lg border border-neutral-200 bg-white px-2.5 text-xs font-medium text-brand-navy transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:opacity-50"
                       >
                         <option value="">Not entered</option>
                         <option value="male">Male</option>
@@ -543,7 +543,7 @@ export function TrySampleStep(props: {
                           "h-9 rounded-lg border bg-white text-xs font-medium text-brand-navy disabled:opacity-50",
                           dobError
                             ? "border-sos focus:border-sos"
-                            : "border-line-tint"
+                            : "border-neutral-200"
                         )}
                       />
                       {dobError ? (
@@ -572,7 +572,7 @@ export function TrySampleStep(props: {
                       }
                       placeholder={PROFILE_FIELD_PLACEHOLDERS[key] ?? ""}
                       disabled={testRunning}
-                      className="h-9 rounded-lg border border-line-tint bg-white text-xs font-medium text-brand-navy disabled:opacity-50"
+                      className="h-9 rounded-lg border border-neutral-200 bg-white text-xs font-medium text-brand-navy disabled:opacity-50"
                     />
                   </label>
                 )
@@ -586,7 +586,7 @@ export function TrySampleStep(props: {
             type="button"
             onClick={() => setUploadOpen((value) => !value)}
             aria-expanded={uploadOpen}
-            className="mx-auto flex items-center gap-1.5 text-xs font-semibold text-brand-blue transition"
+            className="mx-auto flex items-center gap-1.5 text-xs font-semibold text-accent transition"
           >
             {uploadOpen ? (
               <>
@@ -636,7 +636,7 @@ export function TrySampleStep(props: {
                               filename: slot.file.name,
                             })
                           }
-                          className="group relative shrink-0 overflow-hidden rounded-lg border border-line-tint"
+                          className="group relative shrink-0 overflow-hidden rounded-lg border border-neutral-200"
                           aria-label="Preview test photo"
                         >
                           <img
@@ -670,7 +670,7 @@ export function TrySampleStep(props: {
                           type="button"
                           onClick={() => pickFor(side)}
                           disabled={testRunning}
-                          className="shrink-0 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-brand-blue transition hover:bg-tint disabled:opacity-50"
+                          className="shrink-0 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-accent transition hover:bg-tint disabled:opacity-50"
                         >
                           Replace
                         </button>
@@ -689,9 +689,9 @@ export function TrySampleStep(props: {
                         type="button"
                         onClick={() => pickFor(side)}
                         disabled={testRunning}
-                        className="inline-flex items-center gap-2 rounded-lg border border-dashed border-line-tint bg-white px-3 py-2 text-xs font-semibold text-navy-muted transition hover:border-brand-blue hover:bg-tint disabled:opacity-50"
+                        className="inline-flex items-center gap-2 rounded-lg border border-dashed border-neutral-200 bg-white px-3 py-2 text-xs font-semibold text-neutral-600 transition hover:border-accent hover:bg-tint disabled:opacity-50"
                       >
-                        <ImagePlus className="size-4 text-brand-blue" />
+                        <ImagePlus className="size-4 text-accent" />
                         Upload {sideName} photo
                       </button>
                     )}
@@ -706,7 +706,7 @@ export function TrySampleStep(props: {
         </div>
 
         {tested ? (
-          <div className="mt-5 border-t border-line-tint pt-4">
+          <div className="mt-5 border-t border-neutral-200 pt-4">
             <div>
               <p
                 className={cn("mb-2 text-xs font-semibold", PROOF_THEME.title)}
@@ -719,12 +719,12 @@ export function TrySampleStep(props: {
                   return (
                     <section
                       key={side}
-                      className="overflow-hidden rounded-xl border border-line-tint"
+                      className="overflow-hidden rounded-xl border border-neutral-200"
                     >
                       {multiSide ? (
                         <p
                           className={cn(
-                            "border-b border-line-tint bg-tint px-3 py-2 text-[11px] font-semibold uppercase",
+                            "border-b border-neutral-200 bg-tint px-3 py-2 text-[11px] font-semibold uppercase",
                             PROOF_THEME.muted
                           )}
                         >
@@ -780,7 +780,7 @@ export function TrySampleStep(props: {
                                 return (
                                   <tr
                                     key={field.key}
-                                    className="border-t border-line-tint"
+                                    className="border-t border-neutral-200"
                                   >
                                     <td className="px-3 py-2.5 align-top">
                                       <span className="inline-flex items-center gap-2 font-medium">

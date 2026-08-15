@@ -270,7 +270,7 @@ export default function OfficialCategoriesPage() {
                 className={`w-full rounded-lg border bg-card px-2 py-1.5 text-xs font-semibold outline-none focus:border-accent ${
                   current
                     ? "border-card-line text-foreground"
-                    : "border-status-open text-status-open-ink"
+                    : "border-neutral-400 text-neutral-600"
                 }`}
               >
                 <option value="">Nobody assigned</option>
@@ -303,7 +303,7 @@ export default function OfficialCategoriesPage() {
           <button
             type="button"
             onClick={() => void removeCategory(category)}
-            className="rounded-lg px-2 py-1 text-xs font-bold text-severity-critical-ink transition hover:bg-severity-critical-surface"
+            className="rounded-lg px-2 py-1 text-xs font-bold text-neutral-500 transition-colors hover:text-sos"
           >
             Delete
           </button>
@@ -317,7 +317,7 @@ export default function OfficialCategoriesPage() {
   return (
     <ConfigShell
       icon={TagsIcon}
-      eyebrow="Intake & routing"
+      eyebrow="Operations"
       title="Concern categories"
       description="What residents can report, and which barangay unit answers each one. Routing lives here rather than on its own screen — a category and the unit behind it are one decision."
       stats={[

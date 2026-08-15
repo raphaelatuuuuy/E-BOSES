@@ -100,7 +100,9 @@ export function ConfigShell({
     // (#f6f7f9) behind every page, which is so close to white that a
     // configuration screen read as neither one thing nor the other.
     <div className="min-h-full bg-white">
-      <div className="mx-auto w-full max-w-[1100px] px-6 pt-10 pb-28 sm:px-10">
+      {/* pb-40 on a phone clears the floating bottom nav, which was sitting on
+          top of the last row and the pager. */}
+      <div className="mx-auto w-full max-w-[1100px] px-6 pt-10 pb-40 sm:px-10 sm:pb-28">
         <ConfigBreadcrumb
           trail={[
             { label: "Configuration", to: "/dashboard/configuration" },
@@ -109,20 +111,23 @@ export function ConfigShell({
           ]}
         />
 
-        <header className="mt-8 flex flex-wrap items-start justify-between gap-x-8 gap-y-5">
-          <div className="flex min-w-0 flex-1 items-start gap-6">
+        {/* Stacked on a phone. This was one wrapping row, so a `shrink-0`
+            action kept its full width while the title was squeezed into about
+            140px and broke across three lines. */}
+        <header className="mt-8 flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between sm:gap-8">
+          <div className="flex min-w-0 items-start gap-6 sm:flex-1">
             <span className="hidden size-16 shrink-0 items-center justify-center rounded-2xl bg-brand-navy text-white sm:flex">
               <Icon className="size-7" strokeWidth={1.7} aria-hidden />
             </span>
             <div className="min-w-0">
-              <h1 className="text-page-title text-brand-navy">{title}</h1>
+              <h1 className="text-page-title text-balance text-brand-navy">{title}</h1>
               <p className="mt-3 max-w-2xl text-read leading-relaxed text-neutral-500">
                 {description}
               </p>
             </div>
           </div>
 
-          {action ? <div className="shrink-0">{action}</div> : null}
+          {action ? <div className="shrink-0 [&>*]:w-full sm:[&>*]:w-auto">{action}</div> : null}
         </header>
 
         {stats && stats.length > 0 ? (

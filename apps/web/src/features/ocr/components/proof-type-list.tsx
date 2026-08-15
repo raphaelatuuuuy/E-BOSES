@@ -1,20 +1,14 @@
 import { useState } from "react"
-import { Pencil, Plus, Trash2 } from "lucide-react"
+import { Plus } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import {
-  Dialog,
-  DialogBody,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@workspace/ui/components/dialog"
-import { Switch } from "@workspace/ui/components/switch"
-import { cn } from "@workspace/ui/lib/utils"
 
 import type { OcrDocumentType } from "@/features/ocr/api"
-import { PROOF_THEME } from "@/features/ocr/components/proof-theme"
+import {
+  SheetDialog,
+  SheetPrimaryButton,
+} from "@/features/dashboard/components/sheet-dialog"
+import { Pager, PAGE_SIZE } from "@/components/ui/list-controls"
 
 export function ProofTypeList(props: {
   documents: OcrDocumentType[]
@@ -24,8 +18,11 @@ export function ProofTypeList(props: {
   onRemove: (docKey: string) => void
   onToggleAvailable: (docKey: string, enabled: boolean) => void
 }) {
-  const { documents, saving, onAdd, onEdit, onRemove, onToggleAvailable } = props
+  const { documents, saving, onAdd, onEdit, onRemove, onToggleAvailable } =
+    props
   const [pendingRemoveKey, setPendingRemoveKey] = useState<string | null>(null)
+  const [offset, setOffset] = useState(0)
+  const visible = documents.slice(offset, offset + PAGE_SIZE)
 
   const pendingDoc = pendingRemoveKey
     ? documents.find((doc) => doc.key === pendingRemoveKey)
@@ -37,123 +34,138 @@ export function ProofTypeList(props: {
     "this proof type"
 
   return (
-    <div className="w-full space-y-6">
+    <div className="w-full">
       {documents.length === 0 ? (
-        <div className={cn(PROOF_THEME.card, "flex flex-col items-center gap-4 py-10 text-center")}>
+        <div className="flex flex-col items-start gap-4 border-t border-neutral-200 py-12">
           <div className="space-y-1">
-            <h3 className={cn("text-lg font-semibold", PROOF_THEME.title)}>
-              No proof types yet
-            </h3>
-            <p className={cn("font-semibold", PROOF_THEME.body)}>
-              Add your first ID or document type for resident sign-up.
+            <h3 className="text-section text-brand-navy">No documents yet</h3>
+            <p className="mt-2 text-read text-neutral-500">
+              Add the first ID or document residents can use to prove they live
+              here.
             </p>
           </div>
           <Button
             type="button"
-            className={cn("font-bold text-white", PROOF_THEME.primaryBg)}
             onClick={onAdd}
             disabled={saving}
+            className="rounded-full font-bold"
           >
             <Plus className="size-4" />
-            Add your first proof type
+            Add a document
           </Button>
         </div>
       ) : (
-        /* A hairline list, not a four-column table: three of those columns were
-           facts about one row, and the header row cost more than it explained. */
-        <ul className="overflow-hidden rounded-xl border border-neutral-200">
-          {documents.map((doc) => {
-            const displayName =
-              doc.template_name?.trim() || doc.name?.trim() || "Untitled proof"
-            const available = doc.enabled !== false
-            const sides = doc.required_sides ?? []
-            const needsBoth = sides.includes("front") && sides.includes("back")
-            const fieldCount = doc.fields?.length ?? 0
+        /* Editorial rows, not stacked cards: a left rail carrying whether the
+           proof is live, a strong name, and its facts as labelled pairs. Ten at
+           a time — a list of every proof type is not more useful, just longer. */
+        <>
+          <ol>
+            {visible.map((doc) => {
+              const displayName =
+                doc.template_name?.trim() ||
+                doc.name?.trim() ||
+                "Untitled proof"
+              const available = doc.enabled !== false
+              const sides = doc.required_sides ?? []
+              const needsBoth =
+                sides.includes("front") && sides.includes("back")
+              const fieldCount = doc.fields?.length ?? 0
 
-            return (
-              <li
-                key={doc.key}
-                className="flex flex-wrap items-start gap-x-8 gap-y-4 border-b border-neutral-200 px-8 py-7 last:border-b-0"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="text-row text-foreground">{displayName}</p>
-                  <p className="mt-1 text-meta text-neutral-500">
-                    {needsBoth ? "Front and back required" : "Front only"}
-                    {fieldCount
-                      ? ` · ${fieldCount} field${fieldCount === 1 ? "" : "s"} read`
-                      : " · no fields configured yet"}
+              return (
+                <li
+                  key={doc.key}
+                  className="grid grid-cols-1 gap-x-8 gap-y-3 border-b border-neutral-200 py-6 last:border-b-0 sm:grid-cols-[130px_minmax(0,1fr)_auto]"
+                >
+                  {/* No switch. A toggle in a list row reads as a setting you
+                      are about to change by accident; the state is a fact about
+                      the row, and changing it is a named action on the right. */}
+                  <p className="text-meta text-neutral-500">
+                    {available ? "On sign-up" : "Hidden"}
                   </p>
-                  <label className="mt-3 inline-flex items-center gap-3">
-                    <Switch
-                      checked={available}
+
+                  <div className="min-w-0">
+                    <p className="text-row text-brand-navy">{displayName}</p>
+                    <dl className="mt-3 flex flex-wrap gap-x-8 gap-y-2">
+                      <div>
+                        <dt className="text-meta text-neutral-400">
+                          Photos needed
+                        </dt>
+                        <dd className="mt-0.5 text-meta text-brand-navy">
+                          {needsBoth ? "Front and back" : "Front only"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-meta text-neutral-400">
+                          Details read
+                        </dt>
+                        <dd className="mt-0.5 text-meta text-brand-navy">
+                          {fieldCount
+                            ? `${fieldCount} field${fieldCount === 1 ? "" : "s"}`
+                            : "None set up yet"}
+                        </dd>
+                      </div>
+                    </dl>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-5 border-t border-neutral-200 pt-3 sm:border-0 sm:pt-0">
+                    <button
+                      type="button"
+                      onClick={() => onToggleAvailable(doc.key, !available)}
                       disabled={saving}
-                      onCheckedChange={(enabled) => onToggleAvailable(doc.key, enabled)}
-                    />
-                    <span className="text-meta text-neutral-500">
-                      {available
-                        ? "Residents can choose this proof"
-                        : "Hidden until you turn this on"}
-                    </span>
-                  </label>
-                </div>
-                <div className="flex shrink-0 gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => onEdit(doc.key)}
-                    disabled={saving}
-                  >
-                    <Pencil className="size-3.5" />
-                    Edit
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    onClick={() => setPendingRemoveKey(doc.key)}
-                    disabled={saving || documents.length <= 1}
-                  >
-                    <Trash2 className="size-3.5" />
-                    Remove
-                  </Button>
-                </div>
-              </li>
-            )
-          })}
-        </ul>
+                      className="text-meta text-neutral-500 transition-colors hover:text-brand-navy disabled:text-neutral-300"
+                    >
+                      {available ? "Hide" : "Show"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onEdit(doc.key)}
+                      disabled={saving}
+                      className="text-meta text-neutral-500 transition-colors hover:text-accent disabled:text-neutral-300"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPendingRemoveKey(doc.key)}
+                      disabled={saving || documents.length <= 1}
+                      className="text-meta text-neutral-500 transition-colors hover:text-sos disabled:text-neutral-300"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </li>
+              )
+            })}
+          </ol>
+          <Pager
+            offset={offset}
+            total={documents.length}
+            onChange={setOffset}
+            noun="proof types"
+          />
+        </>
       )}
 
-      <Dialog
+      {/* The product's own dialog, the same one Settings, Profile and the
+          report flow use. This was a bare DialogContent with its own footer
+          layout, so removing a proof type looked like a different app. */}
+      <SheetDialog
         open={pendingRemoveKey != null}
-        onOpenChange={(open) => {
-          if (!open) setPendingRemoveKey(null)
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className={PROOF_THEME.title}>Remove proof type?</DialogTitle>
-          </DialogHeader>
-          <DialogBody>
-            <p className={cn("text-sm font-semibold leading-6", PROOF_THEME.body)}>
-              Remove <strong className={PROOF_THEME.title}>“{pendingName}”</strong>? It will be
-              removed from resident sign-up right away.
-            </p>
-          </DialogBody>
-          <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-            <Button
-              type="button"
-              variant="outline"
-              className="font-bold hover:bg-tint hover:text-brand-blue"
-              disabled={saving}
-              onClick={() => setPendingRemoveKey(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              className="font-bold"
+        onClose={() => setPendingRemoveKey(null)}
+        title="Remove this proof type?"
+        description={
+          <>
+            Residents will stop seeing <strong>“{pendingName}”</strong> on
+            sign-up straight away. Checks already completed with it are kept.
+          </>
+        }
+        footer={
+          /* Stacked and full width, the way every other confirmation in the
+             product ends: the destructive action first, then the neutral way
+             out — the same button Settings uses to sign out. */
+          <div className="space-y-3">
+            <SheetPrimaryButton
+              tone="danger"
               disabled={saving || !pendingRemoveKey}
               onClick={() => {
                 if (!pendingRemoveKey) return
@@ -163,10 +175,16 @@ export function ProofTypeList(props: {
               }}
             >
               Remove
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            </SheetPrimaryButton>
+            <SheetPrimaryButton
+              disabled={saving}
+              onClick={() => setPendingRemoveKey(null)}
+            >
+              Keep it
+            </SheetPrimaryButton>
+          </div>
+        }
+      />
     </div>
   )
 }

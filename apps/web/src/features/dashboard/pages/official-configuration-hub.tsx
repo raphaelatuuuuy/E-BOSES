@@ -2,7 +2,6 @@ import { useEffect, useState } from "react"
 import {
   AlertTriangleIcon,
   BrainCircuitIcon,
-  FileLock2Icon,
   MapIcon,
   ShieldCheckIcon,
   SirenIcon,
@@ -85,7 +84,7 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
     ],
   },
   {
-    title: "Intake & routing",
+    title: "Operations",
     sections: [
       {
         key: "categories",
@@ -98,52 +97,34 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
       {
         key: "classification",
         label: "Report checking",
-        description: "How submitted reports are checked before you see them",
+        description: "What happens to a report before it reaches your queue",
         icon: BrainCircuitIcon,
         to: "/dashboard/configuration/classification",
         capability: CAPABILITIES.configureClassification,
       },
-    ],
-  },
-  {
-    title: "Emergency response",
-    sections: [
       {
         key: "dispatch",
-        label: "Emergency categories",
-        description: "SOS choices and the units that answer each",
+        label: "Emergency types",
+        description: "The SOS buttons residents see, and who answers each",
         icon: SirenIcon,
         to: "/dashboard/configuration/dispatch",
         capability: CAPABILITIES.configureDispatch,
       },
       {
         key: "zones",
-        label: "Zones, radius & SMS",
-        description: "Coverage rings and the SMS fallback number",
+        label: "Coverage & SMS fallback",
+        description: "How far alerts reach, and the number used with no internet",
         icon: MapIcon,
         to: "/dashboard/configuration/map-dispatch",
         capability: CAPABILITIES.configureGeography,
       },
-    ],
-  },
-  {
-    title: "Trust & privacy",
-    sections: [
       {
         key: "verification",
-        label: "Automatic ID checks",
-        description: "Resident ID and residence proof, checked automatically",
+        label: "Accepted ID documents",
+        description: "Which documents prove a resident lives here",
         icon: ShieldCheckIcon,
         to: "/dashboard/configuration/id-proof-template",
         capability: CAPABILITIES.reviewVerification,
-      },
-      {
-        key: "privacy",
-        label: "Privacy requests",
-        description: "Data export, deactivation and deletion",
-        icon: FileLock2Icon,
-        to: "/dashboard/configuration/privacy-requests",
-        capability: CAPABILITIES.handlePrivacy,
       },
     ],
   },
@@ -194,7 +175,7 @@ function SectionRow({
     <span className="block h-3 w-24 animate-pulse rounded-full bg-neutral-200" />
   ) : (
     <span className="block text-right">
-      <span className="block text-row text-brand-navy">
+      <span className="block text-row text-brand-navy transition-colors group-hover:text-accent">
         {state?.status ?? (built ? "—" : "Not configured")}
       </span>
       {state?.detail ? (
@@ -275,7 +256,7 @@ export default function OfficialConfigurationHubPage() {
 
   return (
     <div className="min-h-full bg-white">
-      <div className="mx-auto w-full max-w-[1100px] px-6 pt-12 pb-28 sm:px-10">
+      <div className="mx-auto w-full max-w-[1100px] px-6 pt-12 pb-40 sm:px-10 sm:pb-28">
         <PageHeader
           title="Configuration"
           subtitle="How this barangay routes concerns, dispatches responders and verifies residents."

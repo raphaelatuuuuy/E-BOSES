@@ -1,5 +1,9 @@
 import { useMemo, useState, type ReactNode } from "react"
-import { ArrowDownIcon, ArrowUpIcon, SearchIcon } from "lucide-react"
+import { ArrowDownIcon, ArrowUpIcon } from "lucide-react"
+
+import { cn } from "@workspace/ui/lib/utils"
+import { ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
+import { useWheelScroll } from "@/hooks/use-wheel-scroll"
 
 /**
  * Table primitive for the configuration screens.
@@ -64,6 +68,8 @@ export function DataTable<Row>({
 }) {
   const [internalQuery, setInternalQuery] = useState("")
   const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" } | null>(null)
+  const [offset, setOffset] = useState(0)
+  const filterScrollRef = useWheelScroll<HTMLDivElement>()
 
   const query = searchValue ?? internalQuery
   const setQuery = onSearchChange ?? setInternalQuery
@@ -100,52 +106,69 @@ export function DataTable<Row>({
     )
   }
 
+  // Ten rows a page. Showing every record made the long tables scroll for
+  // screens; it never made them easier to read.
+  const viewKey = `${query}|${activeFilter ?? ""}|${sort?.key ?? ""}${sort?.direction ?? ""}`
+  const [prevViewKey, setPrevViewKey] = useState(viewKey)
+  if (prevViewKey !== viewKey) {
+    setPrevViewKey(viewKey)
+    setOffset(0)
+  }
+  const page = visible.slice(offset, offset + PAGE_SIZE)
+
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {(searchMatches || filters) && (
-        <div className="flex flex-wrap items-center gap-2">
+        /* Search on its own line, filters on one line that scrolls sideways.
+           They used to share a wrapping flex row, so a table with six filters
+           pushed its own first row off the screen. */
+        <div className="space-y-4">
           {searchMatches ? (
-            <label className="flex min-w-56 flex-1 items-center gap-3 border-b border-neutral-300 pb-3">
-              <span className="sr-only">{searchPlaceholder}</span>
-              <SearchIcon aria-hidden className="size-5 shrink-0 text-neutral-400" strokeWidth={2} />
-              <input
-                type="search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={searchPlaceholder}
-                className="min-w-0 flex-1 bg-transparent text-read text-foreground outline-none placeholder:text-neutral-400"
-              />
-            </label>
+            <ListSearch
+              value={query}
+              onChange={setQuery}
+              placeholder={searchPlaceholder}
+              label={searchPlaceholder}
+              className="sm:max-w-sm"
+            />
           ) : null}
 
-          {filters?.map((chip) => {
-            const active = activeFilter === chip.key
-            return (
-              <button
-                key={chip.key}
-                type="button"
-                onClick={() => onFilterChange?.(chip.key)}
-                aria-pressed={active}
-                className={
-                  active
-                    ? "inline-flex items-center gap-1.5 rounded-full bg-brand-navy px-4 py-2 text-meta font-semibold text-white"
-                    : "inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-meta font-medium text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-brand-navy"
-                }
-              >
-                {chip.label}
-                {typeof chip.count === "number" ? (
-                  <span className={active ? "opacity-70" : "text-neutral-400"}>{chip.count}</span>
-                ) : null}
-              </button>
-            )
-          })}
+          {filters ? (
+            <div
+              ref={filterScrollRef}
+              className="flex items-center gap-7 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            >
+              {filters.map((chip) => {
+                const active = activeFilter === chip.key
+                return (
+                  <button
+                    key={chip.key}
+                    type="button"
+                    onClick={() => onFilterChange?.(chip.key)}
+                    aria-pressed={active}
+                    className={cn(
+                      "shrink-0 text-read transition-colors",
+                      active
+                        ? "font-medium text-brand-navy"
+                        : "text-neutral-400 hover:text-brand-navy",
+                    )}
+                  >
+                    {chip.label}
+                    {typeof chip.count === "number" ? (
+                      <span className="ml-1.5 text-neutral-400 tabular-nums">{chip.count}</span>
+                    ) : null}
+                  </button>
+                )
+              })}
+            </div>
+          ) : null}
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-card">
+      <div className="overflow-x-auto">
         <table className="w-full min-w-full border-collapse text-left">
           <thead>
-            <tr className="border-b border-neutral-200">
+            <tr>
               {columns.map((column) => (
                 <th
                   key={column.key}
@@ -157,7 +180,7 @@ export function DataTable<Row>({
                         : "descending"
                       : undefined
                   }
-                  className={`px-6 py-4 text-meta font-medium text-neutral-400 ${
+                  className={`px-6 pt-0 pb-3 text-meta font-medium text-neutral-400 ${
                     column.align === "right" ? "text-right" : ""
                   } ${column.hideOnMobile ? "hidden md:table-cell" : ""}`}
                 >
@@ -209,7 +232,7 @@ export function DataTable<Row>({
                 </td>
               </tr>
             ) : (
-              visible.map((row) => (
+              page.map((row) => (
                 <tr
                   key={rowKey(row)}
                   onClick={onRowSelect ? () => onRowSelect(row) : undefined}
@@ -235,11 +258,12 @@ export function DataTable<Row>({
       </div>
 
       {!loading && visible.length > 0 ? (
-        <p className="text-meta text-neutral-400">
-          {visible.length === rows.length
-            ? `${rows.length} ${rows.length === 1 ? "entry" : "entries"}`
-            : `${visible.length} of ${rows.length} shown`}
-        </p>
+        <Pager
+          offset={offset}
+          total={visible.length}
+          onChange={setOffset}
+          noun={visible.length === rows.length ? "entries" : "matches"}
+        />
       ) : null}
     </div>
   )

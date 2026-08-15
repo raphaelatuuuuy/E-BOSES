@@ -143,9 +143,9 @@ export function MarkAreasCanvas(props: {
         <button
           type="button"
           onClick={onRequestUpload}
-          className="flex w-full max-w-md flex-col items-center gap-2 rounded-2xl border border-dashed border-line-tint bg-white px-6 py-14 text-center shadow-sm"
+          className="flex w-full max-w-md flex-col items-center gap-2 rounded-2xl border border-dashed border-neutral-200 bg-white px-6 py-14 text-center shadow-sm"
         >
-          <span className="flex size-12 items-center justify-center rounded-full bg-tint text-brand-blue">
+          <span className="flex size-12 items-center justify-center rounded-full bg-tint text-accent">
             <CloudUpload className="size-6" />
           </span>
           <span className={cn("text-sm font-semibold", PROOF_THEME.title)}>
@@ -169,7 +169,7 @@ export function MarkAreasCanvas(props: {
             <img
               src={imageUrl}
               alt="Sample photo"
-              className="block max-h-[32rem] max-w-full select-none rounded-md border border-line-tint bg-white object-contain"
+              className="block max-h-[32rem] max-w-full select-none rounded-md border border-neutral-200 bg-white object-contain"
               draggable={false}
             />
             {sorted.map((field, index) => {
@@ -246,7 +246,7 @@ export function MarkAreasCanvas(props: {
                 </div>
               )
             })}
-            <span className="pointer-events-none absolute bottom-2 right-2 rotate-[-8deg] text-xs font-semibold uppercase tracking-widest text-brand-blue/40">
+            <span className="pointer-events-none absolute bottom-2 right-2 rotate-[-8deg] text-xs font-semibold uppercase tracking-widest text-accent/40">
               {sideLabel(sampleSide)} preview
             </span>
           </div>

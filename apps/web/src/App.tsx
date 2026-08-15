@@ -37,6 +37,7 @@ const EmergencyHistoryPage = lazy(() => import("@/features/dashboard/pages/emerg
 const OfficialIdProofWorkspacePage = lazy(() => import("@/features/dashboard/pages/official-id-proof-workspace"))
 const ConcernClassificationPage = lazy(() => import("@/features/classification/concern-classification-page"))
 const OfficialConfigurationHubPage = lazy(() => import("@/features/dashboard/pages/official-configuration-hub"))
+const OfficialAuditLogPage = lazy(() => import("@/features/dashboard/pages/official-audit-log-page"))
 const OfficialUnitsPage = lazy(() => import("@/features/dashboard/pages/official-units-page"))
 const OfficialRolesPage = lazy(() => import("@/features/dashboard/pages/official-roles-page"))
 const NotFoundPage = lazy(() => import("@/features/dashboard/pages/not-found"))
@@ -45,7 +46,6 @@ const OfficialCategoriesPage = lazy(() => import("@/features/dashboard/pages/off
 const OfficialDispatchRulesPage = lazy(() => import("@/features/dashboard/pages/official-dispatch-rules-page"))
 const OfficialCommunityContentPage = lazy(() => import("@/features/dashboard/pages/official-community-content-page"))
 const OfficialMapDispatchPolicyPage = lazy(() => import("@/features/dashboard/pages/official-map-dispatch-policy-page"))
-const OfficialPrivacyRequestsPage = lazy(() => import("@/features/dashboard/pages/official-privacy-requests-page"))
 const LandingPage = lazy(() => import("@/features/landing/landing-page"))
 const HelpPage = lazy(() => import("@/features/help/help-page"))
 const HelpCollectionPage = lazy(() => import("@/features/help/help-collection-page"))
@@ -249,7 +249,7 @@ function AppRoutes() {
         <Route path="admin" element={<OfficialRoute><Navigate to="/dashboard/configuration/users" replace /></OfficialRoute>} />
         <Route path="configuration/verification" element={<OfficialRoute><Navigate to="/dashboard/configuration/id-proof-template" replace /></OfficialRoute>} />
         <Route path="configuration/zones" element={<OfficialRoute><Navigate to="/dashboard/configuration/map-dispatch" replace /></OfficialRoute>} />
-        <Route path="configuration/privacy" element={<OfficialRoute><Navigate to="/dashboard/configuration/privacy-requests" replace /></OfficialRoute>} />
+        <Route path="configuration/privacy" element={<OfficialRoute><Navigate to="/dashboard/configuration/audit-log" replace /></OfficialRoute>} />
         <Route path="verification-queue" element={<OfficialRoute><Navigate to="/dashboard/configuration/id-proof-template" replace /></OfficialRoute>} />
         <Route path="ocr-templates" element={<OfficialRoute><Navigate to="/dashboard/configuration/id-proof-template" replace /></OfficialRoute>} />
         <Route path="concern-classification" element={<OfficialRoute><Navigate to="/dashboard/configuration/classification" replace /></OfficialRoute>} />
@@ -263,7 +263,8 @@ function AppRoutes() {
         <Route path="configuration/classification" element={<OfficialRoute><ConcernClassificationPage /></OfficialRoute>} />
         <Route path="configuration/map-dispatch" element={<OfficialRoute><OfficialMapDispatchPolicyPage /></OfficialRoute>} />
         <Route path="configuration/users" element={<OfficialRoute><OfficialUsersManagePage /></OfficialRoute>} />
-        <Route path="configuration/privacy-requests" element={<OfficialRoute><OfficialPrivacyRequestsPage /></OfficialRoute>} />
+        <Route path="configuration/audit-log" element={<OfficialRoute><OfficialAuditLogPage /></OfficialRoute>} />
+        <Route path="configuration/privacy-requests" element={<OfficialRoute><Navigate to="/dashboard/configuration/audit-log" replace /></OfficialRoute>} />
         <Route path="community-content" element={<OfficialRoute><OfficialCommunityContentPage /></OfficialRoute>} />
         <Route path="responders" element={<ResponderRoute><Navigate to="/dashboard/responders/dispatch" replace /></ResponderRoute>} />
         <Route path="responders/dispatch" element={<ResponderRoute><ResponderDispatchPage /></ResponderRoute>} />

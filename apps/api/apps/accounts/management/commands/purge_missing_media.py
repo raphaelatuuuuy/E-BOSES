@@ -165,10 +165,15 @@ class Command(BaseCommand):
         )
         count = open_cases.count()
         if apply_changes and count:
+            # retry_eligible must stay True. Nobody in the barangay can produce
+            # an image that no longer exists — only the resident can upload it
+            # again. Setting it False created cases no official screen could
+            # clear and no resident could retry, which then sat on the
+            # Configuration card forever.
             open_cases.update(
                 status=Case.Status.MANUAL_REVIEW,
                 review_reason=Case.ReviewReason.RESUBMISSION_REQUIRED,
-                retry_eligible=False,
+                retry_eligible=True,
             )
         totals["proofs_flagged"] += count
         if count:

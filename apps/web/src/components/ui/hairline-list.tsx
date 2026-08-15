@@ -49,11 +49,11 @@ export function HairlineRow({
           <span className="mt-2 block text-meta leading-relaxed text-neutral-500">{subtitle}</span>
         ) : null}
       </span>
-      {meta ? <span className="shrink-0 text-meta text-neutral-400">{meta}</span> : null}
+      {meta ? <span className="shrink-0">{meta}</span> : null}
       {trailing ??
         (interactive ? (
           <ChevronRightIcon
-            className="size-6 shrink-0 text-neutral-400"
+            className="size-6 shrink-0 text-neutral-400 transition-colors duration-200 group-hover:text-accent"
             strokeWidth={1.7}
             aria-hidden
           />

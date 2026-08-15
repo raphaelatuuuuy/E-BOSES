@@ -37,7 +37,7 @@ type Draft = Partial<Position>
 const GROUPS: { title: string; capabilities: string[] }[] = [
   { title: "People & access", capabilities: ["manage_units", "manage_roles", "manage_users"] },
   {
-    title: "Intake & routing",
+    title: "Reports",
     capabilities: ["manage_categories", "configure_classification", "resolve_concerns"],
   },
   {
@@ -246,7 +246,7 @@ export default function OfficialRolesPage() {
       header: "Can do",
       render: (position) =>
         position.permissions.length === 0 ? (
-          <span className="text-xs font-semibold italic text-status-open-ink">
+          <span className="text-xs font-semibold italic text-neutral-600">
             No capabilities — cannot do anything
           </span>
         ) : (

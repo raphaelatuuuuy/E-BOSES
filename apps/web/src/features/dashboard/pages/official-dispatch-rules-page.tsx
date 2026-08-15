@@ -278,9 +278,9 @@ export default function OfficialDispatchRulesPage() {
   return (
     <ConfigShell
       icon={SirenIcon}
-      eyebrow="Emergency response"
-      title="Emergency categories & dispatch rules"
-      description="Configure the SOS choices residents see and route each category to one or more responding units."
+      eyebrow="Operations"
+      title="Emergency types"
+      description="The SOS buttons residents see, and which unit answers each one."
       action={<ConfigHeroAction icon={PlusIcon} onClick={() => setDraft({ icon_key: "siren", is_active: true })}>Add category</ConfigHeroAction>}
       stats={[
         { label: "Categories", value: categories.filter((item) => item.is_active).length },

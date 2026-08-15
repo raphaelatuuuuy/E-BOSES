@@ -242,6 +242,13 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 300.0,
         "options": {"queue": "eboses"},
     },
+    # Deletions blocked by an open report finish themselves once it closes.
+    # There is no review screen left to notice, so nothing else would.
+    "complete-unblocked-deletions": {
+        "task": "apps.accounts.privacy_tasks.complete_unblocked_deletions_task",
+        "schedule": 3600.0,
+        "options": {"queue": "eboses"},
+    },
     "ocr-health-canary": {
         "task": "apps.accounts.ocr_tasks.ocr_health_canary_task",
         "schedule": 300.0,
@@ -621,6 +628,10 @@ OCR_STUCK_CASE_MINUTES = env.int("OCR_STUCK_CASE_MINUTES", default=15)
 # Residents get their own data back without an official approving it; deletion
 # still needs a human because it anonymises records other people rely on.
 SELF_SERVICE_DATA_EXPORT = env.bool("SELF_SERVICE_DATA_EXPORT", default=True)
+
+# Deletion needs no official approval, but anonymising cannot be undone. The
+# resident can withdraw the request for this many days before it is carried out.
+ACCOUNT_DELETION_GRACE_DAYS = env.int("ACCOUNT_DELETION_GRACE_DAYS", default=7)
 
 RESEND_API_KEY = env("RESEND_API_KEY", default="")
 RESEND_API_URL = env("RESEND_API_URL", default="https://api.resend.com/emails")

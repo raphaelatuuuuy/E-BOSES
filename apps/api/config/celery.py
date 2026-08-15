@@ -17,7 +17,11 @@ app.autodiscover_tasks()
 # apps.service_status is a bare module, not an app, so autodiscover misses its
 # task the same way. Without it the health sampler never registers and the
 # status timeline only fills in when somebody opens the page.
-app.conf.imports = ("apps.accounts.ocr_tasks", "apps.service_status")
+app.conf.imports = (
+    "apps.accounts.ocr_tasks",
+    "apps.accounts.privacy_tasks",
+    "apps.service_status",
+)
 
 
 __all__ = ("app",)
