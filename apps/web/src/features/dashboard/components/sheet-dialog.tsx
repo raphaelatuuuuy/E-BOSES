@@ -143,6 +143,7 @@ export function SheetIconButton({
   return (
     <button
       type="button"
+      data-slot="sheet-icon-button"
       onClick={onClick}
       aria-label={label}
       className={cn(
@@ -254,10 +255,25 @@ export function SheetToggleRow({
 }) {
   return (
     <div className="flex items-center gap-4 border-b border-neutral-200 px-5 py-4 last:border-b-0">
-      <label htmlFor={id} className="min-w-0 flex-1 cursor-pointer">
-        <span className="block text-[16px] font-medium leading-snug text-neutral-900">{label}</span>
+      <label
+        htmlFor={id}
+        className={cn("min-w-0 flex-1", disabled ? "cursor-default" : "cursor-pointer")}
+      >
+        <span
+          className={cn(
+            "block text-[16px] font-medium leading-snug",
+            disabled ? "text-neutral-400" : "text-neutral-900",
+          )}
+        >
+          {label}
+        </span>
         {description ? (
-          <span className="mt-0.5 block text-[14px] leading-snug text-neutral-500">
+          <span
+            className={cn(
+              "mt-0.5 block text-[14px] leading-snug",
+              disabled ? "text-neutral-400" : "text-neutral-500",
+            )}
+          >
             {description}
           </span>
         ) : null}
@@ -269,7 +285,10 @@ export function SheetToggleRow({
         aria-busy={busy}
         aria-label={label}
         onCheckedChange={onChange}
-        className={cn("shrink-0", checked ? "bg-brand-orange" : "bg-neutral-200")}
+        className={cn(
+          "shrink-0",
+          checked ? "bg-brand-orange" : "bg-neutral-200"
+        )}
       />
     </div>
   )
@@ -307,7 +326,7 @@ export function SheetPrimaryButton({
   onClick?: () => void
   disabled?: boolean
   /** `danger` is for destructive confirmations only. */
-  tone?: "neutral" | "danger"
+  tone?: "neutral" | "danger" | "accent"
   children: ReactNode
   type?: "button" | "submit"
 }) {
@@ -320,9 +339,11 @@ export function SheetPrimaryButton({
         "flex h-[52px] w-full items-center justify-center rounded-full text-[17px] font-semibold transition-colors",
         disabled
           ? "cursor-not-allowed bg-neutral-200 text-neutral-400"
-          : tone === "danger"
-            ? "bg-sos text-white hover:opacity-90 active:scale-[0.99]"
-            : "bg-neutral-200 text-neutral-900 hover:bg-neutral-300 active:scale-[0.99]",
+            : tone === "danger"
+              ? "bg-sos text-white hover:opacity-90 active:scale-[0.99]"
+              : tone === "accent"
+                ? "bg-brand-orange text-white hover:bg-brand-orange-strong active:scale-[0.99]"
+                : "bg-neutral-200 text-neutral-900 hover:bg-neutral-300 active:scale-[0.99]",
       )}
     >
       {children}

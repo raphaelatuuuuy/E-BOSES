@@ -50,7 +50,6 @@ EVIDENCE_RELATIONSHIPS = {
 RECOMMENDED_ACTIONS = {
     "accept",
     "accept_with_privacy_review",
-    "manual_review",
     "request_more_information",
     "escalate_as_emergency",
     "reject_as_irrelevant",
@@ -177,7 +176,7 @@ def empty_details() -> dict:
         "privacy_scan_reasons": [],
         "suspected_sensitive_classes": [],
         "ai_result_uncertain": False,
-        "recommended_action": "manual_review",
+        "recommended_action": "accept",
         "short_explanation": "",
         "image_review_succeeded": None,
     }
@@ -192,16 +191,15 @@ def safe_needs_review(
 ) -> TextClassificationResult:
     """The result used whenever Gemma could not produce one.
 
-    Deliberately not "irrelevant": a report the system failed to read is a
-    report an official still has to read. `is_irrelevant` is set so the soft
-    flag gate routes it into the review queue, but the recommended action is
-    manual review and nothing about the media is claimed to be safe.
+    Deliberately not "irrelevant": a model outage must not reject a real report.
+    Deterministic intake checks remain authoritative and unread media stays
+    private.
     """
     details = {
         **empty_details(),
         "evidence_relationship": "image_review_failed" if image_attached else "image_unavailable",
         "ai_result_uncertain": True,
-        "recommended_action": "manual_review",
+        "recommended_action": "accept",
         "short_explanation": reason,
         "image_review_succeeded": image_review_succeeded,
     }
@@ -441,7 +439,7 @@ def build_prompt(
         "\nIMPORTANT: the resident DID submit a photo, but it could not be analyzed this time. "
         "Never write that there is no image, no photo, or that none was provided. Do not describe "
         "the photo or guess what it shows. Say only that the photo could not be reviewed "
-        "automatically and that it needs a manual look.\n"
+        "automatically and that the image will stay private.\n"
         if image_unreadable
         else ""
     )
@@ -449,7 +447,7 @@ def build_prompt(
         "You are the report-review assistant for E-Boses, a barangay civic concern and "
         "emergency coordination system in the Philippines.\n\n"
         "Analyze Filipino, English, or Taglish reports, and the attached image when one is provided. "
-        "You give recommendations only. You never make the final decision, never reject an emergency, "
+        "You return structured evidence for the automatic validation rules. Never reject an emergency "
         "and never invent information.\n\n"
         "Use only the configured concern categories and emergency types in this payload. "
         "Location is handled separately by the system; do not extract it.\n\n"
@@ -467,8 +465,8 @@ def build_prompt(
         "set urgent_attention true and consider escalate_as_emergency.\n"
         "8. evidence_relationship must be supports_report, partially_supports_report, contradicts_report, "
         "no_useful_image_evidence, or image_unavailable when no image is attached.\n"
-        "9. A category that does not match the photo is a reason for manual_review, never for "
-        "reject_as_irrelevant on its own.\n"
+        "9. A category mismatch is corrected automatically. Never use reject_as_irrelevant for a "
+        "category mismatch on its own.\n"
         "10. severity is low, medium, or high. Low is minor and non-urgent; medium blocks access or needs "
         "official action; high is immediate danger or serious harm.\n"
         "11. Privacy: set privacy_scan_required true when the image may show something that should not "
@@ -483,9 +481,9 @@ def build_prompt(
         "    Only name something you can actually see in this image. Give short reasons in "
         "privacy_scan_reasons. You are flagging a suspicion for a second system to check — never state "
         "that sensitive content is confirmed, and never state that an image is safe.\n"
-        "12. missing_information lists what an official would still need, in short phrases "
+        "12. missing_information lists what the resident must add in a new submission, in short phrases "
         '(for example: "a more specific location", "a clearer photo").\n'
-        "13. recommended_action must be accept, accept_with_privacy_review, manual_review, "
+        "13. recommended_action must be accept, accept_with_privacy_review, "
         "request_more_information, escalate_as_emergency, or reject_as_irrelevant.\n"
         "14. short_explanation is read by barangay staff. Write one or two complete sentences, at most "
         "about 45 words, that say: what the resident reported, what the image appears to show, whether "
@@ -583,7 +581,7 @@ def parse_gemma_result(
 
     action = str(data.get("recommended_action") or "").lower()
     if action not in RECOMMENDED_ACTIONS:
-        action = "manual_review"
+        action = "accept"
 
     urgent = bool(data.get("urgent_attention"))
     if urgent and action == "accept":
@@ -692,8 +690,8 @@ def payload_from_result(result: TextClassificationResult, *, selected_category: 
         "selected_category": selected_category,
         "category_match": category_match,
         "outcome": outcome,
-        "action": details.get("recommended_action") or "manual_review",
-        "notice": details.get("short_explanation") or "An official still needs to review this report.",
+        "action": details.get("recommended_action") or "accept",
+        "notice": details.get("short_explanation") or "Automatic validation used the safe intake fallback.",
     }
 
 

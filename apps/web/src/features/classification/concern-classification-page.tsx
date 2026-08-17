@@ -49,7 +49,7 @@ const defaults: ConcernClassificationConfig = {
   text_relevance_threshold: 0.65,
   duplicate_similarity_threshold: 0.85,
   minimum_description_length: 20,
-  mismatch_action: "manual_review",
+  mismatch_action: "auto_correct",
   flag_suspicious: true,
   flag_duplicates: true,
   report_duplicate_detection_enabled: true,
@@ -59,7 +59,6 @@ const defaults: ConcernClassificationConfig = {
   report_duplicate_similarity_threshold: 0.88,
   report_duplicate_location_precision: 4,
   flag_irrelevant: true,
-  notify_reviewer: true,
   suspicious_terms: ["test", "testing", "asdf", "qwerty", "12345"],
   category_keywords: {},
   categories: [],
@@ -135,7 +134,7 @@ function ResultBadges({ result }: { result: ReportValidationResult }) {
   if (result.evidence_relationship === "image_review_failed") badges.push({ label: "Photo review unavailable", tone: "warn" })
   if (result.evidence_relationship === "image_unavailable") badges.push({ label: "Text-only report", tone: "neutral" })
   if (result.urgent_attention) badges.push({ label: "Urgent attention", tone: "alert" })
-  if (result.category_match === false) badges.push({ label: "Needs review", tone: "warn" })
+  if (result.category_match === false) badges.push({ label: "Category corrected", tone: "warn" })
   if (result.duplicate) badges.push({ label: "Possible duplicate", tone: "warn" })
 
   if (!badges.length) return null
@@ -162,18 +161,17 @@ function ResultBadges({ result }: { result: ReportValidationResult }) {
 /** Mirrors the Privacy Protection wording in the official Review Assistant. */
 const SAMPLE_PRIVACY_COPY: Record<string, string> = {
   unchecked:
-    "The image could not be checked automatically for sensitive details. Manual privacy review is required.",
+    "The image could not be checked automatically for sensitive details, so it stays private.",
   not_required:
     "No sensitive details requiring automatic protection were identified during the initial review.",
   protected: "Sensitive details were protected before public display.",
   sensitive_review_required:
-    "Possible sensitive visual content was found. The image should remain restricted until an authorized official reviews it.",
-  no_match_found:
-    "No matching sensitive region was confirmed. Manual review may still be required.",
+    "Possible sensitive visual content was found. The image stays restricted.",
+    no_match_found: "No matching sensitive region was confirmed. The image stays restricted.",
   not_configured:
-    "Automatic privacy protection is not switched on, so the image would stay restricted pending review.",
+    "Automatic privacy protection is not switched on, so the image stays restricted.",
   failed:
-    "Automatic privacy protection could not be completed. The original image remains restricted pending review.",
+    "Automatic privacy protection could not be completed. The original image remains restricted.",
 }
 
 function SectionLabel({ children }: { children: ReactNode }) {
@@ -190,7 +188,7 @@ function readable(value: string | null | undefined) {
 function displayValue(value: string | null | undefined) {
   const normalized = readable(value)
   const labels: Record<string, string> = {
-    "needs review": "Needs official review",
+    "needs review": "Automatic result uncertain",
     "supports report": "Text and photo match",
     "partially supports report": "Photo partly supports the report",
     "contradicts report": "Text and photo may not match",
@@ -199,7 +197,7 @@ function displayValue(value: string | null | undefined) {
     "image review failed": "Photo could not be reviewed automatically",
     accept: "Accept and continue processing",
     "accept with privacy review": "Continue using the protected image",
-    "manual review": "Review the report manually",
+    "manual review": "Apply safe intake fallback",
     "request more information": "Request additional details",
     "escalate as emergency": "Notify the appropriate emergency personnel",
     "reject as irrelevant": "Review as a potentially unrelated submission",
@@ -217,6 +215,8 @@ export default function ConcernClassificationPage() {
   const [config, setConfig] = useState<ConcernClassificationConfig>(defaults)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState("")
+  const savedSnapshotRef = useRef<string | null>(null)
+  const dirty = savedSnapshotRef.current !== null && JSON.stringify(config) !== savedSnapshotRef.current
 
   const [selectedCategory, setSelectedCategory] = useState("infrastructure")
   const [imageFile, setImageFile] = useState<File | null>(null)
@@ -238,6 +238,7 @@ export default function ConcernClassificationPage() {
       .then((next) => {
         if (cancelled) return
         setConfig(next)
+        savedSnapshotRef.current = JSON.stringify(next)
         const first = next.categories.find((category) => category.enabled)
         if (first) setSelectedCategory(first.key)
       })
@@ -267,7 +268,9 @@ export default function ConcernClassificationPage() {
   async function save() {
     setBusy("save")
     try {
-      setConfig(await saveConcernClassificationConfig(config))
+      const saved = await saveConcernClassificationConfig(config)
+      setConfig(saved)
+      savedSnapshotRef.current = JSON.stringify(saved)
       toast.success("Settings saved")
     } catch (error) {
       toast.error(describeApiError(error, "Could not save these settings."))
@@ -317,12 +320,12 @@ export default function ConcernClassificationPage() {
         },
         { label: "Reports checked", value: config.metrics?.tested ?? 0 },
         { label: "Went straight through", value: config.metrics?.auto_validated ?? 0 },
-        { label: "Waited for an official", value: config.metrics?.flagged ?? 0 },
+        { label: "Rejected by rules", value: config.metrics?.rejected ?? 0 },
       ]}
       action={
         <Button
           onClick={() => void save()}
-          disabled={Boolean(busy)}
+          disabled={Boolean(busy) || !dirty}
           className="rounded-xl bg-accent text-white hover:bg-accent/90"
         >
           <SaveIcon className="size-4" />
@@ -415,7 +418,7 @@ export default function ConcernClassificationPage() {
           hint="The model checks the report meaning for spam, harassment, threats, sexual content, profanity, fake reports, and irrelevant messages. It no longer depends on a fixed word list."
         >
           <p className="rounded-xl bg-tint p-3 text-xs font-medium leading-relaxed text-foreground">
-            Flagged content waits for official review. E-Boses does not automatically reject reports or emergencies from this check alone.
+            Clear unrelated or abusive submissions are rejected automatically. If the model is unavailable, safe intake rules allow the report so a real issue is not lost.
           </p>
         </Card>
       </div>
@@ -424,11 +427,10 @@ export default function ConcernClassificationPage() {
         title="Similar report handling"
         hint="These checks compare a resident's text, category, and pinned location with recent reports. Duplicate photos are still blocked separately."
       >
-        <div className="grid gap-2 md:grid-cols-3">
+        <div className="grid gap-2 md:grid-cols-2">
           {[
             ["warn", "Warn resident", "Tell residents a similar report may exist, but let them continue."],
             ["block", "Block repeated reports", "Stop reports that match an existing nearby report."],
-            ["official_review", "Allow but flag", "Let residents submit, then show the warning to officials."],
           ].map(([value, label, hint]) => {
             const active = (config.report_duplicate_action ?? "warn") === value
             return (
@@ -459,8 +461,8 @@ export default function ConcernClassificationPage() {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card
-          title="How AI reviews reports"
-          hint="The review assistant looks at each report before it reaches your queue."
+          title="How automatic validation works"
+          hint="The validator checks each report before it reaches the official queue."
         >
           <ul className="space-y-1.5">
             {[
@@ -478,7 +480,7 @@ export default function ConcernClassificationPage() {
             ))}
           </ul>
           <p className="mt-3 rounded-xl bg-tint p-3 text-xs font-medium leading-relaxed text-foreground">
-            The assistant recommends a category and a next step. Authorized officials make the final decision.
+            The system validates the report, corrects its category, links possible duplicates, and sends accepted reports to the normal work queue.
           </p>
         </Card>
 
@@ -496,8 +498,7 @@ export default function ConcernClassificationPage() {
             />
           </div>
           <p className="mt-3 text-xs font-medium leading-relaxed text-muted-foreground">
-            When something is unavailable, reports still arrive normally — they simply wait for your review instead
-            of being checked first.
+            When the model is unavailable, required file, location, duplicate, and account checks still run. The report then continues without an AI-review task.
           </p>
         </Card>
       </div>
@@ -742,12 +743,12 @@ export default function ConcernClassificationPage() {
               <div>
                 <SectionLabel>Recommended next step</SectionLabel>
                 <p className="mt-1.5 text-sm font-bold text-foreground">
-                  {displayValue(reportResult.recommended_action || "manual_review")}
+                  {displayValue(reportResult.recommended_action || "accept")}
                 </p>
               </div>
 
               <p className="rounded-xl bg-tint p-3 text-xs font-medium leading-relaxed text-foreground">
-                This review is advisory. Authorized officials make the final decision.
+                This result is applied by the automated validation pipeline.
               </p>
             </div>
           ) : (
@@ -762,7 +763,7 @@ export default function ConcernClassificationPage() {
       <div className="sticky bottom-0 z-30 -mx-4 border-t border-card-line bg-canvas/95 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur md:hidden">
         <Button
           onClick={() => void save()}
-          disabled={Boolean(busy)}
+          disabled={Boolean(busy) || !dirty}
           className="h-11 w-full rounded-xl bg-accent text-white hover:bg-accent/90"
         >
           <SaveIcon className="size-4" /> {busy === "save" ? "Saving…" : "Save"}

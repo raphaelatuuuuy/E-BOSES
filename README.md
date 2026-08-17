@@ -24,8 +24,26 @@
 </p>
 
 <p>
-  <img src="https://img.shields.io/badge/Planned-Django%20Backend-092E20?style=for-the-badge&logo=django&logoColor=white" alt="Django Planned" />
-  <img src="https://img.shields.io/badge/Planned-PostGIS-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" alt="PostGIS Planned" />
+  <img src="https://img.shields.io/badge/Status-In%20Development-7C3AED?style=for-the-badge" alt="Project Status" />
+  <img src="https://img.shields.io/badge/Platform-Web%20%26%20Mobile%20Responsive-2563EB?style=for-the-badge" alt="Platform" />
+  <img src="https://img.shields.io/badge/Project-Capstone-F59E0B?style=for-the-badge" alt="Capstone Project" />
+  <img src="https://img.shields.io/badge/Monorepo-Turborepo-EF4444?style=for-the-badge" alt="Monorepo" />
+</p>
+
+<p>
+  <img src="https://img.shields.io/badge/React-19-20232A?style=for-the-badge&logo=react&logoColor=61DAFB" alt="React" />
+  <img src="https://img.shields.io/badge/TypeScript-6-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/Vite-8-646CFF?style=for-the-badge&logo=vite&logoColor=white" alt="Vite" />
+  <img src="https://img.shields.io/badge/Tailwind%20CSS-4-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white" alt="Tailwind CSS" />
+  <img src="https://img.shields.io/badge/shadcn%2Fui-000000?style=for-the-badge&logo=shadcnui&logoColor=white" alt="shadcn/ui" />
+</p>
+
+<p>
+  <img src="https://img.shields.io/badge/Django-5-092E20?style=for-the-badge&logo=django&logoColor=white" alt="Django" />
+  <img src="https://img.shields.io/badge/DRF-A30000?style=for-the-badge&logo=django&logoColor=white" alt="DRF" />
+  <img src="https://img.shields.io/badge/PostgreSQL%2BPostGIS-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" alt="PostGIS" />
+  <img src="https://img.shields.io/badge/Celery-378B29?style=for-the-badge&logo=celery&logoColor=white" alt="Celery" />
+  <img src="https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white" alt="Redis" />
 </p>
 
 </div>
@@ -38,20 +56,23 @@ The system helps digitize and structure how residents report community concerns,
 
 ## Current Status
 
-This repository is in **active development**. The frontend is built with React 19 / Vite 8 using a **Turborepo monorepo** with shared UI components. The Django backend now includes working auth, resident concern reporting, emergency coordination, notifications, role dashboards, official/admin flows, responder flows, appeals, browser-push registration, and an AI-assessment pipeline boundary.
+This repository is in **active development**. React and Vite provide the frontend. Django provides the API and business rules. PostgreSQL, Redis, Celery, and Channels support data, queued work, caching, and live updates.
+
+The main workflows and the development Supabase cutover are verified. See [PROJECT-DOCUMENTATION.md](PROJECT-DOCUMENTATION.md) for current architecture and complete feature coverage. See [FINDINGS.md](FINDINGS.md) for confirmed failures and test results.
 
 ## Architecture
 
 ```
 e-boses/
 ├── apps/
-│   ├── api/              # Django backend API (scaffolded)
+│   ├── api/              # Django 5 backend API
 │   └── web/              # React 19 frontend application
 ├── packages/
 │   └── ui/               # Shared UI component library (shadcn/ui)
 ├── .claude/              # Claude Code configuration & memory
 ├── .turbo/               # Turborepo build cache
 ├── .vscode/              # Editor settings
+├── .env                  # Environment variables (gitignored)
 └── .env.example          # Environment variable template
 ```
 
@@ -60,32 +81,40 @@ e-boses/
 The main web app built with React 19, Vite 8, and Tailwind CSS 4. Features include:
 
 - **TypeScript 6** with strict mode and bundler module resolution
-- **Dark mode** support with `ThemeProvider` — toggle with the `d` key
 - **shadcn/ui** `radix-nova` style components (Button shipped, more to come)
 - **Path alias** `@/` mapped to `src/` for clean imports
 - **Code quality** — ESLint 10, Prettier with Tailwind plugin, full type checking
+- **Real-time** — WebSocket connections for live maps and notifications
+- **Offline support** — Service worker, GPS ping queue for responders
+- **Maps** — Leaflet-based resident and official alert maps
+- **3D scenes** — Three.js for landing page animations
+- **GSAP** — Scroll-triggered animations on landing and onboarding
 
 ### `apps/api` — Backend API
 
-A Django 5 backend API:
+A Django 5 + DRF backend with implemented routes for:
 
 | Module | Purpose |
 |--------|---------|
 | `config/` | Django project settings, URLs, WSGI/ASGI entry points |
-| `apps/accounts/` | User registration, JWT auth, OTP verification, profiles |
-| `apps/concerns/` | Community concern reporting with geolocation |
-| `apps/emergencies/` | Emergency alerting & responder coordination |
+| `apps/accounts/` | User registration, JWT auth, OTP verification, profiles, OCR verification |
+| `apps/concerns/` | Community concern reporting with geolocation, AI assessment, privacy pipeline |
+| `apps/emergencies/` | Emergency alerting, responder coordination, dispatch, live map |
+| `apps/sms/` | SMS gateway integration, inbound/outbound, AI assist for parsing |
 | `apps/notifications/` | Push/in-app notifications & WebSocket channels |
+| `apps/assistant/` | AI chatbot (Poolside inference) |
+| `apps/audit_log/` | Audit trail for sensitive actions |
 | `templates/` | Email templates for OTP and alerts |
 | `scripts/` | Utility scripts for management tasks |
 
 - **JWT authentication** with `djangorestframework-simplejwt`
 - **WebSocket support** via Django Channels + Redis
-- **PostgreSQL/PostGIS-ready** settings and production readiness checks
+- **Celery** for background tasks (OCR, privacy processing, SMS delivery)
+- **PostgreSQL** with decimal coordinates and JSON geometry; optional PostGIS can be enabled by configuration
+- **Automatic concern validation** before the official work queue, with category correction, duplicate context, reasoned rejection, and fail-open model recovery
 - **Environment-driven** config with `django-environ` (reads `.env` from repo root)
 - **CORS** configured for the Vite frontend dev server
 - **Health check** at `/api/health/`
-- **Production readiness check** via `python apps/api/manage.py check_production_readiness --strict`
 
 ### `packages/ui` — Shared UI Library
 
@@ -99,51 +128,59 @@ A centralized component library consumed by `apps/web` (and any future apps):
 
 ## Tech Stack
 
-### Present
+### Implemented
 
-| Badge | Technology | Purpose |
-|-------|------------|---------|
-| <img src="https://img.shields.io/badge/React-19-20232A?style=flat-square&logo=react&logoColor=61DAFB" alt="React 19" /> | React 19 | UI Library |
-| <img src="https://img.shields.io/badge/Vite-8-646CFF?style=flat-square&logo=vite&logoColor=white" alt="Vite 8" /> | Vite 8 | Build Tool & Dev Server |
-| <img src="https://img.shields.io/badge/Tailwind%20CSS-4-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white" alt="Tailwind CSS 4" /> | Tailwind CSS 4 | Utility-first CSS with `@theme` tokens |
-| <img src="https://img.shields.io/badge/TypeScript-6-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 6" /> | TypeScript 6 | Type safety |
-| <img src="https://img.shields.io/badge/shadcn%2Fui-000000?style=flat-square&logo=shadcnui&logoColor=white" alt="shadcn/ui" /> | shadcn/ui (radix-nova) | Accessible, unstyled UI primitives |
-| <img src="https://img.shields.io/badge/CVA-A855F7?style=flat-square&logo=react&logoColor=white" alt="class-variance-authority" /> | class-variance-authority | Component variant API |
-| <img src="https://img.shields.io/badge/tailwind--merge-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white" alt="tailwind-merge" /> | tailwind-merge | Class conflict resolution |
-| <img src="https://img.shields.io/badge/Lucide-F56565?style=flat-square&logo=lucide&logoColor=white" alt="Lucide" /> | Lucide Icons | Icon library |
-| <img src="https://img.shields.io/badge/Zod-3068B7?style=flat-square&logo=zod&logoColor=white" alt="Zod" /> | Zod | Schema validation |
-| <img src="https://img.shields.io/badge/Turborepo-EF4444?style=flat-square&logo=turborepo&logoColor=white" alt="Turborepo" /> | Turborepo | Monorepo orchestration & caching |
-| <img src="https://img.shields.io/badge/ESLint-10-4B32C3?style=flat-square&logo=eslint&logoColor=white" alt="ESLint 10" /> | ESLint 10 | Linting |
-| <img src="https://img.shields.io/badge/Prettier-F7B93E?style=flat-square&logo=prettier&logoColor=black" alt="Prettier" /> | Prettier | Code formatting |
-| <img src="https://img.shields.io/badge/Django-5-092E20?style=flat-square&logo=django&logoColor=white" alt="Django 5" /> | Django 5 | Backend API (scaffolded) |
-| <img src="https://img.shields.io/badge/DRF-A30000?style=flat-square&logo=django&logoColor=white" alt="Django REST Framework" /> | Django REST Framework | REST endpoints (scaffolded) |
-| <img src="https://img.shields.io/badge/Django%20Channels-0F766E?style=flat-square&logo=django&logoColor=white" alt="Django Channels" /> | Django Channels | WebSocket support (scaffolded) |
-| <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+" /> | Python 3.11+ | Backend programming language |
+| Technology | Purpose |
+|------------|---------|
+| React 19 | UI Library |
+| Vite 8 | Build Tool & Dev Server |
+| Tailwind CSS 4 | Utility-first CSS with `@theme` tokens |
+| TypeScript 6 | Type safety |
+| shadcn/ui (radix-nova) | Accessible, unstyled UI primitives |
+| class-variance-authority | Component variant API |
+| tailwind-merge | Class conflict resolution |
+| Lucide Icons | Icon library |
+| Zod | Schema validation |
+| Turborepo | Monorepo orchestration & caching |
+| ESLint 10 | Linting |
+| Prettier | Code formatting |
+| Django 5 | Backend API |
+| Django REST Framework | REST endpoints |
+| Django Channels | WebSocket support |
+| Celery | Background task queue |
+| Redis | Cache, Celery broker, Channels layer |
+| PostgreSQL | Application database |
+| PostGIS | Optional database extension; disabled by default |
+| SimpleJWT | JWT authentication |
+| Supabase | Active development PostgreSQL, Auth, and private Storage; local rollback tested |
+| Cloudinary | Legacy rollback-only media adapter |
+| Resend | Email delivery (OTP, notifications) |
+| SMS Gateway (Android) | SMS delivery (OTP, emergency alerts) |
+| Ollama / Poolside | LLM inference (Gemma, Laguna) |
+| Roboflow SAM3 | Privacy segmentation (face/license plate/blood) |
+| OCR.space + EasyOCR | Document OCR with fallback |
+| Nominatim / Overpass | Geocoding and POI data |
+| Web Push (pywebpush) | Browser push notifications |
+| Cloudflare Turnstile | Bot protection |
+| IP2GEO | IP geolocation and intelligence |
 
 ### Planned
 
-The `.env.example` contains configuration scaffolding for:
-
-| Badge | Technology | Purpose |
-|-------|------------|---------|
-| <img src="https://img.shields.io/badge/PostgreSQL%20%2B%20PostGIS-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL + PostGIS" /> | PostgreSQL + PostGIS | Database with geospatial queries |
-| <img src="https://img.shields.io/badge/Redis-DC382D?style=flat-square&logo=redis&logoColor=white" alt="Redis" /> | Redis | Caching & WebSocket layer |
-| <img src="https://img.shields.io/badge/Cloudinary-3448C5?style=flat-square&logo=cloudinary&logoColor=white" alt="Cloudinary" /> | Cloudinary | Media storage |
-| <img src="https://img.shields.io/badge/Turnstile-1D9B7A?style=flat-square&logo=cloudflare&logoColor=white" alt="Turnstile" /> | Turnstile (Cloudflare) | Bot protection |
-| <img src="https://img.shields.io/badge/Globe%20Labs-0066B3?style=flat-square&logo=globe&logoColor=white" alt="Globe Labs" /> | Globe Labs | OTP & alert delivery |
-| <img src="https://img.shields.io/badge/Render-000000?style=flat-square&logo=render&logoColor=white" alt="Render" /> | Render | Cloud deployment |
-| <img src="https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker" /> | Docker | Containerization |
-| <img src="https://img.shields.io/badge/PaddleOCR-2563EB?style=flat-square&logo=python&logoColor=white" alt="PaddleOCR" /> | PaddleOCR | Document OCR pipeline |
-| <img src="https://img.shields.io/badge/IP2GEO-7C3AED?style=flat-square&logo=googlemaps&logoColor=white" alt="IP2GEO" /> | IP2GEO | Geolocation |
-| <img src="https://img.shields.io/badge/Google%20OAuth-4285F4?style=flat-square&logo=google&logoColor=white" alt="Google OAuth" /> | Google OAuth | Social login |
-| <img src="https://img.shields.io/badge/YOLOv8m%20Base-111827?style=flat-square&logo=python&logoColor=white" alt="YOLOv8m Base" /> | YOLOv8m base | Optional local image analysis model for assessing submitted complaint photos |
-| <img src="https://img.shields.io/badge/Keyword%20Baseline-9333EA?style=flat-square&logo=python&logoColor=white" alt="Keyword Baseline" /> | Multilingual keyword baseline | Built-in Filipino / Taglish / English text checker for report review guidance |
+| Technology | Purpose |
+|------------|---------|
+| Docker | Containerization |
+| Render | Cloud deployment |
+| PaddleOCR | Alternative local OCR engine |
+| YOLOv8m | Optional local image analysis for complaint photos |
 
 ## Getting Started
 
 ### Prerequisites
 
 - **Node.js 20+** (npm 11.17+)
+- **Python 3.13+** with virtual environment
+- **PostgreSQL 14+**; PostGIS is optional unless `ENABLE_GIS` is enabled
+- **Redis** (local or Upstash)
 - A terminal (PowerShell, bash, or zsh)
 
 ### Quick Start
@@ -153,13 +190,25 @@ The `.env.example` contains configuration scaffolding for:
 npm install
 
 # Start the frontend dev server
-npm run dev
-
-# Or target the web app directly
-cd apps/web && npm run dev
+npm run dev --workspace web
 ```
 
-The Vite dev server starts at `http://localhost:5173` and is also reachable on your LAN IP (see below).
+The root workspace does not start Django. Start the backend in a second terminal.
+
+### Start Backend Only
+
+```bash
+cd apps/api
+python manage.py runserver 0.0.0.0:8000
+```
+
+Run Redis plus the Celery worker and Beat when OCR, AI, privacy, SMS, scheduled content, retention, or retry behavior is tested:
+
+```powershell
+cd apps\api
+powershell -ExecutionPolicy Bypass -File scripts\start-redis.ps1
+powershell -ExecutionPolicy Bypass -File scripts\start-celery.ps1
+```
 
 ### Access from a phone or other devices (same Wi‑Fi)
 
@@ -176,10 +225,11 @@ Look under **Wireless LAN adapter Wi‑Fi** for `IPv4 Address` (example: `10.31.
 2. **Point env at that IP** in the repo root `.env`:
 
 ```env
-FRONTEND_URL=http://YOUR_LAN_IP:5173
-VITE_API_BASE_URL=http://YOUR_LAN_IP:8000/api
+FRONTEND_URL=https://YOUR_LAN_IP:5173
+VITE_API_BASE_URL=/api
+DJANGO_ENV=local
 ALLOWED_HOSTS=localhost,127.0.0.1,YOUR_LAN_IP,*
-CSRF_TRUSTED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://YOUR_LAN_IP:5173,http://YOUR_LAN_IP:8000
+CSRF_TRUSTED_ORIGINS=https://localhost:5173,https://YOUR_LAN_IP:5173,http://localhost:5173,http://YOUR_LAN_IP:5173
 ```
 
 Restart Vite after changing any `VITE_*` value.
@@ -200,7 +250,7 @@ npm run dev
 
 | What | URL |
 |------|-----|
-| App | `http://YOUR_LAN_IP:5173` |
+| App | `https://YOUR_LAN_IP:5173` |
 | API health | `http://YOUR_LAN_IP:8000/api/health/` |
 
 Use the LAN IP on the phone — **not** `localhost`.
@@ -218,11 +268,13 @@ If the API works yesterday but not today, your DHCP IP may have changed — run 
 
 | Command | Description |
 |---------|-------------|
-| `npm run dev` | Start all workspaces in dev mode |
+| `npm run dev --workspace web` | Start the frontend |
 | `npm run build` | Build all workspaces for production |
 | `npm run lint` | Run ESLint across all workspaces |
 | `npm run format` | Format code with Prettier |
 | `npm run typecheck` | Run TypeScript type checking |
+| `python manage.py test` | Run backend tests |
+| `python manage.py test apps/sms` | Run SMS app tests only |
 
 ### Adding shadcn/ui Components
 
@@ -244,6 +296,8 @@ Copy `.env.example` to `.env` and fill in values as needed:
 cp .env.example .env
 ```
 
+See `.env` for all required variables. Secrets are gitignored.
+
 ### Project Conventions
 
 - **TypeScript strict mode** — no implicit any, strict null checks
@@ -251,9 +305,4 @@ cp .env.example .env
 - **shadcn/ui radix-nova style** for all new components
 - **Prettier** with `prettier-plugin-tailwindcss` for class sorting
 - **Turborepo caching** — builds, linting, and typechecking are cached per task
-
-## License
-
-This project is developed for academic purposes at the **Polytechnic University of the Philippines**.
-
-All rights reserved.
+- **Django test isolation** — the default test lane uses an isolated database and mocked providers; controlled live canaries are separate

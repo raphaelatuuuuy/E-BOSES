@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import {
   ActivityIcon,
@@ -6,6 +6,9 @@ import {
   BabyIcon,
   BadgeAlertIcon,
   BellIcon,
+  CircleCheck,
+  ChevronDownIcon,
+  ChevronUpIcon,
   CloudRainWindIcon,
   FlameIcon,
   HeartCrackIcon,
@@ -17,17 +20,24 @@ import {
   SirenIcon,
   StethoscopeIcon,
   WavesIcon,
+  CircleX,
   ZapIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { Button } from "@workspace/ui/components/button"
 import { apiRequest } from "@/lib/api"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
-import { DataTable, type Column } from "@/features/dashboard/components/record/data-table"
-import { ConfigAlarm, ConfigHeroAction, ConfigShell } from "@/features/dashboard/components/config/config-shell"
+import { ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
+import {
+  SheetDialog,
+  SheetPrimaryButton,
+} from "@/features/dashboard/components/sheet-dialog"
+import {
+  ConfigAlarm,
+  ConfigHeroAction,
+  ConfigShell,
+} from "@/features/dashboard/components/config/config-shell"
 import type { EmergencyCategory } from "@/features/dashboard/emergency-api"
-import { StateMarker } from "@/components/ui/state-marker"
 
 const ICONS = [
   ["siren", "Siren", SirenIcon],
@@ -36,7 +46,7 @@ const ICONS = [
   ["baby", "Baby", BabyIcon],
   ["badge-alert", "Badge alert", BadgeAlertIcon],
   ["bell", "Bell", BellIcon],
-  ["cloud-rain-wind", "Rain / wind", CloudRainWindIcon],
+  ["cloud-rain-wind", "Rain", CloudRainWindIcon],
   ["flame", "Flame", FlameIcon],
   ["heart-crack", "Heart crack", HeartCrackIcon],
   ["home", "Home", HomeIcon],
@@ -70,11 +80,116 @@ interface RoleMap {
 type Draft = Partial<EmergencyCategory> & { iconFile?: File | null }
 
 function slugify(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80)
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80)
 }
 
 function iconFor(key: string) {
   return ICONS.find(([value]) => value === key)?.[2] ?? SirenIcon
+}
+
+const inputCls =
+  "mt-1.5 w-full rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[16px] text-neutral-900 outline-none transition-colors focus:border-neutral-500"
+const labelCls = "text-[13px] font-semibold text-neutral-500"
+
+/* Custom dropdown that shows icons — native <select> can't render React elements */
+function IconDropdown({
+  value,
+  onChange,
+  onPickCustom,
+}: {
+  value: string
+  onChange: (key: string) => void
+  onPickCustom?: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [])
+
+  const current =
+    value === "custom"
+      ? { key: "custom", name: "Custom image", Icon: null }
+      : ICONS.find(([k]) => k === value)
+        ? {
+            key: value,
+            name: ICONS.find(([k]) => k === value)![1],
+            Icon: ICONS.find(([k]) => k === value)![2],
+          }
+        : { key: "siren", name: "Siren", Icon: SirenIcon }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-3 rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-left text-[16px] text-neutral-900 transition-colors outline-none hover:border-neutral-400"
+      >
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-navy text-white">
+          {current.Icon ? (
+            <current.Icon className="size-4" strokeWidth={1.7} />
+          ) : (
+            <span className="text-[10px] font-bold">IMG</span>
+          )}
+        </span>
+        <span className="flex-1 truncate font-medium">{current.name}</span>
+        {open ? (
+          <ChevronUpIcon className="size-4 shrink-0 text-neutral-400" />
+        ) : (
+          <ChevronDownIcon className="size-4 shrink-0 text-neutral-400" />
+        )}
+      </button>
+      {open && (
+        <div
+          className="absolute z-50 mt-1 w-full [scrollbar-width:none] overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white shadow-lg [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+          style={{ maxHeight: "110px", overflowY: "auto" }}
+        >
+          <div className="py-1">
+            {ICONS.map(([key, name, Icon]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => {
+                  onChange(key)
+                  setOpen(false)
+                }}
+                className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-neutral-700 transition hover:bg-neutral-50"
+              >
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-brand-navy text-white">
+                  <Icon className="size-3.5" strokeWidth={1.7} />
+                </span>
+                {name}
+              </button>
+            ))}
+          </div>
+          <div className="border-t border-neutral-100 py-1">
+            <button
+              type="button"
+              onClick={() => {
+                onChange("custom")
+                setOpen(false)
+                onPickCustom?.()
+              }}
+              className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-neutral-700 transition hover:bg-neutral-50"
+            >
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-dashed border-neutral-300 bg-neutral-50 text-[10px] font-bold text-neutral-400">
+                IMG
+              </span>
+              Custom image
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function OfficialDispatchRulesPage() {
@@ -84,6 +199,8 @@ export default function OfficialDispatchRulesPage() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
+  const [originalDraft, setOriginalDraft] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -97,7 +214,9 @@ export default function OfficialDispatchRulesPage() {
         setCategories(nextCategories)
         setMaps(nextMaps)
       })
-      .catch((error) => toast.error(describeApiError(error, "Could not load dispatch rules.")))
+      .catch((error) =>
+        toast.error(describeApiError(error, "Could not load dispatch rules."))
+      )
       .finally(() => setLoading(false))
   }, [])
 
@@ -109,47 +228,33 @@ export default function OfficialDispatchRulesPage() {
   }, [load])
 
   const respondingUnits = useMemo(
-    () => units.filter((unit) => unit.is_active && unit.responds_to_emergencies),
-    [units],
+    () =>
+      units.filter((unit) => unit.is_active && unit.responds_to_emergencies),
+    [units]
   )
 
   function explicitRules(code: string) {
-    return maps.filter((item) => item.emergency_type === code && item.is_active && item.department)
+    return maps.filter(
+      (item) =>
+        item.emergency_type === code && item.is_active && item.department
+    )
   }
 
   function declaringUnits(code: string) {
-    return units.filter((unit) => unit.is_active && unit.responds_to_emergencies && (unit.emergency_types || []).includes(code))
+    return units.filter(
+      (unit) =>
+        unit.is_active &&
+        unit.responds_to_emergencies &&
+        (unit.emergency_types || []).includes(code)
+    )
   }
 
   const uncovered = categories.filter(
-    (category) => category.is_active && explicitRules(category.code).length === 0 && declaringUnits(category.code).length === 0,
+    (category) =>
+      category.is_active &&
+      explicitRules(category.code).length === 0 &&
+      declaringUnits(category.code).length === 0
   )
-
-  async function syncRules(category: EmergencyCategory, selectedIds: number[]) {
-    setBusy(category.code)
-    try {
-      const current = explicitRules(category.code)
-      const currentIds = new Set(current.map((item) => item.department).filter(Boolean) as number[])
-      const selected = new Set(selectedIds)
-      await Promise.all(current.filter((rule) => rule.department && !selected.has(rule.department)).map((rule) => apiRequest(`/emergencies/role-maps/${rule.id}/`, { method: "DELETE" })))
-      await Promise.all(
-        selectedIds
-          .filter((department) => !currentIds.has(department))
-          .map((department) =>
-            apiRequest("/emergencies/role-maps/", {
-              method: "POST",
-              body: JSON.stringify({ emergency_type: category.code, department, priority: 100 }),
-            }),
-          ),
-      )
-      toast.success("Dispatch routing updated")
-      load()
-    } catch (error) {
-      toast.error(describeApiError(error, "Could not update dispatch routing."))
-    } finally {
-      setBusy(null)
-    }
-  }
 
   async function saveCategory() {
     if (!draft?.label?.trim()) return
@@ -160,15 +265,25 @@ export default function OfficialDispatchRulesPage() {
     payload.append("subtext", (draft.subtext || "").trim())
     payload.append("icon_key", draft.icon_key || "siren")
     payload.append("custom_icon_label", (draft.custom_icon_label || "").trim())
-    payload.append("sort_order", String(draft.sort_order ?? categories.length * 10 + 10))
+    payload.append(
+      "sort_order",
+      String(draft.sort_order ?? categories.length * 10 + 10)
+    )
     payload.append("is_active", String(draft.is_active ?? true))
     if (draft.iconFile) payload.append("icon_image", draft.iconFile)
     try {
-      await apiRequest(draft.id ? `/emergencies/categories/${draft.id}/` : "/emergencies/categories/", {
-        method: draft.id ? "PATCH" : "POST",
-        body: payload,
-      })
-      toast.success(draft.id ? "Emergency category updated" : "Emergency category added")
+      await apiRequest(
+        draft.id
+          ? `/emergencies/categories/${draft.id}/`
+          : "/emergencies/categories/",
+        {
+          method: draft.id ? "PATCH" : "POST",
+          body: payload,
+        }
+      )
+      toast.success(
+        draft.id ? "Emergency category updated" : "Emergency category added"
+      )
       setDraft(null)
       load()
     } catch (error) {
@@ -178,102 +293,55 @@ export default function OfficialDispatchRulesPage() {
     }
   }
 
-  async function removeCategory(category: EmergencyCategory) {
-    if (!window.confirm(`Remove “${category.label}”? Alerts already filed under it keep their history.`)) return
-    setBusy(category.code)
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    setBusy(deleteTarget.code)
     try {
-      await apiRequest(`/emergencies/categories/${category.id}/`, { method: "DELETE" })
+      await apiRequest(`/emergencies/categories/${deleteTarget.id}/`, {
+        method: "DELETE",
+      })
       toast.success("Emergency category removed")
+      setDeleteOpen(false)
+      setDeleteTarget(null)
       load()
     } catch (error) {
-      toast.error(describeApiError(error, "Could not remove emergency category."))
+      toast.error(
+        describeApiError(error, "Could not remove emergency category.")
+      )
     } finally {
       setBusy(null)
     }
   }
 
-  const columns: Column<EmergencyCategory>[] = [
-    {
-      key: "category",
-      header: "Category",
-      sortValue: (category) => category.label.toLowerCase(),
-      render: (category) => {
-        const Icon = iconFor(category.icon_key)
-        return (
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-brand-navy ring-1 ring-accent/15">
-              {category.icon_image_url ? <img src={category.icon_image_url} alt="" className="size-full rounded-xl object-cover" /> : category.custom_icon_label ? <span className="text-xs font-semibold">{category.custom_icon_label}</span> : <Icon className="size-4" />}
-            </div>
-            <div className="min-w-0">
-              <p className="truncate font-semibold text-foreground">{category.label}</p>
-              <p className="truncate text-xs font-medium text-muted-foreground">{category.subtext || category.code}</p>
-            </div>
-          </div>
-        )
-      },
-    },
-    {
-      key: "assigned_units",
-      header: "Assigned Units",
-      render: (category) => {
-        const selected = new Set(explicitRules(category.code).map((item) => item.department).filter(Boolean) as number[])
-        const declared = declaringUnits(category.code)
-        return (
-          <div className="space-y-2">
-            <div className="flex max-w-xl flex-wrap gap-1.5">
-              {respondingUnits.map((unit) => (
-                <label key={unit.id} className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs font-bold transition ${selected.has(unit.id) ? "border-accent bg-accent/10 text-brand-navy" : "border-card-line bg-canvas text-muted-foreground hover:border-accent/40"}`}>
-                  <input
-                    type="checkbox"
-                    checked={selected.has(unit.id)}
-                    disabled={busy === category.code}
-                    onChange={(event) => {
-                      const next = new Set(selected)
-                      if (event.target.checked) next.add(unit.id)
-                      else next.delete(unit.id)
-                      void syncRules(category, [...next])
-                    }}
-                  />
-                  {unit.short_name || unit.name}
-                </label>
-              ))}
-            </div>
-            <p className="text-[11px] font-medium text-muted-foreground">
-              {selected.size > 0
-                ? `${selected.size} explicit unit${selected.size === 1 ? "" : "s"} assigned.`
-                : declared.length
-                  ? `Assigned unit from Units page: ${declared.map((unit) => unit.short_name || unit.name).join(", ")}.`
-                  : "No unit answers this category yet."}
-            </p>
-          </div>
-        )
-      },
-    },
-    {
-      key: "status",
-      header: "Status",
-      render: (category) => {
-        const covered = explicitRules(category.code).length > 0 || declaringUnits(category.code).length > 0
-        return (
-          <StateMarker
-            tone={!category.is_active ? "closed" : covered ? "active" : "open"}
-            label={!category.is_active ? "Inactive" : covered ? "Covered" : "No unit"}
-          />
-        )
-      },
-    },
-    {
-      key: "actions",
-      header: "",
-      align: "right",
-      render: (category) => (
-        <span className="flex justify-end gap-1">
-          <Button type="button" size="sm" variant="outline" onClick={() => setDraft(category)}>Edit</Button>
-          <Button type="button" size="sm" variant="outline" onClick={() => void removeCategory(category)} className="text-destructive">Remove</Button>
-        </span>
-      ),
-    },
-  ]
+  const [editOpen, setEditOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<EmergencyCategory | null>(
+    null
+  )
+  const [query, setQuery] = useState("")
+  const [offset, setOffset] = useState(0)
+
+  const draftSnapshot = (value: Draft | null) =>
+    JSON.stringify({
+      id: value?.id ?? null,
+      label: value?.label ?? "",
+      code: value?.code ?? "",
+      subtext: value?.subtext ?? "",
+      icon_key: value?.icon_key ?? "siren",
+      custom_icon_label: value?.custom_icon_label ?? "",
+      icon_image_url: value?.icon_image_url ?? "",
+      is_active: value?.is_active ?? true,
+    })
+
+  const filtered = useMemo(() => {
+    if (!query) return categories
+    const q = query.toLowerCase()
+    return categories.filter((c) =>
+      `${c.label} ${c.code} ${c.subtext}`.toLowerCase().includes(q)
+    )
+  }, [categories, query])
+
+  const page = filtered.slice(offset, offset + PAGE_SIZE)
 
   return (
     <ConfigShell
@@ -281,81 +349,303 @@ export default function OfficialDispatchRulesPage() {
       eyebrow="Operations"
       title="Emergency types"
       description="The SOS buttons residents see, and which unit answers each one."
-      action={<ConfigHeroAction icon={PlusIcon} onClick={() => setDraft({ icon_key: "siren", is_active: true })}>Add category</ConfigHeroAction>}
+      action={
+        <ConfigHeroAction
+          icon={PlusIcon}
+          onClick={() => {
+            setDraft({ icon_key: "siren", is_active: true })
+            setOriginalDraft(null)
+            setEditOpen(true)
+          }}
+        >
+          Add category
+        </ConfigHeroAction>
+      }
       stats={[
-        { label: "Categories", value: categories.filter((item) => item.is_active).length },
-        { label: "Unanswered", value: uncovered.length, alarm: uncovered.length > 0 },
+        {
+          label: "Categories",
+          value: categories.filter((item) => item.is_active).length,
+        },
+        {
+          label: "Unanswered",
+          value: uncovered.length,
+          alarm: uncovered.length > 0,
+        },
         { label: "Responding units", value: respondingUnits.length },
       ]}
     >
       {!loading && uncovered.length > 0 ? (
         <ConfigAlarm>
-          No unit answers: {uncovered.map((item) => item.label).join(", ")}. These SOS categories will escalate instead of auto-routing.
+          No unit answers: {uncovered.map((item) => item.label).join(", ")}.
+          These SOS categories will escalate instead of auto-routing.
         </ConfigAlarm>
       ) : null}
 
-      {draft ? (
-        <section className="overflow-hidden rounded-3xl border border-accent/20 bg-gradient-to-br from-white via-accent/10 to-tint p-4 shadow-sm">
-          <div className="grid gap-3 md:grid-cols-2">
-            <Field label="Label" value={draft.label || ""} onChange={(label) => setDraft((current) => ({ ...current, label, code: current?.id ? current.code : slugify(label) }))} />
-            <Field label="Code" value={draft.code || ""} onChange={(code) => setDraft((current) => ({ ...current, code: slugify(code) }))} disabled={Boolean(draft.id)} />
-            <Field label="Subtext" value={draft.subtext || ""} onChange={(subtext) => setDraft((current) => ({ ...current, subtext }))} />
-            <Field label="Custom icon text" value={draft.custom_icon_label || ""} onChange={(custom_icon_label) => setDraft((current) => ({ ...current, custom_icon_label }))} />
-          </div>
-          <div className="mt-3">
-            <p className="text-xs font-bold text-muted-foreground">Icon</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {ICONS.map(([key, label, Icon]) => (
-                <button key={key} type="button" onClick={() => setDraft((current) => ({ ...current, icon_key: key }))} className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-2 text-xs font-bold ${draft.icon_key === key ? "border-accent bg-accent/10 text-brand-navy" : "border-card-line bg-canvas text-muted-foreground"}`}>
-                  <Icon className="size-4" />{label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <label className="mt-4 block rounded-2xl border border-dashed border-accent/40 bg-white/70 p-4">
-            <span className="text-xs font-bold text-muted-foreground">Custom image / .ico</span>
-            <div className="mt-2 flex flex-wrap items-center gap-3">
-              {draft.iconFile ? (
-                <img src={URL.createObjectURL(draft.iconFile)} alt="" className="size-12 rounded-xl object-cover" />
-              ) : draft.icon_image_url ? (
-                <img src={draft.icon_image_url} alt="" className="size-12 rounded-xl object-cover" />
-              ) : null}
-              <input type="file" accept=".png,.jpg,.jpeg,.webp,.ico,image/png,image/jpeg,image/webp,image/x-icon" onChange={(event) => setDraft((current) => ({ ...current, iconFile: event.target.files?.[0] ?? null }))} className="text-sm font-semibold text-foreground" />
-            </div>
-            <span className="mt-2 block text-xs font-medium text-muted-foreground">Optional. PNG, JPG, WEBP, or ICO up to 512 KB. Image overrides the icon picker in resident SOS.</span>
-          </label>
-          <div className="mt-4 flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={() => setDraft(null)}>Cancel</Button>
-            <Button type="button" disabled={busy === "category" || !draft.label?.trim()} onClick={() => void saveCategory()} className="bg-brand-navy text-white hover:bg-brand-navy">Save category</Button>
-          </div>
-        </section>
-      ) : null}
+      <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-4">
+        <ListSearch
+          value={query}
+          onChange={setQuery}
+          placeholder="Search emergency categories"
+          className="w-full"
+        />
+      </div>
 
-      <DataTable
-        rows={categories}
-        columns={columns}
-        rowKey={(category) => String(category.id)}
-        loading={loading}
-        searchPlaceholder="Search emergency categories"
-        searchMatches={(category, query) => `${category.label} ${category.code} ${category.subtext}`.toLowerCase().includes(query)}
-        emptyTitle="No emergency categories"
-        emptyHint="Add the SOS choices residents can use."
+      {/* Editorial list — same structure as proof types */}
+      <ol>
+        {page.map((category) => {
+          const Icon = iconFor(category.icon_key)
+          const covered =
+            explicitRules(category.code).length > 0 ||
+            declaringUnits(category.code).length > 0
+          const unitNames = declaringUnits(category.code).map(
+            (u) => u.short_name || u.name
+          )
+          const isActive = category.is_active
+          return (
+            <li
+              key={category.id}
+              className="grid grid-cols-1 gap-x-8 gap-y-3 border-b border-neutral-200 py-6 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto]"
+            >
+              {/* Name + details */}
+              <div className="min-w-0">
+                <div className="flex items-center gap-3">
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-navy text-white">
+                    {category.icon_image_url ? (
+                      <img
+                        src={category.icon_image_url}
+                        alt=""
+                        className="size-full rounded-lg object-cover"
+                      />
+                    ) : (
+                      <Icon className="size-4" strokeWidth={1.7} />
+                    )}
+                  </span>
+                  <span className="text-row text-brand-navy">
+                    {category.label}
+                  </span>
+                  {isActive && covered ? (
+                    <span className="inline-flex items-center gap-1 text-meta text-green-600">
+                      <CircleCheck className="size-3.5" strokeWidth={2} />
+                      Covered
+                    </span>
+                  ) : isActive ? (
+                    <span className="inline-flex items-center gap-1 text-meta text-red-600">
+                      <CircleX className="size-3.5" strokeWidth={2} />
+                      No unit
+                    </span>
+                  ) : null}
+                </div>
+                <dl className="mt-3 flex flex-wrap gap-x-8 gap-y-2">
+                  <div>
+                    <dt className="text-meta text-neutral-400">Description</dt>
+                    <dd className="mt-0.5 text-meta text-brand-navy">
+                      {category.subtext || category.code}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-meta text-neutral-400">
+                      Units assigned
+                    </dt>
+                    <dd className="mt-0.5 text-meta text-brand-navy">
+                      {unitNames.length > 0 ? unitNames.join(", ") : "None"}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+
+              {/* Actions */}
+              <div className="flex shrink-0 items-center gap-5 border-t border-neutral-200 pt-3 sm:border-0 sm:pt-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDraft(category)
+                    setOriginalDraft(draftSnapshot(category))
+                    setEditOpen(true)
+                  }}
+                  className="text-meta text-neutral-500 transition-colors hover:text-accent"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeleteTarget(category)
+                    setDeleteOpen(true)
+                  }}
+                  className="text-meta text-neutral-500 transition-colors hover:text-sos"
+                >
+                  Remove
+                </button>
+              </div>
+            </li>
+          )
+        })}
+        {page.length === 0 && !loading ? (
+          <li className="py-14 text-center text-read text-neutral-500">
+            No emergency categories found.
+          </li>
+        ) : null}
+      </ol>
+
+      <Pager
+        offset={offset}
+        total={filtered.length}
+        onChange={setOffset}
+        noun="types"
       />
 
       {respondingUnits.length === 0 && !loading ? (
         <p className="rounded-2xl border border-card-line bg-card p-6 text-center text-sm font-semibold text-muted-foreground">
-          No unit is marked as an emergency responder yet. Set that up in <Link to="/dashboard/configuration/units" className="text-brand-navy underline">Configuration → Units</Link> first.
+          No unit is marked as an emergency responder yet. Set that up in{" "}
+          <Link
+            to="/dashboard/configuration/units"
+            className="text-brand-navy underline"
+          >
+            Configuration → Units
+          </Link>{" "}
+          first.
         </p>
       ) : null}
-    </ConfigShell>
-  )
-}
 
-function Field({ label, value, disabled, onChange }: { label: string; value: string; disabled?: boolean; onChange: (value: string) => void }) {
-  return (
-    <label className="block">
-      <span className="text-xs font-bold text-muted-foreground">{label}</span>
-      <input value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-xl border border-card-line bg-canvas px-3 py-2 text-sm font-semibold text-foreground outline-none focus:border-accent disabled:opacity-60" />
-    </label>
+      {/* Edit dialog */}
+      {draft && (
+        <SheetDialog
+          open={editOpen}
+          onClose={() => {
+            setEditOpen(false)
+            setDraft(null)
+            setOriginalDraft(null)
+          }}
+          title={
+            draft.id ? `Edit ${draft.label} Emergency` : "New emergency type"
+          }
+          size="wide"
+        >
+          <div className="space-y-6 pb-4">
+            {/* Basic info */}
+            <div className="space-y-4">
+              <label className="block">
+                <span className={labelCls}>Category name</span>
+                <input
+                  value={draft.label || ""}
+                  onChange={(e) => {
+                    const label = e.target.value
+                    setDraft((current) => ({
+                      ...current,
+                      label,
+                      code: current?.id ? current.code : slugify(label),
+                    }))
+                  }}
+                  className={inputCls}
+                  placeholder="Fire"
+                />
+              </label>
+              <label className="block">
+                <span className={labelCls}>Description</span>
+                <input
+                  value={draft.subtext || ""}
+                  onChange={(e) =>
+                    setDraft((current) => ({
+                      ...current,
+                      subtext: e.target.value,
+                    }))
+                  }
+                  className={inputCls}
+                  placeholder="Fire, smoke, burning"
+                />
+              </label>
+            </div>
+
+            {/* Icon dropdown with icons */}
+            <div className="space-y-2">
+              <p className={labelCls}>Icon</p>
+              <IconDropdown
+                value={draft.icon_key || "siren"}
+                onChange={(key) =>
+                  setDraft((current) => ({ ...current, icon_key: key }))
+                }
+                onPickCustom={() =>
+                  window.setTimeout(() => fileInputRef.current?.click(), 0)
+                }
+              />
+            </div>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".png,.jpg,.jpeg,.webp,.ico,image/png,image/jpeg,image/webp,image/x-icon"
+              onChange={(e) =>
+                setDraft((current) => ({
+                  ...current,
+                  iconFile: e.target.files?.[0] ?? null,
+                }))
+              }
+              className="hidden"
+            />
+          </div>
+
+          <div className="mt-6 space-y-3">
+            <button
+              type="button"
+              disabled={
+                busy === "category" ||
+                !draft.label?.trim() ||
+                Boolean(draft.id && draftSnapshot(draft) === originalDraft)
+              }
+              onClick={() => void saveCategory()}
+              className="flex h-[52px] w-full items-center justify-center rounded-full bg-accent text-[17px] font-semibold text-white transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400"
+            >
+              {busy === "category"
+                ? "Saving\u2026"
+                : draft.id
+                  ? "Save changes"
+                  : "Create category"}
+            </button>
+            <SheetPrimaryButton
+              disabled={busy === "category"}
+              onClick={() => {
+                setEditOpen(false)
+                setDraft(null)
+              }}
+            >
+              Cancel
+            </SheetPrimaryButton>
+          </div>
+        </SheetDialog>
+      )}
+
+      {/* Delete dialog */}
+      <SheetDialog
+        open={deleteOpen}
+        onClose={() => {
+          setDeleteOpen(false)
+          setDeleteTarget(null)
+        }}
+        title={deleteTarget ? `Remove ${deleteTarget.label}?` : ""}
+        description="Alerts already filed under this category keep their history. This cannot be undone."
+        footer={
+          <div className="space-y-3">
+            <SheetPrimaryButton
+              tone="danger"
+              disabled={busy === deleteTarget?.code}
+              onClick={() => void confirmDelete()}
+            >
+              {busy === deleteTarget?.code
+                ? "Removing\u2026"
+                : "Remove category"}
+            </SheetPrimaryButton>
+            <SheetPrimaryButton
+              disabled={busy === deleteTarget?.code}
+              onClick={() => {
+                setDeleteOpen(false)
+                setDeleteTarget(null)
+              }}
+            >
+              Cancel
+            </SheetPrimaryButton>
+          </div>
+        }
+      />
+    </ConfigShell>
   )
 }

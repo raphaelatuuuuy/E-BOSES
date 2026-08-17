@@ -1,8 +1,5 @@
 "use client"
 
-/* eslint-disable react-refresh/only-export-components -- the weather data hook,
-   its state type/labels and the widget components are intentionally one unit. */
-
 import { type ReactNode } from "react"
 import {
   CloudRainIcon,

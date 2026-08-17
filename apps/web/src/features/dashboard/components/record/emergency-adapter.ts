@@ -23,8 +23,6 @@ const TYPE_LABEL: Record<string, string> = {
   disaster: "Disaster",
   child_protection: "Child Protection",
   domestic_violence: "Domestic Violence",
-  drug_related: "Drug-Related Incident",
-  other: "Other",
 }
 
 /** Lifecycle in the order responders actually move through it. */

@@ -411,8 +411,13 @@ export function useOcrTemplateState() {
         setSamplePreviewUrl(null)
         return
       }
-      const sampleList = docSamples?.filter((s) => s.url)?.length
-        ? docSamples.filter((s) => s.url)
+      const listedSamples = docSamples?.filter((s) => s.url) ?? []
+      const sideSamples = listedSamples.filter((sample) => canvasSides.includes(sample.side))
+      const fallbackSingle = listedSamples.find((sample) => sample.side === "single")
+      const sampleList = sideSamples.length
+        ? sideSamples
+        : fallbackSingle && canvasSides.length === 1 && canvasSides[0] === "front"
+          ? [fallbackSingle]
         : docSampleUrl
           ? [
               {
@@ -469,16 +474,19 @@ export function useOcrTemplateState() {
   }, [hasSelectedDocument, docSamples, docSampleUrl, docSampleFilename, canvasSides])
 
   useEffect(() => {
-    // Re-derive the preview URL on side/bySide changes. Deferred a microtask
-    // so the setState isn't synchronous inside the effect (imperceptible).
+    // Re-derive the preview URL on side/bySide changes. Only alias single
+    // onto front (same primary photo) — never fall back to another side, or
+    // a front upload would appear on the back tab and vice-versa.
     queueMicrotask(() =>
       setSamplePreviewUrl(
         samplePreviewBySide[samplePreviewSide] ??
-          samplePreviewBySide[canvasSides[0] ?? "single"] ??
+          (samplePreviewSide === "front"
+            ? samplePreviewBySide.single
+            : undefined) ??
           null
       )
     )
-  }, [samplePreviewSide, samplePreviewBySide, canvasSides])
+  }, [samplePreviewSide, samplePreviewBySide])
 
   // Whenever the selected document changes, guarantee every field has a canvas
   // region — render-adjust instead of a sync setState inside an effect.
@@ -1401,9 +1409,14 @@ export function useOcrTemplateState() {
       }
       markDocumentEdited(docKey)
       setSamplePreviewBySide((prev) => {
+        // front and single alias the same primary photo, so clear both.
+        const removeSides: ProofSide[] =
+          side === "back" ? ["back"] : ["front", "single"]
         const next = { ...prev }
-        if (next[side]) URL.revokeObjectURL(next[side]!)
-        delete next[side]
+        for (const removeSide of removeSides) {
+          if (next[removeSide]) URL.revokeObjectURL(next[removeSide]!)
+          delete next[removeSide]
+        }
         return next
       })
     } catch (reason) {
@@ -1795,16 +1808,18 @@ export function useOcrTemplateState() {
    */
   function renameField(fieldKey: string, label: string) {
     if (!selectedDocument) return
-    const nextLabel = label.trim()
-    if (!nextLabel) return
+    const trimmed = label.trim()
+    if (!trimmed) return
     const target = selectedDocument.fields.find((f) => f.key === fieldKey)
     if (!target) return
 
+    // Keep the raw label (spaces included) in state — trimming on every
+    // keystroke ate the space as the user typed it. Only the slug uses trim.
     const shouldReslug =
       isAutoFieldKey(target.key) || target.label === "New information"
     const nextKey = shouldReslug
       ? slugifyFieldKey(
-          nextLabel,
+          trimmed,
           selectedDocument.fields.map((f) => f.key),
           { excludeKey: fieldKey }
         )
@@ -1817,7 +1832,7 @@ export function useOcrTemplateState() {
           ? {
               ...field,
               key: nextKey,
-              label: nextLabel,
+              label,
             }
           : field
       ),
@@ -1830,8 +1845,6 @@ export function useOcrTemplateState() {
 
   function removeField(key: string) {
     if (!selectedDocument) return
-    if (!window.confirm("Remove this information field from the proof type?"))
-      return
     const nextFields = selectedDocument.fields.filter(
       (field) => field.key !== key
     )

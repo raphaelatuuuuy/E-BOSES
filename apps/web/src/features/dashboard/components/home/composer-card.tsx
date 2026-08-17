@@ -18,9 +18,9 @@ export function ComposerCard({
   onOpenFilter: () => void
 }) {
   return (
-    <section className="mb-3 w-full bg-white lg:mb-2 lg:rounded-lg lg:border-[1.5px] lg:border-neutral-300 lg:px-3.5 lg:py-3.5">
+    <section className="mb-3 w-full bg-white lg:mb-2 lg:rounded-lg lg:border lg:border-neutral-300 lg:px-3.5 lg:py-3.5">
       <div className="flex min-h-11 items-center gap-2.5">
-        <div className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-full border border-neutral-200 bg-neutral-50/80 py-1 pl-1.5 pr-1.5 lg:contents">
+        <div className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-full border border-neutral-300 bg-neutral-50/80 py-1 pl-1.5 pr-1.5 lg:contents">
           <UserAvatar user={user} size="md" className="size-9 text-[15px] sm:size-10 sm:text-[17px]" />
           <button
             type="button"

@@ -6,7 +6,7 @@ from rest_framework.test import APITestCase
 
 from apps.capabilities import MANAGE_USERS
 from apps.concerns.models import Department, Designation, Position
-from apps.emergencies.models import EmergencyAlert, MapDispatchPolicy
+from apps.emergencies.models import EmergencyCategory, MapDispatchPolicy
 
 User = get_user_model()
 
@@ -77,7 +77,7 @@ class ConfigurationHubTests(APITestCase):
         # half of it, so it has to drive the warning.
         response = self.client.get("/api/config/summary/")
         zones = response.data["sections"]["zones"]
-        self.assertIn("SMS fallback not set", zones["detail"])
+        self.assertIn("No SMS fallback number", zones["detail"])
         self.assertTrue(zones["needs_attention"])
 
     def test_zones_card_clears_once_sms_is_set(self):
@@ -87,7 +87,7 @@ class ConfigurationHubTests(APITestCase):
 
         response = self.client.get("/api/config/summary/")
         zones = response.data["sections"]["zones"]
-        self.assertIn("SMS fallback set", zones["detail"])
+        self.assertIn("SMS fallback ready", zones["detail"])
         self.assertFalse(zones["needs_attention"])
 
     def test_summary_hides_sections_the_official_cannot_access(self):
@@ -117,17 +117,8 @@ class ConfigurationHubTests(APITestCase):
         response = self.client.get("/api/config/summary/")
         dispatch = response.data["sections"]["dispatch"]
         self.assertTrue(dispatch["needs_attention"])
-        type_labels = {
-            EmergencyAlert.Type.MEDICAL: "Medical Emergency",
-            EmergencyAlert.Type.FIRE: "Fire",
-            EmergencyAlert.Type.CRIME: "Crime or Public Safety",
-            EmergencyAlert.Type.DISASTER: "Disaster",
-            EmergencyAlert.Type.CHILD_PROTECTION: "Child Protection",
-            EmergencyAlert.Type.DOMESTIC_VIOLENCE: "Domestic Violence",
-            EmergencyAlert.Type.DRUG_RELATED: "Drug-Related Incident",
-        }
-        for alert_type in EmergencyAlert.Type.values:
-            self.assertIn(type_labels[alert_type], dispatch["detail"])
+        for label in EmergencyCategory.objects.filter(is_active=True).values_list("label", flat=True):
+            self.assertIn(label, dispatch["detail"])
 
 
 class UnitScreenTests(APITestCase):

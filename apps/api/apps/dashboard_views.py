@@ -31,10 +31,25 @@ EMERGENCY_ACTIVE = {
 
 def common_counts(user):
     today = timezone.localdate()
+    from django.core.cache import cache
+
+    shared_key = f"dashboard:shared-counts:v1:{today.isoformat()}"
+    try:
+        shared = cache.get(shared_key)
+    except Exception:
+        shared = None
+    if shared is None:
+        shared = {
+            "published_announcements": Announcement.objects.filter(is_published=True).count(),
+            "events_today": BarangayEvent.objects.filter(is_published=True, starts_at__date=today).count(),
+        }
+        try:
+            cache.set(shared_key, shared, 10)
+        except Exception:
+            pass
     return {
         "unread_notifications": Notification.objects.filter(recipient=user, is_read=False).count(),
-        "published_announcements": Announcement.objects.filter(is_published=True).count(),
-        "events_today": BarangayEvent.objects.filter(is_published=True, starts_at__date=today).count(),
+        **shared,
     }
 
 class ResidentDashboardSummaryView(APIView):
@@ -72,7 +87,10 @@ class OfficialDashboardSummaryView(APIView):
             return Response({"detail": "You do not have permission to view official summaries."}, status=status.HTTP_403_FORBIDDEN)
         return Response({
             **common_counts(request.user),
-            "pending_reviews": Concern.objects.filter(status=Concern.Status.SUBMITTED).count(),
+            "new_concerns": Concern.objects.filter(
+                status=Concern.Status.SUBMITTED,
+                validation_status=Concern.ValidationStatus.ACCEPTED,
+            ).count(),
             "active_reports": Concern.objects.filter(status__in=CONCERN_ACTIVE).count(),
             "appealed_reports": Concern.objects.filter(status=Concern.Status.APPEALED).count(),
             "pending_appeals": ConcernAppeal.objects.filter(status=ConcernAppeal.Status.SUBMITTED).count(),

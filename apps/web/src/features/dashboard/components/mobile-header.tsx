@@ -30,7 +30,7 @@ import {
 function ResponderMobileChrome() {
   const [profileOpen, setProfileOpen] = useState(false)
   const { user } = useAuthSession()
-  const avatarInitials = initials(user?.full_name || "Account")
+  const avatarInitials = initials(user?.full_name || "Account").charAt(0)
 
   return (
     <>
@@ -42,7 +42,7 @@ function ResponderMobileChrome() {
           aria-label="Open profile"
           className="flex size-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-nav-raised"
         >
-          <span className="flex size-8 items-center justify-center rounded-full bg-nav-active text-[11px] font-semibold text-white ring-1 ring-white/10">
+          <span className="flex size-8 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
             {avatarInitials}
           </span>
         </button>

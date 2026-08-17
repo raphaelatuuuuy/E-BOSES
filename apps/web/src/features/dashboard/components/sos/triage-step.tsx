@@ -67,13 +67,6 @@ const DETAIL_QUESTIONS: Record<string, { question: string; choices: Choice[] }> 
       { value: "no_immediate_danger", label: "No" },
     ],
   },
-  dangerous_animal: {
-    question: "Is the animal still loose?",
-    choices: [
-      { value: "loose", label: "Yes, still loose" },
-      { value: "animal_contained", label: "No, contained" },
-    ],
-  },
   disaster: {
     question: "Is anyone trapped?",
     choices: [

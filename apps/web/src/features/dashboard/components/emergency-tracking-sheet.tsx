@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import {
   CheckIcon,
@@ -20,6 +20,7 @@ import {
   cancelEmergency,
   createEmergencyAppeal,
   getEmergency,
+  isNewerEmergencyAlert,
   type EmergencyAlert,
   type EmergencyChatMessage,
   type EmergencyStatus,
@@ -805,6 +806,7 @@ export function EmergencyTrackingSheet({
   const [expanded, setExpanded] = useState(false)
   const [detailsExpanded, setDetailsExpanded] = useState(false)
   const [alert, setAlert] = useState<EmergencyAlert | null>(initialAlert)
+  const alertRef = useRef<EmergencyAlert | null>(initialAlert)
   const [appealReason, setAppealReason] = useState("")
   const [appealBusy, setAppealBusy] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
@@ -814,6 +816,13 @@ export function EmergencyTrackingSheet({
     initialAlert && ACTIVE_EMERGENCY_STATUSES.has(initialAlert.status) ? "connecting" : "live"
   )
   const [chatMessage, setChatMessage] = useState<EmergencyChatMessage | null>(null)
+
+  const adoptAlert = useCallback((nextAlert: EmergencyAlert) => {
+    if (!isNewerEmergencyAlert(alertRef.current, nextAlert)) return
+    alertRef.current = nextAlert
+    setAlert(nextAlert)
+    onAlertChange?.(nextAlert)
+  }, [onAlertChange])
 
   // Reset transient sheet state when the sheet closes, and adopt a newly
   // selected alert — render-adjust instead of sync setStates inside effects.
@@ -855,14 +864,13 @@ export function EmergencyTrackingSheet({
     const interval = window.setInterval(async () => {
       try {
         const nextAlert = await getEmergency(alertId)
-        setAlert(nextAlert)
-        onAlertChange?.(nextAlert)
+        adoptAlert(nextAlert)
       } catch {
         /* keep last */
       }
     }, 5000)
     return () => window.clearInterval(interval)
-  }, [open, alertId, alertStatus, connectionState, onAlertChange])
+  }, [open, alertId, alertStatus, connectionState, adoptAlert])
 
   useEffect(() => {
     if (!open || !alertId || !alertStatus || !ACTIVE_EMERGENCY_STATUSES.has(alertStatus)) return
@@ -904,8 +912,7 @@ export function EmergencyTrackingSheet({
             return
           }
           if (message.type !== "emergency.update" || !message.payload) return
-          setAlert(message.payload as EmergencyAlert)
-          onAlertChange?.(message.payload as EmergencyAlert)
+          adoptAlert(message.payload as EmergencyAlert)
         } catch {
           /* ignore */
         }
@@ -929,7 +936,7 @@ export function EmergencyTrackingSheet({
       if (reconnectTimer) window.clearTimeout(reconnectTimer)
       socket?.close()
     }
-  }, [open, alertId, alertStatus, onAlertChange])
+  }, [open, alertId, alertStatus, adoptAlert])
 
   if (!open || !alert || typeof document === "undefined") return null
 
@@ -955,8 +962,7 @@ export function EmergencyTrackingSheet({
     setCancelBusy(true)
     try {
       const nextAlert = await cancelEmergency(alert.id, reason)
-      setAlert(nextAlert)
-      onAlertChange?.(nextAlert)
+      adoptAlert(nextAlert)
       setCancelOpen(false)
       setCancelReason("")
       toast.success("Emergency alert cancelled")
@@ -973,8 +979,7 @@ export function EmergencyTrackingSheet({
     try {
       await createEmergencyAppeal(alert.id, appealReason.trim())
       const nextAlert = await getEmergency(alert.id)
-      setAlert(nextAlert)
-      onAlertChange?.(nextAlert)
+      adoptAlert(nextAlert)
       setAppealReason("")
       toast.success("Review request submitted")
     } catch (error) {

@@ -7,7 +7,7 @@ import { Sidebar } from "@/features/dashboard/components/sidebar"
 import { SidebarProvider } from "@/features/dashboard/components/sidebar-context"
 import { SOSButton } from "@/features/dashboard/components/sos-button"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { isResponderUser } from "@/features/auth/roles"
+import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import { MobileNav } from "@/features/dashboard/components/mobile-nav"
 import { StaffMobileHeader } from "@/features/dashboard/components/mobile-header"
 import { useLocationPing } from "@/features/dashboard/hooks/use-location-ping"
@@ -41,6 +41,7 @@ function DashboardContent() {
     user?.is_staff ||
     user?.is_superuser
   const isResident = !isStaffRole
+  const isOfficialRole = isOfficialUser(user)
   const isMobile = !isDesktop
   const chrome = getRouteChrome(location.pathname)
   const hideMobileNav = isMobile && chrome.hideMobileNav
@@ -107,9 +108,9 @@ function DashboardContent() {
   const isWorkspaceRoute = chrome.workspace && isDesktop
 
   return (
-    <div className={cn("min-h-svh overflow-x-hidden", shellScope, isResident ? "bg-white" : "bg-canvas")}>
+    <div className={cn("min-h-svh overflow-x-hidden", shellScope, isResident || isOfficialRole ? "bg-white" : "bg-canvas")}>
         <div
-          className={cn("mx-auto min-h-svh w-full", isResident ? "bg-white" : "bg-canvas")}
+          className={cn("mx-auto min-h-svh w-full", isResident || isOfficialRole ? "bg-white" : "bg-canvas")}
           style={{
             maxWidth: isResident ? SHELL_MAX_RESIDENT : SHELL_MAX_STAFF,
             minWidth: 0,
@@ -117,24 +118,20 @@ function DashboardContent() {
         >
           {isDesktop ? (
             <div
-              className="grid h-svh max-h-svh min-h-0 overflow-hidden"
+              className="grid h-svh max-h-svh min-h-0 overflow-visible"
               style={{
-                // Two columns for everyone. Resident, official and responder
-                // share the same fixed sidebar width; the role differences live
-                // inside the sidebar, not in the column width.
-                gridTemplateColumns: `${SIDEBAR_W}px minmax(0, 1fr)`,
+                  // Every role uses the same compact icon rail.
+                  gridTemplateColumns: `${isResident || isOfficialRole || isResponder ? 72 : SIDEBAR_W}px minmax(0, 1fr)`,
               }}
             >
-              <div
+               <div
                 className={cn(
-                  "flex h-full min-h-0 min-w-0 flex-col overflow-hidden",
-                  isResident
-                    ? "border-r border-neutral-100 bg-white"
-                    : "bg-nav-bg",
+                  "flex h-full min-h-0 min-w-0 flex-col overflow-visible",
+                  isResident || isOfficialRole ? "bg-white" : "bg-transparent",
                 )}
               >
-                <ResidentLogoBar homeTo={shellHome} tone={isResident ? "light" : "dark"} />
-                <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                 <ResidentLogoBar homeTo={shellHome} tone={isResident || isOfficialRole ? "light" : "dark"} compact={isResident || isOfficialRole || isResponder} />
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-visible">
                   <Sidebar />
                 </div>
               </div>
@@ -145,7 +142,7 @@ function DashboardContent() {
                 <main
                   className={cn(
                     "min-h-0 min-w-0 flex-1 overflow-x-hidden [scrollbar-width:thin]",
-                    isResident ? "bg-white" : "bg-canvas",
+                    isResident || isOfficialRole ? "bg-white" : "bg-canvas",
                     // Workspace routes scroll inside their own panes, so the
                     // shell must not add a second scroll container around them.
                     isWorkspaceRoute

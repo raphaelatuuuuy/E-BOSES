@@ -129,7 +129,7 @@ export function DataTable<Row>({
               onChange={setQuery}
               placeholder={searchPlaceholder}
               label={searchPlaceholder}
-              className="sm:max-w-sm"
+              className={filters ? "sm:max-w-sm" : "w-full"}
             />
           ) : null}
 

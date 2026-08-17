@@ -8,11 +8,9 @@ import { CloudUpload } from "lucide-react"
 import { cn } from "@workspace/ui/lib/utils"
 
 import type { OcrFieldDefinition, ProofSide } from "@/features/ocr/api"
-import { PROOF_THEME } from "@/features/ocr/components/proof-theme"
 import {
   defaultRegionForIndex,
   fieldCanvasSide,
-  fieldDisplayColor,
   fieldDisplayNumber,
   hintsOf,
   type FieldRegion,
@@ -137,121 +135,121 @@ export function MarkAreasCanvas(props: {
     window.addEventListener("pointercancel", onUp)
   }
 
+  if (!imageUrl) {
+    // Borderless upload target — the photo fills the section when added.
+    return (
+      <button
+        type="button"
+        onClick={onRequestUpload}
+        className="flex min-h-[16rem] w-full flex-col items-center justify-center gap-2 rounded-[18px] bg-neutral-50 px-6 py-14 text-center transition-colors hover:bg-neutral-100"
+      >
+        <span className="flex size-12 items-center justify-center rounded-full bg-neutral-100 text-neutral-500">
+          <CloudUpload className="size-6" strokeWidth={1.8} />
+        </span>
+        <span className="text-[15px] font-semibold text-neutral-900">
+          {emptyUploadLabel ??
+            (sampleSide === "back"
+              ? "Upload the back"
+              : sampleSide === "front"
+                ? "Upload the front"
+                : "Upload a sample photo")}
+        </span>
+        <span className="text-[13px] text-neutral-500">
+          Clear JPG or PNG works best
+        </span>
+      </button>
+    )
+  }
+
+  // The photo fills the section with no frame. The boxes are neutral ink,
+  // not colour-coded: square, grey, numbered — kept thin so the photo stays
+  // readable underneath.
+  const ink = "#171717"
+
   return (
-    <div className="relative flex min-h-[16rem] flex-1 items-center justify-center overflow-auto rounded-xl bg-tint p-4">
-      {!imageUrl ? (
-        <button
-          type="button"
-          onClick={onRequestUpload}
-          className="flex w-full max-w-md flex-col items-center gap-2 rounded-2xl border border-dashed border-neutral-200 bg-white px-6 py-14 text-center shadow-sm"
-        >
-          <span className="flex size-12 items-center justify-center rounded-full bg-tint text-accent">
-            <CloudUpload className="size-6" />
-          </span>
-          <span className={cn("text-sm font-semibold", PROOF_THEME.title)}>
-            {emptyUploadLabel ??
-              (sampleSide === "back"
-                ? "Upload the back"
-                : sampleSide === "front"
-                  ? "Upload the front"
-                  : "Upload a sample photo")}
-          </span>
-          <span className={cn("text-xs font-semibold", PROOF_THEME.muted)}>
-            Clear JPG or PNG works best
-          </span>
-        </button>
-      ) : (
-        <div
-          className="relative origin-center shadow-lg"
-          style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}
-        >
-          <div ref={canvasFrameRef} className="relative inline-block max-h-[32rem] max-w-full">
-            <img
-              src={imageUrl}
-              alt="Sample photo"
-              className="block max-h-[32rem] max-w-full select-none rounded-md border border-neutral-200 bg-white object-contain"
-              draggable={false}
-            />
-            {sorted.map((field, index) => {
-              const region =
-                hintsOf(field).region ?? defaultRegionForIndex(index, sorted.length)
-              const displayNumber = fieldDisplayNumber(field, fields)
-              const color = fieldDisplayColor(field, fields)
-              const selected = selectedFieldKey === field.key
-              const crowded = sorted.some((other, otherIndex) => {
-                if (other.key === field.key) return false
-                const otherRegion =
-                  hintsOf(other).region ?? defaultRegionForIndex(otherIndex, sorted.length)
-                return regionsOverlapOrClose(region, otherRegion)
-              })
-              const fillOpacity = selected ? 0.18 : crowded ? 0.04 : 0.08
-              const borderOpacity = selected ? 1 : crowded ? 0.45 : 0.85
-              return (
-                <div
-                  key={field.key}
-                  role="button"
-                  tabIndex={0}
-                  title={`${field.label}. Drag to move, corner to resize. The system reads text inside this box.`}
-                  onPointerDown={(event) => beginRegionDrag(event, field.key, "move", region)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault()
-                      onSelectField(field.key)
-                    }
-                  }}
+    <div className="relative flex min-h-[16rem] w-full items-center justify-center overflow-auto rounded-[18px] bg-white">
+      <div
+        className="relative origin-center"
+        style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}
+      >
+        <div ref={canvasFrameRef} className="relative block w-full max-h-[32rem]">
+          <img
+            src={imageUrl}
+            alt="Sample photo"
+            className="block max-h-[32rem] w-full select-none bg-white object-contain"
+            draggable={false}
+          />
+          {sorted.map((field, index) => {
+            const region =
+              hintsOf(field).region ?? defaultRegionForIndex(index, sorted.length)
+            const displayNumber = fieldDisplayNumber(field, fields)
+            const selected = selectedFieldKey === field.key
+            const crowded = sorted.some((other, otherIndex) => {
+              if (other.key === field.key) return false
+              const otherRegion =
+                hintsOf(other).region ?? defaultRegionForIndex(otherIndex, sorted.length)
+              return regionsOverlapOrClose(region, otherRegion)
+            })
+            return (
+              <div
+                key={field.key}
+                role="button"
+                tabIndex={0}
+                title={`${field.label}. Drag to move, corner to resize. The system reads text inside this box.`}
+                onPointerDown={(event) => beginRegionDrag(event, field.key, "move", region)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault()
+                    onSelectField(field.key)
+                  }
+                }}
+                className={cn(
+                  "absolute cursor-move border-2 text-left outline-none transition-opacity",
+                  selected ? "z-20" : "z-10 hover:z-20",
+                  regionDrag?.fieldKey === field.key && "z-30",
+                  !selected && crowded && "hover:opacity-100",
+                )}
+                style={{
+                  left: `${region.x * 100}%`,
+                  top: `${region.y * 100}%`,
+                  width: `${region.w * 100}%`,
+                  height: `${region.h * 100}%`,
+                  borderColor: ink,
+                  backgroundColor: `rgba(23, 23, 23, ${selected ? 0.12 : crowded ? 0.03 : 0.06})`,
+                  opacity: selected ? 1 : crowded ? 0.55 : 0.9,
+                  borderWidth: selected ? 2 : crowded ? 1 : 1.5,
+                }}
+              >
+                <span
                   className={cn(
-                    "absolute cursor-move rounded border-2 text-left outline-none transition-[box-shadow,opacity]",
-                    selected ? "z-20 shadow-[0_0_0_3px_rgba(20,91,231,0.28)]" : "z-10 hover:z-20",
-                    regionDrag?.fieldKey === field.key && "z-30",
-                    !selected && crowded && "hover:opacity-100",
+                    "pointer-events-none absolute -left-px max-w-[10rem] truncate px-1.5 py-0.5 text-[10px] font-bold text-white",
+                    selected || !crowded ? "-top-5" : "-top-4 scale-95",
                   )}
                   style={{
-                    left: `${region.x * 100}%`,
-                    top: `${region.y * 100}%`,
-                    width: `${region.w * 100}%`,
-                    height: `${region.h * 100}%`,
-                    borderColor: color,
-                    backgroundColor: `color-mix(in srgb, ${color} ${Math.round(fillOpacity * 100)}%, transparent)`,
-                    opacity: selected ? 1 : crowded ? 0.55 : 0.9,
-                    borderWidth: selected ? 2.5 : crowded ? 1.5 : 2,
-                    boxShadow: selected
-                      ? undefined
-                      : crowded
-                        ? `inset 0 0 0 1px ${color}${Math.round(borderOpacity * 40).toString(16).padStart(2, "0")}`
-                        : undefined,
+                    backgroundColor: ink,
+                    opacity: selected ? 1 : crowded ? 0.7 : 0.95,
                   }}
                 >
+                  {displayNumber} {field.label}
+                </span>
+                {selected ? (
                   <span
-                    className={cn(
-                      "pointer-events-none absolute -left-px max-w-[10rem] truncate rounded px-1.5 py-0.5 text-[10px] font-bold text-white shadow-sm",
-                      selected || !crowded ? "-top-5" : "-top-4 scale-95",
-                    )}
-                    style={{
-                      backgroundColor: color,
-                      opacity: selected ? 1 : crowded ? 0.7 : 0.95,
-                    }}
-                  >
-                    {displayNumber} {field.label}
-                  </span>
-                  {selected ? (
-                    <span
-                      aria-label={`Resize ${field.label}`}
-                      onPointerDown={(event) =>
-                        beginRegionDrag(event, field.key, "resize", region)
-                      }
-                      className="absolute -bottom-1.5 -right-1.5 size-3.5 cursor-se-resize rounded-sm border-2 border-white shadow"
-                      style={{ backgroundColor: color }}
-                    />
-                  ) : null}
-                </div>
-              )
-            })}
-            <span className="pointer-events-none absolute bottom-2 right-2 rotate-[-8deg] text-xs font-semibold uppercase tracking-widest text-accent/40">
-              {sideLabel(sampleSide)} preview
-            </span>
-          </div>
+                    aria-label={`Resize ${field.label}`}
+                    onPointerDown={(event) =>
+                      beginRegionDrag(event, field.key, "resize", region)
+                    }
+                    className="absolute -bottom-2 -right-2 size-2.5 cursor-se-resize rounded-full"
+                    style={{ backgroundColor: ink }}
+                  />
+                ) : null}
+              </div>
+            )
+          })}
+          <span className="pointer-events-none absolute bottom-2 right-2 rotate-[-8deg] text-[13px] font-semibold uppercase tracking-widest text-neutral-400">
+            {sideLabel(sampleSide)} preview
+          </span>
         </div>
-      )}
+      </div>
     </div>
   )
 }

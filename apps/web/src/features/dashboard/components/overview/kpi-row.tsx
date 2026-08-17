@@ -118,8 +118,8 @@ export function KpiRow({
   return (
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       <KpiCard
-        label="Concerns Awaiting Review"
-        value={summary?.pending_reviews ?? 0}
+        label="New Concerns"
+        value={summary?.new_concerns ?? 0}
         note={
           weekDelta === 0
             ? "No change from last week"

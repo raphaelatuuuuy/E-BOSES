@@ -11,6 +11,7 @@ import {
   type EmergencyStatus,
 } from "@/features/dashboard/emergency-api"
 import { usePageTitle } from "@/hooks/use-page-title"
+import { useWheelScroll } from "@/hooks/use-wheel-scroll"
 import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
 import { statusLabelOf } from "@/features/dashboard/lib/status-vocabulary"
 
@@ -46,6 +47,7 @@ export default function EmergencyHistoryPage() {
   const [filter, setFilter] = useState<FilterKey>("all")
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState("")
+  const filterScrollRef = useWheelScroll<HTMLDivElement>()
 
   useEffect(() => {
     let cancelled = false
@@ -98,7 +100,7 @@ export default function EmergencyHistoryPage() {
             Active and past SOS alerts, with location and status.
           </p>
 
-          <div className="mt-4 flex gap-2 overflow-x-auto pb-0.5">
+          <div ref={filterScrollRef} className="mt-4 flex gap-2 overflow-x-auto overscroll-x-contain pb-0.5 scrollbar-hide">
             {filters.map((item) => (
               <button
                 key={item.key}

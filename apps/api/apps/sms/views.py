@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import time
 
 from django.conf import settings
 from rest_framework import status
@@ -81,6 +82,9 @@ def _signature_is_valid(request) -> bool:
         timestamp = (request.headers.get(header) or "").strip()
         if timestamp:
             break
+    if not timestamp or not _signature_timestamp_is_fresh(timestamp):
+        logger.warning("Rejected SMS webhook signature with missing or stale timestamp.")
+        return False
 
     try:
         # Raw bytes, not a decoded string: decoding with errors="replace" would
@@ -116,6 +120,18 @@ def _signature_is_valid(request) -> bool:
             digest = hmac.new(key.encode("utf-8"), message, hashlib.sha256).hexdigest()
             logger.warning("  candidate %-10s -> %s", name, digest)
     return False
+
+
+def _signature_timestamp_is_fresh(timestamp: str) -> bool:
+    """Accept Unix seconds or milliseconds within the replay window."""
+    try:
+        value = int(timestamp)
+    except (TypeError, ValueError):
+        return False
+    if value > 10_000_000_000:
+        value //= 1000
+    age = abs(time.time() - value)
+    return age <= max(1, int(getattr(settings, "SMS_WEBHOOK_SIGNATURE_MAX_AGE_SECONDS", 300)))
 
 
 def _token_is_valid(request) -> bool:

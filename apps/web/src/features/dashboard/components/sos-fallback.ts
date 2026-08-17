@@ -244,13 +244,8 @@ export function isSosLocationReady(
   value: {
     lat: number
     lng: number
-    address?: string
-    addressPrimary?: string
   } | null
 ) {
   if (!value) return false
-  const primary = (value.addressPrimary || value.address || "").trim()
-  if (!primary || primary === "Move pin to a street") return false
-  if (/^lat\b/i.test(primary)) return false
   return Number.isFinite(value.lat) && Number.isFinite(value.lng)
 }

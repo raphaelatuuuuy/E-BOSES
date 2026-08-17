@@ -1,28 +1,16 @@
-import { useCallback, useEffect, useState } from "react"
-import { PlusIcon, ShieldCheckIcon } from "lucide-react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { CircleCheck, ChevronRightIcon, PlusIcon, ShieldCheckIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { apiRequest } from "@/lib/api"
-import { DataTable, type Column } from "@/features/dashboard/components/record/data-table"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { CAPABILITY_LABEL } from "@/features/dashboard/lib/capabilities"
+import { ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
+import { SheetDialog, SheetPrimaryButton } from "@/features/dashboard/components/sheet-dialog"
 import {
   ConfigHeroAction,
   ConfigShell,
 } from "@/features/dashboard/components/config/config-shell"
-
-/**
- * Role management.
- *
- * `Position.permissions` existed in the schema and went unread, so every staff
- * member carried the same flat `barangay_official` role — a Secretary and the
- * Barangay Captain held identical power. This screen is where that becomes
- * real.
- *
- * The capability vocabulary is fixed, not user-definable: officials configure
- * who holds which position, never which capabilities exist. Letting them invent
- * capabilities would produce another surface nobody can reason about.
- */
 
 interface Position {
   id: number
@@ -35,7 +23,7 @@ interface Position {
 type Draft = Partial<Position>
 
 const GROUPS: { title: string; capabilities: string[] }[] = [
-  { title: "People & access", capabilities: ["manage_units", "manage_roles", "manage_users"] },
+  { title: "User management", capabilities: ["manage_units", "manage_roles", "manage_users"] },
   {
     title: "Reports",
     capabilities: ["manage_categories", "configure_classification", "resolve_concerns"],
@@ -45,8 +33,8 @@ const GROUPS: { title: string; capabilities: string[] }[] = [
     capabilities: ["configure_dispatch", "configure_geography", "dispatch_emergencies"],
   },
   {
-    title: "Trust & community",
-    capabilities: ["review_verification", "handle_privacy", "publish_announcements"],
+    title: "Community",
+    capabilities: ["publish_announcements"],
   },
 ]
 
@@ -73,102 +61,40 @@ function slugify(value: string) {
     .slice(0, 80)
 }
 
-function RoleEditor({
-  draft,
-  onChange,
-  onSave,
-  onCancel,
-  saving,
-}: {
-  draft: Draft
-  onChange: (next: Draft) => void
-  onSave: () => void
-  onCancel: () => void
-  saving: boolean
-}) {
-  const isNew = !draft.id
-  const held = draft.permissions ?? []
+const inputCls = "mt-1.5 w-full rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[16px] text-neutral-900 outline-none transition-colors focus:border-neutral-500"
+const labelCls = "text-[13px] font-semibold text-neutral-500"
 
-  function toggle(capability: string) {
-    onChange({
-      ...draft,
-      permissions: held.includes(capability)
-        ? held.filter((item) => item !== capability)
-        : [...held, capability],
-    })
-  }
+function CapabilityGroup({ title, capabilities, selected, onToggle, defaultOpen = false, isLast = false }: {
+  title: string; capabilities: string[]; selected: string[]; onToggle: (cap: string) => void; defaultOpen?: boolean; isLast?: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen)
 
   return (
-    <div className="space-y-4 rounded-2xl border border-card-line bg-card p-4">
-      <label className="block sm:max-w-sm">
-        <span className="text-[11px] font-bold text-muted-foreground">
-          Position name
-        </span>
-        <input
-          value={draft.name ?? ""}
-          onChange={(event) => {
-            const name = event.target.value
-            onChange(isNew ? { ...draft, name, code: slugify(name) } : { ...draft, name })
-          }}
-          className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
-          placeholder="Barangay Secretary"
-        />
-      </label>
-
-      <div className="space-y-4">
-        {GROUPS.map((group) => (
-          <fieldset key={group.title}>
-            <legend className="text-[11px] font-bold text-muted-foreground">
-              {group.title}
-            </legend>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              {group.capabilities.map((capability) => (
-                <label
-                  key={capability}
-                  className="flex items-start gap-3 rounded-xl border border-card-line bg-canvas p-3"
-                >
-                  <input
-                    type="checkbox"
-                    checked={held.includes(capability)}
-                    onChange={() => toggle(capability)}
-                    className="mt-0.5 size-4 accent-accent"
-                  />
-                  <span className="min-w-0">
-                    <span className="block text-sm font-semibold text-foreground">
-                      {CAPABILITY_LABEL[capability] ?? capability}
-                    </span>
-                    {/* Plain language, so granting a capability is an informed
-                        act rather than ticking an opaque code. */}
-                    <span className="block text-xs font-medium text-muted-foreground">
-                      {CAPABILITY_HINT[capability]}
-                    </span>
-                  </span>
-                </label>
-              ))}
-            </div>
-          </fieldset>
-        ))}
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={onSave}
-          disabled={saving || !draft.name}
-          className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-55"
-        >
-          {saving ? "Saving…" : isNew ? "Create position" : "Save changes"}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          disabled={saving}
-          className="rounded-xl border border-card-line bg-card px-4 py-2.5 text-sm font-semibold text-foreground transition hover:bg-tint"
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
+    <>
+      <button type="button" onClick={() => setOpen(!open)} className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left transition hover:bg-neutral-50">
+        <span className="text-[15px] font-medium text-neutral-900">{title}</span>
+        <ChevronRightIcon className={`size-4 shrink-0 text-neutral-400 transition-transform ${open ? "rotate-90" : ""}`} />
+      </button>
+      {open && (
+        <div className="border-t border-neutral-100">
+          {capabilities.map((cap) => {
+            const isSelected = selected.includes(cap)
+            return (
+              <button key={cap} type="button"
+                onClick={() => onToggle(cap)}
+                className="flex w-full items-center gap-3 px-5 py-4 text-left transition hover:bg-neutral-50">
+                <span className="flex-1 min-w-0">
+                  <span className="block text-[15px] font-medium text-neutral-900">{CAPABILITY_LABEL[cap] ?? cap}</span>
+                  <span className="block text-[13px] text-neutral-500">{CAPABILITY_HINT[cap]}</span>
+                </span>
+                {isSelected && <CircleCheck className="size-5 shrink-0 text-green-600" strokeWidth={2} />}
+              </button>
+            )
+          })}
+        </div>
+      )}
+      {!isLast && <div className="border-b border-neutral-200" />}
+    </>
   )
 }
 
@@ -176,7 +102,13 @@ export default function OfficialRolesPage() {
   const [positions, setPositions] = useState<Position[]>([])
   const [loading, setLoading] = useState(true)
   const [draft, setDraft] = useState<Draft | null>(null)
+  const [originalDraft, setOriginalDraft] = useState<string | null>(null)
+  const [editOpen, setEditOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<Position | null>(null)
   const [saving, setSaving] = useState(false)
+  const [query, setQuery] = useState("")
+  const [offset, setOffset] = useState(0)
 
   const load = useCallback(() => {
     apiRequest<Position[]>("/concerns/admin/positions/")
@@ -189,15 +121,30 @@ export default function OfficialRolesPage() {
     void load()
   }, [load])
 
-  // Guard against removing the last holder of manage_roles: doing so would
-  // leave nobody able to grant it back.
+  const filtered = useMemo(() => {
+    if (!query) return positions.filter((p) => p.is_active)
+    const q = query.toLowerCase()
+    return positions
+      .filter((p) => p.is_active)
+      .filter((p) => p.name.toLowerCase().includes(q))
+  }, [positions, query])
+
+  const page = filtered.slice(offset, offset + PAGE_SIZE)
+
+  const positionSnapshot = (value: Draft | null) => JSON.stringify({
+    id: value?.id ?? null,
+    name: value?.name ?? "",
+    code: value?.code ?? "",
+    permissions: value?.permissions ?? [],
+    is_active: value?.is_active ?? true,
+  })
+
   function wouldOrphanRoleManagement(next: Draft) {
     if (!next.id) return false
     const stillHasIt = (next.permissions ?? []).includes("manage_roles")
     if (stillHasIt) return false
     const otherHolders = positions.filter(
-      (position) =>
-        position.id !== next.id && position.is_active && position.permissions.includes("manage_roles"),
+      (p) => p.id !== next.id && p.is_active && p.permissions.includes("manage_roles"),
     )
     return otherHolders.length === 0
   }
@@ -205,12 +152,9 @@ export default function OfficialRolesPage() {
   async function save() {
     if (!draft) return
     if (wouldOrphanRoleManagement(draft)) {
-      toast.error(
-        "This is the last position that can manage roles. Grant it to another position first.",
-      )
+      toast.error("This is the last position that can manage roles. Grant it to another position first.")
       return
     }
-
     setSaving(true)
     try {
       const isNew = !draft.id
@@ -223,8 +167,7 @@ export default function OfficialRolesPage() {
         },
       )
       toast.success(isNew ? "Position created" : "Position updated")
-      setDraft(null)
-      load()
+      setEditOpen(false); setDraft(null); load()
     } catch (error) {
       toast.error(describeApiError(error, "Could not save the position."))
     } finally {
@@ -232,103 +175,157 @@ export default function OfficialRolesPage() {
     }
   }
 
-  const columns: Column<Position>[] = [
-    {
-      key: "name",
-      header: "Position",
-      sortValue: (position) => position.name.toLowerCase(),
-      render: (position) => (
-        <p className="font-semibold text-foreground">{position.name}</p>
-      ),
-    },
-    {
-      key: "capabilities",
-      header: "Can do",
-      render: (position) =>
-        position.permissions.length === 0 ? (
-          <span className="text-xs font-semibold italic text-neutral-600">
-            No capabilities — cannot do anything
-          </span>
-        ) : (
-          <div className="flex flex-wrap gap-1">
-            {position.permissions.slice(0, 4).map((capability) => (
-              <span
-                key={capability}
-                className="rounded-full bg-tint px-2 py-0.5 text-[11px] font-bold text-brand-navy"
-              >
-                {CAPABILITY_LABEL[capability] ?? capability}
-              </span>
-            ))}
-            {position.permissions.length > 4 ? (
-              <span className="rounded-full px-2 py-0.5 text-[11px] font-bold text-muted-foreground">
-                +{position.permissions.length - 4} more
-              </span>
-            ) : null}
-          </div>
-        ),
-    },
-    {
-      key: "actions",
-      header: "",
-      align: "right",
-      render: (position) => (
-        <button
-          type="button"
-          onClick={() => setDraft(position)}
-          className="rounded-lg px-2 py-1 text-xs font-bold text-brand-navy transition hover:bg-tint"
-        >
-          Edit
-        </button>
-      ),
-    },
-  ]
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    try {
+      await apiRequest(`/concerns/admin/positions/${deleteTarget.id}/`, { method: "DELETE" })
+      toast.success("Position removed")
+      setDeleteOpen(false); setDeleteTarget(null); load()
+    } catch (error) {
+      toast.error(describeApiError(error, "Could not remove the position."))
+    }
+  }
 
-  const active = positions.filter((position) => position.is_active)
+  const held = draft?.permissions ?? []
+
+  function toggle(capability: string) {
+    if (!draft) return
+    setDraft({
+      ...draft,
+      permissions: held.includes(capability)
+        ? held.filter((item) => item !== capability)
+        : [...held, capability],
+    })
+  }
 
   return (
     <ConfigShell
       icon={ShieldCheckIcon}
-      eyebrow="People & access"
+      eyebrow="User management"
       title="Permissions"
       description="What each position is allowed to do. Give someone a position in Users, and they get everything ticked here."
       stats={[
-        { label: "Positions", value: active.length },
-        {
-          label: "Without permissions",
-          value: active.filter((position) => position.permissions.length === 0).length,
-          alarm: active.some((position) => position.permissions.length === 0),
-        },
+        { label: "Positions", value: filtered.length },
+        { label: "Without permissions", value: filtered.filter((p) => p.permissions.length === 0).length, alarm: filtered.some((p) => p.permissions.length === 0) },
       ]}
       action={
-        !draft ? (
-          <ConfigHeroAction
-            icon={PlusIcon}
-            onClick={() => setDraft({ name: "", code: "", permissions: [] })}
-          >
-            New position
-          </ConfigHeroAction>
-        ) : null
+        <ConfigHeroAction icon={PlusIcon} onClick={() => { setDraft({ name: "", code: "", permissions: [] }); setOriginalDraft(null); setEditOpen(true) }}>
+          New position
+        </ConfigHeroAction>
       }
     >
-      {draft ? (
-        <RoleEditor
-          draft={draft}
-          onChange={setDraft}
-          onSave={() => void save()}
-          onCancel={() => setDraft(null)}
-          saving={saving}
-        />
-      ) : null}
+      <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-4">
+        <ListSearch value={query} onChange={setQuery} placeholder="Search positions" className="w-full" />
+      </div>
 
-      <DataTable
-        rows={positions.filter((position) => position.is_active)}
-        columns={columns}
-        rowKey={(position) => String(position.id)}
-        loading={loading}
-        searchPlaceholder="Search positions"
-        searchMatches={(position, query) => position.name.toLowerCase().includes(query)}
-        emptyTitle="No positions yet"
-        emptyHint="Create a position, then assign it to people in Users."
+      {/* Editorial list */}
+      <ol>
+        {page.map((position) => (
+          <li
+            key={position.id}
+            className="grid grid-cols-1 gap-x-8 gap-y-3 border-b border-neutral-200 py-6 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto]"
+          >
+            <div className="min-w-0">
+              <span className="text-row text-brand-navy">{position.name}</span>
+              <dl className="mt-2 flex flex-wrap gap-x-8 gap-y-2">
+                <div>
+                  <dt className="text-meta text-neutral-400">Permissions</dt>
+                  <dd className="mt-0.5 text-meta text-brand-navy">
+                    {position.permissions.length === 0 ? (
+                      <span className="italic text-neutral-400">None assigned</span>
+                    ) : (
+                      <>
+                        {position.permissions.slice(0, 5).map((cap) => CAPABILITY_LABEL[cap] ?? cap).join(", ")}
+                        {position.permissions.length > 5 && (
+                          <span className="mt-1 block text-meta text-neutral-400">+{position.permissions.length - 5} more</span>
+                        )}
+                      </>
+                    )}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-5 border-t border-neutral-200 pt-3 sm:border-0 sm:pt-0">
+              <button type="button" onClick={() => { setDraft(position); setOriginalDraft(positionSnapshot(position)); setEditOpen(true) }} className="text-meta text-neutral-500 transition-colors hover:text-accent">Edit</button>
+              <button type="button" onClick={() => { setDeleteTarget(position); setDeleteOpen(true) }} className="text-meta text-neutral-500 transition-colors hover:text-sos">Delete</button>
+            </div>
+          </li>
+        ))}
+        {page.length === 0 && !loading ? (
+          <li className="py-14 text-center text-read text-neutral-500">No positions found.</li>
+        ) : null}
+      </ol>
+
+      <Pager offset={offset} total={filtered.length} onChange={setOffset} noun="positions" />
+
+      {/* Edit dialog */}
+      {draft && (
+        <SheetDialog
+          open={editOpen}
+          onClose={() => { setEditOpen(false); setDraft(null); setOriginalDraft(null) }}
+          title={draft.id ? `Edit ${draft.name}` : "New position"}
+          size="wide"
+        >
+          <div className="space-y-6 pb-4">
+            <label className="block">
+              <span className={labelCls}>Position name</span>
+              <input
+                value={draft.name || ""}
+                onChange={(e) => {
+                  const name = e.target.value
+                  setDraft((current) => current?.id ? { ...current, name } : { ...current, name, code: slugify(name) })
+                }}
+                className={inputCls}
+                placeholder="Barangay Secretary"
+              />
+            </label>
+
+            {/* Capabilities by group — merged accordion */}
+            <div className="space-y-2">
+              <p className={labelCls}>Permissions</p>
+              <div className="overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white">
+                {GROUPS.map((group, index) => (
+                  <CapabilityGroup
+                    key={group.title}
+                    title={group.title}
+                    capabilities={group.capabilities}
+                    selected={held}
+                    onToggle={toggle}
+                    defaultOpen={index === 0}
+                    isLast={index === GROUPS.length - 1}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-6 space-y-3">
+            <button
+              type="button"
+              disabled={saving || !draft.name || Boolean(draft.id && positionSnapshot(draft) === originalDraft)}
+              onClick={() => void save()}
+              className="flex h-[52px] w-full items-center justify-center rounded-full bg-accent text-[17px] font-semibold text-white transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400"
+            >
+              {saving ? "Saving\u2026" : draft.id ? "Save changes" : "Create position"}
+            </button>
+            <SheetPrimaryButton disabled={saving} onClick={() => { setEditOpen(false); setDraft(null) }}>Cancel</SheetPrimaryButton>
+          </div>
+        </SheetDialog>
+      )}
+
+      {/* Delete dialog */}
+      <SheetDialog
+        open={deleteOpen}
+        onClose={() => { setDeleteOpen(false); setDeleteTarget(null) }}
+        title={deleteTarget ? `Delete ${deleteTarget.name}?` : ""}
+        description="This position will be removed. People assigned to it will lose these permissions."
+        footer={
+          <div className="space-y-3">
+            <SheetPrimaryButton tone="danger" onClick={() => void confirmDelete()}>Delete position</SheetPrimaryButton>
+            <SheetPrimaryButton onClick={() => { setDeleteOpen(false); setDeleteTarget(null) }}>Cancel</SheetPrimaryButton>
+          </div>
+        }
       />
     </ConfigShell>
   )

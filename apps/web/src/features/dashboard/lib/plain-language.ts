@@ -341,8 +341,6 @@ export const EMERGENCY_TYPE: Record<string, PlainTerm> = {
   disaster: { label: "Disaster" },
   child_protection: { label: "Child protection" },
   domestic_violence: { label: "Domestic violence" },
-  drug_related: { label: "Drug-related incident" },
-  other: { label: "Other" },
 }
 
 export function emergencyType(value: string | null | undefined): PlainTerm {

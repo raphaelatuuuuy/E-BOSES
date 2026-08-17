@@ -559,7 +559,7 @@ export function EmergencyChatPanel({
               onClick={() => setAttachment(null)}
               aria-label="Remove attachment"
             >
-              <span className="truncate">{attachment.name}</span><XIcon className="size-3 shrink-0" />
+              <span className="truncate">{attachment.name}</span> <XIcon className="size-3 shrink-0" />
             </button>
           ) : null}
           <button

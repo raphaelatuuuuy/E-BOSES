@@ -52,7 +52,20 @@ class NotificationUnreadCountView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from django.core.cache import cache
+
+        key = f"notifications:unread-count:v1:{request.user.pk}"
+        try:
+            cached = cache.get(key)
+        except Exception:
+            cached = None
+        if cached is not None:
+            return Response({"count": cached})
         count = Notification.objects.filter(recipient=request.user, is_read=False).count()
+        try:
+            cache.set(key, count, 5)
+        except Exception:
+            pass
         return Response({"count": count})
 
 
@@ -65,6 +78,11 @@ class NotificationReadView(APIView):
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         notification.is_read = True
         notification.save(update_fields=["is_read"])
+        try:
+            from django.core.cache import cache
+            cache.delete(f"notifications:unread-count:v1:{request.user.pk}")
+        except Exception:
+            pass
         if notification.type == Notification.Type.WITNESS_ALERT and notification.emergency_id:
             mark_witness_notifications_read(request.user, alert_id=notification.emergency_id)
         return Response(NotificationSerializer(notification).data)

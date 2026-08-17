@@ -99,12 +99,6 @@ export const emergencies: SosEmergencyOption[] = [
     icon: ShieldAlert,
     desc: "Violence at home, VAWC cases",
   },
-  {
-    label: "Drug-Related",
-    value: "drug_related" as const,
-    icon: ShieldAlert,
-    desc: "Drug-related incident or concern",
-  },
 ]
 
 export function emergencyOptionsFromCategories(categories: EmergencyCategory[]) {

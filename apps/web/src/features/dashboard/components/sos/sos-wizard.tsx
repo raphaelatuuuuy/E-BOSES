@@ -35,6 +35,7 @@ import {
   type SosTriageAnswers,
 } from "@/features/dashboard/components/sos-fallback"
 import {
+  friendlyLocationMessage,
   SosLocationStep,
   type SosLocationValue,
 } from "@/features/dashboard/components/sos/location-step"
@@ -247,7 +248,7 @@ function SosShell({
           ) : null}
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-brand-navy px-4 py-4 sm:px-5">
+        <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain bg-brand-navy px-4 py-4 sm:px-5">
           {children}
         </div>
 
@@ -480,8 +481,19 @@ export function SosWizard({
       return
     }
     if (step === "location") {
-      if (!isSosLocationReady(location)) {
-        setFieldErrors({ location: "Confirm a street location on the map." })
+      const selectedLocation = location
+      if (!selectedLocation || !isSosLocationReady(selectedLocation)) {
+        setFieldErrors({ location: "Choose a location on the map." })
+        return
+      }
+      if (
+        isOnline &&
+        (!selectedLocation.locationCheck?.accepted || !selectedLocation.locationCheck.acceptance_zone?.within)
+      ) {
+        setFieldErrors({
+          location:
+            friendlyLocationMessage(selectedLocation.locationCheck),
+        })
         return
       }
       setFieldErrors({})
@@ -650,6 +662,11 @@ export function SosWizard({
   }
 
   const locationLabel = location?.addressPrimary || location?.address
+  const locationCanContinue = Boolean(
+    location &&
+      isSosLocationReady(location) &&
+      (!isOnline || (location.locationCheck?.accepted && location.locationCheck.acceptance_zone?.within)),
+  )
 
   const wizardFooter =
     step !== "countdown" ? (
@@ -676,7 +693,8 @@ export function SosWizard({
           <button
             type="button"
             onClick={goNext}
-            className="h-11 flex-[1.4] rounded-full bg-brand-orange text-[14px] font-semibold text-white hover:bg-brand-orange-strong"
+            disabled={step === "location" && !locationCanContinue}
+            className="h-11 flex-[1.4] rounded-full bg-brand-orange text-[14px] font-semibold text-white hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:bg-white/15 disabled:text-white/45"
           >
             {step === "details"
               ? "Skip / Next"

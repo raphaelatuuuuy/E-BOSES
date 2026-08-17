@@ -1,13 +1,13 @@
 import type { LucideIcon } from "lucide-react"
 import {
-  BellIcon,
+  InboxIcon,
+  BoltIcon,
   ClipboardListIcon,
+  ChartColumn,
   ClockIcon,
   HomeIcon,
-  LayoutDashboardIcon,
   MapPinnedIcon,
   MoreHorizontalIcon,
-  Settings2Icon,
   TriangleAlert,
   UserCircleIcon,
   UsersIcon,
@@ -79,7 +79,8 @@ function matches(pathname: string, path: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Resident — unchanged from current sidebar/mobile-nav (no behavior change).
+// Resident mobile navigation uses the same compact, expanding-label treatment
+// as the official navigation; only the destinations differ.
 // ---------------------------------------------------------------------------
 
 function isResidentHomeActive(pathname: string) {
@@ -141,7 +142,7 @@ const officialOverview: NavItemConfig = {
   key: "overview",
   label: "Overview",
   to: "/dashboard/overview",
-  icon: LayoutDashboardIcon,
+  icon: ChartColumn,
   isActive: (pathname) => matches(pathname, "/dashboard/overview"),
   section: "Operations",
 }
@@ -153,6 +154,7 @@ const officialOperationsMap: NavItemConfig = {
   icon: MapPinnedIcon,
   isActive: (pathname) => matches(pathname, "/dashboard/alerts-map"),
   section: "Operations",
+  capability: "configure_geography",
 }
 
 const officialEmergencies: NavItemConfig = {
@@ -162,6 +164,7 @@ const officialEmergencies: NavItemConfig = {
   icon: TriangleAlert,
   isActive: (pathname) => matches(pathname, "/dashboard/emergencies"),
   section: "Operations",
+  capability: "dispatch_emergencies",
 }
 
 const officialConcerns: NavItemConfig = {
@@ -171,6 +174,7 @@ const officialConcerns: NavItemConfig = {
   icon: ClipboardListIcon,
   isActive: (pathname) => matches(pathname, "/dashboard/reports"),
   section: "Operations",
+  capability: "resolve_concerns",
 }
 
 const officialCommunity: NavItemConfig = {
@@ -180,13 +184,14 @@ const officialCommunity: NavItemConfig = {
   icon: UsersIcon,
   isActive: (pathname) => matches(pathname, "/dashboard/community-content"),
   section: "Manage",
+  capability: "publish_announcements",
 }
 
 const officialConfiguration: NavItemConfig = {
   key: "configuration",
   label: "Configuration",
   to: "/dashboard/configuration",
-  icon: Settings2Icon,
+  icon: BoltIcon,
   isActive: (pathname) =>
     matches(pathname, "/dashboard/configuration") ||
     // Legacy deep links that still redirect into Configuration.
@@ -201,7 +206,7 @@ const officialNotifications: NavItemConfig = {
   key: "notifications",
   label: "Notifications",
   to: "/dashboard/notifications",
-  icon: BellIcon,
+  icon: InboxIcon,
   isActive: (pathname) => matches(pathname, "/dashboard/notifications"),
 }
 
@@ -288,7 +293,7 @@ const responderNotifications: NavItemConfig = {
   key: "notifications",
   label: "Notifications",
   to: "/dashboard/responders/notifications",
-  icon: BellIcon,
+  icon: InboxIcon,
   isActive: (pathname) => matches(pathname, "/dashboard/responders/notifications"),
 }
 

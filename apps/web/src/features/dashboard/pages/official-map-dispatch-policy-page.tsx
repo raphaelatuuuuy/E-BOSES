@@ -93,6 +93,8 @@ export default function OfficialMapDispatchPolicyPage() {
     setDraft((current) => current ? { ...current, ...next } : current)
   }
 
+  const dirty = draft && policy ? JSON.stringify(draft) !== JSON.stringify(draftFromPolicy(policy)) : false
+
   return (
     <ConfigShell
       icon={MapPinnedIcon}
@@ -239,8 +241,8 @@ export default function OfficialMapDispatchPolicyPage() {
           <div className="flex flex-wrap items-center gap-3">
             <Button
               type="submit"
-              disabled={saving}
-              className="rounded-xl bg-accent text-white hover:bg-accent/90"
+              disabled={saving || !dirty}
+              className="rounded-xl bg-accent text-white hover:bg-accent/90 disabled:opacity-50"
             >
               <SaveIcon className="size-4" />
               {saving ? "Saving…" : "Save changes"}

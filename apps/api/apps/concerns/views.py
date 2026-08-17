@@ -87,7 +87,6 @@ from .serializers import (
     ConcernAppealSerializer,
     ConcernAssignSerializer,
     ConcernAiAssessmentSerializer,
-    ConcernAiReviewSerializer,
     ConcernAssignmentSerializer,
     ConcernChatCreateSerializer,
     ConcernChatMessageSerializer,
@@ -229,10 +228,8 @@ FEED_VISIBLE_STATUSES = {
 
 # Legal status transitions for a Concern's lifecycle. Notes on two transitions that are
 # easy to misread from the table alone:
-#   - SUBMITTED -> UNDER_REVIEW is a manual official transition only. The AI-flagged queue
-#     (concerns list filtered with `?ai=flagged`) surfaces candidates for review, but the AI
-#     assessment never auto-transitions a concern's status itself (soft gate) -- an official
-#     must explicitly move it into `under_review`.
+#   - SUBMITTED -> UNDER_REVIEW is an optional operational status. Automated
+#     validation is completed before the concern enters the official queue.
 #   - APPEALED -> SUBMITTED is the appeal-approval reopen path: when an official approves a
 #     resident's appeal of a rejected/resolved concern, the concern is sent back to
 #     `submitted` to re-enter the normal review pipeline (see ConcernAppealReviewView).
@@ -460,7 +457,8 @@ class ConcernListCreateView(APIView):
             configuration = ConcernClassificationConfiguration.current()
             enabled_categories = configuration.enabled_categories or list(Concern.Category.values)
             selected_category = serializer.validated_data["category"]
-            if selected_category not in enabled_categories:
+            category_ref = ConcernCategory.objects.filter(code=selected_category, is_active=True).select_related("department").first()
+            if not category_ref and selected_category not in enabled_categories:
                 return Response(
                     {"category": ["This concern category is temporarily unavailable. Choose another category."]},
                     status=status.HTTP_400_BAD_REQUEST,
@@ -468,9 +466,6 @@ class ConcernListCreateView(APIView):
             # Resolve the legacy string to a real category row so every concern
             # carries a FK, not just those filed through the newer path. Without
             # this, routing and the category breakdown silently skip them.
-            category_ref = ConcernCategory.objects.filter(
-                code=selected_category, is_active=True
-            ).select_related("department").first()
             if category_ref:
                 rule = (
                     category_ref.routing_rules.filter(is_active=True)
@@ -478,13 +473,21 @@ class ConcernListCreateView(APIView):
                     .first()
                 )
                 assigned_department = rule.department if rule else category_ref.department
+        description = serializer.validated_data.get("description", "").strip()
+        if category_ref and category_ref.description_required and len(description) < 20:
+            return Response({"description": ["Describe the issue in at least 20 characters."]}, status=status.HTTP_400_BAD_REQUEST)
+        if category_ref and category_ref.location_required:
+            if serializer.validated_data.get("latitude") is None or serializer.validated_data.get("longitude") is None or not serializer.validated_data.get("address", "").strip():
+                return Response({"address": ["Pin where the issue is located."]}, status=status.HTTP_400_BAD_REQUEST)
+        if category_ref and not category_ref.public_feed_allowed and serializer.validated_data.get("visibility") == Concern.Visibility.COMMUNITY:
+            return Response({"visibility": ["Public sharing is not available for this concern type."]}, status=status.HTTP_400_BAD_REQUEST)
         location_review = serializer.validated_data.get("_location_review") or {}
         pending_location_review = location_review.get("action") == "review"
         validation_summary = location_review.get("summary") or "Required report checks passed. Advanced analysis is pending."
         validated_media = []
         media_hashes = set()
         media_files = request.FILES.getlist("media")
-        if not media_files:
+        if category_ref and category_ref.photo_required and not media_files:
             return Response(
                 {"media": ["Add at least one clear photo as evidence."]},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -525,7 +528,7 @@ class ConcernListCreateView(APIView):
             barangay=getattr(getattr(request.user, "resident_profile", None), "barangay", "") or "Marikina Heights",
             category=selected_category,
             title=serializer.validated_data["title"],
-            description=serializer.validated_data.get("description", ""),
+            description=description,
             latitude=serializer.validated_data.get("latitude"),
             longitude=serializer.validated_data.get("longitude"),
             precision=duplicate_config.report_duplicate_location_precision,
@@ -548,7 +551,7 @@ class ConcernListCreateView(APIView):
             category=selected_category,
             category_ref=category_ref,
             assigned_department=assigned_department,
-            visibility=serializer.validated_data["visibility"],
+            visibility=Concern.Visibility.PRIVATE if category_ref and not category_ref.public_feed_allowed else serializer.validated_data["visibility"],
             address=serializer.validated_data.get("address", ""),
             latitude=serializer.validated_data.get("latitude"),
             longitude=serializer.validated_data.get("longitude"),
@@ -558,9 +561,9 @@ class ConcernListCreateView(APIView):
             location_source=serializer.validated_data.get("location_source", ""),
             location_accuracy=serializer.validated_data.get("location_accuracy"),
             barangay=getattr(getattr(request.user, "resident_profile", None), "barangay", "") or "Marikina Heights",
-            validation_status=Concern.ValidationStatus.PENDING if pending_location_review else Concern.ValidationStatus.ACCEPTED,
+            validation_status=Concern.ValidationStatus.PENDING,
             validation_summary=validation_summary,
-            update_text="Report submitted for location review." if pending_location_review else "Report submitted and accepted for routing.",
+            update_text="Report submitted for location review." if pending_location_review else "Report submitted for automated validation.",
             ip_asn=ip_meta.get("asn", ""),
             ip_country=ip_meta.get("country", ""),
             ip_org=ip_meta.get("org", ""),
@@ -668,7 +671,7 @@ class ManagedConcernListView(APIView):
         touch_last_seen(request.user)
         if not can_update_concern_status(request.user):
             return Response({"detail": "You do not have permission to manage reports."}, status=status.HTTP_403_FORBIDDEN)
-        queryset = Concern.objects.all()
+        queryset = Concern.objects.exclude(validation_status=Concern.ValidationStatus.PENDING)
         status_filter = request.query_params.get("status")
         if status_filter and status_filter != "all":
             if status_filter == "active":
@@ -687,21 +690,6 @@ class ManagedConcernListView(APIView):
                 | Q(barangay__icontains=search)
                 | Q(update_text__icontains=search)
             )
-        ai_filter = request.query_params.get("ai")
-        if ai_filter == "flagged":
-            queryset = queryset.filter(ai_assessment__flagged=True, ai_assessment__official_decision="")
-        elif ai_filter == "cleared":
-            queryset = queryset.filter(ai_assessment__flagged=False, ai_assessment__status=ConcernAiAssessment.Status.COMPLETED)
-        elif ai_filter == "pending":
-            queryset = queryset.filter(
-                ai_assessment__status__in=[
-                    ConcernAiAssessment.Status.PENDING,
-                    ConcernAiAssessment.Status.FAILED,
-                    ConcernAiAssessment.Status.NOT_CONFIGURED,
-                ]
-            )
-        # Any other `ai` value is ignored (no filter applied); default ordering
-        # is unaffected either way.
         concerns = decorate_concerns(queryset.order_by("-updated_at", "-created_at"), request.user)
         return Response(ConcernSerializer(concerns, many=True, context={"request": request}).data)
 
@@ -1148,11 +1136,15 @@ class ConcernAppealListView(APIView):
 class ConcernAppealReviewView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @transaction.atomic
     def post(self, request, appeal_id):
         touch_last_seen(request.user)
         if not can_update_concern_status(request.user):
             return Response({"detail": "You do not have permission to review appeals."}, status=status.HTTP_403_FORBIDDEN)
-        appeal = get_object_or_404(ConcernAppeal.objects.select_related("concern", "appellant"), pk=appeal_id)
+        appeal = get_object_or_404(
+            ConcernAppeal.objects.select_for_update().select_related("concern", "appellant"),
+            pk=appeal_id,
+        )
         if appeal.status != ConcernAppeal.Status.SUBMITTED:
             return Response({"detail": "This appeal has already been decided."}, status=status.HTTP_400_BAD_REQUEST)
         serializer = ConcernAppealReviewSerializer(data=request.data)
@@ -1193,44 +1185,6 @@ class ConcernOfficialRemarkCreateView(APIView):
             create_concern_notification(concern, recipient=concern.reporter, type="under_review", title="Official remark added", body=remark.body[:240])
         create_audit_log("concern.remark_added", actor=request.user, target_user=concern.reporter, metadata={"concern_id": concern.pk, "remark_id": remark.pk, "visible_to_resident": remark.visible_to_resident}, request_meta=request_meta(request))
         return Response(ConcernOfficialRemarkSerializer(remark, context={"request": request}).data, status=status.HTTP_201_CREATED)
-
-
-class ConcernAiReviewView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, pk):
-        touch_last_seen(request.user)
-        if not can_update_concern_status(request.user):
-            return Response({"detail": "Only authorized officials can review AI assessment."}, status=status.HTTP_403_FORBIDDEN)
-        concern = get_object_or_404(Concern, pk=pk)
-        serializer = ConcernAiReviewSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        assessment, _ = ConcernAiAssessment.objects.get_or_create(concern=concern, defaults={"status": ConcernAiAssessment.Status.PENDING})
-        assessment.official_decision = serializer.validated_data["decision"]
-        assessment.official_reason = serializer.validated_data["reason"]
-        assessment.official_reviewer = request.user
-        assessment.official_reviewed_at = timezone.now()
-        update_fields = ["official_decision", "official_reason", "official_reviewer", "official_reviewed_at", "updated_at"]
-        if assessment.official_decision == ConcernAiAssessment.OfficialDecision.RELATED:
-            # The official confirmed this report is legitimate: clear the flag
-            # so it drops out of the `ai=flagged` queue, but keep flag_reasons
-            # for audit history. Never touches validation_status/status.
-            assessment.flagged = False
-            update_fields.append("flagged")
-        assessment.save(update_fields=update_fields)
-        create_audit_log(
-            "concern.ai_assessment_reviewed",
-            actor=request.user,
-            target_user=concern.reporter,
-            metadata={"concern_id": concern.pk, "assessment_id": assessment.pk, "decision": assessment.official_decision, "reason": assessment.official_reason},
-            request_meta=request_meta(request),
-        )
-        from .tasks import broadcast_concern_ai_update
-
-        transaction.on_commit(
-            lambda assessment_id=assessment.pk: broadcast_concern_ai_update(assessment_id)
-        )
-        return Response(ConcernAiAssessmentSerializer(assessment, context={"request": request}).data)
 
 
 class ConcernChatView(APIView):
@@ -1403,6 +1357,10 @@ class ConcernCategoryOptionsView(APIView):
                     "icon_key": category.icon_key,
                     "custom_icon_label": category.custom_icon_label,
                     "icon_image_url": request.build_absolute_uri(category.icon_image.url) if category.icon_image else "",
+                    "photo_required": category.photo_required,
+                    "description_required": category.description_required,
+                    "location_required": category.location_required,
+                    "public_feed_allowed": category.public_feed_allowed,
                     "department": (
                         {
                             "id": category.department_id,
@@ -1586,7 +1544,7 @@ class ConcernFormFieldListCreateView(APIView):
 
     def post(self, request, category_id):
         touch_last_seen(request.user)
-        if not can_update_concern_status(request.user):
+        if not can_update_concern_status(request.user) or not user_has_capability(request.user, MANAGE_CATEGORIES):
             return Response({"detail": "You do not have permission to manage forms."}, status=status.HTTP_403_FORBIDDEN)
         category = get_object_or_404(ConcernCategory, pk=category_id)
         data = request.data.copy()
@@ -1612,16 +1570,22 @@ class RoutingRuleDetailView(AdminModelDetailView):
 class ConcernTimelineEntryView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @transaction.atomic
     def post(self, request, pk):
         touch_last_seen(request.user)
-        concern = get_object_or_404(Concern, pk=pk)
-        if not can_chat_on_concern(request.user, concern):
-            return Response({"detail": "You do not have permission to update this timeline."}, status=status.HTTP_403_FORBIDDEN)
+        concern = get_object_or_404(Concern.objects.select_for_update(), pk=pk)
         serializer = ConcernTimelineEntryCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        next_status = serializer.validated_data.get("status")
+        can_manage = can_update_concern_status(request.user)
+        can_progress = bool(next_status) and can_progress_assigned_concern(
+            request.user, concern, next_status
+        )
+        if not (can_manage or can_progress):
+            return Response({"detail": "You do not have permission to update this timeline."}, status=status.HTTP_403_FORBIDDEN)
         entry = create_timeline_entry(concern=concern, actor=request.user, **serializer.validated_data)
-        if serializer.validated_data.get("status"):
-            concern.status = serializer.validated_data["status"]
+        if next_status:
+            concern.status = next_status
             concern.update_text = serializer.validated_data["message"][:255]
             concern.status_version += 1
             concern.save(update_fields=["status", "update_text", "status_version", "updated_at"])
@@ -1697,7 +1661,7 @@ class ConcernStatusUpdateView(APIView):
     @transaction.atomic
     def post(self, request, pk):
         touch_last_seen(request.user)
-        concern = get_object_or_404(Concern, pk=pk)
+        concern = get_object_or_404(Concern.objects.select_for_update(), pk=pk)
         serializer = ConcernStatusUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         next_status = serializer.validated_data["status"]
@@ -1904,6 +1868,32 @@ class ConcernResolutionEvidenceRawView(APIView):
             object_id=evidence.pk,
             request_meta=request_meta(request),
         )
+        return FileResponse(
+            evidence.file.open("rb"),
+            content_type=evidence.mime_type or "application/octet-stream",
+        )
+
+
+class ConcernResolutionEvidencePreviewView(APIView):
+    """Serve approved resolution evidence to the community feed."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, pk):
+        evidence = get_object_or_404(
+            ConcernResolutionEvidence.objects.select_related("concern"),
+            pk=pk,
+        )
+        concern = evidence.concern
+        if not (
+            concern.visibility == Concern.Visibility.COMMUNITY
+            and concern.validation_status == Concern.ValidationStatus.ACCEPTED
+            and concern.status in {Concern.Status.RESOLVED, Concern.Status.REJECTED}
+        ):
+            return Response(
+                {"detail": "This resolution evidence is not publicly available."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         return FileResponse(
             evidence.file.open("rb"),
             content_type=evidence.mime_type or "application/octet-stream",

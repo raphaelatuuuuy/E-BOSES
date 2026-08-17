@@ -492,6 +492,7 @@ export function CreateReportDialog({
         photo_required: true,
         description_required: true,
         location_required: true,
+        public_feed_allowed: true,
       }
     )
   }
@@ -676,8 +677,18 @@ export function CreateReportDialog({
   }
 
   const selectedConcern = concernConfig.find((item) => item.label === concern)
-  const isControlled = controlledOpen !== undefined
   const hasMedia = mediaFiles.length > 0
+  const selectedCategory = categoryOptions.find((item) => item.code === selectedCategoryCode())
+  const publicFeedAllowed = selectedCategory?.public_feed_allowed !== false
+  const requirements = categoryRequirements()
+  const formReady = Boolean(
+    concern &&
+      (!requirements.description_required || description.trim().length >= 20) &&
+      (!requirements.photo_required || hasMedia) &&
+      (!requirements.location_required || Boolean(locationPin && address.trim())) &&
+      (!(!publicFeedAllowed) || visibility === "private")
+  )
+  const isControlled = controlledOpen !== undefined
 
   return (
     <>
@@ -720,7 +731,9 @@ export function CreateReportDialog({
                 <div className="relative ml-auto flex shrink-0 items-center gap-2.5">
                   <button
                     type="button"
-                    onClick={() => setVisibilityMenuOpen((v) => !v)}
+                    onClick={() => {
+                      if (publicFeedAllowed) setVisibilityMenuOpen((v) => !v)
+                    }}
                     className="inline-flex h-10 items-center gap-2 rounded-full border border-neutral-200 bg-neutral-100/80 px-3.5 text-[14px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-100 sm:h-11 sm:px-4 sm:text-[15px]"
                   >
                     {visibility === "community" ? (
@@ -735,7 +748,7 @@ export function CreateReportDialog({
                     <div className="absolute right-0 top-full z-20 mt-1.5 w-52 overflow-hidden rounded-xl border border-neutral-200 bg-white py-1 shadow-lg">
                       {(
                         [
-                          ["community", "Anyone", "Visible in the community feed"],
+                          ...(publicFeedAllowed ? [["community", "Anyone", "Visible in the community feed"] as const] : []),
                           ["private", "Private", "Only you and officials"],
                         ] as const
                       ).map(([value, label, helper]) => (
@@ -760,7 +773,7 @@ export function CreateReportDialog({
 
                   <button
                     type="button"
-                    disabled={isSubmitting || isCheckingMedia}
+                    disabled={isSubmitting || isCheckingMedia || !formReady}
                     onClick={() => void handleSubmit()}
                     className="inline-flex h-10 items-center justify-center rounded-full bg-primary px-5 text-[14px] font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:opacity-100 sm:h-11 sm:px-6 sm:text-[15px]"
                   >
@@ -856,17 +869,6 @@ export function CreateReportDialog({
                           })
                         : null}
                     </div>
-
-                    {hasMedia ? (
-                      <p className="mt-2.5 text-[12px] leading-relaxed text-neutral-500">
-                        Photos are checked by automated services that may run on
-                        third-party AI infrastructure; any sensitive parts
-                        (faces, plates) found are blurred and are never
-                        displayed or shared publicly. By submitting you consent
-                        to this processing under the Data Privacy Act of 2012
-                        (RA 10173).
-                      </p>
-                    ) : null}
 
                     {locationPin && address ? (
                       <div className="mt-3 flex items-center gap-3 rounded-md border border-neutral-300 bg-white px-3.5 py-2.5">
@@ -1025,6 +1027,7 @@ export function CreateReportDialog({
                             type="button"
                             onClick={() => {
                               setConcern(item.label)
+                              if (categoryOptions.find((option) => option.code === item.value)?.public_feed_allowed === false) setVisibility("private")
                               setFieldErrors((prev) => ({ ...prev, concern: "" }))
                               setMoreOpen(false)
                             }}
@@ -1078,6 +1081,7 @@ export function CreateReportDialog({
                           type="button"
                           onClick={() => {
                             setConcern(item.label)
+                            if (categoryOptions.find((option) => option.code === item.value)?.public_feed_allowed === false) setVisibility("private")
                             setFieldErrors((prev) => ({ ...prev, concern: "" }))
                             setMoreOpen(false)
                           }}
@@ -1266,7 +1270,10 @@ export function CreateReportDialog({
               onClick={() => {
                 categoryOverrideRef.current = categoryConfirm.code
                 const match = concernConfig.find((item) => item.value === categoryConfirm.code)
-                if (match) setConcern(match.label)
+                if (match) {
+                  setConcern(match.label)
+                  if (categoryOptions.find((option) => option.code === categoryConfirm.code)?.public_feed_allowed === false) setVisibility("private")
+                }
                 setCategoryConfirm(null)
                 void advance("duplicate")
               }}

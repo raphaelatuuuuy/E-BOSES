@@ -1,14 +1,10 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { Loader2Icon } from "lucide-react"
+import { Loader2Icon, LocateFixedIcon, MinusIcon, PlusIcon } from "lucide-react"
 import type leaflet from "leaflet"
-import { MapPin } from "lucide-react"
 import { cn } from "@workspace/ui/lib/utils"
-import { matchMarikinaHeightsStreet } from "@/features/auth/lib/marikina-heights-streets"
-import { reverseGeocodeToMarikinaStreet } from "@/features/auth/lib/reverse-geocode"
-import { reverseGeocode } from "@/lib/geocode"
-import { buildPinnedCoordinateAddress } from "@/features/dashboard/components/sos-fallback"
+import { apiRequest } from "@/lib/api"
 
 const DEFAULT_CENTER: [number, number] = [14.6507, 121.1133]
 
@@ -19,48 +15,29 @@ export type SosLocationValue = {
   source: "gps" | "manual"
   address: string
   addressPrimary: string
+  locationCheck?: SosLocationCheck | null
 }
 
-async function reverseStreet(
-  lat: number,
-  lng: number
-): Promise<{ primary: string; full: string }> {
-  if (typeof navigator !== "undefined" && !navigator.onLine) {
-    return buildPinnedCoordinateAddress(lat, lng)
+export type SosLocationCheck = {
+  accepted: boolean
+  status: string
+  zone: string
+  message: string
+  acceptance_zone?: { within: boolean; distance_meters?: number; radius_meters?: number }
+}
+
+export function friendlyLocationMessage(check: SosLocationCheck | null | undefined) {
+  if (!check) return "Checking your location…"
+  if (check.accepted && check.acceptance_zone?.within) {
+    return ""
   }
-  try {
-    const matched = await reverseGeocodeToMarikinaStreet(lat, lng)
-    if (matched.ok && matched.street) {
-      const primary = matched.houseNumber
-        ? `${matched.houseNumber} ${matched.street}`
-        : matched.street
-      return { primary, full: `${primary}, Marikina Heights` }
-    }
-  } catch {
-    /* fall through */
+  if (check.zone === "outside_acceptance_zone") {
+    return "This area is outside our scope. You may call 911."
   }
-  try {
-    const data = await reverseGeocode(lat, lng)
-    if (!data) throw new Error("reverse failed")
-    const a = data.address ?? {}
-    const road = (a.road || a.pedestrian || a.residential || "").trim()
-    const curated = road ? matchMarikinaHeightsStreet(road) : null
-    const primary =
-      curated ||
-      road ||
-      (data.display_name ?? "").split(",")[0]?.trim() ||
-      "Pinned location"
-    if (
-      /^lat\b/i.test(primary) ||
-      primary.toLowerCase() === "marikina heights"
-    ) {
-      return { primary: "Move pin to a street", full: "" }
-    }
-    const secondary = a.suburb || a.neighbourhood || "Marikina Heights"
-    return { primary, full: `${primary}, ${secondary}` }
-  } catch {
-    return buildPinnedCoordinateAddress(lat, lng)
+  if (check.zone === "outside_barangay" || check.zone === "outside_city") {
+    return "This area is outside our scope. You may call 911."
   }
+  return "We could not check this area yet. Try again."
 }
 
 export function SosLocationStep({
@@ -75,21 +52,73 @@ export function SosLocationStep({
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
   const ignoreMove = useRef(false)
-  const [geocoding, setGeocoding] = useState(false)
   const [gpsBusy, setGpsBusy] = useState(false)
   const [error, setError] = useState("")
   const [isOnline, setIsOnline] = useState(() =>
     typeof navigator === "undefined" ? true : navigator.onLine
   )
+  const isOnlineRef = useRef(isOnline)
+  const validationRequestRef = useRef(0)
   const onChangeRef = useRef(onChange)
+
+  async function validatePin(lat: number, lng: number) {
+    const requestId = ++validationRequestRef.current
+    try {
+      const result = await apiRequest<SosLocationCheck>("/locations/validate/", {
+        method: "POST",
+        body: JSON.stringify({ latitude: lat, longitude: lng }),
+      })
+      return requestId === validationRequestRef.current ? result : null
+    } catch {
+      return requestId === validationRequestRef.current ? null : null
+    }
+  }
+
+  async function locateCurrentUser() {
+    if (!navigator.geolocation) {
+      setError("Your device does not provide location access. Drag the map to set the pin.")
+      return
+    }
+    setGpsBusy(true)
+    setError("")
+    navigator.geolocation.getCurrentPosition(
+      async ({ coords }) => {
+        const lat = coords.latitude
+        const lng = coords.longitude
+        const locationCheck = isOnlineRef.current ? await validatePin(lat, lng) : null
+        setGpsBusy(false)
+        onChangeRef.current({
+          lat,
+          lng,
+          accuracy: coords.accuracy,
+          source: "gps",
+          address: "Pinned location on map",
+          addressPrimary: "Pinned location",
+          locationCheck,
+        })
+        mapRef.current?.setView([lat, lng], Math.max(mapRef.current.getZoom(), 17), { animate: true })
+      },
+      () => {
+        setGpsBusy(false)
+        setError("Location access was not available. Drag the map to set the pin.")
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 },
+    )
+  }
 
   useEffect(() => {
     onChangeRef.current = onChange
   }, [onChange])
 
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true)
-    const handleOffline = () => setIsOnline(false)
+    const handleOnline = () => {
+      isOnlineRef.current = true
+      setIsOnline(true)
+    }
+    const handleOffline = () => {
+      isOnlineRef.current = false
+      setIsOnline(false)
+    }
     window.addEventListener("online", handleOnline)
     window.addEventListener("offline", handleOffline)
     return () => {
@@ -114,23 +143,18 @@ export function SosLocationStep({
           if (cancelled) return
           const lat = pos.coords.latitude
           const lng = pos.coords.longitude
-          setGeocoding(true)
-          const street = await reverseStreet(lat, lng)
+          const locationCheck = isOnlineRef.current ? await validatePin(lat, lng) : null
           if (cancelled) return
-          setGeocoding(false)
           setGpsBusy(false)
-          setError(
-            street.primary === "Pinned location"
-              ? "Street lookup is unavailable. Your exact pinned coordinates can still be sent."
-              : ""
-          )
+          setError("")
           onChangeRef.current({
             lat,
             lng,
             accuracy: pos.coords.accuracy,
             source: "gps",
-            address: street.full || street.primary,
-            addressPrimary: street.primary,
+            address: "Pinned location on map",
+            addressPrimary: "Pinned location",
+            locationCheck,
           })
           const map = mapRef.current
           if (map) {
@@ -152,6 +176,7 @@ export function SosLocationStep({
             source: "manual",
             address: "",
             addressPrimary: "",
+            locationCheck: null,
           })
         },
         { enableHighAccuracy: true, timeout: 12_000 }
@@ -198,7 +223,6 @@ export function SosLocationStep({
         attributionControl: false,
         scrollWheelZoom: false,
       })
-      L.control.zoom({ position: "topright" }).addTo(map)
       L.tileLayer(
         "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
         {
@@ -207,27 +231,61 @@ export function SosLocationStep({
         }
       ).addTo(map)
 
+      try {
+        const context = await apiRequest<{
+          map?: {
+            boundary?: { geometry?: object | null }
+            dispatch_policy?: {
+              acceptance_center_latitude?: number
+              acceptance_center_longitude?: number
+              acceptance_radius_meters?: number
+            }
+          }
+        }>("/locations/map-context/")
+        if (!cancelled && context.map) {
+          const boundaryGeometry = context.map.boundary?.geometry
+          if (boundaryGeometry) {
+            L.geoJSON(boundaryGeometry as Parameters<typeof L.geoJSON>[0], {
+              style: { color: "#2563eb", weight: 2, fillColor: "#2563eb", fillOpacity: 0.06 },
+              interactive: false,
+            }).addTo(map)
+          }
+          const policy = context.map.dispatch_policy
+          if (policy?.acceptance_center_latitude != null && policy.acceptance_center_longitude != null) {
+            L.circle(
+              [policy.acceptance_center_latitude, policy.acceptance_center_longitude],
+              {
+                radius: Math.max(100, Number(policy.acceptance_radius_meters) || 800),
+                color: "#d97706",
+                fillColor: "#d97706",
+                fillOpacity: 0.08,
+                weight: 2,
+                dashArray: "6 6",
+                interactive: false,
+              },
+            ).addTo(map)
+          }
+        }
+      } catch {
+        // The backend still validates the pin when the SOS is submitted.
+      }
+
       map.on("moveend", () => {
         if (ignoreMove.current || !map) return
         const c = map.getCenter()
         if (geocodeTimer) window.clearTimeout(geocodeTimer)
         geocodeTimer = window.setTimeout(() => {
           void (async () => {
-            setGeocoding(true)
-            const street = await reverseStreet(c.lat, c.lng)
-            setGeocoding(false)
-            setError(
-              street.primary === "Pinned location"
-                ? "Street lookup is unavailable. Your exact pinned coordinates can still be sent."
-                : ""
-            )
+            const locationCheck = isOnlineRef.current ? await validatePin(c.lat, c.lng) : null
+            setError("")
             onChangeRef.current({
               lat: c.lat,
               lng: c.lng,
               accuracy: null,
               source: "manual",
-              address: street.full || street.primary,
-              addressPrimary: street.primary,
+              address: "Pinned location on map",
+              addressPrimary: "Pinned location",
+              locationCheck,
             })
           })()
         }, 350)
@@ -252,12 +310,6 @@ export function SosLocationStep({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- init once; GPS updates view separately
   }, [])
 
-  const primary = value?.addressPrimary || value?.address || ""
-  const usable =
-    Boolean(primary) &&
-    primary !== "Move pin to a street" &&
-    !/^lat\b/i.test(primary)
-
   return (
     <div className={cn("flex min-h-0 flex-1 flex-col gap-3", className)}>
       {!isOnline ? (
@@ -266,42 +318,10 @@ export function SosLocationStep({
           role="status"
           aria-live="polite"
         >
-          You’re offline. Street names and map tiles may not load, but you can
-          still move the pin and send its coordinates. An SMS backup appears on
-          Review when configured.
+          You’re offline. Map tiles may not load, but you can still move the pin
+          and send its coordinates. An SMS backup appears on Review when configured.
         </div>
       ) : null}
-
-      <div
-        className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3.5 py-3"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      >
-        <MapPin
-          className="size-6 shrink-0 text-black"
-          strokeWidth={2}
-          aria-hidden
-        />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-[15px] font-medium text-neutral-900">
-            {gpsBusy || geocoding
-              ? "Finding street…"
-              : usable
-                ? primary
-                : "Move pin to a street"}
-          </p>
-          <p className="text-[12px] text-neutral-500">
-            Drag the map to adjust · pin stays centered
-          </p>
-        </div>
-        {(gpsBusy || geocoding) && (
-          <Loader2Icon
-            className="size-4 shrink-0 animate-spin text-neutral-400"
-            aria-hidden="true"
-          />
-        )}
-      </div>
 
       <div className="relative min-h-[220px] flex-1 overflow-hidden rounded-xl border border-neutral-200 bg-tint">
         <div
@@ -309,6 +329,52 @@ export function SosLocationStep({
           className="sos-loc-map absolute inset-0 z-0 h-full w-full"
           aria-label="Emergency location map. Drag the map to move the centered pin."
         />
+        <div className="absolute right-2 top-2 z-[600] flex flex-col overflow-hidden rounded-md border border-neutral-200 bg-white shadow-sm">
+          <button
+            type="button"
+            onClick={() => mapRef.current?.zoomIn()}
+            aria-label="Zoom in"
+            title="Zoom in"
+            className="flex size-[30px] items-center justify-center border-b border-neutral-200 text-neutral-700 transition-colors hover:bg-neutral-50"
+          >
+            <PlusIcon className="size-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => mapRef.current?.zoomOut()}
+            aria-label="Zoom out"
+            title="Zoom out"
+            className="flex size-[30px] items-center justify-center border-b border-neutral-200 text-neutral-700 transition-colors hover:bg-neutral-50"
+          >
+            <MinusIcon className="size-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void locateCurrentUser()}
+            disabled={gpsBusy}
+            aria-label="Use my current location"
+            title="Use my current location"
+            className="flex size-[30px] items-center justify-center text-neutral-700 transition-colors hover:bg-neutral-50 disabled:opacity-60"
+          >
+            {gpsBusy ? <Loader2Icon className="size-4 animate-spin" /> : <LocateFixedIcon className="size-4" />}
+          </button>
+        </div>
+        {(() => {
+          const message = friendlyLocationMessage(value?.locationCheck)
+          if (!message) return null
+          return (
+            <div
+              className={cn(
+                "absolute bottom-2 left-2 right-2 z-[600] rounded-lg border px-3 py-2 text-[12px] font-semibold shadow-sm backdrop-blur-sm",
+                "border-white/70 bg-white/95 text-neutral-700",
+              )}
+              role="status"
+              aria-live="polite"
+            >
+              {message}
+            </div>
+          )
+        })()}
         {/* Center pin overlay */}
         <div
           className="pointer-events-none absolute top-1/2 left-1/2 z-[500] h-0 w-0"
@@ -325,14 +391,6 @@ export function SosLocationStep({
         </div>
         <style>{`
           .sos-loc-map.leaflet-container { width:100%; height:100%; background:#e8eef5; }
-          .sos-loc-map .leaflet-control-zoom {
-            border:1px solid #e5e7eb !important; border-radius:10px !important; overflow:hidden;
-            box-shadow:0 4px 14px rgba(15,23,42,.1);
-          }
-          .sos-loc-map .leaflet-control-zoom a {
-            width:30px !important; height:30px !important; line-height:30px !important;
-            color:#171717 !important; background:#fff !important;
-          }
           .sos-loc-map img.leaflet-tile { max-width:none !important; }
         `}</style>
       </div>

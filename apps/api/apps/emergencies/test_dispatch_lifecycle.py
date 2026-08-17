@@ -184,6 +184,26 @@ class DispatchLifecycleTests(APITestCase):
         alert.refresh_from_db()
         self.assertEqual(alert.status, EmergencyAlert.Status.EN_ROUTE)
 
+    def test_assignment_status_rejects_a_stale_alert_version(self):
+        alert, assignment = self.alert_with_assignment()
+        self.client.force_authenticate(self.first)
+
+        response = self.client.post(
+            f"/api/emergencies/{alert.pk}/assignments/{assignment.pk}/status/",
+            {
+                "status": EmergencyResponderAssignment.Status.ACKNOWLEDGED,
+                "note": "I am responding now.",
+                "status_version": alert.status_version + 1,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        assignment.refresh_from_db()
+        alert.refresh_from_db()
+        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ASSIGNED)
+        self.assertEqual(alert.status_version, 0)
+
     def test_respond_is_refused_for_an_unassigned_responder(self):
         alert, _ = self.alert_with_assignment()
         self.client.force_authenticate(self.second)

@@ -95,16 +95,19 @@ export default defineConfig(({ mode }) => {
         "/api": {
           target: apiProxyTarget,
           changeOrigin: true,
+          xfwd: true,
           secure: false,
         },
         "/media": {
           target: apiProxyTarget,
           changeOrigin: true,
+          xfwd: true,
           secure: false,
         },
         "/ws": {
           target: apiProxyTarget,
           changeOrigin: true,
+          xfwd: true,
           secure: false,
           ws: true,
         },
@@ -123,16 +126,19 @@ export default defineConfig(({ mode }) => {
         "/api": {
           target: apiProxyTarget,
           changeOrigin: true,
+          xfwd: true,
           secure: false,
         },
         "/media": {
           target: apiProxyTarget,
           changeOrigin: true,
+          xfwd: true,
           secure: false,
         },
         "/ws": {
           target: apiProxyTarget,
           changeOrigin: true,
+          xfwd: true,
           secure: false,
           ws: true,
         },

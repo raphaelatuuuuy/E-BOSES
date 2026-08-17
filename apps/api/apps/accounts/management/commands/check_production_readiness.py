@@ -51,6 +51,23 @@ class Command(BaseCommand):
         if not getattr(settings, "ROBOFLOW_API_KEY", ""):
             warnings.append("ROBOFLOW_API_KEY is missing; automatic media protection cannot run and flagged photos stay restricted pending manual privacy review.")
 
+        # Migration 0026 created accounts with a published password. A later
+        # forward repair disables them, but fail readiness if stale rows remain.
+        from apps.accounts.models import User
+
+        seeded = User.objects.filter(
+            email__in=(
+                "official@eboses.test",
+                "responder@eboses.test",
+                "resident@eboses.test",
+            ),
+            is_active=True,
+        ).exists()
+        if seeded:
+            failures.append(
+                "Known-password development accounts are active; apply the latest accounts migration."
+            )
+
         ocrspace_key = getattr(settings, "OCRSPACE_API_KEY", "")
         ocrspace_url = getattr(settings, "OCRSPACE_URL", "")
         if not ocrspace_key:

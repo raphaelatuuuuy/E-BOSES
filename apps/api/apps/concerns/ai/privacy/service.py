@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+import tempfile
 from io import BytesIO
 
 from django.core.files.base import ContentFile
@@ -56,6 +58,25 @@ def _load_image(media):
         # load() before the context manager closes the underlying file.
         image.load()
     return image
+
+
+def _run_segmentation_from_storage(media, classes):
+    """Give path-only providers a short-lived copy from any Django storage."""
+    temp_path = ""
+    try:
+        suffix = os.path.splitext(media.original_filename or "")[1][:10] or ".img"
+        with media.file.open("rb") as source:
+            raw = source.read()
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temporary:
+            temporary.write(raw)
+            temp_path = temporary.name
+        return run_segmentation(temp_path, classes)
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
 
 
 def _write_preview(media, image) -> None:
@@ -161,7 +182,7 @@ def process_media_privacy(media, *, requested_classes: list[str], force: bool = 
         return _restrict(media, state=ConcernMedia.PrivacyState.FAILED_RESTRICTED, reason="image_unreadable")
 
     try:
-        payload = run_segmentation(media.file.path, classes)
+        payload = _run_segmentation_from_storage(media, classes)
     except Sam3NotConfigured:
         return _restrict(media, state=ConcernMedia.PrivacyState.FAILED_RESTRICTED, reason="media_protection_not_configured")
     except Sam3Unavailable as exc:

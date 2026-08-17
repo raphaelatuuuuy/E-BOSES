@@ -1,20 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
-import { UserCogIcon, XIcon } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { CircleCheck, CircleX, PencilIcon, TriangleAlert, UserCogIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { apiRequest } from "@/lib/api"
-import { StateMarker, type StateTone } from "@/components/ui/state-marker"
-import { DataTable, type Column } from "@/features/dashboard/components/record/data-table"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
+import { cn } from "@workspace/ui/lib/utils"
+import { ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
+import { SheetDialog, SheetPrimaryButton } from "@/features/dashboard/components/sheet-dialog"
 import { ConfigShell } from "@/features/dashboard/components/config/config-shell"
+import { useWheelScroll } from "@/hooks/use-wheel-scroll"
 
-/**
- * A `<select>` hands back a plain string, which does not narrow to the role
- * union on its own. Validating against the known set rather than asserting the
- * type means a stray option value can never be written into state and sent to
- * the role-change endpoint — which, on this screen, decides what someone is
- * allowed to do in the barangay.
- */
 type ManagedRole = "resident" | "barangay_official" | "first_responder"
 
 const MANAGED_ROLES: readonly string[] = ["resident", "barangay_official", "first_responder"]
@@ -22,15 +17,6 @@ const MANAGED_ROLES: readonly string[] = ["resident", "barangay_official", "firs
 function toManagedRole(value: string, fallback: ManagedRole): ManagedRole {
   return MANAGED_ROLES.includes(value) ? (value as ManagedRole) : fallback
 }
-
-/**
- * User management.
- *
- * The old screen could not edit or add users, and there was nowhere to place
- * someone in a unit. That placement is a `Designation` (user + department +
- * position), and it is what actually grants capabilities — so this screen is
- * where role-based access stops being theoretical.
- */
 
 interface Unit {
   id: number
@@ -51,6 +37,11 @@ interface StaffUser {
   responder_unit?: string
   units?: Unit[]
   last_seen_at?: string | null
+  date_joined?: string
+  gender?: string
+  date_of_birth?: string
+  member_since?: string
+  address?: string
 }
 
 interface Department {
@@ -82,316 +73,46 @@ const ROLE_LABEL: Record<string, string> = {
   first_responder: "Responder",
 }
 
-// A status is a fact, not a badge. Four filled pills in a table column read as
-// four warnings; a marker and a word reads as information.
 const STATUS_LABEL: Record<string, string> = {
+  pending_otp: "Pending",
+  pending_profile: "Pending",
+  pending_verification: "Pending",
   verified: "Verified",
-  pending_verification: "Waiting on ID check",
-  suspended: "Suspended",
   rejected: "Rejected",
+  suspended: "Suspended",
 }
 
-const STATUS_TONE: Record<string, StateTone> = {
-  verified: "closed",
-  pending_verification: "open",
-  suspended: "alarm",
-  rejected: "alarm",
-}
+const FILTERS = [
+  { key: "all", label: "All" },
+  { key: "barangay_official", label: "Officials" },
+  { key: "first_responder", label: "Responders" },
+  { key: "resident", label: "Residents" },
+]
 
-function UserDrawer({
-  user,
-  departments,
-  positions,
-  onClose,
-  onChanged,
-}: {
-  user: StaffUser
-  departments: Department[]
-  positions: Position[]
-  onClose: () => void
-  onChanged: () => void
+function InlineDropdown({ value, onChange, options }: {
+  value: string; onChange: (v: string) => void; options: { value: string; label: string }[]
 }) {
-  const [role, setRole] = useState(user.role)
-  const [accountStatus, setAccountStatus] = useState(user.status)
-  const [responderUnit, setResponderUnit] = useState(user.responder_unit ?? "")
-  const dirty =
-    role !== user.role ||
-    accountStatus !== user.status ||
-    responderUnit !== (user.responder_unit ?? "")
-  const [designations, setDesignations] = useState<Designation[]>([])
-  const [loading, setLoading] = useState(true)
-  const [departmentId, setDepartmentId] = useState("")
-  const [positionId, setPositionId] = useState("")
-  const [busy, setBusy] = useState(false)
-
-  const load = useCallback(() => {
-    apiRequest<Designation[]>("/concerns/admin/designations/")
-      .then((all) => setDesignations(all.filter((item) => item.user === user.id && item.is_active)))
-      .catch((error) => toast.error(describeApiError(error, "Could not load this person's units.")))
-      .finally(() => setLoading(false))
-  }, [user.id])
-
+  const [, setOpen] = useState(true)
+  const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    void load()
-  }, [load])
-
-  async function saveAccount() {
-    setBusy(true)
-    try {
-      await apiRequest(`/auth/staff/${user.id}/`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          role,
-          status: accountStatus,
-          ...(role === "first_responder" ? { responder_unit: responderUnit } : {}),
-        }),
-      })
-      toast.success("Account updated")
-      onChanged()
-    } catch (error) {
-      toast.error(describeApiError(error, "Could not update this account."))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function addDesignation() {
-    if (!departmentId || !positionId) return
-    setBusy(true)
-    try {
-      await apiRequest("/concerns/admin/designations/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user: user.id,
-          department: Number(departmentId),
-          position: Number(positionId),
-        }),
-      })
-      toast.success("Assigned")
-      setDepartmentId("")
-      setPositionId("")
-      load()
-      onChanged()
-    } catch (error) {
-      toast.error(describeApiError(error, "Could not assign this unit."))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function removeDesignation(id: number) {
-    setBusy(true)
-    try {
-      await apiRequest(`/concerns/admin/designations/${id}/`, { method: "DELETE" })
-      toast.success("Removed")
-      load()
-      onChanged()
-    } catch (error) {
-      toast.error(describeApiError(error, "Could not remove this assignment."))
-    } finally {
-      setBusy(false)
-    }
-  }
-
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [])
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <button
-        type="button"
-        aria-label="Close"
-        onClick={onClose}
-        className="absolute inset-0 bg-brand-navy/40"
-      />
-      <aside
-        role="dialog"
-        aria-modal="true"
-        aria-label={`${user.full_name || user.email} details`}
-        className="relative flex h-full w-full max-w-md flex-col overflow-y-auto bg-canvas p-5 shadow-2xl"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="truncate font-heading text-lg font-bold text-foreground">
-              {user.full_name || user.email}
-            </h2>
-            <p className="truncate text-sm font-medium text-muted-foreground">{user.email}</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-tint"
-          >
-            <XIcon className="size-5" />
-          </button>
-        </div>
-
-        <div className="mt-4 space-y-3 rounded-2xl border border-card-line bg-card p-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block">
-              <span className="text-[11px] font-bold text-muted-foreground">Role</span>
-              <select
-                value={role}
-                onChange={(event) => setRole(toManagedRole(event.target.value, role))}
-                disabled={busy}
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-semibold text-foreground outline-none focus:border-accent disabled:opacity-60"
-              >
-                <option value="resident">Resident</option>
-                <option value="first_responder">Responder</option>
-                <option value="barangay_official">Official</option>
-              </select>
-            </label>
-
-            <label className="block">
-              <span className="text-[11px] font-bold text-muted-foreground">Status</span>
-              <select
-                value={accountStatus}
-                onChange={(event) => setAccountStatus(event.target.value)}
-                disabled={busy}
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-semibold text-foreground outline-none focus:border-accent disabled:opacity-60"
-              >
-                <option value="verified">Verified</option>
-                <option value="pending_verification">Pending verification</option>
-                <option value="suspended">Suspended</option>
-                <option value="rejected">Rejected</option>
-              </select>
-            </label>
-          </div>
-
-          {/* A responder with no unit is invisible to dispatch, so the unit is
-              required as soon as the role becomes responder. */}
-          {role === "first_responder" ? (
-            <label className="block">
-              <span className="text-[11px] font-bold text-muted-foreground">
-                Responder unit
-              </span>
-              <select
-                value={responderUnit}
-                onChange={(event) => setResponderUnit(event.target.value)}
-                disabled={busy}
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-semibold text-foreground outline-none focus:border-accent disabled:opacity-60"
-              >
-                <option value="">Choose a unit</option>
-                <option value="tanod">Tanod</option>
-                <option value="bhw">BHW</option>
-                <option value="bdrrmo">BDRRMO</option>
-              </select>
-            </label>
-          ) : null}
-
-          {dirty ? (
-            <button
-              type="button"
-              onClick={() => void saveAccount()}
-              disabled={busy || (role === "first_responder" && !responderUnit)}
-              className="w-full rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-55"
-            >
-              {busy ? "Saving…" : "Save role & status"}
-            </button>
-          ) : null}
-
-          <p className="text-xs font-medium text-muted-foreground">
-            {user.phone_number || "No phone number on file"}
-          </p>
-        </div>
-
-        <section className="mt-5">
-          <h3 className="text-[11px] font-bold tracking-wide text-muted-foreground">
-            Units and positions
-          </h3>
-          {/* This is the part that matters: capabilities come from the position
-              held here, and emergency dispatch finds responders through it. */}
-          <p className="mt-1 text-xs font-medium text-muted-foreground">
-            The position held here decides what this person can do. For responders, it also
-            decides which emergencies they are dispatched to.
-          </p>
-
-          <div className="mt-3 space-y-2">
-            {loading ? (
-              <span className="block h-10 animate-pulse rounded-xl bg-chart-track" />
-            ) : designations.length === 0 ? (
-              <p className="rounded-xl border border-card-line bg-card px-3 py-2.5 text-sm font-medium text-muted-foreground">
-                Not assigned to any unit yet.
-              </p>
-            ) : (
-              designations.map((designation) => (
-                <div
-                  key={designation.id}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-card-line bg-card px-3 py-2.5"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-bold text-foreground">
-                      {designation.department_detail?.name ?? "Unit"}
-                    </p>
-                    <p className="truncate text-xs font-medium text-muted-foreground">
-                      {designation.position_detail?.name ?? "Position"}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void removeDesignation(designation.id)}
-                    className="shrink-0 rounded-lg px-2 py-1 text-xs font-bold text-neutral-500 transition-colors hover:text-sos disabled:opacity-50"
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-
-          <div className="mt-3 space-y-2 rounded-xl border border-card-line bg-card p-3">
-            <label className="block">
-              <span className="text-[11px] font-bold text-muted-foreground">Unit</span>
-              <select
-                value={departmentId}
-                onChange={(event) => setDepartmentId(event.target.value)}
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
-              >
-                <option value="">Select a unit</option>
-                {departments
-                  .filter((department) => department.is_active)
-                  .map((department) => (
-                    <option key={department.id} value={department.id}>
-                      {department.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-
-            <label className="block">
-              <span className="text-[11px] font-bold text-muted-foreground">
-                Position
-              </span>
-              <select
-                value={positionId}
-                onChange={(event) => setPositionId(event.target.value)}
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
-              >
-                <option value="">Select a position</option>
-                {positions
-                  .filter((position) => position.is_active)
-                  .map((position) => (
-                    <option key={position.id} value={position.id}>
-                      {position.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-
-            <button
-              type="button"
-              disabled={busy || !departmentId || !positionId}
-              onClick={() => void addDesignation()}
-              className="w-full rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-55"
-            >
-              Assign unit
-            </button>
-          </div>
-        </section>
-      </aside>
+    <div ref={ref} className="mt-2 rounded-xl border border-neutral-200 bg-white shadow-lg overflow-hidden">
+      {options.map((o) => (
+        <button key={o.value} type="button" onClick={() => { onChange(o.value); setOpen(false) }}
+          className="flex w-full items-center justify-between px-4 py-3 text-left text-[17px] text-neutral-700 transition hover:bg-neutral-50 border-b border-neutral-100 last:border-b-0">
+          <span className={o.value === value ? "font-medium text-neutral-900" : ""}>{o.label}</span>
+          {o.value === value && <CircleCheck className="size-5 shrink-0 text-green-600" strokeWidth={2} />}
+        </button>
+      ))}
     </div>
   )
 }
+
+
 
 export default function OfficialUsersManagePage() {
   const [users, setUsers] = useState<StaffUser[]>([])
@@ -399,7 +120,21 @@ export default function OfficialUsersManagePage() {
   const [positions, setPositions] = useState<Position[]>([])
   const [loading, setLoading] = useState(true)
   const [roleFilter, setRoleFilter] = useState("all")
+  const [query, setQuery] = useState("")
+  const [debounced, setDebounced] = useState("")
+  const [offset, setOffset] = useState(0)
   const [selected, setSelected] = useState<StaffUser | null>(null)
+  const [editOpen, setEditOpen] = useState(false)
+  const rangeScrollRef = useWheelScroll<HTMLDivElement>()
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebounced(query.trim()), 250)
+    return () => window.clearTimeout(t)
+  }, [query])
+
+  const filterKey = `${roleFilter}|${debounced}`
+  const [prevKey, setPrevKey] = useState(filterKey)
+  if (prevKey !== filterKey) { setPrevKey(filterKey); setOffset(0) }
 
   const load = useCallback(() => {
     Promise.all([
@@ -416,146 +151,371 @@ export default function OfficialUsersManagePage() {
       .finally(() => setLoading(false))
   }, [])
 
-  useEffect(() => {
-    void load()
-  }, [load])
+  useEffect(() => { void load() }, [load])
 
-  const visible = useMemo(
-    () => (roleFilter === "all" ? users : users.filter((user) => user.role === roleFilter)),
-    [users, roleFilter],
-  )
+  const filtered = useMemo(() => {
+    let result = users
+    if (roleFilter !== "all") result = result.filter((u) => u.role === roleFilter)
+    if (debounced) {
+      const q = debounced.toLowerCase()
+      result = result.filter((u) => `${u.full_name ?? ""} ${u.email} ${u.phone_number}`.toLowerCase().includes(q))
+    }
+    return result
+  }, [users, roleFilter, debounced])
 
-  const columns: Column<StaffUser>[] = [
-    {
-      key: "name",
-      header: "Name",
-      sortValue: (user) => (user.full_name || user.email).toLowerCase(),
-      render: (user) => (
-        <div className="min-w-0">
-          <p className="truncate font-semibold text-foreground">{user.full_name || "—"}</p>
-          <p className="truncate text-xs font-medium text-muted-foreground">{user.email}</p>
-        </div>
-      ),
-    },
-    {
-      key: "role",
-      header: "Role",
-      sortValue: (user) => user.role,
-      render: (user) => (
-        <span className="rounded-full bg-tint px-2 py-0.5 text-[11px] font-bold text-brand-navy">
-          {ROLE_LABEL[user.role] ?? user.role}
-        </span>
-      ),
-    },
-    {
-      key: "units",
-      header: "Units",
-      hideOnMobile: true,
-      render: (user) =>
-        user.units && user.units.length > 0 ? (
-          <div className="flex flex-wrap gap-1">
-            {user.units.map((unit) => (
-              <span
-                key={unit.id}
-                className="rounded-full bg-tint px-2 py-0.5 text-[11px] font-bold text-brand-navy"
-                title={`${unit.name} — ${unit.position}`}
-              >
-                {unit.short_name || unit.name}
-              </span>
-            ))}
-          </div>
-        ) : (
-          <span className="text-xs font-medium italic text-muted-foreground">Unassigned</span>
-        ),
-    },
-    {
-      key: "status",
-      header: "Status",
-      hideOnMobile: true,
-      sortValue: (user) => user.status,
-      render: (user) => (
-        <StateMarker
-          tone={STATUS_TONE[user.status] ?? "active"}
-          label={STATUS_LABEL[user.status] ?? user.status.replace(/_/g, " ")}
-        />
-      ),
-    },
-    {
-      key: "actions",
-      header: "",
-      align: "right",
-      render: (user) => (
-        <button
-          type="button"
-          onClick={() => setSelected(user)}
-          className="rounded-lg px-2 py-1 text-xs font-bold text-brand-navy transition hover:bg-tint"
-        >
-          Manage
-        </button>
-      ),
-    },
-  ]
+  const page = filtered.slice(offset, offset + PAGE_SIZE)
 
-  const unassignedStaff = users.filter(
-    (user) => user.role !== "resident" && (user.units?.length ?? 0) === 0,
-  ).length
+  const filterCounts = useMemo(() => ({
+    all: users.length,
+    barangay_official: users.filter((u) => u.role === "barangay_official").length,
+    first_responder: users.filter((u) => u.role === "first_responder").length,
+    resident: users.filter((u) => u.role === "resident").length,
+  }), [users])
 
   return (
     <ConfigShell
       icon={UserCogIcon}
-      eyebrow="People & access"
+      eyebrow="User management"
       title="Users"
-      description="Accounts, roles and unit assignments. A person's position in a unit is what grants their permissions — and for responders, what puts them in dispatch."
+      description="Accounts, roles and unit assignments. A person's position in a unit grants their permissions."
       stats={[
         { label: "Accounts", value: users.length },
-        { label: "Officials", value: users.filter((u) => u.role === "barangay_official").length },
-        { label: "Responders", value: users.filter((u) => u.role === "first_responder").length },
-        { label: "Staff unplaced", value: unassignedStaff, alarm: unassignedStaff > 0 },
+        { label: "Officials", value: filterCounts.barangay_official },
+        { label: "Responders", value: filterCounts.first_responder },
+        { label: "Residents", value: filterCounts.resident },
       ]}
     >
-      <DataTable
-        rows={visible}
-        columns={columns}
-        rowKey={(user) => String(user.id)}
-        loading={loading}
-        searchPlaceholder="Search by name, email or phone"
-        searchMatches={(user, query) =>
-          `${user.full_name ?? ""} ${user.email} ${user.phone_number}`.toLowerCase().includes(query)
-        }
-        filters={[
-          { key: "all", label: "All", count: users.length },
-          {
-            key: "barangay_official",
-            label: "Officials",
-            count: users.filter((user) => user.role === "barangay_official").length,
-          },
-          {
-            key: "first_responder",
-            label: "Responders",
-            count: users.filter((user) => user.role === "first_responder").length,
-          },
-          {
-            key: "resident",
-            label: "Residents",
-            count: users.filter((user) => user.role === "resident").length,
-          },
-        ]}
-        activeFilter={roleFilter}
-        onFilterChange={setRoleFilter}
-        onRowSelect={setSelected}
-        emptyTitle="No accounts match"
-        emptyHint="Try a different search or filter."
-      />
+      {/* Search + filters on same line */}
+      <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-4">
+        <ListSearch value={query} onChange={setQuery} placeholder="Search by name, email or phone" className="flex-1 sm:max-w-xs" />
+        <div ref={rangeScrollRef} className="flex items-center gap-6 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {FILTERS.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              onClick={() => setRoleFilter(f.key)}
+              className={roleFilter === f.key ? "shrink-0 text-read font-medium text-brand-navy" : "shrink-0 text-read text-neutral-400 hover:text-brand-navy"}
+            >
+              {f.label}
+              <span className="ml-1.5 tabular-nums text-neutral-400">{filterCounts[f.key as keyof typeof filterCounts]}</span>
+            </button>
+          ))}
+        </div>
+      </div>
 
-      {selected ? (
-        <UserDrawer
+      {/* Editorial list */}
+      <ol className="mt-4">
+        {page.map((user) => (
+          <li
+            key={user.id}
+            className="grid grid-cols-1 gap-x-8 gap-y-3 border-b border-neutral-200 py-6 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto]"
+          >
+            <div className="min-w-0">
+              <div className="flex items-center gap-3">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
+                  {(user.full_name || user.email).charAt(0).toUpperCase()}
+                </span>
+                <span className="text-row text-brand-navy">{user.full_name || user.email}</span>
+                {user.status === "verified" ? (
+                  <span className="inline-flex items-center gap-1 text-meta text-green-600">
+                    <CircleCheck className="size-3.5" strokeWidth={2} />
+                    Verified
+                  </span>
+                ) : user.status.startsWith("pending") ? (
+                  <span className="inline-flex items-center gap-1 text-meta text-amber-600">
+                    <TriangleAlert className="size-3.5" strokeWidth={2} />
+                    {STATUS_LABEL[user.status] ?? user.status.replace(/_/g, " ")}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-meta text-red-600">
+                    <CircleX className="size-3.5" strokeWidth={2} />
+                    {STATUS_LABEL[user.status] ?? user.status.replace(/_/g, " ")}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-5 border-t border-neutral-200 pt-3 sm:border-0 sm:pt-0">
+              <button
+                type="button"
+                onClick={() => { setSelected(user); setEditOpen(true) }}
+                className="text-meta text-neutral-500 transition-colors hover:text-accent"
+              >
+                Manage
+              </button>
+            </div>
+          </li>
+        ))}
+        {page.length === 0 && !loading ? (
+          <li className="py-14 text-center text-read text-neutral-500">No users found.</li>
+        ) : null}
+      </ol>
+
+      <Pager offset={offset} total={filtered.length} onChange={setOffset} noun="users" />
+
+      {/* Manage dialog */}
+      {selected && (
+        <UserManageDialog
           user={selected}
           departments={departments}
           positions={positions}
-          onClose={() => setSelected(null)}
+          open={editOpen}
+          onClose={() => { setEditOpen(false); setSelected(null) }}
           onChanged={load}
         />
-      ) : null}
+      )}
     </ConfigShell>
+  )
+}
+
+function UserManageDialog({
+  user,
+  departments,
+  positions,
+  open,
+  onClose,
+  onChanged,
+}: {
+  user: StaffUser
+  departments: Department[]
+  positions: Position[]
+  open: boolean
+  onClose: () => void
+  onChanged: () => void
+}) {
+  const [role, setRole] = useState(user.role)
+  const [accountStatus, setAccountStatus] = useState(user.status)
+  const [designations, setDesignations] = useState<Designation[]>([])
+  const [, setLoading] = useState(true)
+  const [departmentId, setDepartmentId] = useState("")
+  const [positionId, setPositionId] = useState("")
+  const [busy, setBusy] = useState(false)
+
+  const loadDesignations = useCallback(() => {
+    apiRequest<Designation[]>("/concerns/admin/designations/")
+      .then((all) => setDesignations(all.filter((d) => d.user === user.id && d.is_active)))
+      .catch((error) => toast.error(describeApiError(error, "Could not load units.")))
+      .finally(() => setLoading(false))
+  }, [user.id])
+
+  useEffect(() => { if (open) loadDesignations() }, [open, loadDesignations])
+
+  const hasNewAssignment = Boolean(departmentId && positionId)
+  const dirty = role !== user.role || accountStatus !== user.status || hasNewAssignment
+
+  async function saveAccount() {
+    setBusy(true)
+    try {
+      await apiRequest(`/auth/staff/${user.id}/`, {
+        method: "PATCH",
+        body: JSON.stringify({ role, status: accountStatus }),
+      })
+      if (hasNewAssignment) {
+        await apiRequest("/concerns/admin/designations/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user: user.id, department: Number(departmentId), position: Number(positionId) }),
+        })
+        setDepartmentId(""); setPositionId("")
+      }
+      toast.success("Account updated")
+      onChanged()
+    } catch (error) {
+      toast.error(describeApiError(error, "Could not update account."))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function removeDesignation(id: number) {
+    setBusy(true)
+    try {
+      await apiRequest(`/concerns/admin/designations/${id}/`, { method: "DELETE" })
+      toast.success("Removed")
+      loadDesignations(); onChanged()
+    } catch (error) {
+      toast.error(describeApiError(error, "Could not remove assignment."))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const GENDER_LABEL: Record<string, string> = { male: "Male", female: "Female", other: "Other", "" : "Not specified" }
+  const fmtDate = (d?: string | null) => d ? new Date(d).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : null
+  const registered = fmtDate(user.date_joined) ?? "—"
+  const lastSeen = fmtDate(user.last_seen_at) ?? "Never"
+
+  const hasChanges = dirty || Boolean(departmentId && positionId)
+
+  const [editingField, setEditingField] = useState<string | null>(null)
+
+  return (
+    <SheetDialog
+      open={open}
+      onClose={onClose}
+      title="User Details"
+      size="wide"
+      footer={
+        <div className="space-y-3">
+          <button
+            type="button"
+            disabled={busy || !hasChanges}
+            onClick={() => void saveAccount().then(onClose)}
+            className={cn(
+              "flex h-[52px] w-full items-center justify-center rounded-full text-[17px] font-semibold transition-colors",
+              busy || !hasChanges
+                ? "cursor-not-allowed bg-neutral-200 text-neutral-400"
+                : "bg-accent text-white hover:opacity-90 active:scale-[0.99]",
+            )}
+          >
+            {busy ? "Saving\u2026" : "Save changes"}
+          </button>
+          <SheetPrimaryButton onClick={onClose}>Cancel</SheetPrimaryButton>
+        </div>
+      }
+    >
+      <div className="pb-4">
+        {/* Header */}
+        <div className="flex items-start gap-4 mb-6">
+          <div className="flex size-14 shrink-0 items-center justify-center rounded-2xl bg-slate-soft text-navy-muted">
+            <span className="text-xl font-bold">{(user.full_name || user.email)?.charAt(0)?.toUpperCase()}</span>
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-lg font-semibold text-neutral-900">{user.full_name || user.email}</h3>
+            <p className="text-sm text-neutral-500">{ROLE_LABEL[user.role]}</p>
+          </div>
+        </div>
+
+        {/* Account information */}
+        <h4 className="text-2xl font-semibold text-neutral-900 mb-5">Account information</h4>
+        <dl className="space-y-4">
+          <div className="flex items-center gap-3">
+            <dt className="w-28 shrink-0 text-neutral-500 text-[18px]">Email</dt>
+            <dd className="text-neutral-900 text-[18px]">{user.email}</dd>
+          </div>
+          <div className="flex items-center gap-3">
+            <dt className="w-28 shrink-0 text-neutral-500 text-[18px]">Phone</dt>
+            <dd className="text-neutral-900 text-[18px]">{user.phone_number || "—"}</dd>
+          </div>
+          <div className="flex items-center gap-3">
+            <dt className="w-28 shrink-0 text-neutral-500 text-[18px]">Gender</dt>
+            <dd className="text-neutral-900 text-[18px]">{GENDER_LABEL[user.gender ?? ""] || user.gender || "—"}</dd>
+          </div>
+          {user.address && (
+            <div className="flex items-center gap-3">
+              <dt className="w-28 shrink-0 text-neutral-500 text-[18px]">Address</dt>
+              <dd className="text-neutral-900 text-[18px]">{user.address}</dd>
+            </div>
+          )}
+          <div className="flex items-center gap-3">
+            <dt className="w-28 shrink-0 text-neutral-500 text-[18px]">Joined</dt>
+            <dd className="text-neutral-900 text-[18px]">{registered}</dd>
+          </div>
+          <div className="flex items-center gap-3">
+            <dt className="w-28 shrink-0 text-neutral-500 text-[18px]">Last seen</dt>
+            <dd className="text-neutral-900 text-[18px]">{lastSeen}</dd>
+          </div>
+
+          {/* Role */}
+          <div>
+            <div className="flex items-center gap-3">
+              <dt className="w-28 shrink-0 text-neutral-500 text-[18px]">Role</dt>
+              <dd className="flex-1 flex items-center gap-2">
+                <span className="text-neutral-900 text-[18px]">{ROLE_LABEL[role]}</span>
+                <button type="button" onClick={() => setEditingField(editingField === "role" ? null : "role")} className="text-neutral-400 hover:text-accent">
+                  <PencilIcon className="size-4" />
+                </button>
+              </dd>
+            </div>
+            {editingField === "role" && (
+              <InlineDropdown value={role} onChange={(v) => { setRole(toManagedRole(v, role)); setEditingField(null) }}
+                options={[{ value: "resident", label: "Resident" }, { value: "first_responder", label: "Responder" }, { value: "barangay_official", label: "Official" }]} />
+            )}
+          </div>
+
+          {/* Status */}
+          <div>
+            <div className="flex items-center gap-3">
+              <dt className="w-28 shrink-0 text-neutral-500 text-[18px]">Status</dt>
+              <dd className="flex-1 flex items-center gap-2">
+                <span className="text-neutral-900 text-[18px]">{STATUS_LABEL[accountStatus] ?? accountStatus}</span>
+                <button type="button" onClick={() => setEditingField(editingField === "status" ? null : "status")} className="text-neutral-400 hover:text-accent">
+                  <PencilIcon className="size-4" />
+                </button>
+              </dd>
+            </div>
+            {editingField === "status" && (
+              <InlineDropdown value={accountStatus} onChange={(v) => { setAccountStatus(v); setEditingField(null) }}
+                options={[{ value: "verified", label: "Verified" }, { value: "pending_verification", label: "Pending" }, { value: "suspended", label: "Suspended" }, { value: "rejected", label: "Rejected" }]} />
+            )}
+          </div>
+
+          {/* Unit */}
+          {role !== "resident" && (
+            <>
+              <div>
+                <div className="flex items-center gap-3">
+                  <dt className="w-28 shrink-0 text-neutral-500 text-[18px]">Unit</dt>
+                  <dd className="flex-1 flex items-center gap-2">
+                    <span className="text-neutral-900 text-[18px]">
+                      {departmentId
+                        ? departments.find((d) => String(d.id) === departmentId)?.name ?? "—"
+                        : designations.length > 0
+                          ? designations.map((d) => d.department_detail?.name ?? "Unit").join(", ")
+                          : "Not assigned yet"}
+                    </span>
+                    <button type="button" onClick={() => setEditingField(editingField === "unit" ? null : "unit")} className="text-neutral-400 hover:text-accent">
+                      <PencilIcon className="size-4" />
+                    </button>
+                  </dd>
+                </div>
+                {editingField === "unit" && (
+                  <div className="mt-2">
+                    <InlineDropdown value={departmentId} onChange={setDepartmentId}
+                      options={departments.filter((d) => d.is_active).map((d) => ({ value: String(d.id), label: d.name }))} />
+                  </div>
+                )}
+              </div>
+
+              {/* Position */}
+              <div>
+                <div className="flex items-center gap-3">
+                  <dt className="w-28 shrink-0 text-neutral-500 text-[18px]">Position</dt>
+                  <dd className="flex-1 flex items-center gap-2">
+                    <span className="text-neutral-900 text-[18px]">
+                      {positionId
+                        ? positions.find((p) => String(p.id) === positionId)?.name ?? "—"
+                        : designations.length > 0
+                          ? designations.map((d) => d.position_detail?.name ?? "Position").join(", ")
+                          : "Not assigned yet"}
+                    </span>
+                    <button type="button" disabled={!departmentId && designations.length === 0} onClick={() => { if (departmentId || designations.length > 0) setEditingField(editingField === "position" ? null : "position") }} className={cn("text-neutral-400 transition-colors", (departmentId || designations.length > 0) ? "hover:text-accent" : "cursor-not-allowed opacity-40")}>
+                      <PencilIcon className="size-4" />
+                    </button>
+                  </dd>
+                </div>
+                {editingField === "position" && (departmentId || designations.length > 0) && (
+                  <div className="mt-2">
+                    <InlineDropdown value={positionId} onChange={(v) => { setPositionId(v); setEditingField(null) }}
+                      options={positions.filter((p) => p.is_active).map((p) => ({ value: String(p.id), label: p.name }))} />
+                  </div>
+                )}
+              </div>
+
+              {designations.length > 0 && (
+                <div className="mt-2">
+                  {designations.map((d) => (
+                    <div key={d.id} className="flex items-center justify-between py-2 border-b border-neutral-100 last:border-b-0">
+                      <span className="text-[18px] text-neutral-900">{d.department_detail?.name ?? "Unit"} · {d.position_detail?.name ?? "Position"}</span>
+                      <button type="button" disabled={busy} onClick={() => void removeDesignation(d.id)} className="text-[16px] text-neutral-500 hover:text-red-600">Remove</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </dl>
+      </div>
+    </SheetDialog>
   )
 }

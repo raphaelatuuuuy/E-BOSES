@@ -1670,14 +1670,25 @@ class EmergencyTypeRoleMapDetailView(APIView):
 class EmergencyAssignmentStatusView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @transaction.atomic
     def post(self, request, pk, assignment_id):
         touch_last_seen(request.user)
-        alert = get_object_or_404(EmergencyAlert, pk=pk)
-        assignment = get_object_or_404(EmergencyResponderAssignment, pk=assignment_id, alert=alert)
+        alert = get_object_or_404(EmergencyAlert.objects.select_for_update(), pk=pk)
+        assignment = get_object_or_404(
+            EmergencyResponderAssignment.objects.select_for_update(),
+            pk=assignment_id,
+            alert=alert,
+        )
         if not (can_manage_emergencies(request.user) or assignment.responder_id == request.user.pk):
             return Response({"detail": "You are not assigned to this dispatch item."}, status=status.HTTP_403_FORBIDDEN)
         serializer = EmergencyAssignmentStatusSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        expected_version = serializer.validated_data.get("status_version")
+        if expected_version is not None and expected_version != alert.status_version:
+            return Response(
+                {"status_version": ["This emergency was updated elsewhere. Refresh and try again."]},
+                status=status.HTTP_409_CONFLICT,
+            )
         old_status = assignment.status
         new_status = serializer.validated_data["status"]
         note = serializer.validated_data["note"]
@@ -1869,9 +1880,12 @@ class EmergencyChatView(APIView):
 class EmergencyCancelView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @transaction.atomic
     def post(self, request, pk):
         touch_last_seen(request.user)
-        alert = get_object_or_404(EmergencyAlert, pk=pk, reporter=request.user)
+        alert = get_object_or_404(
+            EmergencyAlert.objects.select_for_update(), pk=pk, reporter=request.user
+        )
         if alert.status not in {EmergencyAlert.Status.SUBMITTED, EmergencyAlert.Status.ROUTED}:
             return Response({"detail": "This emergency can no longer be cancelled."}, status=status.HTTP_400_BAD_REQUEST)
         reason = str(request.data.get("reason", "")).strip()
@@ -1886,11 +1900,12 @@ class EmergencyCancelView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         alert.status = EmergencyAlert.Status.CANCELLED
+        alert.status_version += 1
         alert.resolved_at = timezone.now()
         from apps.live_map import route_for_assignment
 
         alert.route = route_for_assignment(alert)
-        alert.save(update_fields=["status", "resolved_at", "updated_at", "route"])
+        alert.save(update_fields=["status", "resolved_at", "status_version", "updated_at", "route"])
         active_assignments = list(
             alert.assignments.exclude(
                 status__in=[
@@ -1935,7 +1950,7 @@ class EmergencyDispositionView(APIView):
         touch_last_seen(request.user)
         if not can_manage_emergencies(request.user):
             return Response({"detail": "You do not have permission to review emergency disposition."}, status=status.HTTP_403_FORBIDDEN)
-        alert = get_object_or_404(EmergencyAlert, pk=pk)
+        alert = get_object_or_404(EmergencyAlert.objects.select_for_update(), pk=pk)
         if alert.status not in ACTIVE_STATUSES | {EmergencyAlert.Status.CANCELLED, EmergencyAlert.Status.RESOLVED}:
             return Response({"detail": "This emergency already has a final disposition."}, status=status.HTTP_400_BAD_REQUEST)
         serializer = EmergencyDispositionSerializer(data=request.data)

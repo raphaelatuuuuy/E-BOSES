@@ -96,30 +96,11 @@ function computePosition(
   const spaceBelow = window.innerHeight - rect.bottom - gap
   const spaceAbove = rect.top - gap
 
-  let placeAbove = false
-  if (side === "top") {
-    placeAbove = true
-  } else if (side === "auto") {
-    placeAbove = spaceBelow < 160 && spaceAbove > spaceBelow
-  } else {
-    // Always prefer below the input (never cover it).
-    placeAbove = false
-  }
+  const placeAbove = side === "top" || (side === "auto" && spaceBelow < 160 && spaceAbove > spaceBelow)
 
-  let top = placeAbove
+  const top = placeAbove
     ? Math.max(viewportPadding, rect.top - contentHeight - gap)
     : rect.bottom + gap
-
-  // Keep panel starting below the trigger so it never covers the input.
-  if (!placeAbove) {
-    top = Math.max(top, rect.bottom + gap)
-  }
-
-  // Hard rule: never overlap the trigger when side is bottom.
-  // Do not clamp upward — page can scroll so the full panel is visible.
-  if (!placeAbove && top < rect.bottom + gap) {
-    top = rect.bottom + gap
-  }
 
   let left = rect.left
   left = Math.max(
@@ -141,12 +122,6 @@ const PopoverContent = React.forwardRef<
     left: number
     maxHeight?: number
   } | null>(null)
-  const [mounted, setMounted] = React.useState(false)
-
-  React.useEffect(() => {
-    setMounted(true)
-  }, [])
-
   const updatePosition = React.useCallback(() => {
     const trigger = triggerRef.current
     const content = contentRef.current
@@ -156,10 +131,7 @@ const PopoverContent = React.forwardRef<
   }, [triggerRef, side])
 
   React.useLayoutEffect(() => {
-    if (!open) {
-      setCoords(null)
-      return
-    }
+    if (!open) return
 
     updatePosition()
     const raf = requestAnimationFrame(updatePosition)
@@ -202,7 +174,7 @@ const PopoverContent = React.forwardRef<
     }
   }, [open, setOpen, triggerRef])
 
-  if (!open || !mounted) return null
+  if (!open || typeof document === "undefined") return null
 
   return createPortal(
     <div

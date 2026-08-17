@@ -5,6 +5,7 @@ from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from apps.throttling import SystemStatusThrottle
 
 from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated
 from apps.emergencies.models import EmergencyAlert
@@ -71,16 +72,30 @@ class SystemStatusView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = [SystemStatusThrottle]
 
     def get(self, request):
+        from django.core.cache import cache
+        from django.conf import settings
+
+        try:
+            cached = None if getattr(settings, "IS_TEST_RUN", False) else cache.get("system-status:v1")
+        except Exception:
+            cached = None
+        if cached is not None:
+            return Response(cached)
         maintenance = SystemBanner.live(SystemBanner.Kind.MAINTENANCE)
-        return Response(
-            {
-                "maintenance": serialize(maintenance),
-                "ticker": serialize(SystemBanner.live(SystemBanner.Kind.TICKER)),
-                "server_time": timezone.now(),
-            }
-        )
+        payload = {
+            "maintenance": serialize(maintenance),
+            "ticker": serialize(SystemBanner.live(SystemBanner.Kind.TICKER)),
+            "server_time": timezone.now(),
+        }
+        if not getattr(settings, "IS_TEST_RUN", False):
+            try:
+                cache.set("system-status:v1", payload, 15)
+            except Exception:
+                pass
+        return Response(payload)
 
 
 class SystemBannerManageView(APIView):

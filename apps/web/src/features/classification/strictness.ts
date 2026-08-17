@@ -100,9 +100,9 @@ export const MISMATCH_OPTIONS: {
   hint: string
 }[] = [
   {
-    value: "manual_review",
-    label: "Hold it for an official",
-    hint: "The report waits in your queue. Recommended.",
+    value: "auto_correct",
+    label: "Use the detected category",
+    hint: "The system corrects the category before routing. Recommended.",
   },
   {
     value: "request_resubmission",

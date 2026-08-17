@@ -148,10 +148,6 @@ export interface ConcernAiAssessment {
     title: string
     status: ConcernStatus
   } | null
-  official_decision: "related" | "irrelevant" | "suspicious" | "needs_review" | ""
-  official_reason: string
-  official_reviewer: PublicUser | null
-  official_reviewed_at: string | null
   updated_at: string
 }
 
@@ -393,7 +389,7 @@ export interface ResidentRoleSummary extends CommonRoleSummary {
 }
 
 export interface OfficialRoleSummary extends CommonRoleSummary {
-  pending_reviews: number
+  new_concerns: number
   open_reports: number
   active_reports: number
   appealed_reports: number
@@ -602,13 +598,11 @@ export function listManagedConcerns(
   status?: string,
   category?: string,
   search?: string,
-  ai?: "flagged" | "cleared" | "pending",
 ) {
   const params = new URLSearchParams()
   if (status && status !== "all") params.set("status", status)
   if (category && category !== "all") params.set("category", category)
   if (search?.trim()) params.set("search", search.trim())
-  if (ai) params.set("ai", ai)
   const query = params.toString() ? `?${params.toString()}` : ""
   return apiRequest<Concern[]>(`/concerns/manage/${query}`)
 }
@@ -746,16 +740,6 @@ export function reviewConcernAppeal(appealId: number, payload: { status: "approv
 
 export function createConcernRemark(id: number, payload: { body: string; visible_to_resident?: boolean }) {
   return apiRequest<ConcernOfficialRemark>(`/concerns/${id}/remarks/`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  })
-}
-
-export function reviewConcernAi(
-  id: number,
-  payload: { decision: "related" | "irrelevant" | "suspicious" | "needs_review"; reason: string },
-) {
-  return apiRequest<ConcernAiAssessment>(`/concerns/${id}/ai-review/`, {
     method: "POST",
     body: JSON.stringify(payload),
   })

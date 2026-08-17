@@ -50,9 +50,9 @@ export function ResidentProfilePanel() {
       <section className="flex items-center gap-4">
         <span
           aria-hidden
-          className="flex size-16 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-[20px] font-semibold text-neutral-700"
+          className="flex size-16 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[22px] font-bold text-navy-muted"
         >
-          {initials(fullName)}
+          {initials(fullName).charAt(0)}
         </span>
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-[20px] font-bold leading-tight tracking-tight text-neutral-900">

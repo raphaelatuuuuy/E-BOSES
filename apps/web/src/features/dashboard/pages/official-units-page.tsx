@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react"
-import { PlusIcon, UsersIcon } from "lucide-react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { ActivityIcon, AmbulanceIcon, BabyIcon, BadgeAlertIcon, BellIcon, CircleCheck, ChevronDownIcon, ChevronUpIcon, CloudRainWindIcon, FlameIcon, HeartCrackIcon, HomeIcon, MapPinIcon, PillIcon, PlusIcon, ShieldAlertIcon, SirenIcon, StethoscopeIcon, UsersIcon, WavesIcon, ZapIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { apiRequest } from "@/lib/api"
@@ -10,7 +10,7 @@ import {
   ConfigShell,
 } from "@/features/dashboard/components/config/config-shell"
 import { ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
-import { SheetDialog, SheetPrimaryButton, SheetList, SheetOptionRow } from "@/features/dashboard/components/sheet-dialog"
+import { SheetDialog, SheetPrimaryButton } from "@/features/dashboard/components/sheet-dialog"
 import { listEmergencyCategories, type EmergencyCategory } from "@/features/dashboard/emergency-api"
 import { useWheelScroll } from "@/hooks/use-wheel-scroll"
 
@@ -31,6 +31,19 @@ interface Unit {
 
 type Draft = Partial<Unit> & { name?: string; code?: string }
 
+function unitSnapshot(value: Draft | null) {
+  return JSON.stringify({
+    id: value?.id ?? null,
+    name: value?.name ?? "",
+    code: value?.code ?? "",
+    short_name: value?.short_name ?? "",
+    description: value?.description ?? "",
+    emergency_types: value?.emergency_types ?? [],
+    responds_to_emergencies: value?.responds_to_emergencies ?? false,
+    is_active: value?.is_active ?? true,
+  })
+}
+
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80)
 }
@@ -42,12 +55,14 @@ const FILTERS = [
 ]
 
 function EditDialog({
-  open, draft, onChange, onSave, onClose, saving, emergencyCategories,
+  open, draft, onChange, onSave, onClose, saving, emergencyCategories, originalDraft,
 }: {
   open: boolean; draft: Draft; onChange: (next: Draft) => void; onSave: () => void
   onClose: () => void; saving: boolean; emergencyCategories: EmergencyCategory[]
+  originalDraft: string | null
 }) {
   const isNew = !draft.id
+  const dirty = isNew || unitSnapshot(draft) !== originalDraft
   const responds = Boolean(draft.responds_to_emergencies)
   const types = draft.emergency_types ?? []
 
@@ -88,46 +103,104 @@ function EditDialog({
         </div>
 
         {/* Emergency dispatch */}
-        <div className="space-y-3">
-          <SheetList>
-            <SheetOptionRow
-              title="Responds to emergencies"
-              description="Dispatch this unit to emergency incidents"
-              onClick={() => onChange({ ...draft, responds_to_emergencies: !responds, emergency_types: responds ? [] : validTypes })}
-              selected={responds}
-            />
-          </SheetList>
-          {responds && (
-            <div className="grid gap-2 sm:grid-cols-2">
-              {emergencyCategories.filter((c) => c.is_active).map((category) => {
-                const active = validTypes.includes(category.code)
-                return (
-                  <button key={category.code} type="button" aria-pressed={active}
-                    onClick={() => onChange({ ...draft, emergency_types: active ? validTypes.filter((t) => t !== category.code) : [...validTypes, category.code] })}
-                    className={active
-                      ? "rounded-[14px] border-[1.5px] border-accent bg-accent/10 px-3 py-2.5 text-left text-[15px] font-medium text-neutral-900"
-                      : "rounded-[14px] border-[1.5px] border-neutral-200 bg-white px-3 py-2.5 text-left text-[15px] font-medium text-neutral-900 transition hover:border-neutral-400"}>
-                    <>
-                      <span className="block">{category.label}</span>
-                      <span className="mt-0.5 block text-[13px] text-neutral-500">{category.subtext || category.code}</span>
-                    </>
-                  </button>
-                )
-              })}
-            </div>
+        <div className="space-y-2">
+          <p className="text-[13px] font-semibold text-neutral-500">Emergency types</p>
+          <EmergencyTypeDropdown
+            categories={emergencyCategories}
+            selected={validTypes}
+            onChange={(types) => onChange({ ...draft, emergency_types: types, responds_to_emergencies: types.length > 0 })}
+          />
+          {validTypes.length > 0 && (
+            <p className="text-[13px] text-neutral-400">This unit will respond to emergencies for the selected types.</p>
           )}
-          {responds && validTypes.length === 0 && <p className="text-[14px] text-neutral-500">Pick at least one type, or this unit will never be dispatched to.</p>}
+          {validTypes.length === 0 && (
+            <p className="text-[13px] text-neutral-400">Leave empty if this unit does not respond to emergencies.</p>
+          )}
         </div>
       </div>
 
       <div className="mt-6 space-y-3">
-        <button type="button" onClick={onSave} disabled={saving || !draft.name || (responds && validTypes.length === 0)}
+        <button type="button" onClick={onSave} disabled={saving || !draft.name || (responds && validTypes.length === 0) || !dirty}
           className="flex h-[52px] w-full items-center justify-center rounded-full bg-accent text-[17px] font-semibold text-white transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400">
           {saving ? "Saving\u2026" : isNew ? "Create unit" : "Save changes"}
         </button>
         <SheetPrimaryButton onClick={onClose} disabled={saving}>Cancel</SheetPrimaryButton>
       </div>
     </SheetDialog>
+  )
+}
+
+const ICONS_MAP: Record<string, typeof SirenIcon> = {
+  siren: SirenIcon,
+  activity: ActivityIcon,
+  ambulance: AmbulanceIcon,
+  baby: BabyIcon,
+  "badge-alert": BadgeAlertIcon,
+  bell: BellIcon,
+  "cloud-rain-wind": CloudRainWindIcon,
+  flame: FlameIcon,
+  "heart-crack": HeartCrackIcon,
+  home: HomeIcon,
+  "map-pin": MapPinIcon,
+  pill: PillIcon,
+  "shield-alert": ShieldAlertIcon,
+  stethoscope: StethoscopeIcon,
+  waves: WavesIcon,
+  zap: ZapIcon,
+}
+
+function EmergencyTypeDropdown({ categories, selected, onChange }: {
+  categories: EmergencyCategory[]; selected: string[]; onChange: (types: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [])
+
+  const active = categories.filter((c) => c.is_active)
+  const selectedLabels = selected.map((code) => active.find((c) => c.code === code)?.label).filter(Boolean)
+
+  function toggle(code: string) {
+    onChange(selected.includes(code) ? selected.filter((t) => t !== code) : [...selected, code])
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-3 rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-left text-[16px] text-neutral-900 outline-none transition-colors hover:border-neutral-400">
+        <span className="flex-1 truncate font-medium">
+          {selectedLabels.length > 0 ? selectedLabels.join(", ") : "Select emergency types"}
+        </span>
+        {open ? <ChevronUpIcon className="size-4 shrink-0 text-neutral-400" /> : <ChevronDownIcon className="size-4 shrink-0 text-neutral-400" />}
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white shadow-lg [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" style={{ maxHeight: '110px', overflowY: 'auto' }}>
+          <div className="py-1">
+            {active.map((category) => {
+              const Icon = ICONS_MAP[category.icon_key] ?? SirenIcon
+              const isSelected = selected.includes(category.code)
+              return (
+                <button key={category.code} type="button"
+                  onClick={() => toggle(category.code)}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-neutral-700 transition hover:bg-neutral-50">
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-brand-navy text-white">
+                    <Icon className="size-3.5" strokeWidth={1.7} />
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block font-medium text-neutral-900">{category.label}</span>
+                    <span className="block text-[13px] text-neutral-500">{category.subtext || category.code}</span>
+                  </span>
+                  {isSelected && <CircleCheck className="size-4 shrink-0 text-green-600" strokeWidth={2} />}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -178,6 +251,7 @@ export default function OfficialUnitsPage() {
   const rangeScrollRef = useWheelScroll<HTMLDivElement>()
   const [editOpen, setEditOpen] = useState(false)
   const [draft, setDraft] = useState<Draft | null>(null)
+  const [originalDraft, setOriginalDraft] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Unit | null>(null)
@@ -233,7 +307,7 @@ export default function OfficialUnitsPage() {
   const respondingCount = units.filter((u) => u.is_active && u.responds_to_emergencies).length
 
   return (
-    <ConfigShell icon={UsersIcon} eyebrow="People & access" title="Units"
+    <ConfigShell icon={UsersIcon} eyebrow="User management" title="Units"
       description="Barangay units, desks and committees. A unit marked as an emergency responder receives SOS alerts for the types you choose."
       stats={[
         { label: "Active units", value: units.filter((u) => u.is_active).length },
@@ -241,7 +315,7 @@ export default function OfficialUnitsPage() {
         { label: "Members placed", value: units.reduce((t, u) => t + u.member_count, 0) },
         { label: "Inactive", value: units.filter((u) => !u.is_active).length },
       ]}
-      action={<ConfigHeroAction icon={PlusIcon} onClick={() => { setDraft({ name: "", code: "", emergency_types: [] }); setEditOpen(true) }}>New unit</ConfigHeroAction>}>
+      action={<ConfigHeroAction icon={PlusIcon} onClick={() => { setDraft({ name: "", code: "", emergency_types: [] }); setOriginalDraft(null); setEditOpen(true) }}>New unit</ConfigHeroAction>}>
       {!loading && respondingCount === 0 && <ConfigAlarm>No unit answers emergencies yet. Until one does, an SOS cannot be routed to anyone automatically — open a unit and turn on "Responds to emergencies".</ConfigAlarm>}
 
       <div className="space-y-4">
@@ -269,7 +343,7 @@ export default function OfficialUnitsPage() {
               {unit.responds_to_emergencies && unit.emergency_types.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{unit.emergency_types.map((type) => <span key={type} className="rounded-full bg-neutral-100 px-2 py-0.5 text-meta font-medium text-neutral-600">{eLabel(type)}</span>)}</div>}
             </div>
             <div className="flex shrink-0 items-center gap-3">
-              <button type="button" onClick={() => { setDraft(unit); setEditOpen(true) }} className="text-meta text-neutral-500 transition-colors hover:text-accent">Edit</button>
+              <button type="button" onClick={() => { setDraft(unit); setOriginalDraft(unitSnapshot(unit)); setEditOpen(true) }} className="text-meta text-neutral-500 transition-colors hover:text-accent">Edit</button>
               <button type="button" onClick={() => { setDeleteTarget(unit); setDeleteOpen(true) }} className="text-meta text-neutral-500 transition-colors hover:text-sos">Delete</button>
             </div>
           </li>
@@ -278,7 +352,7 @@ export default function OfficialUnitsPage() {
         {!loading && filtered.length > 0 && <Pager offset={offset} total={filtered.length} onChange={setOffset} noun="units" />}
       </div>
 
-      {draft && <EditDialog open={editOpen} draft={draft} onChange={setDraft} onSave={() => void save()} onClose={() => { setEditOpen(false); setDraft(null) }} saving={saving} emergencyCategories={emergencyCategories} />}
+      {draft && <EditDialog open={editOpen} draft={draft} onChange={setDraft} onSave={() => void save()} onClose={() => { setEditOpen(false); setDraft(null); setOriginalDraft(null) }} saving={saving} emergencyCategories={emergencyCategories} originalDraft={originalDraft} />}
       <DeleteDialog open={deleteOpen} unit={deleteTarget} onConfirm={() => void confirmDelete()} onClose={() => { setDeleteOpen(false); setDeleteTarget(null) }} saving={deleting} />
     </ConfigShell>
   )

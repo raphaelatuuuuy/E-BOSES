@@ -2,7 +2,7 @@
 
 import { useMemo } from "react"
 import { useNavigate } from "react-router-dom"
-import { BellIcon, ShieldAlertIcon } from "lucide-react"
+import { InboxIcon, ShieldAlertIcon } from "lucide-react"
 
 import { type NotificationItem } from "@/features/dashboard/components/notification-context"
 import {
@@ -17,9 +17,8 @@ import {
  */
 
 const FILTERS = [
-  { value: "all", label: "All" },
   { value: "unread", label: "Unread" },
-  { value: "dispatch", label: "Dispatch" },
+  { value: "read", label: "Read" },
 ]
 
 function categoryOf(item: NotificationItem): "dispatch" | "system" {
@@ -57,11 +56,12 @@ export function ResponderNotificationsPanel({
   const config = useMemo<NotificationsConfig>(
     () => ({
       filters: FILTERS,
+      dark: true,
       groupOf: (item) => (categoryOf(item) === "dispatch" ? "dispatch" : null),
       iconFor: (item) =>
         categoryOf(item) === "dispatch"
           ? { Icon: ShieldAlertIcon, chipClass: "bg-white/10 text-sos-bright" }
-          : { Icon: BellIcon, chipClass: "bg-neutral-100 text-neutral-700" },
+          : { Icon: InboxIcon, chipClass: "bg-neutral-100 text-neutral-700" },
       filterStorageKey: "eboses:responder-notifications-filter",
       landingCopy: "Dispatch, backup and assignment updates will land here.",
       onOpen: (item) => {

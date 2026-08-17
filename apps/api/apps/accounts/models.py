@@ -59,6 +59,7 @@ class User(AbstractUser):
 
     username = None
     email = models.EmailField(unique=True)
+    supabase_user_id = models.UUIDField(null=True, blank=True, unique=True)
     phone_number = models.CharField(max_length=16, unique=True, blank=True)
     role = models.CharField(max_length=32, choices=Role.choices, default=Role.RESIDENT)
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.PENDING_OTP)

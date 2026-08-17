@@ -10,11 +10,8 @@ import { type NotificationsConfig } from "@/features/dashboard/components/notifi
  */
 
 export const RESIDENT_NOTIFICATION_FILTERS = [
-  { value: "all", label: "All" },
   { value: "unread", label: "Unread" },
-  { value: "reports", label: "Reports" },
-  { value: "emergencies", label: "Emergencies" },
-  { value: "announcements", label: "Announcements" },
+  { value: "read", label: "Read" },
 ]
 
 function typeGroup(item: NotificationItem): string | null {

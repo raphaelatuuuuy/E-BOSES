@@ -1,6 +1,8 @@
 import { useState } from "react"
 import { Link } from "react-router-dom"
 
+import { cn } from "@workspace/ui/lib/utils"
+
 import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
 import {
@@ -75,7 +77,7 @@ export function ResidentContentGrid({
 export function ResidentMobileHeader({ homeTo = "/dashboard/home" }: { homeTo?: string }) {
   const { user } = useAuthSession()
   const [profileOpen, setProfileOpen] = useState(false)
-  const avatarInitials = initials(user?.full_name || "Resident")
+  const avatarInitials = initials(user?.full_name || "Resident").charAt(0)
 
   return (
     <header className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-neutral-200 bg-white px-3">
@@ -102,7 +104,7 @@ export function ResidentMobileHeader({ homeTo = "/dashboard/home" }: { homeTo?: 
           aria-label="Open profile"
           className="flex size-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-neutral-50"
         >
-          <span className="flex size-8 items-center justify-center rounded-full bg-neutral-100 text-[11px] font-semibold text-neutral-700">
+          <span className="flex size-8 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
             {avatarInitials}
           </span>
         </button>
@@ -128,26 +130,28 @@ export function ResidentTopBar() {
 export function ResidentLogoBar({
   homeTo = "/dashboard/home",
   tone = "light",
+  compact = false,
 }: {
   homeTo?: string
   /** `dark` renders on the navy staff rail; `light` on the white resident shell. */
   tone?: "light" | "dark"
+  compact?: boolean
 }) {
   // Navy staff panel — same lockup as the light shell, recoloured for the dark
   // surface (ref 8 "AeuxGlobal": mark + wordmark, white on near-black).
   if (tone === "dark") {
     return (
-      <div className="flex h-16 shrink-0 items-center px-3">
+      <div className={cn("flex h-16 shrink-0 items-center px-3", compact && "justify-center px-2")}>
         <Link
           to={homeTo}
-          className="flex min-w-0 items-center gap-2.5 rounded-xl px-2 py-1.5 no-underline transition-colors hover:bg-nav-raised"
+          className={cn("flex min-w-0 items-center gap-2.5 rounded-xl px-2 py-1.5 no-underline transition-colors hover:bg-nav-raised", compact && "justify-center gap-0")}
         >
           <img
             src="/contents/logo.webp"
             alt="Boses Marikina Heights"
             className="size-8 shrink-0 object-contain"
           />
-          <span className="flex min-w-0 flex-col">
+          <span className={cn("flex min-w-0 flex-col", compact && "hidden")}>
             <span className="truncate text-[19px] font-bold leading-none tracking-tight text-brand-orange">
               Boses
             </span>
@@ -161,13 +165,13 @@ export function ResidentLogoBar({
   }
 
   return (
-    <div className="flex h-14 shrink-0 items-center px-3">
+    <div className={cn("flex h-14 shrink-0 items-center px-3", compact && "justify-center px-2")}>
       <Link
         to={homeTo}
-        className="flex min-w-0 items-center gap-2 rounded-lg px-2.5 no-underline"
+        className={cn("flex min-w-0 items-center gap-2 rounded-lg px-2.5 no-underline", compact && "justify-center gap-0")}
       >
         <img src="/contents/logo.webp" alt="Boses Marikina Heights" className="size-9 shrink-0 object-contain" />
-        <div className="flex min-w-0 flex-col">
+        <div className={cn("flex min-w-0 flex-col", compact && "hidden")}>
           <span className="truncate text-[26px] font-bold leading-none tracking-tight text-brand-orange">
             Boses
           </span>

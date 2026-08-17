@@ -1,8 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
 
-/* eslint-disable react-refresh/only-export-components -- provider + hooks must
-   live in one module; fast refresh degrades to a full reload. */
-
 import { apiRequest } from "@/lib/api"
 
 /**
@@ -29,6 +26,7 @@ export interface ConcernCategoryOption {
   photo_required: boolean
   description_required: boolean
   location_required: boolean
+  public_feed_allowed: boolean
   department: { id: number; name: string; short_name: string } | null
 }
 

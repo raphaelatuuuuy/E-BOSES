@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
-  BellIcon,
+  InboxIcon,
   ChevronLeftIcon,
   FileTextIcon,
   LockIcon,
@@ -399,7 +399,7 @@ export function SettingsWorkspace({
                     <SheetOptionRow
                       title="Notifications"
                       description="Alerts and report updates"
-                      leading={<BellIcon className="size-5" strokeWidth={1.75} />}
+                      leading={<InboxIcon className="size-5" strokeWidth={1.75} />}
                       onClick={() => setPanel("notifications")}
                       showChevron
                     />
@@ -523,7 +523,7 @@ export function SettingsWorkspace({
                   onClick={() => setPanel("privacy")}
                 />
                 <HubRow
-                  icon={BellIcon}
+                  icon={InboxIcon}
                   label="Notification settings"
                   onClick={() => setPanel("notifications")}
                 />

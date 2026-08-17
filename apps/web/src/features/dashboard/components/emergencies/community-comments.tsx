@@ -87,14 +87,6 @@ export function EmergencyCommunityComments({
       closedNotice={
         acceptsComments ? undefined : "This emergency is closed, so new comments are not accepted."
       }
-      header={
-        acceptsComments ? (
-          <p className="text-meta leading-relaxed text-neutral-500">
-            Road access, water level, whether help has arrived. Never share names, plate numbers or
-            anything that identifies someone.
-          </p>
-        ) : null
-      }
     />
   )
 }

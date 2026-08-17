@@ -1,9 +1,13 @@
 import random
+import os
+import re
+import hashlib
 from datetime import date, timedelta
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
+from django.db import transaction
 from django.utils import timezone
 
 from apps.concerns import merge_services
@@ -65,20 +69,22 @@ class Command(BaseCommand):
     help = "Seed a demo dataset grounded in real barangay concerns and the configured categories."
 
     def add_arguments(self, parser):
-        parser.add_argument("--keep-existing", action="store_true", help="Add without clearing.")
+        parser.add_argument("--dataset-id", required=True)
+        parser.add_argument("--replace-dataset", action="store_true")
         parser.add_argument("--no-images", action="store_true", help="Skip photo downloads.")
-        parser.add_argument("--password", default="Demo!Pass123")
+        parser.add_argument("--password", default=os.getenv("EBOSES_E2E_PASSWORD", ""))
+        parser.add_argument("--live-providers", action="store_true")
         parser.add_argument(
             "--skip-ai",
             action="store_true",
-            help="Do not run the real classification pipeline over the seeded reports.",
+            help="Deprecated compatibility option. Providers are skipped unless --live-providers is set.",
         )
 
     def make_user(self, email, phone, role, first, last, gender="", password="Demo!Pass123", unit=""):
         from apps.accounts.models import ResidentProfile
 
         User = get_user_model()
-        user = User.objects.filter(email=email).first() or User.objects.filter(phone_number=phone).first()
+        user = User.objects.filter(email=email).first()
         if user is None:
             user = User.objects.create_user(
                 email=email, phone_number=phone, password=password,
@@ -208,7 +214,19 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(f"  {failed} could not be reviewed"))
 
     def handle(self, *args, **options):
-        rng = random.Random("demo-data")
+        dataset_id = options["dataset_id"].strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{2,40}", dataset_id):
+            self.stderr.write(self.style.ERROR("dataset-id must be 3-41 safe characters"))
+            return
+        if not options["password"]:
+            self.stderr.write(self.style.ERROR("Set EBOSES_E2E_PASSWORD or pass --password"))
+            return
+
+        dataset_slug = dataset_id.lower()
+        email_prefix = f"e2e-{dataset_slug}-"
+        phone_block = int(hashlib.sha256(dataset_id.encode()).hexdigest()[:6], 16) % 900 + 100
+        phone = lambda group, index: f"+6391{phone_block:03d}{group * 100 + index:05d}"
+        rng = random.Random(dataset_id)
         street_names = streets()
         zones = streets_by_zone()
         User = get_user_model()
@@ -219,28 +237,31 @@ class Command(BaseCommand):
         )
         password = options["password"]
 
+        if options["replace_dataset"]:
+            with transaction.atomic():
+                scoped = User.objects.filter(email__startswith=email_prefix, email__endswith="@example.invalid")
+                count = scoped.count()
+                removed = scoped.delete()[0]
+            self.stdout.write(f"  replaced dataset users={count}, rows={removed}")
+
         residents = [
-            self.make_user(f"resident{i + 1}@eboses.demo", f"+63917000{i + 1:04d}",
+            self.make_user(f"{email_prefix}resident{i + 1}@example.invalid", phone(1, i + 1),
                            User.Role.RESIDENT, first, last, gender, password)
             for i, (first, last, gender) in enumerate(RESIDENTS)
         ]
         responders = [
-            self.make_user(f"responder{i + 1}@eboses.demo", f"+63918000{i + 1:04d}",
+            self.make_user(f"{email_prefix}responder{i + 1}@example.invalid", phone(2, i + 1),
                            User.Role.FIRST_RESPONDER, first, last, "", password, unit)
             for i, (first, last, unit) in enumerate(RESPONDERS)
         ]
         officials = [
-            self.make_user(f"official{i + 1}@eboses.demo", f"+63919000{i + 1:04d}",
+            self.make_user(f"{email_prefix}official{i + 1}@example.invalid", phone(3, i + 1),
                            User.Role.BARANGAY_OFFICIAL, first, last, "", password)
             for i, (first, last) in enumerate(OFFICIALS)
         ]
         self.stdout.write(
             f"  {len(residents)} residents, {len(responders)} responders, {len(officials)} officials"
         )
-
-        if not options["keep_existing"]:
-            removed = Concern.objects.all().delete()[0]
-            self.stdout.write(f"  cleared {removed} rows across the concern graph")
 
         official = officials[0]
         seeded_ids = []
@@ -280,7 +301,7 @@ class Command(BaseCommand):
 
             concern = Concern.objects.create(
                 reporter=reporter,
-                title=spec["title"],
+                title=f"[{dataset_id}] {spec['title']}",
                 description=spec["description"],
                 category=category.code,
                 category_ref=category,
@@ -350,8 +371,8 @@ class Command(BaseCommand):
 
         self.demonstrate_merge(groups, official)
 
-        if options["skip_ai"]:
-            self.stdout.write("  AI review skipped (--skip-ai)")
+        if options["skip_ai"] or not options["live_providers"]:
+            self.stdout.write("  provider calls skipped; use --live-providers for a controlled canary")
         else:
             self.run_real_ai(seeded_ids)
             self.run_privacy_pipeline()
@@ -360,10 +381,10 @@ class Command(BaseCommand):
         call_command("seed_emergency_lifecycle")
 
         self.stdout.write("")
-        self.stdout.write(self.style.MIGRATE_HEADING("Demo accounts (all share one password)"))
-        self.stdout.write(f"  resident1@eboses.demo   / {password}")
-        self.stdout.write(f"  responder1@eboses.demo  / {password}")
-        self.stdout.write(f"  official1@eboses.demo   / {password}")
+        self.stdout.write(self.style.MIGRATE_HEADING(f"Dataset {dataset_id} accounts"))
+        self.stdout.write(f"  {email_prefix}resident1@example.invalid")
+        self.stdout.write(f"  {email_prefix}responder1@example.invalid")
+        self.stdout.write(f"  {email_prefix}official1@example.invalid")
 
     def demonstrate_merge(self, groups, official):
         """Three neighbours, one blocked canal: suggest, merge, resolve."""

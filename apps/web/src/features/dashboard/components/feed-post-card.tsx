@@ -7,6 +7,7 @@ import {
   BadgeCheckIcon,
   CheckCircle2Icon,
   CircleArrowUp,
+  CircleCheck,
   GlobeIcon,
   MapPinIcon,
   MessageCircleIcon,
@@ -176,10 +177,17 @@ function ResolutionBanner({ post, onReply }: { post: Concern; onReply?: (prefix:
   const evidence = (post.resolution_evidence ?? []).filter((item) =>
     item.mime_type?.startsWith("image/"),
   )
+  const publicReportEvidence = (post.media ?? []).filter(
+    (item) => item.mime_type?.startsWith("image/") && item.public_visible,
+  )
+  const displayEvidence = evidence.length ? evidence : publicReportEvidence
   const closingEvent = [...(post.status_events ?? [])]
     .reverse()
     .find((event) => event.status === post.status)
-  const detail = (post.update_text || "").trim() || closingEvent?.note || ""
+  const detail =
+    (post.update_text || "").trim() ||
+    closingEvent?.note ||
+    "The barangay has completed the reported work."
   const official = evidence[0]?.uploaded_by ?? closingEvent?.actor ?? null
   const when = closingEvent?.created_at ?? post.updated_at
 
@@ -187,12 +195,20 @@ function ResolutionBanner({ post, onReply }: { post: Concern; onReply?: (prefix:
   const replyPrefix = official?.id
     ? mentionToken(toMentionUser(official))
     : firstNameOf(officialName)
+  const positive = post.status === "resolved"
 
   return (
     <div>
-      <p className="mb-1.5 flex items-center gap-1 text-[11px] font-semibold text-neutral-500">
+      <p
+        className={cn(
+          "mb-1.5 flex items-center gap-1 text-[11px] font-semibold",
+          positive ? "text-status-closed" : "text-neutral-500",
+        )}
+      >
         <CheckCircle2Icon className="size-3 shrink-0" strokeWidth={2.4} />
-        {statusLabelOf(post.status, "resident", "concern")}
+        {positive
+          ? "Issue was resolved"
+          : statusLabelOf(post.status, "resident", "concern")}
       </p>
 
       <CommentRow
@@ -208,7 +224,7 @@ function ResolutionBanner({ post, onReply }: { post: Concern; onReply?: (prefix:
             </>
           ) : (
             <>
-              <span className="flex size-8 items-center justify-center rounded-full bg-brand-navy text-[12px] font-bold text-white">
+              <span className="flex size-8 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
                 BH
               </span>
               <BadgeCheckIcon
@@ -226,9 +242,9 @@ function ResolutionBanner({ post, onReply }: { post: Concern; onReply?: (prefix:
         {detail ? (
           <p className="mt-0.5 text-[14px] leading-relaxed text-neutral-900">{detail}</p>
         ) : null}
-        {evidence.length ? (
+        {displayEvidence.length ? (
           <div className="mt-1.5 flex gap-1.5 overflow-x-auto">
-            {evidence.slice(0, 3).map((item) => (
+            {displayEvidence.slice(0, 3).map((item) => (
               <AuthenticatedMediaImage
                 key={item.id}
                 src={mediaDisplaySource(item)}
@@ -335,6 +351,11 @@ export function FeedPostCard({
 
   const incidentStreet = streetSegment(post.address) || streetSegment(post.reporter.street)
   const commentFieldId = `feed-post-comment-${post.id}`
+  // The comment icon counts every row shown in the thread: real comments plus
+  // the resolution banner and the "neighbours also reported" entries.
+  const resolutionRows = statusGroupOf(post.status) === "closed" ? 1 : 0
+  const relatedRows = (post.community_incident?.reports?.filter((entry) => !entry.is_primary) ?? []).length
+  const totalCommentRows = post.comment_count + resolutionRows + relatedRows
 
   useEffect(() => {
     if (!focusCommentOnMount) return
@@ -363,7 +384,7 @@ export function FeedPostCard({
     <>
       <article
         className={cn(
-          "relative rounded-lg border-[1.5px] border-card-line-strong bg-white",
+          "relative rounded-lg border border-neutral-300 bg-white",
           className,
         )}
       >
@@ -377,18 +398,20 @@ export function FeedPostCard({
                 </p>
                 <p
                   className={cn(
-                    "inline-flex max-w-full items-center gap-1 overflow-hidden text-neutral-500",
+                    "flex max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5 text-neutral-500",
                     FS.meta,
                   )}
                 >
                   {incidentStreet ? (
                     <>
-                      <MapPinIcon
-                        className="size-3 shrink-0 text-neutral-400"
-                        strokeWidth={2.3}
-                        aria-hidden
-                      />
-                      <span className="min-w-0 truncate">{incidentStreet}</span>
+                      <span className="inline-flex min-w-0 max-w-full items-center gap-1">
+                        <MapPinIcon
+                          className="size-3 shrink-0 text-neutral-400"
+                          strokeWidth={2.3}
+                          aria-hidden
+                        />
+                        <span className="min-w-0 break-words">{incidentStreet}</span>
+                      </span>
                       <span className="shrink-0" aria-hidden>
                         ·
                       </span>
@@ -405,16 +428,8 @@ export function FeedPostCard({
                       <span className="shrink-0" aria-hidden>
                         ·
                       </span>
-                      <span className="inline-flex shrink-0 items-center gap-1 font-semibold text-neutral-600">
-                        <span
-                          aria-hidden
-                          className={cn(
-                            "size-1.5 rounded-full",
-                            post.status === "resolved" || post.status === "partially_resolved"
-                              ? "bg-status-closed"
-                              : "bg-neutral-400",
-                          )}
-                        />
+                      <span className="inline-flex shrink-0 items-center gap-1 font-medium text-status-closed">
+                        <CircleCheck className="size-3.5 shrink-0" strokeWidth={2.4} />
                         {statusLabelOf(post.status, "resident", "concern")}
                       </span>
                     </>
@@ -490,9 +505,9 @@ export function FeedPostCard({
               )}
             >
               <MessageCircleIcon className="size-6 shrink-0" />
-              {post.comment_count > 0 ? (
+              {totalCommentRows > 0 ? (
                 <span className="pr-0.5 text-[13px] font-semibold tabular-nums">
-                  {post.comment_count}
+                  {totalCommentRows}
                 </span>
               ) : null}
             </button>

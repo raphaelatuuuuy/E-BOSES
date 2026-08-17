@@ -19,5 +19,5 @@ export const PROOF_THEME = {
 } as const
 
 export function proofSelectClass() {
-  return "h-10 w-full rounded-lg border border-neutral-200 bg-white px-3 text-read text-brand-navy outline-none focus:border-accent"
+  return "h-10 w-full rounded-[10px] border-[1.5px] border-neutral-300 bg-white px-3 text-[14px] text-neutral-900 outline-none focus:border-neutral-500"
 }

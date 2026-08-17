@@ -615,7 +615,6 @@ export function ResidentLeafletMap({
             }
           </div>
           <div style="font-weight:600;color:#b91c1c;margin-bottom:2px">${escapeHtml(brief.status.label)}</div>
-          <div style="font-weight:500;color:#475569">${escapeHtml(brief.line)}</div>
           ${
             em.created_at
               ? `<div style="font-weight:500;color:#64748b">Posted ${escapeHtml(timeAgo(em.created_at))} ago</div>`

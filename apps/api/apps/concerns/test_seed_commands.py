@@ -22,6 +22,8 @@ from .models import (
 
 
 def run(command, *args, **kwargs):
+    if command == "seed_demo_data" and "--dataset-id" not in args:
+        args = (*args, "--dataset-id", "test-suite", "--password", "Test!Pass123")
     out = StringIO()
     call_command(command, *args, stdout=out, stderr=StringIO(), **kwargs)
     return out.getvalue()

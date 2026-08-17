@@ -61,7 +61,20 @@ class NotificationSerializer(serializers.ModelSerializer):
         return self._display_payload(obj).get("icon")
 
     def get_image_url(self, obj):
-        return self._display_payload(obj).get("image") or None
+        image = self._display_payload(obj).get("image")
+        if not image:
+            media = None
+            if obj.concern_id:
+                media = obj.concern.media.filter(public_visible=True).exclude(preview_file="").first()
+            elif obj.emergency_id:
+                media = obj.emergency.media.exclude(preview_file="").first()
+            if media and media.preview_file:
+                image = media.preview_file.url
+        if image and image.startswith("/"):
+            request = self.context.get("request")
+            if request:
+                image = request.build_absolute_uri(image)
+        return image or None
 
     def get_actions(self, obj):
         return self._display_payload(obj).get("actions") or []

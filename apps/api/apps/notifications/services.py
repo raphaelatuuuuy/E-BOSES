@@ -12,7 +12,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from apps.concerns.models import Concern
+from apps.concerns.models import Announcement, Concern
 
 
 def _notification_title(concern: Concern) -> str:
@@ -189,9 +189,31 @@ def notification_icon_url(notification) -> str:
 
 def notification_image_url(notification) -> str:
     metadata = _safe_metadata(notification)
+    # Announcements store a publish-time URL snapshot. Resolving the live
+    # announcement is more reliable: it stays correct if the image was added
+    # or replaced after the notification was sent.
+    announcement_id = metadata.get("announcement_id")
+    if announcement_id:
+        try:
+            announcement = Announcement.objects.get(pk=announcement_id)
+        except (Announcement.DoesNotExist, TypeError, ValueError):
+            announcement = None
+        if announcement is not None and announcement.image:
+            return _safe_url(announcement.image.url)
     # Only use public images in browser notifications. Private report/emergency
     # media still opens safely inside the authenticated app after tap.
-    return _safe_url(metadata.get("image_url"))
+    image_url = _safe_url(metadata.get("image_url"))
+    if image_url:
+        return image_url
+
+    # Notifications may point to a concern/emergency without copying media
+    # into metadata. Use only the processed public preview, never the original.
+    media = None
+    if getattr(notification, "concern_id", None):
+        media = notification.concern.media.filter(public_visible=True).exclude(preview_file="").first()
+    elif getattr(notification, "emergency_id", None):
+        media = notification.emergency.media.exclude(preview_file="").first()
+    return _safe_url(media.preview_file.url if media and media.preview_file else "")
 
 
 def notification_tag(notification) -> str:
@@ -232,7 +254,7 @@ def _display_concern_notification(notification) -> tuple[str, str]:
         "concern_mention": notification.title or "You were mentioned",
     }
     title = special_titles.get(type_value) or status_titles.get(type_value) or notification.title or f"Report {status_label.lower()}"
-    context = f"{tracking} · {concern_title}" if tracking else concern_title
+    context = f"{tracking} Â· {concern_title}" if tracking else concern_title
     if note:
         body = f"{context}. {note}"
     else:
@@ -278,7 +300,7 @@ def _display_emergency_notification(notification) -> tuple[str, str]:
         }
         title = title_map.get(type_value) or notification.title or f"Emergency {status_label.lower()}"
     body_bits = [f"{emergency_type} emergency", address]
-    body = " · ".join(part for part in body_bits if part)
+    body = " Â· ".join(part for part in body_bits if part)
     if note:
         body = f"{body}. {note}"
     else:
@@ -521,19 +543,29 @@ def send_browser_push(notification, payload: dict | None = None) -> dict:
         if service_label not in result["push_services"]:
             result["push_services"].append(service_label)
         try:
-            webpush(
-                subscription_info={
+            push_args = {
+                "subscription_info": {
                     "endpoint": subscription.endpoint,
                     "keys": {"p256dh": subscription.p256dh, "auth": subscription.auth},
                 },
-                data=data,
-                vapid_private_key=private_key,
-                vapid_claims=claims,
-                headers=browser_push_extra_headers(subscription.endpoint),
-                ttl=3600,
-                timeout=15,
-            )
-            delivered_count += 1
+                "data": data,
+                "vapid_private_key": private_key,
+                "vapid_claims": claims,
+                "headers": browser_push_extra_headers(subscription.endpoint),
+                "ttl": 3600,
+                "timeout": 15,
+            }
+            for attempt in range(2):
+                try:
+                    webpush(**push_args)
+                    delivered_count += 1
+                    break
+                except WebPushException as exc:
+                    response = getattr(exc, "response", None)
+                    status_code = getattr(response, "status_code", None)
+                    if attempt == 0 and status_code in {408, 425, 429, 500, 502, 503, 504}:
+                        continue
+                    raise
         except WebPushException as exc:
             failure_count += 1
             response = getattr(exc, "response", None)

@@ -16,6 +16,7 @@ from rest_framework.test import APITestCase
 from apps.accounts.models import ResidentProfile
 from apps.emergencies.models import EmergencyAlert, ResponderShift
 from apps.sms.models import InboundSmsMessage, OutboundSmsMessage, SmsPurpose
+from apps.sms.payload import InboundPayload
 
 TOKEN = "test-inbound-token"
 TEST_CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
@@ -194,6 +195,17 @@ class SmsInboundTests(APITestCase):
         self.assertEqual(second.status_code, status.HTTP_200_OK)
         self.assertEqual(EmergencyAlert.objects.count(), 1)
         self.assertEqual(InboundSmsMessage.objects.count(), 1)
+
+    def test_dedupe_without_gateway_id_is_stable(self):
+        first = InboundPayload(
+            body="GUIDE", sender="+639451234821", gateway_timestamp=None,
+            gateway_message_id="", raw={"from": "+639451234821", "msg": "GUIDE"},
+        )
+        retry = InboundPayload(
+            body="GUIDE", sender="+639451234821", gateway_timestamp=None,
+            gateway_message_id="", raw={"msg": "GUIDE", "from": "+639451234821"},
+        )
+        self.assertEqual(first.dedupe_key(), retry.dedupe_key())
 
     def test_a_second_emergency_while_one_is_open_returns_status_instead(self):
         self.post(WIZARD_MESSAGE, id="gw-1")

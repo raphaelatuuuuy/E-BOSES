@@ -12,6 +12,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from apps.throttling import LoginIPThrottle, LoginIdentifierThrottle, RefreshSessionThrottle
 from django.utils.decorators import method_decorator
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
@@ -164,6 +165,19 @@ class RegisterView(APIView):
                 return Response(exc.error_dict, status=status.HTTP_400_BAD_REQUEST)
             message = exc.message if hasattr(exc, "message") else str(exc)
             return Response({"proof": [message]}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            from .supabase_admin import SupabaseProvisioningError
+            if isinstance(exc, SupabaseProvisioningError):
+                return Response(
+                    {"detail": "Account creation is temporarily unavailable. No local account was saved."},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            raise
+        if settings.AUTH_BACKEND == "supabase":
+            return Response(
+                {"access": "", "user": UserSummarySerializer(user).data},
+                status=status.HTTP_201_CREATED,
+            )
         return token_response(user, status.HTTP_201_CREATED)
 
 
@@ -515,7 +529,7 @@ class ResidenceProofDetectView(APIView):
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
-    throttle_scope = "login"
+    throttle_classes = [LoginIdentifierThrottle, LoginIPThrottle]
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
@@ -576,7 +590,7 @@ class CSRFTokenView(APIView):
 class RefreshTokenView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
-    throttle_scope = "auth"
+    throttle_classes = [RefreshSessionThrottle, LoginIPThrottle]
 
     def post(self, request):
         raw_refresh = request.COOKIES.get(REFRESH_COOKIE_NAME)
@@ -835,6 +849,8 @@ class ReactivateAccountView(APIView):
 
         user.status = user.Status.VERIFIED
         user.save(update_fields=["status", "updated_at"])
+        from .email_services import send_account_email_after_commit
+        send_account_email_after_commit(user, "account_reactivated")
         create_audit_log(
             "account.reactivated",
             actor=user,
@@ -882,6 +898,8 @@ class ChangePasswordView(APIView):
 
         request.user.set_password(new_password)
         request.user.save(update_fields=["password", "updated_at"])
+        from .email_services import send_account_email_after_commit
+        send_account_email_after_commit(request.user, "password_changed")
         create_audit_log(
             "account.password_changed",
             actor=request.user,
@@ -1031,6 +1049,8 @@ class AccountEmailChangeVerifyView(APIView):
         request.user.email = email
         request.user.email_verified_at = timezone.now()
         request.user.save(update_fields=["email", "email_verified_at", "updated_at"])
+        from .email_services import send_account_email_after_commit
+        send_account_email_after_commit(request.user, "email_changed")
         create_audit_log(
             "account.email_changed",
             actor=request.user,
@@ -1639,6 +1659,8 @@ class PasswordResetConfirmView(APIView):
             return Response({"detail": "Invalid or expired reset token."}, status=status.HTTP_400_BAD_REQUEST)
         user.set_password(serializer.validated_data["password"])
         user.save(update_fields=["password", "updated_at"])
+        from .email_services import send_account_email_after_commit
+        send_account_email_after_commit(user, "password_changed")
         create_audit_log("password_reset.confirmed", target_user=user, request_meta=request_meta(request))
         return Response(status=status.HTTP_204_NO_CONTENT)
 

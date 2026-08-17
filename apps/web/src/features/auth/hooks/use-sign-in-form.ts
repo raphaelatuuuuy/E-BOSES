@@ -1,7 +1,9 @@
 import { type FormEvent, useState } from "react"
 
-import { ApiError } from "@/lib/api"
-import { login, type AuthUser } from "@/features/auth/api"
+import { ApiError, setAuthTokens } from "@/lib/api"
+import { getMe, login, type AuthUser } from "@/features/auth/api"
+import { signInSupabaseWithPassword } from "@/features/auth/supabase-auth"
+import { supabaseAuthEnabled } from "@/lib/supabase"
 import {
   type SignInErrors,
   type SignInValues,
@@ -81,10 +83,14 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
     setIsSubmitting(true)
     setSubmitError("")
     try {
-      const response = await login({
-        identifier: values.email,
-        password: values.password,
-      })
+      const response = supabaseAuthEnabled
+        ? await (async () => {
+            const { data, error } = await signInSupabaseWithPassword(values.email, values.password)
+            if (error || !data.session) throw error ?? new Error("Supabase did not create a session.")
+            setAuthTokens(data.session.access_token)
+            return { user: await getMe(), access: data.session.access_token }
+          })()
+        : await login({ identifier: values.email, password: values.password })
       onSuccess?.(response.user, response.access)
     } catch (error) {
       const message = apiMessage(error, "Invalid email or password.")

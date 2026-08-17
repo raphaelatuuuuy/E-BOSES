@@ -1,6 +1,6 @@
 import {
   BadgeCheckIcon,
-  BellIcon,
+  InboxIcon,
   GlobeIcon,
   ListChecksIcon,
   MegaphoneIcon,
@@ -863,7 +863,7 @@ export const HELP_COLLECTIONS: HelpCollection[] = [
       en: "How E-Boses reaches you and what you can turn off",
       fil: "Paano kayo naaabot ng E-Boses at ano ang puwedeng patayin",
     },
-    icon: BellIcon,
+    icon: InboxIcon,
     articles: [
       {
         slug: "what-notifications-you-get",

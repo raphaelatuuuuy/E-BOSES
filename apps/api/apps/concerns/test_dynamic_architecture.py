@@ -195,6 +195,9 @@ class DynamicConcernArchitectureTests(APITestCase):
             ).exists()
         )
 
+        concern.validation_status = Concern.ValidationStatus.ACCEPTED
+        concern.save(update_fields=["validation_status", "updated_at"])
+
         self.client.force_authenticate(self.kagawad)
         assigned = self.client.post(
             f"/api/concerns/{concern.pk}/assign/",

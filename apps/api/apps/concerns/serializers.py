@@ -216,7 +216,7 @@ class ConcernCategorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ConcernCategory
-        fields = ("id", "name", "code", "description", "icon_key", "custom_icon_label", "icon_image", "icon_image_url", "department", "department_detail", "is_active", "form_fields", "created_at", "updated_at")
+        fields = ("id", "name", "code", "description", "icon_key", "custom_icon_label", "icon_image", "icon_image_url", "department", "department_detail", "is_active", "photo_required", "description_required", "location_required", "public_feed_allowed", "form_fields", "created_at", "updated_at")
         read_only_fields = ("id", "icon_image_url", "created_at", "updated_at")
 
     def get_icon_image_url(self, obj):
@@ -406,6 +406,7 @@ class ConcernMediaSerializer(serializers.ModelSerializer):
 class ConcernResolutionEvidenceSerializer(serializers.ModelSerializer):
     uploaded_by = PublicUserSerializer(read_only=True)
     raw_url = serializers.SerializerMethodField()
+    preview_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ConcernResolutionEvidence
@@ -417,11 +418,19 @@ class ConcernResolutionEvidenceSerializer(serializers.ModelSerializer):
             "file_size",
             "note",
             "raw_url",
+            "preview_url",
             "created_at",
         )
 
     def get_raw_url(self, obj):
         path = f"/api/concerns/resolution-evidence/{obj.pk}/raw/"
+        request = self.context.get("request")
+        return request.build_absolute_uri(path) if request else path
+
+    def get_preview_url(self, obj):
+        if not self.context.get("public_resolution"):
+            return ""
+        path = f"/api/concerns/resolution-evidence/{obj.pk}/preview/"
         request = self.context.get("request")
         return request.build_absolute_uri(path) if request else path
 
@@ -460,7 +469,6 @@ class ConcernCommentSerializer(serializers.ModelSerializer):
         return ConcernCommentSerializer(replies, many=True, context=self.context).data
 
 class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
-    official_reviewer = PublicUserSerializer(read_only=True)
     possible_duplicate = serializers.SerializerMethodField()
     duplicate_similarity = serializers.SerializerMethodField()
     duplicate_distance_meters = serializers.SerializerMethodField()
@@ -502,10 +510,6 @@ class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
             "duplicate_similarity",
             "duplicate_distance_meters",
             "duplicate_match",
-            "official_decision",
-            "official_reason",
-            "official_reviewer",
-            "official_reviewed_at",
             "updated_at",
         )
 
@@ -558,10 +562,6 @@ class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
             "status": match.status,
         }
 
-
-class ConcernAiReviewSerializer(serializers.Serializer):
-    decision = serializers.ChoiceField(choices=ConcernAiAssessment.OfficialDecision.choices)
-    reason = serializers.CharField(min_length=10, max_length=2000, trim_whitespace=True)
 
 class ContentFlagSerializer(serializers.ModelSerializer):
     reporter = PublicUserSerializer(read_only=True)
@@ -884,8 +884,16 @@ class ConcernSerializer(serializers.ModelSerializer):
             {
                 "id": event.pk,
                 "status": event.status,
-                "note": "",
-                "actor": None,
+                "note": event.note if event.status == obj.status and event.status in {
+                    Concern.Status.RESOLVED,
+                    Concern.Status.REJECTED,
+                } else "",
+                "actor": self._public_user(event.actor)
+                if event.status == obj.status and event.status in {
+                    Concern.Status.RESOLVED,
+                    Concern.Status.REJECTED,
+                }
+                else None,
                 "created_at": self._date(event.created_at),
             }
             for event in queryset
@@ -936,6 +944,22 @@ class ConcernSerializer(serializers.ModelSerializer):
         return ConcernOfficialRemarkSerializer(queryset, many=True, context=self.context).data
 
     def get_resolution_evidence(self, obj):
+        if self.is_privacy_safe():
+            if not (
+                obj.visibility == Concern.Visibility.COMMUNITY
+                and obj.validation_status == Concern.ValidationStatus.ACCEPTED
+                and obj.status in {Concern.Status.RESOLVED, Concern.Status.REJECTED}
+            ):
+                return []
+            queryset = obj.resolution_evidence.select_related(
+                "uploaded_by",
+                "uploaded_by__resident_profile",
+            )
+            return ConcernResolutionEvidenceSerializer(
+                queryset,
+                many=True,
+                context={**self.context, "public_resolution": True},
+            ).data
         if not self._can_view_case(obj):
             return []
         queryset = obj.resolution_evidence.select_related(
@@ -1123,15 +1147,15 @@ class ConcernSerializer(serializers.ModelSerializer):
 class ConcernCreateSerializer(serializers.Serializer):
     client_request_id = serializers.UUIDField(required=False)
     title = serializers.CharField(max_length=160)
-    description = serializers.CharField(min_length=20, max_length=4000)
-    category = serializers.ChoiceField(choices=Concern.Category.choices, required=False)
+    description = serializers.CharField(required=False, allow_blank=True, max_length=4000)
+    category = serializers.CharField(required=False, allow_blank=True, max_length=80)
     category_id = serializers.IntegerField(required=False)
     dynamic_fields = serializers.JSONField(required=False, default=dict)
     visibility = serializers.ChoiceField(choices=Concern.Visibility.choices, default=Concern.Visibility.COMMUNITY)
-    address = serializers.CharField(max_length=255)
-    latitude = serializers.DecimalField(max_digits=10, decimal_places=7)
-    longitude = serializers.DecimalField(max_digits=10, decimal_places=7)
-    location_source = serializers.ChoiceField(choices=("gps", "manual_pin"))
+    address = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    latitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
+    longitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
+    location_source = serializers.ChoiceField(choices=("gps", "manual_pin"), required=False, allow_blank=True)
     location_accuracy = serializers.FloatField(required=False, allow_null=True)
 
     def validate_address(self, value: str) -> str:
@@ -1159,10 +1183,13 @@ class ConcernCreateSerializer(serializers.Serializer):
                 attrs["dynamic_fields"] = json.loads(dynamic_fields or "{}")
             except ValueError as exc:
                 raise serializers.ValidationError({"dynamic_fields": "Enter valid JSON."}) from exc
-        try:
-            attrs["_location_review"] = validate_report_location(attrs.get("latitude"), attrs.get("longitude"))
-        except DjangoValidationError as exc:
-            raise serializers.ValidationError(exc) from exc
+        if attrs.get("latitude") is not None and attrs.get("longitude") is not None:
+            try:
+                attrs["_location_review"] = validate_report_location(attrs["latitude"], attrs["longitude"])
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError(exc) from exc
+        else:
+            attrs["_location_review"] = {}
         return attrs
 
 

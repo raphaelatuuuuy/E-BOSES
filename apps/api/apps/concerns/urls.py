@@ -36,8 +36,8 @@ from .views import (
     ConcernMediaRawView,
     ConcernMediaRedactionView,
     ConcernOfficialRemarkCreateView,
+    ConcernResolutionEvidencePreviewView,
     ConcernResolutionEvidenceRawView,
-    ConcernAiReviewView,
     ConcernPublicDetailView,
     ConcernStatusUpdateView,
     ConcernTimelineEntryView,
@@ -116,7 +116,6 @@ urlpatterns = [
     path("<int:pk>/clarifications/<int:clarification_id>/reply/", ConcernClarificationReplyView.as_view(), name="concern-clarification-reply"),
     path("<int:pk>/appeals/", ConcernAppealCreateView.as_view(), name="concern-appeal-create"),
     path("<int:pk>/remarks/", ConcernOfficialRemarkCreateView.as_view(), name="concern-remark-create"),
-    path("<int:pk>/ai-review/", ConcernAiReviewView.as_view(), name="concern-ai-review"),
     path("<int:pk>/chat/", ConcernChatView.as_view(), name="concern-chat"),
     path("<int:pk>/chat/read/", ConcernChatReadView.as_view(), name="concern-chat-read"),
     path("<int:pk>/chat/typing/", ConcernChatTypingView.as_view(), name="concern-chat-typing"),
@@ -153,5 +152,10 @@ urlpatterns = [
         "resolution-evidence/<int:pk>/raw/",
         ConcernResolutionEvidenceRawView.as_view(),
         name="concern-resolution-evidence-raw",
+    ),
+    path(
+        "resolution-evidence/<int:pk>/preview/",
+        ConcernResolutionEvidencePreviewView.as_view(),
+        name="concern-resolution-evidence-preview",
     ),
 ]

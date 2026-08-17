@@ -222,8 +222,8 @@ export function DispatchOverviewCard({
       <div className="overflow-hidden rounded-2xl border border-card-line bg-card-raised">
         <div className="flex items-center justify-between gap-3 px-3 py-2.5">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-ice/10 text-[12px] font-semibold text-ice">
-              {initials(reporterName)}
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
+              {initials(reporterName).charAt(0)}
             </span>
             <div className="min-w-0">
               <p className="truncate text-heading text-foreground">{reporterName}</p>

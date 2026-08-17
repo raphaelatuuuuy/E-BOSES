@@ -30,6 +30,18 @@ export const ERROR_MESSAGES: Record<string, string> = {
   // Operations
   emergency_in_progress:
     "This cannot be done while an emergency is still active. Please try again once it is closed.",
+  throttle:
+    "You're doing that too often. Please wait a moment and try again.",
+  too_many_attempts:
+    "Too many attempts. Please wait a moment before trying again.",
+  session_expired:
+    "Your session expired. Please sign in again.",
+  not_found:
+    "The page you're looking for doesn't exist.",
+  server_error:
+    "Something went wrong on our end. Please try again.",
+  sign_in_required:
+    "Please sign in to continue.",
 
   // Identity verification
   ocr_name_mismatch:
@@ -59,6 +71,22 @@ function looksLikeACode(text: string) {
   return /^[a-z][a-z0-9_]*$/.test(text.trim())
 }
 
+const DRF_DETAIL_MAP: Record<string, string> = {
+  "Request was throttled. Expected available in": "You're doing that too often. Please wait a moment and try again.",
+  "Authentication credentials were not provided.": "Please sign in to continue.",
+  "Given token not valid for any token type.": "Your session expired. Please sign in again.",
+  "Not found.": "The page you're looking for doesn't exist.",
+  "Internal server error.": "Something went wrong on our end. Please try again.",
+}
+
+function friendlyDrfDetail(detail: string): string {
+  const trimmed = detail.trim()
+  for (const [needle, friendly] of Object.entries(DRF_DETAIL_MAP)) {
+    if (trimmed.startsWith(needle) || trimmed === needle) return friendly
+  }
+  return trimmed
+}
+
 /**
  * Best human message for an API error payload.
  * Order: an explicit `detail` from the server, then a mapped `code`, then the
@@ -70,7 +98,7 @@ export function humanError(data: unknown, fallback = FALLBACK): string {
   const payload = data as Record<string, unknown>
   const detail = payload.detail
   if (typeof detail === "string" && detail.trim() && !looksLikeACode(detail)) {
-    return detail
+    return friendlyDrfDetail(detail)
   }
 
   for (const key of ["code", "reason"]) {
@@ -81,7 +109,7 @@ export function humanError(data: unknown, fallback = FALLBACK): string {
   }
 
   if (typeof detail === "string" && detail.trim()) {
-    return ERROR_MESSAGES[detail.trim()] ?? fallback
+    return ERROR_MESSAGES[detail.trim()] ?? friendlyDrfDetail(detail)
   }
 
   return fallback

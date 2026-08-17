@@ -1,4 +1,4 @@
-"""Run the automatic review for one concern.
+"""Run automated validation for one concern.
 
 Order of operations, and why:
 
@@ -12,9 +12,9 @@ Order of operations, and why:
 3. **Media state** is written for every image, then the privacy task is queued
    on commit. Anything not cleared here stays non-public.
 
-The soft-gate contract from the previous version is unchanged: this function
-flags reports for official attention and never touches `validation_status`,
-`status`, or any resident-visible workflow state.
+The result completes the validation gate before a report enters the official
+work queue. Officials receive accepted reports through the normal queue; there
+is no separate AI-review decision.
 """
 
 import logging
@@ -24,8 +24,11 @@ from django.db import transaction
 from apps.concerns.models import (
     Concern,
     ConcernAiAssessment,
+    ConcernCategory,
     ConcernClassificationConfiguration,
     ConcernMedia,
+    ConcernStatusEvent,
+    ConcernTimelineEntry,
 )
 
 from .classification import BASE_TEXT_MODEL
@@ -91,8 +94,9 @@ def privacy_classes_for(gemma_result: dict, *, image_uploaded: bool, gemma_image
 def _run_gemma(config, *, title, description, selected_category, image):
     """Returns (result, run_status, fallback_reason|None).
 
-    Gemma is advisory. When it is unavailable the report goes to official review
-    rather than falling back to hidden keyword rules.
+    When Gemma is unavailable, deterministic intake checks remain authoritative.
+    The report fails open to the normal queue so an outage cannot discard a real
+    civic concern. Its original media remains private until privacy checks pass.
 
     The status is decided here, at the point where we know *why* the call did
     not produce a result, rather than inferred later from the wording of an
@@ -115,7 +119,7 @@ def _run_gemma(config, *, title, description, selected_category, image):
         return (
             safe_needs_review(
                 model_version=BASE_TEXT_MODEL,
-                reason="Automatic review is not switched on, so this report needs a manual look.",
+                reason="Automated validation is unavailable. Required intake checks remain in effect.",
                 image_attached=image is not None,
             ),
             ConcernAiAssessment.Status.NOT_CONFIGURED,
@@ -127,7 +131,7 @@ def _run_gemma(config, *, title, description, selected_category, image):
         return (
             safe_needs_review(
                 model_version=BASE_TEXT_MODEL,
-                reason="The automatic review could not run, so this report needs a manual look.",
+                reason="Automated validation could not run. Required intake checks remain in effect.",
                 image_attached=image is not None,
             ),
             ConcernAiAssessment.Status.FAILED,
@@ -140,7 +144,7 @@ def _first_image_media(concern) -> ConcernMedia | None:
         (
             media
             for media in concern.media.all()
-            if media.mime_type.startswith("image/") and hasattr(media.file, "path")
+            if media.mime_type.startswith("image/")
         ),
         None,
     )
@@ -150,10 +154,10 @@ def _prepare_first_image(media):
     if media is None:
         return None
     try:
-        with open(media.file.path, "rb") as handle:
+        with media.file.open("rb") as handle:
             raw = handle.read()
-    except OSError:
-        logger.warning("Concern media %s could not be read from disk for review.", media.pk)
+    except (OSError, ValueError, NotImplementedError):
+        logger.warning("Concern media %s could not be read for review.", media.pk)
         return None
     return prepare_image_for_gemma(raw, filename=media.original_filename, mime_type=media.mime_type)
 
@@ -218,7 +222,7 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
     if category_match is None:
         category_match = bool(gemma_result.category) and gemma_result.category == concern.category
 
-    recommended_action = details.get("recommended_action") or "manual_review"
+    recommended_action = details.get("recommended_action") or "accept"
     recommendation = _recommendation(
         recommended_action,
         category_match=bool(category_match),
@@ -299,15 +303,13 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
             image_review_succeeded=image_review_succeeded,
         )
 
-        # Soft gate only: this advisory summary never changes validation_status
-        # or status. AI findings flag reports for official review, they never
-        # auto-reject and never move the concern's real workflow state.
-        summary = (
-            "AI review flagged: " + ", ".join(reason["reason"].replace("_", " ") for reason in flag_reasons)
-            if flag_reasons
-            else "AI checks passed; cleared for official review."
+        _apply_automated_validation(
+            concern,
+            run_status=run_status,
+            details=details,
+            suggested_category=gemma_result.category,
+            duplicate_match=duplicate_match,
         )
-        Concern.objects.filter(pk=concern.pk).update(validation_summary=summary)
 
         if media_to_queue:
             from apps.concerns.tasks import enqueue_concern_media_privacy
@@ -317,6 +319,92 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
                     lambda media_id=media_id: enqueue_concern_media_privacy(media_id)
                 )
     return current
+
+
+def _apply_automated_validation(
+    concern: Concern,
+    *,
+    run_status: str,
+    details: dict,
+    suggested_category: str,
+    duplicate_match,
+) -> None:
+    """Finish validation without creating an AI-review task for an official."""
+    uncertain = run_status != ConcernAiAssessment.Status.COMPLETED or bool(details.get("ai_result_uncertain"))
+    relevance = str(details.get("relevance") or "").upper()
+    action = str(details.get("recommended_action") or "")
+
+    if duplicate_match.possible_duplicate and duplicate_match.matched_concern_id:
+        concern.duplicate_of_id = duplicate_match.matched_concern_id
+
+    if not uncertain and suggested_category and suggested_category != concern.category:
+        _apply_suggested_category(concern, suggested_category)
+
+    reject_irrelevant = not uncertain and relevance == "IRRELEVANT" and action == "reject_as_irrelevant"
+    request_resubmission = not uncertain and action == "request_more_information"
+
+    if reject_irrelevant or request_resubmission:
+        concern.validation_status = Concern.ValidationStatus.REJECTED
+        concern.status = Concern.Status.REJECTED
+        concern.status_version += 1
+        concern.rejection_code = "automated_irrelevant" if reject_irrelevant else "automated_incomplete"
+        concern.validation_summary = (
+            "Automated validation rejected unrelated content."
+            if reject_irrelevant
+            else "More report details are required. Submit again with the missing information."
+        )
+        concern.update_text = concern.validation_summary
+        concern.save(update_fields=[
+            "category", "category_ref", "assigned_department", "duplicate_of",
+            "validation_status", "validation_summary", "status", "status_version",
+            "rejection_code", "update_text", "updated_at",
+        ])
+        ConcernStatusEvent.objects.create(
+            concern=concern,
+            status=Concern.Status.REJECTED,
+            note=concern.validation_summary,
+        )
+        ConcernTimelineEntry.objects.create(
+            concern=concern,
+            event_type=ConcernTimelineEntry.EventType.STATUS_CHANGE,
+            status=Concern.Status.REJECTED,
+            message=concern.validation_summary,
+        )
+
+        def publish_rejection():
+            from apps.notifications.services import notify_status_change
+
+            notify_status_change(concern)
+
+        transaction.on_commit(publish_rejection)
+        return
+
+    # A configured location-policy review remains separate from AI validation.
+    location_hold = concern.validation_status == Concern.ValidationStatus.PENDING and concern.validation_summary.startswith("Location ")
+    if not location_hold:
+        concern.validation_status = Concern.ValidationStatus.ACCEPTED
+        concern.validation_summary = (
+            "Required intake checks passed; automated model validation was unavailable."
+            if uncertain
+            else "Automated validation passed."
+        )
+        concern.update_text = "Report is ready for routing."
+    concern.save(update_fields=[
+        "category", "category_ref", "assigned_department", "duplicate_of",
+        "validation_status", "validation_summary", "update_text", "updated_at",
+    ])
+
+
+def _apply_suggested_category(concern: Concern, suggested_category: str) -> None:
+    category = ConcernCategory.objects.filter(code=suggested_category, is_active=True).select_related("department").first()
+    if not category:
+        if suggested_category in Concern.Category.values:
+            concern.category = suggested_category
+        return
+    rule = category.routing_rules.filter(is_active=True).select_related("department").first()
+    concern.category = suggested_category
+    concern.category_ref = category
+    concern.assigned_department = rule.department if rule else category.department
 
 
 def _stage_media_privacy(image_media, *, run_sam3: bool, sam3_classes: list[str], image_review_succeeded) -> list[int]:
@@ -396,15 +484,15 @@ def _recommendation(action: str, *, category_match: bool, possible_duplicate: bo
     if action == "escalate_as_emergency":
         return "Possible emergency; notify the appropriate personnel."
     if possible_duplicate:
-        return "Possible duplicate; compare the nearby report before routing."
+        return "Possible duplicate linked to the earlier report."
     if action == "reject_as_irrelevant":
-        return "Review as a potentially unrelated submission."
+        return "Reject unrelated content automatically."
     if action == "request_more_information":
-        return "Request additional details from the resident."
+        return "Ask the resident to submit the missing details."
     if action == "accept_with_privacy_review":
         return "Continue using the protected image."
     if not category_match:
-        return "Review the category before assigning."
+        return "Use the detected category for routing."
     if action == "accept":
-        return "Likely valid; proceed with official review."
-    return "Review this report manually."
+        return "Valid report; continue to routing."
+    return "Continue through the automatic validation rules."

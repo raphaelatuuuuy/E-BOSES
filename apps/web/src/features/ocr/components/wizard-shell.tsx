@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react"
-import { ArrowLeftIcon, CheckIcon, LoaderCircleIcon, XIcon } from "lucide-react"
+import { CheckIcon, LoaderCircleIcon, XIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -13,8 +13,10 @@ import { cn } from "@workspace/ui/lib/utils"
  * opened with its own dropdown to re-pick the detail you had just selected.
  *
  * So there are no steps and no sections. The workspace fills the dialog with
- * two panes and everything lives in one of them — testing included. This shell
- * only supplies the frame: where you are, whether it saved, and the way out.
+ * one scrolling column and everything lives in it — testing included. The
+ * shell is the same object as every other dialog in the product: a bottom
+ * sheet on a phone, a centred card with a 28px radius above it, a single
+ * pinned pill action.
  */
 
 export type SaveState = "idle" | "pending" | "saving" | "saved" | "error"
@@ -26,7 +28,7 @@ function SaveNote({ state }: { state: SaveState }) {
     <span
       aria-live="polite"
       className={cn(
-        "hidden items-center gap-1.5 text-meta sm:inline-flex",
+        "hidden items-center gap-1.5 text-[13px] sm:inline-flex",
         state === "error" ? "text-sos" : "text-neutral-500"
       )}
     >
@@ -51,6 +53,8 @@ export function ProofWizardShell({
   subtitle,
   onClose,
   saveState,
+  doneDisabled = false,
+  actions,
   children,
 }: {
   open: boolean
@@ -58,6 +62,10 @@ export function ProofWizardShell({
   subtitle?: string
   onClose: () => void
   saveState: SaveState
+  /** Disable Done until the operator changes something. */
+  doneDisabled?: boolean
+  /** Controls seated beside the close button (e.g. the front/back toggle). */
+  actions?: ReactNode
   children: ReactNode
 }) {
   useEffect(() => {
@@ -81,56 +89,59 @@ export function ProofWizardShell({
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-[80] flex sm:items-center sm:justify-center sm:bg-black/40 sm:p-6">
-      {/* A dialog on a desktop, the whole screen on a phone. Setting up a
-          document is a detour from the list, not a place you live — taking the
-          entire window for it on a large screen loses the context you came
-          from. */}
+    <div className="fixed inset-0 z-[80] flex items-end justify-center sm:items-center sm:p-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} aria-hidden />
+
       <div
-        className="flex h-full w-full flex-col bg-white sm:h-[min(880px,92vh)] sm:max-w-[1180px] sm:rounded-3xl sm:shadow-2xl"
         role="dialog"
         aria-modal="true"
+        aria-label={title}
+        className="relative z-10 flex max-h-[min(720px,92vh)] w-full flex-col overflow-hidden bg-white shadow-2xl sm:max-w-2xl sm:rounded-[28px] rounded-t-[28px]"
       >
-        <header className="flex shrink-0 items-center gap-3 border-b border-neutral-200 px-5 py-4 sm:px-8">
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Back to all documents"
-            className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-brand-navy"
-          >
-            <ArrowLeftIcon className="size-5" strokeWidth={1.8} aria-hidden />
-          </button>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-row font-medium text-brand-navy">
+        {/* The same header as every sheet: bold title, subtitle, then the
+            close. The save note sits with the close, not in the body. */}
+        <div className="flex shrink-0 items-start gap-2 px-5 pb-3 pt-5">
+          <div className="min-w-0 flex-1 pt-1.5">
+            <h2 className="text-[22px] font-bold leading-[1.2] tracking-tight text-neutral-900">
               {title}
-            </p>
+            </h2>
             {subtitle ? (
-              <p className="truncate text-meta text-neutral-500">{subtitle}</p>
+              <p className="mt-1.5 text-[15px] leading-snug text-neutral-500">
+                {subtitle}
+              </p>
             ) : null}
           </div>
-          <SaveNote state={saveState} />
-          <button
-            type="button"
-            onClick={onClose}
-            className="ml-2 shrink-0 rounded-full bg-brand-navy px-6 py-2.5 text-read font-semibold text-white transition-colors hover:bg-accent"
-          >
-            Done
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-brand-navy sm:hidden"
-          >
-            <XIcon className="size-5" strokeWidth={1.8} aria-hidden />
-          </button>
-        </header>
 
-        {/* The workspace lays out its own two panes and scrolls them
-            independently, so the shell adds no column or scroller of its own. */}
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden sm:rounded-b-3xl">
+          <div className="-mr-2 flex shrink-0 items-center gap-0.5">
+            <SaveNote state={saveState} />
+            {actions ? <div className="ml-2">{actions}</div> : null}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
+            >
+              <XIcon className="size-6" strokeWidth={2} aria-hidden />
+            </button>
+          </div>
+        </div>
+
+        {/* One scrolling column. The workspace lays out its own sections, so
+            the shell adds no second scroller. */}
+        <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-6">
           {children}
         </div>
+
+        <footer className="shrink-0 px-5 pb-6 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={doneDisabled}
+            className="flex h-[52px] w-full items-center justify-center rounded-full bg-accent text-[17px] font-semibold text-white transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400 disabled:hover:opacity-100"
+          >
+            Save changes
+          </button>
+        </footer>
       </div>
     </div>
   )

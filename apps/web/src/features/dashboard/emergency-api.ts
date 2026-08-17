@@ -289,6 +289,17 @@ export interface EmergencyAlert {
   resolved_at: string | null
 }
 
+export function isNewerEmergencyAlert(current: EmergencyAlert | null, next: EmergencyAlert) {
+  if (!current || current.id !== next.id) return true
+  if (next.status_version !== current.status_version) {
+    return next.status_version > current.status_version
+  }
+  const currentTime = Date.parse(current.updated_at)
+  const nextTime = Date.parse(next.updated_at)
+  if (!Number.isFinite(currentTime) || !Number.isFinite(nextTime)) return true
+  return nextTime >= currentTime
+}
+
 export interface ResponderShift {
   id: number
   responder: PublicUser

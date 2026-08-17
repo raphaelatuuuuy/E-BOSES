@@ -46,6 +46,7 @@ export default defineConfig([
       globals: globals.browser,
     },
     rules: {
+      'react-refresh/only-export-components': 'off',
       // The codebase already writes intentionally-unused bindings with a
       // leading underscore (`_single` in a rest-omit, `_side` on a signature
       // kept for API compatibility, `(_: string) => {}` context defaults).

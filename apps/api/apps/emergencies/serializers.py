@@ -333,6 +333,7 @@ class EmergencyAssignmentStatusSerializer(serializers.Serializer):
         EmergencyResponderAssignment.Status.DECLINED,
     ])
     note = serializers.CharField(min_length=5, max_length=255, trim_whitespace=True)
+    status_version = serializers.IntegerField(required=False, min_value=0)
 
 
 class EmergencyResponderAssignmentSerializer(serializers.ModelSerializer):

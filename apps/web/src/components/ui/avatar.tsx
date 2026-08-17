@@ -7,7 +7,7 @@ export function Avatar({ className, ...props }: React.ComponentProps<"span">) {
     <span
       data-slot="avatar"
       className={cn(
-        "relative flex size-9 shrink-0 overflow-hidden rounded-full bg-neutral-100",
+        "relative flex size-9 shrink-0 overflow-hidden rounded-full bg-slate-soft",
         className,
       )}
       {...props}
@@ -31,7 +31,7 @@ export function AvatarFallback({ className, ...props }: React.ComponentProps<"sp
     <span
       data-slot="avatar-fallback"
       className={cn(
-        "flex size-full items-center justify-center rounded-full bg-neutral-200 text-[12px] font-bold text-neutral-700",
+        "flex size-full items-center justify-center rounded-full bg-slate-soft text-[12px] font-bold text-navy-muted",
         className,
       )}
       {...props}

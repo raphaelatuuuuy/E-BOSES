@@ -17,6 +17,14 @@ export function describeApiError(error: unknown, fallback: string): string {
 
   const data = error.data as Record<string, unknown> | null | undefined
 
+  if (error.status === 429) {
+    return "You're doing that too often. Please wait a moment and try again."
+  }
+
+  if (error.status === 401) {
+    return "Your session expired. Please sign in again."
+  }
+
   if (error.status === 403) {
     const capability = typeof data?.required_capability === "string" ? data.required_capability : null
     if (capability) {

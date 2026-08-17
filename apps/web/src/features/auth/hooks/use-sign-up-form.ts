@@ -9,6 +9,8 @@ import {
   verifyRegistrationEmailOtp,
   verifyRegistrationPhoneOtp,
 } from "@/features/auth/api"
+import { signInSupabaseWithPassword } from "@/features/auth/supabase-auth"
+import { supabaseAuthEnabled } from "@/lib/supabase"
 import { getPasswordStrength } from "@/features/auth/lib/password-requirements"
 import { humanizeProofError } from "@/features/auth/lib/process-proof-file"
 import { listResidenceProofOptions, type ResidenceProofOption } from "@/features/ocr/api"
@@ -782,7 +784,13 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     setSubmitError("")
     try {
       const response = await registerResident(formData)
-      onSuccess?.(response.user, response.access)
+      if (supabaseAuthEnabled) {
+        const { data, error } = await signInSupabaseWithPassword(payloadValues.email, payloadValues.password)
+        if (error || !data.session) throw error ?? new Error("Supabase did not create a session.")
+        onSuccess?.(response.user, data.session.access_token)
+      } else {
+        onSuccess?.(response.user, response.access)
+      }
     } catch (error) {
       if (error instanceof ApiError && error.data && typeof error.data === "object") {
         const backendErrors = error.data as Record<string, unknown>

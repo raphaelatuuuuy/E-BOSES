@@ -228,7 +228,7 @@ function ActorCard({
 
   return (
     <div className="flex items-center gap-3.5 rounded-2xl border border-neutral-200 bg-white px-4 py-3.5">
-      <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-full bg-tint text-[16px] font-bold text-navy-muted">
+      <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-soft text-[16px] font-bold text-navy-muted">
         {letter}
       </div>
       <div className="min-w-0">

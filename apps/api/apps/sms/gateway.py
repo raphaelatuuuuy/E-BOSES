@@ -7,7 +7,7 @@ swapping a delivery backend rather than two.
 Drivers:
 
 ``console``        development — logs a redacted line, never leaves the machine
-``sms_forwarder``  the SMS Forwarder handset on +639640746068 (default)
+``sms_forwarder``  the configured SMS Forwarder handset
 ``http_generic``   any JSON-over-HTTP gateway, shaped entirely from settings
 ``disabled``       refuses to send; used to prove a failure path in tests
 
@@ -278,7 +278,7 @@ class HttpJsonSmsDriver(BaseSmsDriver):
 
 
 class SmsForwarderDriver(HttpJsonSmsDriver):
-    """SMS Forwarder on the barangay handset (+639640746068).
+    """SMS Forwarder on the configured barangay handset.
 
     Defaults to the remote-control payload that SMS Forwarder's send API
     expects. If your build names the fields differently, set
@@ -488,6 +488,20 @@ def deliver(message_id: int, destination: str, body: str) -> str:
 def send_sms(destination: str, body: str, **kwargs) -> OutboundSmsMessage | None:
     """Alias kept for readability at call sites."""
     return queue_sms(destination, body, **kwargs)
+
+
+def send_ephemeral_sms(destination: str, body: str) -> None:
+    """Send an Auth OTP without storing the code or destination."""
+    number = normalize_ph_mobile(destination)
+    if not number or not (body or "").strip():
+        raise SmsDeliveryError("The SMS destination or body is invalid.")
+    try:
+        get_driver().send(number, body)
+    except SmsConfigurationError:
+        raise
+    except Exception as exc:
+        logger.warning("Ephemeral SMS delivery failed: %s", type(exc).__name__)
+        raise SmsDeliveryError("The SMS provider rejected the message.") from exc
 
 
 def gateway_is_available() -> bool:

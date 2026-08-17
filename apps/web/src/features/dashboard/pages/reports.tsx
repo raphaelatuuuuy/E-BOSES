@@ -60,6 +60,7 @@ import {
 } from "@/features/dashboard/lib/authenticated-media"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { usePageTitle } from "@/hooks/use-page-title"
+import { useWheelScroll } from "@/hooks/use-wheel-scroll"
 import { useIsDesktop } from "@/features/dashboard/lib/shell"
 import { usePaneCollapse } from "@/features/dashboard/components/responder/pane-collapse"
 import {
@@ -659,6 +660,7 @@ export default function ReportsPage() {
   const [reports, setReports] = useState<Concern[]>([])
   const [error, setError] = useState("")
   const [statusDialogOpen, setStatusDialogOpen] = useState(false)
+  const filterScrollRef = useWheelScroll<HTMLDivElement>()
 
   const statusDialogMode: StatusDialogMode = "assigned"
   const routeReportId = reportId ?? null
@@ -707,16 +709,9 @@ export default function ReportsPage() {
     else setSelectedReport(null)
   }
 
-  const deepLinkFlagged = isOfficial && searchParams.get("ai") === "flagged"
-  const [prevDeepLink, setPrevDeepLink] = useState(deepLinkFlagged)
-  if (prevDeepLink !== deepLinkFlagged) {
-    setPrevDeepLink(deepLinkFlagged)
-    if (deepLinkFlagged) setActiveFilter("Needs review")
-  }
-
   useEffect(() => {
     if (!isOfficial) return
-    if (searchParams.get("ai") === "flagged") {
+    if (searchParams.has("ai")) {
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev)
@@ -727,26 +722,6 @@ export default function ReportsPage() {
       )
     }
   }, [isOfficial, searchParams, setSearchParams])
-
-  useEffect(() => {
-    if (!isOfficial || activeFilter !== "Needs review") return
-    let cancelled = false
-    void listManagedConcerns(undefined, undefined, undefined, "flagged")
-      .then((flagged) => {
-        if (cancelled) return
-        setReports((current) => {
-          const byId = new Map(current.map((report) => [report.id, report]))
-          for (const report of flagged) byId.set(report.id, report)
-          return Array.from(byId.values())
-        })
-      })
-      .catch(() => {
-        if (!cancelled) toast.error("Could not refresh AI-flagged concerns.")
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [isOfficial, activeFilter])
 
   const [prevFilterChip, setPrevFilterChip] = useState(activeFilter)
   if (prevFilterChip !== activeFilter) {
@@ -876,6 +851,7 @@ export default function ReportsPage() {
           style={{ width: "min(100%, 52rem)" }}
         >
           <div
+            ref={filterScrollRef}
             className="scrollbar-hide w-full min-w-0 overflow-x-auto overscroll-x-contain pb-0.5 [-webkit-overflow-scrolling:touch] touch-pan-x"
             role="tablist"
             aria-label="Report status filters"

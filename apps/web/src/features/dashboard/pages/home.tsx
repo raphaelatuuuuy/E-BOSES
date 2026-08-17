@@ -54,10 +54,10 @@ import { AnnouncementCarousel } from "@/features/dashboard/components/home/annou
 import { usePageTitle } from "@/hooks/use-page-title"
 
 const FEED_TABS = [
-  { id: "for_you", label: "For you" },
   { id: "recent", label: "Recent" },
   { id: "nearby", label: "Nearby" },
   { id: "trending", label: "Trending" },
+  { id: "resolved", label: "Resolved" },
 ] as const
 
 type FeedTab = (typeof FEED_TABS)[number]["id"]
@@ -67,7 +67,7 @@ export default function HomePage() {
   const { user, loading: authLoading } = useAuthSession()
 
   const [createOpen, setCreateOpen] = useState(false)
-  const [feedTab, setFeedTab] = useState<FeedTab>("for_you")
+  const [feedTab, setFeedTab] = useState<FeedTab>("recent")
   const [origin, setOrigin] = useState<FeedOrigin | null>(null)
   const [feedFilterOpen, setFeedFilterOpen] = useState(false)
 
@@ -239,7 +239,7 @@ export default function HomePage() {
   }
 
   useEffect(() => {
-    if (feedTab !== "nearby" && feedTab !== "for_you") return
+    if (feedTab !== "nearby") return
     if (origin || !navigator.geolocation) return
     let cancelled = false
     navigator.geolocation.getCurrentPosition(
@@ -472,11 +472,11 @@ export default function HomePage() {
                   type="button"
                   onClick={() => setFeedTab(tab.id)}
                   className={cn(
-                    "h-8 rounded-sm border-2 px-3.5 text-[13px] font-semibold transition-colors outline-none",
-                    "focus-visible:border-brand-navy focus-visible:text-brand-navy",
+                    "h-8 rounded-sm border px-3.5 text-[13px] font-semibold transition-colors outline-none",
+                    "border-neutral-300 focus-visible:border-neutral-400 focus-visible:text-brand-navy",
                     active
-                      ? "border-brand-navy bg-white text-brand-navy"
-                      : "border-card-line-strong bg-white text-neutral-600 hover:border-brand-navy hover:bg-neutral-50 hover:text-brand-navy",
+                      ? "bg-neutral-100 text-brand-navy"
+                      : "bg-white text-neutral-600 hover:bg-neutral-50 hover:text-brand-navy",
                   )}
                 >
                   {tab.label}
@@ -490,7 +490,7 @@ export default function HomePage() {
           {hasOngoingAlerts ? (
             <Link
               to="/dashboard/alerts-map"
-              className="mb-3 flex items-center gap-3 rounded-2xl border border-sos/30 bg-sos/10 px-3.5 py-3 no-underline transition-colors hover:bg-sos/10/80 lg:mb-2.5 lg:rounded-lg lg:border"
+              className="mb-3 flex items-center gap-3 rounded-2xl border border-neutral-300 bg-sos/10 px-3.5 py-3 no-underline transition-colors hover:bg-sos/10/80 lg:mb-2.5 lg:rounded-lg"
             >
               <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-sos/10 text-sos">
                 <AlertTriangleIcon className="size-5" strokeWidth={2.25} />
@@ -535,7 +535,7 @@ export default function HomePage() {
             ))}
 
             {sortedConcerns.length === 0 && concerns.length > 0 && !error ? (
-              <div className="rounded-lg border border-neutral-200 bg-white px-5 py-8 text-center">
+              <div className="rounded-lg border border-neutral-300 bg-white px-5 py-8 text-center">
                 <p className="text-[15px] font-semibold text-neutral-700">
                   {feedTab === "nearby"
                     ? "Nothing reported within 1.5 km of you."
@@ -552,7 +552,7 @@ export default function HomePage() {
             ) : null}
 
             {announcements.length === 0 && concerns.length === 0 && !error ? (
-              <div className="flex flex-col items-center rounded-lg border border-neutral-200 bg-white px-6 py-10 text-center">
+              <div className="flex flex-col items-center rounded-lg border border-neutral-300 bg-white px-6 py-10 text-center">
                 <img
                   src="/contents/feed-header.webp"
                   alt=""

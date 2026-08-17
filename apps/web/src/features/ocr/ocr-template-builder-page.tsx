@@ -1,14 +1,20 @@
 import { forwardRef, useImperativeHandle, useState } from "react"
-import { ArrowLeft, LoaderCircle } from "lucide-react"
+import { ArrowLeft, CreditCard, IdCard, LoaderCircle } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import { cn } from "@workspace/ui/lib/utils"
 
 import { usePageTitle } from "@/hooks/use-page-title"
+import type { ProofSide } from "@/features/ocr/api"
 import { ProofWizardShell } from "@/features/ocr/components/wizard-shell"
 import { ProofWorkspace } from "@/features/ocr/components/proof-workspace"
 import { ProofTypeList } from "@/features/ocr/components/proof-type-list"
 import { RulesStep } from "@/features/ocr/components/steps/rules-step"
-import { TrySampleStep } from "@/features/ocr/components/steps/try-sample-step"
+import {
+  TrySampleProfileForm,
+  TrySampleResults,
+} from "@/features/ocr/components/steps/try-sample-step"
+import type { ProfileMatchKey } from "@/features/ocr/hooks/use-ocr-template-state"
 import { useOcrTemplateState } from "@/features/ocr/hooks/use-ocr-template-state"
 
 const OcrTemplateBuilderPage = forwardRef<
@@ -17,6 +23,7 @@ const OcrTemplateBuilderPage = forwardRef<
 >(function OcrTemplateBuilderPage(_props, ref) {
   usePageTitle("ID & Proof Templates")
   const [view, setView] = useState<"list" | "wizard">("list")
+  const [edited, setEdited] = useState(false)
 
   const {
     configuration,
@@ -49,6 +56,7 @@ const OcrTemplateBuilderPage = forwardRef<
     samplePreviewSide,
     setSamplePreviewSide,
     handleSampleUpload,
+    handleSampleRemove,
     zoom,
     sortedCanvasFields,
     selectedFieldIndex,
@@ -67,12 +75,12 @@ const OcrTemplateBuilderPage = forwardRef<
     relevantProfileKeys,
     validateRequiredSamples,
     missingRequiredSampleSides,
-    selectedDetected,
   } = useOcrTemplateState()
 
   useImperativeHandle(ref, () => ({
     startAddProofType() {
       void addDocumentType()
+      setEdited(false)
       setView("wizard")
     },
   }))
@@ -81,6 +89,30 @@ const OcrTemplateBuilderPage = forwardRef<
   const missingSampleLabels = missingSamples.map((side) =>
     side === "front" ? "Front" : side === "back" ? "Back" : "Sample"
   )
+
+  // Values last read for each detail from the most recent test, so rows can
+  // show a green check or "Not tested" without opening anything.
+  const lastReadByKey = new Map<string, string>()
+  for (const side of Object.keys(mergedTestResult.bySide ?? {})) {
+    const result = mergedTestResult.bySide?.[side as ProofSide]
+    const extracted = result?.extracted_fields
+    if (Array.isArray(extracted)) {
+      for (const field of extracted) {
+        if ((field.value ?? "").trim())
+          lastReadByKey.set(field.key, field.value)
+      }
+    }
+  }
+
+  function changeFieldMatches(fieldKey: string, next: ProfileMatchKey[]) {
+    const field = fields.find((item) => item.key === fieldKey)
+    setFieldValidationRules(fieldKey, {
+      required: field?.required ?? false,
+      matchProfiles: next,
+      notExpired: fieldHasNotExpired(fieldKey),
+    })
+    setEdited(true)
+  }
 
   async function backToList() {
     await persistWizardExit()
@@ -119,18 +151,17 @@ const OcrTemplateBuilderPage = forwardRef<
         saving={saving}
         onAdd={() => {
           void addDocumentType()
+          setEdited(false)
           setView("wizard")
         }}
         onEdit={(docKey) => {
           beginEditingDocument(docKey)
           resetTests()
+          setEdited(false)
           setView("wizard")
         }}
         onRemove={(docKey) => {
           void removeDocumentType(docKey)
-        }}
-        onToggleAvailable={(docKey, enabled) => {
-          void setProofAvailableOnSignup(docKey, enabled)
         }}
       />
     )
@@ -172,10 +203,43 @@ const OcrTemplateBuilderPage = forwardRef<
       subtitle={
         availableOnSignup
           ? "Residents can choose this on sign-up"
-          : "Not offered on sign-up yet"
+          : "Hidden from residents at sign-up for now"
       }
       onClose={() => void backToList()}
       saveState={autoSaveState}
+      doneDisabled={!edited}
+      actions={
+        <div className="flex items-center rounded-full border border-neutral-200 p-0.5">
+          <button
+            type="button"
+            onClick={() => changeCaptureMode("one")}
+            title="Front only"
+            aria-label="Front only"
+            className={cn(
+              "flex size-8 items-center justify-center rounded-full transition-colors",
+              canvasSides.length === 1
+                ? "bg-neutral-100 text-neutral-900"
+                : "text-neutral-400 hover:text-neutral-900"
+            )}
+          >
+            <IdCard className="size-4" aria-hidden />
+          </button>
+          <button
+            type="button"
+            onClick={() => changeCaptureMode("both")}
+            title="Front and back"
+            aria-label="Front and back"
+            className={cn(
+              "flex size-8 items-center justify-center rounded-full transition-colors",
+              canvasSides.length === 2
+                ? "bg-neutral-100 text-neutral-900"
+                : "text-neutral-400 hover:text-neutral-900"
+            )}
+          >
+            <CreditCard className="size-4" aria-hidden />
+          </button>
+        </div>
+      }
     >
       <ProofWorkspace
         document={selectedDocument}
@@ -187,25 +251,50 @@ const OcrTemplateBuilderPage = forwardRef<
         sampleUrl={canvasSource}
         zoom={zoom}
         onSelectField={selectField}
-        onAddField={() => addField()}
-        onRemoveField={removeField}
-        onRenameField={renameField}
-        onSetFieldRegion={setFieldRegion}
+        onAddField={() => {
+          addField()
+          setEdited(true)
+        }}
+        onRemoveField={(key) => {
+          removeField(key)
+          setEdited(true)
+        }}
+        onRenameField={(key, label) => {
+          renameField(key, label)
+          setEdited(true)
+        }}
+        onSetFieldRegion={(key, region) => {
+          setFieldRegion(key, region)
+          setEdited(true)
+        }}
         onUploadSample={(file, side) => {
           void handleSampleUpload(file, side)
+          setEdited(true)
         }}
-        onChangeDocument={(patch) =>
+        onChangeDocument={(patch) => {
           updateSelectedDocument((doc) => ({ ...doc, ...patch }))
-        }
+          setEdited(true)
+        }}
         onBlurSave={() => {
           void saveProofNameAndDescription()
         }}
-        onChangeCaptureMode={(mode) => changeCaptureMode(mode)}
+        testSlots={testSlots}
+        onUploadTestSlot={(side, file) => uploadTestSlot(side, file)}
+        onClearTestSlot={(side) => clearTestSlot(side)}
+        sampleMatchForSide={sampleMatchForSide}
+        fieldMatchProfiles={fieldMatchProfiles}
+        onChangeFieldMatches={changeFieldMatches}
+        fieldLastRead={(key) => lastReadByKey.get(key) ?? null}
+        onRemoveSample={(side) => {
+          void handleSampleRemove(side)
+          setEdited(true)
+        }}
         saving={saving}
         tested={mergedTestResult.tested}
         availableOnSignup={availableOnSignup}
         onAvailabilityChange={(next) => {
           if (next && !validateRequiredSamples(selectedDocument)) return
+          setEdited(true)
           void setProofAvailableOnSignup(selectedDocument.key, next)
         }}
         availabilityHint={
@@ -213,6 +302,7 @@ const OcrTemplateBuilderPage = forwardRef<
             ? `Add a ${missingSampleLabels.join(" and ")} sample photo first.`
             : "Residents can choose this document when they register."
         }
+        signupDisabled={missingSamples.length > 0}
         checksFor={
           <RulesStep
             document={selectedDocument}
@@ -220,35 +310,64 @@ const OcrTemplateBuilderPage = forwardRef<
             selectedField={selectedField}
             selectedFieldIndex={selectedFieldIndex}
             onSelectField={selectField}
-            onUpdateField={updateField}
-            onUpdateHints={updateFieldHints}
-            onSetValidationRules={setFieldValidationRules}
+            onUpdateField={(key, updater) => {
+              updateField(key, updater)
+              setEdited(true)
+            }}
+            onUpdateHints={(key, patch) => {
+              updateFieldHints(key, patch)
+              setEdited(true)
+            }}
+            onSetValidationRules={(key, next) => {
+              setFieldValidationRules(key, next)
+              setEdited(true)
+            }}
             fieldMatchProfiles={fieldMatchProfiles}
             fieldHasNotExpired={fieldHasNotExpired}
-            selectedDetected={selectedDetected}
             showFieldPicker={false}
           />
         }
         testPanel={
-          <TrySampleStep
+          <TrySampleProfileForm
             testRunning={testRunning}
-            runningTestKey={runningTestKey}
-            testSlots={testSlots}
-            mergedTestResult={mergedTestResult}
-            documentFields={selectedDocument.fields}
-            canvasSides={canvasSides}
-            sampleMatchForSide={sampleMatchForSide}
             testProfile={testProfile}
             relevantProfileKeys={relevantProfileKeys}
             onTestProfileChange={(key, value) =>
               setTestProfileField(key, value)
             }
-            onUploadSlot={(side, file) => uploadTestSlot(side, file)}
-            onClearSlot={(side) => clearTestSlot(side)}
-            onRunTestAll={() => {
-              void runTestAll()
-            }}
           />
+        }
+        resultsPanel={
+          <TrySampleResults
+            mergedTestResult={mergedTestResult}
+            documentFields={selectedDocument.fields}
+            canvasSides={canvasSides}
+          />
+        }
+        testAction={
+          <button
+            type="button"
+            onClick={() => void runTestAll()}
+            disabled={testRunning}
+            className="flex h-[52px] w-full items-center justify-center gap-2 rounded-full bg-brand-navy text-[17px] font-semibold text-white transition-colors hover:bg-accent disabled:bg-neutral-200 disabled:text-neutral-400 disabled:hover:bg-neutral-200"
+          >
+            {testRunning ? (
+              <LoaderCircle className="size-4 animate-spin" />
+            ) : null}
+            {testRunning
+              ? (() => {
+                  const side = runningTestKey?.startsWith("test:")
+                    ? (runningTestKey.slice(5) as ProofSide)
+                    : null
+                  if (side && canvasSides.length >= 2) {
+                    const index = canvasSides.indexOf(side)
+                    if (index >= 0)
+                      return `Testing ${side === "back" ? "back" : "front"} (${index + 1} of ${canvasSides.length})`
+                  }
+                  return "Testing"
+                })()
+              : "Test sample"}
+          </button>
         }
       />
     </ProofWizardShell>

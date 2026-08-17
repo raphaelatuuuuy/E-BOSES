@@ -334,10 +334,11 @@ def detect_residence_proof(
     if hint_type:
         hint = next((item for item in enabled_types if item.code == hint_type), None)
 
-    # Without OCR provider, fall back to keyword scoring on empty lines fails — need provider.
-    if not circuit_allows_request(force=False) and not getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
-        # Still try once in local/dev even if circuit open.
-        pass
+    # Do not spend another hosted request while the configured provider circuit
+    # is open. A missing key is handled by the normal fallback path and is not a
+    # circuit outage.
+    service = service_status()
+    cloud_allowed = service.status == OCRServiceStatus.Status.NOT_CONFIGURED or circuit_allows_request(force=False)
 
     # Prefer the user-selected type early so we know whether field regions exist.
     # When regions are drawn, do NOT deskew/crop — that shifts coordinates vs the boxes.
@@ -374,11 +375,14 @@ def detect_residence_proof(
     except Exception:
         logger.exception("Sign-up detect OCR enhance skipped")
 
-    provider = FallbackOCRProvider(
-        primary=OCRSpaceProvider(),
-        fallback_factory=lambda: EasyOCRProvider(gpu=False),
-        caller="signup.detect",
-    )
+    if cloud_allowed:
+        provider = FallbackOCRProvider(
+            primary=OCRSpaceProvider(),
+            fallback_factory=lambda: EasyOCRProvider(gpu=False),
+            caller="signup.detect",
+        )
+    else:
+        provider = EasyOCRProvider(gpu=False)
     try:
         # deskew=False when regions are used so OCR geometry matches Mark Areas boxes.
         response = provider.recognize(
@@ -386,16 +390,17 @@ def detect_residence_proof(
             suffix=suffix_for_filename(filename),
             deskew=not use_regions,
         )
-        record_provider_success(
-            latency_ms=response.latency_ms,
-            details={
-                "model": response.model,
-                "probe": "sign_up_detect",
-                "deskew": deskew_meta,
-                "enhance": enhance_meta,
-                "regions": use_regions,
-            },
-        )
+        if cloud_allowed:
+            record_provider_success(
+                latency_ms=response.latency_ms,
+                details={
+                    "model": response.model,
+                    "probe": "sign_up_detect",
+                    "deskew": deskew_meta,
+                    "enhance": enhance_meta,
+                    "regions": use_regions,
+                },
+            )
         lines = response.lines or []
     except OCRProviderError as exc:
         record_provider_failure(exc)
@@ -776,11 +781,16 @@ def process_verification_case(case_id, *, trigger=VerificationCheck.Trigger.SYST
         # when the primary actually fails. The circuit breaker still tracks
         # health, but it no longer short-circuits sign-up straight to EasyOCR
         # while OCR.space may be available again.
-        provider = FallbackOCRProvider(
-            primary=OCRSpaceProvider(),
-            fallback_factory=lambda: EasyOCRProvider(gpu=False),
-            caller="signup.case",
-        )
+        service = service_status()
+        cloud_allowed = service.status == OCRServiceStatus.Status.NOT_CONFIGURED or circuit_allows_request(force=force)
+        if not cloud_allowed:
+            provider = EasyOCRProvider(gpu=False)
+        else:
+            provider = FallbackOCRProvider(
+                primary=OCRSpaceProvider(),
+                fallback_factory=lambda: EasyOCRProvider(gpu=False),
+                caller="signup.case",
+            )
     else:
         if not getattr(settings, "OCRSPACE_API_KEY", ""):
             error = OCRProviderAuthenticationError("OCR.space is not configured.")
@@ -822,15 +832,16 @@ def process_verification_case(case_id, *, trigger=VerificationCheck.Trigger.SYST
                 page_size=page_size,
             )
             per_side_extracted.append(side_fields)
-            record_provider_success(
-                latency_ms=response.latency_ms,
-                details={
-                    "model": response.model,
-                    "probe": "verification",
-                    "side": proof_side,
-                    "regions": use_regions,
-                },
-            )
+            if cloud_allowed:
+                record_provider_success(
+                    latency_ms=response.latency_ms,
+                    details={
+                        "model": response.model,
+                        "probe": "verification",
+                        "side": proof_side,
+                        "regions": use_regions,
+                    },
+                )
     except OCRProviderError as exc:
         record_provider_failure(exc)
         return fail_case_attempts(case.pk, attempts, exc)
@@ -992,6 +1003,8 @@ def finalize_case_attempts(case_id, attempts, responses, engine):
         if case.user.status not in {User.Status.SUSPENDED, User.Status.REJECTED}:
             case.user.status = User.Status.VERIFIED
             case.user.save(update_fields=["status", "updated_at"])
+            from .email_services import send_account_email_after_commit
+            send_account_email_after_commit(case.user, "welcome")
     elif engine.outcome == "reject":
         case.status = ResidenceVerificationCase.Status.REJECTED
         case.review_reason = ""
@@ -1006,6 +1019,8 @@ def finalize_case_attempts(case_id, attempts, responses, engine):
         if case.user.status != User.Status.SUSPENDED:
             case.user.status = User.Status.REJECTED
             case.user.save(update_fields=["status", "updated_at"])
+            from .email_services import send_account_email_after_commit
+            send_account_email_after_commit(case.user, "verification_rejected")
     else:
         review_reason = (
             ResidenceVerificationCase.ReviewReason.RESUBMISSION_REQUIRED
@@ -1197,6 +1212,8 @@ def decide_case(case_id, *, official, approve: bool, reason: str):
     case.save()
     case.user.status = User.Status.VERIFIED if approve else User.Status.REJECTED
     case.user.save(update_fields=["status", "updated_at"])
+    from .email_services import send_account_email_after_commit
+    send_account_email_after_commit(case.user, "welcome" if approve else "verification_rejected")
     case.checks.filter(status__in=[VerificationCheck.Status.QUEUED, VerificationCheck.Status.PROCESSING]).update(
         status=VerificationCheck.Status.CANCELLED,
         failure_reason="Superseded by an official decision.",

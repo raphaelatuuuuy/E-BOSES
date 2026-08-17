@@ -149,7 +149,7 @@ class VerificationSummaryTests(APITestCase):
         from apps.config_summary import _verification
 
         summary = _verification()
-        self.assertEqual(summary["status"], "Running automatically")
+        self.assertEqual(summary["status"], "Set up a document")
         self.assertFalse(summary["needs_attention"])
 
     def test_a_stuck_case_is_surfaced_as_needing_attention(self):
@@ -194,7 +194,7 @@ class VerificationSummaryTests(APITestCase):
         from apps.config_summary import _verification
 
         summary = _verification()
-        self.assertEqual(summary["status"], "Running automatically")
+        self.assertEqual(summary["status"], "Set up a document")
         self.assertIn("upload", summary["detail"])
         self.assertFalse(summary["needs_attention"])
 

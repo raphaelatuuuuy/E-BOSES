@@ -164,8 +164,6 @@ def _record_completion(claim: _RunClaim, assessment_id: int):
     assessment.raw_result = raw_result
     assessment.save(update_fields=["raw_result", "updated_at"])
     transaction.on_commit(lambda assessment_id=assessment.pk: broadcast_concern_ai_update(assessment_id))
-    if assessment.flagged:
-        transaction.on_commit(lambda assessment_id=assessment.pk: notify_officials_of_flagged_assessment(assessment_id))
     return assessment, True
 
 
@@ -230,44 +228,6 @@ def broadcast_concern_ai_update(assessment_id: int) -> None:
             },
         },
     )
-
-
-def notify_officials_of_flagged_assessment(assessment_id: int) -> None:
-    """Advisory-only: tell verified officials the AI review queue needs a look.
-
-    This never touches Concern.validation_status/status — it is purely a
-    review-queue nudge for the soft AI gate (fired once per completed run
-    from _record_completion, not from the retry path).
-    """
-    from django.contrib.auth import get_user_model
-
-    from apps.notifications.services import create_user_notification
-
-    from .models import ConcernAiAssessment
-
-    assessment = ConcernAiAssessment.objects.select_related("concern").get(pk=assessment_id)
-    concern = assessment.concern
-    config = _current_classification_configuration()
-    if config is not None and not config.notify_reviewer:
-        return
-
-    User = get_user_model()
-    reason_codes = ", ".join(
-        reason.get("reason", "").replace("_", " ")
-        for reason in (assessment.flag_reasons or [])
-        if isinstance(reason, dict) and reason.get("reason")
-    )
-    title = "AI review flagged a report"
-    body = f"{concern.tracking_id} · {concern.title}" + (f". Reasons: {reason_codes}." if reason_codes else ".")
-    for official in User.objects.filter(role=User.Role.BARANGAY_OFFICIAL, status=User.Status.VERIFIED):
-        create_user_notification(
-            recipient=official,
-            type="concern_ai_flagged",
-            title=title,
-            body=body,
-            concern=concern,
-            metadata={"assessment_id": assessment.pk, "flag_reasons": assessment.flag_reasons},
-        )
 
 
 def _current_classification_configuration():

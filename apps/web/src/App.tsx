@@ -8,7 +8,7 @@ import { AuthSessionProvider, getStatusPath, useAuthSession } from "@/features/a
 import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import DashboardLayout from "@/features/dashboard/dashboard"
 import { getAccessToken } from "@/lib/api"
-import { SystemTicker, useSystemStatus } from "@/features/dashboard/components/system-banner"
+import { SystemStatusProvider, SystemTicker, useSystemStatus } from "@/features/dashboard/components/system-banner"
 import { MaintenancePage } from "@/features/dashboard/pages/maintenance"
 
 const AccountInactivePage = lazy(() => import("@/features/auth/account-inactive"))
@@ -423,7 +423,7 @@ function PageLoader() {
  * page: someone arriving mid-window still needs to see the hotlines.
  */
 function MaintenanceGate({ children }: { children: ReactNode }) {
-  const status = useSystemStatus()
+  const { status } = useSystemStatus()
   const { user } = useAuthSession()
   const location = useLocation()
 
@@ -439,13 +439,15 @@ function MaintenanceGate({ children }: { children: ReactNode }) {
 export default function App() {
   return (
     <AuthSessionProvider>
-      <SystemTicker />
-      <MaintenanceGate>
-        <Suspense fallback={<PageLoader />}>
-          <AppRoutes />
-        </Suspense>
-      </MaintenanceGate>
-      <AssistantMount />
+      <SystemStatusProvider>
+        <SystemTicker />
+        <MaintenanceGate>
+          <Suspense fallback={<PageLoader />}>
+            <AppRoutes />
+          </Suspense>
+        </MaintenanceGate>
+        <AssistantMount />
+      </SystemStatusProvider>
     </AuthSessionProvider>
   )
 }

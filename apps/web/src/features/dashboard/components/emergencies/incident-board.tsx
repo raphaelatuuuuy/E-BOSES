@@ -168,7 +168,16 @@ function IncidentMap({ alert }: { alert: EmergencyAlert }) {
       map?.remove()
     }
 
-  }, [signature])
+  }, [
+    signature,
+    assignment?.location_history,
+    assignment?.responder,
+    incident,
+    locationLabel,
+    responder,
+    route,
+    routeIsLive,
+  ])
 
   if (!incident) {
     return (

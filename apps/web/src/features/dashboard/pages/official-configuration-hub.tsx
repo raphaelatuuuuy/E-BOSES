@@ -2,10 +2,11 @@ import { useEffect, useState } from "react"
 import {
   AlertTriangleIcon,
   BrainCircuitIcon,
+  IdCardLanyard,
   MapIcon,
   ShieldCheckIcon,
   SirenIcon,
-  TagsIcon,
+  FolderOpenIcon,
   UserCogIcon,
   UsersIcon,
   type LucideIcon,
@@ -55,7 +56,7 @@ interface SectionDef {
 
 const GROUPS: { title: string; sections: SectionDef[] }[] = [
   {
-    title: "People & access",
+    title: "User management",
     sections: [
       {
         key: "units",
@@ -90,7 +91,7 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
         key: "categories",
         label: "Concern categories",
         description: "What residents can report, and who answers each",
-        icon: TagsIcon,
+        icon: FolderOpenIcon,
         to: "/dashboard/configuration/categories",
         capability: CAPABILITIES.manageCategories,
       },
@@ -112,17 +113,17 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
       },
       {
         key: "zones",
-        label: "Coverage & SMS fallback",
-        description: "How far alerts reach, and the number used with no internet",
+        label: "Barangay coverage",
+        description: "The area where alerts reach residents and backup contact for emergencies",
         icon: MapIcon,
         to: "/dashboard/configuration/map-dispatch",
         capability: CAPABILITIES.configureGeography,
       },
       {
         key: "verification",
-        label: "Accepted ID documents",
+        label: "ID Documents",
         description: "Which documents prove a resident lives here",
-        icon: ShieldCheckIcon,
+        icon: IdCardLanyard,
         to: "/dashboard/configuration/id-proof-template",
         capability: CAPABILITIES.reviewVerification,
       },

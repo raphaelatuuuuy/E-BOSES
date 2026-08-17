@@ -6,17 +6,20 @@ const CSRF_COOKIE_NAME = "csrftoken"
 
 let accessToken: string | null = null
 let refreshPromise: Promise<SessionResponse | null> | null = null
-const STORAGE_KEY = "eboses_access_token"
+let csrfPromise: Promise<void> | null = null
+const inflightGets = new Map<string, Promise<unknown>>()
 
 export class ApiError extends Error {
   status: number
   data: unknown
+  retryAfterMs: number | null
 
-  constructor(message: string, status: number, data: unknown) {
+  constructor(message: string, status: number, data: unknown, retryAfterMs: number | null = null) {
     super(message)
     this.name = "ApiError"
     this.status = status
     this.data = data
+    this.retryAfterMs = retryAfterMs
   }
 }
 
@@ -70,39 +73,58 @@ function isUnsafeMethod(method: string) {
   return !["GET", "HEAD", "OPTIONS", "TRACE"].includes(method.toUpperCase())
 }
 
+function mergeSignals(first: AbortSignal | undefined, second: AbortSignal | undefined) {
+  if (!first) return second
+  if (!second) return first
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  if (first.aborted || second.aborted) abort()
+  first.addEventListener("abort", abort, { once: true })
+  second.addEventListener("abort", abort, { once: true })
+  return controller.signal
+}
+
 export function getAccessToken() {
-  if (!accessToken) {
-    try { accessToken = sessionStorage.getItem(STORAGE_KEY) } catch { /* noop */ }
-  }
   return accessToken
 }
 
 export function setAuthTokens(access: string) {
   accessToken = access
-  try { sessionStorage.setItem(STORAGE_KEY, access) } catch { /* noop */ }
 }
 
 export function clearAuthTokens() {
   accessToken = null
-  try { sessionStorage.removeItem(STORAGE_KEY) } catch { /* noop */ }
 }
 
 export async function ensureCsrfCookie() {
-  await fetch(`${apiBaseUrl()}/auth/csrf/`, {
+  csrfPromise ??= fetch(`${apiBaseUrl()}/auth/csrf/`, {
     credentials: "include",
+  }).then((response) => {
+    if (!response.ok) throw new ApiError("Could not prepare a secure request.", response.status, null)
+  }).finally(() => {
+    csrfPromise = null
   })
+  return csrfPromise
 }
 
 export async function refreshSession() {
-  refreshPromise ??= apiRequest<SessionResponse | null>(
-    "/auth/refresh/",
-    { method: "POST" },
-    { auth: false, refreshOnUnauthorized: false, csrf: true },
-  ).then((result) => {
-    if (!result) return null
-    setAuthTokens(result.access)
-    return result
-  }).finally(() => {
+  refreshPromise ??= (async () => {
+    const rotate = () => apiRequest<SessionResponse | null>(
+      "/auth/refresh/",
+      { method: "POST" },
+      { auth: false, refreshOnUnauthorized: false, csrf: true, dedupe: false },
+    ).then((result) => {
+      if (result) setAuthTokens(result.access)
+      return result
+    })
+    const locks = typeof navigator !== "undefined"
+      ? (navigator as Navigator & { locks?: { request: <T>(name: string, callback: () => Promise<T>) => Promise<T> } }).locks
+      : undefined
+    if (locks) {
+      return locks.request("eboses-auth-refresh", rotate)
+    }
+    return rotate()
+  })().finally(() => {
     refreshPromise = null
   })
 
@@ -178,7 +200,7 @@ async function request<T>(path: string, init: RequestInit, options: ApiRequestOp
   const isFormData = init.body instanceof FormData
   const method = init.method ?? "GET"
 
-  if (!isFormData && !headers.has("Content-Type")) {
+  if (!isFormData && init.body != null && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json")
   }
 
@@ -199,6 +221,7 @@ async function request<T>(path: string, init: RequestInit, options: ApiRequestOp
 
   const timeoutMs = options.timeoutMs
   const controller = timeoutMs ? new AbortController() : null
+  const signal = mergeSignals(controller?.signal, init.signal ?? undefined)
   const timeoutId =
     controller && timeoutMs
       ? window.setTimeout(() => controller.abort(), timeoutMs)
@@ -210,7 +233,7 @@ async function request<T>(path: string, init: RequestInit, options: ApiRequestOp
       ...init,
       headers,
       credentials: "include",
-      signal: controller?.signal ?? init.signal,
+      signal,
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
@@ -239,7 +262,18 @@ async function request<T>(path: string, init: RequestInit, options: ApiRequestOp
   const data = contentType.includes("application/json") ? await response.json() : await response.text()
 
   if (!response.ok) {
-    throw new ApiError(errorMessage(data, "Request failed."), response.status, data)
+    const retryAfter = response.headers.get("Retry-After")
+    const retryDate = retryAfter && !/^\d+(?:\.\d+)?$/.test(retryAfter) ? Date.parse(retryAfter) : NaN
+    const retryAfterMs = retryAfter
+      ? /^\d+(?:\.\d+)?$/.test(retryAfter)
+        ? Number(retryAfter) * 1000
+        : Number.isFinite(retryDate)
+          ? Math.max(0, retryDate - Date.now())
+          : null
+      : data && typeof data === "object" && typeof (data as { retry_after?: unknown }).retry_after === "number"
+        ? Number((data as { retry_after: number }).retry_after) * 1000
+        : null
+    throw new ApiError(errorMessage(data, "Request failed."), response.status, data, retryAfterMs)
   }
 
   return data as T
@@ -251,19 +285,33 @@ interface ApiRequestOptions {
   refreshOnUnauthorized?: boolean
   /** Optional request timeout in milliseconds (AbortController). */
   timeoutMs?: number
+  dedupe?: boolean
 }
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}, options: ApiRequestOptions = {}) {
+  const method = (init.method ?? "GET").toUpperCase()
+  const dedupeKey = method === "GET" && options.dedupe !== false
+    ? `${method}:${apiBaseUrl()}${path}:${getAccessToken() ?? "anonymous"}`
+    : null
+  if (dedupeKey) {
+    const existing = inflightGets.get(dedupeKey)
+    if (existing) return existing as Promise<T>
+  }
+  const pending = requestWithRefresh<T>(path, init, options)
+  if (dedupeKey) {
+    inflightGets.set(dedupeKey, pending)
+    pending.finally(() => inflightGets.delete(dedupeKey)).catch(() => undefined)
+  }
+  return pending
+}
+
+async function requestWithRefresh<T>(path: string, init: RequestInit, options: ApiRequestOptions) {
   try {
     return await request<T>(path, init, options)
   } catch (error) {
     if (error instanceof ApiError && error.status === 401 && options.auth !== false && options.refreshOnUnauthorized !== false) {
-      try {
-        await refreshSession()
-      } catch {
-        clearAuthTokens()
-        throw error
-      }
+      const refreshed = await refreshSession()
+      if (!refreshed) throw new ApiError("Your session has expired.", 401, null)
       return request<T>(path, init, { ...options, refreshOnUnauthorized: false })
     }
     throw error

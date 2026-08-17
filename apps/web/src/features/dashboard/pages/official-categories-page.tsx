@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowRightIcon,
+  CircleCheck,
+  ChevronDownIcon,
+  ChevronUpIcon,
   DropletsIcon,
+  FolderOpenIcon,
   HomeIcon,
   LeafIcon,
   LightbulbIcon,
@@ -13,28 +17,19 @@ import {
   TagsIcon,
   Trash2Icon,
   WrenchIcon,
+  CircleX,
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { Checkbox } from "@workspace/ui/components/checkbox"
-
 import { apiRequest } from "@/lib/api"
-import { DataTable, type Column } from "@/features/dashboard/components/record/data-table"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
+import { ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
+import { SheetDialog, SheetPrimaryButton } from "@/features/dashboard/components/sheet-dialog"
 import {
   ConfigAlarm,
   ConfigHeroAction,
   ConfigShell,
 } from "@/features/dashboard/components/config/config-shell"
-
-/**
- * Concern categories and the unit each one routes to.
- *
- * Categories and routing are one screen rather than two, because they are one
- * decision: a category with no responsible unit is a category whose concerns
- * land with nobody. Splitting them across tabs is what allowed the gap to exist
- * unnoticed — the Configuration hub flags it, and this is where it gets closed.
- */
 
 interface Unit {
   id: number
@@ -57,6 +52,7 @@ interface Category {
   photo_required: boolean
   description_required: boolean
   location_required: boolean
+  public_feed_allowed: boolean
   is_active: boolean
 }
 
@@ -99,25 +95,48 @@ function slugify(value: string) {
     .slice(0, 80)
 }
 
-function RequirementToggle({
-  label,
-  hint,
-  checked,
-  onChange,
-}: {
-  label: string
-  hint: string
-  checked: boolean
-  onChange: (value: boolean) => void
-}) {
+const inputCls = "mt-1.5 w-full rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[16px] text-neutral-900 outline-none transition-colors focus:border-neutral-500"
+const labelCls = "text-[13px] font-semibold text-neutral-500"
+
+function IconDropdown({ value, onChange }: { value: string; onChange: (key: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [])
+
+  const current = ICONS.find(([k]) => k === value) ?? ICONS[0]
+  const CurrentIcon = current[2]
+
   return (
-    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-card-line bg-card px-3 py-2.5">
-      <span className="min-w-0">
-        <span className="block text-sm font-semibold text-foreground">{label}</span>
-        <span className="block text-xs font-medium text-muted-foreground">{hint}</span>
-      </span>
-      <Checkbox checked={checked} onChange={(event) => onChange(event.currentTarget.checked)} aria-label={label} />
-    </label>
+    <div ref={ref} className="relative">
+      <button type="button" onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-3 rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-left text-[16px] text-neutral-900 outline-none transition-colors hover:border-neutral-400">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-navy text-white">
+          <CurrentIcon className="size-4" strokeWidth={1.7} />
+        </span>
+        <span className="flex-1 truncate font-medium">{current[1]}</span>
+        {open ? <ChevronUpIcon className="size-4 shrink-0 text-neutral-400" /> : <ChevronDownIcon className="size-4 shrink-0 text-neutral-400" />}
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white shadow-lg [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" style={{ maxHeight: '110px', overflowY: 'auto' }}>
+          <div className="py-1">
+            {ICONS.map(([key, name, Icon]) => (
+              <button key={key} type="button"
+                onClick={() => { onChange(key); setOpen(false) }}
+                className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-neutral-700 transition hover:bg-neutral-50">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-brand-navy text-white">
+                  <Icon className="size-3.5" strokeWidth={1.7} />
+                </span>
+                {name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -127,7 +146,28 @@ export default function OfficialCategoriesPage() {
   const [units, setUnits] = useState<Unit[]>([])
   const [loading, setLoading] = useState(true)
   const [draft, setDraft] = useState<Draft | null>(null)
+  const [editOpen, setEditOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<Category | null>(null)
   const [saving, setSaving] = useState(false)
+  const [query, setQuery] = useState("")
+  const [offset, setOffset] = useState(0)
+  const [originalDraft, setOriginalDraft] = useState<string | null>(null)
+
+  const draftSnapshot = (value: Draft | null) => JSON.stringify({
+    id: value?.id ?? null,
+    name: value?.name ?? "",
+    code: value?.code ?? "",
+    description: value?.description ?? "",
+    department: value?.department ?? null,
+    icon_key: value?.icon_key ?? "tag",
+    custom_icon_label: value?.custom_icon_label ?? "",
+    photo_required: value?.photo_required ?? true,
+    description_required: value?.description_required ?? true,
+    location_required: value?.location_required ?? true,
+    public_feed_allowed: value?.public_feed_allowed ?? true,
+    is_active: value?.is_active ?? true,
+  })
 
   const load = useCallback(() => {
     Promise.all([
@@ -148,14 +188,22 @@ export default function OfficialCategoriesPage() {
     void load()
   }, [load])
 
-  /** The unit that actually answers a category: an explicit rule wins, then the
-   *  category's own department. Mirrors how the backend resolves it. */
   function routedUnit(category: Category): Unit | null {
     const rule = rules
       .filter((item) => item.category === category.id && item.is_active)
       .sort((a, b) => b.priority - a.priority)[0]
     return rule?.department_detail ?? category.department_detail ?? null
   }
+
+  const filtered = useMemo(() => {
+    if (!query) return categories.filter((c) => c.is_active)
+    const q = query.toLowerCase()
+    return categories
+      .filter((c) => c.is_active)
+      .filter((c) => `${c.name} ${c.code} ${c.description}`.toLowerCase().includes(q))
+  }, [categories, query])
+
+  const page = filtered.slice(offset, offset + PAGE_SIZE)
 
   async function save() {
     if (!draft) return
@@ -171,19 +219,16 @@ export default function OfficialCategoriesPage() {
       payload.append("photo_required", String(draft.photo_required ?? true))
       payload.append("description_required", String(draft.description_required ?? true))
       payload.append("location_required", String(draft.location_required ?? true))
+      payload.append("public_feed_allowed", String(draft.public_feed_allowed ?? true))
       payload.append("is_active", String(draft.is_active ?? true))
       if (draft.department) payload.append("department", String(draft.department))
       if (draft.iconFile) payload.append("icon_image", draft.iconFile)
       await apiRequest(
         isNew ? "/concerns/admin/categories/" : `/concerns/admin/categories/${draft.id}/`,
-        {
-          method: isNew ? "POST" : "PATCH",
-          body: payload,
-        },
+        { method: isNew ? "POST" : "PATCH", body: payload },
       )
       toast.success(isNew ? "Category created" : "Category updated")
-      setDraft(null)
-      load()
+      setEditOpen(false); setDraft(null); setOriginalDraft(null); load()
     } catch (error) {
       toast.error(describeApiError(error, "Could not save the category."))
     } finally {
@@ -191,15 +236,11 @@ export default function OfficialCategoriesPage() {
     }
   }
 
-  async function removeCategory(category: Category) {
-    const confirmed = window.confirm(
-      `Delete “${category.name}”? Concerns already filed under it keep their history; ` +
-        "if any exist, it is deactivated instead of deleted.",
-    )
-    if (!confirmed) return
+  async function confirmDelete() {
+    if (!deleteTarget) return
     try {
       const result = await apiRequest<{ deleted: boolean; in_use: number }>(
-        `/concerns/admin/categories/${category.id}/`,
+        `/concerns/admin/categories/${deleteTarget.id}/`,
         { method: "DELETE" },
       )
       toast.success(
@@ -207,299 +248,226 @@ export default function OfficialCategoriesPage() {
           ? "Category deleted"
           : `Category deactivated — ${result.in_use} concern${result.in_use === 1 ? "" : "s"} still use it`,
       )
-      load()
+      setDeleteOpen(false); setDeleteTarget(null); load()
     } catch (error) {
       toast.error(describeApiError(error, "Could not remove the category."))
     }
   }
 
-  async function route(category: Category, departmentId: string) {
-    try {
-      await apiRequest(`/concerns/admin/categories/${category.id}/`, {
-        method: "PATCH",
-        body: JSON.stringify({ department: departmentId ? Number(departmentId) : null }),
-      })
-      toast.success(departmentId ? "Routing updated" : "Routing cleared")
-      load()
-    } catch (error) {
-      toast.error(describeApiError(error, "Could not update routing."))
-    }
-  }
-
   const unrouted = categories.filter((category) => category.is_active && !routedUnit(category))
-
-  const columns: Column<Category>[] = [
-    {
-      key: "name",
-      header: "Category",
-      sortValue: (category) => category.name.toLowerCase(),
-      render: (category) => (
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-brand-navy ring-1 ring-accent/15">
-            {category.icon_image_url ? (
-              <img src={category.icon_image_url} alt="" className="size-full rounded-xl object-cover" />
-            ) : category.custom_icon_label ? (
-              <span className="text-xs font-semibold">{category.custom_icon_label}</span>
-            ) : (() => {
-              const Icon = iconFor(category.icon_key)
-              return <Icon className="size-4" />
-            })()}
-          </div>
-          <div className="min-w-0">
-            <p className="truncate font-semibold text-foreground">{category.name}</p>
-            <p className="truncate text-xs font-medium text-muted-foreground">
-              {category.description || category.code}
-            </p>
-          </div>
-        </div>
-      ),
-    },
-    {
-      key: "routing",
-      header: "Assigned Unit",
-      render: (category) => {
-        const current = routedUnit(category)
-        return (
-          <div className="flex items-center gap-2">
-            <ArrowRightIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-            <label className="min-w-0 flex-1">
-              <span className="sr-only">Unit for {category.name}</span>
-              <select
-                value={category.department ? String(category.department) : ""}
-                onChange={(event) => void route(category, event.target.value)}
-                className={`w-full rounded-lg border bg-card px-2 py-1.5 text-xs font-semibold outline-none focus:border-accent ${
-                  current
-                    ? "border-card-line text-foreground"
-                    : "border-neutral-400 text-neutral-600"
-                }`}
-              >
-                <option value="">Nobody assigned</option>
-                {units
-                  .filter((unit) => unit.is_active)
-                  .map((unit) => (
-                    <option key={unit.id} value={unit.id}>
-                      {unit.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-          </div>
-        )
-      },
-    },
-    {
-      key: "actions",
-      header: "",
-      align: "right",
-      render: (category) => (
-        <span className="flex justify-end gap-1">
-          <button
-            type="button"
-            onClick={() => setDraft(category)}
-            className="rounded-lg px-2 py-1 text-xs font-bold text-brand-navy transition hover:bg-tint"
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            onClick={() => void removeCategory(category)}
-            className="rounded-lg px-2 py-1 text-xs font-bold text-neutral-500 transition-colors hover:text-sos"
-          >
-            Delete
-          </button>
-        </span>
-      ),
-    },
-  ]
-
-  const active = categories.filter((category) => category.is_active)
 
   return (
     <ConfigShell
-      icon={TagsIcon}
+      icon={FolderOpenIcon}
       eyebrow="Operations"
       title="Concern categories"
-      description="What residents can report, and which barangay unit answers each one. Routing lives here rather than on its own screen — a category and the unit behind it are one decision."
+      description="What residents can report, and which barangay unit answers each one."
       stats={[
-        { label: "Categories", value: active.length },
-        {
-          label: "No unit assigned",
-          value: unrouted.length,
-          alarm: unrouted.length > 0,
-        },
-        { label: "Units available", value: units.filter((unit) => unit.is_active).length },
+        { label: "Categories", value: filtered.length },
+        { label: "No unit assigned", value: unrouted.length, alarm: unrouted.length > 0 },
+        { label: "Units available", value: units.filter((u) => u.is_active).length },
       ]}
       action={
-        !draft ? (
-          <ConfigHeroAction icon={PlusIcon} onClick={() => setDraft({ name: "", code: "", icon_key: "tag" })}>
-            New category
-          </ConfigHeroAction>
-        ) : null
+        <ConfigHeroAction icon={PlusIcon} onClick={() => { setDraft({ name: "", code: "", icon_key: "tag" }); setOriginalDraft(null); setEditOpen(true) }}>
+          New category
+        </ConfigHeroAction>
       }
     >
       {!loading && unrouted.length > 0 ? (
         <ConfigAlarm>
           {unrouted.length} categor{unrouted.length === 1 ? "y has" : "ies have"} no unit assigned:{" "}
-          {unrouted.map((category) => category.name).join(", ")}. Concerns filed under
-          {unrouted.length === 1 ? " it" : " them"} will not reach anyone.
+          {unrouted.map((c) => c.name).join(", ")}. Concerns filed under them will not reach anyone.
         </ConfigAlarm>
       ) : null}
 
-      {draft ? (
-        <div className="space-y-3 rounded-2xl border border-card-line bg-card p-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block">
-              <span className="text-[11px] font-bold text-muted-foreground">
-                Category name
-              </span>
-              <input
-                value={draft.name ?? ""}
-                onChange={(event) => {
-                  const name = event.target.value
-                  setDraft(
-                    draft.id ? { ...draft, name } : { ...draft, name, code: slugify(name) },
-                  )
-                }}
-                placeholder="Illegal dumping"
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
-              />
-            </label>
-            <label className="block">
-              <span className="text-[11px] font-bold text-muted-foreground">
-                Assigned Unit
-              </span>
-              <select
-                value={draft.department ? String(draft.department) : ""}
-                onChange={(event) =>
-                  setDraft({
-                    ...draft,
-                    department: event.target.value ? Number(event.target.value) : null,
-                  })
-                }
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
-              >
-                <option value="">Choose a unit</option>
-                {units
-                  .filter((unit) => unit.is_active)
-                  .map((unit) => (
-                    <option key={unit.id} value={unit.id}>
-                      {unit.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-          </div>
+      <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-4">
+        <ListSearch value={query} onChange={setQuery} placeholder="Search categories" className="w-full" />
+      </div>
 
-          <label className="block">
-            <span className="text-[11px] font-bold text-muted-foreground">
-              What belongs here
-            </span>
-            <input
-              value={draft.description ?? ""}
-              onChange={(event) => setDraft({ ...draft, description: event.target.value })}
-              placeholder="Garbage dumped outside collection points"
-              className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
-            />
-          </label>
-
-          <div className="space-y-2 rounded-2xl border border-card-line bg-canvas p-3">
-            <p className="text-[11px] font-bold text-muted-foreground">Report requirements</p>
-            <RequirementToggle
-              label="Description required"
-              hint="Residents must describe the issue before filing"
-              checked={draft.description_required ?? true}
-              onChange={(value) => setDraft({ ...draft, description_required: value })}
-            />
-            <RequirementToggle
-              label="Photo required"
-              hint="Residents must attach at least one photo"
-              checked={draft.photo_required ?? true}
-              onChange={(value) => setDraft({ ...draft, photo_required: value })}
-            />
-            <RequirementToggle
-              label="Location required"
-              hint="Residents must pin where the issue is"
-              checked={draft.location_required ?? true}
-              onChange={(value) => setDraft({ ...draft, location_required: value })}
-            />
-          </div>
-
-          <div className="space-y-3 rounded-2xl border border-card-line bg-canvas p-3">
-            <p className="text-[11px] font-bold text-muted-foreground">Icon</p>
-            <div className="flex flex-wrap gap-2">
-              {ICONS.map(([key, label, Icon]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setDraft({ ...draft, icon_key: key })}
-                  className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-2 text-xs font-bold ${draft.icon_key === key ? "border-accent bg-accent/10 text-brand-navy" : "border-card-line bg-card text-muted-foreground"}`}
-                >
-                  <Icon className="size-4" />
-                  {label}
-                </button>
-              ))}
-            </div>
-            <label className="block">
-              <span className="text-[11px] font-bold text-muted-foreground">Custom icon text</span>
-              <input
-                value={draft.custom_icon_label ?? ""}
-                onChange={(event) => setDraft({ ...draft, custom_icon_label: event.target.value })}
-                placeholder="BD"
-                maxLength={8}
-                className="mt-1 w-full rounded-xl border border-card-line bg-card px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-accent"
-              />
-            </label>
-            <label className="block rounded-2xl border border-dashed border-accent/40 bg-card p-3">
-              <span className="text-[11px] font-bold text-muted-foreground">Custom image / .ico</span>
-              <div className="mt-2 flex flex-wrap items-center gap-3">
-                {draft.iconFile ? (
-                  <img src={URL.createObjectURL(draft.iconFile)} alt="" className="size-12 rounded-xl object-cover" />
-                ) : draft.icon_image_url ? (
-                  <img src={draft.icon_image_url} alt="" className="size-12 rounded-xl object-cover" />
-                ) : null}
-                <input
-                  type="file"
-                  accept=".png,.jpg,.jpeg,.webp,.ico,image/png,image/jpeg,image/webp,image/x-icon"
-                  onChange={(event) => setDraft({ ...draft, iconFile: event.target.files?.[0] ?? null })}
-                  className="text-sm font-semibold text-foreground"
-                />
+      {/* Editorial list */}
+      <ol>
+        {page.map((category) => {
+          const Icon = iconFor(category.icon_key)
+          const unit = routedUnit(category)
+          const hasUnit = Boolean(unit)
+          return (
+            <li
+              key={category.id}
+              className="grid grid-cols-1 gap-x-8 gap-y-3 border-b border-neutral-200 py-6 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto]"
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-3">
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-navy text-white">
+                    {category.icon_image_url ? (
+                      <img src={category.icon_image_url} alt="" className="size-full rounded-lg object-cover" />
+                    ) : (
+                      <Icon className="size-4" strokeWidth={1.7} />
+                    )}
+                  </span>
+                  <span className="text-row text-brand-navy">{category.name}</span>
+                  {hasUnit ? (
+                    <span className="inline-flex items-center gap-1 text-meta text-green-600">
+                      <CircleCheck className="size-3.5" strokeWidth={2} />
+                      Assigned
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-meta text-red-600">
+                      <CircleX className="size-3.5" strokeWidth={2} />
+                      No unit
+                    </span>
+                  )}
+                </div>
+                <dl className="mt-3 flex flex-wrap gap-x-8 gap-y-2">
+                  <div>
+                    <dt className="text-meta text-neutral-400">Description</dt>
+                    <dd className="mt-0.5 text-meta text-brand-navy">{category.description || category.code}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-meta text-neutral-400">Assigned unit</dt>
+                    <dd className="mt-0.5 text-meta text-brand-navy">
+                      {unit ? unit.name : "None"}
+                    </dd>
+                  </div>
+                </dl>
               </div>
-              <span className="mt-2 block text-xs font-medium text-muted-foreground">Optional. PNG, JPG, WEBP, or ICO up to 512 KB.</span>
-            </label>
+
+              <div className="flex shrink-0 items-center gap-5 border-t border-neutral-200 pt-3 sm:border-0 sm:pt-0">
+                <button type="button" onClick={() => { setDraft({ ...category }); setOriginalDraft(draftSnapshot(category)); setEditOpen(true) }} className="text-meta text-neutral-500 transition-colors hover:text-accent">Edit</button>
+                <button type="button" onClick={() => { setDeleteTarget(category); setDeleteOpen(true) }} className="text-meta text-neutral-500 transition-colors hover:text-sos">Delete</button>
+              </div>
+            </li>
+          )
+        })}
+        {page.length === 0 && !loading ? (
+          <li className="py-14 text-center text-read text-neutral-500">No categories found.</li>
+        ) : null}
+      </ol>
+
+      <Pager offset={offset} total={filtered.length} onChange={setOffset} noun="categories" />
+
+      {/* Edit dialog */}
+      {draft && (
+        <SheetDialog
+          open={editOpen}
+          onClose={() => { setEditOpen(false); setDraft(null); setOriginalDraft(null) }}
+          title={draft.id ? `Edit ${draft.name}` : "New concern category"}
+          size="wide"
+        >
+          <div className="space-y-6 pb-4">
+            <div className="space-y-4">
+              <label className="block">
+                <span className={labelCls}>Category name</span>
+                <input value={draft.name || ""} onChange={(e) => {
+                  const name = e.target.value
+                  setDraft((current) => current?.id ? { ...current, name } : { ...current, name, code: slugify(name) })
+                }} className={inputCls} placeholder="Illegal dumping" />
+              </label>
+              <label className="block">
+                <span className={labelCls}>Description</span>
+                <input value={draft.description || ""} onChange={(e) => setDraft((current) => ({ ...current, description: e.target.value }))} className={inputCls} placeholder="Garbage dumped outside collection points" />
+              </label>
+            </div>
+
+            {/* Assigned unit — dropdown style */}
+            <div className="space-y-2">
+              <p className={labelCls}>Assigned unit</p>
+              <div className="relative">
+                <select
+                  value={draft.department ? String(draft.department) : ""}
+                  onChange={(e) => setDraft((current) => ({ ...current, department: e.target.value ? Number(e.target.value) : null }))}
+                  className="w-full appearance-none rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 pr-10 text-[16px] text-neutral-900 outline-none transition-colors focus:border-neutral-500"
+                >
+                  <option value="">Choose a unit</option>
+                  {units.filter((u) => u.is_active).map((u) => (
+                    <option key={u.id} value={u.id}>{u.name}</option>
+                  ))}
+                </select>
+                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400">
+                  <ChevronDownIcon className="size-4" />
+                </span>
+              </div>
+            </div>
+
+            {/* Requirements — merged with green checkmarks */}
+            <div className="space-y-2">
+              <p className={labelCls}>Report requirements</p>
+              <div className="overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white">
+                {[
+                  { key: "description_required", label: "Description required", hint: "Residents must describe the issue" },
+                  { key: "photo_required", label: "Photo required", hint: "Residents must attach at least one photo" },
+                  { key: "location_required", label: "Location required", hint: "Residents must pin where the issue is" },
+                ].map((item) => {
+                  const checked = Boolean(draft[item.key as keyof Draft])
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => setDraft((current) => ({ ...current, [item.key]: !checked }))}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-neutral-50"
+                    >
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-[15px] font-medium text-neutral-900">{item.label}</span>
+                        <span className="block text-[13px] text-neutral-500">{item.hint}</span>
+                      </span>
+                      {checked ? (
+                        <CircleCheck className="size-5 shrink-0 text-green-600" strokeWidth={2} />
+                      ) : (
+                        <span className="size-5 shrink-0 rounded-full border-[1.5px] border-neutral-300" />
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className={labelCls}>Community feed</p>
+              <button
+                type="button"
+                onClick={() => setDraft((current) => ({ ...current, public_feed_allowed: !(current?.public_feed_allowed ?? true) }))}
+                className="flex w-full items-center gap-3 rounded-[14px] border-[1.5px] border-neutral-200 px-4 py-3 text-left transition hover:bg-neutral-50"
+              >
+                <span className="flex-1">
+                  <span className="block text-[15px] font-medium text-neutral-900">Allow public sharing</span>
+                  <span className="block text-[13px] text-neutral-500">Residents can choose to show this report in the community feed</span>
+                </span>
+                {draft.public_feed_allowed !== false ? <CircleCheck className="size-5 text-green-600" /> : <span className="size-5 rounded-full border-[1.5px] border-neutral-300" />}
+              </button>
+            </div>
+
+            {/* Icon dropdown */}
+            <div className="space-y-2">
+              <p className={labelCls}>Icon</p>
+              <IconDropdown value={draft.icon_key || "tag"} onChange={(key) => setDraft((current) => ({ ...current, icon_key: key }))} />
+            </div>
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="mt-6 space-y-3">
             <button
               type="button"
+              disabled={saving || !draft.name?.trim() || Boolean(draft.id && originalDraft === draftSnapshot(draft))}
               onClick={() => void save()}
-              disabled={saving || !draft.name}
-              className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-55"
+              className="flex h-[52px] w-full items-center justify-center rounded-full bg-accent text-[17px] font-semibold text-white transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400"
             >
-              {saving ? "Saving…" : draft.id ? "Save changes" : "Create category"}
+              {saving ? "Saving\u2026" : draft.id ? "Save changes" : "Create category"}
             </button>
-            <button
-              type="button"
-              onClick={() => setDraft(null)}
-              disabled={saving}
-              className="rounded-xl border border-card-line bg-card px-4 py-2.5 text-sm font-semibold text-foreground transition hover:bg-tint"
-            >
-              Cancel
-            </button>
+            <SheetPrimaryButton disabled={saving} onClick={() => { setEditOpen(false); setDraft(null); setOriginalDraft(null) }}>Cancel</SheetPrimaryButton>
           </div>
-        </div>
-      ) : null}
+        </SheetDialog>
+      )}
 
-      <DataTable
-        rows={categories.filter((category) => category.is_active)}
-        columns={columns}
-        rowKey={(category) => String(category.id)}
-        loading={loading}
-        searchPlaceholder="Search categories"
-        searchMatches={(category, query) =>
-          `${category.name} ${category.code} ${category.description}`.toLowerCase().includes(query)
+      {/* Delete dialog */}
+      <SheetDialog
+        open={deleteOpen}
+        onClose={() => { setDeleteOpen(false); setDeleteTarget(null) }}
+        title={deleteTarget ? `Delete ${deleteTarget.name}?` : ""}
+        description="Concerns already filed under this category keep their history. If any exist, it is deactivated instead of deleted."
+        footer={
+          <div className="space-y-3">
+            <SheetPrimaryButton tone="danger" onClick={() => void confirmDelete()}>Delete category</SheetPrimaryButton>
+            <SheetPrimaryButton onClick={() => { setDeleteOpen(false); setDeleteTarget(null) }}>Cancel</SheetPrimaryButton>
+          </div>
         }
-        emptyTitle="No categories yet"
-        emptyHint="Use “New category” above to add what residents can report."
       />
     </ConfigShell>
   )

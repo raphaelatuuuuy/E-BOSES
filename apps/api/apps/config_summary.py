@@ -145,8 +145,16 @@ def _dispatch():
     covered_count = sum(1 for item in types if item in covered)
     labels = dict(categories)
     missing = [t for t in types if t not in covered]
+    
+    if not missing:
+        status = "All emergency types covered"
+    elif len(missing) == 1:
+        status = f"1 emergency type needs a unit"
+    else:
+        status = f"{len(missing)} emergency types need a unit"
+    
     return {
-        "status": f"{covered_count}/{len(types)} emergency types covered",
+        "status": status,
         "detail": (
             f"No unit answers: {', '.join(labels.get(item, item) for item in missing)}" if missing else "Every type has a responding unit"
         ),
@@ -160,10 +168,10 @@ def _geography():
     policy = MapDispatchPolicy.current()
     has_sms = bool(policy.emergency_sms_number)
     return {
-        "status": f"{policy.acceptance_radius_meters}m acceptance radius",
+        "status": f"{policy.acceptance_radius_meters}m acceptance zone",
         "detail": (
             f"Witness alerts {policy.witness_radius_meters}m · "
-            + ("SMS fallback set" if has_sms else "SMS fallback not set")
+            + ("SMS fallback ready" if has_sms else "No SMS fallback number")
         ),
         "needs_attention": not has_sms,
     }
@@ -204,7 +212,7 @@ def _verification():
     elif in_pipeline:
         status_text = f"{_plural(in_pipeline, 'ID')} being checked now"
     else:
-        status_text = "Running automatically"
+        status_text = "Set up a document"
 
     if resident_action:
         detail = f"{_plural(resident_action, 'resident')} must upload a clearer photo"

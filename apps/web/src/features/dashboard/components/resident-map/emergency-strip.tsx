@@ -6,46 +6,14 @@ import type { ResidentMapEmergency } from "@/features/dashboard/api"
 import { emergencyBrief, formatDistance } from "@/features/dashboard/lib/resident-map-utils"
 import { timeAgo } from "@/features/dashboard/lib/format"
 import { Fact, FactRow } from "@/components/ui/fact"
-import { StateMarker } from "@/components/ui/state-marker"
+import { StateGlyph, StateMarker } from "@/components/ui/state-marker"
 import { EmergencyCommunityComments } from "@/features/dashboard/components/emergencies/community-comments"
 
 /**
- * Ongoing-SOS UI for the resident alerts map: the floating top banner (shown
- * whenever any emergency is in the current filter), the compact list-preview
- * card, and the expanded detail panel. Grouped into one file since all three
- * are "emergency banner / ongoing-SOS strip" surfaces per the D1.2 brief.
+ * Ongoing-SOS UI for the resident alerts map: the compact list-preview card
+ * and the expanded detail panel. Grouped into one file since both are
+ * "emergency / ongoing-SOS strip" surfaces per the D1.2 brief.
  */
-
-/**
- * Floating banner over the map with the brief of the selected emergency.
- *
- * Only shows while an SOS is actually selected — the old "N ongoing SOSs"
- * count badge was removed per product request; the map already carries the
- * live red pins, so a count on top was noise.
- */
-export function EmergencyBanner({
-  selectedEmergency,
-}: {
-  selectedEmergency: ResidentMapEmergency | null
-}) {
-  if (!selectedEmergency) return null
-  const brief = emergencyBrief(selectedEmergency)
-
-  return (
-    <div className="pointer-events-none absolute inset-x-0 top-14 z-20 flex justify-center px-3 md:top-4 md:justify-start md:pl-4">
-      <div className="pointer-events-auto max-w-sm rounded-xl border border-neutral-200 bg-white px-3.5 py-2.5 shadow-md">
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-[15px] font-semibold text-neutral-900">{brief.title}</p>
-          <StateMarker
-            tone={brief.status.live ? "alarm" : "closed"}
-            label={brief.status.label}
-          />
-        </div>
-        <p className="mt-1 text-meta leading-snug text-neutral-500">{brief.line}</p>
-      </div>
-    </div>
-  )
-}
 
 /** Emergency list card — type, LIVE badge, pipeline status, place, note */
 export function EmergencyPreviewCard({
@@ -78,20 +46,24 @@ export function EmergencyPreviewCard({
         className="w-full px-3 py-3 text-left sm:px-3.5"
       >
         <div className="flex items-start gap-2.5 sm:gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-sos sm:size-10">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-severity-critical-surface text-sos sm:size-10">
             <AlertTriangleIcon className="size-5" strokeWidth={1.9} />
           </span>
           <div className="min-w-0 flex-1 overflow-hidden">
-            <p className="truncate text-row font-semibold text-neutral-900">{brief.title}</p>
-            <p className="mt-1 text-meta text-neutral-500">
-              {[dist, ago].filter(Boolean).join(" · ")}
+            <p className="truncate text-[13px] font-bold text-neutral-900 sm:text-[14px]">{brief.title}</p>
+            <p className="mt-0.5 flex items-center gap-x-1.5 text-[11px] text-neutral-500 sm:text-[12px]">
+              <span
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1.5 font-semibold",
+                  brief.status.live ? "text-sos" : "text-neutral-400",
+                )}
+              >
+                <StateGlyph tone={brief.status.live ? "alarm" : "closed"} />
+                {brief.status.label}
+              </span>
+              <span aria-hidden>·</span>
+              <span>{[dist, ago].filter(Boolean).join(" · ")}</span>
             </p>
-            <div className="mt-2">
-              <StateMarker
-                tone={brief.status.live ? "alarm" : "closed"}
-                label={brief.status.label}
-              />
-            </div>
           </div>
         </div>
       </button>
@@ -144,12 +116,11 @@ export function EmergencyDetailPanel({
         <p className="min-w-0 flex-1 truncate text-left text-[15px] font-semibold text-neutral-600">
           Emergency
         </p>
-        {st.live ? <StateMarker tone="alarm" label="Live" className="mr-2" /> : null}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6">
         <div className="flex items-start gap-3">
-          <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-sos">
+          <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-severity-critical-surface text-sos">
             <AlertTriangleIcon className="size-6" strokeWidth={1.9} />
           </span>
           <div className="min-w-0 flex-1">
@@ -159,12 +130,6 @@ export function EmergencyDetailPanel({
             </p>
           </div>
         </div>
-
-        <p className="mt-5 text-read leading-relaxed text-neutral-800">
-          {st.live
-            ? "This SOS is active. Help has been dispatched to the area. Stay clear if you are not involved."
-            : "This emergency is no longer active."}
-        </p>
 
         <FactRow className="mt-6">
           <Fact label="Status" value={<StateMarker tone={st.live ? "alarm" : "closed"} label={st.label} />} />
@@ -176,8 +141,6 @@ export function EmergencyDetailPanel({
               </span>
             }
           />
-          <Fact label="Reported" value={timeAgo(emergency.created_at) || "—"} />
-          <Fact label="Updated" value={timeAgo(emergency.updated_at) || "—"} />
         </FactRow>
 
         {/* Residents can say what they can see here, the same way they comment

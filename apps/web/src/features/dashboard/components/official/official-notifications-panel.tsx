@@ -11,18 +11,15 @@ import {
 } from "@/features/dashboard/components/notifications/notifications-panel"
 
 /**
- * The official's notifications — the shared panel with the official's filters
- * (Reports / Emergencies / Announcements) and routes (alert or report pages).
+ * The official's notifications — the shared panel with read-state filters and
+ * routes (alert or report pages).
  * Rendered as a desktop dialog / full-screen mobile sheet by
  * official-account-dialogs.tsx.
  */
 
 const FILTERS = [
-  { value: "all", label: "All" },
   { value: "unread", label: "Unread" },
-  { value: "reports", label: "Reports" },
-  { value: "emergencies", label: "Emergencies" },
-  { value: "announcements", label: "Announcements" },
+  { value: "read", label: "Read" },
 ]
 
 function typeGroup(item: NotificationItem): string | null {

@@ -53,5 +53,11 @@ export function rankFeed(concerns: Concern[], tab: string, origin: FeedOrigin | 
     return list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
   }
 
+  if (tab === "resolved") {
+    return list
+      .filter((concern) => concern.status === "resolved")
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  }
+
   return list.sort((a, b) => relevanceScore(b, from) - relevanceScore(a, from))
 }

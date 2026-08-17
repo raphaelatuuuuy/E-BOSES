@@ -859,60 +859,66 @@ def create_email_otp_challenge(email):
 
 def verify_email_otp_challenge(email, code, allow_verified=False):
     email = normalize_registration_email(email)
-    try:
-        challenge = EmailOTPChallenge.objects.filter(email=email).latest("created_at")
-    except EmailOTPChallenge.DoesNotExist as exc:
-        raise OTPVerificationError("No active email OTP challenge.") from exc
+    with transaction.atomic():
+        try:
+            challenge = EmailOTPChallenge.objects.select_for_update().filter(email=email).latest("created_at")
+        except EmailOTPChallenge.DoesNotExist as exc:
+            raise OTPVerificationError("No active email OTP challenge.") from exc
 
-    if challenge.consumed_at:
-        raise OTPVerificationError("This OTP has already been used.")
-    # Already verified earlier in signup (email step) — accept even if the 10-min
-    # window has passed, so finishing the multi-step form still works.
-    if challenge.verified_at:
-        if allow_verified:
-            return challenge
-        raise OTPVerificationError("This OTP has already been used.")
-    if challenge.is_expired:
-        raise OTPVerificationError("This OTP has expired.")
-    if challenge.attempts >= challenge.max_attempts:
-        raise OTPVerificationError("Too many OTP attempts.")
-    if not check_password(code, challenge.code_hash):
-        challenge.attempts += 1
-        challenge.save(update_fields=["attempts"])
+        if challenge.consumed_at:
+            raise OTPVerificationError("This OTP has already been used.")
+        # Already verified earlier in signup (email step) — accept even if the 10-min
+        # window has passed, so finishing the multi-step form still works.
+        if challenge.verified_at:
+            if allow_verified:
+                return challenge
+            raise OTPVerificationError("This OTP has already been used.")
+        if challenge.is_expired:
+            raise OTPVerificationError("This OTP has expired.")
+        if challenge.attempts >= challenge.max_attempts:
+            raise OTPVerificationError("Too many OTP attempts.")
+        invalid_code = not check_password(code, challenge.code_hash)
+        if invalid_code:
+            challenge.attempts += 1
+            challenge.save(update_fields=["attempts"])
+        else:
+            challenge.verified_at = timezone.now()
+            challenge.save(update_fields=["verified_at"])
+    if invalid_code:
         raise OTPVerificationError("Invalid OTP code.")
-
-    challenge.verified_at = timezone.now()
-    challenge.save(update_fields=["verified_at"])
     return challenge
 
 
 def verify_phone_otp_challenge(phone_number, code, allow_verified=False):
-    try:
-        challenge = PhoneOTPChallenge.objects.filter(
-            phone_number=phone_number,
-        ).latest("created_at")
-    except PhoneOTPChallenge.DoesNotExist as exc:
-        raise OTPVerificationError("No active phone OTP challenge.") from exc
+    with transaction.atomic():
+        try:
+            challenge = PhoneOTPChallenge.objects.select_for_update().filter(
+                phone_number=phone_number,
+            ).latest("created_at")
+        except PhoneOTPChallenge.DoesNotExist as exc:
+            raise OTPVerificationError("No active phone OTP challenge.") from exc
 
-    if challenge.consumed_at:
-        raise OTPVerificationError("This OTP has already been used.")
-    # Already verified earlier in signup (phone step) — accept on final register
-    # even if the original OTP window has elapsed.
-    if challenge.verified_at:
-        if allow_verified:
-            return challenge
-        raise OTPVerificationError("This OTP has already been used.")
-    if challenge.is_expired:
-        raise OTPVerificationError("This OTP has expired.")
-    if challenge.attempts >= challenge.max_attempts:
-        raise OTPVerificationError("Too many OTP attempts.")
-    if not check_password(code, challenge.code_hash):
-        challenge.attempts += 1
-        challenge.save(update_fields=["attempts"])
+        if challenge.consumed_at:
+            raise OTPVerificationError("This OTP has already been used.")
+        # Already verified earlier in signup (phone step) — accept on final register
+        # even if the original OTP window has elapsed.
+        if challenge.verified_at:
+            if allow_verified:
+                return challenge
+            raise OTPVerificationError("This OTP has already been used.")
+        if challenge.is_expired:
+            raise OTPVerificationError("This OTP has expired.")
+        if challenge.attempts >= challenge.max_attempts:
+            raise OTPVerificationError("Too many OTP attempts.")
+        invalid_code = not check_password(code, challenge.code_hash)
+        if invalid_code:
+            challenge.attempts += 1
+            challenge.save(update_fields=["attempts"])
+        else:
+            challenge.verified_at = timezone.now()
+            challenge.save(update_fields=["verified_at"])
+    if invalid_code:
         raise OTPVerificationError("Invalid OTP code.")
-
-    challenge.verified_at = timezone.now()
-    challenge.save(update_fields=["verified_at"])
     return challenge
 
 
@@ -1106,6 +1112,9 @@ def register_resident(validated_data, request_meta=None):
     phone_challenge.consumed_at = timezone.now()
     phone_challenge.save(update_fields=["consumed_at"])
     create_audit_log("auth.registered", actor=user, target_user=user, request_meta=request_meta)
+    if settings.AUTH_BACKEND == "supabase":
+        from .supabase_admin import provision_supabase_user
+        provision_supabase_user(user, validated_data["password"])
     queue_user_verification(user, trigger=VerificationCheck.Trigger.REGISTRATION)
     return user
 

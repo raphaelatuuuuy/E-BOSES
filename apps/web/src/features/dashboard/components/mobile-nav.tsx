@@ -8,6 +8,7 @@ import { useAuthSession } from "@/features/auth/auth-session"
 import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import { getActiveEmergency } from "@/features/dashboard/emergency-api"
 import { getRoleNav } from "@/features/dashboard/lib/navigation"
+import { hasCapability } from "@/features/dashboard/lib/capabilities"
 import { useAssignedDispatches } from "@/features/dashboard/hooks/use-assigned-dispatches"
 import { useOfficialBadges } from "@/features/dashboard/hooks/use-official-badges"
 import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/record/status"
@@ -127,6 +128,7 @@ function PillTab({
   ariaLabel,
   compact = false,
   alarmed = false,
+  staffStyle = false,
 }: {
   label: string
   icon: LucideIcon
@@ -137,11 +139,18 @@ function PillTab({
   ariaLabel?: string
   compact?: boolean
   alarmed?: boolean
+  staffStyle?: boolean
 }) {
   const className = cn(
-    "flex h-12 shrink-0 items-center justify-center rounded-full transition-all duration-200",
-    alarmed
-      ? "bg-gradient-to-b from-sos-bright to-sos text-white shadow-[0_6px_20px_rgba(242,59,53,0.38)] animate-sos-glow-blink gap-1.5 px-4"
+    "flex h-12 shrink-0 items-center justify-center rounded-full transition-all duration-300 ease-out",
+    staffStyle
+      ? alarmed
+        ? "gap-1.5 px-4 text-sos"
+        : active
+          ? cn("gap-1.5 text-brand-navy", compact ? "px-3" : "px-4")
+          : cn("text-neutral-500 hover:text-brand-navy", compact ? "w-11" : "w-12")
+      : alarmed
+        ? "bg-gradient-to-b from-sos-bright to-sos text-white shadow-[0_6px_20px_rgba(242,59,53,0.38)] animate-sos-glow-blink gap-1.5 px-4"
       : active
         ? cn("gap-1.5 bg-brand-navy text-white", compact ? "px-3" : "px-4")
         : cn(
@@ -152,8 +161,8 @@ function PillTab({
   const labelSpan = (
     <span
       className={cn(
-        "overflow-hidden whitespace-nowrap text-[10.5px] font-bold leading-none transition-all duration-200",
-        (active || alarmed) ? (compact ? "max-w-20 opacity-100" : "max-w-24 opacity-100") : "max-w-0 opacity-0",
+        "overflow-hidden whitespace-nowrap text-[12px] font-bold leading-none transition-[max-width,opacity] duration-300 ease-out",
+        active ? (compact ? "max-w-20 opacity-100" : "max-w-24 opacity-100") : "max-w-0 opacity-0",
       )}
     >
       {label}
@@ -167,8 +176,8 @@ function PillTab({
         aria-label={ariaLabel ?? label}
         className={className}
       >
-        <Icon className="size-5 shrink-0" strokeWidth={active || alarmed ? 2.4 : 1.8} fill="none" />
-        {(active || alarmed) ? labelSpan : null}
+        <Icon className={cn("size-5 shrink-0", alarmed && staffStyle && "animate-sos-icon-blink")} strokeWidth={active || alarmed ? 2.4 : 1.8} fill="none" />
+        {labelSpan}
       </Link>
     )
   }
@@ -182,7 +191,7 @@ function PillTab({
       className={className}
     >
       <Icon className="size-5 shrink-0" strokeWidth={active || alarmed ? 2.4 : 1.8} fill="none" />
-      {(active || alarmed) ? labelSpan : null}
+      {labelSpan}
     </button>
   )
 }
@@ -197,8 +206,9 @@ export function MobileNav() {
   const isResident = !isOfficialRole && !isResponderRole
 
   const nav = getRoleNav(isResponderRole ? "responder" : isOfficialRole ? "official" : "resident")
-  const navItems = nav.mobileItems
+  const navItems = nav.mobileItems.filter((item) => hasCapability(user?.capabilities, item.capability))
   const more = nav.more
+  const moreItems = more?.items.filter((item) => hasCapability(user?.capabilities, item.capability)) ?? []
   const moreActive = more ? more.isActive(location.pathname) : false
 
   const activeEmergencies = useOfficialBadges(isOfficialRole).emergencies ?? 0
@@ -227,8 +237,9 @@ export function MobileNav() {
                   icon={item.icon}
                   to={item.to}
                   active={active}
-                  compact={!isResident}
+                  compact
                   alarmed={hasActiveEmergency}
+                  staffStyle
                 />
               )
             })}
@@ -240,7 +251,8 @@ export function MobileNav() {
                 active={moreActive}
                 open={moreOpen}
                 onClick={() => setMoreOpen(true)}
-                compact={!isResident}
+                compact
+                staffStyle
               />
             ) : null}
 
@@ -256,7 +268,7 @@ export function MobileNav() {
               <SheetTitle>{more.label}</SheetTitle>
             </SheetHeader>
             <ul className="flex flex-col gap-0.5 px-2 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2">
-              {more.items.map((item) => {
+              {moreItems.map((item) => {
                 const active = item.isActive(location.pathname)
                 const Icon = item.icon
                 return (

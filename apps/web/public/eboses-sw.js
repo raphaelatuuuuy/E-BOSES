@@ -1,5 +1,5 @@
-self.__EBOSES_CACHE = "eboses-shell-v3"
-self.__EBOSES_SHELL = ["/", "/dashboard", "/manifest.webmanifest", "/contents/logo.png"]
+self.__EBOSES_CACHE = "eboses-shell-v4"
+self.__EBOSES_SHELL = ["/", "/dashboard", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"]
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {

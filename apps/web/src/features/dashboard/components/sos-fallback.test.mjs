@@ -97,8 +97,8 @@ test("golden fixtures render exactly what the backend parser expects", () => {
 
 test("buildPinnedCoordinateAddress keeps a usable, honest location when geocoding is unavailable", () => {
   assert.deepEqual(buildPinnedCoordinateAddress(14.6507, 121.1133), {
-    primary: "Pinned coordinates",
-    full: "Pinned coordinates: 14.650700, 121.113300",
+    primary: "Pinned location",
+    full: "Pinned location on the map",
   })
 })
 
@@ -107,8 +107,8 @@ test("isSosLocationReady accepts coordinate fallback but rejects an unconfirmed 
     isSosLocationReady({
       lat: 14.6507,
       lng: 121.1133,
-      address: "Pinned coordinates: 14.650700, 121.113300",
-      addressPrimary: "Pinned coordinates",
+      address: "Pinned location on the map",
+      addressPrimary: "Pinned location",
     }),
     true
   )

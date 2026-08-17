@@ -1,14 +1,18 @@
 "use client"
 
 import { useState } from "react"
-import { BellIcon } from "lucide-react"
+import { InboxIcon } from "lucide-react"
 
 import { SheetDialog } from "@/features/dashboard/components/sheet-dialog"
 
 import { useNotifications } from "@/features/dashboard/components/notification-context"
 import { ResponderProfilePanel } from "@/features/dashboard/components/responder/responder-profile-panel"
 import { ResponderNotificationsPanel } from "@/features/dashboard/components/responder/responder-notifications-panel"
+import { NotificationViewActions } from "@/features/dashboard/components/notifications/notifications-panel"
 import { useNotificationsPopGate } from "@/features/dashboard/components/notifications/notifications-event"
+
+const RESPONDER_DIALOG_THEME =
+  "staff-dark border-nav-border bg-nav-bg text-nav-text-active [&_.text-neutral-950]:text-nav-text-active [&_.text-neutral-900]:text-nav-text-active [&_.text-neutral-800]:text-nav-text [&_.text-neutral-700]:text-nav-muted [&_.text-neutral-600]:text-nav-muted [&_.text-neutral-500]:text-nav-muted [&_.text-neutral-400]:text-nav-muted [&_.bg-white]:bg-nav-raised [&_.bg-neutral-50]:bg-nav-raised [&_.bg-neutral-100]:bg-nav-active [&_.bg-neutral-100]:text-nav-text-active [&_.bg-neutral-200]:bg-nav-raised [&_.border-neutral-200]:border-nav-border [&_[data-notification-actions]]:!bg-nav-raised [&_[data-slot=sheet-icon-button]:hover]:bg-brand-orange/10 [&_[data-slot=sheet-icon-button]:hover]:text-brand-orange"
 
 /**
  * The responder's personal surfaces. Profile and Notifications both open as
@@ -43,15 +47,15 @@ export function ResponderNotificationsButton() {
         aria-label={ariaLabel}
         className="group relative flex size-10 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-nav-raised"
       >
-        <BellIcon className="size-5 text-nav-muted group-hover:text-nav-text-active" />
+        <InboxIcon className="size-5 text-nav-muted group-hover:text-nav-text-active" />
         {unreadCount > 0 ? (
-          <span className="absolute -right-0.5 -top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-brand-orange px-1 text-[10px] font-bold leading-none text-brand-orange-ink tabular-nums">
+          <span className="absolute -right-1 -top-1 text-[11px] font-semibold leading-none text-nav-muted tabular-nums">
             {unreadCount > 99 ? "99+" : unreadCount}
           </span>
         ) : null}
       </button>
       {open ? (
-        <SheetDialog open onClose={() => setOpen(false)} title="Notifications" size="wide">
+        <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => setOpen(false)} title="Notifications" size="wide" actions={<NotificationViewActions dark />}>
           <ResponderNotificationsPanel
             variant="sheet"
             onClose={() => setOpen(false)}
@@ -82,7 +86,7 @@ export function ResponderNotificationsDialog({
   if (!open) return null
 
   return (
-    <SheetDialog open onClose={() => onOpenChange(false)} title="Notifications" size="wide">
+    <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => onOpenChange(false)} title="Notifications" size="wide" actions={<NotificationViewActions dark initialView={initialFilter === "archived" ? "archived" : "inbox"} />}>
       <ResponderNotificationsPanel
         variant="sheet"
         onClose={() => onOpenChange(false)}
@@ -124,7 +128,7 @@ export function ResponderProfileDialog({
   if (!open) return null
 
   return (
-    <SheetDialog open onClose={() => onOpenChange(false)} title="Profile" size="wide">
+    <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => onOpenChange(false)} title="Profile" size="wide">
       <ResponderProfilePanel />
     </SheetDialog>
   )

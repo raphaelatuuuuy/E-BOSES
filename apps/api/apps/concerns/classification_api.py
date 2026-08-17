@@ -44,7 +44,7 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
             "id", "nlp_provider", "text_model",
             "text_relevance_threshold", "duplicate_similarity_threshold",
             "minimum_description_length", "mismatch_action", "flag_suspicious", "flag_duplicates",
-            "flag_irrelevant", "notify_reviewer", "suspicious_terms", "category_keywords",
+            "flag_irrelevant", "suspicious_terms", "category_keywords",
             "report_duplicate_detection_enabled", "report_duplicate_action",
             "report_duplicate_lookback_days", "report_duplicate_distance_meters",
             "report_duplicate_similarity_threshold", "report_duplicate_location_precision",
@@ -99,12 +99,15 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
         since = timezone.now() - timedelta(days=30)
         assessments = ConcernAiAssessment.objects.filter(updated_at__gte=since)
         completed = assessments.filter(status=ConcernAiAssessment.Status.COMPLETED)
-        flagged = assessments.exclude(status=ConcernAiAssessment.Status.COMPLETED).count() + completed.filter(category_match=False).count()
+        rejected = Concern.objects.filter(
+            updated_at__gte=since,
+            validation_status=Concern.ValidationStatus.REJECTED,
+        ).count()
         return {
             "image_accuracy": None,
             "text_accuracy": None,
             "auto_validated": completed.filter(category_match=True).count(),
-            "flagged": flagged,
+            "rejected": rejected,
             "tested": assessments.count(),
         }
 
@@ -325,15 +328,20 @@ class ResidentConcernPrecheckView(APIView):
         if not user_has_role_permission(request.user, "concerns.create"):
             return Response({"detail": "Only residents can check reports."}, status=status.HTTP_403_FORBIDDEN)
         selected_category = str(request.data.get("category", ""))
-        if selected_category not in Concern.Category.values:
+        category_ref = ConcernCategory.objects.filter(code=selected_category, is_active=True).first()
+        if not category_ref and selected_category not in Concern.Category.values:
             return Response({"category": ["Choose a valid concern category."]}, status=status.HTTP_400_BAD_REQUEST)
         title = str(request.data.get("title", ""))[:160]
         description = str(request.data.get("description", ""))[:5000]
-        if not description.strip():
+        if category_ref and category_ref.description_required and len(description.strip()) < 20:
             return Response({"description": ["Describe the issue before submitting."]}, status=status.HTTP_400_BAD_REQUEST)
+        uploaded = request.FILES.get("media") or request.FILES.get("file")
+        if category_ref and category_ref.photo_required and not uploaded:
+            return Response({"media": ["Add at least one clear photo as evidence."]}, status=status.HTTP_400_BAD_REQUEST)
+        if category_ref and category_ref.location_required and (request.data.get("latitude") is None or request.data.get("longitude") is None):
+            return Response({"address": ["Pin where the issue is located."]}, status=status.HTTP_400_BAD_REQUEST)
 
         config = ConcernClassificationConfiguration.current()
-        uploaded = request.FILES.get("media") or request.FILES.get("file")
         image, _image_error = _prepared_image_from_upload(uploaded)
         result = classification_payload(
             title=title,

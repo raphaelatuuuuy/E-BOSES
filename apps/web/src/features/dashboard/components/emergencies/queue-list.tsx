@@ -82,9 +82,37 @@ export function EmergencyAppealsPanel({ appeals, onUpdated }: { appeals: Emergen
   if (appeals.length === 0) return null
   return (
     <section className="rounded-panel border border-severity-moderate/40 bg-severity-moderate-surface/50 p-5">
-      <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-semibold text-brand-navy">Emergency review requests</p><p className="mt-1 text-xs font-semibold text-subtle-foreground">Decide resident requests from cancelled or disputed incidents with an auditable note.</p></div><span className="rounded-control bg-card px-2.5 py-1 text-xs font-semibold text-severity-moderate-ink">{appeals.filter((item) => item.status === "submitted").length} pending</span></div>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-brand-navy">Emergency review requests</p>
+          <p className="mt-1 text-xs font-semibold text-subtle-foreground">Decide resident requests from cancelled or disputed incidents with an auditable note.</p>
+        </div>
+        <span className="rounded-control bg-card px-2.5 py-1 text-xs font-semibold text-severity-moderate-ink">{appeals.filter((item) => item.status === "submitted").length} pending</span>
+      </div>
       <div className="mt-4 grid gap-3 xl:grid-cols-2">
-        {appeals.map((appeal) => <article key={appeal.id} className="rounded-panel border border-severity-moderate/40 bg-card p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold capitalize text-brand-navy">{appeal.alert_type || "Emergency"} incident</p><p className="mt-1 text-xs font-semibold text-subtle-foreground">{appeal.appellant.full_name} · {formatTime(appeal.created_at)}</p></div><span className="rounded-control border border-card-line px-2 py-1 text-[10px] font-semibold text-muted-foreground">{appeal.status}</span></div><p className="mt-3 text-xs font-semibold leading-5 text-muted-foreground">{appeal.reason}</p>{appeal.status === "submitted" ? <><textarea rows={2} maxLength={255} value={notes[appeal.id] || ""} onChange={(event) => setNotes((current) => ({ ...current, [appeal.id]: event.target.value }))} placeholder="Decision note" className="mt-3 w-full resize-none rounded-panel border border-card-line-strong p-3 text-xs font-semibold text-brand-navy outline-none focus:border-brand-orange" /><div className="mt-2 grid grid-cols-2 gap-2"><Button type="button" size="sm" variant="outline" disabled={busy === appeal.id} onClick={() => void decide(appeal, "denied")} className="border-severity-critical/40 text-severity-critical-ink">Deny</Button><Button type="button" size="sm" disabled={busy === appeal.id} onClick={() => void decide(appeal, "approved")} className="bg-status-closed text-white">Approve</Button></div></> : appeal.decision_note ? <p className="mt-3 rounded-control bg-card-raised p-3 text-xs font-semibold text-muted-foreground">Decision: {appeal.decision_note}</p> : null}</article>)}
+        {appeals.map((appeal) => (
+          <article key={appeal.id} className="rounded-panel border border-severity-moderate/40 bg-card p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold capitalize text-brand-navy">{appeal.alert_type || "Emergency"} incident</p>
+                <p className="mt-1 text-xs font-semibold text-subtle-foreground">{appeal.appellant.full_name} · {formatTime(appeal.created_at)}</p>
+              </div>
+              <span className="rounded-control border border-card-line px-2 py-1 text-[10px] font-semibold text-muted-foreground">{appeal.status}</span>
+            </div>
+            <p className="mt-3 text-xs font-semibold leading-5 text-muted-foreground">{appeal.reason}</p>
+            {appeal.status === "submitted" ? (
+              <>
+                <textarea rows={2} maxLength={255} value={notes[appeal.id] || ""} onChange={(event) => setNotes((current) => ({ ...current, [appeal.id]: event.target.value }))} placeholder="Decision note" className="mt-3 w-full resize-none rounded-panel border border-card-line-strong p-3 text-xs font-semibold text-brand-navy outline-none focus:border-brand-orange" />
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <Button type="button" size="sm" variant="outline" disabled={busy === appeal.id} onClick={() => void decide(appeal, "denied")} className="border-severity-critical/40 text-severity-critical-ink">Deny</Button>
+                  <Button type="button" size="sm" disabled={busy === appeal.id} onClick={() => void decide(appeal, "approved")} className="bg-status-closed text-white">Approve</Button>
+                </div>
+              </>
+            ) : appeal.decision_note ? (
+              <p className="mt-3 rounded-control bg-card-raised p-3 text-xs font-semibold text-muted-foreground">Decision: {appeal.decision_note}</p>
+            ) : null}
+          </article>
+        ))}
       </div>
     </section>
   )

@@ -874,13 +874,17 @@ function AlertsLeafletMapInner({
     <div className="absolute inset-0 overflow-hidden bg-nav-bg">
       <div ref={containerRef} className="absolute inset-0" />
 
-      {/* One control column, same order and geometry as the resident map:
-          Home, Locate, Zoom, then weather. The official surface adds the
-          acceptance-zone editor below them. */}
+      {/* One control column. Locate sits below the zoom controls. */}
       <div className="absolute right-3 top-3 z-[600] flex flex-col items-end gap-2">
         <MapControlStack tone="dark">
           <MapControlButton tone="dark" label="Frame the barangay" onClick={goHomeOnMap}>
             <HomeIcon className="size-5" strokeWidth={1.9} />
+          </MapControlButton>
+          <MapControlButton tone="dark" divider label="Zoom in" onClick={() => mapRef.current?.zoomIn()}>
+            <PlusIcon className="size-5" strokeWidth={2.1} />
+          </MapControlButton>
+          <MapControlButton tone="dark" divider label="Zoom out" onClick={() => mapRef.current?.zoomOut()}>
+            <MinusIcon className="size-5" strokeWidth={2.1} />
           </MapControlButton>
           <MapControlButton
             tone="dark"
@@ -890,12 +894,6 @@ function AlertsLeafletMapInner({
             loading={locating}
           >
             <NavigationIcon className="size-5" strokeWidth={1.9} />
-          </MapControlButton>
-          <MapControlButton tone="dark" divider label="Zoom in" onClick={() => mapRef.current?.zoomIn()}>
-            <PlusIcon className="size-5" strokeWidth={2.1} />
-          </MapControlButton>
-          <MapControlButton tone="dark" divider label="Zoom out" onClick={() => mapRef.current?.zoomOut()}>
-            <MinusIcon className="size-5" strokeWidth={2.1} />
           </MapControlButton>
         </MapControlStack>
 
@@ -989,4 +987,3 @@ function AlertsLeafletMapInner({
 // Memoised because it owns the Leaflet instance: an unmemoised parent render
 // used to re-run every layer effect and rebuild every polyline and pin.
 export const AlertsLeafletMap = memo(AlertsLeafletMapInner)
-

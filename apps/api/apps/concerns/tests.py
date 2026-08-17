@@ -368,7 +368,7 @@ class ResidentDashboardAPITests(APITestCase):
         concern.ai_assessment.refresh_from_db()
         self.assertEqual(concern.ai_assessment.status, ConcernAiAssessment.Status.NOT_CONFIGURED)
         self.assertIn("Concern", output.getvalue())
-        self.assertIn("review", concern.ai_assessment.recommendation.lower())
+        self.assertIn("routing", concern.ai_assessment.recommendation.lower())
 
     @override_settings(OLLAMA_API_KEY="test-key")
     def test_concern_ai_task_runs_base_text_assessment_without_external_model(self):
@@ -466,10 +466,9 @@ class ResidentDashboardAPITests(APITestCase):
         assessment = process_concern_ai(concern.id)
 
         self.assertEqual(assessment.status, ConcernAiAssessment.Status.NOT_CONFIGURED)
-        self.assertEqual(assessment.recommended_action, "manual_review")
-        self.assertIn("review", assessment.recommendation.lower())
+        self.assertEqual(assessment.recommended_action, "accept")
         concern.refresh_from_db()
-        self.assertEqual(concern.validation_status, Concern.ValidationStatus.PENDING)
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.ACCEPTED)
 
     def test_duplicate_concern_media_is_rejected_without_creating_report(self):
         response = self.client.post(
@@ -964,6 +963,7 @@ class ResidentDashboardAPITests(APITestCase):
             title="Queue drainage",
             category=Concern.Category.INFRASTRUCTURE,
             status=Concern.Status.SUBMITTED,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
         )
         Concern.objects.create(
             reporter=self.resident,
@@ -1160,42 +1160,23 @@ class PhaseOneFoundationAPITests(APITestCase):
             matched.tracking_id,
         )
 
-    def test_official_ai_review_requires_reason_and_is_audited(self):
+    def test_manual_ai_review_endpoint_is_removed(self):
         concern = Concern.objects.create(
             reporter=self.resident,
             title="AI review target",
             description="A report that requires an official AI decision.",
             category=Concern.Category.INFRASTRUCTURE,
         )
-        self.client.force_authenticate(self.resident)
-        forbidden = self.client.post(
-            f"/api/concerns/{concern.pk}/ai-review/",
-            {"decision": "related", "reason": "Resident attempt"},
-            format="json",
-        )
-        self.assertEqual(forbidden.status_code, status.HTTP_403_FORBIDDEN)
-
         self.client.force_authenticate(self.official)
-        missing_reason = self.client.post(
-            f"/api/concerns/{concern.pk}/ai-review/",
-            {"decision": "related", "reason": "short"},
-            format="json",
-        )
-        self.assertEqual(missing_reason.status_code, status.HTTP_400_BAD_REQUEST)
-
         response = self.client.post(
             f"/api/concerns/{concern.pk}/ai-review/",
-            {"decision": "related", "reason": "Image and description match the selected category."},
+            {"decision": "related", "reason": "This endpoint no longer exists."},
             format="json",
         )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        assessment = ConcernAiAssessment.objects.get(concern=concern)
-        self.assertEqual(assessment.official_decision, "related")
-        self.assertEqual(assessment.official_reviewer_id, self.official.pk)
-        self.assertTrue(AuditLog.objects.filter(action="concern.ai_assessment_reviewed", actor=self.official).exists())
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     @override_settings(OLLAMA_API_KEY="test-key")
-    def test_ai_pipeline_category_mismatch_flags_for_review_without_touching_validation_gate(self):
+    def test_ai_pipeline_category_mismatch_is_applied_automatically(self):
         concern = Concern.objects.create(
             reporter=self.resident,
             title="Blocked drainage report",
@@ -1205,7 +1186,13 @@ class PhaseOneFoundationAPITests(APITestCase):
             status=Concern.Status.SUBMITTED,
         )
 
-        assessment = process_concern_ai(concern.pk)
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.return_value = gemma_result(
+                category=Concern.Category.ENVIRONMENT,
+                selected_category_match=False,
+                recommended_action="accept",
+            )
+            assessment = process_concern_ai(concern.pk)
 
         self.assertFalse(assessment.category_match)
         self.assertTrue(assessment.flagged)
@@ -1215,11 +1202,10 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(mismatch_entry["configured_action"], ConcernClassificationConfiguration.current().mismatch_action)
 
         concern.refresh_from_db()
-        # Soft gate: the AI never moves the real workflow state, only the
-        # advisory summary text changes.
         self.assertEqual(concern.validation_status, Concern.ValidationStatus.ACCEPTED)
         self.assertEqual(concern.status, Concern.Status.SUBMITTED)
-        self.assertIn("flagged", concern.validation_summary.lower())
+        self.assertEqual(concern.category, Concern.Category.ENVIRONMENT)
+        self.assertEqual(concern.validation_summary, "Automated validation passed.")
 
     @override_settings(OLLAMA_API_KEY="test-key")
     def test_ai_pipeline_clean_run_is_not_flagged(self):
@@ -1241,11 +1227,11 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertFalse(assessment.flagged)
         self.assertEqual(assessment.flag_reasons, [])
         concern.refresh_from_db()
-        self.assertEqual(concern.validation_summary, "AI checks passed; cleared for official review.")
+        self.assertEqual(concern.validation_summary, "Automated validation passed.")
         self.assertEqual(concern.validation_status, Concern.ValidationStatus.ACCEPTED)
 
     @override_settings(OLLAMA_API_KEY="test-key")
-    def test_flagged_completion_notifies_each_verified_official_once(self):
+    def test_flagged_completion_does_not_create_ai_review_notifications(self):
         from apps.concerns.tasks import process_concern_ai_task
 
         concern = Concern.objects.create(
@@ -1265,10 +1251,10 @@ class PhaseOneFoundationAPITests(APITestCase):
             recipient=self.official,
             concern=concern,
         )
-        self.assertEqual(notifications.count(), 1)
+        self.assertEqual(notifications.count(), 0)
 
     @override_settings(OLLAMA_API_KEY="test-key")
-    def test_managed_concern_list_ai_flagged_filter_excludes_after_official_decision(self):
+    def test_managed_concern_list_ignores_removed_ai_filter(self):
         concern = Concern.objects.create(
             reporter=self.resident,
             title="Blocked drainage report",
@@ -1280,23 +1266,12 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertTrue(concern.ai_assessment.flagged)
 
         self.client.force_authenticate(self.official)
-        flagged_response = self.client.get("/api/concerns/manage/?ai=flagged")
-        self.assertEqual(flagged_response.status_code, status.HTTP_200_OK)
-        self.assertIn(concern.pk, [item["id"] for item in flagged_response.data])
-
-        review_response = self.client.post(
-            f"/api/concerns/{concern.pk}/ai-review/",
-            {"decision": "needs_review", "reason": "Needs a second look from the barangay office."},
-            format="json",
-        )
-        self.assertEqual(review_response.status_code, status.HTTP_200_OK)
-
-        excluded_response = self.client.get("/api/concerns/manage/?ai=flagged")
-        self.assertEqual(excluded_response.status_code, status.HTTP_200_OK)
-        self.assertNotIn(concern.pk, [item["id"] for item in excluded_response.data])
+        response = self.client.get("/api/concerns/manage/?ai=flagged")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn(concern.pk, [item["id"] for item in response.data])
 
     @override_settings(OLLAMA_API_KEY="test-key")
-    def test_ai_review_related_decision_clears_flag_but_keeps_flag_reasons(self):
+    def test_ai_assessment_is_read_only_for_officials(self):
         concern = Concern.objects.create(
             reporter=self.resident,
             title="Blocked drainage report",
@@ -1309,20 +1284,10 @@ class PhaseOneFoundationAPITests(APITestCase):
         original_reasons = concern.ai_assessment.flag_reasons
 
         self.client.force_authenticate(self.official)
-        response = self.client.post(
-            f"/api/concerns/{concern.pk}/ai-review/",
-            {"decision": "related", "reason": "Confirmed with the resident; this report is legitimate."},
-            format="json",
-        )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-
+        response = self.client.post(f"/api/concerns/{concern.pk}/ai-review/", {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         concern.ai_assessment.refresh_from_db()
-        self.assertFalse(concern.ai_assessment.flagged)
         self.assertEqual(concern.ai_assessment.flag_reasons, original_reasons)
-        self.assertEqual(concern.ai_assessment.official_decision, "related")
-        # Clearing the flag never touches the concern's real workflow state.
-        concern.refresh_from_db()
-        self.assertEqual(concern.status, Concern.Status.SUBMITTED)
 
     def test_resident_account_request_and_sos_setting_are_persisted(self):
         self.client.force_authenticate(self.resident)
@@ -1363,7 +1328,12 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(official_list_response.data[0]["reason"], ContentFlag.Reason.FALSE_INFO)
 
     def test_role_dashboard_summaries_return_real_counts(self):
-        Concern.objects.create(reporter=self.resident, title="Pending", status=Concern.Status.SUBMITTED)
+        Concern.objects.create(
+            reporter=self.resident,
+            title="Pending",
+            status=Concern.Status.SUBMITTED,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
         Concern.objects.create(reporter=self.resident, title="Appeal", status=Concern.Status.APPEALED)
         alert = EmergencyAlert.objects.create(
             reporter=self.resident,
@@ -1392,7 +1362,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(resident_response.data["unread_notifications"], 1)
         self.assertEqual(resident_response.data["open_account_requests"], 1)
         self.assertEqual(official_denied.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertEqual(official_response.data["pending_reviews"], 1)
+        self.assertEqual(official_response.data["new_concerns"], 1)
         self.assertEqual(official_response.data["active_emergencies"], 1)
         self.assertEqual(official_response.data["responders_on_duty"], 1)
         self.assertEqual(responder_response.data["assigned_active_emergencies"], 1)

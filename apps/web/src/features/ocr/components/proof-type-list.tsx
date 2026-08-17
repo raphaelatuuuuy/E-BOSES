@@ -16,10 +16,8 @@ export function ProofTypeList(props: {
   onAdd: () => void
   onEdit: (docKey: string) => void
   onRemove: (docKey: string) => void
-  onToggleAvailable: (docKey: string, enabled: boolean) => void
 }) {
-  const { documents, saving, onAdd, onEdit, onRemove, onToggleAvailable } =
-    props
+  const { documents, saving, onAdd, onEdit, onRemove } = props
   const [pendingRemoveKey, setPendingRemoveKey] = useState<string | null>(null)
   const [offset, setOffset] = useState(0)
   const visible = documents.slice(offset, offset + PAGE_SIZE)
@@ -74,18 +72,19 @@ export function ProofTypeList(props: {
               return (
                 <li
                   key={doc.key}
-                  className="grid grid-cols-1 gap-x-8 gap-y-3 border-b border-neutral-200 py-6 last:border-b-0 sm:grid-cols-[130px_minmax(0,1fr)_auto]"
+                  className="grid grid-cols-1 gap-x-8 gap-y-3 border-b border-neutral-200 py-6 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto]"
                 >
-                  {/* No switch. A toggle in a list row reads as a setting you
-                      are about to change by accident; the state is a fact about
-                      the row, and changing it is a named action on the right. */}
-                  <p className="text-meta text-neutral-500">
-                    {available ? "On sign-up" : "Hidden"}
-                  </p>
-
                   <div className="min-w-0">
                     <p className="text-row text-brand-navy">{displayName}</p>
                     <dl className="mt-3 flex flex-wrap gap-x-8 gap-y-2">
+                      <div>
+                        <dt className="text-meta text-neutral-400">
+                          Status
+                        </dt>
+                        <dd className="mt-0.5 text-meta text-brand-navy">
+                          {available ? "Visible on sign-up" : "Hidden"}
+                        </dd>
+                      </div>
                       <div>
                         <dt className="text-meta text-neutral-400">
                           Photos needed
@@ -108,14 +107,6 @@ export function ProofTypeList(props: {
                   </div>
 
                   <div className="flex shrink-0 items-center gap-5 border-t border-neutral-200 pt-3 sm:border-0 sm:pt-0">
-                    <button
-                      type="button"
-                      onClick={() => onToggleAvailable(doc.key, !available)}
-                      disabled={saving}
-                      className="text-meta text-neutral-500 transition-colors hover:text-brand-navy disabled:text-neutral-300"
-                    >
-                      {available ? "Hide" : "Show"}
-                    </button>
                     <button
                       type="button"
                       onClick={() => onEdit(doc.key)}

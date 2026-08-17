@@ -33,7 +33,7 @@ export function HomeRail({
 }) {
   return (
     <aside className="resident-home-rail flex w-full min-w-0 flex-col gap-2.5 self-start pb-2">
-      <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+      <div className="overflow-hidden rounded-lg border border-neutral-300 bg-white">
         <Link
           to="/dashboard/alerts-map"
           className="flex min-w-0 items-center gap-3 px-3.5 py-3 no-underline transition-colors hover:bg-neutral-50"
@@ -86,7 +86,7 @@ export function HomeRail({
         <Link
           to="/dashboard/alerts-map"
           className={cn(
-            "flex items-center justify-between border-t border-neutral-200 px-3.5 py-2.5 font-semibold no-underline transition-colors",
+            "flex items-center justify-between border-t border-neutral-300 px-3.5 py-2.5 font-semibold no-underline transition-colors",
             hasOngoingAlerts
               ? "text-sos hover:bg-sos/10 hover:text-sos"
               : "text-neutral-500 hover:bg-neutral-50 hover:text-neutral-700",
@@ -103,8 +103,8 @@ export function HomeRail({
 
       <EventCalendar events={events} />
 
-      <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-        <div className="border-b border-neutral-200 p-3">
+      <div className="overflow-hidden rounded-lg border border-neutral-300 bg-white">
+        <div className="border-b border-neutral-300 p-3">
           <div className="aspect-[16/10] w-full overflow-hidden rounded-lg bg-tint">
             <img
               src="/contents/marikina-area-2.webp"
@@ -125,7 +125,7 @@ export function HomeRail({
           type="button"
           onClick={onCreateReport}
           className={cn(
-            "flex w-full items-center justify-between border-t border-neutral-200 px-3.5 py-2.5 text-left font-semibold text-neutral-500 transition-colors hover:bg-neutral-50 hover:text-neutral-700",
+            "flex w-full items-center justify-between border-t border-neutral-300 px-3.5 py-2.5 text-left font-semibold text-neutral-500 transition-colors hover:bg-neutral-50 hover:text-neutral-700",
             FS.railLink,
           )}
         >

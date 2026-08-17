@@ -5,7 +5,7 @@ Django backend for the E-Boses barangay civic engagement platform.
 ## Prerequisites
 
 - Python 3.11+
-- PostgreSQL 16+ with PostGIS
+- PostgreSQL 14+; PostGIS is optional when `ENABLE_GIS` is enabled
 - Redis 7+ (for WebSocket layer and caching)
 
 ## Local Setup
@@ -97,6 +97,8 @@ apps/api/
 - `apps.concerns` owns community concern intake, categorization, media evidence, geospatial filtering, and concern status history.
 - `apps.emergencies` owns SOS/emergency alert intake, severity/status transitions, responder assignment, and response timelines.
 - `apps.notifications` owns in-app notifications, device delivery, WebSocket fan-out, and read/unread state.
+
+Concern intake uses automatic validation before the official work queue. Clear unrelated or incomplete content is rejected with a reason. Category mismatches are corrected, possible duplicates are linked without merging, and a model outage fails open so a real report is not lost. There is no manual AI-review endpoint.
 
 ## Backend Architecture Conventions
 

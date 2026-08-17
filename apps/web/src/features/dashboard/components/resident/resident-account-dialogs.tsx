@@ -2,14 +2,14 @@
 
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { BellIcon, SettingsIcon } from "lucide-react"
+import { InboxIcon, SettingsIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
 import { SheetDialog, SheetIconButton } from "@/features/dashboard/components/sheet-dialog"
 
 import { useNotifications } from "@/features/dashboard/components/notification-context"
-import { NotificationsPanel } from "@/features/dashboard/components/notifications/notifications-panel"
+import { NotificationViewActions, NotificationsPanel } from "@/features/dashboard/components/notifications/notifications-panel"
 import { createResidentNotificationsConfig } from "@/features/dashboard/components/notifications/resident-config"
 import { useNotificationsPopGate } from "@/features/dashboard/components/notifications/notifications-event"
 import { SettingsWorkspace } from "@/features/dashboard/components/settings/settings-workspace"
@@ -48,17 +48,17 @@ export function ResidentNotificationsButton() {
           )}
           aria-hidden="true"
         >
-          <BellIcon className="size-full" />
+          <InboxIcon className="size-full" />
         </span>
         {unreadCount > 0 ? (
-          <span className="absolute -right-0.5 -top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-brand-orange px-1 text-[10px] font-bold leading-none text-white tabular-nums">
+          <span className="absolute -right-1 -top-1 text-[11px] font-semibold leading-none text-neutral-700 tabular-nums">
             {unreadCount > 99 ? "99+" : unreadCount}
           </span>
         ) : null}
       </button>
 
       {open ? (
-        <SheetDialog open onClose={() => setOpen(false)} title="Notifications" size="wide">
+        <SheetDialog open onClose={() => setOpen(false)} title="Notifications" size="wide" actions={<NotificationViewActions />}>
           <NotificationsPanel config={config} variant="sheet" onClose={() => setOpen(false)} />
         </SheetDialog>
       ) : null}
@@ -139,7 +139,7 @@ export function ResidentNotificationsDialog({
   const config = createResidentNotificationsConfig(navigate)
 
   return (
-    <SheetDialog open onClose={() => onOpenChange(false)} title="Notifications" size="wide">
+    <SheetDialog open onClose={() => onOpenChange(false)} title="Notifications" size="wide" actions={<NotificationViewActions initialView={initialFilter === "archived" ? "archived" : "inbox"} />}>
       <NotificationsPanel
         config={config}
         variant="sheet"

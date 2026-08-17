@@ -282,6 +282,7 @@ class ConcernCategory(models.Model):
     photo_required = models.BooleanField(default=False)
     description_required = models.BooleanField(default=True)
     location_required = models.BooleanField(default=True)
+    public_feed_allowed = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -529,12 +530,6 @@ class ConcernAiAssessment(models.Model):
         COMPLETED = "completed", "Completed"
         FAILED = "failed", "Failed"
 
-    class OfficialDecision(models.TextChoices):
-        RELATED = "related", "Related"
-        IRRELEVANT = "irrelevant", "Irrelevant"
-        SUSPICIOUS = "suspicious", "Suspicious"
-        NEEDS_REVIEW = "needs_review", "Needs review"
-
     concern = models.OneToOneField(Concern, on_delete=models.CASCADE, related_name="ai_assessment")
     status = models.CharField(max_length=24, choices=Status.choices, default=Status.NOT_CONFIGURED)
     # Plain-language object names Gemma reports seeing in the photo. Free text,
@@ -564,10 +559,6 @@ class ConcernAiAssessment(models.Model):
     raw_result = models.JSONField(default=dict, blank=True)
     flagged = models.BooleanField(default=False)
     flag_reasons = models.JSONField(default=list, blank=True)
-    official_decision = models.CharField(max_length=24, choices=OfficialDecision.choices, blank=True)
-    official_reason = models.TextField(blank=True)
-    official_reviewer = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="ai_assessment_reviews")
-    official_reviewed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -586,14 +577,13 @@ class ConcernClassificationConfiguration(models.Model):
     """
 
     class MismatchAction(models.TextChoices):
-        REVIEW = "manual_review", "Flag for official review"
+        AUTO_CORRECT = "auto_correct", "Use detected category"
         REJECT = "reject", "Reject automatically"
         RESUBMIT = "request_resubmission", "Request resubmission"
 
     class ReportDuplicateAction(models.TextChoices):
         WARN = "warn", "Warn resident"
         BLOCK = "block", "Block submission"
-        OFFICIAL_REVIEW = "official_review", "Submit but flag for official review"
 
     nlp_provider = models.CharField(max_length=32, default="ollama_cloud")
     nlp_model = models.CharField(max_length=120, default="gemma4:31b")
@@ -606,13 +596,12 @@ class ConcernClassificationConfiguration(models.Model):
     report_duplicate_similarity_threshold = models.FloatField(default=0.88)
     report_duplicate_location_precision = models.PositiveSmallIntegerField(default=4)
     minimum_description_length = models.PositiveSmallIntegerField(default=20)
-    mismatch_action = models.CharField(max_length=32, choices=MismatchAction.choices, default=MismatchAction.REVIEW)
+    mismatch_action = models.CharField(max_length=32, choices=MismatchAction.choices, default=MismatchAction.AUTO_CORRECT)
     duplicate_detection_enabled = models.BooleanField(default=True)
     resolved_match_detection_enabled = models.BooleanField(default=True)
     resolved_match_lookback_days = models.PositiveIntegerField(default=90)
     flag_suspicious = models.BooleanField(default=True)
     flag_irrelevant = models.BooleanField(default=True)
-    notify_reviewer = models.BooleanField(default=True)
     enabled_categories = models.JSONField(default=list, blank=True)
     suspicious_terms = models.JSONField(default=list, blank=True)
     category_keywords = models.JSONField(default=dict, blank=True)

@@ -1,4 +1,7 @@
 import hashlib
+import os
+import tempfile
+from io import BytesIO
 from pathlib import Path
 
 from django.core.exceptions import ValidationError
@@ -112,7 +115,7 @@ def validate_chat_attachment(uploaded_file):
 
 def ensure_emergency_media_preview(media):
     preview_name = (media.preview_file.name or "").lower() if media.preview_file else ""
-    if preview_name and "/redacted-v3-" in preview_name and preview_name.endswith(".jpg"):
+    if preview_name and "/redacted-v4-sam3-" in preview_name and preview_name.endswith(".jpg"):
         return media.preview_file
     if media.preview_file:
         media.preview_file.delete(save=False)
@@ -122,11 +125,43 @@ def ensure_emergency_media_preview(media):
     # it explicitly or deleting the file in tests (or rotating it in prod)
     # hits WinError 32.
     with media.file.open("rb") as source:
-        media.preview_file.save(
-            f"redacted-v3-{media.pk}.jpg",
-            ContentFile(build_redacted_preview_bytes(source, media.mime_type)),
-            save=True,
-        )
+        raw = source.read()
+    protected = None
+    try:
+        from PIL import Image, ImageOps
+        from apps.concerns.ai.privacy.masks import blur_regions, parse_regions
+        from apps.concerns.ai.privacy.sam3_client import run_segmentation
+
+        suffix = os.path.splitext(getattr(media, "original_filename", "") or "")[1] or ".jpg"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temporary:
+            temporary.write(raw)
+            temp_path = temporary.name
+        try:
+            payload = run_segmentation(temp_path, ["face", "person", "license plate"])
+        finally:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+        with Image.open(BytesIO(raw)) as source:
+            image = ImageOps.exif_transpose(source).convert("RGB")
+            image.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+            image.load()
+        regions = parse_regions(payload, image_width=image.width, image_height=image.height)
+        if regions:
+            output = BytesIO()
+            blur_regions(image, regions).save(output, format="JPEG", quality=84, optimize=True)
+            protected = output.getvalue()
+    except Exception:
+        protected = None
+    if protected is None:
+        from io import BytesIO as _BytesIO
+        protected = build_redacted_preview_bytes(_BytesIO(raw), media.mime_type)
+    media.preview_file.save(
+        f"redacted-v4-sam3-{media.pk}.jpg",
+        ContentFile(protected),
+        save=True,
+    )
     return media.preview_file
 
 

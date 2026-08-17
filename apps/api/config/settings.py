@@ -119,9 +119,31 @@ WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
 IS_TEST_RUN = "test" in sys.argv
+if IS_TEST_RUN:
+    AUTH_BACKEND = "local"
+    STORAGE_BACKEND = "local"
 # Reverse geocoding calls Nominatim. Tests must stay hermetic and must not
 # depend on the machine having internet, so it is off by default under test.
 REVERSE_GEOCODE_ENABLED = env.bool("REVERSE_GEOCODE_ENABLED", default=not IS_TEST_RUN)
+
+# Supabase can replace PostgreSQL, Auth, and media independently. Local remains
+# the safe default so a developer never writes to the cloud by accident.
+DATABASE_TARGET = env("DATABASE_TARGET", default="local")
+AUTH_BACKEND = env("AUTH_BACKEND", default="local")
+STORAGE_BACKEND = env("STORAGE_BACKEND", default="local")
+SUPABASE_URL = env("SUPABASE_URL", default="").rstrip("/")
+SUPABASE_PUBLISHABLE_KEY = env("SUPABASE_PUBLISHABLE_KEY", default="")
+SUPABASE_SECRET_KEY = env("SUPABASE_SECRET_KEY", default="")
+SUPABASE_DATABASE_URL = env("SUPABASE_DATABASE_URL", default="")
+SUPABASE_DATABASE_POOLER_URL = env("SUPABASE_DATABASE_POOLER_URL", default="")
+SUPABASE_SSLMODE = env("SUPABASE_SSLMODE", default="require")
+SUPABASE_AUTH_HOOK_SECRET = env("SUPABASE_AUTH_HOOK_SECRET", default="")
+SUPABASE_JWT_AUDIENCE = env("SUPABASE_JWT_AUDIENCE", default="authenticated")
+SUPABASE_JWT_SECRET = env("SUPABASE_JWT_SECRET", default="")
+SUPABASE_AUTO_LINK_USERS = env.bool("SUPABASE_AUTO_LINK_USERS", default=False)
+SUPABASE_ORIGINAL_BUCKET = env("SUPABASE_ORIGINAL_BUCKET", default="original-photos")
+SUPABASE_PROTECTED_BUCKET = env("SUPABASE_PROTECTED_BUCKET", default="protected-photos")
+SUPABASE_SIGNED_URL_TTL_SECONDS = env.int("SUPABASE_SIGNED_URL_TTL_SECONDS", default=300)
 
 # Database
 if "test" in sys.argv:
@@ -139,14 +161,27 @@ else:
         f'{env("DB_PORT", default="5432")}/'
         f'{env("DB_NAME", default="e_boses")}'
     )
-    DATABASES = {
-        "default": env.db_url("DATABASE_URL", default=default_database_url),
-    }
-    # Reuse the Postgres connection across requests: establishing a connection
-    # costs tens of milliseconds per request on this machine. CONN_HEALTH_CHECKS
-    # quietly discards connections the server dropped while idle.
-    DATABASES["default"]["CONN_MAX_AGE"] = 60
-    DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
+    if DATABASE_TARGET == "supabase":
+        database_url = SUPABASE_DATABASE_POOLER_URL or SUPABASE_DATABASE_URL
+        if not database_url:
+            raise ImproperlyConfigured(
+                "DATABASE_TARGET=supabase requires SUPABASE_DATABASE_POOLER_URL or SUPABASE_DATABASE_URL."
+            )
+    elif DATABASE_TARGET == "local":
+        database_url = env("LOCAL_DATABASE_URL", default=env("DATABASE_URL", default=default_database_url))
+    else:
+        raise ImproperlyConfigured("DATABASE_TARGET must be local or supabase.")
+    DATABASES = {"default": env.db_url_config(database_url)}
+    if DATABASE_TARGET == "supabase":
+        DATABASES["default"].setdefault("OPTIONS", {})["sslmode"] = SUPABASE_SSLMODE
+    # Close the database connection after each request. Reusing connections
+    # across requests is not safe on Supabase: the free-tier pool is 15
+    # connections, the development server opens one per thread, and idle
+    # connections quickly exhaust the pool and produce "max clients reached"
+    # errors. A fresh TCP connection costs roughly one network round-trip,
+    # which is acceptable for the current data volume.
+    DATABASES["default"]["CONN_MAX_AGE"] = 0
+    DATABASES["default"]["CONN_HEALTH_CHECKS"] = False
     if ENABLE_GIS:
         DATABASES["default"]["ENGINE"] = "django.contrib.gis.db.backends.postgis"
 
@@ -331,9 +366,18 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "accounts.User"
 
 # REST Framework
+if AUTH_BACKEND == "supabase":
+    if not SUPABASE_URL:
+        raise ImproperlyConfigured("AUTH_BACKEND=supabase requires SUPABASE_URL.")
+    DEFAULT_AUTHENTICATION_CLASSES = ("apps.accounts.supabase_auth.SupabaseJWTAuthentication",)
+elif AUTH_BACKEND == "local":
+    DEFAULT_AUTHENTICATION_CLASSES = ("rest_framework_simplejwt.authentication.JWTAuthentication",)
+else:
+    raise ImproperlyConfigured("AUTH_BACKEND must be local or supabase.")
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        *DEFAULT_AUTHENTICATION_CLASSES,
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
@@ -352,6 +396,11 @@ REST_FRAMEWORK = {
         "geocode": "90/minute",
         "auth": "20/minute",
         "login": "5/minute",
+        "client_ip": "300/hour",
+        "login_identifier": "5/minute",
+        "login_ip": "30/minute",
+        "refresh_session": "30/minute",
+        "system_status": "60/minute",
         "password_reset": "5/minute",
         "location_ping": "60/minute",
         "assistant": "20/minute",
@@ -568,6 +617,11 @@ OUTBOUND_SMS_PASSWORD = env("OUTBOUND_SMS_PASSWORD", default=SMS_GATE_PASSWORD)
 # Its webhooks are HMAC-signed with the key from Settings > Webhooks, since the
 # app cannot attach a custom auth header.
 SMS_WEBHOOK_SIGNING_KEY = env("SMS_WEBHOOK_SIGNING_KEY", default=SMS_GATE_WEBHOOK_SIGNING_KEY)
+# Signed webhook timestamps are short-lived. Token-authenticated legacy
+# handsets are unaffected, but an HMAC must not be reusable forever.
+SMS_WEBHOOK_SIGNATURE_MAX_AGE_SECONDS = env.int(
+    "SMS_WEBHOOK_SIGNATURE_MAX_AGE_SECONDS", default=300
+)
 # Logs the raw webhook body and every candidate digest when a signature does not
 # verify. Off by default: the body contains SMS content.
 SMS_WEBHOOK_DEBUG = env.bool("SMS_WEBHOOK_DEBUG", default=False)
@@ -593,12 +647,16 @@ WEB_PUSH_SUBJECT = env("WEB_PUSH_SUBJECT", default=f"mailto:{DEFAULT_FROM_EMAIL}
 
 SUPPORT_EMAIL = env("SUPPORT_EMAIL", default=DEFAULT_FROM_EMAIL)
 
-# Media storage. With CLOUDINARY_URL set, uploads go to Cloudinary and survive
-# a redeploy; without it they stay on local disk. Private files upload as
-# type=authenticated either way, and are still only readable through the
-# authenticated proxy views.
+# Supabase is the production media target. Local disk stays the development
+# default. Cloudinary remains only as a short rollback option during migration.
 CLOUDINARY_URL = env("CLOUDINARY_URL", default="")
-if CLOUDINARY_URL:
+if STORAGE_BACKEND not in {"local", "supabase", "cloudinary"}:
+    raise ImproperlyConfigured("STORAGE_BACKEND must be local, supabase, or cloudinary.")
+if STORAGE_BACKEND == "supabase" and not (SUPABASE_URL and SUPABASE_SECRET_KEY):
+    raise ImproperlyConfigured(
+        "STORAGE_BACKEND=supabase requires SUPABASE_URL and SUPABASE_SECRET_KEY."
+    )
+if STORAGE_BACKEND == "cloudinary" and CLOUDINARY_URL:
     os.environ.setdefault("CLOUDINARY_URL", CLOUDINARY_URL)
     THIRD_PARTY_APPS = [*THIRD_PARTY_APPS, "cloudinary", "cloudinary_storage"]
     INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -639,8 +697,9 @@ RESEND_FROM_EMAIL = env("RESEND_FROM_EMAIL", default=DEFAULT_FROM_EMAIL)
 RESEND_FROM_NAME = env("RESEND_FROM_NAME", default="E-Boses")
 RESEND_REPLY_TO = env("RESEND_REPLY_TO", default="")
 RESEND_DELIVERY_TIMEOUT_SECONDS = env.float("RESEND_DELIVERY_TIMEOUT_SECONDS", default=20.0)
+ACCOUNT_EMAIL_PROVIDER = env("ACCOUNT_EMAIL_PROVIDER", default="disabled")
 OTP_EMAIL_LOGO_URL = env("OTP_EMAIL_LOGO_URL", default="")
-OTP_EMAIL_EXPIRY_TEXT = env("OTP_EMAIL_EXPIRY_TEXT", default="This code expires in 10 minutes.")
+OTP_EMAIL_EXPIRY_TEXT = env("OTP_EMAIL_EXPIRY_TEXT", default="This code expires in 5 minutes.")
 
 ASSISTANT_ENABLED = env.bool("ASSISTANT_ENABLED", default=False)
 ASSISTANT_API_KEY = env("ASSISTANT_API_KEY", default="")
@@ -726,6 +785,8 @@ OCRSPACE_OVERLAY = env.bool("OCRSPACE_OVERLAY", default=True)
 OCRSPACE_CONNECT_TIMEOUT = env.int("OCRSPACE_CONNECT_TIMEOUT", default=10)
 OCRSPACE_READ_TIMEOUT = env.int("OCRSPACE_READ_TIMEOUT", default=60)
 OCRSPACE_MAX_RETRIES = env.int("OCRSPACE_MAX_RETRIES", default=3)
+# Live OCR tests are opt-in so a normal test run can never spend API quota.
+OCR_LIVE_TESTS = env.bool("OCR_LIVE_TESTS", default=False)
 OSM_ROUTE_URL = env("OSM_ROUTE_URL", default="https://router.project-osrm.org/route/v1/driving")
 OSM_ROUTE_TIMEOUT_SECONDS = env.int("OSM_ROUTE_TIMEOUT_SECONDS", default=4)
 

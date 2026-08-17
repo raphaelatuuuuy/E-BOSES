@@ -34,7 +34,7 @@ export function UserAvatar({
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-soft font-semibold text-navy-muted",
+        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-soft font-bold text-navy-muted",
         // sizeClass first so callers can override size; never strip the bg unless explicit
         sizeClass,
         className,

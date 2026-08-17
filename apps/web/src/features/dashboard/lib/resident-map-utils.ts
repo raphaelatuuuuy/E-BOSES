@@ -222,8 +222,5 @@ export function emergencyStatusLabel(status: string): { label: string; live: boo
 export function emergencyBrief(em: ResidentMapEmergency) {
   const type = (em.type_label || em.type || "Emergency").replace(/_/g, " ")
   const st = emergencyStatusLabel(em.status)
-  const line = st.live
-    ? "Help has been dispatched to the area."
-    : "This emergency is no longer active."
-  return { title: type, line, status: st }
+  return { title: type, status: st }
 }

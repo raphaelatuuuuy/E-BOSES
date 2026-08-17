@@ -17,7 +17,7 @@ function formatWindow(endsAt: string | null) {
  * most prominent thing on the page.
  */
 export function MaintenancePage() {
-  const status = useSystemStatus(30_000)
+  const { status } = useSystemStatus()
   const notice = status?.maintenance ?? null
 
   return (

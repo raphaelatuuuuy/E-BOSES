@@ -100,15 +100,25 @@ def _request_with_retries(attempt_request, *, max_retries, what="request"):
     """Run attempt_request() (a zero-arg callable returning a requests.Response),
     retrying transient connection/timeout errors with exponential backoff.
 
-    HTTP error responses are not retried here — callers validate them with
-    _raise_for_status afterwards. The callable is invoked fresh on every
-    attempt so file handles or streams can be reopened per attempt.
+    Transient HTTP responses (429 and 5xx) are retried here. The callable is
+    invoked fresh on every attempt so file handles or streams can be reopened.
     """
     import sys
     last_exc = None
     for attempt in range(1, max_retries + 1):
         try:
-            return attempt_request()
+            response = attempt_request()
+            if response.status_code == 429 or response.status_code >= 500:
+                if attempt >= max_retries:
+                    return response
+                retry_after = response.headers.get("Retry-After", "")
+                try:
+                    delay = max(0.5, min(float(retry_after), 30.0))
+                except (TypeError, ValueError):
+                    delay = 2 ** (attempt - 1)
+                time.sleep(delay)
+                continue
+            return response
         except requests.RequestException as exc:
             last_exc = exc
             if attempt >= max_retries:

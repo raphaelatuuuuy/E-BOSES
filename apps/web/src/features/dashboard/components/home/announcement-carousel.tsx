@@ -47,8 +47,8 @@ export function AnnouncementCarousel({ announcements }: { announcements: Announc
   }
 
   return (
-    <article className="overflow-hidden rounded-2xl border border-neutral-200 bg-white lg:rounded-lg">
-      <header className="flex items-center gap-2 border-b border-neutral-200 px-3.5 py-2.5">
+    <article className="overflow-hidden rounded-2xl border border-neutral-300 bg-white lg:rounded-lg">
+      <header className="flex items-center gap-2 border-b border-neutral-300 px-3.5 py-2.5">
         <GlobeIcon className="size-4 shrink-0 text-neutral-500" strokeWidth={2.1} />
         <p className="text-[13px] font-bold text-neutral-900">Barangay announcements</p>
         <span className="ml-auto text-[12px] font-semibold tabular-nums text-neutral-500">
@@ -108,7 +108,7 @@ export function AnnouncementCarousel({ announcements }: { announcements: Announc
                   src={announcement.image_url}
                   alt={announcement.image_alt || ""}
                   loading="lazy"
-                  className="max-h-80 w-full border-y border-neutral-200 object-cover"
+                  className="max-h-80 w-full border-y border-neutral-300 object-cover"
                 />
               ) : null}
 
@@ -121,7 +121,7 @@ export function AnnouncementCarousel({ announcements }: { announcements: Announc
       </div>
 
       {count > 1 ? (
-        <footer className="flex items-center gap-2 border-t border-neutral-200 px-3.5 py-2">
+        <footer className="flex items-center gap-2 border-t border-neutral-300 px-3.5 py-2">
           <div className="flex flex-1 items-center gap-1.5">
             {announcements.map((announcement, dot) => (
               <button

@@ -7,6 +7,7 @@ Tests are skipped when no key is configured.
 
 import os
 from io import BytesIO
+from pathlib import Path
 from unittest.mock import patch
 
 import requests
@@ -37,7 +38,7 @@ from apps.accounts.ocr_runtime import (
     process_verification_case,
 )
 
-TEST_IMAGE = "C:\\Users\\TO GOD BE THE GLORY\\Downloads\\5207cdef-1047-45a1-ab29-b7f0df616458.jpg"
+TEST_IMAGE = str(Path(__file__).resolve().parent / "fixtures" / "live-id.jpg")
 
 
 class OCRApiTest(SimpleTestCase):
@@ -47,8 +48,8 @@ class OCRApiTest(SimpleTestCase):
     def setUpClass(cls):
         super().setUpClass()
         cls.has_token = bool(
-            getattr(settings, "OCRSPACE_API_KEY", None)
-            or os.environ.get("OCRSPACE_API_KEY")
+            getattr(settings, "OCR_LIVE_TESTS", False)
+            and (getattr(settings, "OCRSPACE_API_KEY", None) or os.environ.get("OCRSPACE_API_KEY"))
         )
         cls.has_test_image = os.path.exists(TEST_IMAGE)
 

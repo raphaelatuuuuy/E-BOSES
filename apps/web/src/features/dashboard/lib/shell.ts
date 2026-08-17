@@ -19,9 +19,8 @@ export const SHELL_MAX_RESIDENT = 1600
 export const SHELL_MAX_STAFF = 1800
 
 /**
- * Unified sidebar width — resident, official and responder all share one fixed
- * 248px rail. Three separate widths is what made the roles look different; the
- * sidebar rewrite deliberately collapsed them into a single column.
+ * Wider sidebar width used by the responder rail. Residents and officials use
+ * the compact 72px icon rail in the desktop shell.
  */
 export const SIDEBAR_W = 248
 

@@ -57,7 +57,7 @@ export function ProfileAccountMenu({
   const displayName = user
     ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "Resident"
     : "Resident"
-  const letter = initials(user?.full_name || displayName)
+  const letter = initials(user?.full_name || displayName).charAt(0)
 
   async function handleSignOut() {
     setSigningOut(true)

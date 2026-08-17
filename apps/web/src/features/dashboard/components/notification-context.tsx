@@ -1,4 +1,3 @@
-/* eslint-disable react-refresh/only-export-components -- Provider + useNotifications() hook are an intentional pair in one module (React's context pattern). */
 import * as React from "react"
 import { apiRequest, websocketTicket, websocketUrl } from "@/lib/api"
 import type { Concern } from "@/features/dashboard/api"

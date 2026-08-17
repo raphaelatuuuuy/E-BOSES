@@ -274,7 +274,6 @@ class EmergencyAlert(models.Model):
         DISASTER = "disaster", "Disaster"
         CHILD_PROTECTION = "child_protection", "Child Protection"
         DOMESTIC_VIOLENCE = "domestic_violence", "Domestic Violence"
-        DRUG_RELATED = "drug_related", "Drug-Related Incident"
 
     class Status(models.TextChoices):
         SUBMITTED = "submitted", "Emergency Received"

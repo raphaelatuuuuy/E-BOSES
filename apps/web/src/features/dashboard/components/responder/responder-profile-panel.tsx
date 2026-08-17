@@ -91,9 +91,9 @@ export function ResponderProfilePanel() {
       <section className="flex items-center gap-4">
         <span
           aria-hidden
-          className="flex size-16 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-[20px] font-semibold text-neutral-700"
+          className="flex size-16 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[32px] font-bold text-navy-muted"
         >
-          {initials(fullName, "R")}
+          {initials(fullName, "R").charAt(0)}
         </span>
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-[20px] font-bold leading-tight tracking-tight text-neutral-900">
@@ -120,7 +120,7 @@ export function ResponderProfilePanel() {
       </SheetList>
 
       <div className="mt-6">
-        <SheetPrimaryButton onClick={() => void signOut().finally(() => navigate("/sign-in"))}>
+        <SheetPrimaryButton tone="accent" onClick={() => void signOut().finally(() => navigate("/sign-in"))}>
           Sign out
         </SheetPrimaryButton>
       </div>

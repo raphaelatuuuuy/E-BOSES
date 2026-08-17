@@ -1,14 +1,14 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import {
   AlertTriangleIcon,
   ArchiveIcon,
   ArchiveRestoreIcon,
   ArrowLeftIcon,
-  BellIcon,
-  BellOffIcon,
+  InboxIcon,
+  ImageIcon,
   CheckCheckIcon,
   FileTextIcon,
   MegaphoneIcon,
@@ -21,15 +21,73 @@ import { cn } from "@workspace/ui/lib/utils"
 import { apiRequest } from "@/lib/api"
 import { useNotifications, type NotificationItem } from "@/features/dashboard/components/notification-context"
 import {
-  disableBrowserNotifications,
-  enableBrowserNotifications,
-  getBrowserNotificationState,
-  type BrowserNotificationState,
-} from "@/features/dashboard/browser-notifications"
-import {
   notificationsPageFilter,
   openNotificationsPop,
 } from "@/features/dashboard/components/notifications/notifications-event"
+
+type NotificationView = "inbox" | "archived"
+const notificationViewEvent = "eboses:notification-view"
+const holdTimers = new WeakMap<HTMLElement, number>()
+
+function NotificationImage({ src }: { src: string }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) {
+    return (
+      <span className="mt-2 flex h-32 w-full items-center justify-center rounded-lg border border-neutral-200 bg-neutral-100 text-neutral-500">
+        <ImageIcon className="size-5" aria-label="Image unavailable" />
+      </span>
+    )
+  }
+  return (
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className="mt-2 h-32 w-full rounded-lg border border-neutral-200 object-cover"
+    />
+  )
+}
+
+export function NotificationViewActions({ initialView = "inbox", dark = false }: { initialView?: NotificationView; dark?: boolean }) {
+  const [view, setView] = useState<NotificationView>(initialView)
+  return (
+    <div role="tablist" aria-label="Notification views" className="flex items-center gap-0.5 rounded-full bg-neutral-100 p-1">
+      {([
+        ["inbox", InboxIcon, "Inbox"],
+        ["archived", ArchiveIcon, "Archived"],
+      ] as const).map(([value, Icon, label]) => {
+        const active = view === value
+        return (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            aria-label={label}
+            title={label}
+            onClick={() => {
+              setView(value)
+              window.dispatchEvent(new CustomEvent(notificationViewEvent, { detail: value }))
+            }}
+            className={cn(
+              "flex size-9 items-center justify-center rounded-full transition-colors",
+              dark
+                ? active
+                  ? "bg-brand-orange/15 text-brand-orange shadow-sm"
+                  : "text-nav-muted hover:bg-brand-orange/10 hover:text-brand-orange"
+                : active
+                  ? "bg-white/70 text-neutral-900 shadow-sm"
+                  : "text-neutral-400 hover:bg-white/60 hover:text-neutral-900",
+            )}
+          >
+            <Icon className="size-[18px]" />
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 
 /**
  * ONE notifications surface, shared by every role.
@@ -43,12 +101,14 @@ import {
  */
 
 export type NotificationsConfig = {
-  /** Role-specific chips, e.g. All/Unread/Reports/Emergencies/Announcements. */
+  /** The available read-state filters for the notification list. */
   filters: Array<{ value: string; label: string }>
   /** Buckets an item into one of the role's group filters (null → the neutral bucket). */
   groupOf: (item: NotificationItem) => string | null
   /** Defaults to group chips (emergency red, announcement amber, rest neutral). */
   iconFor?: (item: NotificationItem) => { Icon: LucideIcon; chipClass: string }
+  /** Uses the responder dark surface and contrast ladder. */
+  dark?: boolean
   filterStorageKey: string
   /** Shown when the Inbox All filter is empty and on the push card. */
   landingCopy: string
@@ -146,16 +206,22 @@ export function NotificationsPanel({
       initialView ?? (initialFilter === "archived" ? "archived" : "inbox"),
   )
 
+  useEffect(() => {
+    function onViewChange(event: Event) {
+      const next = (event as CustomEvent<NotificationView>).detail
+      if (next === "inbox" || next === "archived") setView(next)
+    }
+    window.addEventListener(notificationViewEvent, onViewChange)
+    return () => window.removeEventListener(notificationViewEvent, onViewChange)
+  }, [])
+
   const [filter, setFilter] = useState(() => {
-    if (typeof window === "undefined") return initialFilter ?? "all"
-    const fromUrl =
-      initialFilter &&
-      initialFilter !== "archived" &&
-      config.filters.some((entry) => entry.value === initialFilter)
-        ? initialFilter
-        : null
+    if (typeof window === "undefined") {
+      return initialFilter === "read" || initialFilter === "unread" ? initialFilter : "unread"
+    }
+    const fromUrl = initialFilter === "read" || initialFilter === "unread" ? initialFilter : null
     const stored = window.localStorage.getItem(config.filterStorageKey)
-    return fromUrl ?? config.filters.find((entry) => entry.value === stored)?.value ?? "all"
+    return fromUrl ?? (stored === "read" || stored === "unread" ? stored : "unread")
   })
 
   useEffect(() => {
@@ -163,37 +229,6 @@ export function NotificationsPanel({
       window.localStorage.setItem(config.filterStorageKey, filter)
     }
   }, [filter, config.filterStorageKey])
-
-  const [browserState, setBrowserState] = useState<BrowserNotificationState>({
-    supported: true,
-    permission: "default",
-    serverConfigured: false,
-    subscribed: false,
-  })
-  const [browserBusy, setBrowserBusy] = useState(false)
-  const browserStateRef = useRef(browserState)
-  useEffect(() => {
-    browserStateRef.current = browserState
-  })
-  useEffect(() => {
-    // Retry a few times — the SW may still be activating on fresh page load.
-    let cancelled = false
-    ;(async () => {
-      for (let i = 0; i < 10; i++) {
-        const state = await getBrowserNotificationState().catch(() => null)
-        if (!state || cancelled) return
-        if (state.serverConfigured || state.subscribed) {
-          setBrowserState(state)
-          return
-        }
-        await new Promise((r) => setTimeout(r, 500))
-      }
-      setBrowserState(await getBrowserNotificationState().catch(() => browserStateRef.current))
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [])
 
   const merged = useMemo(() => {
     const byId = new Map<number, NotificationItem>()
@@ -208,9 +243,9 @@ export function NotificationsPanel({
       view === "archived"
         ? merged.filter((item) => item.is_archived)
         : merged.filter((item) => !item.is_archived)
-    if (filter === "all") return rows
     if (filter === "unread") return rows.filter((item) => !item.is_read)
-    return rows.filter((item) => config.groupOf(item) === filter)
+    if (filter === "read") return rows.filter((item) => item.is_read)
+    return rows
   }, [merged, filter, config, view])
 
   const hasArchivableReadNotifications = useMemo(
@@ -241,20 +276,6 @@ export function NotificationsPanel({
     }
   }
 
-  async function toggleBrowserPush() {
-    setBrowserBusy(true)
-    try {
-      if (browserState.subscribed) await disableBrowserNotifications()
-      else await enableBrowserNotifications()
-      setBrowserState(await getBrowserNotificationState())
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update browser push.")
-      setBrowserState(await getBrowserNotificationState().catch(() => browserState))
-    } finally {
-      setBrowserBusy(false)
-    }
-  }
-
   async function openItem(item: NotificationItem) {
     if (!item.is_read) {
       await markAsRead(item.id).catch(() => void refresh().catch(() => {}))
@@ -272,28 +293,20 @@ export function NotificationsPanel({
   }
 
   const iconFor = config.iconFor ?? defaultIconFor
+  const darkTheme = Boolean(config.dark)
 
-  const filterLabel = config.filters.find((entry) => entry.value === filter)?.label ?? "matching"
   const isEmpty = visible.length === 0
   const emptyTitle = isEmpty
     ? view === "archived"
       ? "Nothing archived yet."
-      : filter === "all"
-        ? notifications.length === 0
-          ? "You're all caught up."
-          : "No active notifications."
-        : filter === "unread"
-          ? "No unread notifications."
-          : `No ${filterLabel.toLowerCase()} notifications right now.`
+      : filter === "unread"
+        ? "No unread notifications."
+        : "No read notifications right now."
     : null
   const emptySub = isEmpty
     ? view === "archived"
       ? "Notifications you archive will go here."
-      : filter === "all"
-        ? notifications.length === 0
-          ? config.landingCopy
-          : "Check back later."
-        : "Check back later."
+      : "Check back later."
     : null
 
   /**
@@ -301,48 +314,7 @@ export function NotificationsPanel({
    * "Mark all read". Archive-read stays on the full page — a pop-up should not
    * carry every bulk action.
    */
-  const sheetToolbar = (
-    <div className="mb-3 flex items-center justify-between gap-3">
-      <div
-        role="tablist"
-        aria-label="Notification views"
-        className="flex items-center gap-0.5 rounded-full bg-neutral-100 p-0.5"
-      >
-        {(["inbox", "archived"] as const).map((value) => {
-          const active = view === value
-          return (
-            <button
-              key={value}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => setView(value)}
-              className={cn(
-                "h-8 rounded-full px-3.5 text-[14px] font-semibold transition-colors",
-                active
-                  ? "bg-white text-neutral-900 shadow-sm"
-                  : "text-neutral-500 hover:text-neutral-900",
-              )}
-            >
-              {value === "inbox" ? "Inbox" : "Archived"}
-            </button>
-          )
-        })}
-      </div>
-      <button
-        type="button"
-        onClick={() => {
-          void markAllAsRead().catch(() =>
-            toast.error("Could not mark all as read.", { id: "mark-all" }),
-          )
-        }}
-        disabled={loading || unreadCount === 0}
-        className="shrink-0 text-[14px] font-semibold text-neutral-600 transition-colors hover:text-neutral-900 disabled:cursor-not-allowed disabled:text-neutral-300"
-      >
-        Mark all read
-      </button>
-    </div>
-  )
+  const sheetToolbar = null
 
   return (
     <div className={cn("flex w-full flex-col", variant === "sheet" ? "" : "h-full min-h-0")}>
@@ -365,7 +337,7 @@ export function NotificationsPanel({
         ) : null}
         <span className="text-heading font-semibold text-foreground">Notifications</span>
         {unreadCount > 0 ? (
-          <span className="flex h-[20px] min-w-[20px] shrink-0 items-center justify-center rounded-full bg-brand-orange px-1.5 text-[10.5px] font-semibold leading-none text-brand-orange-ink tabular-nums">
+          <span className="shrink-0 text-[11px] font-semibold leading-none text-current tabular-nums">
             {unreadCount > 99 ? "99+" : unreadCount}
           </span>
         ) : null}
@@ -399,6 +371,33 @@ export function NotificationsPanel({
             <ArchiveIcon className="size-4" />
             <span className="hidden sm:inline">Archive read</span>
           </button>
+          <div role="tablist" aria-label="Notification views" className="flex items-center gap-0.5">
+            {([
+              ["inbox", InboxIcon, "Inbox"],
+              ["archived", ArchiveIcon, "Archived"],
+            ] as const).map(([value, Icon, label]) => {
+              const active = view === value
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  aria-label={label}
+                  title={label}
+                  onClick={() => setView(value)}
+                  className={cn(
+                    "flex size-10 items-center justify-center rounded-lg transition-colors",
+                    active
+                      ? "bg-card-raised text-foreground shadow-sm"
+                      : "text-muted-foreground hover:bg-card-raised hover:text-foreground",
+                  )}
+                >
+                  <Icon className="size-[18px]" />
+                </button>
+              )
+            })}
+          </div>
           {onClose ? (
             <button
               type="button"
@@ -423,113 +422,9 @@ export function NotificationsPanel({
         )}
       >
         <div className="mx-auto flex min-w-0 max-w-3xl flex-col gap-3">
-          <section
-            className={cn(
-              "flex items-center gap-3 p-3",
-              variant === "sheet"
-                ? "rounded-[18px] border border-neutral-200"
-                : cn(
-                    "rounded-2xl border",
-                    browserState.subscribed
-                      ? "border-brand-orange/40 bg-brand-orange/5"
-                      : "border-card-line bg-card-raised",
-                  ),
-              // Once push is on there is nothing to do here — in a pop-up that
-              // row is pure noise above the thing you opened it for.
-              variant === "sheet" && browserState.subscribed && "hidden",
-            )}
-          >
-            <span
-              className={cn(
-                "flex size-9 shrink-0 items-center justify-center rounded-full",
-                variant === "sheet"
-                  ? "text-neutral-500"
-                  : browserState.subscribed
-                    ? "bg-brand-orange/15 text-brand-orange"
-                    : "text-muted-foreground",
-              )}
-            >
-              {browserState.subscribed ? (
-                <BellIcon className="size-4" />
-              ) : (
-                <BellOffIcon className="size-4" />
-              )}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p
-                className={cn(
-                  "font-semibold",
-                  variant === "sheet"
-                    ? "text-[15px] text-neutral-900"
-                    : "text-[15px] text-foreground",
-                )}
-              >
-                {browserState.subscribed ? "Push notifications on" : "Turn on push notifications"}
-              </p>
-              {!browserState.serverConfigured ? (
-                <p className="mt-1 text-[12px] font-semibold text-neutral-500">
-                  Server Web Push keys are not configured yet.
-                </p>
-              ) : null}
-            </div>
-            <button
-              type="button"
-              disabled={
-                browserBusy ||
-                !browserState.supported ||
-                browserState.permission === "denied" ||
-                !browserState.serverConfigured
-              }
-              onClick={() => void toggleBrowserPush()}
-              // One button, one shape, whichever way it is pointing — only the
-              // label changes between Enable and Disable.
-              className={cn(
-                "shrink-0 rounded-full border px-4 py-2 text-body font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-                variant === "sheet"
-                  ? "border-brand-orange text-brand-orange hover:bg-brand-orange hover:text-brand-orange-ink"
-                  : browserState.subscribed
-                    ? "border-card-line text-foreground hover:bg-card-raised"
-                    : "border-brand-orange bg-brand-orange text-brand-orange-ink hover:bg-brand-orange-strong",
-              )}
-            >
-              {browserBusy ? "Working…" : browserState.subscribed ? "Disable" : "Enable"}
-            </button>
-          </section>
-
-          <div
-            role="tablist"
-            aria-label="Notification views"
-            className={cn(
-              "flex w-fit items-center gap-0.5 rounded-full border border-card-line bg-card-raised p-0.5",
-              // The sheet toolbar already carries this control.
-              variant === "sheet" && "hidden",
-            )}
-          >
-            {(["inbox", "archived"] as const).map((value) => {
-              const active = view === value
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => setView(value)}
-                  className={cn(
-                    "h-8 rounded-full px-4 text-body font-semibold transition-colors",
-                    active
-                      ? "bg-card text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {value === "inbox" ? "Inbox" : "Archived"}
-                </button>
-              )
-            })}
-          </div>
-
           <nav
             aria-label="Notification filters"
-            className="scrollbar-hide flex w-full gap-2 overflow-x-auto overscroll-x-contain pb-1 pt-0.5"
+            className="scrollbar-hide flex w-full gap-1 overflow-x-auto overscroll-x-contain rounded-full bg-neutral-100 p-1"
           >
             {config.filters.map((entry) => {
               const active = filter === entry.value
@@ -540,12 +435,14 @@ export function NotificationsPanel({
                   onClick={() => setFilter(entry.value)}
                   aria-pressed={active}
                   className={cn(
-                    "shrink-0 rounded-full border px-3.5 py-1.5 text-body font-semibold transition-colors",
-                    active
-                      ? "border-brand-orange bg-brand-orange text-brand-orange-ink"
-                      : variant === "sheet"
-                        ? "border-neutral-200 text-neutral-600 hover:border-brand-orange hover:text-brand-orange"
-                        : "border-card-line text-muted-foreground hover:bg-card-raised hover:text-foreground",
+                    "min-w-0 flex-1 rounded-full px-2 py-2 text-center text-[clamp(10px,1.8vw,14px)] font-semibold leading-tight transition-colors",
+                     darkTheme
+                       ? active
+                         ? "bg-brand-orange/15 text-brand-orange shadow-sm"
+                         : "text-nav-muted hover:bg-brand-orange/10 hover:text-brand-orange"
+                       : active
+                         ? "bg-white text-neutral-900 shadow-sm"
+                         : "text-neutral-500 hover:bg-white/60 hover:text-neutral-900",
                   )}
                 >
                   {entry.label}
@@ -578,70 +475,132 @@ export function NotificationsPanel({
             </div>
           ) : isEmpty ? (
             <div className="flex flex-col items-center gap-1 px-4 py-12 text-center">
-              <span className="flex size-11 items-center justify-center rounded-full bg-card-raised text-muted-foreground">
-                <BellIcon className="size-5" />
+              <span className="flex size-12 items-center justify-center text-neutral-800">
+                <InboxIcon className="size-6" />
               </span>
-              <p className="mt-2 text-[15px] font-semibold text-foreground">{emptyTitle}</p>
-              <p className="mt-1 max-w-sm text-[13px] leading-5 text-subtle-foreground">
+              <p className="mt-2 text-[15px] font-semibold text-neutral-950">{emptyTitle}</p>
+              <p className="mt-1 max-w-sm text-[13px] leading-5 text-neutral-600">
                 {emptySub}
               </p>
             </div>
           ) : (
             <ul
               className={cn(
-                "overflow-hidden border",
-                variant === "sheet"
-                  ? "divide-y divide-neutral-200 rounded-[18px] border-neutral-200 bg-white"
-                  : "divide-y divide-card-line rounded-xl border-card-line bg-card",
+                "space-y-3",
+                  variant === "sheet"
+                   ? darkTheme ? "bg-nav-bg" : "bg-white"
+                  : "bg-card",
               )}
             >
               {visible.map((item) => {
-                const { Icon, chipClass } = iconFor(item)
+                const { Icon } = iconFor(item)
                 const body = snippet(item.display_body || item.body)
                 return (
                   <li
                     key={item.id}
                     className={cn(
-                      "relative",
+                      "relative touch-pan-y overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-50",
+                      darkTheme && "border-nav-border bg-nav-raised",
                       !item.is_read &&
-                        (variant === "sheet" ? "bg-neutral-50" : "bg-brand-orange/5"),
+                        darkTheme ? "bg-nav-raised" : "bg-neutral-50",
                     )}
                   >
                     <button
                       type="button"
-                      onClick={() => void openItem(item)}
-                      className="flex w-full items-start gap-3.5 px-3.5 py-3.5 text-left transition-colors hover:bg-card-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-orange"
-                    >
+                      onClick={(event) => {
+                        if (event.currentTarget.dataset.held === "true") {
+                          delete event.currentTarget.dataset.held
+                          event.preventDefault()
+                          return
+                        }
+                        void openItem(item)
+                      }}
+                       className={cn(
+                         "flex w-full items-start gap-3.5 px-3.5 py-3.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-neutral-400",
+                         darkTheme ? "hover:bg-brand-orange/10" : "hover:bg-neutral-100",
+                       )}
+                     onPointerDown={(event) => {
+                       document.querySelectorAll<HTMLElement>("[data-notification-actions]").forEach((actions) => {
+                         actions.style.opacity = ""
+                         actions.style.transform = ""
+                         actions.style.pointerEvents = ""
+                         actions.style.left = ""
+                         actions.style.right = ""
+                         actions.style.background = ""
+                       })
+                        event.currentTarget.setPointerCapture(event.pointerId)
+                        event.currentTarget.dataset.swipeStart = String(event.clientX)
+                        delete event.currentTarget.dataset.held
+                        const target = event.currentTarget
+                        holdTimers.set(target, window.setTimeout(() => {
+                          const actions = target.parentElement?.querySelector<HTMLElement>("[data-notification-actions]")
+                          if (!actions) return
+                          target.dataset.held = "true"
+                          actions.style.opacity = "1"
+                          actions.style.transform = "translateX(0)"
+                          actions.style.pointerEvents = "auto"
+                          actions.style.left = "0"
+                          actions.style.right = "0"
+                        }, 450))
+                    }}
+                    onPointerMove={(event) => {
+                      const start = Number(event.currentTarget.dataset.swipeStart)
+                      if (!Number.isFinite(start)) return
+                      const delta = Math.min(0, event.clientX - start)
+                      const actions = event.currentTarget.parentElement?.querySelector<HTMLElement>("[data-notification-actions]")
+                      if (actions && delta < 0) {
+                        actions.style.opacity = "1"
+                        actions.style.transform = `translateX(${Math.max(delta, -88)}px)`
+                        actions.style.pointerEvents = "auto"
+                      }
+                    }}
+                     onPointerUp={(event) => {
+                        const start = Number(event.currentTarget.dataset.swipeStart)
+                        const delta = event.clientX - start
+                        const timer = holdTimers.get(event.currentTarget)
+                        if (timer) window.clearTimeout(timer)
+                        const actions = event.currentTarget.parentElement?.querySelector<HTMLElement>("[data-notification-actions]")
+                        if (delta < -48) event.preventDefault()
+                        if (event.currentTarget.dataset.held === "true") {
+                          event.preventDefault()
+                          event.stopPropagation()
+                        }
+                        if (actions && delta > -48 && event.currentTarget.dataset.held !== "true") {
+                          actions.style.opacity = ""
+                          actions.style.transform = ""
+                          actions.style.pointerEvents = ""
+                        }
+                        if (actions && event.currentTarget.dataset.held !== "true") {
+                         actions.style.left = ""
+                         actions.style.right = ""
+                         actions.style.background = ""
+                       }
+                       delete event.currentTarget.dataset.swipeStart
+                     }}
+                   >
                       <span
                         className={cn(
-                          "flex size-10 shrink-0 items-center justify-center rounded-xl",
-                          chipClass,
+                           "flex size-12 shrink-0 items-center justify-center rounded-xl",
+                            darkTheme ? "bg-nav-active text-nav-text-active" : "bg-neutral-100 text-neutral-700",
                         )}
                       >
-                        <Icon className="size-4" />
+                         <Icon className="size-5" />
                       </span>
                       <span className="min-w-0 flex-1 pr-8">
                         <span className="flex items-start justify-between gap-3">
-                          <span className="text-[15px] font-semibold text-foreground">
+                           <span className="text-[15px] font-semibold text-neutral-950">
                             {item.display_title || item.title}
                           </span>
-                          <span className="shrink-0 pt-0.5 text-[12px] text-muted-foreground">
+                           <span className="shrink-0 pt-0.5 text-[12px] text-neutral-700">
                             {relativeTime(item.created_at)}
                           </span>
                         </span>
                         {body ? (
-                          <span className="mt-0.5 block line-clamp-2 text-[13.5px] leading-5 text-subtle-foreground">
+                           <span className="mt-0.5 block line-clamp-2 text-[13.5px] leading-5 text-neutral-700">
                             {body}
                           </span>
                         ) : null}
-                        {item.image_url ? (
-                          <img
-                            src={item.image_url}
-                            alt=""
-                            loading="lazy"
-                            className="mt-2 h-24 w-full rounded-xl border border-card-line object-cover"
-                          />
-                        ) : null}
+                        {item.image_url ? <NotificationImage src={item.image_url} /> : null}
                         {item.safety_limited ? (
                           <span className="mt-2 block rounded-lg border border-sos/30 bg-sos/10 px-3 py-2.5">
                             <span className="block text-[12px] font-bold tracking-wide text-sos">
@@ -657,7 +616,7 @@ export function NotificationsPanel({
                             </span>
                           </span>
                         ) : null}
-                        {item.action_label && !item.safety_limited ? (
+                        {item.action_label && item.type !== "announcement" && !item.safety_limited ? (
                           <span
                             className={cn(
                               "mt-1.5 block text-[12px] font-bold",
@@ -670,17 +629,8 @@ export function NotificationsPanel({
                           </span>
                         ) : null}
                       </span>
-                      {!item.is_read ? (
-                        <span
-                          className={cn(
-                            "mt-2 size-2 shrink-0 rounded-full",
-                            variant === "sheet" ? "bg-neutral-900" : "bg-brand-orange",
-                          )}
-                          aria-label="Unread"
-                        />
-                      ) : null}
                     </button>
-                    <span className="absolute inset-y-0 right-0 z-10 flex shrink-0 flex-col items-center justify-center gap-1 bg-gradient-to-l from-card via-card/70 to-transparent pr-2">
+                    <span data-notification-actions className={cn("pointer-events-none absolute inset-0 z-10 flex shrink-0 flex-row items-stretch justify-center gap-0 opacity-0 transition-[opacity,transform] duration-200", darkTheme ? "bg-nav-raised" : "bg-neutral-100")}>
                       <button
                         type="button"
                         onClick={() => void archiveItem(item)}
@@ -688,22 +638,34 @@ export function NotificationsPanel({
                           item.is_archived ? "Restore notification" : "Archive notification"
                         }
                         title={item.is_archived ? "Restore notification" : "Archive notification"}
-                        className="flex size-9 items-center justify-center rounded-md text-subtle-foreground transition-colors hover:bg-card-raised hover:text-foreground"
+                          className={cn(
+                            "flex min-w-24 flex-1 flex-col items-center justify-center gap-1 border-r px-4 transition-colors",
+                            darkTheme
+                              ? "border-nav-border text-nav-text-active hover:bg-brand-orange/10 hover:text-brand-orange"
+                              : "border-neutral-200 text-neutral-700 hover:bg-neutral-200",
+                          )}
                       >
-                        {item.is_archived ? (
-                          <ArchiveRestoreIcon className="size-4" />
-                        ) : (
-                          <ArchiveIcon className="size-4" />
-                        )}
+                         {item.is_archived ? (
+                           <ArchiveRestoreIcon className="size-4" />
+                         ) : (
+                           <ArchiveIcon className="size-4" />
+                         )}
+                         <span className="text-[11px] font-semibold">{item.is_archived ? "Restore" : "Archive"}</span>
                       </button>
                       <button
                         type="button"
                         onClick={() => void deleteItem(item)}
                         aria-label="Delete notification"
                         title="Delete notification"
-                        className="flex size-9 items-center justify-center rounded-md text-subtle-foreground transition-colors hover:bg-sos/15 hover:text-sos"
+                          className={cn(
+                            "flex min-w-24 flex-1 flex-col items-center justify-center gap-1 px-4 transition-colors",
+                            darkTheme
+                              ? "text-nav-text-active hover:bg-brand-orange/10 hover:text-brand-orange"
+                              : "text-neutral-700 hover:bg-neutral-200",
+                          )}
                       >
-                        <Trash2Icon className="size-4" />
+                         <Trash2Icon className="size-4" />
+                         <span className="text-[11px] font-semibold">Delete</span>
                       </button>
                     </span>
                   </li>

@@ -155,7 +155,7 @@ export function ResponderAssignment({
           return (
             <div key={responder.id} className={cn("rounded-control border p-3", assigned ? "border-brand-orange bg-brand-orange-soft" : "border-card-line bg-card")}>
               <div className="flex items-start gap-3">
-                <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-brand-navy text-[11px] font-semibold text-white">
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
                   {responder.initials || responder.full_name.slice(0, 2).toUpperCase()}
                 </div>
                 <div className="min-w-0 flex-1">

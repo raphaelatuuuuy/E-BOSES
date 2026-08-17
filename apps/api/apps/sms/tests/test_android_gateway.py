@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import time
 
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, override_settings
@@ -88,7 +89,8 @@ class AndroidGatewayWebhookTests(APITestCase):
             barangay="Marikina Heights",
         )
 
-    def post_signed(self, payload, *, key=SIGNING_KEY, timestamp="1767330660"):
+    def post_signed(self, payload, *, key=SIGNING_KEY, timestamp=None):
+        timestamp = timestamp or str(int(time.time()))
         raw = json.dumps(payload)
         signature = hmac.new(
             key.encode(), f"{raw}{timestamp}".encode(), hashlib.sha256
@@ -158,7 +160,7 @@ class AndroidGatewayWebhookTests(APITestCase):
 
     def test_a_tampered_body_fails_verification(self):
         raw = json.dumps(webhook_body("GUIDE"))
-        timestamp = "1767330660"
+        timestamp = str(int(time.time()))
         signature = hmac.new(
             SIGNING_KEY.encode(), f"{raw}{timestamp}".encode(), hashlib.sha256
         ).hexdigest()

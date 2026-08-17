@@ -1,5 +1,5 @@
 import { useRef } from "react"
-import { Plus, ShieldCheckIcon } from "lucide-react"
+import { IdCardLanyard, Plus } from "lucide-react"
 
 import OcrTemplateBuilderPage from "@/features/ocr/ocr-template-builder-page"
 import { usePageTitle } from "@/hooks/use-page-title"
@@ -23,9 +23,9 @@ export default function OfficialIdProofWorkspacePage() {
 
   return (
     <ConfigShell
-      icon={ShieldCheckIcon}
+      icon={IdCardLanyard}
       eyebrow="Operations"
-      title="Accepted ID documents"
+      title="ID Documents"
       description="Which documents prove a resident lives here, and which details are read from each one."
       action={
         <ConfigHeroAction

@@ -689,7 +689,10 @@ def _apply_draft_payload(configuration, payload):
             rule.code = rule_code
             for attr in ("name", "rule_type", "operator", "on_failure"):
                 if attr in rule_data:
-                    setattr(rule, attr, str(rule_data[attr])[:160])
+                    value = str(rule_data[attr])[:160]
+                    if attr == "on_failure" and value == "reject":
+                        value = "manual_review"
+                    setattr(rule, attr, value)
             if (
                 rule.rule_type not in valid_rule_types
                 or rule.operator not in valid_operators
@@ -1032,7 +1035,7 @@ class OCRTestRunView(APIView):
         # see OCR.space results instead of a job that stays queued forever.
         # Production keeps the asynchronous queue and only falls back to a
         # synchronous run when broker submission itself fails.
-        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) or getattr(settings, "IS_TEST_RUN", False):
             process_test_run(run.pk, side=test_side)
         else:
             try:
@@ -1224,7 +1227,10 @@ class OCRDocumentSampleView(APIView):
         if not document:
             return Response({"detail": "Document type not found."}, status=status.HTTP_404_NOT_FOUND)
         side = self._resolve_side(request, document)
-        document.samples.filter(name=side).update(is_active=False)
+        # front and single are the same primary photo (the builder aliases
+        # them), so removing one must remove both or the photo comes back.
+        target_names = ["front", "single"] if side in {"front", "single"} else ["back"]
+        document.samples.filter(name__in=target_names).update(is_active=False)
         if side in {"front", "single"}:
             # Clear legacy primary if removing the main canvas sample
             still_primary = document.samples.filter(is_active=True, name__in=["front", "single"]).exclude(file="").exists()

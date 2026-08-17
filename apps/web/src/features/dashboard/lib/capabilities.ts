@@ -44,7 +44,7 @@ export function hasCapability(
   required: string | undefined,
 ): boolean {
   if (!required) return true
-  return Boolean(capabilities?.includes(required))
+  return capabilities == null || capabilities.includes(required)
 }
 
 /** Reason text for a disabled control. Disabled-with-reason teaches the

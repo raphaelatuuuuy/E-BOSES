@@ -1,6 +1,28 @@
 import { Link, useLocation, useNavigate } from "react-router-dom"
 import { useState } from "react"
-import { BellIcon, ChevronDownIcon, LogOutIcon, UserCircleIcon } from "lucide-react"
+import {
+  InboxIcon,
+  BellRingIcon,
+  CalendarDaysIcon,
+  ChartSplineIcon,
+  ClipboardListIcon,
+  FileTextIcon,
+  FileChartColumnIcon,
+  FileUserIcon,
+  LogOutIcon,
+  MapIcon,
+  MapPinIcon,
+  MegaphoneIcon,
+  MessageSquareIcon,
+  MessagesSquareIcon,
+  SettingsIcon,
+  SirenIcon,
+  ShieldAlertIcon,
+  UserCircleIcon,
+  UserRoundIcon,
+  UsersIcon,
+  type LucideIcon,
+} from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -27,6 +49,7 @@ import {
   getRoleNav,
   type NavItemConfig,
 } from "@/features/dashboard/lib/navigation"
+import { hasCapability } from "@/features/dashboard/lib/capabilities"
 import { displayPosition } from "@/features/dashboard/lib/position"
 
 /**
@@ -45,14 +68,13 @@ function isAlarmItem(itemKey: string, count: number) {
 
 function rowClass(tone: Tone, active: boolean, alarm: boolean) {
   return cn(
-    // Exact responder row: fixed height + full-width pill, no width collapse.
-    "flex h-12 w-full items-center gap-2.5 rounded-2xl px-4 transition-colors duration-150",
+    "flex h-12 w-full items-center gap-2.5 rounded-xl px-4 transition-colors duration-150",
     alarm
-      ? cn("bg-gradient-to-b from-sos-bright to-sos text-white", "animate-sos-glow-blink")
+      ? "text-sos"
       : active
         ? tone === "dark"
-          ? "bg-nav-active text-nav-text-active"
-          : "bg-brand-navy text-white"
+          ? "text-nav-text-active"
+          : "text-brand-navy"
         : tone === "dark"
           ? "text-nav-muted hover:bg-nav-raised hover:text-nav-text-active"
           : "text-neutral-600 hover:bg-neutral-100 hover:text-brand-navy",
@@ -65,6 +87,10 @@ function SidebarRow({
   active,
   badge,
   alarm,
+  iconOnly = false,
+  description,
+  relatedIcons = [],
+  onHover,
 }: {
   item: NavItemConfig
   tone: Tone
@@ -73,40 +99,121 @@ function SidebarRow({
   badge?: number
   /** Live work that gets the SOS treatment. */
   alarm?: boolean
+  iconOnly?: boolean
+  description?: string
+  relatedIcons?: LucideIcon[]
+  onHover?: () => void
 }) {
   const Icon = item.icon
   const urgent = alarm
+  const LeftRelatedIcon = relatedIcons[0] !== Icon ? relatedIcons[0] : null
+  const RightRelatedIcon = relatedIcons[1] !== Icon ? relatedIcons[1] : null
+  const tooltipSurface = tone === "dark"
+    ? "bg-nav-raised text-nav-text ring-nav-border before:border-nav-border before:bg-nav-raised"
+    : "bg-white text-neutral-900 ring-neutral-200/80 before:border-neutral-200 before:bg-white"
 
   return (
     <Link
       to={item.to}
       aria-current={active ? "page" : undefined}
-      className={rowClass(tone, active, Boolean(urgent))}
+      title={item.label}
+      onMouseEnter={onHover}
+      className={cn(
+        "group relative",
+        iconOnly ? "justify-center rounded-none px-0 hover:!bg-transparent" : "",
+        rowClass(tone, active, Boolean(urgent)),
+      )}
     >
       <Icon
-        className="size-5 shrink-0"
+        className={cn(
+          cn(
+            iconOnly ? "size-6" : "size-5",
+            "shrink-0 transition-transform duration-200 ease-out group-hover:scale-[1.16]",
+          ),
+          urgent && "animate-sos-icon-blink",
+        )}
         strokeWidth={active || urgent ? 2.2 : 1.8}
         fill="none"
       />
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-left text-[13px] leading-none",
+          iconOnly && "sr-only",
           urgent || active ? "font-bold" : "font-medium",
         )}
       >
         {item.label}
       </span>
 
-      {badge && badge > 0 ? (
+      {badge && badge > 0 && !iconOnly ? (
         <span
           className={cn(
             "flex h-5 min-w-5 shrink-0 items-center justify-center rounded-pill px-1.5 text-[11px] leading-none tabular-nums",
             urgent ? "bg-white font-bold text-sos" : "bg-sos font-bold text-white",
             urgent && "flex items-center gap-1",
+            iconOnly && "absolute right-8 top-1/2 -translate-y-1/2",
           )}
         >
           {urgent ? <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-sos" /> : null}
           {badge > 99 ? "99+" : badge}
+        </span>
+      ) : null}
+      {iconOnly ? (
+        <span className={cn("pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-50 w-52 -translate-y-1/2 translate-x-1 rounded-xl px-6 pb-5 pt-5 text-center opacity-0 shadow-[0_14px_35px_rgba(15,23,42,0.16)] ring-1 transition-[opacity,transform] duration-150 ease-out before:absolute before:left-[-6px] before:top-1/2 before:size-3 before:-translate-y-1/2 before:rotate-45 before:border-b before:border-l group-hover:translate-x-0 group-hover:opacity-100", tooltipSurface)}>
+          <span className="flex items-center justify-center gap-2">
+            {LeftRelatedIcon ? (
+              <span
+                key={`${item.key}-related-left`}
+                className={cn(
+                  "flex size-8 items-center justify-center rounded-md",
+                  tone === "dark"
+                    ? "bg-nav-active text-nav-text-active"
+                    : alarm
+                    ? "bg-sos/10 text-sos/50"
+                    : active
+                      ? tone === "dark" ? "bg-nav-active text-nav-muted" : "bg-brand-navy/10 text-brand-navy/50"
+                    : tone === "dark" ? "bg-nav-bg text-nav-muted" : "bg-neutral-100 text-neutral-400",
+                )}
+              >
+                <LeftRelatedIcon className="size-4" strokeWidth={2} />
+              </span>
+            ) : null}
+            <span
+              className={cn(
+                "relative flex size-9 items-center justify-center rounded-md text-white shadow-sm",
+                tone === "dark"
+                  ? "bg-nav-active text-nav-text-active"
+                  : alarm
+                  ? "bg-sos"
+                  : active
+                    ? tone === "dark" ? "bg-nav-active text-nav-text-active" : "bg-brand-navy"
+                    : tone === "dark" ? "bg-nav-bg text-nav-muted" : "bg-neutral-200 text-neutral-700",
+              )}
+            >
+              <Icon className="size-[18px]" strokeWidth={2} />
+            </span>
+            {RightRelatedIcon ? (
+              <span
+                key={`${item.key}-related-right`}
+                className={cn(
+                  "flex size-8 items-center justify-center rounded-md",
+                  tone === "dark"
+                    ? "bg-nav-active text-nav-text-active"
+                    : alarm
+                    ? "bg-sos/10 text-sos/50"
+                    : active
+                      ? tone === "dark" ? "bg-nav-active text-nav-muted" : "bg-brand-navy/10 text-brand-navy/50"
+                    : tone === "dark" ? "bg-nav-bg text-nav-muted" : "bg-neutral-100 text-neutral-400",
+                )}
+              >
+                <RightRelatedIcon className="size-4" strokeWidth={2} />
+              </span>
+            ) : null}
+          </span>
+          <span className="mt-3.5 block text-[14px] font-bold leading-tight">{item.label}</span>
+          <span className={cn("mt-2 block text-[12px] leading-[1.45]", tone === "dark" ? "text-nav-muted" : "text-neutral-500")}>
+            {description}
+          </span>
         </span>
       ) : null}
     </Link>
@@ -120,11 +227,11 @@ export function Sidebar() {
   const isResponderRole = isResponderUser(user)
   const isOfficialRole = isOfficialUser(user)
   const isResident = !isOfficialRole && !isResponderRole
-  const tone: Tone = isResident ? "light" : "dark"
+  const tone: Tone = isResident || isOfficialRole ? "light" : "dark"
 
   const role = isResponderRole ? "responder" : isOfficialRole ? "official" : "resident"
   const nav = getRoleNav(role)
-  const navItems = nav.items
+  const navItems = nav.items.filter((item) => hasCapability(user?.capabilities, item.capability))
   const badges = useOfficialBadges(isOfficialRole)
 
   // Unread notifications ride on the account block.
@@ -145,8 +252,36 @@ export function Sidebar() {
   const [profileOpen, setProfileOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
-  const avatarInitials = initials(user?.full_name || "Account")
+  const avatarInitials = initials(user?.full_name || "Account").charAt(0)
   const rolePosition = displayPosition(user)
+  const descriptions: Record<string, string> = {
+    dispatch: "Handle emergency requests and coordinate the response.",
+    shift: "View your duty status, unit, and shift record.",
+    home: "See your latest updates, reports, and community activity.",
+    alerts: "See nearby emergencies, alerts, and safety updates.",
+    reports: "Track the concerns you submitted and their progress.",
+    emergencies: "View urgent reports and responder requests.",
+    overview: "See the barangay activity and current summary.",
+    "alert-map": "View active alerts, locations, and boundaries.",
+    "operations-map": "View active alerts, locations, and boundaries.",
+    concerns: "Review resident reports and their progress.",
+    community: "Manage public updates and resident activity.",
+    configuration: "Set report rules, categories, and access.",
+  }
+  const relatedIcons: Record<string, LucideIcon[]> = {
+    dispatch: [SirenIcon, MapPinIcon],
+    shift: [CalendarDaysIcon, ClipboardListIcon],
+    home: [CalendarDaysIcon, MessagesSquareIcon],
+    alerts: [MapPinIcon, SirenIcon],
+    reports: [FileUserIcon, MessagesSquareIcon],
+    emergencies: [SirenIcon, BellRingIcon],
+    overview: [FileChartColumnIcon, ChartSplineIcon],
+    "operations-map": [MapPinIcon, MapIcon],
+    alerts: [MapPinIcon, ShieldAlertIcon],
+    concerns: [FileTextIcon, MessageSquareIcon],
+    community: [UserRoundIcon, MegaphoneIcon],
+    configuration: [SettingsIcon, ShieldAlertIcon],
+  }
 
   async function handleSignOut() {
     setSigningOut(true)
@@ -168,15 +303,21 @@ export function Sidebar() {
     "size-4 shrink-0",
     tone === "dark" ? "text-nav-muted" : "text-neutral-500",
   )
+  const accountSurfaceClass = tone === "dark"
+    ? "bg-nav-raised ring-nav-border before:border-nav-border before:bg-nav-raised"
+    : "bg-white ring-neutral-200/80 before:border-neutral-200 before:bg-white"
 
   return (
     <aside
       className={cn(
-        "flex h-full min-h-0 w-full flex-col overflow-hidden",
-        tone === "dark" ? "bg-nav-bg" : "bg-white",
+        "relative flex h-full min-h-0 w-full flex-col overflow-visible bg-transparent",
       )}
     >
-      <nav className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-3 pt-6 [scrollbar-width:thin]">
+      <nav className={cn(
+        "flex min-h-0 flex-1 flex-col overscroll-contain px-3 pt-6 [scrollbar-width:thin]",
+        "overflow-visible",
+        (isResident || isOfficialRole || isResponderRole) && "justify-center pt-0",
+      )}>
         <ul className="flex flex-col gap-1.5">
           {navItems.map((item) => {
             const active = item.isActive(location.pathname)
@@ -184,7 +325,17 @@ export function Sidebar() {
             const alarm = isAlarmItem(item.key, badgeForItemValue)
             return (
               <li key={item.key}>
-                <SidebarRow item={item} tone={tone} active={active} badge={badgeForItemValue} alarm={alarm} />
+                <SidebarRow
+                  item={item}
+                  tone={tone}
+                  active={active}
+                  badge={badgeForItemValue}
+                  alarm={alarm}
+                  iconOnly
+                  description={descriptions[item.key] ?? `Open ${item.label.toLowerCase()}.`}
+                  relatedIcons={relatedIcons[item.key]}
+                  onHover={() => setOpen(false)}
+                />
               </li>
             )
           })}
@@ -192,10 +343,10 @@ export function Sidebar() {
       </nav>
 
       {/* Identity block pinned to the floor — avatar, name, role, sign out. */}
-      <div className={cn("shrink-0 px-3 pb-4 pt-2", tone === "dark" ? "border-t border-nav-border" : "border-t border-neutral-100")}>
-        <div>
+      <div className="relative shrink-0 px-3 pb-4 pt-2">
+          <div>
           {open ? (
-            <ul className="mb-1 flex flex-col gap-0.5">
+            <ul className={cn("absolute bottom-6 left-[calc(100%+6px)] z-50 flex w-52 flex-col gap-0.5 rounded-xl p-3 shadow-[0_14px_35px_rgba(15,23,42,0.16)] ring-1 before:absolute before:bottom-4 before:left-[-6px] before:size-3 before:rotate-45 before:border-b before:border-l", accountSurfaceClass)}>
               <li>
                 {isResident ? (
                   <button
@@ -237,12 +388,12 @@ export function Sidebar() {
                   }}
                   className={accountItemClass}
                 >
-                  <BellIcon className={accountIconClass} strokeWidth={1.8} />
+                  <InboxIcon className={accountIconClass} strokeWidth={1.8} />
                   <span className="min-w-0 flex-1 truncate text-left font-medium">
                     Notifications
                   </span>
                   {unreadCount > 0 ? (
-                    <span className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-sos px-1 text-[10px] font-bold leading-none text-white tabular-nums">
+                    <span className="shrink-0 text-[11px] font-semibold leading-none text-current tabular-nums">
                       {unreadCount > 99 ? "99+" : unreadCount}
                     </span>
                   ) : null}
@@ -271,20 +422,24 @@ export function Sidebar() {
             aria-expanded={open}
             className={cn(
               "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left transition-colors",
-              tone === "dark" ? "hover:bg-nav-raised" : "hover:bg-neutral-50",
+               (isResident || isOfficialRole) && "justify-center px-0",
+               "",
             )}
           >
             <span
               className={cn(
-                "flex size-9 shrink-0 items-center justify-center rounded-full text-[11.5px] font-semibold ring-1",
-                tone === "dark"
-                  ? "bg-nav-active text-white ring-white/10"
-                  : "bg-neutral-100 text-neutral-700 ring-transparent",
+                 "flex size-9 shrink-0 items-center justify-center rounded-full text-[14px] font-bold ring-1",
+                 "bg-slate-soft text-navy-muted ring-transparent",
               )}
             >
               {avatarInitials}
             </span>
-            <span className="flex min-w-0 flex-1 flex-col">
+            <span
+              className={cn(
+                "flex min-w-0 flex-1 flex-col",
+                "hidden",
+              )}
+            >
               <span
                 className={cn(
                   "truncate text-[12.5px] font-bold leading-tight",
@@ -302,15 +457,6 @@ export function Sidebar() {
                 {rolePosition}
               </span>
             </span>
-            <ChevronDownIcon
-              aria-hidden
-              className={cn(
-                "size-3.5 shrink-0 transition-transform duration-200",
-                tone === "dark" ? "text-nav-muted" : "text-neutral-400",
-                open && "rotate-180",
-              )}
-              strokeWidth={2.4}
-            />
           </button>
         </div>
       </div>

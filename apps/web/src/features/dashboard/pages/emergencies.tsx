@@ -23,6 +23,7 @@ import {
 } from "@/features/dashboard/api"
 import {
   getEmergency,
+  isNewerEmergencyAlert,
   listEmergencyAppeals,
   listEmergencyQueue,
   type EmergencyAlert,
@@ -136,8 +137,35 @@ export default function EmergenciesPage() {
     return () => { cancelled = true }
   }, [user, isOfficial, requestedAlertId])
 
+  useEffect(() => {
+    if (!isOfficial) return
+    let cancelled = false
+    const timer = window.setInterval(async () => {
+      try {
+        const nextAlerts = await listEmergencyQueue("all")
+        if (cancelled) return
+        setAlerts((current) => {
+          const byId = new Map(current.map((alert) => [alert.id, alert]))
+          for (const next of nextAlerts) {
+            const previous = byId.get(next.id)
+            if (!previous || isNewerEmergencyAlert(previous, next)) byId.set(next.id, next)
+          }
+          return Array.from(byId.values())
+        })
+      } catch {
+        return
+      }
+    }, 15000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [isOfficial])
+
   function updateAlert(next: EmergencyAlert) {
-    setAlerts((current) => current.map((alert) => (alert.id === next.id ? next : alert)))
+    setAlerts((current) => current.map((alert) => (
+      alert.id === next.id && isNewerEmergencyAlert(alert, next) ? next : alert
+    )))
     setSelectedId(next.id)
   }
 

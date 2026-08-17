@@ -18,17 +18,16 @@ export type ConcernClassificationConfig = {
   text_relevance_threshold: number
   duplicate_similarity_threshold: number
   minimum_description_length: number
-  mismatch_action: "manual_review" | "request_resubmission" | "reject"
+  mismatch_action: "auto_correct" | "request_resubmission" | "reject"
   flag_suspicious: boolean
   flag_duplicates: boolean
   report_duplicate_detection_enabled?: boolean
-  report_duplicate_action?: "warn" | "block" | "official_review"
+  report_duplicate_action?: "warn" | "block"
   report_duplicate_lookback_days?: number
   report_duplicate_distance_meters?: number
   report_duplicate_similarity_threshold?: number
   report_duplicate_location_precision?: number
   flag_irrelevant: boolean
-  notify_reviewer: boolean
   suspicious_terms: string[]
   category_keywords: Record<string, string[]>
   categories: ConcernCategory[]
@@ -38,7 +37,7 @@ export type ConcernClassificationConfig = {
   }
   metrics?: {
     auto_validated?: number
-    flagged?: number
+    rejected?: number
     tested?: number
   }
 }

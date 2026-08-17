@@ -51,9 +51,9 @@ export function ListSearch({
             inputRef.current?.focus()
           }}
           aria-label="Clear the search"
-          className="flex size-7 shrink-0 items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-brand-navy"
+          className="flex shrink-0 items-center justify-center text-neutral-400 transition-colors hover:text-brand-navy"
         >
-          <XIcon className="size-4" strokeWidth={2} aria-hidden />
+          <XIcon className="size-5" strokeWidth={1.8} aria-hidden />
         </button>
       ) : null}
     </div>

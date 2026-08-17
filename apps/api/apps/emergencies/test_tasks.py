@@ -131,6 +131,8 @@ class BeatScheduleTests(TestCase):
         "emergency-assignment-escalation",
         "refresh-map-service-pois",
         "periodic-housekeeping",
+        "service-health-sample",
+        "complete-unblocked-deletions",
     }
 
     def test_every_expected_entry_is_present(self):

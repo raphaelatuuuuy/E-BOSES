@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import time
 
 from django.test import override_settings
 from rest_framework import status
@@ -29,7 +30,8 @@ ENVELOPE = {
 class WebhookAuthModeTests(APITestCase):
     url = "/api/sms/inbound/"
 
-    def signed(self, key=SIGNING_KEY, timestamp="1767330660"):
+    def signed(self, key=SIGNING_KEY, timestamp=None):
+        timestamp = timestamp or str(int(time.time()))
         raw = json.dumps(ENVELOPE)
         signature = hmac.new(
             key.encode(), f"{raw}{timestamp}".encode(), hashlib.sha256
@@ -87,3 +89,7 @@ class WebhookAuthModeTests(APITestCase):
             status.HTTP_403_FORBIDDEN,
         )
         self.assertEqual(InboundSmsMessage.objects.count(), 0)
+
+    @override_settings(SMS_WEBHOOK_SIGNING_KEY=SIGNING_KEY, SMS_INBOUND_WEBHOOK_TOKEN="")
+    def test_a_stale_signature_is_refused(self):
+        self.assertEqual(self.signed(timestamp="1000000000").status_code, status.HTTP_403_FORBIDDEN)

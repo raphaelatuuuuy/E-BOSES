@@ -14,8 +14,9 @@ import {
 } from "react"
 import {
   AlertTriangleIcon,
-  BellIcon,
   ChevronLeftIcon,
+  CircleAlertIcon,
+  CircleCheck,
   CloudRainIcon,
   CloudSunIcon,
   DropletsIcon,
@@ -59,13 +60,13 @@ import {
 import { FeedPostCard } from "@/features/dashboard/components/feed-post-card"
 import { EmptyState } from "@/features/dashboard/components/record/empty-state"
 import {
+  categoryLabel,
   concernBodyText,
   streetLabelFromAddress,
 } from "@/features/dashboard/components/feed-post-text"
 import { advisoryMeta } from "@/features/dashboard/components/community-content/advisory-tags"
 import { AnnouncementComments } from "@/features/dashboard/components/home/announcement-comments"
 import {
-  EmergencyBanner,
   EmergencyDetailPanel,
   EmergencyPreviewCard,
 } from "@/features/dashboard/components/resident-map/emergency-strip"
@@ -87,6 +88,7 @@ import {
   defaultResidentLayers,
   type ResidentMapLayers,
 } from "@/features/dashboard/lib/resident-map-layers"
+import { useWheelScroll } from "@/hooks/use-wheel-scroll"
 import { usePageTitle } from "@/hooks/use-page-title"
 import {
   BARANGAY_CENTER,
@@ -167,10 +169,12 @@ function CategoryFilterChips({
   onSelect: (key: ChipKey) => void
   className?: string
 }) {
+  const scrollerRef = useWheelScroll<HTMLDivElement>()
   return (
     <div
+      ref={scrollerRef}
       className={cn(
-        "flex min-w-0 gap-1.5 overflow-x-auto overscroll-x-contain pb-0.5 [scrollbar-width:thin] [-webkit-overflow-scrolling:touch]",
+        "scrollbar-hide flex min-w-0 gap-1.5 overflow-x-auto overscroll-x-contain pb-0.5 [-webkit-overflow-scrolling:touch]",
         className,
       )}
       style={{ touchAction: "pan-x" }}
@@ -307,19 +311,26 @@ function FeedPreviewCard({
                   return `${(atWord.length >= 24 ? atWord : slice).trim()}...`
                 })()}
               </p>
-              <span
-                className={cn(
-                  "shrink-0 text-[11px] font-semibold sm:text-[12px]",
-                  st.tone === "active" && "text-sos",
-                  st.tone === "appealed" && "text-neutral-600",
-                  st.tone === "closed" && "text-neutral-400",
-                )}
-              >
-                {st.label}
+              <span className="shrink-0 text-[11px] font-semibold text-neutral-500 sm:text-[12px]">
+                {categoryLabel(post.category)}
               </span>
             </div>
-            <p className="mt-0.5 text-[11px] text-neutral-500 sm:text-[12px]">
-              {[dist, ago].filter(Boolean).join(" · ")}
+            <p className="mt-0.5 flex items-center gap-x-1.5 text-[11px] text-neutral-500 sm:text-[12px]">
+              {st.tone === "closed" ? (
+                <>
+                  <span className="inline-flex shrink-0 items-center gap-1 font-semibold text-status-closed">
+                    <CircleCheck className="size-3.5 shrink-0" strokeWidth={2.4} />
+                    {st.label}
+                  </span>
+                  <span aria-hidden>·</span>
+                </>
+              ) : st.tone === "appealed" ? (
+                <>
+                  <span className="shrink-0 font-semibold text-neutral-600">{st.label}</span>
+                  <span aria-hidden>·</span>
+                </>
+              ) : null}
+              <span>{[dist, ago].filter(Boolean).join(" · ")}</span>
             </p>
             {snippet ? (
               <p className="mt-1.5 line-clamp-2 break-words text-[12px] leading-snug text-neutral-600 sm:text-[13px]">
@@ -383,15 +394,15 @@ function AnnouncementListItem({
             <TagIcon className="size-4 sm:size-5" strokeWidth={1.9} />
           </span>
           <div className="min-w-0 flex-1 overflow-hidden">
-            <p className="truncate text-[15px] font-semibold text-neutral-900">Barangay Hall</p>
-            <p className="mt-0.5 text-meta text-neutral-500">
+            <p className="truncate text-[11px] font-semibold text-neutral-500 sm:text-[12px]">Barangay Hall</p>
+            <p className="mt-0.5 text-[11px] text-neutral-500 sm:text-[12px]">
               {[announcement.date_label, place].filter(Boolean).join(" · ")}
             </p>
-            <p className="mt-2 break-words text-row font-semibold leading-snug text-neutral-900">
+            <p className="mt-2 break-words text-[13px] font-bold leading-snug text-neutral-900 sm:text-[14px]">
               {announcement.title}
             </p>
             {announcement.body ? (
-              <p className="mt-1.5 line-clamp-2 break-words text-read leading-relaxed text-neutral-600">
+              <p className="mt-1.5 line-clamp-2 break-words text-[12px] leading-snug text-neutral-600 sm:text-[13px]">
                 {announcement.body}
               </p>
             ) : null}
@@ -907,6 +918,7 @@ export default function ResidentAlertsMapPage() {
     setSelectedAnnouncementId(id)
     setFocusComment(write)
     setWeatherOpen(false)
+    setAlertsOpen(true)
     if (!isDesktop) snapSheetTo("expanded")
   }
 
@@ -915,15 +927,21 @@ export default function ResidentAlertsMapPage() {
     setSelectedAnnouncementId(null)
     setSelectedId(id)
     setWeatherOpen(false)
+    setAlertsOpen(true)
     snapSheetTo("expanded")
     setFocusComment(write)
     setExpandLoading(true)
     try {
+      // The feed endpoint masks the incident address to the barangay for
+      // privacy; the map snapshot keeps the full street. Preserve it so the
+      // panel shows where the report is.
+      const streetAddress = posts.find((p) => p.id === id)?.address || null
       // Reload full feed post (comments, votes, media) into the left panel
       const full = await getConcern(id)
-      setExpandedPost(full)
+      const detailed = streetAddress ? { ...full, address: streetAddress } : full
+      setExpandedPost(detailed)
       // Keep list in sync with lightweight fields
-      setPosts((prev) => prev.map((p) => (p.id === id ? { ...p, ...full, media: full.media } : p)))
+      setPosts((prev) => prev.map((p) => (p.id === id ? { ...p, ...detailed } : p)))
     } catch {
       const fallback = posts.find((p) => p.id === id) ?? null
       setExpandedPost(fallback)
@@ -953,6 +971,7 @@ export default function ResidentAlertsMapPage() {
     setSelectedAnnouncementId(null)
     setSelectedEmergencyId(id)
     setWeatherOpen(false)
+    setAlertsOpen(true)
     if (!isDesktop) snapSheetTo("expanded")
   }
 
@@ -1323,9 +1342,6 @@ export default function ResidentAlertsMapPage() {
         />
       ) : null}
 
-      {/* Selected-emergency brief over the map (no count badge) */}
-      <EmergencyBanner selectedEmergency={selectedEmergency} />
-
       {error ? (
         <div className="absolute inset-x-4 top-1/3 z-30 mx-auto max-w-sm rounded-2xl border border-sos/30 bg-white p-4 text-center shadow-xl">
           <p className="text-sm font-semibold text-sos">{error}</p>
@@ -1607,11 +1623,8 @@ export default function ResidentAlertsMapPage() {
       {isDesktop ? (
         alertsOpen ? (
           <aside className="absolute left-4 top-4 z-20 flex w-[min(100%,380px)] max-h-[min(72vh,620px)] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)]">
-            <div className="flex shrink-0 items-center gap-1.5 border-b border-neutral-100 px-3 py-2">
-              <BellIcon className="size-4 shrink-0 text-neutral-600" strokeWidth={2.25} />
-              <span className="text-[11px] font-bold tracking-wide text-neutral-500">
-                Alerts
-              </span>
+            <div className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-100 px-3">
+              <CircleAlertIcon className="size-5 shrink-0 text-neutral-800" strokeWidth={2.25} />
               <button
                 type="button"
                 onClick={() => setAlertsOpen(false)}
@@ -1628,12 +1641,11 @@ export default function ResidentAlertsMapPage() {
           <button
             type="button"
             onClick={() => setAlertsOpen(true)}
-            className="absolute left-4 top-4 z-20 inline-flex h-10 items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 text-[13px] font-semibold text-neutral-800 shadow-md"
+            className="absolute left-4 top-4 z-20 flex size-10 items-center justify-center rounded-lg border border-neutral-200 bg-white shadow-md"
             aria-label="Open alerts"
             title="Open alerts"
           >
-            <BellIcon className="size-5 shrink-0 text-neutral-600" strokeWidth={2.25} />
-            <span className="whitespace-nowrap">Alerts</span>
+            <CircleAlertIcon className="size-5 shrink-0 text-neutral-800" strokeWidth={2.25} />
           </button>
         )
       ) : weatherOpen ? null : (

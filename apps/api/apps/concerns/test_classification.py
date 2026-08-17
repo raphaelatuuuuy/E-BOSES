@@ -282,7 +282,7 @@ class ConcernAiTextProviderPipelineTests(TestCase):
         return Concern.objects.create(**defaults)
 
     @override_settings(OLLAMA_API_KEY="")
-    def test_missing_ollama_key_routes_to_review(self):
+    def test_missing_ollama_key_uses_safe_intake_fallback(self):
         concern = self._make_concern()
 
         assessment = process_concern_ai(concern.id)
@@ -292,7 +292,9 @@ class ConcernAiTextProviderPipelineTests(TestCase):
         self.assertIn("fallback_reason", review)
         self.assertEqual(assessment.nlp_validity, "needs_review")
         self.assertEqual(assessment.status, ConcernAiAssessment.Status.NOT_CONFIGURED)
-        self.assertEqual(assessment.recommended_action, "manual_review")
+        self.assertEqual(assessment.recommended_action, "accept")
+        concern.refresh_from_db()
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.ACCEPTED)
 
     @override_settings(OLLAMA_API_KEY="test-key")
     def test_analyzer_is_called_with_the_report_and_no_detector_evidence(self):
@@ -317,7 +319,7 @@ class ConcernAiTextProviderPipelineTests(TestCase):
         self.assertEqual(assessment.nlp_validity, "related_infrastructure")
 
     @override_settings(OLLAMA_API_KEY="test-key")
-    def test_analyzer_failure_fails_safely_to_review(self):
+    def test_analyzer_failure_fails_open_without_rejecting_report(self):
         concern = self._make_concern()
 
         with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
@@ -328,9 +330,9 @@ class ConcernAiTextProviderPipelineTests(TestCase):
         self.assertIn("RuntimeError", review["fallback_reason"])
         self.assertEqual(assessment.nlp_validity, "needs_review")
         self.assertEqual(assessment.status, ConcernAiAssessment.Status.FAILED)
-        # The report itself is untouched — a broken model is not a rejection.
+        # A broken model does not discard a real report.
         concern.refresh_from_db()
-        self.assertEqual(concern.validation_status, Concern.ValidationStatus.PENDING)
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.ACCEPTED)
 
     @override_settings(OLLAMA_API_KEY="test-key")
     def test_suspicious_flag_fires_from_the_result_flag(self):
@@ -345,28 +347,32 @@ class ConcernAiTextProviderPipelineTests(TestCase):
 
         self.assertTrue(assessment.flagged)
         self.assertIn("suspicious_text", [reason["reason"] for reason in assessment.flag_reasons])
+        concern.refresh_from_db()
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.REJECTED)
+        self.assertEqual(concern.status, Concern.Status.REJECTED)
+        self.assertEqual(concern.rejection_code, "automated_irrelevant")
 
     @override_settings(OLLAMA_API_KEY="test-key")
-    def test_category_mismatch_needs_review_and_is_never_auto_rejected(self):
-        """A wrong category is a reason to look, not a reason to turn down."""
+    def test_category_mismatch_is_corrected_without_manual_review(self):
         concern = self._make_concern(category=Concern.Category.ENVIRONMENT)
 
         with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
             classifier.return_value.analyze.return_value = gemma_result(
                 category=Concern.Category.INFRASTRUCTURE,
                 selected_category_match=False,
-                recommended_action="manual_review",
+                recommended_action="accept",
             )
             assessment = process_concern_ai(concern.id)
 
         self.assertFalse(assessment.category_match)
         self.assertTrue(assessment.flagged)
         self.assertIn("category_mismatch", [reason["reason"] for reason in assessment.flag_reasons])
-        self.assertEqual(assessment.recommended_action, "manual_review")
+        self.assertEqual(assessment.recommended_action, "accept")
         self.assertNotEqual(assessment.recommended_action, "reject_as_irrelevant")
         concern.refresh_from_db()
         self.assertNotEqual(concern.status, Concern.Status.REJECTED)
-        self.assertEqual(concern.validation_status, Concern.ValidationStatus.PENDING)
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.ACCEPTED)
+        self.assertEqual(concern.category, Concern.Category.INFRASTRUCTURE)
 
 
 class GemmaParserTests(TestCase):
@@ -413,7 +419,7 @@ class GemmaParserTests(TestCase):
         self.assertEqual(result.details["possible_categories"], ["public_safety"])
         self.assertEqual(result.details["suspected_sensitive_classes"], ["license plate"])
 
-    def test_unreadable_output_needs_review_without_claiming_anything(self):
+    def test_unreadable_output_uses_safe_fallback_without_claiming_anything(self):
         result = parse_gemma_result(
             "This should be reviewed by an official.",
             model_version="gemma4:cloud",
@@ -424,7 +430,7 @@ class GemmaParserTests(TestCase):
 
         self.assertEqual(result.label, "needs_review")
         self.assertTrue(result.details["ai_result_uncertain"])
-        self.assertEqual(result.details["recommended_action"], "manual_review")
+        self.assertEqual(result.details["recommended_action"], "accept")
         self.assertFalse(result.details["privacy_scan_required"])
 
     def test_gemma_may_name_any_concrete_object_to_blur(self):
