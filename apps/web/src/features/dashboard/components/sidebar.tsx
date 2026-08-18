@@ -18,9 +18,8 @@ import {
   SettingsIcon,
   SirenIcon,
   ShieldAlertIcon,
-  UserCircleIcon,
+UserCircleIcon,
   UserRoundIcon,
-  UsersIcon,
   type LucideIcon,
 } from "lucide-react"
 
@@ -166,13 +165,13 @@ function SidebarRow({
                 key={`${item.key}-related-left`}
                 className={cn(
                   "flex size-8 items-center justify-center rounded-md",
-                  tone === "dark"
+tone === "dark"
                     ? "bg-nav-active text-nav-text-active"
                     : alarm
                     ? "bg-sos/10 text-sos/50"
                     : active
-                      ? tone === "dark" ? "bg-nav-active text-nav-muted" : "bg-brand-navy/10 text-brand-navy/50"
-                    : tone === "dark" ? "bg-nav-bg text-nav-muted" : "bg-neutral-100 text-neutral-400",
+                      ? "bg-brand-navy/10 text-brand-navy/50"
+                      : "bg-neutral-100 text-neutral-400",
                 )}
               >
                 <LeftRelatedIcon className="size-4" strokeWidth={2} />
@@ -181,13 +180,13 @@ function SidebarRow({
             <span
               className={cn(
                 "relative flex size-9 items-center justify-center rounded-md text-white shadow-sm",
-                tone === "dark"
+tone === "dark"
                   ? "bg-nav-active text-nav-text-active"
                   : alarm
                   ? "bg-sos"
                   : active
-                    ? tone === "dark" ? "bg-nav-active text-nav-text-active" : "bg-brand-navy"
-                    : tone === "dark" ? "bg-nav-bg text-nav-muted" : "bg-neutral-200 text-neutral-700",
+                    ? "bg-brand-navy"
+                    : "bg-neutral-200 text-neutral-700",
               )}
             >
               <Icon className="size-[18px]" strokeWidth={2} />
@@ -197,13 +196,13 @@ function SidebarRow({
                 key={`${item.key}-related-right`}
                 className={cn(
                   "flex size-8 items-center justify-center rounded-md",
-                  tone === "dark"
+tone === "dark"
                     ? "bg-nav-active text-nav-text-active"
                     : alarm
                     ? "bg-sos/10 text-sos/50"
                     : active
-                      ? tone === "dark" ? "bg-nav-active text-nav-muted" : "bg-brand-navy/10 text-brand-navy/50"
-                    : tone === "dark" ? "bg-nav-bg text-nav-muted" : "bg-neutral-100 text-neutral-400",
+                      ? "bg-brand-navy/10 text-brand-navy/50"
+                      : "bg-neutral-100 text-neutral-400",
                 )}
               >
                 <RightRelatedIcon className="size-4" strokeWidth={2} />
@@ -261,8 +260,7 @@ export function Sidebar() {
     alerts: "See nearby emergencies, alerts, and safety updates.",
     reports: "Track the concerns you submitted and their progress.",
     emergencies: "View urgent reports and responder requests.",
-    overview: "See the barangay activity and current summary.",
-    "alert-map": "View active alerts, locations, and boundaries.",
+overview: "See the barangay activity and current summary.",
     "operations-map": "View active alerts, locations, and boundaries.",
     concerns: "Review resident reports and their progress.",
     community: "Manage public updates and resident activity.",
@@ -275,9 +273,8 @@ export function Sidebar() {
     alerts: [MapPinIcon, SirenIcon],
     reports: [FileUserIcon, MessagesSquareIcon],
     emergencies: [SirenIcon, BellRingIcon],
-    overview: [FileChartColumnIcon, ChartSplineIcon],
+overview: [FileChartColumnIcon, ChartSplineIcon],
     "operations-map": [MapPinIcon, MapIcon],
-    alerts: [MapPinIcon, ShieldAlertIcon],
     concerns: [FileTextIcon, MessageSquareIcon],
     community: [UserRoundIcon, MegaphoneIcon],
     configuration: [SettingsIcon, ShieldAlertIcon],
@@ -393,9 +390,10 @@ export function Sidebar() {
                     Notifications
                   </span>
                   {unreadCount > 0 ? (
-                    <span className="shrink-0 text-[11px] font-semibold leading-none text-current tabular-nums">
-                      {unreadCount > 99 ? "99+" : unreadCount}
-                    </span>
+                    <span
+                      className="size-2.5 shrink-0 rounded-full bg-brand-orange"
+                      aria-hidden="true"
+                    />
                   ) : null}
                 </button>
               </li>

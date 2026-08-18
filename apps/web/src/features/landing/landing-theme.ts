@@ -10,15 +10,6 @@ export function prefersReducedMotion(): boolean {
   )
 }
 
-/** Heuristic: skip three.js on devices likely to jank. */
-export function isLowEndDevice(): boolean {
-  if (typeof navigator === "undefined") return false
-  const nav = navigator as Navigator & { deviceMemory?: number }
-  const cores = nav.hardwareConcurrency ?? 8
-  const memory = nav.deviceMemory ?? 8
-  return cores <= 4 || memory <= 4
-}
-
 /** Shared gsap.matchMedia() breakpoint conditions. */
 export const MM = {
   desktop: "(min-width: 768px) and (prefers-reduced-motion: no-preference)",

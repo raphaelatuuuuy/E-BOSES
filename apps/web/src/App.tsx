@@ -44,8 +44,8 @@ const NotFoundPage = lazy(() => import("@/features/dashboard/pages/not-found"))
 const OfficialUsersManagePage = lazy(() => import("@/features/dashboard/pages/official-users-manage-page"))
 const OfficialCategoriesPage = lazy(() => import("@/features/dashboard/pages/official-categories-page"))
 const OfficialDispatchRulesPage = lazy(() => import("@/features/dashboard/pages/official-dispatch-rules-page"))
+const OfficialCoverageAreaPage = lazy(() => import("@/features/dashboard/pages/official-coverage-area-page"))
 const OfficialCommunityContentPage = lazy(() => import("@/features/dashboard/pages/official-community-content-page"))
-const OfficialMapDispatchPolicyPage = lazy(() => import("@/features/dashboard/pages/official-map-dispatch-policy-page"))
 const LandingPage = lazy(() => import("@/features/landing/landing-page"))
 const HelpPage = lazy(() => import("@/features/help/help-page"))
 const HelpCollectionPage = lazy(() => import("@/features/help/help-collection-page"))
@@ -248,7 +248,7 @@ function AppRoutes() {
         <Route path="alerts-map" element={<AlertsMapRoute />} />
         <Route path="admin" element={<OfficialRoute><Navigate to="/dashboard/configuration/users" replace /></OfficialRoute>} />
         <Route path="configuration/verification" element={<OfficialRoute><Navigate to="/dashboard/configuration/id-proof-template" replace /></OfficialRoute>} />
-        <Route path="configuration/zones" element={<OfficialRoute><Navigate to="/dashboard/configuration/map-dispatch" replace /></OfficialRoute>} />
+        <Route path="configuration/zones" element={<OfficialRoute><Navigate to="/dashboard/configuration" replace /></OfficialRoute>} />
         <Route path="configuration/privacy" element={<OfficialRoute><Navigate to="/dashboard/configuration/audit-log" replace /></OfficialRoute>} />
         <Route path="verification-queue" element={<OfficialRoute><Navigate to="/dashboard/configuration/id-proof-template" replace /></OfficialRoute>} />
         <Route path="ocr-templates" element={<OfficialRoute><Navigate to="/dashboard/configuration/id-proof-template" replace /></OfficialRoute>} />
@@ -259,9 +259,9 @@ function AppRoutes() {
         <Route path="configuration/categories" element={<OfficialRoute><OfficialCategoriesPage /></OfficialRoute>} />
         <Route path="configuration/routing" element={<OfficialRoute><Navigate to="/dashboard/configuration/categories" replace /></OfficialRoute>} />
         <Route path="configuration/dispatch" element={<OfficialRoute><OfficialDispatchRulesPage /></OfficialRoute>} />
+        <Route path="configuration/coverage" element={<OfficialRoute><OfficialCoverageAreaPage /></OfficialRoute>} />
         <Route path="configuration/id-proof-template" element={<OfficialRoute><OfficialIdProofWorkspacePage /></OfficialRoute>} />
         <Route path="configuration/classification" element={<OfficialRoute><ConcernClassificationPage /></OfficialRoute>} />
-        <Route path="configuration/map-dispatch" element={<OfficialRoute><OfficialMapDispatchPolicyPage /></OfficialRoute>} />
         <Route path="configuration/users" element={<OfficialRoute><OfficialUsersManagePage /></OfficialRoute>} />
         <Route path="configuration/audit-log" element={<OfficialRoute><OfficialAuditLogPage /></OfficialRoute>} />
         <Route path="configuration/privacy-requests" element={<OfficialRoute><Navigate to="/dashboard/configuration/audit-log" replace /></OfficialRoute>} />

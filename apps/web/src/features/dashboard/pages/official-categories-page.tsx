@@ -98,6 +98,127 @@ function slugify(value: string) {
 const inputCls = "mt-1.5 w-full rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[16px] text-neutral-900 outline-none transition-colors focus:border-neutral-500"
 const labelCls = "text-[13px] font-semibold text-neutral-500"
 
+function UnitDropdown({
+  units,
+  value,
+  onChange,
+}: {
+  units: Unit[]
+  value: number | null
+  onChange: (id: number | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [])
+
+  const current = units.find((u) => u.id === value)
+
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-3 rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-left text-[16px] text-neutral-900 outline-none transition-colors hover:border-neutral-400">
+        <span className={current ? "flex-1 truncate font-medium" : "flex-1 truncate font-medium text-neutral-400"}>
+          {current ? current.name : "Choose a unit"}
+        </span>
+        {open ? <ChevronUpIcon className="size-4 shrink-0 text-neutral-400" /> : <ChevronDownIcon className="size-4 shrink-0 text-neutral-400" />}
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white shadow-lg [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" style={{ maxHeight: '200px', overflowY: 'auto' }}>
+          <div className="py-1">
+            <button type="button"
+              onClick={() => { onChange(null); setOpen(false) }}
+              className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-neutral-700 transition hover:bg-neutral-50">
+              <span className="flex-1 min-w-0">
+                <span className="block font-medium text-neutral-900">No unit</span>
+                <span className="block text-[13px] text-neutral-500">Concerns will not be routed to anyone</span>
+              </span>
+              {value == null && <CircleCheck className="size-4 shrink-0 text-green-600" strokeWidth={2} />}
+            </button>
+            {units.filter((u) => u.is_active).map((u) => (
+              <button key={u.id} type="button"
+                onClick={() => { onChange(u.id); setOpen(false) }}
+                className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-neutral-700 transition hover:bg-neutral-50">
+                <span className="flex-1 min-w-0">
+                  <span className="block font-medium text-neutral-900">{u.name}</span>
+                  {u.short_name && <span className="block text-[13px] text-neutral-500">{u.short_name}</span>}
+                </span>
+                {value === u.id && <CircleCheck className="size-4 shrink-0 text-green-600" strokeWidth={2} />}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const REQUIREMENTS = [
+  { key: "description_required", label: "Description required", hint: "Residents must describe the issue" },
+  { key: "photo_required", label: "Photo required", hint: "Residents must attach at least one photo" },
+  { key: "location_required", label: "Location required", hint: "Residents must pin where the issue is" },
+] as const
+
+function RequirementDropdown({
+  draft,
+  onChange,
+}: {
+  draft: Draft
+  onChange: (next: Draft) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [])
+
+  const onCount = REQUIREMENTS.filter((item) => Boolean(draft[item.key])).length
+
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-3 rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-left text-[16px] text-neutral-900 outline-none transition-colors hover:border-neutral-400">
+        <span className="flex-1 truncate font-medium">
+          Set a requirement
+          <span className="ml-2 text-[13px] font-normal text-neutral-500">
+            {onCount} of {REQUIREMENTS.length}
+          </span>
+        </span>
+        {open ? <ChevronUpIcon className="size-4 shrink-0 text-neutral-400" /> : <ChevronDownIcon className="size-4 shrink-0 text-neutral-400" />}
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white shadow-lg [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" style={{ maxHeight: '200px', overflowY: 'auto' }}>
+          <div className="py-1">
+            {REQUIREMENTS.map((item) => {
+              const checked = Boolean(draft[item.key])
+              return (
+                <button key={item.key} type="button"
+                  onClick={() => onChange({ ...draft, [item.key]: !checked })}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-neutral-700 transition hover:bg-neutral-50">
+                  <span className="flex-1 min-w-0">
+                    <span className="block font-medium text-neutral-900">{item.label}</span>
+                    <span className="block text-[13px] text-neutral-500">{item.hint}</span>
+                  </span>
+                  {checked ? (
+                    <CircleCheck className="size-4 shrink-0 text-green-600" strokeWidth={2} />
+                  ) : (
+                    <span className="size-4 shrink-0 rounded-full border-[1.5px] border-neutral-300" />
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function IconDropdown({ value, onChange }: { value: string; onChange: (key: string) => void }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -368,56 +489,20 @@ export default function OfficialCategoriesPage() {
               </label>
             </div>
 
-            {/* Assigned unit — dropdown style */}
+            {/* Assigned unit — dropdown with checkmarks, like the Icon picker */}
             <div className="space-y-2">
               <p className={labelCls}>Assigned unit</p>
-              <div className="relative">
-                <select
-                  value={draft.department ? String(draft.department) : ""}
-                  onChange={(e) => setDraft((current) => ({ ...current, department: e.target.value ? Number(e.target.value) : null }))}
-                  className="w-full appearance-none rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 pr-10 text-[16px] text-neutral-900 outline-none transition-colors focus:border-neutral-500"
-                >
-                  <option value="">Choose a unit</option>
-                  {units.filter((u) => u.is_active).map((u) => (
-                    <option key={u.id} value={u.id}>{u.name}</option>
-                  ))}
-                </select>
-                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400">
-                  <ChevronDownIcon className="size-4" />
-                </span>
-              </div>
+              <UnitDropdown
+                units={units}
+                value={draft.department ?? null}
+                onChange={(id) => setDraft((current) => ({ ...current, department: id }))}
+              />
             </div>
 
-            {/* Requirements — merged with green checkmarks */}
+            {/* Requirements — dropdown with checkmarks, like the Icon picker */}
             <div className="space-y-2">
               <p className={labelCls}>Report requirements</p>
-              <div className="overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white">
-                {[
-                  { key: "description_required", label: "Description required", hint: "Residents must describe the issue" },
-                  { key: "photo_required", label: "Photo required", hint: "Residents must attach at least one photo" },
-                  { key: "location_required", label: "Location required", hint: "Residents must pin where the issue is" },
-                ].map((item) => {
-                  const checked = Boolean(draft[item.key as keyof Draft])
-                  return (
-                    <button
-                      key={item.key}
-                      type="button"
-                      onClick={() => setDraft((current) => ({ ...current, [item.key]: !checked }))}
-                      className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-neutral-50"
-                    >
-                      <span className="flex-1 min-w-0">
-                        <span className="block text-[15px] font-medium text-neutral-900">{item.label}</span>
-                        <span className="block text-[13px] text-neutral-500">{item.hint}</span>
-                      </span>
-                      {checked ? (
-                        <CircleCheck className="size-5 shrink-0 text-green-600" strokeWidth={2} />
-                      ) : (
-                        <span className="size-5 shrink-0 rounded-full border-[1.5px] border-neutral-300" />
-                      )}
-                    </button>
-                  )
-                })}
-              </div>
+              <RequirementDropdown draft={draft} onChange={setDraft} />
             </div>
 
             <div className="space-y-2">
@@ -427,7 +512,7 @@ export default function OfficialCategoriesPage() {
                 onClick={() => setDraft((current) => ({ ...current, public_feed_allowed: !(current?.public_feed_allowed ?? true) }))}
                 className="flex w-full items-center gap-3 rounded-[14px] border-[1.5px] border-neutral-200 px-4 py-3 text-left transition hover:bg-neutral-50"
               >
-                <span className="flex-1">
+                <span className="flex-1 text-[15px]">
                   <span className="block text-[15px] font-medium text-neutral-900">Allow public sharing</span>
                   <span className="block text-[13px] text-neutral-500">Residents can choose to show this report in the community feed</span>
                 </span>
@@ -463,9 +548,9 @@ export default function OfficialCategoriesPage() {
         title={deleteTarget ? `Delete ${deleteTarget.name}?` : ""}
         description="Concerns already filed under this category keep their history. If any exist, it is deactivated instead of deleted."
         footer={
-          <div className="space-y-3">
-            <SheetPrimaryButton tone="danger" onClick={() => void confirmDelete()}>Delete category</SheetPrimaryButton>
-            <SheetPrimaryButton onClick={() => { setDeleteOpen(false); setDeleteTarget(null) }}>Cancel</SheetPrimaryButton>
+          <div className="flex gap-2">
+            <SheetPrimaryButton onClick={() => { setDeleteOpen(false); setDeleteTarget(null) }} className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]">Cancel</SheetPrimaryButton>
+            <SheetPrimaryButton tone="danger" onClick={() => void confirmDelete()} className="flex-1 text-[15px]">Delete category</SheetPrimaryButton>
           </div>
         }
       />

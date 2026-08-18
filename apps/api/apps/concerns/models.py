@@ -236,8 +236,14 @@ class Department(models.Model):
 
 
 class Position(models.Model):
-    name = models.CharField(max_length=120, unique=True)
+    name = models.CharField(max_length=120)
     code = models.SlugField(max_length=80, unique=True)
+    # The unit this position belongs to. Null means barangay-wide: the shared
+    # RBAC catalog (Barangay Captain, Secretary, ...) stays assignable to any
+    # unit and appears in no unit's own position list.
+    department = models.ForeignKey(
+        Department, null=True, blank=True, on_delete=models.CASCADE, related_name="positions"
+    )
     permissions = models.JSONField(default=list, blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -245,6 +251,9 @@ class Position(models.Model):
 
     class Meta:
         ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(fields=["name", "department"], name="concerns_unique_position_per_department"),
+        ]
 
     def __str__(self):
         return self.name
@@ -508,6 +517,7 @@ class ContentFlag(models.Model):
         REVIEWED = "reviewed", "Reviewed"
         DISMISSED = "dismissed", "Dismissed"
         ACTION_TAKEN = "action_taken", "Action Taken"
+        TAKEN_DOWN = "taken_down", "Taken Down"
 
     concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="flags")
     comment = models.ForeignKey(ConcernComment, null=True, blank=True, on_delete=models.CASCADE, related_name="flags")

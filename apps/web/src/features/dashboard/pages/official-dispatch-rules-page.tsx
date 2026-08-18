@@ -624,24 +624,26 @@ export default function OfficialDispatchRulesPage() {
         title={deleteTarget ? `Remove ${deleteTarget.label}?` : ""}
         description="Alerts already filed under this category keep their history. This cannot be undone."
         footer={
-          <div className="space-y-3">
-            <SheetPrimaryButton
-              tone="danger"
-              disabled={busy === deleteTarget?.code}
-              onClick={() => void confirmDelete()}
-            >
-              {busy === deleteTarget?.code
-                ? "Removing\u2026"
-                : "Remove category"}
-            </SheetPrimaryButton>
+          <div className="flex gap-2">
             <SheetPrimaryButton
               disabled={busy === deleteTarget?.code}
               onClick={() => {
                 setDeleteOpen(false)
                 setDeleteTarget(null)
               }}
+              className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]"
             >
               Cancel
+            </SheetPrimaryButton>
+            <SheetPrimaryButton
+              tone="danger"
+              disabled={busy === deleteTarget?.code}
+              onClick={() => void confirmDelete()}
+              className="flex-1 text-[15px]"
+            >
+              {busy === deleteTarget?.code
+                ? "Removing\u2026"
+                : "Remove category"}
             </SheetPrimaryButton>
           </div>
         }

@@ -17,12 +17,29 @@ interface ServiceModule {
   message: string
   latency_ms: number
   history: DayEntry[]
+  availability: Availability
 }
 
 interface DayEntry {
   date: string
   status: DayStatus
   issues: { severity: number; text: string }[]
+  checks_total: number
+  measured_checks: number
+  up_checks: number
+  degraded_checks: number
+  down_checks: number
+  unknown_checks: number
+  availability_percent: number | null
+}
+
+interface Availability {
+  percent: number | null
+  measured_checks: number
+  up_checks: number
+  degraded_checks: number
+  down_checks: number
+  sample_minutes: number
 }
 
 interface ServiceGroup {
@@ -30,6 +47,7 @@ interface ServiceGroup {
   modules: ServiceModule[]
   worst: number
   history: DayEntry[]
+  availability: Availability
 }
 
 interface ServiceStatus {
@@ -43,6 +61,7 @@ interface ServiceStatus {
     operational: number
     degraded: number
     down: number
+    unknown: number
     not_configured: number
   }
 }
@@ -60,22 +79,20 @@ const STATUS_WORD: Partial<Record<ModuleStatus, string>> = {
  * the header. Days never sampled are left out of both sides of the fraction —
  * counting them as good would invent a track record we do not have.
  */
-function uptimeLabel(days: DayEntry[]): string {
-  const measured = days.filter((day) => day.status !== "no_data")
-  if (measured.length === 0) return "No history yet"
-  const good = measured.filter(
-    (day) => day.status === "operational" || day.status === "not_configured",
-  ).length
-  const percent = (good / measured.length) * 100
-  const rounded = Number.isInteger(percent) ? String(percent) : percent.toFixed(2)
-  return `${rounded}% uptime`
+function availabilityLabel(availability: Availability): string {
+  if (availability.percent === null) return "No measured history"
+  const rounded = Number.isInteger(availability.percent)
+    ? String(availability.percent)
+    : availability.percent.toFixed(2)
+  return `${rounded}% availability`
 }
 
-// Nothing is said when a group is fine — the uptime figure already says it.
-const GROUP_STATUS_WORD: Record<number, string> = {
-  1: "Some not set up",
-  2: "Running slow",
-  3: "Needs attention",
+function groupStatusWord(group: ServiceGroup): string {
+  if (group.modules.some((mod) => mod.status === "down")) return "Needs attention"
+  if (group.modules.some((mod) => mod.status === "degraded")) return "Running slow"
+  if (group.modules.some((mod) => mod.status === "unknown")) return "Not verified"
+  if (group.modules.some((mod) => mod.status === "not_configured")) return "Needs setup"
+  return ""
 }
 
 const WINDOW_DAYS = 90
@@ -200,7 +217,7 @@ function DayTooltip({ day, anchor }: { day: DayEntry; anchor: DOMRect }) {
       style={{ top: 0, left: 0, visibility: "hidden" }}
       className="pointer-events-none fixed z-[100] w-64 rounded-xl border border-neutral-200 bg-card px-3.5 py-3 shadow-xl"
     >
-      <p className="text-meta font-medium text-neutral-500">{formatDay(day.date)}</p>
+      <p className="text-meta font-normal text-neutral-500">{formatDay(day.date)}</p>
       {day.status === "no_data" ? (
         <p className="mt-2 text-meta text-neutral-500">No data was recorded on this day.</p>
       ) : day.issues.length > 0 ? (
@@ -250,14 +267,25 @@ function StatusBar({ days, className }: { days: DayEntry[]; className?: string }
 /* ── Window nav ── */
 
 function windowLabel(days: DayEntry[]): string {
-  if (days.length === 0) return ""
+  const measured = days.filter((day) => day.checks_total > 0)
+  if (measured.length === 0) return "No measured history"
   const fmt = (iso: string) => {
     const [y, m] = iso.split("-").map(Number)
     return new Date(y!, (m ?? 1) - 1, 1).toLocaleDateString("en-US", { month: "short", year: "numeric" })
   }
-  const first = fmt(days[0]!.date)
-  const last = fmt(days[days.length - 1]!.date)
+  const first = fmt(measured[0]!.date)
+  const last = fmt(measured[measured.length - 1]!.date)
   return first === last ? first : `${first} – ${last}`
+}
+
+function checkedLabel(timestamp?: number): string {
+  if (!timestamp) return ""
+  return `Checked ${new Date(timestamp * 1000).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })}`
 }
 
 /* ── Section ── */
@@ -276,6 +304,7 @@ export function ServiceStatusSection() {
   const [status, setStatus] = useState<ServiceStatus | null>(null)
   const [audit, setAudit] = useState<AuditStatus | null>(null)
   const [error, setError] = useState("")
+  const [checking, setChecking] = useState(false)
   const [open, setOpen] = useState(false)
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [offset, setOffset] = useState(0)
@@ -326,17 +355,21 @@ export function ServiceStatusSection() {
       ? "Some parts are not responding. Reports and alerts may be delayed."
       : worst === 2
         ? "Some parts are slow. The system still works."
+        : counts && counts.unknown > 0
+          ? `${counts.unknown} ${counts.unknown === 1 ? "service has" : "services have"} no recent end-to-end proof.`
         : counts && counts.not_configured > 0
-          ? `${counts.not_configured} optional ${counts.not_configured === 1 ? "service is" : "services are"} not set up.`
-          : "We know of no problems with the system."
+          ? `${counts.not_configured} ${counts.not_configured === 1 ? "service is" : "services are"} not configured.`
+          : "Every operational check passed."
 
   const summaryWord = !status
     ? "Checking…"
-    : counts && counts.down > 0
-      ? `${counts.down} not working`
-      : counts && counts.degraded > 0
-        ? `${counts.degraded} slow`
-        : "All working"
+    : counts && (counts.down > 0 || counts.degraded > 0)
+      ? "Needs attention"
+      : counts && counts.unknown > 0
+        ? "Needs verification"
+        : counts && counts.not_configured > 0
+          ? "Needs setup"
+          : "All operational"
 
   const firstWindow = status?.groups[0] ? slice(status.groups[0].history) : undefined
 
@@ -347,6 +380,19 @@ export function ServiceStatusSection() {
       else next.add(title)
       return next
     })
+  }
+
+  async function runChecks() {
+    setChecking(true)
+    try {
+      await apiRequest("/notifications/browser-push/test/", { method: "POST" }).catch(() => null)
+      setStatus(await fetchStatus(true))
+      setError("")
+    } catch {
+      setError("We could not check the system right now.")
+    } finally {
+      setChecking(false)
+    }
   }
 
   return (
@@ -368,7 +414,7 @@ export function ServiceStatusSection() {
                 />
               </span>
               <div>
-                <p className="text-row font-medium text-brand-navy transition-colors group-hover:text-accent">
+                <p className="text-row font-normal text-brand-navy transition-colors group-hover:text-accent">
                   System status
                 </p>
                 <p className="mt-2 text-meta leading-relaxed text-neutral-500">
@@ -378,7 +424,7 @@ export function ServiceStatusSection() {
             </div>
             <div className="flex items-center gap-4">
               <StatusMark severity={worst} className="size-5" />
-              <span className="text-row font-medium text-brand-navy transition-colors group-hover:text-accent">{summaryWord}</span>
+              <span className="text-row font-normal text-brand-navy transition-colors group-hover:text-accent">{summaryWord}</span>
               <ChevronRightIcon
                 className={cn(
                   "size-6 shrink-0 text-neutral-400 transition-colors duration-200 group-hover:text-accent",
@@ -396,10 +442,21 @@ export function ServiceStatusSection() {
               <div className="flex items-center gap-3">
                 <StatusMark severity={error ? 1 : worst} className="size-6" />
                 <div>
-                  <p className="text-section text-brand-navy">{headline}</p>
-                  <p className="mt-1 text-meta text-neutral-500">{subline}</p>
+                  <p className="text-section font-normal text-brand-navy">{headline}</p>
+                  <p className="mt-1 text-meta text-neutral-500">
+                    {subline} {checkedLabel(status?.checked_at)}
+                  </p>
                 </div>
               </div>
+              <div className="flex items-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => void runChecks()}
+                  disabled={checking}
+                  className="text-meta font-normal text-neutral-500 transition-colors hover:text-accent disabled:cursor-wait disabled:opacity-50"
+                >
+                  {checking ? "Checking…" : "Run checks"}
+                </button>
               {firstWindow && firstWindow.length > 0 && (
                 <div className="flex items-center gap-3">
                   <button
@@ -437,6 +494,7 @@ export function ServiceStatusSection() {
                   </button>
                 </div>
               )}
+              </div>
             </div>
 
             {error ? (
@@ -452,7 +510,10 @@ export function ServiceStatusSection() {
                 {status.groups.map((group) => {
                   const expanded = expandedGroups.has(group.title)
                   const days = slice(group.history)
-                  const measured = days.some((d) => d.status !== "no_data")
+                  const measured = days.some((d) => d.checks_total > 0)
+                  const operationalNow = group.modules.filter((mod) => mod.status === "operational").length
+                  const groupStatus = groupStatusWord(group)
+                  const completeHistory = group.modules.every((mod) => mod.availability.measured_checks > 0)
                   return (
                     <div key={group.title} className="px-8 py-5">
                       <button
@@ -463,7 +524,7 @@ export function ServiceStatusSection() {
                         {/* Once open, each service states its own condition —
                             a summary mark on top of them only repeats it. */}
                         {!expanded && <StatusMark severity={group.worst} />}
-                        <span className="text-row font-medium text-brand-navy transition-colors group-hover:text-accent">
+                        <span className="text-row font-normal text-brand-navy transition-colors group-hover:text-accent">
                           {group.title}
                         </span>
                         <span className="text-meta text-neutral-400">
@@ -471,11 +532,11 @@ export function ServiceStatusSection() {
                         </span>
                         <span className="ml-auto flex shrink-0 items-center gap-3">
                           <span className="text-meta text-neutral-500 tabular-nums">
-                            {uptimeLabel(days)}
+                            {operationalNow}/{group.modules.length} operational · {completeHistory ? availabilityLabel(group.availability) : "Not enough history"}
                           </span>
-                          {group.worst > 0 && (
-                            <span className="text-meta font-medium text-foreground transition-colors group-hover:text-accent">
-                              {GROUP_STATUS_WORD[group.worst]}
+                          {groupStatus && (
+                            <span className="text-meta font-normal text-foreground transition-colors group-hover:text-accent">
+                              {groupStatus}
                             </span>
                           )}
                           <ChevronRightIcon
@@ -504,7 +565,7 @@ export function ServiceStatusSection() {
                               <div key={mod.key}>
                                 <div className="flex items-center gap-2.5">
                                   <StatusMark severity={severityOf(mod.status)} />
-                                  <span className="text-row text-foreground transition-colors group-hover:text-accent">{mod.label}</span>
+                                  <span className="text-row font-normal text-foreground transition-colors group-hover:text-accent">{mod.label}</span>
                                   <span
                                     className={cn(
                                       "min-w-0 truncate text-meta leading-snug",
@@ -517,12 +578,12 @@ export function ServiceStatusSection() {
                                   </span>
                                   <span className="ml-auto flex shrink-0 items-center gap-3">
                                     {STATUS_WORD[mod.status] && (
-                                      <span className="text-meta font-medium text-foreground transition-colors group-hover:text-accent">
+                                      <span className="text-meta font-normal text-foreground transition-colors group-hover:text-accent">
                                         {STATUS_WORD[mod.status]}
                                       </span>
                                     )}
                                     <span className="text-meta text-neutral-500 tabular-nums">
-                                      {uptimeLabel(modDays)}
+                                      {availabilityLabel(mod.availability)}
                                     </span>
                                   </span>
                                 </div>
@@ -556,7 +617,7 @@ export function ServiceStatusSection() {
                 />
               </span>
               <div>
-                <p className="text-row font-medium text-brand-navy transition-colors group-hover:text-accent">
+                <p className="text-row font-normal text-brand-navy transition-colors group-hover:text-accent">
                   Audit log
                 </p>
                 <p className="mt-2 text-meta leading-relaxed text-neutral-500">
@@ -566,7 +627,7 @@ export function ServiceStatusSection() {
             </div>
             <div className="flex items-center gap-4">
               <span className="text-right">
-                <span className="block text-row font-medium text-brand-navy transition-colors group-hover:text-accent">
+                <span className="block text-row font-normal text-brand-navy transition-colors group-hover:text-accent">
                   {audit?.status ?? "Loading…"}
                 </span>
                 {audit?.detail ? (

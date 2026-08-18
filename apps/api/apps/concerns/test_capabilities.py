@@ -22,6 +22,7 @@ from apps.capabilities import (
     MANAGE_ROLES,
     MANAGE_UNITS,
     MANAGE_USERS,
+    PUBLISH_ANNOUNCEMENTS,
     RESOLVE_CONCERNS,
     capabilities_for,
 )
@@ -46,10 +47,8 @@ class CapabilityResolutionTests(APITestCase):
         )
         self.department = Department.objects.get(code="sangguniang-barangay")
 
-    def test_official_without_designation_keeps_blanket_access(self):
-        # Transitional safety: an official who was never placed in a unit must
-        # not silently lose the access they have today.
-        self.assertEqual(capabilities_for(self.official), set(ALL_CAPABILITIES))
+    def test_official_without_designation_has_no_capabilities(self):
+        self.assertEqual(capabilities_for(self.official), set())
 
     def test_designation_switches_official_to_explicit_capabilities(self):
         kagawad = Position.objects.get(code="kagawad")
@@ -91,8 +90,7 @@ class CapabilityResolutionTests(APITestCase):
             position=Position.objects.get(code="kagawad"),
             is_active=False,
         )
-        # Falls back to the transitional blanket set rather than the position.
-        self.assertEqual(capabilities_for(self.official), set(ALL_CAPABILITIES))
+        self.assertEqual(capabilities_for(self.official), set())
 
     def test_unverified_official_holds_nothing(self):
         self.official.status = User.Status.PENDING_VERIFICATION
@@ -161,6 +159,114 @@ class CapabilityEnforcementTests(APITestCase):
         self.assertNotIn(MANAGE_ROLES, response.data["capabilities"])
         self.assertEqual(response.data["units"][0]["code"], "sangguniang-barangay")
 
+    def test_position_changes_are_reflected_in_user_capabilities(self):
+        position = Position.objects.create(
+            name="Records Clerk",
+            code="records-clerk",
+            permissions=[MANAGE_USERS],
+        )
+        Designation.objects.create(
+            user=self.official,
+            department=Department.objects.get(code="secretary"),
+            position=position,
+        )
+        self.assertIn(MANAGE_USERS, self.client.get("/api/auth/me/").data["capabilities"])
+
+        position.permissions = [PUBLISH_ANNOUNCEMENTS]
+        position.save(update_fields=["permissions", "updated_at"])
+        capabilities = self.client.get("/api/auth/me/").data["capabilities"]
+        self.assertNotIn(MANAGE_USERS, capabilities)
+        self.assertIn(PUBLISH_ANNOUNCEMENTS, capabilities)
+
+
+class RoleConfigurationSafetyTests(APITestCase):
+    def setUp(self):
+        self.captain = User.objects.create_user(
+            email="role-safety-captain@example.com",
+            phone_number="+639171110011",
+            password="pass",
+            role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
+        )
+        self.captain_designation = Designation.objects.create(
+            user=self.captain,
+            department=Department.objects.get(code="sangguniang-barangay"),
+            position=Position.objects.get(code="barangay-captain"),
+        )
+        self.client.force_authenticate(self.captain)
+
+    def test_unknown_permission_is_rejected(self):
+        response = self.client.post(
+            "/api/concerns/admin/positions/",
+            {"name": "Invalid Role", "code": "invalid-role", "permissions": ["unknown"]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_resident_cannot_receive_a_designation(self):
+        resident = User.objects.create_user(
+            email="role-safety-resident@example.com",
+            phone_number="+639171110012",
+            password="pass",
+            status=User.Status.VERIFIED,
+        )
+        response = self.client.post(
+            "/api/concerns/admin/designations/",
+            {
+                "user": resident.pk,
+                "department": Department.objects.get(code="bhw").pk,
+                "position": Position.objects.get(code="staff").pk,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_last_role_manager_cannot_be_removed(self):
+        response = self.client.delete(
+            f"/api/concerns/admin/designations/{self.captain_designation.pk}/"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(Designation.objects.filter(pk=self.captain_designation.pk).exists())
+
+    def test_unit_manager_can_create_positions_but_cannot_grant_permissions(self):
+        manager = User.objects.create_user(
+            email="role-safety-unit-manager@example.com",
+            phone_number="+639171110013",
+            password="pass",
+            role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
+        )
+        position = Position.objects.create(
+            name="Unit Manager",
+            code="unit-manager-test",
+            permissions=[MANAGE_UNITS],
+        )
+        department = Department.objects.get(code="bhw")
+        Designation.objects.create(user=manager, department=department, position=position)
+        self.client.force_authenticate(manager)
+
+        self.assertEqual(
+            self.client.get("/api/concerns/admin/positions/").status_code,
+            status.HTTP_200_OK,
+        )
+        created = self.client.post(
+            "/api/concerns/admin/positions/",
+            {"name": "BHW Trainee", "code": "bhw-trainee", "department": department.pk},
+            format="json",
+        )
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        denied = self.client.post(
+            "/api/concerns/admin/positions/",
+            {
+                "name": "BHW Supervisor",
+                "code": "bhw-supervisor",
+                "department": department.pk,
+                "permissions": [MANAGE_USERS],
+            },
+            format="json",
+        )
+        self.assertEqual(denied.status_code, status.HTTP_403_FORBIDDEN)
+
 
 class UnitMigrationTests(APITestCase):
     """The seeded state the unit unification migrations are supposed to produce."""
@@ -174,6 +280,8 @@ class UnitMigrationTests(APITestCase):
             set(Position.objects.get(code="barangay-captain").permissions),
             set(ALL_CAPABILITIES),
         )
+        self.assertNotIn("review_verification", ALL_CAPABILITIES)
+        self.assertNotIn("handle_privacy", ALL_CAPABILITIES)
 
     def test_emergency_responding_units_are_seeded(self):
         responding = Department.objects.filter(is_active=True, responds_to_emergencies=True)

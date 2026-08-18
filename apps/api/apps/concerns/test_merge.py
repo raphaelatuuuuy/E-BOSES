@@ -3,7 +3,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from . import merge_services
-from .models import Concern, ConcernMergeEvent, ConcernMergeSuggestion
+from .models import Concern, ConcernMergeEvent, ConcernMergeSuggestion, Department, Designation, Position
 
 
 class MergeTestBase(APITestCase):
@@ -22,6 +22,11 @@ class MergeTestBase(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             is_staff=True,
             status=User.Status.VERIFIED,
+        )
+        Designation.objects.create(
+            user=self.official,
+            department=Department.objects.get(code="sangguniang-barangay"),
+            position=Position.objects.get(code="kagawad"),
         )
 
     def make_concern(self, title, **kwargs):

@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 
 from apps.accounts.models import User
 from apps.accounts.services import validate_concern_media_file
+from apps.capabilities import ALL_CAPABILITIES
 
 from .models import (
     Announcement,
@@ -185,10 +186,33 @@ class DepartmentSerializer(serializers.ModelSerializer):
 
 
 class PositionSerializer(serializers.ModelSerializer):
+    department_detail = DepartmentSerializer(source="department", read_only=True)
+
     class Meta:
         model = Position
-        fields = ("id", "name", "code", "permissions", "is_active", "created_at", "updated_at")
+        fields = (
+            "id",
+            "name",
+            "code",
+            "department",
+            "department_detail",
+            "permissions",
+            "is_active",
+            "created_at",
+            "updated_at",
+        )
         read_only_fields = ("id", "created_at", "updated_at")
+
+    def validate_permissions(self, value):
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Permissions must be a list.")
+        permissions = list(dict.fromkeys(value))
+        invalid = sorted(set(permissions) - set(ALL_CAPABILITIES))
+        if invalid:
+            raise serializers.ValidationError(
+                f"Unknown permission: {', '.join(invalid)}."
+            )
+        return permissions
 
 
 class DesignationSerializer(serializers.ModelSerializer):
@@ -200,6 +224,28 @@ class DesignationSerializer(serializers.ModelSerializer):
         model = Designation
         fields = ("id", "user", "department", "position", "title", "is_active", "user_detail", "department_detail", "position_detail", "created_at", "updated_at")
         read_only_fields = ("id", "created_at", "updated_at")
+
+    def validate(self, attrs):
+        # A position belongs to one unit; it may only be given to people in
+        # that unit. Barangay-wide positions (department is None) stay
+        # assignable anywhere for the RBAC catalog seeded in 0027.
+        department = attrs.get("department", getattr(self.instance, "department", None))
+        position = attrs.get("position", getattr(self.instance, "position", None))
+        user = attrs.get("user", getattr(self.instance, "user", None))
+        is_active = attrs.get("is_active", getattr(self.instance, "is_active", True))
+        if user and user.role == User.Role.RESIDENT:
+            raise serializers.ValidationError(
+                {"user": "Residents cannot receive staff positions."}
+            )
+        if is_active and department and not department.is_active:
+            raise serializers.ValidationError({"department": "Choose an active unit."})
+        if is_active and position and not position.is_active:
+            raise serializers.ValidationError({"position": "Choose an active position."})
+        if department and position and position.department_id not in (None, department.pk):
+            raise serializers.ValidationError(
+                {"position": "This position does not belong to the selected unit."}
+            )
+        return attrs
 
 
 class ConcernFormFieldSerializer(serializers.ModelSerializer):
@@ -565,6 +611,7 @@ class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
 
 class ContentFlagSerializer(serializers.ModelSerializer):
     reporter = PublicUserSerializer(read_only=True)
+    reporter_full_name = serializers.SerializerMethodField()
     comment = serializers.IntegerField(required=False, allow_null=True)
 
     class Meta:
@@ -574,6 +621,7 @@ class ContentFlagSerializer(serializers.ModelSerializer):
             "concern",
             "comment",
             "reporter",
+            "reporter_full_name",
             "reason",
             "note",
             "status",
@@ -583,13 +631,18 @@ class ContentFlagSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("id", "concern", "reporter", "status", "staff_note", "created_at", "updated_at")
 
+    def get_reporter_full_name(self, obj):
+        profile = getattr(obj.reporter, "resident_profile", None)
+        if profile:
+            return f"{profile.first_name.strip()} {profile.last_name.strip()}".strip()
+        return obj.reporter.email.split("@", 1)[0].replace(".", " ")
+
 
 class ContentFlagReviewSerializer(serializers.Serializer):
     status = serializers.ChoiceField(
         choices=[
-            ContentFlag.Status.REVIEWED,
             ContentFlag.Status.DISMISSED,
-            ContentFlag.Status.ACTION_TAKEN,
+            ContentFlag.Status.TAKEN_DOWN,
         ]
     )
     staff_note = serializers.CharField(min_length=5, max_length=255, trim_whitespace=True)
@@ -713,6 +766,9 @@ class ConcernSerializer(serializers.ModelSerializer):
     location_source = serializers.SerializerMethodField()
     location_accuracy = serializers.SerializerMethodField()
     reporter = PublicUserSerializer(read_only=True)
+    # Unmasked reporter name for officials reviewing flagged content; the
+    # public `reporter.full_name` stays first-name + last-initial for privacy.
+    reporter_full_name = serializers.SerializerMethodField()
     media = ConcernMediaSerializer(many=True, read_only=True)
     status_events = serializers.SerializerMethodField()
     comments = serializers.SerializerMethodField()
@@ -770,6 +826,7 @@ class ConcernSerializer(serializers.ModelSerializer):
             "rejection_code",
             "status_version",
             "reporter",
+            "reporter_full_name",
             "title",
             "description",
             "category",
@@ -850,6 +907,12 @@ class ConcernSerializer(serializers.ModelSerializer):
 
     def get_tracking_id(self, obj):
         return obj.tracking_id
+
+    def get_reporter_full_name(self, obj):
+        profile = getattr(obj.reporter, "resident_profile", None)
+        if profile:
+            return f"{profile.first_name.strip()} {profile.last_name.strip()}".strip()
+        return obj.reporter.email.split("@", 1)[0].replace(".", " ")
 
     def get_address(self, obj):
         if self.is_privacy_safe():

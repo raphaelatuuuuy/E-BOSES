@@ -105,7 +105,14 @@ def can_manage_accounts(user):
     return bool(
         user
         and user.is_authenticated
-        and (user.is_staff or user.is_superuser or user_has_role_permission(user, "accounts.verify_residents"))
+        and (
+            user.is_staff
+            or user.is_superuser
+            or (
+                user_has_role_permission(user, "accounts.verify_residents")
+                and user_has_capability(user, MANAGE_USERS)
+            )
+        )
     )
 
 

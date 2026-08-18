@@ -167,7 +167,7 @@ export function MarkAreasCanvas(props: {
   const ink = "#171717"
 
   return (
-    <div className="relative flex min-h-[16rem] w-full items-center justify-center overflow-auto rounded-[18px] bg-white">
+    <div className="relative flex min-h-[16rem] w-full items-center justify-center overflow-hidden rounded-[18px] bg-white">
       <div
         className="relative origin-center"
         style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}

@@ -6,7 +6,7 @@ from rest_framework.test import APITestCase
 
 from apps.emergencies.models import EmergencyAlert, EmergencyCommunityComment
 
-from .models import Announcement, AnnouncementComment, BarangayEvent, Concern
+from .models import Announcement, AnnouncementComment, BarangayEvent, Concern, Department, Designation, Position
 
 
 class CommunityTestBase(APITestCase):
@@ -31,6 +31,11 @@ class CommunityTestBase(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             is_staff=True,
             status=User.Status.VERIFIED,
+        )
+        Designation.objects.create(
+            user=self.official,
+            department=Department.objects.get(code="sangguniang-barangay"),
+            position=Position.objects.get(code="barangay-captain"),
         )
         self.announcement = Announcement.objects.create(
             title="Water interruption",

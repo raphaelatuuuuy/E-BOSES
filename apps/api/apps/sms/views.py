@@ -17,6 +17,7 @@ import logging
 import time
 
 from django.conf import settings
+from django.core.cache import cache
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
@@ -191,6 +192,10 @@ class SmsInboundView(APIView):
         # Gateways also emit sms:sent / sms:delivered / system:ping. Acting on
         # those would feed our own outgoing replies back in as new traffic.
         if not payload.is_received_message:
+            if payload.event == "system:ping":
+                cache.set("sms-gateway:last-device-ping", time.time(), 3600)
+            elif payload.event in {"sms:sent", "sms:delivered"}:
+                cache.set("sms-gateway:last-delivery-event", time.time(), 86400)
             return Response(
                 {"detail": f"Ignored event '{payload.event}'.", "ignored": True},
                 status=status.HTTP_200_OK,

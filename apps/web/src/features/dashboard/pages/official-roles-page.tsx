@@ -5,19 +5,27 @@ import { toast } from "sonner"
 import { apiRequest } from "@/lib/api"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { CAPABILITY_LABEL } from "@/features/dashboard/lib/capabilities"
-import { ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
+import { FilterRow, ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
 import { SheetDialog, SheetPrimaryButton } from "@/features/dashboard/components/sheet-dialog"
 import {
   ConfigHeroAction,
   ConfigShell,
 } from "@/features/dashboard/components/config/config-shell"
+import { useAuthSession } from "@/features/auth/auth-session"
 
 interface Position {
   id: number
   name: string
   code: string
+  department: number | null
   permissions: string[]
   is_active: boolean
+}
+
+interface Department {
+  id: number
+  name: string
+  short_name: string
 }
 
 type Draft = Partial<Position>
@@ -42,8 +50,6 @@ const CAPABILITY_HINT: Record<string, string> = {
   manage_units: "Create, edit and deactivate barangay units",
   manage_roles: "Change which capabilities each position holds",
   manage_users: "Create accounts, assign units and positions, deactivate",
-  review_verification: "Approve or reject resident ID and residence proof",
-  handle_privacy: "Action data export and deletion requests",
   resolve_concerns: "Update status, assign and close community concerns",
   manage_categories: "Edit concern categories and their intake forms",
   configure_classification: "Adjust AI thresholds and keyword rules",
@@ -99,7 +105,9 @@ function CapabilityGroup({ title, capabilities, selected, onToggle, defaultOpen 
 }
 
 export default function OfficialRolesPage() {
+  const { refreshUser } = useAuthSession()
   const [positions, setPositions] = useState<Position[]>([])
+  const [departments, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [originalDraft, setOriginalDraft] = useState<string | null>(null)
@@ -108,11 +116,25 @@ export default function OfficialRolesPage() {
   const [deleteTarget, setDeleteTarget] = useState<Position | null>(null)
   const [saving, setSaving] = useState(false)
   const [query, setQuery] = useState("")
+  const [debounced, setDebounced] = useState("")
+  const [unitKey, setUnitKey] = useState("all")
   const [offset, setOffset] = useState(0)
 
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebounced(query.trim()), 250)
+    return () => window.clearTimeout(t)
+  }, [query])
+
+  const filterKey = `${unitKey}|${debounced}`
+  const [prevKey, setPrevKey] = useState(filterKey)
+  if (prevKey !== filterKey) { setPrevKey(filterKey); setOffset(0) }
+
   const load = useCallback(() => {
-    apiRequest<Position[]>("/concerns/admin/positions/")
-      .then(setPositions)
+    Promise.all([
+      apiRequest<Position[]>("/concerns/admin/positions/"),
+      apiRequest<Department[]>("/concerns/admin/departments/"),
+    ])
+      .then(([pos, deps]) => { setPositions(pos); setDepartments(deps) })
       .catch((error) => toast.error(describeApiError(error, "Could not load positions.")))
       .finally(() => setLoading(false))
   }, [])
@@ -122,12 +144,19 @@ export default function OfficialRolesPage() {
   }, [load])
 
   const filtered = useMemo(() => {
-    if (!query) return positions.filter((p) => p.is_active)
-    const q = query.toLowerCase()
-    return positions
-      .filter((p) => p.is_active)
-      .filter((p) => p.name.toLowerCase().includes(q))
-  }, [positions, query])
+    const unitFilter = unitKey === "all" ? null : Number(unitKey)
+    let result = positions.filter((p) => p.is_active)
+    if (unitFilter != null) result = result.filter((p) => p.department === unitFilter)
+    if (debounced) {
+      const q = debounced.toLowerCase()
+      result = result.filter((p) => {
+        const unit = p.department ? departments.find((d) => d.id === p.department) : null
+        return p.name.toLowerCase().includes(q) ||
+          (unit ? `${unit.name} ${unit.short_name}`.toLowerCase().includes(q) : false)
+      })
+    }
+    return result
+  }, [positions, departments, debounced, unitKey])
 
   const page = filtered.slice(offset, offset + PAGE_SIZE)
 
@@ -139,22 +168,8 @@ export default function OfficialRolesPage() {
     is_active: value?.is_active ?? true,
   })
 
-  function wouldOrphanRoleManagement(next: Draft) {
-    if (!next.id) return false
-    const stillHasIt = (next.permissions ?? []).includes("manage_roles")
-    if (stillHasIt) return false
-    const otherHolders = positions.filter(
-      (p) => p.id !== next.id && p.is_active && p.permissions.includes("manage_roles"),
-    )
-    return otherHolders.length === 0
-  }
-
   async function save() {
     if (!draft) return
-    if (wouldOrphanRoleManagement(draft)) {
-      toast.error("This is the last position that can manage roles. Grant it to another position first.")
-      return
-    }
     setSaving(true)
     try {
       const isNew = !draft.id
@@ -166,6 +181,7 @@ export default function OfficialRolesPage() {
           body: JSON.stringify(draft),
         },
       )
+      await refreshUser()
       toast.success(isNew ? "Position created" : "Position updated")
       setEditOpen(false); setDraft(null); load()
     } catch (error) {
@@ -179,6 +195,7 @@ export default function OfficialRolesPage() {
     if (!deleteTarget) return
     try {
       await apiRequest(`/concerns/admin/positions/${deleteTarget.id}/`, { method: "DELETE" })
+      await refreshUser()
       toast.success("Position removed")
       setDeleteOpen(false); setDeleteTarget(null); load()
     } catch (error) {
@@ -198,6 +215,18 @@ export default function OfficialRolesPage() {
     })
   }
 
+  const activePositions = positions.filter((p) => p.is_active)
+  const unitsWithPositions = departments.filter((d) => activePositions.some((p) => p.department === d.id))
+  const countFor = (id: number | null) =>
+    id == null ? activePositions.length : activePositions.filter((p) => p.department === id).length
+  const unitCounts: Record<string, number> = {
+    all: countFor(null),
+    ...Object.fromEntries(unitsWithPositions.map((u) => [String(u.id), countFor(u.id)])),
+  }
+  const unitDetails: Record<string, string> = Object.fromEntries(
+    unitsWithPositions.map((u) => [String(u.id), u.name]),
+  )
+
   return (
     <ConfigShell
       icon={ShieldCheckIcon}
@@ -205,8 +234,8 @@ export default function OfficialRolesPage() {
       title="Permissions"
       description="What each position is allowed to do. Give someone a position in Users, and they get everything ticked here."
       stats={[
-        { label: "Positions", value: filtered.length },
-        { label: "Without permissions", value: filtered.filter((p) => p.permissions.length === 0).length, alarm: filtered.some((p) => p.permissions.length === 0) },
+        { label: "Positions", value: activePositions.length },
+        { label: "Without permissions", value: activePositions.filter((p) => p.permissions.length === 0).length, alarm: activePositions.some((p) => p.permissions.length === 0) },
       ]}
       action={
         <ConfigHeroAction icon={PlusIcon} onClick={() => { setDraft({ name: "", code: "", permissions: [] }); setOriginalDraft(null); setEditOpen(true) }}>
@@ -214,9 +243,19 @@ export default function OfficialRolesPage() {
         </ConfigHeroAction>
       }
     >
-      <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-4">
-        <ListSearch value={query} onChange={setQuery} placeholder="Search positions" className="w-full" />
-      </div>
+      <FilterRow
+        options={[
+          { key: "all", label: "All" },
+          ...unitsWithPositions.map((u) => ({ key: String(u.id), label: u.short_name || u.name })),
+        ]}
+        counts={unitCounts}
+        details={unitDetails}
+        value={unitKey}
+        onChange={setUnitKey}
+        className="mt-8"
+      />
+
+      <ListSearch value={query} onChange={setQuery} placeholder="Search positions or units" className="mt-5 flex-1 sm:max-w-xs" />
 
       {/* Editorial list */}
       <ol>
@@ -226,7 +265,14 @@ export default function OfficialRolesPage() {
             className="grid grid-cols-1 gap-x-8 gap-y-3 border-b border-neutral-200 py-6 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto]"
           >
             <div className="min-w-0">
-              <span className="text-row text-brand-navy">{position.name}</span>
+              <div className="flex items-center gap-3">
+                <span className="text-row text-brand-navy">{position.name}</span>
+                {position.department && (
+                  <span className="text-meta text-neutral-400">
+                    {departments.find((d) => d.id === position.department)?.name ?? "Unit"}
+                  </span>
+                )}
+              </div>
               <dl className="mt-2 flex flex-wrap gap-x-8 gap-y-2">
                 <div>
                   <dt className="text-meta text-neutral-400">Permissions</dt>
@@ -321,9 +367,9 @@ export default function OfficialRolesPage() {
         title={deleteTarget ? `Delete ${deleteTarget.name}?` : ""}
         description="This position will be removed. People assigned to it will lose these permissions."
         footer={
-          <div className="space-y-3">
-            <SheetPrimaryButton tone="danger" onClick={() => void confirmDelete()}>Delete position</SheetPrimaryButton>
-            <SheetPrimaryButton onClick={() => { setDeleteOpen(false); setDeleteTarget(null) }}>Cancel</SheetPrimaryButton>
+          <div className="flex gap-2">
+            <SheetPrimaryButton onClick={() => { setDeleteOpen(false); setDeleteTarget(null) }} className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]">Cancel</SheetPrimaryButton>
+            <SheetPrimaryButton tone="danger" onClick={() => void confirmDelete()} className="flex-1 text-[15px]">Delete position</SheetPrimaryButton>
           </div>
         }
       />

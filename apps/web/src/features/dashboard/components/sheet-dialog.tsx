@@ -156,11 +156,6 @@ export function SheetIconButton({
   )
 }
 
-/**
- * One bordered container, rows divided by hairlines — never a stack of
- * separate pills with gaps between them. This is the design system's hairline
- * list, scoped to dialog padding.
- */
 export function SheetList({
   children,
   className,
@@ -240,6 +235,7 @@ export function SheetToggleRow({
   id,
   label,
   description,
+  icon: Icon,
   checked,
   disabled = false,
   busy = false,
@@ -248,6 +244,7 @@ export function SheetToggleRow({
   id: string
   label: string
   description?: string
+  icon?: React.ComponentType<{ className?: string; strokeWidth?: number; "aria-hidden"?: boolean }>
   checked: boolean
   disabled?: boolean
   busy?: boolean
@@ -261,10 +258,11 @@ export function SheetToggleRow({
       >
         <span
           className={cn(
-            "block text-[16px] font-medium leading-snug",
+            "flex items-center gap-1.5 text-[16px] font-medium leading-snug",
             disabled ? "text-neutral-400" : "text-neutral-900",
           )}
         >
+          {Icon ? <Icon className="size-4" strokeWidth={2} aria-hidden /> : null}
           {label}
         </span>
         {description ? (
@@ -322,6 +320,7 @@ export function SheetPrimaryButton({
   tone = "neutral",
   children,
   type = "button",
+  className,
 }: {
   onClick?: () => void
   disabled?: boolean
@@ -329,6 +328,7 @@ export function SheetPrimaryButton({
   tone?: "neutral" | "danger" | "accent"
   children: ReactNode
   type?: "button" | "submit"
+  className?: string
 }) {
   return (
     <button
@@ -344,6 +344,7 @@ export function SheetPrimaryButton({
               : tone === "accent"
                 ? "bg-brand-orange text-white hover:bg-brand-orange-strong active:scale-[0.99]"
                 : "bg-neutral-200 text-neutral-900 hover:bg-neutral-300 active:scale-[0.99]",
+        className,
       )}
     >
       {children}
@@ -355,15 +356,17 @@ export function SheetPrimaryButton({
 export function SheetSecondaryButton({
   onClick,
   children,
+  className,
 }: {
   onClick: () => void
   children: ReactNode
+  className?: string
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="mt-2 flex h-[52px] w-full items-center justify-center rounded-full text-[17px] font-semibold text-neutral-600 transition-colors hover:bg-neutral-100"
+      className={cn("mt-2 flex h-[52px] w-full items-center justify-center rounded-full text-[17px] font-semibold text-neutral-600 transition-colors hover:bg-neutral-200 bg-neutral-100", className)}
     >
       {children}
     </button>

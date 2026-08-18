@@ -44,15 +44,16 @@ export function OfficialNotificationsButton() {
         className="group relative flex size-10 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-neutral-100"
       >
         <span
-          className="inline-flex size-7 shrink-0 items-center justify-center text-neutral-700 opacity-55 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100 group-active:opacity-100"
+          className="inline-flex size-8 shrink-0 items-center justify-center text-neutral-700 opacity-55 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100 group-active:opacity-100"
           aria-hidden="true"
         >
           <InboxIcon className="size-full" />
         </span>
         {unreadCount > 0 ? (
-          <span className="absolute -right-1 -top-1 text-[11px] font-semibold leading-none text-neutral-700 tabular-nums">
-            {unreadCount > 99 ? "99+" : unreadCount}
-          </span>
+          <span
+            className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full bg-brand-orange"
+            aria-hidden="true"
+          />
         ) : null}
       </button>
       {open ? (
@@ -179,9 +180,9 @@ export function OfficialMobileChrome() {
           type="button"
           onClick={() => setProfileOpen(true)}
           aria-label="Open profile"
-          className="flex size-10 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-neutral-100"
+          className="ml-1.5 flex size-11 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-neutral-100"
         >
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[15px] font-bold text-navy-muted">
             {avatarInitials}
           </span>
         </button>

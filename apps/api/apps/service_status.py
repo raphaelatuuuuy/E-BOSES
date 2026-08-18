@@ -5,13 +5,23 @@ probe that cannot decide reports "unknown" rather than taking down the page
 that exists to tell you what is broken.
 """
 
+import asyncio
+import base64
+import hashlib
+import hmac
+import json
+import os
+import tempfile
 import time
+import uuid
 from datetime import timedelta
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db import connection
+from django.db import transaction
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
+from asgiref.sync import async_to_sync
 from celery import shared_task
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -27,9 +37,12 @@ DOWN = "down"
 NOT_CONFIGURED = "not_configured"
 UNKNOWN = "unknown"
 
-CACHE_KEY = "service-status:v2"
-CACHE_SECONDS = 20
+CACHE_KEY = "service-status:v3"
+CACHE_SECONDS = 60
 HISTORY_DAYS = 180
+SAMPLE_MINUTES = 5
+STATE_STALE_MINUTES = 15
+WORKER_HEARTBEAT_KEY = "service-status:worker-heartbeat"
 
 GROUPS = (
     ("Core", ("database", "cache", "realtime", "worker")),
@@ -58,10 +71,15 @@ def _probe(name, label, description, fn):
 
 
 def _database():
-    with connection.cursor() as cursor:
-        cursor.execute("SELECT 1")
-        cursor.fetchone()
-    return OPERATIONAL, connection.vendor
+    from apps.accounts.models import ServiceHealthDay
+
+    probe_key = f"probe-{uuid.uuid4().hex[:20]}"
+    with transaction.atomic():
+        row = ServiceHealthDay.objects.create(day=timezone.localdate(), module_key=probe_key)
+        if not ServiceHealthDay.objects.filter(pk=row.pk).exists():
+            return DOWN, "write could not be read"
+        transaction.set_rollback(True)
+    return OPERATIONAL, "write and read succeeded"
 
 
 def _cache():
@@ -77,16 +95,34 @@ def _realtime():
     layer = get_channel_layer()
     if layer is None:
         return NOT_CONFIGURED, "no channel layer"
-    return OPERATIONAL, type(layer).__name__
+
+    async def round_trip():
+        token = uuid.uuid4().hex
+        channel = await layer.new_channel("health.")
+        await layer.send(channel, {"type": "health.check", "token": token})
+        message = await asyncio.wait_for(layer.receive(channel), timeout=2.0)
+        return message.get("token") == token
+
+    if not async_to_sync(round_trip)():
+        return DOWN, "message round trip failed"
+    return OPERATIONAL, "message round trip succeeded"
 
 
 def _worker():
     from config.celery import app
+    from celery import current_task
 
-    replies = app.control.ping(timeout=1.0) or []
-    if not replies:
-        return DOWN, "no worker responded"
-    return OPERATIONAL, f"{len(replies)} worker(s)"
+    if getattr(getattr(current_task, "request", None), "id", None):
+        return OPERATIONAL, "health task is running in a worker"
+
+    replies = app.control.ping(timeout=2.5) or []
+    heartbeat = cache.get(WORKER_HEARTBEAT_KEY)
+    fresh_heartbeat = bool(heartbeat and time.time() - float(heartbeat) <= 150)
+    if replies:
+        return OPERATIONAL, f"{len(replies)} worker(s) answered"
+    if fresh_heartbeat:
+        return OPERATIONAL, "queued heartbeat completed recently"
+    return DOWN, "no worker response or recent queued heartbeat"
 
 
 def _ocr():
@@ -95,6 +131,8 @@ def _ocr():
     row = OCRServiceStatus.objects.order_by("-updated_at").first()
     if row is None:
         return UNKNOWN, "never checked"
+    if row.updated_at < timezone.now() - timedelta(minutes=15):
+        return UNKNOWN, "last canary is stale"
     mapping = {
         "healthy": OPERATIONAL,
         "degraded": DEGRADED,
@@ -108,18 +146,54 @@ def _ocr():
 
 
 def _classifier():
-    from apps.concerns.models import ConcernClassificationConfiguration
-
-    config = ConcernClassificationConfiguration.current()
     if not getattr(settings, "OLLAMA_API_KEY", ""):
         return NOT_CONFIGURED, "no OLLAMA_API_KEY"
-    return OPERATIONAL, f"{config.nlp_provider}/{config.nlp_model}"
+    try:
+        from ollama import Client
+
+        client = Client(
+            host=getattr(settings, "OLLAMA_HOST", "https://ollama.com"),
+            headers={"Authorization": f"Bearer {settings.OLLAMA_API_KEY}"},
+            timeout=min(30, getattr(settings, "OLLAMA_TIMEOUT_SECONDS", 120)),
+        )
+        response = client.chat(
+            getattr(settings, "OLLAMA_TEXT_MODEL", "gemma4:31b"),
+            messages=[{"role": "user", "content": "Reply with only: operational"}],
+            options={"temperature": 0},
+            stream=False,
+        )
+        content = getattr(getattr(response, "message", None), "content", "")
+        if not str(content or "").strip():
+            return DOWN, "model returned no content"
+    except Exception as exc:
+        return DOWN, exc.__class__.__name__
+    return OPERATIONAL, getattr(settings, "OLLAMA_TEXT_MODEL", "configured")
 
 
 def _privacy_scan():
     if not getattr(settings, "ROBOFLOW_API_KEY", ""):
         return NOT_CONFIGURED, "no ROBOFLOW_API_KEY"
-    return OPERATIONAL, getattr(settings, "ROBOFLOW_WORKFLOW_ID", "") or "configured"
+    from PIL import Image, ImageDraw
+    from apps.concerns.ai.privacy.sam3_client import run_segmentation
+
+    path = ""
+    try:
+        image = Image.new("RGB", (160, 120), "white")
+        draw = ImageDraw.Draw(image)
+        draw.ellipse((45, 15, 115, 85), outline="black", width=4)
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
+            path = handle.name
+            image.save(handle, format="PNG")
+        result = run_segmentation(path, ["face"])
+        if not isinstance(result, dict):
+            return DOWN, "workflow returned an invalid payload"
+    finally:
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+    return OPERATIONAL, getattr(settings, "ROBOFLOW_WORKFLOW_ID", "configured")
 
 
 def _email():
@@ -127,7 +201,38 @@ def _email():
     if provider == "resend":
         if not getattr(settings, "RESEND_API_KEY", ""):
             return NOT_CONFIGURED, "resend selected but no API key"
-        return OPERATIONAL, "resend"
+        import httpx
+
+        endpoint = getattr(settings, "RESEND_API_URL", "https://api.resend.com/emails")
+        try:
+            response = httpx.get(
+                endpoint,
+                params={"limit": 1},
+                headers={"Authorization": f"Bearer {settings.RESEND_API_KEY}"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.HTTPError as exc:
+            return DOWN, exc.__class__.__name__
+        except ValueError:
+            return DOWN, "invalid API response"
+        delivered = cache.get("service-status:email-delivered")
+        failed = cache.get("service-status:email-failed")
+        if failed and (not delivered or float(failed) > float(delivered)):
+            return DEGRADED, "the latest delivery event failed"
+        if delivered and time.time() - float(delivered) <= 86400:
+            return OPERATIONAL, "API reachable and a recent email was delivered"
+        rows = payload.get("data", []) if isinstance(payload, dict) else []
+        latest = rows[0] if rows and isinstance(rows[0], dict) else {}
+        latest_at = parse_datetime(str(latest.get("created_at") or ""))
+        recent = bool(latest_at and latest_at >= timezone.now() - timedelta(days=7))
+        latest_event = str(latest.get("last_event") or "").lower()
+        if recent and latest_event == "delivered":
+            return OPERATIONAL, "API reachable and the latest email was delivered"
+        if recent and latest_event in {"bounced", "failed", "complained"}:
+            return DEGRADED, "the latest email was not delivered"
+        return UNKNOWN, "API reachable but no recent delivery was confirmed"
     if provider in {"development", "disabled"}:
         return NOT_CONFIGURED, provider
     return OPERATIONAL, provider or "unset"
@@ -141,30 +246,102 @@ def _sms():
         return DEGRADED, "console driver - nothing is sent"
     if not getattr(settings, "OUTBOUND_SMS_URL", ""):
         return NOT_CONFIGURED, "no gateway URL"
-    return OPERATIONAL, driver
+    if driver != "android_sms_gateway":
+        return UNKNOWN, "driver has no operational health endpoint"
+
+    import httpx
+
+    base = str(settings.OUTBOUND_SMS_URL).rstrip("/")
+    for suffix in ("/3rdparty/v1/message", "/3rdparty/v1/messages", "/message"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    auth = None
+    username = getattr(settings, "OUTBOUND_SMS_USERNAME", "")
+    if username:
+        auth = (username, getattr(settings, "OUTBOUND_SMS_PASSWORD", ""))
+    is_cloud = "sms-gate.app" in base
+    endpoint = f"{base}/3rdparty/v1/webhooks" if is_cloud else f"{base}/health/ready"
+    try:
+        response = httpx.get(endpoint, auth=auth, timeout=10)
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        return DOWN, exc.__class__.__name__
+    if is_cloud:
+        hooks = payload if isinstance(payload, list) else []
+        receives_sms = any(hook.get("event") == "sms:received" for hook in hooks if isinstance(hook, dict))
+        has_webhook_auth = bool(
+            getattr(settings, "SMS_WEBHOOK_SIGNING_KEY", "")
+            or getattr(settings, "SMS_INBOUND_WEBHOOK_TOKEN", "")
+        )
+        if not receives_sms or not has_webhook_auth:
+            return NOT_CONFIGURED, "inbound gateway webhook is not configured"
+        last_ping = cache.get("sms-gateway:last-device-ping")
+        if not last_ping or time.time() - float(last_ping) > 1800:
+            return UNKNOWN, "cloud API is reachable but no recent device ping was received"
+        return OPERATIONAL, "cloud API and device are ready"
+    gateway_status = str(payload.get("status", "")).lower()
+    if gateway_status == "fail":
+        return DOWN, "gateway readiness failed"
+    if gateway_status == "warn":
+        return DEGRADED, "gateway reports a warning"
+    return OPERATIONAL, "gateway and device are ready"
 
 
 def _push():
+    from apps.notifications.services import web_push_config_health
+
     if not getattr(settings, "WEB_PUSH_PRIVATE_KEY", ""):
         return NOT_CONFIGURED, "no VAPID key"
-    return OPERATIONAL, "web push"
+    health = web_push_config_health()
+    if not health.get("configured") or health.get("key_pair_valid") is not True:
+        return DOWN, "VAPID key pair is invalid"
+    from apps.notifications.models import BrowserPushSubscription
+
+    if not BrowserPushSubscription.objects.filter(is_active=True).exists():
+        return UNKNOWN, "no subscribed browser can be tested"
+    delivered = cache.get("service-status:push-delivered")
+    if delivered and time.time() - float(delivered) <= 86400:
+        return OPERATIONAL, "a recent browser push test was accepted"
+    from apps.emergencies.models import WitnessNotification
+
+    recent = timezone.now() - timedelta(hours=24)
+    if WitnessNotification.objects.filter(push_delivered_at__gte=recent).exists():
+        return OPERATIONAL, "a recent push was accepted by the push service"
+    if WitnessNotification.objects.filter(push_attempted_at__gte=recent, push_failure_count__gt=0).exists():
+        return DEGRADED, "a recent push delivery failed"
+    return UNKNOWN, "keys are valid but no recent delivery was observed"
 
 
 def _assistant():
-    from apps.assistant.client import is_configured
+    from apps.assistant.client import complete, is_configured
 
     if not is_configured():
         return NOT_CONFIGURED, "answers from the built-in topics only"
+    complete([{"role": "user", "content": "Reply with only: operational"}])
     return OPERATIONAL, getattr(settings, "ASSISTANT_MODEL", "")
 
 
 def _map_data():
-    from apps.emergencies.models import MapGeometry
+    from apps.geo_services import get_active_boundary_geometry, point_in_geojson
+    from apps.emergencies.models import MapGeometry, MapDispatchPolicy
 
     count = MapGeometry.objects.filter(is_active=True).count()
     if not count:
         return DEGRADED, "no geometry imported"
-    return OPERATIONAL, f"{count} active geometries"
+    geometry = get_active_boundary_geometry()
+    if not geometry or geometry.get("type") not in {"Polygon", "MultiPolygon"}:
+        return DOWN, "active boundary geometry is invalid"
+    policy = MapDispatchPolicy.current()
+    inside = point_in_geojson(
+        float(policy.acceptance_center_longitude),
+        float(policy.acceptance_center_latitude),
+        geometry,
+    )
+    if inside is not True:
+        return DEGRADED, "barangay center is outside the active boundary"
+    return OPERATIONAL, f"{count} valid active geometries"
 
 
 CLIENT_WEATHER_KEY = "client-health:weather"
@@ -244,7 +421,12 @@ def _weather():
 def _geocoding():
     if not getattr(settings, "REVERSE_GEOCODE_ENABLED", False):
         return NOT_CONFIGURED, "reverse geocoding disabled"
-    return OPERATIONAL, "Nominatim"
+    from apps.geo_services import REVERSE_STATUS_SUCCESS, reverse_geocode
+
+    result = reverse_geocode(14.6507, 121.1029)
+    if result.get("status") != REVERSE_STATUS_SUCCESS or not result.get("location"):
+        return DOWN, "known coordinate did not resolve"
+    return OPERATIONAL, result["location"]
 
 
 PROBES = {
@@ -308,16 +490,19 @@ MESSAGES = {
         DEGRADED: "Codes arrive late.",
         DOWN: "No codes or password resets are sent.",
         NOT_CONFIGURED: "No codes or password resets are sent.",
+        UNKNOWN: "Waiting for a recent delivered email.",
     },
     "sms": {
         DEGRADED: "Residents receive nothing.",
         DOWN: "No texts when the internet is down.",
-        NOT_CONFIGURED: "No texts when the internet is down.",
+        NOT_CONFIGURED: "The gateway phone is not linked to E-Boses.",
+        UNKNOWN: "Waiting for the gateway phone to check in.",
     },
     "push": {
         DEGRADED: "Alerts reach phones late.",
         DOWN: "No alerts on officials' phones.",
         NOT_CONFIGURED: "No alerts on officials' phones.",
+        UNKNOWN: "Waiting for a recent phone alert.",
     },
     "assistant": {
         DEGRADED: "Answers come slowly.",
@@ -359,38 +544,137 @@ def _message(key, label, status):
     return fallback.get(status, "State unclear.")
 
 
-def _record(results):
-    """Save today's worst state per module so the timeline has real history."""
+STATUS_COUNTER = {
+    OPERATIONAL: "operational_checks",
+    DEGRADED: "degraded_checks",
+    DOWN: "down_checks",
+    NOT_CONFIGURED: "not_configured_checks",
+    UNKNOWN: "unknown_checks",
+}
+
+
+def _sample_bucket(checked_at):
+    minute = checked_at.minute - checked_at.minute % SAMPLE_MINUTES
+    return checked_at.replace(minute=minute, second=0, microsecond=0)
+
+
+def _record(results, checked_at):
+    """Record one sample per service per five-minute bucket."""
     from apps.accounts.models import ServiceHealthDay
 
-    today = timezone.localdate()
-    existing = {
-        row.module_key: row
-        for row in ServiceHealthDay.objects.filter(day=today, module_key__in=results)
-    }
-    for key, module in results.items():
-        severity = SEVERITY.get(module["status"], 1)
-        row = existing.get(key)
-        if row is None:
-            issues = [] if severity == 0 else [{"severity": severity, "text": module["message"]}]
-            ServiceHealthDay.objects.get_or_create(
+    today = timezone.localdate(checked_at)
+    bucket = _sample_bucket(checked_at)
+    with transaction.atomic():
+        for key, module in results.items():
+            row, _ = ServiceHealthDay.objects.select_for_update().get_or_create(
                 day=today,
                 module_key=key,
-                defaults={"severity": severity, "issues": issues},
             )
+            if row.last_sample_bucket == bucket:
+                continue
+            status_value = module["status"]
+            counter = STATUS_COUNTER.get(status_value, "unknown_checks")
+            setattr(row, counter, getattr(row, counter) + 1)
+            row.checks_total += 1
+            latency = max(0, int(module.get("latency_ms") or 0))
+            row.latency_total_ms += latency
+            row.latency_max_ms = max(row.latency_max_ms, latency)
+            severity = SEVERITY.get(status_value, 1)
+            row.severity = max(row.severity, severity)
+            if severity and module.get("message"):
+                texts = {item.get("text") for item in row.issues}
+                if module["message"] not in texts:
+                    row.issues = [*row.issues, {"severity": severity, "text": module["message"]}]
+            row.last_sample_bucket = bucket
+            row.save()
+
+
+def _update_states(results, checked_at):
+    from apps.accounts.models import ServiceHealthState, ServiceIncident
+
+    for key, module in results.items():
+        raw_status = module["status"]
+        state = ServiceHealthState.objects.filter(module_key=key).first()
+        failures = state.consecutive_failures if state else 0
+        successes = state.consecutive_successes if state else 0
+        previous = state.status if state else UNKNOWN
+
+        if raw_status == DOWN:
+            failures += 1
+            successes = 0
+            effective = DOWN if failures >= 2 else DEGRADED
+        elif raw_status == OPERATIONAL:
+            successes += 1
+            failures = 0
+            effective = OPERATIONAL
+        else:
+            failures = 0
+            successes = 0
+            effective = raw_status
+
+        module["raw_status"] = raw_status
+        module["status"] = effective
+        if effective != raw_status:
+            module["message"] = _message(key, module["label"], effective) or module["message"]
+
+        state, _ = ServiceHealthState.objects.update_or_create(
+            module_key=key,
+            defaults={
+                "status": effective,
+                "detail": str(module.get("detail") or "")[:255],
+                "message": str(module.get("message") or "")[:255],
+                "latency_ms": max(0, int(module.get("latency_ms") or 0)),
+                "consecutive_failures": failures,
+                "consecutive_successes": successes,
+                "checked_at": checked_at,
+            },
+        )
+        open_incident = ServiceIncident.objects.filter(module_key=key, resolved_at__isnull=True).first()
+        if effective == DOWN and open_incident is None:
+            ServiceIncident.objects.create(
+                module_key=key,
+                status=effective,
+                message=state.message,
+                started_at=checked_at,
+            )
+        elif effective == OPERATIONAL and open_incident is not None:
+            open_incident.resolved_at = checked_at
+            open_incident.save(update_fields=["resolved_at", "updated_at"])
+
+
+def _stored_results():
+    from apps.accounts.models import ServiceHealthState
+
+    states = {row.module_key: row for row in ServiceHealthState.objects.filter(module_key__in=PROBES)}
+    if not states:
+        return None
+    cutoff = timezone.now() - timedelta(minutes=STATE_STALE_MINUTES)
+    results = {}
+    for key, (label, description, _fn) in PROBES.items():
+        state = states.get(key)
+        if state is None or state.checked_at < cutoff:
+            results[key] = {
+                "key": key,
+                "label": label,
+                "description": description,
+                "status": UNKNOWN,
+                "message": "The last operational check is stale.",
+                "latency_ms": 0,
+                "detail": "stale or missing sample",
+                "checked_at": state.checked_at if state else None,
+            }
             continue
-        if severity == 0:
-            continue
-        texts = {item.get("text") for item in row.issues}
-        changed = False
-        if module["message"] not in texts:
-            row.issues = [*row.issues, {"severity": severity, "text": module["message"]}]
-            changed = True
-        if severity > row.severity:
-            row.severity = severity
-            changed = True
-        if changed:
-            row.save(update_fields=["severity", "issues", "updated_at"])
+        results[key] = {
+            "key": key,
+            "label": label,
+            "description": description,
+            "status": state.status,
+            "message": state.message,
+            "latency_ms": state.latency_ms,
+            "detail": state.detail,
+            "checked_at": state.checked_at,
+        }
+    return results
 
 
 DAY_STATUS = {0: "operational", 1: "not_configured", 2: "degraded", 3: "down"}
@@ -409,8 +693,49 @@ def _history():
         by_key.setdefault(row.module_key, {})[row.day.isoformat()] = {
             "severity": row.severity,
             "issues": row.issues,
+            "checks_total": row.checks_total,
+            "operational_checks": row.operational_checks,
+            "degraded_checks": row.degraded_checks,
+            "down_checks": row.down_checks,
+            "not_configured_checks": row.not_configured_checks,
+            "unknown_checks": row.unknown_checks,
+            "latency_total_ms": row.latency_total_ms,
+            "latency_max_ms": row.latency_max_ms,
         }
     return by_key
+
+
+def _day_payload(day, samples):
+    checks_total = sum(sample.get("checks_total", 0) for sample in samples)
+    operational_checks = sum(sample.get("operational_checks", 0) for sample in samples)
+    degraded_checks = sum(sample.get("degraded_checks", 0) for sample in samples)
+    down_checks = sum(sample.get("down_checks", 0) for sample in samples)
+    not_configured_checks = sum(sample.get("not_configured_checks", 0) for sample in samples)
+    unknown_checks = sum(sample.get("unknown_checks", 0) for sample in samples)
+    measured = operational_checks + degraded_checks + down_checks
+    up = operational_checks + degraded_checks
+    if checks_total == 0:
+        status_value = "no_data"
+    elif measured == 0:
+        status_value = "not_configured" if not_configured_checks else "no_data"
+    elif down_checks:
+        status_value = "down" if down_checks * 2 >= measured else "degraded"
+    elif degraded_checks:
+        status_value = "degraded"
+    else:
+        status_value = "operational"
+    return {
+        "date": day.isoformat(),
+        "status": status_value,
+        "issues": [issue for sample in samples for issue in sample.get("issues", [])],
+        "checks_total": checks_total,
+        "measured_checks": measured,
+        "up_checks": up,
+        "degraded_checks": degraded_checks,
+        "down_checks": down_checks,
+        "unknown_checks": unknown_checks,
+        "availability_percent": round(up / measured * 100, 2) if measured else None,
+    }
 
 
 def _group_history(keys, by_key):
@@ -421,32 +746,40 @@ def _group_history(keys, by_key):
         iso = day.isoformat()
         samples = [by_key[key][iso] for key in keys if iso in by_key.get(key, {})]
         if not samples:
-            days.append({"date": iso, "status": "no_data", "issues": []})
+            days.append(_day_payload(day, []))
             continue
-        severity = max(sample["severity"] for sample in samples)
-        issues = [issue for sample in samples for issue in sample["issues"]]
-        days.append(
-            {
-                "date": iso,
-                "status": DAY_STATUS.get(severity, "operational"),
-                "issues": issues,
-            }
-        )
+        days.append(_day_payload(day, samples))
     return days
 
 
-def collect(use_cache=True):
+def _availability(days):
+    measured = sum(day["measured_checks"] for day in days)
+    up = sum(day["up_checks"] for day in days)
+    degraded = sum(day["degraded_checks"] for day in days)
+    down = sum(day["down_checks"] for day in days)
+    return {
+        "percent": round(up / measured * 100, 2) if measured else None,
+        "measured_checks": measured,
+        "up_checks": up,
+        "degraded_checks": degraded,
+        "down_checks": down,
+        "sample_minutes": SAMPLE_MINUTES,
+    }
+
+
+def collect(use_cache=True, run_checks=False, record=False):
     if use_cache:
         cached = cache.get(CACHE_KEY)
         if cached:
             return cached
 
-    results = {key: _probe(key, *PROBES[key]) for key in PROBES}
-    try:
-        _record(results)
-    except Exception:
-        # History is a nice-to-have; a write failure must not hide live status.
-        pass
+    results = None if run_checks else _stored_results()
+    checked_at = timezone.now()
+    if results is None:
+        results = {key: _probe(key, *PROBES[key]) for key in PROBES}
+        if record:
+            _record(results, checked_at)
+        _update_states(results, checked_at)
 
     try:
         by_key = _history()
@@ -463,6 +796,7 @@ def collect(use_cache=True):
             # Uptime is worked out from these days by whoever displays them, so
             # the number always matches the range on screen.
             module["history"] = _group_history((key,), by_key)
+            module["availability"] = _availability(module["history"])
             modules.append(module)
         worst = max((SEVERITY.get(m["status"], 1) for m in modules), default=0)
         groups.append(
@@ -473,26 +807,31 @@ def collect(use_cache=True):
                 "history": _group_history(keys, by_key),
             }
         )
+        groups[-1]["availability"] = _availability(groups[-1]["history"])
 
     everything = list(results.values())
     worst_overall = max((SEVERITY.get(m["status"], 1) for m in everything), default=0)
     down = [m["label"] for m in everything if m["status"] == DOWN]
     degraded = [m["label"] for m in everything if m["status"] == DEGRADED]
     unset = [m["label"] for m in everything if m["status"] == NOT_CONFIGURED]
+    unknown = [m["label"] for m in everything if m["status"] == UNKNOWN]
 
-    if down:
-        headline = f"{len(down)} {'service is' if len(down) == 1 else 'services are'} not working"
-    elif degraded:
-        headline = f"{len(degraded)} {'service is' if len(degraded) == 1 else 'services are'} slow"
+    if down or degraded:
+        headline = "Some services need attention"
+    elif unknown:
+        headline = "Some services could not be verified"
     elif unset:
-        headline = "Everything is working"
+        headline = "Some services need setup"
     else:
-        headline = "Everything is working"
+        headline = "All services are operational"
 
     payload = {
         "headline": headline,
         "worst": worst_overall,
-        "checked_at": time.time(),
+        "checked_at": max(
+            (m.get("checked_at") or checked_at for m in everything),
+            default=checked_at,
+        ).timestamp(),
         "history_days": HISTORY_DAYS,
         "groups": groups,
         "counts": {
@@ -500,6 +839,7 @@ def collect(use_cache=True):
             "operational": sum(1 for m in everything if m["status"] == OPERATIONAL),
             "degraded": len(degraded),
             "down": len(down),
+            "unknown": len(unknown),
             "not_configured": sum(1 for m in everything if m["status"] == NOT_CONFIGURED),
         },
     }
@@ -516,7 +856,12 @@ def record_service_health_task():
     two together cover each other — the worker records the rest of the system,
     the page records the worker.
     """
-    collect(use_cache=False)
+    collect(use_cache=False, run_checks=True, record=True)
+
+
+@shared_task(name="apps.service_status.record_worker_heartbeat_task", ignore_result=True)
+def record_worker_heartbeat_task():
+    cache.set(WORKER_HEARTBEAT_KEY, time.time(), 300)
 
 
 class WeatherHealthReportView(APIView):
@@ -539,10 +884,58 @@ class WeatherHealthReportView(APIView):
         return Response(status=204)
 
 
+def _resend_webhook_key():
+    secret = str(getattr(settings, "RESEND_WEBHOOK_SECRET", "") or "").strip()
+    if secret.startswith("whsec_"):
+        secret = secret[6:]
+    if not secret:
+        return None
+    try:
+        return base64.b64decode(secret, validate=True)
+    except (TypeError, ValueError):
+        return secret.encode()
+
+
+def _valid_resend_webhook(request):
+    event_id = request.headers.get("svix-id", "")
+    timestamp = request.headers.get("svix-timestamp", "")
+    signature = request.headers.get("svix-signature", "")
+    key = _resend_webhook_key()
+    try:
+        sent_at = int(timestamp)
+    except ValueError:
+        return False
+    if not key or not event_id or abs(int(time.time()) - sent_at) > 300:
+        return False
+    signed = f"{event_id}.{timestamp}.".encode() + request.body
+    expected = base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
+    candidates = [item.removeprefix("v1,") for item in signature.split()]
+    return any(hmac.compare_digest(expected, item) for item in candidates)
+
+
+class ResendHealthWebhookView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = []
+
+    def post(self, request):
+        if not _valid_resend_webhook(request):
+            return Response({"detail": "Invalid webhook signature."}, status=401)
+        try:
+            event = json.loads(request.body).get("type", "")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return Response({"detail": "Invalid webhook payload."}, status=400)
+        if event == "email.delivered":
+            cache.set("service-status:email-delivered", time.time(), 172800)
+        elif event in {"email.failed", "email.bounced", "email.delivery_delayed"}:
+            cache.set("service-status:email-failed", time.time(), 172800)
+        return Response(status=204)
+
+
 class ServiceStatusView(APIView):
     permission_classes = [IsAuthenticated, HasCapability]
     required_capability = CONFIGURE_CLASSIFICATION
 
     def get(self, request):
         fresh = request.query_params.get("refresh") == "1"
-        return Response(collect(use_cache=not fresh))
+        return Response(collect(use_cache=not fresh, run_checks=fresh, record=fresh))

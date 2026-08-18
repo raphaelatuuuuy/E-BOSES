@@ -76,7 +76,7 @@ export default function AccountPendingPage() {
           aria-label="Boses — back to landing page"
         >
           <img src="/contents/logo.webp" alt="" className="h-8 w-auto" />
-          <span className="font-heading text-xl font-bold text-primary">Boses</span>
+          <span className="text-2xl font-bold text-accent">Boses</span>
         </Link>
       </header>
 

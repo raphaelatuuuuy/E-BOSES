@@ -18,6 +18,9 @@ class MapGeometry(models.Model):
     street_type = models.CharField(max_length=40, blank=True)
     geometry = models.JSONField(default=dict)
     is_active = models.BooleanField(default=True)
+    locality = models.CharField(max_length=80, blank=True)
+    is_home = models.BooleanField(default=False)
+    neighbors = models.ManyToManyField("self", blank=True, symmetrical=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -103,6 +106,12 @@ class MapDispatchPolicy(models.Model):
         blank=True,
         help_text='[{"label": "Marikina Rescue", "number": "161"}]',
     )
+    covered = models.ManyToManyField(
+        "MapGeometry",
+        blank=True,
+        limit_choices_to={"kind": "boundary"},
+        related_name="covered_by_policies",
+    )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -121,10 +130,26 @@ class MapDispatchPolicy(models.Model):
         obj, _ = cls.objects.get_or_create(pk=1, defaults={"barangay": "Marikina Heights"})
         return obj
 
+    def covered_geometries(self):
+        """Boundaries this barangay answers for; home alone until coverage is set."""
+        if self.pk:
+            rows = list(self.covered.filter(is_active=True).order_by("name", "id"))
+            if rows:
+                return rows
+        return list(
+            MapGeometry.objects.filter(
+                kind=MapGeometry.Kind.BOUNDARY, is_active=True, is_home=True
+            ).order_by("name", "id")
+        )
+
     def as_payload(self):
         return {
             "id": self.pk,
             "barangay": self.barangay,
+            "covered": [
+                {"id": row.pk, "name": row.name, "locality": row.locality, "is_home": row.is_home}
+                for row in self.covered_geometries()
+            ],
             "acceptance_center_latitude": float(self.acceptance_center_latitude),
             "acceptance_center_longitude": float(self.acceptance_center_longitude),
             "acceptance_radius_meters": int(self.acceptance_radius_meters),

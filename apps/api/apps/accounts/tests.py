@@ -31,6 +31,7 @@ from apps.accounts.services import (
 )
 from apps.emergencies.models import ResponderShift
 from apps.concerns.models import Concern
+from apps.concerns.test_helpers import grant_position
 from apps.notifications.models import BrowserPushSubscription, Notification
 
 VALID_PDF_BYTES = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF"
@@ -1357,6 +1358,7 @@ class PhaseOneBAccountAPITests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
+        grant_position(self.official)
         self.responder = User.objects.create_user(
             email="phase1b-responder@example.com",
             phone_number="+639351234569",

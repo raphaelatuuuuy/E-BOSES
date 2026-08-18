@@ -156,9 +156,10 @@ export interface ContentFlag {
   concern: number
   comment: number | null
   reporter: PublicUser
+  reporter_full_name?: string
   reason: "irrelevant" | "false_info" | "sensitive" | "abusive" | "other"
   note: string
-  status: "submitted" | "reviewed" | "dismissed" | "action_taken"
+  status: "submitted" | "reviewed" | "dismissed" | "action_taken" | "taken_down"
   staff_note: string
   created_at: string
   updated_at: string
@@ -267,6 +268,7 @@ export interface Concern {
   rejection_code: string
   status_version: number
   reporter: PublicUser
+  reporter_full_name?: string
   title: string
   description: string
 

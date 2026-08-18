@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated
 from apps.accounts.permissions import user_has_role_permission
+from apps.capabilities import PUBLISH_ANNOUNCEMENTS, RESOLVE_CONCERNS, user_has_capability
 from apps.live_map import static_map_payload
 
 from .models import Announcement, AnnouncementComment, BarangayEvent
@@ -28,6 +29,14 @@ def is_official(user):
             or user_has_role_permission(user, "concerns.manage")
         )
     )
+
+
+def can_moderate_community(user):
+    return is_official(user) and user_has_capability(user, PUBLISH_ANNOUNCEMENTS)
+
+
+def can_resolve_concerns(user):
+    return is_official(user) and user_has_capability(user, RESOLVE_CONCERNS)
 
 
 def display_name(user):
@@ -126,7 +135,7 @@ class AnnouncementCommentDetailView(APIView):
         comment = get_object_or_404(
             AnnouncementComment, pk=comment_id, announcement_id=announcement_id
         )
-        if comment.author_id != request.user.pk and not is_official(request.user):
+        if comment.author_id != request.user.pk and not can_moderate_community(request.user):
             return Response(
                 {"detail": "You can only remove your own comment."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -184,7 +193,7 @@ class ConcernReopenRequestView(APIView):
         from .views import decorate_concerns
 
         concern = get_object_or_404(Concern, pk=pk)
-        if concern.reporter_id != request.user.pk and not is_official(request.user):
+        if concern.reporter_id != request.user.pk and not can_resolve_concerns(request.user):
             return Response(
                 {"detail": "Only the reporter can ask to reopen this report."},
                 status=status.HTTP_403_FORBIDDEN,

@@ -22,7 +22,7 @@ from rest_framework.test import APITestCase
 from apps.concerns.ai import process_concern_ai
 from apps.concerns.ai.gemma_analyzer import GemmaAnalyzer, parse_gemma_result, payload_from_result
 from apps.concerns.ai_fixtures import gemma_result
-from apps.concerns.models import Concern, ConcernAiAssessment, ConcernClassificationConfiguration
+from apps.concerns.models import Concern, ConcernAiAssessment, ConcernClassificationConfiguration, Department, Designation, Position
 
 
 def png_upload(name="safe.png"):
@@ -35,6 +35,14 @@ def png_upload(name="safe.png"):
     return SimpleUploadedFile(name, output.getvalue(), content_type="image/png")
 
 
+def grant_captain(user):
+    Designation.objects.create(
+        user=user,
+        department=Department.objects.get(code="sangguniang-barangay"),
+        position=Position.objects.get(code="barangay-captain"),
+    )
+
+
 class ConcernClassificationApiTests(APITestCase):
     def setUp(self):
         User = get_user_model()
@@ -42,6 +50,7 @@ class ConcernClassificationApiTests(APITestCase):
             email="classification-official@example.com", phone_number="+639180000001",
             password="pass", role=User.Role.BARANGAY_OFFICIAL, status=User.Status.VERIFIED,
         )
+        grant_captain(self.official)
         self.resident = User.objects.create_user(
             email="classification-resident@example.com", phone_number="+639180000002",
             password="pass", role=User.Role.RESIDENT, status=User.Status.VERIFIED,
@@ -185,6 +194,8 @@ class ConcernClassificationApiTests(APITestCase):
                 "category": "vehicle",
                 "title": "Blocked driveway",
                 "description": "May sasakyang nakaharang sa driveway.",
+                "latitude": "14.6507",
+                "longitude": "121.1029",
             },
             format="multipart",
         )
@@ -198,10 +209,15 @@ class ConcernClassificationApiTests(APITestCase):
 
         response = self.client.post(
             "/api/concerns/classification/precheck/",
-            {"category": "others", "title": "test", "description": "asdf asdf qwerty 12345"},
+            {
+                "category": "others",
+                "title": "test",
+                "description": "asdf asdf qwerty 12345",
+                "latitude": "14.6507",
+                "longitude": "121.1029",
+            },
             format="multipart",
         )
-
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(response.data["can_submit"])
         self.assertEqual(response.data["field_errors"]["description"], "Add a clearer description of the issue.")
@@ -222,6 +238,7 @@ class ClassificationServiceStatusTests(APITestCase):
             email="service-status-official@example.com", phone_number="+639180000201",
             password="pass", role=User.Role.BARANGAY_OFFICIAL, status=User.Status.VERIFIED,
         )
+        grant_captain(self.official)
         self.client.force_authenticate(self.official)
 
     def tearDown(self):

@@ -112,11 +112,11 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
         capability: CAPABILITIES.configureDispatch,
       },
       {
-        key: "zones",
-        label: "Barangay coverage",
-        description: "The area where alerts reach residents and backup contact for emergencies",
+        key: "coverage",
+        label: "Coverage area",
+        description: "Which barangays this station answers for",
         icon: MapIcon,
-        to: "/dashboard/configuration/map-dispatch",
+        to: "/dashboard/configuration/coverage",
         capability: CAPABILITIES.configureGeography,
       },
       {
@@ -125,7 +125,7 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
         description: "Which documents prove a resident lives here",
         icon: IdCardLanyard,
         to: "/dashboard/configuration/id-proof-template",
-        capability: CAPABILITIES.reviewVerification,
+        capability: CAPABILITIES.manageUsers,
       },
     ],
   },
@@ -176,7 +176,7 @@ function SectionRow({
     <span className="block h-3 w-24 animate-pulse rounded-full bg-neutral-200" />
   ) : (
     <span className="block text-right">
-      <span className="block text-row text-brand-navy transition-colors group-hover:text-accent">
+      <span className="block text-row font-normal text-brand-navy transition-colors group-hover:text-accent">
         {state?.status ?? (built ? "—" : "Not configured")}
       </span>
       {state?.detail ? (

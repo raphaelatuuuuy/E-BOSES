@@ -17,6 +17,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.capabilities import MANAGE_USERS, user_has_capability
+
 from .media_services import ensure_residence_proof_preview
 from .models import (
     OCRConfigurationVersion,
@@ -68,8 +70,10 @@ def _official(request):
         and (
             user.is_staff
             or user.is_superuser
-            or user.role == User.Role.BARANGAY_OFFICIAL
-            or user_has_role_permission(user, "accounts.verify_residents")
+            or (
+                user_has_role_permission(user, "accounts.verify_residents")
+                and user_has_capability(user, MANAGE_USERS)
+            )
         )
     )
 

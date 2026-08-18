@@ -1,4 +1,7 @@
+import time
+
 from django.conf import settings
+from django.core.cache import cache
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -157,6 +160,8 @@ class BrowserPushTestView(APIView):
         )
         # Only push — skip WebSocket broadcast so the test doesn't ping the in-app toast too.
         push_result = send_browser_push(notification)
+        if push_result["status"] in {"delivered", "partial"}:
+            cache.set("service-status:push-delivered", time.time(), 172800)
         return Response(
             {
                 "notification": NotificationSerializer(notification).data,

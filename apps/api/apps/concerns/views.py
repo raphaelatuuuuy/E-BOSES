@@ -22,6 +22,8 @@ from apps.capabilities import (
     MANAGE_ROLES,
     MANAGE_UNITS,
     MANAGE_USERS,
+    PUBLISH_ANNOUNCEMENTS,
+    RESOLVE_CONCERNS,
     capability_denied,
     user_has_capability,
 )
@@ -277,7 +279,7 @@ def can_access_concern(user, concern):
     )
 
 
-def can_update_concern_status(user):
+def can_manage_concern_operations(user):
     return bool(
         user
         and user.is_authenticated
@@ -286,6 +288,18 @@ def can_update_concern_status(user):
             or user.is_superuser
             or user_has_role_permission(user, "concerns.manage")
         )
+    )
+
+
+def can_update_concern_status(user):
+    return can_manage_concern_operations(user) and user_has_capability(
+        user, RESOLVE_CONCERNS
+    )
+
+
+def can_publish_announcements(user):
+    return can_manage_concern_operations(user) and user_has_capability(
+        user, PUBLISH_ANNOUNCEMENTS
     )
 
 
@@ -912,6 +926,12 @@ class ContentFlagListView(APIView):
         return Response(ContentFlagSerializer(flags, many=True, context={"request": request}).data)
 
 
+def _can_take_down(concern):
+    return concern.status == Concern.Status.REJECTED or Concern.Status.REJECTED in LEGAL_STATUS_TRANSITIONS.get(
+        concern.status, set()
+    )
+
+
 class ContentFlagReviewView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -924,11 +944,27 @@ class ContentFlagReviewView(APIView):
             return Response({"detail": "You do not have permission to review content flags."}, status=status.HTTP_403_FORBIDDEN)
         serializer = ContentFlagReviewSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        flag = get_object_or_404(ContentFlag, pk=pk)
-        flag.status = serializer.validated_data["status"]
-        flag.staff_note = serializer.validated_data["staff_note"]
+        decision = serializer.validated_data["status"]
+        staff_note = serializer.validated_data["staff_note"]
+        flag = get_object_or_404(
+            ContentFlag.objects.select_related("concern", "concern__reporter", "reporter"),
+            pk=pk,
+        )
+        if decision == ContentFlag.Status.TAKEN_DOWN and not _can_take_down(flag.concern):
+            return Response(
+                {"detail": "This report is already closed and can no longer be taken down."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        flag.status = decision
+        flag.staff_note = staff_note
         flag.reviewed_by = request.user
         flag.save(update_fields=["status", "staff_note", "reviewed_by", "updated_at"])
+
+        if decision == ContentFlag.Status.TAKEN_DOWN:
+            self._take_down(flag, staff_note, request)
+        elif flag.reporter_id != flag.concern.reporter_id:
+            self._notify_flag_reporter_dismissed(flag, staff_note)
+
         create_audit_log(
             "content.flag_reviewed",
             actor=request.user,
@@ -937,6 +973,79 @@ class ContentFlagReviewView(APIView):
             request_meta=request_meta(request),
         )
         return Response(ContentFlagSerializer(flag, context={"request": request}).data)
+
+    def _take_down(self, flag, staff_note, request):
+        from apps.notifications.models import Notification
+
+        concern = flag.concern
+        concern.status = Concern.Status.REJECTED
+        concern.rejection_code = "content_violation"
+        concern.status_version += 1
+        concern.update_text = staff_note[:255]
+        concern.archived_at = timezone.now()
+        concern.save(
+            update_fields=[
+                "status",
+                "rejection_code",
+                "status_version",
+                "update_text",
+                "archived_at",
+                "updated_at",
+            ]
+        )
+        reason_label = flag.get_reason_display()
+        create_timeline_entry(
+            concern=concern,
+            event_type=ConcernTimelineEntry.EventType.STATUS_CHANGE,
+            status=Concern.Status.REJECTED,
+            actor=request.user,
+            message=f"Post taken down due to a content violation ({reason_label}). {staff_note}",
+        )
+        body = (
+            f"Your report was taken down because it was flagged as {reason_label}. "
+            f"Official note: {staff_note}\nYou can appeal this decision."
+        )
+        create_user_notification(
+            recipient=concern.reporter,
+            concern=concern,
+            type=Notification.Type.POST_TAKEN_DOWN,
+            title="Post taken down",
+            body=body,
+        )
+        if flag.reporter_id != concern.reporter_id:
+            create_user_notification(
+                recipient=flag.reporter,
+                concern=concern,
+                type=Notification.Type.POST_TAKEN_DOWN,
+                title="Flag acted on",
+                body=(
+                    f"The post you flagged as {reason_label} has been removed. "
+                    f"Official note: {staff_note}"
+                ),
+            )
+        # Push the updated concern so open feeds hide the post without a reload.
+        from apps.live_map import concern_payload
+        from apps.notifications.services import broadcast_live_map_event
+
+        decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
+        transaction.on_commit(
+            lambda: broadcast_live_map_event("concern.updated", {"concern": concern_payload(decorated)})
+        )
+
+    @staticmethod
+    def _notify_flag_reporter_dismissed(flag, staff_note):
+        from apps.notifications.models import Notification
+
+        create_user_notification(
+            recipient=flag.reporter,
+            concern=flag.concern,
+            type=Notification.Type.FLAG_DISMISSED,
+            title="Flag report reviewed",
+            body=(
+                f"Your report was reviewed, however the post stays up. "
+                f"Official note: {staff_note}"
+            ),
+        )
 
 
 class ConcernAssignView(APIView):
@@ -1376,6 +1485,34 @@ class ConcernCategoryOptionsView(APIView):
         )
 
 
+def _designation_manages_roles(designation):
+    return bool(
+        designation.is_active
+        and designation.department.is_active
+        and designation.position.is_active
+        and MANAGE_ROLES in (designation.position.permissions or [])
+    )
+
+
+def _has_role_manager(*, exclude_position_id=None, exclude_designation_id=None):
+    User = get_user_model()
+    if User.objects.filter(is_superuser=True, is_active=True).exists():
+        return True
+    designations = Designation.objects.filter(
+        is_active=True,
+        department__is_active=True,
+        position__is_active=True,
+        user__is_active=True,
+        user__status=User.Status.VERIFIED,
+        user__role=User.Role.BARANGAY_OFFICIAL,
+    ).select_related("position")
+    if exclude_position_id:
+        designations = designations.exclude(position_id=exclude_position_id)
+    if exclude_designation_id:
+        designations = designations.exclude(pk=exclude_designation_id)
+    return any(MANAGE_ROLES in (item.position.permissions or []) for item in designations)
+
+
 class AdminModelListCreateView(APIView):
     """List and create configuration rows.
 
@@ -1389,21 +1526,31 @@ class AdminModelListCreateView(APIView):
     model = None
     serializer_class = None
     # Capability required to read/write this configuration. See apps.capabilities.
+    # A tuple means any one suffices (positions live in both the Units and the
+    # Roles screens, so either manager may edit them).
     required_capability = None
+    required_capabilities = None
+    read_capabilities = None
+
+    def _caps(self, *, read=False):
+        if read and self.read_capabilities:
+            return self.read_capabilities
+        return self.required_capabilities or (self.required_capability,)
 
     def _denied(self):
-        return capability_denied(self.required_capability)
+        return capability_denied(self._caps()[0])
 
-    def _allowed(self, user):
-        if not can_update_concern_status(user):
+    def _allowed(self, user, *, read=False):
+        if not can_manage_concern_operations(user):
             return False
-        if self.required_capability and not user_has_capability(user, self.required_capability):
+        caps = [c for c in self._caps(read=read) if c]
+        if caps and not any(user_has_capability(user, c) for c in caps):
             return False
         return True
 
     def get(self, request):
         touch_last_seen(request.user)
-        if not self._allowed(request.user):
+        if not self._allowed(request.user, read=True):
             return self._denied()
         return Response(self.serializer_class(self.model.objects.all(), many=True, context={"request": request}).data)
 
@@ -1432,14 +1579,19 @@ class AdminModelDetailView(APIView):
     # Reverse accessor checked before a hard delete is allowed.
     protected_relation = None
     required_capability = None
+    required_capabilities = None
+
+    def _caps(self):
+        return self.required_capabilities or (self.required_capability,)
 
     def _denied(self):
-        return capability_denied(self.required_capability)
+        return capability_denied(self._caps()[0])
 
     def _allowed(self, user):
-        if not can_update_concern_status(user):
+        if not can_manage_concern_operations(user):
             return False
-        if self.required_capability and not user_has_capability(user, self.required_capability):
+        caps = [c for c in self._caps() if c]
+        if caps and not any(user_has_capability(user, c) for c in caps):
             return False
         return True
 
@@ -1487,6 +1639,7 @@ class AdminModelDetailView(APIView):
 class DepartmentListCreateView(AdminModelListCreateView):
     model = Department
     required_capability = MANAGE_UNITS
+    read_capabilities = (MANAGE_UNITS, MANAGE_ROLES, MANAGE_USERS)
     serializer_class = DepartmentSerializer
 
 
@@ -1499,17 +1652,58 @@ class DepartmentDetailView(AdminModelDetailView):
 
 class PositionListCreateView(AdminModelListCreateView):
     model = Position
-    required_capability = MANAGE_ROLES
+    required_capabilities = (MANAGE_ROLES, MANAGE_UNITS)
+    read_capabilities = (MANAGE_ROLES, MANAGE_UNITS, MANAGE_USERS)
     serializer_class = PositionSerializer
+
+    def post(self, request):
+        if "permissions" in request.data and not user_has_capability(request.user, MANAGE_ROLES):
+            return capability_denied(MANAGE_ROLES)
+        return super().post(request)
 
 
 class PositionDetailView(AdminModelDetailView):
     model = Position
-    required_capability = MANAGE_ROLES
+    required_capabilities = (MANAGE_ROLES, MANAGE_UNITS)
     serializer_class = PositionSerializer
     # A position still held by someone is deactivated, not deleted: dropping it
     # would strip those people of their capabilities with no record of why.
     protected_relation = "designations"
+
+    def patch(self, request, pk):
+        if ({"permissions", "is_active"} & set(request.data)) and not user_has_capability(
+            request.user, MANAGE_ROLES
+        ):
+            return capability_denied(MANAGE_ROLES)
+        position = get_object_or_404(Position, pk=pk)
+        next_permissions = request.data.get("permissions", position.permissions)
+        next_active = request.data.get("is_active", position.is_active)
+        removes_role_manager = (
+            position.is_active
+            and MANAGE_ROLES in (position.permissions or [])
+            and (not next_active or MANAGE_ROLES not in next_permissions)
+        )
+        if removes_role_manager and not _has_role_manager(exclude_position_id=position.pk):
+            return Response(
+                {"permissions": ["Assign Manage roles to another active user first."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().patch(request, pk)
+
+    def delete(self, request, pk):
+        if not user_has_capability(request.user, MANAGE_ROLES):
+            return capability_denied(MANAGE_ROLES)
+        position = get_object_or_404(Position, pk=pk)
+        if (
+            position.is_active
+            and MANAGE_ROLES in (position.permissions or [])
+            and not _has_role_manager(exclude_position_id=position.pk)
+        ):
+            return Response(
+                {"detail": "Assign Manage roles to another active user first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().delete(request, pk)
 
 
 class DesignationListCreateView(AdminModelListCreateView):
@@ -1522,6 +1716,30 @@ class DesignationDetailView(AdminModelDetailView):
     model = Designation
     required_capability = MANAGE_USERS
     serializer_class = DesignationSerializer
+
+    def patch(self, request, pk):
+        designation = get_object_or_404(Designation, pk=pk)
+        if (
+            request.data.get("is_active") is False
+            and _designation_manages_roles(designation)
+            and not _has_role_manager(exclude_designation_id=designation.pk)
+        ):
+            return Response(
+                {"detail": "Assign Manage roles to another active user first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().patch(request, pk)
+
+    def delete(self, request, pk):
+        designation = get_object_or_404(Designation, pk=pk)
+        if _designation_manages_roles(designation) and not _has_role_manager(
+            exclude_designation_id=designation.pk
+        ):
+            return Response(
+                {"detail": "Assign Manage roles to another active user first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().delete(request, pk)
 
 
 class ConcernCategoryListCreateView(AdminModelListCreateView):
@@ -1544,7 +1762,7 @@ class ConcernFormFieldListCreateView(APIView):
 
     def post(self, request, category_id):
         touch_last_seen(request.user)
-        if not can_update_concern_status(request.user) or not user_has_capability(request.user, MANAGE_CATEGORIES):
+        if not can_manage_concern_operations(request.user) or not user_has_capability(request.user, MANAGE_CATEGORIES):
             return Response({"detail": "You do not have permission to manage forms."}, status=status.HTTP_403_FORBIDDEN)
         category = get_object_or_404(ConcernCategory, pk=category_id)
         data = request.data.copy()
@@ -1934,7 +2152,7 @@ class AnnouncementManageListCreateView(APIView):
 
     def get(self, request):
         touch_last_seen(request.user)
-        if not can_update_concern_status(request.user):
+        if not can_publish_announcements(request.user):
             return Response({"detail": "You do not have permission to manage announcements."}, status=status.HTTP_403_FORBIDDEN)
         dispatch_due_announcements()
         announcements = Announcement.objects.all()
@@ -1945,7 +2163,7 @@ class AnnouncementManageListCreateView(APIView):
 
     def post(self, request):
         touch_last_seen(request.user)
-        if not can_update_concern_status(request.user):
+        if not can_publish_announcements(request.user):
             return Response({"detail": "You do not have permission to create announcements."}, status=status.HTTP_403_FORBIDDEN)
         serializer = AnnouncementSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -1963,7 +2181,7 @@ class AnnouncementManageDetailView(APIView):
 
     def patch(self, request, pk):
         touch_last_seen(request.user)
-        if not can_update_concern_status(request.user):
+        if not can_publish_announcements(request.user):
             return Response({"detail": "You do not have permission to update announcements."}, status=status.HTTP_403_FORBIDDEN)
         announcement = get_object_or_404(Announcement, pk=pk)
         serializer = AnnouncementSerializer(announcement, data=request.data, partial=True)
@@ -1978,7 +2196,7 @@ class AnnouncementManageDetailView(APIView):
 
     def delete(self, request, pk):
         touch_last_seen(request.user)
-        if not can_update_concern_status(request.user):
+        if not can_publish_announcements(request.user):
             return Response({"detail": "You do not have permission to delete announcements."}, status=status.HTTP_403_FORBIDDEN)
         announcement = get_object_or_404(Announcement, pk=pk)
         create_audit_log("announcement.deleted", actor=request.user, metadata={"announcement_id": announcement.pk}, request_meta=request_meta(request))
@@ -2003,7 +2221,7 @@ class BarangayEventManageListCreateView(APIView):
 
     def get(self, request):
         touch_last_seen(request.user)
-        if not can_update_concern_status(request.user):
+        if not can_publish_announcements(request.user):
             return Response({"detail": "You do not have permission to manage events."}, status=status.HTTP_403_FORBIDDEN)
         events = BarangayEvent.objects.all()
         published = request.query_params.get("published")
@@ -2013,7 +2231,7 @@ class BarangayEventManageListCreateView(APIView):
 
     def post(self, request):
         touch_last_seen(request.user)
-        if not can_update_concern_status(request.user):
+        if not can_publish_announcements(request.user):
             return Response({"detail": "You do not have permission to create events."}, status=status.HTTP_403_FORBIDDEN)
         serializer = BarangayEventSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -2026,7 +2244,7 @@ class BarangayEventManageDetailView(APIView):
 
     def patch(self, request, pk):
         touch_last_seen(request.user)
-        if not can_update_concern_status(request.user):
+        if not can_publish_announcements(request.user):
             return Response({"detail": "You do not have permission to update events."}, status=status.HTTP_403_FORBIDDEN)
         event = get_object_or_404(BarangayEvent, pk=pk)
         serializer = BarangayEventSerializer(event, data=request.data, partial=True)
@@ -2037,7 +2255,7 @@ class BarangayEventManageDetailView(APIView):
 
     def delete(self, request, pk):
         touch_last_seen(request.user)
-        if not can_update_concern_status(request.user):
+        if not can_publish_announcements(request.user):
             return Response({"detail": "You do not have permission to delete events."}, status=status.HTTP_403_FORBIDDEN)
         event = get_object_or_404(BarangayEvent, pk=pk)
         create_audit_log("event.deleted", actor=request.user, metadata={"event_id": event.pk}, request_meta=request_meta(request))

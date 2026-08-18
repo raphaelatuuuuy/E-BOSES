@@ -23,16 +23,14 @@ from apps.capabilities import (
     CONFIGURE_CLASSIFICATION,
     CONFIGURE_DISPATCH,
     CONFIGURE_GEOGRAPHY,
-    HANDLE_PRIVACY,
     MANAGE_CATEGORIES,
     MANAGE_ROLES,
     MANAGE_UNITS,
     MANAGE_USERS,
-    REVIEW_VERIFICATION,
     capabilities_for,
 )
 from apps.concerns.models import ConcernCategory, Department, Position, RoutingRule
-from apps.emergencies.models import EmergencyCategory, EmergencyTypeRoleMap, MapDispatchPolicy
+from apps.emergencies.models import EmergencyCategory, EmergencyTypeRoleMap
 
 
 def _plural(count: int, singular: str, plural: str | None = None) -> str:
@@ -162,20 +160,44 @@ def _dispatch():
     }
 
 
-def _geography():
-    """Zones and the SMS fallback share a card because they are both "how does an
-    emergency reach us"; SMS being unset is the actionable half."""
-    policy = MapDispatchPolicy.current()
-    has_sms = bool(policy.emergency_sms_number)
-    return {
-        "status": f"{policy.acceptance_radius_meters}m acceptance zone",
-        "detail": (
-            f"Witness alerts {policy.witness_radius_meters}m · "
-            + ("SMS fallback ready" if has_sms else "No SMS fallback number")
-        ),
-        "needs_attention": not has_sms,
-    }
+def _coverage():
+    """Coverage is the barangays this station accepts reports from.
 
+    An empty coverage area is not possible — home is always covered — so the
+    only thing worth flagging is boundary data that never loaded, which would
+    silently fall back to a bounding box.
+    """
+    from apps.emergencies.models import MapDispatchPolicy, MapGeometry
+
+    covered = MapDispatchPolicy.current().covered_geometries()
+    covered_ids = {row.pk for row in covered}
+
+    adjacency = MapGeometry.neighbors.through.objects.values_list(
+        "from_mapgeometry_id", "to_mapgeometry_id"
+    )
+    available: set[int] = set()
+    for left, right in adjacency:
+        if left in covered_ids:
+            available.add(right)
+        if right in covered_ids:
+            available.add(left)
+    available -= covered_ids
+
+    outside = sorted(
+        {row.locality for row in covered if row.locality and row.locality != "Marikina"}
+    )
+    if outside:
+        detail = f"Includes {', '.join(outside)}"
+    elif available:
+        detail = f"{_plural(len(available), 'neighbour')} available to add"
+    else:
+        detail = "No neighbouring barangays are mapped"
+
+    return {
+        "status": _plural(len(covered), "barangay") + " covered",
+        "detail": detail,
+        "needs_attention": not covered,
+    }
 
 
 def _verification():
@@ -282,9 +304,9 @@ SECTIONS = {
     "categories": (MANAGE_CATEGORIES, _categories),
     "classification": (CONFIGURE_CLASSIFICATION, _classification),
     "dispatch": (CONFIGURE_DISPATCH, _dispatch),
-    "zones": (CONFIGURE_GEOGRAPHY, _geography),
-    "verification": (REVIEW_VERIFICATION, _verification),
-    "privacy": (HANDLE_PRIVACY, _privacy),
+    "coverage": (CONFIGURE_GEOGRAPHY, _coverage),
+    "verification": (MANAGE_USERS, _verification),
+    "privacy": (MANAGE_USERS, _privacy),
     "audit": (MANAGE_USERS, _audit),
 }
 

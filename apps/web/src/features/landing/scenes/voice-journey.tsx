@@ -2,7 +2,7 @@
 import { useRef } from "react"
 import gsap from "gsap"
 import { useGSAP } from "@gsap/react"
-import { CameraIcon, MapPinIcon } from "lucide-react"
+import { CameraIcon, ConstructionIcon, MapPinIcon } from "lucide-react"
 
 import { MM } from "../landing-theme"
 
@@ -38,36 +38,56 @@ export function VoiceJourney() {
       const segFills = gsap.utils.toArray<HTMLElement>(".vj-seg-fill", scope)
       const phone = scope.querySelector<HTMLElement>(".vj-phone")
 
-      // Phone-mock beats: photo, review boxes (the camera placeholder fades out
-      // as they draw in), skeleton lines + category chips, location pin,
-      // severity pips, then the tracking number counts up.
+      // Phone-mock beats: the card scales in, then one scan line sweeps the WHOLE
+      // card top to bottom and each element resolves as the line reaches it. The
+      // offsets below are that line's position expressed in seconds: the sweep
+      // runs SCAN_SPAN seconds for 0->100%, so a beat placed at "scan+=t" fires
+      // when the line is t/SCAN_SPAN of the way down. The fractions come from the
+      // card's own stacking order (photo ~27%, description ~64%, pin ~87%), so
+      // the reveals stay glued to the line even though nothing is measured.
+      // The .set() bookends keep the line hidden at both rest states, which
+      // matters because the whole timeline is scrubbed and can rewind.
+      const SCAN_SPAN = 1.4
       const addMockBeats = (tl: gsap.core.Timeline) => {
         if (trackingRef.current) trackingRef.current.textContent = "EB-2026-0000"
         const counter = { n: 0 }
         tl.from(".vj-photo", { scale: 0.85, opacity: 0, duration: 0.8 })
-          .from(".vj-box", {
-            scale: 0.5,
-            opacity: 0,
-            transformOrigin: "top left",
-            stagger: 0.3,
-            duration: 0.5,
-          })
+          .addLabel("scan")
+          .set(".vj-scan", { opacity: 1 }, "scan")
+          .fromTo(
+            ".vj-scan",
+            { top: "0%" },
+            { top: "100%", duration: SCAN_SPAN, ease: "none" },
+            "scan",
+          )
           .fromTo(
             ".vj-cam",
             { opacity: 1, scale: 1 },
-            { opacity: 0, scale: 0.8, duration: 0.4 },
-            "<",
+            { opacity: 0, scale: 0.85, duration: 0.3 },
+            "scan+=0.26",
           )
-          .from(".vj-desc-seg", {
-            scaleX: 0,
-            transformOrigin: "left center",
-            stagger: 0.1,
-            duration: 0.35,
-          })
-          .from(".vj-chip", { scale: 0.4, opacity: 0, stagger: 0.2, duration: 0.35 })
-          .from(".vj-pin", { y: -30, opacity: 0, ease: "bounce.out", duration: 0.7 })
-          .from(".vj-severity", { opacity: 0, duration: 0.4 })
-          .from(".vj-sev-pip-lit", { scale: 0, opacity: 0, stagger: 0.12, duration: 0.25 }, "<")
+          .from(".vj-category", { opacity: 0, scale: 0.85, duration: 0.35 }, "scan+=0.34")
+          .from(
+            ".vj-desc-seg",
+            {
+              scaleX: 0,
+              transformOrigin: "left center",
+              stagger: 0.08,
+              duration: 0.3,
+            },
+            "scan+=0.86",
+          )
+          .from(
+            ".vj-chip",
+            { scale: 0.4, opacity: 0, stagger: 0.15, duration: 0.3 },
+            "scan+=0.98",
+          )
+          .from(
+            ".vj-pin",
+            { y: -30, opacity: 0, ease: "bounce.out", duration: 0.7 },
+            "scan+=1.18",
+          )
+          .set(".vj-scan", { opacity: 0 }, `scan+=${SCAN_SPAN}`)
           .from(".vj-tracking", { opacity: 0, duration: 0.4 })
           .to(
             counter,
@@ -157,8 +177,8 @@ export function VoiceJourney() {
       })
 
       // MM.reduced gets no context on purpose: the static DOM state is the
-      // finished one (line fully drawn, all dots lit, boxes, chips, severity
-      // visible, camera placeholder hidden behind the detections, tracking
+      // finished one (line fully drawn, all dots lit, chips visible, scan line
+      // hidden, camera placeholder already swapped for the category, tracking
       // number at its final value) and nothing pins.
       return () => mm.revert()
     },
@@ -189,23 +209,13 @@ export function VoiceJourney() {
           </span>
 
           {/* Phone mock: photo under review, highlighted description, location, severity */}
-          <div className="vj-phone mx-auto mt-8 w-64 rounded-3xl border border-white/15 bg-white/[0.04] p-4 shadow-2xl backdrop-blur-sm md:mx-0">
-            <div className="vj-photo relative flex h-24 items-center justify-center overflow-hidden rounded-xl bg-white/10">
+          <div className="vj-phone relative mx-auto mt-8 w-64 overflow-hidden rounded-3xl border border-white/15 bg-white/[0.04] p-4 shadow-2xl backdrop-blur-sm md:mx-0">
+            <div className="vj-photo relative flex h-28 items-center justify-center overflow-hidden rounded-xl bg-white/10">
               <CameraIcon className="vj-cam size-8 text-white/40 opacity-0" strokeWidth={1.5} aria-hidden />
-              <div
-                aria-hidden
-                className="vj-box absolute left-[12%] top-[38%] h-[45%] w-[46%] border border-accent shadow-[0_0_6px_rgba(255,80,3,0.35)]"
-              >
-                <span className="absolute -left-px -top-3.5 whitespace-nowrap bg-accent px-1 font-mono text-[9px] font-semibold leading-[14px] text-landing-bg">
-                  pothole 0.94
-                </span>
-              </div>
-              <div
-                aria-hidden
-                className="vj-box absolute right-[8%] top-[22%] h-[30%] w-[30%] border border-landing-sky shadow-[0_0_6px_rgba(77,163,255,0.35)]"
-              >
-                <span className="absolute -left-px -top-3.5 whitespace-nowrap bg-landing-sky px-1 font-mono text-[9px] font-semibold leading-[14px] text-landing-bg">
-                  debris 0.71
+              <div className="vj-category absolute inset-0 flex flex-col items-center justify-center">
+                <ConstructionIcon className="size-8 text-primary" strokeWidth={1.5} aria-hidden />
+                <span className="mt-1 font-mono text-[8px] uppercase tracking-[0.25em] text-primary">
+                  Infrastructure
                 </span>
               </div>
             </div>
@@ -228,26 +238,15 @@ export function VoiceJourney() {
                 <span className="vj-desc-seg h-2 w-3/5 rounded-sm bg-white/20" aria-hidden />
               </div>
             </div>
-            <div className="vj-pin mt-4 flex items-center gap-2 rounded-lg bg-accent/15 px-3 py-2 text-sm text-primary">
+            <div className="vj-pin mt-3.5 flex items-center gap-2 rounded-lg bg-accent/15 px-3 py-2 text-sm text-primary">
               <MapPinIcon className="size-4" strokeWidth={1.5} aria-hidden /> Marikina Heights
             </div>
-            <div className="vj-severity mt-3 flex items-center justify-between border-t border-white/10 pt-2.5">
-              <span className="font-mono text-[9px] uppercase tracking-[0.25em] text-white/50">
-                Severity 4/5
-              </span>
-              <span className="flex gap-1" aria-hidden>
-                {Array.from({ length: 5 }, (_, i) =>
-                  i < 4 ? (
-                    <span
-                      key={i}
-                      className="vj-sev-pip-lit size-1.5 bg-accent shadow-[0_0_4px_rgba(255,80,3,0.8)]"
-                    />
-                  ) : (
-                    <span key={i} className="size-1.5 border border-white/25" />
-                  ),
-                )}
-              </span>
-            </div>
+            {/* Sweeps the whole card, not just the photo; clipped by the card's
+                own overflow-hidden so it never bleeds past the rounded edges. */}
+            <span
+              aria-hidden
+              className="vj-scan pointer-events-none absolute inset-x-0 top-0 h-px bg-accent opacity-0 shadow-[0_0_10px_2px_rgba(255,80,3,0.55)]"
+            />
           </div>
         </div>
 

@@ -92,7 +92,7 @@ export function Navbar() {
           <div className="mx-auto flex h-20 max-w-7xl items-center justify-between">
             <Link to="/" className="flex shrink-0 items-center rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground">
               <img src="/contents/logo.webp" alt="E-Boses" className="h-10 w-auto object-contain" />
-              <span className="text-lg font-bold text-primary px-2">Boses</span>
+              <span className="text-2xl font-bold text-accent px-2">Boses</span>
             </Link>
 
             <nav aria-label="Primary navigation" className="hidden items-center gap-7 lg:flex">
@@ -114,54 +114,55 @@ export function Navbar() {
               Sign in
             </Link>
 
-            <button ref={menuButtonRef} type="button" onClick={() => setMobileOpen(true)} className="inline-flex size-11 items-center justify-center rounded-full border border-white/25 text-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground lg:hidden" aria-label="Open menu" aria-expanded={mobileOpen} aria-controls="mobile-navigation">
+            <button ref={menuButtonRef} type="button" onClick={() => setMobileOpen(true)} className="inline-flex size-11 items-center justify-center rounded-full text-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground lg:hidden" aria-label="Open menu" aria-expanded={mobileOpen} aria-controls="mobile-navigation">
               <MenuIcon className="size-5" strokeWidth={1.5} aria-hidden="true" />
             </button>
           </div>
         </div>
       </header>
 
-      <div ref={menuRef} id="mobile-navigation" role="dialog" aria-modal="true" aria-label="Navigation menu" aria-hidden={!mobileOpen} className={`fixed inset-0 z-50 flex flex-col overflow-hidden bg-landing-bg text-white transition-opacity duration-200 lg:hidden ${mobileOpen ? "opacity-100" : "pointer-events-none invisible opacity-0"}`}>
+      <div ref={menuRef} id="mobile-navigation" role="dialog" aria-modal="true" aria-label="Navigation menu" aria-hidden={!mobileOpen} className={`fixed inset-0 z-[60] flex flex-col overflow-hidden bg-landing-bg text-white transition-[opacity,transform] duration-300 ease-out lg:hidden ${mobileOpen ? "translate-y-0 opacity-100" : "pointer-events-none invisible -translate-y-5 opacity-0"}`}>
         <img
           src="/contents/marikina-heights.svg"
           alt=""
           aria-hidden="true"
           className="pointer-events-none absolute left-1/2 top-1/2 w-[120%] -translate-x-1/2 -translate-y-1/2 opacity-[0.03]"
         />
-        <div className="relative z-10 flex h-20 items-center justify-between px-5">
+        <div className="relative z-10 flex h-20 items-center justify-between px-5 pt-4">
           <Link to="/" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground">
             <img src="/contents/logo.webp" alt="E-Boses" className="h-10 w-auto object-contain" />
           </Link>
-          <button ref={closeButtonRef} type="button" onClick={closeMenu} className="flex size-11 items-center justify-center rounded-full border border-white/25 text-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground" aria-label="Close menu" tabIndex={mobileOpen ? 0 : -1}>
+          <button ref={closeButtonRef} type="button" onClick={closeMenu} className="flex size-11 items-center justify-center rounded-full text-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground" aria-label="Close menu" tabIndex={mobileOpen ? 0 : -1}>
             <XIcon className="size-5" strokeWidth={1.5} aria-hidden="true" />
           </button>
         </div>
 
         <nav aria-label="Mobile navigation" className="relative z-10 flex flex-col px-5 pt-6">
-          {NAV_LINKS.map((link) => {
-            const className = "flex min-h-14 items-center justify-between border-b border-white/10 py-4 text-xl font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-foreground"
+          {NAV_LINKS.map((link, index) => {
+            const className = `flex min-h-14 items-center justify-between border-b border-white/10 py-4 text-xl font-semibold text-white transition-[opacity,transform] duration-300 ease-out focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-foreground ${mobileOpen ? "translate-y-0 opacity-100" : "translate-y-5 opacity-0"}`
             const inner = (
               <>
                 {link.label}<ArrowRightIcon className="size-5 text-accent" strokeWidth={1.5} aria-hidden="true" />
               </>
             )
+            const delay = mobileOpen ? { transitionDelay: `${120 + index * 45}ms` } : undefined
             return link.to ? (
-              <Link key={link.label} to={link.to} onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className={className}>
+              <Link key={link.label} to={link.to} onClick={closeMenu} style={delay} tabIndex={mobileOpen ? 0 : -1} className={className}>
                 {inner}
               </Link>
             ) : (
-              <a key={link.label} href={link.href} onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className={className}>
+              <a key={link.label} href={link.href} onClick={closeMenu} style={delay} tabIndex={mobileOpen ? 0 : -1} className={className}>
                 {inner}
               </a>
             )
           })}
-          <Link to="/sign-in" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="flex min-h-14 items-center justify-between border-b border-white/10 py-4 text-xl font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-foreground">
+          <Link to="/sign-in" onClick={closeMenu} style={mobileOpen ? { transitionDelay: `${120 + NAV_LINKS.length * 45}ms` } : undefined} tabIndex={mobileOpen ? 0 : -1} className={`flex min-h-14 items-center justify-between border-b border-white/10 py-4 text-xl font-semibold text-white transition-[opacity,transform] duration-300 ease-out focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-foreground ${mobileOpen ? "translate-y-0 opacity-100" : "translate-y-5 opacity-0"}`}>
             Sign in<ArrowRightIcon className="size-5 text-accent" strokeWidth={1.5} aria-hidden="true" />
           </Link>
         </nav>
 
         <div className="relative z-10 mt-auto p-5 pb-8">
-          <Link to="/sign-up" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="flex min-h-12 w-full items-center justify-center bg-accent px-6 font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground">
+          <Link to="/sign-up" onClick={closeMenu} style={mobileOpen ? { transitionDelay: `${120 + (NAV_LINKS.length + 1) * 45}ms` } : undefined} tabIndex={mobileOpen ? 0 : -1} className={`flex min-h-12 w-full items-center justify-center bg-accent px-6 font-semibold text-white transition-[opacity,transform] duration-300 ease-out hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground ${mobileOpen ? "translate-y-0 opacity-100" : "translate-y-5 opacity-0"}`}>
             Create an account to report
           </Link>
         </div>

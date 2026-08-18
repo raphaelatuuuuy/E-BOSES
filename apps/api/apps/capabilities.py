@@ -26,8 +26,6 @@ from rest_framework.permissions import BasePermission
 MANAGE_UNITS = "manage_units"
 MANAGE_ROLES = "manage_roles"
 MANAGE_USERS = "manage_users"
-REVIEW_VERIFICATION = "review_verification"
-HANDLE_PRIVACY = "handle_privacy"
 RESOLVE_CONCERNS = "resolve_concerns"
 MANAGE_CATEGORIES = "manage_categories"
 CONFIGURE_CLASSIFICATION = "configure_classification"
@@ -40,8 +38,6 @@ ALL_CAPABILITIES = (
     MANAGE_UNITS,
     MANAGE_ROLES,
     MANAGE_USERS,
-    REVIEW_VERIFICATION,
-    HANDLE_PRIVACY,
     RESOLVE_CONCERNS,
     MANAGE_CATEGORIES,
     CONFIGURE_CLASSIFICATION,
@@ -57,8 +53,6 @@ CAPABILITY_LABELS = {
     MANAGE_UNITS: ("Manage units", "Create, edit and deactivate barangay units"),
     MANAGE_ROLES: ("Manage roles", "Change which capabilities each position holds"),
     MANAGE_USERS: ("Manage users", "Create accounts, assign units and positions, deactivate"),
-    REVIEW_VERIFICATION: ("Review verification", "Approve or reject resident ID and residence proof"),
-    HANDLE_PRIVACY: ("Handle privacy requests", "Action data export and deletion requests"),
     RESOLVE_CONCERNS: ("Resolve concerns", "Update status, assign and close community concerns"),
     MANAGE_CATEGORIES: ("Manage categories", "Edit concern categories and their intake forms"),
     CONFIGURE_CLASSIFICATION: ("Configure AI classification", "Adjust thresholds and keyword rules"),
@@ -73,7 +67,7 @@ CAPABILITY_GROUPS = (
     ("People & access", (MANAGE_UNITS, MANAGE_ROLES, MANAGE_USERS)),
     ("Intake & routing", (MANAGE_CATEGORIES, CONFIGURE_CLASSIFICATION, RESOLVE_CONCERNS)),
     ("Emergency response", (CONFIGURE_DISPATCH, CONFIGURE_GEOGRAPHY, DISPATCH_EMERGENCIES)),
-    ("Trust & community", (REVIEW_VERIFICATION, HANDLE_PRIVACY, PUBLISH_ANNOUNCEMENTS)),
+    ("Community", (PUBLISH_ANNOUNCEMENTS,)),
 )
 
 
@@ -87,7 +81,7 @@ POSITION_SEEDS = (
     (
         "secretary",
         "Barangay Secretary",
-        [MANAGE_USERS, REVIEW_VERIFICATION, HANDLE_PRIVACY, PUBLISH_ANNOUNCEMENTS, RESOLVE_CONCERNS],
+        [MANAGE_USERS, PUBLISH_ANNOUNCEMENTS, RESOLVE_CONCERNS],
     ),
     ("kagawad", "Kagawad", [RESOLVE_CONCERNS, PUBLISH_ANNOUNCEMENTS]),
     ("unit-head", "Unit Head", [DISPATCH_EMERGENCIES, RESOLVE_CONCERNS]),
@@ -113,27 +107,20 @@ def capabilities_for(user) -> set[str]:
     # without pulling the model layer in at app-loading time.
     from apps.accounts.models import User
 
-    if not user.is_active or user.status != User.Status.VERIFIED:
+    if (
+        not user.is_active
+        or user.status != User.Status.VERIFIED
+        or user.role not in {User.Role.BARANGAY_OFFICIAL, User.Role.FIRST_RESPONDER}
+    ):
         return set()
 
     designations = list(
-        user.designations.filter(is_active=True, position__is_active=True).select_related("position")
+        user.designations.filter(
+            is_active=True,
+            department__is_active=True,
+            position__is_active=True,
+        ).select_related("position")
     )
-
-    if not designations:
-        # Transitional: an official who has never been placed in a unit keeps
-        # the blanket access they have today rather than silently losing all of
-        # it. 0027_rbac_positions_and_designations seeds a Captain designation
-        # for officials that existed at migration time, but accounts created by
-        # other means (admin scripts, fixtures, tests) would otherwise arrive
-        # with zero capabilities and be locked out of their own barangay.
-        #
-        # Giving someone *any* designation switches them to explicit
-        # capabilities, so restricting an official is a deliberate act in the
-        # Roles screen — never an accident of account creation order.
-        if user.role == User.Role.BARANGAY_OFFICIAL:
-            return set(ALL_CAPABILITIES)
-        return set()
 
     granted: set[str] = set()
     for designation in designations:

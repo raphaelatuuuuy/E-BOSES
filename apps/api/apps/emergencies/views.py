@@ -35,6 +35,7 @@ from apps.notifications.services import (
 from apps.capabilities import (
     CONFIGURE_DISPATCH,
     CONFIGURE_GEOGRAPHY,
+    DISPATCH_EMERGENCIES,
     capability_denied,
     user_has_capability,
 )
@@ -43,7 +44,7 @@ from apps.concerns.units import (
     assigned_legacy_unit,
     department_ids_for_code,
 )
-from apps.geo_services import validate_emergency_location
+from apps.geo_services import invalidate_coverage_cache, validate_emergency_location
 
 from .models import (
     EmergencyAlert,
@@ -54,6 +55,7 @@ from .models import (
     EmergencyEscalation,
     EmergencyLocationPing,
     MapDispatchPolicy,
+    MapGeometry,
     EmergencyMedia,
     EmergencyResponderAssignment,
     EmergencyStatusEvent,
@@ -165,7 +167,7 @@ def log_assignment_action(*, alert, action, assignment=None, responder=None, act
     )
 
 
-def can_manage_emergencies(user):
+def can_access_emergency_management(user):
     return bool(
         user
         and user.is_authenticated
@@ -175,6 +177,16 @@ def can_manage_emergencies(user):
             or user_has_role_permission(user, "emergencies.manage")
         )
     )
+
+
+def can_manage_emergencies(user):
+    return can_access_emergency_management(user) and user_has_capability(
+        user, DISPATCH_EMERGENCIES
+    )
+
+
+def can_configure_emergencies(user, capability):
+    return can_access_emergency_management(user) and user_has_capability(user, capability)
 
 
 def can_respond_to_emergencies(user):
@@ -1184,17 +1196,13 @@ class MapDispatchPolicyView(APIView):
 
     def get(self, request):
         touch_last_seen(request.user)
-        if not can_manage_emergencies(request.user) or not user_has_capability(
-            request.user, CONFIGURE_GEOGRAPHY
-        ):
+        if not can_configure_emergencies(request.user, CONFIGURE_GEOGRAPHY):
             return capability_denied(CONFIGURE_GEOGRAPHY)
         return Response(MapDispatchPolicySerializer(MapDispatchPolicy.current()).data)
 
     def patch(self, request):
         touch_last_seen(request.user)
-        if not can_manage_emergencies(request.user) or not user_has_capability(
-            request.user, CONFIGURE_GEOGRAPHY
-        ):
+        if not can_configure_emergencies(request.user, CONFIGURE_GEOGRAPHY):
             return capability_denied(CONFIGURE_GEOGRAPHY)
         policy = MapDispatchPolicy.current()
         serializer = MapDispatchPolicySerializer(policy, data=request.data, partial=True)
@@ -1212,6 +1220,140 @@ class MapDispatchPolicyView(APIView):
             request_meta=request_meta(request),
         )
         return Response(MapDispatchPolicySerializer(policy).data)
+
+
+def _coverage_geometry_payload(row):
+    return {
+        "id": row.pk,
+        "name": row.name,
+        "locality": row.locality,
+        "is_home": row.is_home,
+        "geometry": row.geometry,
+    }
+
+
+def _connected_from_home(selected_ids, adjacency, home_id):
+    """Ids reachable from home by walking only through the selected set."""
+    if home_id not in selected_ids:
+        return set()
+    reached = {home_id}
+    frontier = [home_id]
+    while frontier:
+        current = frontier.pop()
+        for neighbor in adjacency.get(current, ()):
+            if neighbor in selected_ids and neighbor not in reached:
+                reached.add(neighbor)
+                frontier.append(neighbor)
+    return reached
+
+
+class CoverageAreaView(APIView):
+    """Which barangays this station answers for.
+
+    Coverage may only grow outward from home through shared borders, so the
+    saved set is validated for connectivity here rather than trusting the map.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        if not can_configure_emergencies(request.user, CONFIGURE_GEOGRAPHY):
+            return capability_denied(CONFIGURE_GEOGRAPHY)
+        return Response(self._payload())
+
+    def put(self, request):
+        touch_last_seen(request.user)
+        if not can_configure_emergencies(request.user, CONFIGURE_GEOGRAPHY):
+            return capability_denied(CONFIGURE_GEOGRAPHY)
+
+        raw = request.data.get("covered")
+        if not isinstance(raw, list):
+            return Response({"detail": "covered must be a list of boundary ids."}, status=400)
+        try:
+            selected = {int(value) for value in raw}
+        except (TypeError, ValueError):
+            return Response({"detail": "covered must contain boundary ids."}, status=400)
+
+        home = MapGeometry.objects.filter(
+            kind=MapGeometry.Kind.BOUNDARY, is_active=True, is_home=True
+        ).first()
+        if not home:
+            return Response({"detail": "No home barangay is configured."}, status=409)
+
+        selected.add(home.pk)
+        rows = list(
+            MapGeometry.objects.filter(
+                kind=MapGeometry.Kind.BOUNDARY, is_active=True, pk__in=selected
+            )
+        )
+        if len(rows) != len(selected):
+            return Response({"detail": "One or more barangays no longer exist."}, status=400)
+
+        adjacency = self._adjacency()
+        reached = _connected_from_home(selected, adjacency, home.pk)
+        if reached != selected:
+            orphaned = sorted(
+                row.name for row in rows if row.pk in selected - reached
+            )
+            return Response(
+                {
+                    "detail": (
+                        "Coverage must be one connected area. "
+                        f"These do not touch it: {', '.join(orphaned)}."
+                    )
+                },
+                status=400,
+            )
+
+        policy = MapDispatchPolicy.current()
+        policy.covered.set(rows)
+        policy.updated_by = request.user
+        policy.save(update_fields=["updated_by", "updated_at"])
+        invalidate_coverage_cache()
+
+        create_audit_log(
+            "coverage_area.updated",
+            actor=request.user,
+            metadata={"covered": sorted(row.name for row in rows)},
+            request_meta=request_meta(request),
+        )
+        return Response(self._payload())
+
+    def _adjacency(self):
+        adjacency: dict[int, set[int]] = {}
+        pairs = MapGeometry.neighbors.through.objects.values_list(
+            "from_mapgeometry_id", "to_mapgeometry_id"
+        )
+        for left, right in pairs:
+            adjacency.setdefault(left, set()).add(right)
+            adjacency.setdefault(right, set()).add(left)
+        return adjacency
+
+    def _payload(self):
+        policy = MapDispatchPolicy.current()
+        covered = policy.covered_geometries()
+        covered_ids = {row.pk for row in covered}
+
+        adjacency = self._adjacency()
+        available_ids = set()
+        for row_id in covered_ids:
+            available_ids |= adjacency.get(row_id, set())
+        available_ids -= covered_ids
+
+        available = list(
+            MapGeometry.objects.filter(
+                kind=MapGeometry.Kind.BOUNDARY, is_active=True, pk__in=available_ids
+            ).order_by("name")
+        )
+        home = next((row for row in covered if row.is_home), None)
+
+        return {
+            "home_id": home.pk if home else None,
+            "home_locality": home.locality if home else "",
+            "covered": [_coverage_geometry_payload(row) for row in covered],
+            "available": [_coverage_geometry_payload(row) for row in available],
+        }
 
 
 class MyActiveEmergencyView(APIView):
@@ -1245,7 +1387,7 @@ class EmergencyQueueView(APIView):
     def get(self, request):
         touch_last_seen(request.user)
         if not can_manage_emergencies(request.user):
-            return Response({"detail": "You do not have permission to view emergency queue."}, status=status.HTTP_403_FORBIDDEN)
+            return capability_denied(DISPATCH_EMERGENCIES)
         alerts = EmergencyAlert.objects.filter(status__in=ACTIVE_STATUSES).order_by("-created_at")
         return Response([serialize_alert(alert, request) for alert in alerts])
 
@@ -1525,7 +1667,7 @@ class EmergencyCategoryListCreateView(APIView):
     def get(self, request):
         touch_last_seen(request.user)
         qs = EmergencyCategory.objects.all()
-        if not can_manage_emergencies(request.user):
+        if not can_configure_emergencies(request.user, CONFIGURE_DISPATCH):
             qs = qs.filter(is_active=True)
             qs = [category for category in qs.order_by("sort_order", "label") if emergency_category_is_covered(category.code)]
             return Response(EmergencyCategorySerializer(qs, many=True, context={"request": request}).data)
@@ -1533,7 +1675,7 @@ class EmergencyCategoryListCreateView(APIView):
 
     def post(self, request):
         touch_last_seen(request.user)
-        if not can_manage_emergencies(request.user) or not user_has_capability(request.user, CONFIGURE_DISPATCH):
+        if not can_configure_emergencies(request.user, CONFIGURE_DISPATCH):
             return capability_denied(CONFIGURE_DISPATCH)
         serializer = EmergencyCategorySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -1552,7 +1694,7 @@ class EmergencyCategoryDetailView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _allowed(self, user):
-        return can_manage_emergencies(user) and user_has_capability(user, CONFIGURE_DISPATCH)
+        return can_configure_emergencies(user, CONFIGURE_DISPATCH)
 
     def patch(self, request, pk):
         touch_last_seen(request.user)
@@ -1590,18 +1732,14 @@ class EmergencyTypeRoleMapListCreateView(APIView):
 
     def get(self, request):
         touch_last_seen(request.user)
-        if not can_manage_emergencies(request.user) or not user_has_capability(
-            request.user, CONFIGURE_DISPATCH
-        ):
+        if not can_configure_emergencies(request.user, CONFIGURE_DISPATCH):
             return capability_denied(CONFIGURE_DISPATCH)
         maps = EmergencyTypeRoleMap.objects.all().order_by("emergency_type", "-priority", "id")
         return Response(EmergencyTypeRoleMapSerializer(maps, many=True, context={"request": request}).data)
 
     def post(self, request):
         touch_last_seen(request.user)
-        if not can_manage_emergencies(request.user) or not user_has_capability(
-            request.user, CONFIGURE_DISPATCH
-        ):
+        if not can_configure_emergencies(request.user, CONFIGURE_DISPATCH):
             return capability_denied(CONFIGURE_DISPATCH)
         serializer = EmergencyTypeRoleMapSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
@@ -1644,7 +1782,7 @@ class EmergencyTypeRoleMapDetailView(APIView):
         return capability_denied(CONFIGURE_DISPATCH)
 
     def _allowed(self, user):
-        return can_manage_emergencies(user) and user_has_capability(user, CONFIGURE_DISPATCH)
+        return can_configure_emergencies(user, CONFIGURE_DISPATCH)
 
     def patch(self, request, pk):
         touch_last_seen(request.user)

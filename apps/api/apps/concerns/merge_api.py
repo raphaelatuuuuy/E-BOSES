@@ -5,6 +5,7 @@ from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated
 from apps.accounts.permissions import user_has_role_permission
+from apps.capabilities import RESOLVE_CONCERNS, user_has_capability
 
 from . import merge_services
 from .merge_serializers import (
@@ -26,6 +27,7 @@ def can_manage_merges(user):
             or user.is_superuser
             or user_has_role_permission(user, "concerns.manage")
         )
+        and user_has_capability(user, RESOLVE_CONCERNS)
     )
 
 

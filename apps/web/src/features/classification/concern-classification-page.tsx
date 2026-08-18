@@ -19,7 +19,6 @@ import {
   testConcernSubmission,
   type ConcernClassificationConfig,
   type ReportValidationResult,
-  type ServiceStatus,
 } from "./api"
 import {
   applyStrictness,
@@ -62,34 +61,6 @@ const defaults: ConcernClassificationConfig = {
   suspicious_terms: ["test", "testing", "asdf", "qwerty", "12345"],
   category_keywords: {},
   categories: [],
-}
-
-const SERVICE_STATUS_COPY: Record<string, { label: string; dot: string; text: string }> = {
-  available: { label: "Working", dot: "bg-status-closed", text: "text-neutral-500" },
-  limited: { label: "Slow", dot: "bg-severity-moderate", text: "text-neutral-600" },
-  unavailable: { label: "Not working", dot: "bg-sos", text: "text-sos" },
-}
-
-function ServiceRow({
-  title,
-  detail,
-  status,
-}: {
-  title: string
-  detail: string
-  status: ServiceStatus | undefined
-}) {
-  const copy = SERVICE_STATUS_COPY[status?.status ?? "unavailable"] ?? SERVICE_STATUS_COPY.unavailable
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-card-line bg-canvas px-3 py-3">
-      <span className={cn("size-2.5 shrink-0 rounded-full", copy.dot)} />
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-foreground">{title}</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">{detail}</p>
-      </div>
-      <span className={cn("shrink-0 text-xs font-semibold", copy.text)}>{copy.label}</span>
-    </div>
-  )
 }
 
 function Card({
@@ -459,7 +430,6 @@ export default function ConcernClassificationPage() {
         </label>
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
         <Card
           title="How automatic validation works"
           hint="The validator checks each report before it reaches the official queue."
@@ -483,25 +453,6 @@ export default function ConcernClassificationPage() {
             The system validates the report, corrects its category, links possible duplicates, and sends accepted reports to the normal work queue.
           </p>
         </Card>
-
-        <Card title="Service status" hint="Whether each part of the review is working right now.">
-          <div className="space-y-2">
-            <ServiceRow
-              title="Report review"
-              detail="Checks report text and photo before it reaches you"
-              status={config.services?.report_review}
-            />
-            <ServiceRow
-              title="Privacy protection"
-              detail="Hides faces and plates in photos before publishing"
-              status={config.services?.media_protection}
-            />
-          </div>
-          <p className="mt-3 text-xs font-medium leading-relaxed text-muted-foreground">
-            When the model is unavailable, required file, location, duplicate, and account checks still run. The report then continues without an AI-review task.
-          </p>
-        </Card>
-      </div>
 
       {/* The fastest way to understand a setting is to watch it decide on a
           real example, so the testers sit beside the settings rather than

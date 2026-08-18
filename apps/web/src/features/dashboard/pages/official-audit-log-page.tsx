@@ -278,7 +278,7 @@ export default function OfficialAuditLogPage() {
                   </div>
 
                   <div className="min-w-0">
-                    <p className="text-row text-brand-navy">
+                    <p className="text-row font-normal text-brand-navy">
                       {entry.label}
                       {entry.sensitive ? (
                         <span className="ml-2 align-middle text-meta font-medium text-accent">

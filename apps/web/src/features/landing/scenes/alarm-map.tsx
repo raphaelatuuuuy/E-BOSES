@@ -4,7 +4,7 @@ import gsap from "gsap"
 import { useGSAP } from "@gsap/react"
 import { MapPinIcon, PhoneIcon } from "lucide-react"
 
-import { MM, isLowEndDevice, prefersReducedMotion } from "../landing-theme"
+import { MM, prefersReducedMotion } from "../landing-theme"
 import { AlarmMap2D } from "./alarm-map-2d"
 
 // The 3D scene pulls in three.js (~900 kB before gzip). It is only mounted
@@ -16,7 +16,7 @@ const AlarmMap3D = lazy(() => import("./alarm-map-3d"))
 const BEATS = [
   ["Send the alert", "One large button. Your GPS location attaches automatically."],
   ["Responders see your exact location", "Tanods, health workers, or the disaster response team get the alert routed to their role."],
-  ["Neighbors nearby are notified", "Residents inside the alert radius get a heads-up for awareness, ready to help while responders are on the way."],
+  ["Neighbors nearby are notified", "Residents inside the alert radius get a heads-up for awareness while responders are on the way."],
 ] as const
 
 class MapErrorBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
@@ -34,7 +34,7 @@ export function AlarmMap() {
   const pinArea = useRef<HTMLDivElement | null>(null)
   const progress = useRef(0)
   const reduced = prefersReducedMotion()
-  const use3D = !isLowEndDevice() && !reduced
+  const use3D = !reduced
 
   // Defer the three.js chunk until the pinned map area is within ~1.5 viewport
   // heights below the screen. Stops the browser downloading ~244 kB gzip for a

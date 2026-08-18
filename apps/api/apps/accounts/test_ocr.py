@@ -37,6 +37,7 @@ from apps.accounts.ocr_runtime import (
     process_test_run,
     process_verification_case,
 )
+from apps.concerns.test_helpers import grant_position
 
 TEST_IMAGE = str(Path(__file__).resolve().parent / "fixtures" / "live-id.jpg")
 
@@ -501,6 +502,7 @@ class ConfigurableOCRWorkflowTests(TestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
+        grant_position(official)
         resident_client = APIClient()
         resident_client.force_authenticate(second_user)
         self.assertEqual(
@@ -804,7 +806,9 @@ class ConfigurableOCRWorkflowTests(TestCase):
             email="official@example.com",
             password="Str0ng!Pass123",
             role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
         )
+        grant_position(official)
         client.force_authenticate(official)
         response = client.get("/api/auth/ocr/config/draft/")
         self.assertEqual(response.status_code, 200)
@@ -816,7 +820,9 @@ class ConfigurableOCRWorkflowTests(TestCase):
             phone_number="+639700000003",
             password="Str0ng!Pass123",
             role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
         )
+        grant_position(official)
         client = APIClient()
         client.force_authenticate(official)
         draft = client.get("/api/auth/ocr/config/draft/").json()
@@ -845,7 +851,9 @@ class ConfigurableOCRWorkflowTests(TestCase):
             email="rule-editor@example.com",
             password="Str0ng!Pass123",
             role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
         )
+        grant_position(official)
         client = APIClient()
         client.force_authenticate(official)
         draft = client.get("/api/auth/ocr/config/draft/").json()

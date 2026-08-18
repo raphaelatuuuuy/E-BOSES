@@ -211,7 +211,11 @@ def user_can_access_residence_proof_raw(user, proof):
         return True
     if user.status != user.Status.VERIFIED:
         return False
-    return user.is_staff or user.pk == proof.user_id or user.role == user.Role.BARANGAY_OFFICIAL
+    if user.is_staff or user.pk == proof.user_id:
+        return True
+    from apps.capabilities import MANAGE_USERS, user_has_capability
+
+    return user.role == user.Role.BARANGAY_OFFICIAL and user_has_capability(user, MANAGE_USERS)
 
 
 def log_raw_media_access(*, actor, target_user, media_type, object_id, request_meta=None):

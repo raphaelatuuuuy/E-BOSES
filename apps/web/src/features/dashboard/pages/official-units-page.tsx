@@ -29,6 +29,14 @@ interface Unit {
   member_count: number
 }
 
+interface UnitPosition {
+  id?: number
+  name: string
+  code: string
+  department: number | null
+  is_active: boolean
+}
+
 type Draft = Partial<Unit> & { name?: string; code?: string }
 
 function unitSnapshot(value: Draft | null) {
@@ -56,13 +64,16 @@ const FILTERS = [
 
 function EditDialog({
   open, draft, onChange, onSave, onClose, saving, emergencyCategories, originalDraft,
+  positions, positionsDirty, onPositionsChange,
 }: {
   open: boolean; draft: Draft; onChange: (next: Draft) => void; onSave: () => void
   onClose: () => void; saving: boolean; emergencyCategories: EmergencyCategory[]
   originalDraft: string | null
+  positions: UnitPosition[]; positionsDirty: boolean; onPositionsChange: (next: UnitPosition[]) => void
 }) {
   const isNew = !draft.id
   const dirty = isNew || unitSnapshot(draft) !== originalDraft
+  const canSave = dirty || positionsDirty
   const responds = Boolean(draft.responds_to_emergencies)
   const types = draft.emergency_types ?? []
 
@@ -89,7 +100,7 @@ function EditDialog({
               onChange(isNew ? { ...draft, name, code: slugify(name) } : { ...draft, name })
             }} className={inputCls} placeholder="Barangay Health Workers" />
           </label>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,3fr)]">
             <label className="block">
               <span className={labelCls}>Short name</span>
               <input value={draft.short_name ?? ""} onChange={(e) => onChange({ ...draft, short_name: e.target.value })} className={inputCls} placeholder="BHW" />
@@ -100,6 +111,10 @@ function EditDialog({
               <input value={draft.description ?? ""} onChange={(e) => onChange({ ...draft, description: e.target.value })} className={inputCls} placeholder="Health concerns, medical assistance" />
             </label>
           </div>
+
+          {draft.id && (
+            <PositionsDropdown unitId={draft.id} positions={positions} onChange={onPositionsChange} />
+          )}
         </div>
 
         {/* Emergency dispatch */}
@@ -120,7 +135,7 @@ function EditDialog({
       </div>
 
       <div className="mt-6 space-y-3">
-        <button type="button" onClick={onSave} disabled={saving || !draft.name || (responds && validTypes.length === 0) || !dirty}
+        <button type="button" onClick={onSave} disabled={saving || !draft.name || (responds && validTypes.length === 0) || !canSave}
           className="flex h-[52px] w-full items-center justify-center rounded-full bg-accent text-[17px] font-semibold text-white transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400">
           {saving ? "Saving\u2026" : isNew ? "Create unit" : "Save changes"}
         </button>
@@ -204,6 +219,122 @@ function EmergencyTypeDropdown({ categories, selected, onChange }: {
   )
 }
 
+function PositionsDropdown({ unitId, positions, onChange }: {
+  unitId: number; positions: UnitPosition[]; onChange: (next: UnitPosition[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editingName, setEditingName] = useState("")
+  const [adding, setAdding] = useState(false)
+  const [addName, setAddName] = useState("")
+  const ref = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false)
+        if (editingId != null) commitEdit()
+      }
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  })
+
+  useEffect(() => {
+    if (open && inputRef.current) inputRef.current.focus()
+  }, [open, editingId, adding])
+
+  const active = positions.filter((p) => p.is_active)
+  const rowCls = "flex w-full items-center gap-3 px-4 py-2.5 text-left transition hover:bg-neutral-50"
+  const editInputCls = "w-full rounded-lg border-[1.5px] border-neutral-300 bg-white px-3 py-1.5 text-[15px] text-neutral-900 outline-none transition-colors focus:border-neutral-500"
+
+  function addPosition() {
+    const name = addName.trim()
+    setAddName("")
+    setAdding(false)
+    if (!name) return
+    onChange([...positions, { id: undefined, name, code: "", department: unitId, is_active: true }])
+  }
+
+  function commitEdit() {
+    if (editingId == null) return
+    const id = editingId
+    const name = editingName.trim()
+    setEditingId(null)
+    if (!name) {
+      onChange(positions.filter((p) => p.id !== id))
+      return
+    }
+    onChange(positions.map((p) => (p.id === id ? { ...p, name } : p)))
+  }
+
+  return (
+    <div ref={ref} className="space-y-2">
+      <p className="text-[13px] font-semibold text-neutral-500">Positions</p>
+      <button type="button" onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-3 rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-left text-[16px] text-neutral-900 outline-none transition-colors hover:border-neutral-400">
+        <span className="flex-1 truncate font-medium">
+          {active.length === 0 ? "No positions yet" : `${active.length} position${active.length === 1 ? "" : "s"}`}
+        </span>
+        {open ? <ChevronUpIcon className="size-4 shrink-0 text-neutral-400" /> : <ChevronDownIcon className="size-4 shrink-0 text-neutral-400" />}
+      </button>
+      {open && (
+        <div className="overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white shadow-lg [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" style={{ maxHeight: '200px', overflowY: 'auto' }}>
+          <div className="py-1">
+            {active.map((position) => (
+              <div key={position.id ?? `new-${position.name}`} className={rowCls}>
+                {editingId === position.id ? (
+                  <input
+                    ref={inputRef}
+                    value={editingName}
+                    onChange={(e) => setEditingName(e.target.value)}
+                    onBlur={() => void commitEdit()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); void commitEdit() }
+                      if (e.key === "Escape") setEditingId(null)
+                    }}
+                    className={editInputCls}
+                    placeholder={position.name}
+                  />
+                ) : (
+                  <button type="button" onClick={() => { setEditingId(position.id ?? null); setEditingName(position.name) }}
+                    className="flex w-full items-center gap-3 text-left text-[15px] text-neutral-700">
+                    <span className="flex-1 min-w-0 truncate font-medium text-neutral-900">{position.name}</span>
+                  </button>
+                )}
+              </div>
+            ))}
+            {adding ? (
+              <div className={rowCls}>
+                <input
+                  ref={inputRef}
+                  value={addName}
+                  onChange={(e) => setAddName(e.target.value)}
+                  onBlur={() => void addPosition()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") { e.preventDefault(); void addPosition() }
+                    if (e.key === "Escape") { setAdding(false); setAddName("") }
+                  }}
+                  className={editInputCls}
+                  placeholder="New position"
+                />
+              </div>
+            ) : (
+              <button type="button" onClick={() => setAdding(true)}
+                className="flex w-full items-center gap-3 border-t border-neutral-100 px-4 py-2.5 text-left text-[15px] font-medium text-accent transition hover:bg-neutral-50">
+                <span>Add a position</span>
+                <span className="flex-1 text-[15px]" />
+                <span className="text-[13px] font-normal text-neutral-400">Click a position to rename</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function DeleteDialog({ open, unit, onConfirm, onClose, saving }: {
   open: boolean; unit: Unit | null; onConfirm: () => void; onClose: () => void; saving: boolean
 }) {
@@ -230,10 +361,12 @@ function DeleteDialog({ open, unit, onConfirm, onClose, saving }: {
             placeholder={unit.name}
             autoFocus
           />
-          <SheetPrimaryButton tone="danger" disabled={saving || !matches} onClick={onConfirm}>
-            {saving ? "Deleting\u2026" : "Delete"}
-          </SheetPrimaryButton>
-          <SheetPrimaryButton disabled={saving} onClick={() => { setConfirmName(""); onClose() }}>Cancel</SheetPrimaryButton>
+          <div className="flex gap-2">
+            <SheetPrimaryButton disabled={saving} onClick={() => { setConfirmName(""); onClose() }} className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]">Cancel</SheetPrimaryButton>
+            <SheetPrimaryButton tone="danger" disabled={saving || !matches} onClick={onConfirm} className="flex-1 text-[15px]">
+              {saving ? "Deleting\u2026" : "Delete"}
+            </SheetPrimaryButton>
+          </div>
         </div>
       }
     />
@@ -252,6 +385,8 @@ export default function OfficialUnitsPage() {
   const [editOpen, setEditOpen] = useState(false)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [originalDraft, setOriginalDraft] = useState<string | null>(null)
+  const [editPositions, setEditPositions] = useState<UnitPosition[]>([])
+  const [originalPositions, setOriginalPositions] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Unit | null>(null)
@@ -272,14 +407,69 @@ export default function OfficialUnitsPage() {
 
   useEffect(() => { void load() }, [load])
 
+  const positionsSnapshot = (list: UnitPosition[]) =>
+    JSON.stringify(list.map((p) => ({ id: p.id ?? 0, name: p.name })))
+  const positionsDirty = originalPositions !== null && positionsSnapshot(editPositions) !== originalPositions
+
+  function closeEdit() {
+    setEditOpen(false); setDraft(null); setOriginalDraft(null)
+    setEditPositions([]); setOriginalPositions(null)
+  }
+
+  function openEdit(unit: Unit | null) {
+    const isNew = unit == null
+    setDraft(isNew ? { name: "", code: "", emergency_types: [] } : unit)
+    setOriginalDraft(isNew ? null : unitSnapshot(unit))
+    setEditPositions([])
+    setOriginalPositions(null)
+    setEditOpen(true)
+    if (isNew) return
+    apiRequest<UnitPosition[]>("/concerns/admin/positions/")
+      .then((all) => {
+        const list = all.filter((p) => p.department === unit.id)
+        setEditPositions(list)
+        setOriginalPositions(JSON.stringify(list.map((p) => ({ id: p.id, name: p.name }))))
+      })
+      .catch((e) => toast.error(describeApiError(e, "Could not load positions.")))
+  }
+
   async function save() {
     if (!draft) return
     setSaving(true)
     try {
       const isNew = !draft.id
-      await apiRequest<Unit>(isNew ? "/concerns/admin/departments/" : `/concerns/admin/departments/${draft.id}/`, { method: isNew ? "POST" : "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) })
+      const saved = await apiRequest<Unit>(isNew ? "/concerns/admin/departments/" : `/concerns/admin/departments/${draft.id}/`, { method: isNew ? "POST" : "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) })
+      if (positionsDirty) {
+        const original: { id: number; name: string }[] = originalPositions ? JSON.parse(originalPositions) : []
+        const keptIds = new Set(editPositions.filter((p) => p.id != null).map((p) => p.id as number))
+        const ops: Promise<unknown>[] = []
+        for (const p of editPositions) {
+          if (p.id == null) {
+            ops.push(apiRequest("/concerns/admin/positions/", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name: p.name, code: slugify(p.name), department: saved.id, is_active: true }),
+            }))
+          } else {
+            const before = original.find((o) => o.id === p.id)
+            if (before && before.name !== p.name) {
+              ops.push(apiRequest(`/concerns/admin/positions/${p.id}/`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: p.name }),
+              }))
+            }
+          }
+        }
+        for (const o of original) {
+          if (!keptIds.has(o.id)) {
+            ops.push(apiRequest(`/concerns/admin/positions/${o.id}/`, { method: "DELETE" }))
+          }
+        }
+        await Promise.all(ops)
+      }
       toast.success(isNew ? "Unit created" : "Unit updated")
-      setEditOpen(false); setDraft(null); load()
+      closeEdit(); load()
     } catch (e) { toast.error(describeApiError(e, "Could not save the unit.")) } finally { setSaving(false) }
   }
 
@@ -315,7 +505,7 @@ export default function OfficialUnitsPage() {
         { label: "Members placed", value: units.reduce((t, u) => t + u.member_count, 0) },
         { label: "Inactive", value: units.filter((u) => !u.is_active).length },
       ]}
-      action={<ConfigHeroAction icon={PlusIcon} onClick={() => { setDraft({ name: "", code: "", emergency_types: [] }); setOriginalDraft(null); setEditOpen(true) }}>New unit</ConfigHeroAction>}>
+      action={<ConfigHeroAction icon={PlusIcon} onClick={() => openEdit(null)}>New unit</ConfigHeroAction>}>
       {!loading && respondingCount === 0 && <ConfigAlarm>No unit answers emergencies yet. Until one does, an SOS cannot be routed to anyone automatically — open a unit and turn on "Responds to emergencies".</ConfigAlarm>}
 
       <div className="space-y-4">
@@ -343,7 +533,7 @@ export default function OfficialUnitsPage() {
               {unit.responds_to_emergencies && unit.emergency_types.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{unit.emergency_types.map((type) => <span key={type} className="rounded-full bg-neutral-100 px-2 py-0.5 text-meta font-medium text-neutral-600">{eLabel(type)}</span>)}</div>}
             </div>
             <div className="flex shrink-0 items-center gap-3">
-              <button type="button" onClick={() => { setDraft(unit); setOriginalDraft(unitSnapshot(unit)); setEditOpen(true) }} className="text-meta text-neutral-500 transition-colors hover:text-accent">Edit</button>
+              <button type="button" onClick={() => openEdit(unit)} className="text-meta text-neutral-500 transition-colors hover:text-accent">Edit</button>
               <button type="button" onClick={() => { setDeleteTarget(unit); setDeleteOpen(true) }} className="text-meta text-neutral-500 transition-colors hover:text-sos">Delete</button>
             </div>
           </li>
@@ -352,7 +542,7 @@ export default function OfficialUnitsPage() {
         {!loading && filtered.length > 0 && <Pager offset={offset} total={filtered.length} onChange={setOffset} noun="units" />}
       </div>
 
-      {draft && <EditDialog open={editOpen} draft={draft} onChange={setDraft} onSave={() => void save()} onClose={() => { setEditOpen(false); setDraft(null); setOriginalDraft(null) }} saving={saving} emergencyCategories={emergencyCategories} originalDraft={originalDraft} />}
+      {draft && <EditDialog open={editOpen} draft={draft} onChange={setDraft} onSave={() => void save()} onClose={closeEdit} saving={saving} emergencyCategories={emergencyCategories} originalDraft={originalDraft} positions={editPositions} positionsDirty={positionsDirty} onPositionsChange={setEditPositions} />}
       <DeleteDialog open={deleteOpen} unit={deleteTarget} onConfirm={() => void confirmDelete()} onClose={() => { setDeleteOpen(false); setDeleteTarget(null) }} saving={deleting} />
     </ConfigShell>
   )

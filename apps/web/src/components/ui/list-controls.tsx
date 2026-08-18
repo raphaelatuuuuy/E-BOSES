@@ -1,8 +1,7 @@
-import { useRef, type ReactNode } from "react"
+import { useRef, useState, type ReactNode } from "react"
 import { ChevronLeftIcon, ChevronRightIcon, SearchIcon, XIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { useWheelScroll } from "@/hooks/use-wheel-scroll"
 
 /**
  * The controls every configuration list shares: a search box, a row of filters
@@ -69,39 +68,82 @@ export function FilterRow({
   value,
   onChange,
   className,
+  counts,
+  details,
   children,
 }: {
   options: { key: string; label: string }[]
   value: string
   onChange: (key: string) => void
   className?: string
+  counts?: Record<string, number>
+  /** Full names that morph in over the short label on hover or when active. */
+  details?: Record<string, string>
   children?: ReactNode
 }) {
-  const scrollRef = useWheelScroll<HTMLDivElement>()
+  const [hoverKey, setHoverKey] = useState<string | null>(null)
 
   return (
-    <div
-      ref={scrollRef}
-      className={cn(
-        "flex items-center gap-7 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-        className,
-      )}
-    >
-      {options.map((option) => (
-        <button
-          key={option.key}
-          type="button"
-          onClick={() => onChange(option.key)}
-          className={cn(
-            "shrink-0 text-read transition-colors",
-            value === option.key
-              ? "font-medium text-brand-navy"
-              : "text-neutral-400 hover:text-brand-navy",
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
+    <div className={cn("flex flex-wrap items-center gap-x-7 gap-y-3", className)}>
+      {options.map((option) => {
+        const full = details?.[option.key]
+        const showFull = !!full && (hoverKey === option.key || value === option.key)
+        return (
+          <button
+            key={option.key}
+            type="button"
+            onClick={() => onChange(option.key)}
+            onMouseEnter={() => setHoverKey(option.key)}
+            onMouseLeave={() => setHoverKey((k) => (k === option.key ? null : k))}
+            className={cn(
+              "flex shrink-0 items-center whitespace-nowrap text-read transition-colors",
+              value === option.key
+                ? "font-medium text-brand-navy"
+                : "text-neutral-400 hover:text-brand-navy",
+            )}
+          >
+            {full ? (
+              <>
+                <span
+                  className={cn(
+                    "grid transition-[grid-template-columns] duration-300 ease-out",
+                    showFull ? "grid-cols-[0fr]" : "grid-cols-[1fr]",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "overflow-hidden transition-all duration-300 ease-out",
+                      showFull ? "-translate-x-1 opacity-0" : "translate-x-0 opacity-100",
+                    )}
+                  >
+                    {option.label}
+                  </span>
+                </span>
+                <span
+                  className={cn(
+                    "grid transition-[grid-template-columns] duration-300 ease-out",
+                    showFull ? "grid-cols-[1fr]" : "grid-cols-[0fr]",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "overflow-hidden transition-all duration-300 ease-out",
+                      showFull ? "translate-x-0 opacity-100" : "-translate-x-1 opacity-0",
+                    )}
+                  >
+                    {full}
+                  </span>
+                </span>
+              </>
+            ) : (
+              option.label
+            )}
+            {counts && option.key in counts && (
+              <span className="ml-1.5 tabular-nums text-neutral-400">{counts[option.key]}</span>
+            )}
+          </button>
+        )
+      })}
       {children}
     </div>
   )

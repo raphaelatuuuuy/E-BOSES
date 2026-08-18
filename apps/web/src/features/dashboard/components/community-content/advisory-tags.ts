@@ -143,7 +143,7 @@ export function advisoryMarkerHtml(tag: string | null | undefined, size = 26): s
     )
     .join("")
   return `<div style="position:relative;width:${size}px;height:${size}px">
-    <div style="position:absolute;inset:0;border-radius:999px;background:${meta.color};border:2px solid #fff;box-shadow:0 3px 10px rgba(15,23,42,.3)"></div>
+    <div style="position:absolute;inset:0;border-radius:999px;background:${meta.color};box-shadow:0 0 8px 1px ${meta.color},0 0 18px 4px ${meta.color}88"></div>
     <svg viewBox="0 0 24 24" style="position:absolute;left:50%;top:50%;width:${Math.round(size * 0.5)}px;height:${Math.round(size * 0.5)}px;transform:translate(-50%,-50%)">${paths}</svg>
   </div>`
 }

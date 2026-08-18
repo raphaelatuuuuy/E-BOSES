@@ -10,10 +10,10 @@ const INCIDENT = { left: "46%", top: "38%" }
 
 /** Blue responder positions revealed by the beat 2 radar sweep. */
 const RESPONDERS: ReadonlyArray<{ left: string; top: string; label?: string }> = [
-  { left: "63%", top: "58%", label: "TANOD" },
-  { left: "36%", top: "50%" },
-  { left: "55%", top: "29%", label: "BHW" },
-  { left: "48%", top: "63%" },
+  { left: "63%", top: "58%", label: "RESPONDER" },
+  { left: "36%", top: "50%", label: "RESPONDER" },
+  { left: "55%", top: "29%", label: "RESPONDER" },
+  { left: "48%", top: "63%", label: "RESPONDER" },
 ]
 
 /** Green neighbor positions inside the beat 3 awareness radius. */

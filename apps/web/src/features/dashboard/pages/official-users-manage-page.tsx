@@ -54,6 +54,7 @@ interface Department {
 interface Position {
   id: number
   name: string
+  department: number | null
   is_active: boolean
 }
 
@@ -212,7 +213,7 @@ export default function OfficialUsersManagePage() {
           >
             <div className="min-w-0">
               <div className="flex items-center gap-3">
-                <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[15px] font-bold text-navy-muted">
                   {(user.full_name || user.email).charAt(0).toUpperCase()}
                 </span>
                 <span className="text-row text-brand-navy">{user.full_name || user.email}</span>
@@ -347,6 +348,8 @@ function UserManageDialog({
 
   const hasChanges = dirty || Boolean(departmentId && positionId)
 
+  const unitPositions = positions.filter((p) => p.is_active && String(p.department) === departmentId)
+
   const [editingField, setEditingField] = useState<string | null>(null)
 
   return (
@@ -356,13 +359,14 @@ function UserManageDialog({
       title="User Details"
       size="wide"
       footer={
-        <div className="space-y-3">
+        <div className="flex gap-2">
+          <SheetPrimaryButton onClick={onClose} className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]">Cancel</SheetPrimaryButton>
           <button
             type="button"
             disabled={busy || !hasChanges}
             onClick={() => void saveAccount().then(onClose)}
             className={cn(
-              "flex h-[52px] w-full items-center justify-center rounded-full text-[17px] font-semibold transition-colors",
+              "flex h-[52px] flex-1 items-center justify-center rounded-full text-[15px] font-semibold transition-colors",
               busy || !hasChanges
                 ? "cursor-not-allowed bg-neutral-200 text-neutral-400"
                 : "bg-accent text-white hover:opacity-90 active:scale-[0.99]",
@@ -370,7 +374,6 @@ function UserManageDialog({
           >
             {busy ? "Saving\u2026" : "Save changes"}
           </button>
-          <SheetPrimaryButton onClick={onClose}>Cancel</SheetPrimaryButton>
         </div>
       }
     >
@@ -497,7 +500,10 @@ function UserManageDialog({
                 {editingField === "position" && (departmentId || designations.length > 0) && (
                   <div className="mt-2">
                     <InlineDropdown value={positionId} onChange={(v) => { setPositionId(v); setEditingField(null) }}
-                      options={positions.filter((p) => p.is_active).map((p) => ({ value: String(p.id), label: p.name }))} />
+                      options={unitPositions.map((p) => ({ value: String(p.id), label: p.name }))} />
+                    {unitPositions.length === 0 && (
+                      <p className="mt-1 text-[13px] text-neutral-400">No positions for this unit yet. Add them in Units.</p>
+                    )}
                   </div>
                 )}
               </div>

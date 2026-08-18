@@ -44,7 +44,7 @@ export function HairlineRow({
     <>
       {leading ? <span className="shrink-0">{leading}</span> : null}
       <span className="min-w-0 flex-1">
-        <span className="block text-row text-brand-navy">{title}</span>
+        <span className="block text-row font-normal text-brand-navy">{title}</span>
         {subtitle ? (
           <span className="mt-2 block text-meta leading-relaxed text-neutral-500">{subtitle}</span>
         ) : null}

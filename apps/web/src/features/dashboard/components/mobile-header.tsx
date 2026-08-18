@@ -40,9 +40,9 @@ function ResponderMobileChrome() {
           type="button"
           onClick={() => setProfileOpen(true)}
           aria-label="Open profile"
-          className="flex size-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-nav-raised"
+          className="ml-1.5 flex size-11 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-nav-raised"
         >
-          <span className="flex size-8 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
+          <span className="flex size-9 items-center justify-center rounded-full bg-slate-soft text-[15px] font-bold text-navy-muted">
             {avatarInitials}
           </span>
         </button>
@@ -75,12 +75,12 @@ export function StaffMobileHeader({
           className="size-8 shrink-0 object-contain"
         />
         <div className="flex flex-col">
-          <span className="truncate text-[18px] font-bold leading-none tracking-tight text-brand-orange">
+          <span className="truncate text-[22px] font-bold leading-none tracking-tight text-brand-orange">
             Boses
           </span>
           <span
             className={cn(
-              "text-[9px] font-bold leading-tight tracking-wide",
+              "mt-0.5 text-[11px] font-bold leading-tight tracking-wide",
               dark ? "text-nav-muted" : "text-brand-navy",
             )}
           >

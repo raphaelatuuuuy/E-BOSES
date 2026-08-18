@@ -47,11 +47,12 @@ export function ResponderNotificationsButton() {
         aria-label={ariaLabel}
         className="group relative flex size-10 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-nav-raised"
       >
-        <InboxIcon className="size-5 text-nav-muted group-hover:text-nav-text-active" />
+        <InboxIcon className="size-6 text-nav-muted group-hover:text-nav-text-active" />
         {unreadCount > 0 ? (
-          <span className="absolute -right-1 -top-1 text-[11px] font-semibold leading-none text-nav-muted tabular-nums">
-            {unreadCount > 99 ? "99+" : unreadCount}
-          </span>
+          <span
+            className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full bg-brand-orange"
+            aria-hidden="true"
+          />
         ) : null}
       </button>
       {open ? (

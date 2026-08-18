@@ -132,6 +132,7 @@ class BeatScheduleTests(TestCase):
         "refresh-map-service-pois",
         "periodic-housekeeping",
         "service-health-sample",
+        "service-health-worker-heartbeat",
         "complete-unblocked-deletions",
     }
 

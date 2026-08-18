@@ -133,7 +133,7 @@ export function Problem() {
 
       <div className="relative mx-auto max-w-6xl">
         <h2 className="max-w-4xl font-heading text-[clamp(2rem,5.5vw,4rem)] font-bold leading-tight">
-          Today, a concern travels by foot, by phone, by paper. And too often, it goes quiet.
+          Paper records, no updates, and no way to see where your report went.
         </h2>
 
         <div className="mt-16 grid items-center gap-16 md:mt-20 md:grid-cols-[1.1fr_0.9fr] md:gap-12 lg:gap-20">

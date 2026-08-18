@@ -74,3 +74,9 @@ apps/api/private_media/raw/
 New_UI_Reference/
 id/
 tmp/
+
+#
+.kilo
+tests/
+supabase/
+AGENTS.md

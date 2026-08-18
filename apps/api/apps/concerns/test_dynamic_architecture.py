@@ -45,6 +45,11 @@ class DynamicConcernArchitectureTests(APITestCase):
             status=User.Status.VERIFIED,
             is_staff=True,
         )
+        Designation.objects.create(
+            user=self.admin,
+            department=Department.objects.get(code="sangguniang-barangay"),
+            position=Position.objects.get(code="barangay-captain"),
+        )
         self.secretary = User.objects.create_user(
             email="dynamic-secretary@example.com",
             phone_number="+639180001002",
@@ -58,6 +63,17 @@ class DynamicConcernArchitectureTests(APITestCase):
             password="pass",
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
+        )
+        home = Department.objects.get(code="sangguniang-barangay")
+        Designation.objects.create(
+            user=self.secretary,
+            department=home,
+            position=Position.objects.get(code="secretary"),
+        )
+        Designation.objects.create(
+            user=self.kagawad,
+            department=home,
+            position=Position.objects.get(code="kagawad"),
         )
         self.responder = User.objects.create_user(
             email="dynamic-responder@example.com",
@@ -102,7 +118,7 @@ class DynamicConcernArchitectureTests(APITestCase):
         self.assertEqual(department.status_code, status.HTTP_201_CREATED, department.data)
         responder_position = self.client.post(
             "/api/concerns/admin/positions/",
-            {"name": "Field Responder", "code": "field-responder", "permissions": ["concerns.update_assigned"]},
+            {"name": "Field Responder", "code": "field-responder", "permissions": ["resolve_concerns"], "department": department.data["id"]},
             format="json",
         )
         self.assertEqual(responder_position.status_code, status.HTTP_201_CREATED)

@@ -10,6 +10,7 @@ from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentProfile
 from apps.concerns.models import Department
+from apps.concerns.test_helpers import grant_position
 
 from .models import (
     EmergencyAlert,
@@ -42,6 +43,7 @@ class DispatchLifecycleTests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             is_staff=True,
         )
+        grant_position(self.official)
 
     def _user(self, email, phone, first, last, **extra):
         User = get_user_model()

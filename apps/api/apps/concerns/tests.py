@@ -23,7 +23,7 @@ from apps.concerns.ai.text_classifier import TextClassificationResult
 from apps.concerns.ai_fixtures import gemma_result
 from apps.geo_services import classify_location
 
-from .models import Announcement, BarangayEvent, Concern, ConcernAiAssessment, ConcernAppeal, ConcernAssignment, ConcernChatAttachment, ConcernClassificationConfiguration, ConcernClarification, ConcernComment, ConcernMedia, ConcernOfficialRemark, ConcernResolutionEvidence, ConcernStatusEvent, ConcernVote, ContentFlag
+from .models import Announcement, BarangayEvent, Concern, ConcernAiAssessment, ConcernAppeal, ConcernAssignment, ConcernChatAttachment, ConcernClassificationConfiguration, ConcernClarification, ConcernComment, ConcernMedia, ConcernOfficialRemark, ConcernResolutionEvidence, ConcernStatusEvent, ConcernVote, ContentFlag, Department, Designation, Position
 
 def png_bytes():
     output = BytesIO()
@@ -35,6 +35,14 @@ def png_bytes():
 
 def png_upload(name="evidence.png", content=None):
     return SimpleUploadedFile(name, content or png_bytes(), content_type="image/png")
+
+
+def grant_captain(user):
+    Designation.objects.create(
+        user=user,
+        department=Department.objects.get(code="sangguniang-barangay"),
+        position=Position.objects.get(code="barangay-captain"),
+    )
 
 
 class PrivateMediaAccessTests(APITestCase):
@@ -50,6 +58,7 @@ class PrivateMediaAccessTests(APITestCase):
             is_staff=True,
             status=User.Status.VERIFIED,
         )
+        grant_captain(self.staff)
         proof_file = SimpleUploadedFile("proof.pdf", b"raw proof bytes", content_type="application/pdf")
         self.proof = ResidenceProof.objects.create(
             user=self.owner,
@@ -546,7 +555,16 @@ class ResidentDashboardAPITests(APITestCase):
                 [121.1000, 14.6400],
             ]],
         }
-        with patch("apps.geo_services.get_active_boundary_geometry", return_value=boundary):
+        covered = [
+            {
+                "id": 1,
+                "name": "Marikina Heights",
+                "locality": "Marikina",
+                "is_home": True,
+                "geometry": boundary,
+            }
+        ]
+        with patch("apps.geo_services.covered_boundaries", return_value=covered):
             result = classify_location(14.6605, 121.1150)
 
         self.assertEqual(result["status"], "edge")
@@ -805,6 +823,7 @@ class ResidentDashboardAPITests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
+        grant_captain(official)
         self.client.force_authenticate(official)
         official_response = self.client.get("/api/responders/active/")
         self.assertEqual(official_response.data[0]["current_latitude"], "14.6516000")
@@ -819,6 +838,7 @@ class ResidentDashboardAPITests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
+        grant_captain(official)
         concern = Concern.objects.create(
             reporter=self.resident,
             title="Needs status update",
@@ -866,6 +886,7 @@ class ResidentDashboardAPITests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
+        grant_captain(official)
         concern = Concern.objects.create(
             reporter=self.resident,
             title="Needs a single notification",
@@ -904,6 +925,7 @@ class ResidentDashboardAPITests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
+        grant_captain(official)
         concern = Concern.objects.create(
             reporter=self.resident,
             title='Needs official review',
@@ -932,6 +954,7 @@ class ResidentDashboardAPITests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
+        grant_captain(official)
         concern = Concern.objects.create(
             reporter=self.resident,
             title="Still validating",
@@ -958,6 +981,7 @@ class ResidentDashboardAPITests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
+        grant_captain(official)
         first = Concern.objects.create(
             reporter=self.resident,
             title="Queue drainage",
@@ -1019,6 +1043,7 @@ class PhaseOneFoundationAPITests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
+        grant_captain(self.official)
         self.responder = User.objects.create_user(
             email="phase1-responder@example.com",
             phone_number="+639100000203",
@@ -1326,6 +1351,122 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(resident_list_response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(official_list_response.status_code, status.HTTP_200_OK)
         self.assertEqual(official_list_response.data[0]["reason"], ContentFlag.Reason.FALSE_INFO)
+
+    def test_flag_dismiss_keeps_post_and_notifies_flag_reporter(self):
+        from django.contrib.auth import get_user_model
+        from apps.notifications.models import Notification
+
+        User = get_user_model()
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Sirang kalsada",
+            visibility=Concern.Visibility.COMMUNITY,
+            status=Concern.Status.UNDER_REVIEW,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        flagger = User.objects.create_user(
+            email="flagger2@example.com",
+            phone_number="+639100000205",
+            password="pass",
+            status=User.Status.VERIFIED,
+        )
+        flag = ContentFlag.objects.create(
+            concern=concern,
+            reporter=flagger,
+            reason=ContentFlag.Reason.FALSE_INFO,
+            note="Misleading photo.",
+        )
+
+        self.client.force_authenticate(self.official)
+        response = self.client.patch(
+            f"/api/concerns/flags/{flag.pk}/review/",
+            {"status": ContentFlag.Status.DISMISSED, "staff_note": "Post appears factual."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        flag.refresh_from_db()
+        concern.refresh_from_db()
+        self.assertEqual(flag.status, ContentFlag.Status.DISMISSED)
+        self.assertEqual(concern.status, Concern.Status.UNDER_REVIEW)
+        self.assertFalse(Notification.objects.filter(recipient=self.resident, type=Notification.Type.POST_TAKEN_DOWN).exists())
+        notification = Notification.objects.get(recipient=flagger, type=Notification.Type.FLAG_DISMISSED)
+        self.assertIn("Post appears factual", notification.body)
+
+    def test_flag_take_down_rejects_concern_and_notifies_main_reporter(self):
+        from django.contrib.auth import get_user_model
+        from apps.concerns.models import ConcernTimelineEntry
+        from apps.notifications.models import Notification
+
+        User = get_user_model()
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Sirang kalsada",
+            visibility=Concern.Visibility.COMMUNITY,
+            status=Concern.Status.UNDER_REVIEW,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        flagger = User.objects.create_user(
+            email="flagger@example.com",
+            phone_number="+639100000204",
+            password="pass",
+            status=User.Status.VERIFIED,
+        )
+        flag = ContentFlag.objects.create(
+            concern=concern,
+            reporter=flagger,
+            reason=ContentFlag.Reason.FALSE_INFO,
+            note="Misleading photo.",
+        )
+
+        self.client.force_authenticate(self.official)
+        response = self.client.patch(
+            f"/api/concerns/flags/{flag.pk}/review/",
+            {"status": ContentFlag.Status.TAKEN_DOWN, "staff_note": "Unverified claims during an emergency."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        flag.refresh_from_db()
+        concern.refresh_from_db()
+        self.assertEqual(flag.status, ContentFlag.Status.TAKEN_DOWN)
+        self.assertEqual(concern.status, Concern.Status.REJECTED)
+        self.assertEqual(concern.rejection_code, "content_violation")
+        self.assertTrue(ConcernTimelineEntry.objects.filter(concern=concern, status=Concern.Status.REJECTED).exists())
+        # The main reporter is told why (the flag reason) and the flagger is
+        # notified that their flag was acted on.
+        notification = Notification.objects.get(recipient=self.resident, type=Notification.Type.POST_TAKEN_DOWN)
+        self.assertIn("False Information", notification.body)
+        self.assertIn("Unverified claims", notification.body)
+        flagger_notification = Notification.objects.get(recipient=flagger, type=Notification.Type.POST_TAKEN_DOWN)
+        self.assertIn("False Information", flagger_notification.body)
+
+    def test_flag_take_down_blocked_when_post_already_closed(self):
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Already resolved",
+            status=Concern.Status.RESOLVED,
+        )
+        flag = ContentFlag.objects.create(
+            concern=concern,
+            reporter=self.resident,
+            reason=ContentFlag.Reason.FALSE_INFO,
+            note="Misleading photo.",
+        )
+
+        self.client.force_authenticate(self.official)
+        response = self.client.patch(
+            f"/api/concerns/flags/{flag.pk}/review/",
+            {"status": ContentFlag.Status.TAKEN_DOWN, "staff_note": "Remove it anyway."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        flag.refresh_from_db()
+        self.assertEqual(flag.status, ContentFlag.Status.SUBMITTED)
 
     def test_role_dashboard_summaries_return_real_counts(self):
         Concern.objects.create(
@@ -1724,6 +1865,7 @@ class ConcernChatAttachmentAPITests(APITestCase):
             status=User.Status.VERIFIED,
             is_staff=True,
         )
+        grant_captain(self.official)
         self.other = User.objects.create_user(
             email="chat-other@example.com",
             phone_number="+639100000703",

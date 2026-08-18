@@ -18,6 +18,8 @@ class Notification(models.Model):
         APPEAL_DENIED = "appeal_denied", "Appeal Denied"
         CONCERN_COMMENT = "concern_comment", "Concern Comment"
         CONCERN_MENTION = "concern_mention", "Concern Mention"
+        FLAG_DISMISSED = "flag_dismissed", "Flag Dismissed"
+        POST_TAKEN_DOWN = "post_taken_down", "Post Taken Down"
         CHAT_MESSAGE = "chat_message", "Chat Message"
         EMERGENCY_SUBMITTED = "emergency_submitted", "Emergency Submitted"
         EMERGENCY_ROUTED = "emergency_routed", "Emergency Routed"

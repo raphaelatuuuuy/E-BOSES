@@ -18,9 +18,9 @@ const INCIDENT = { x: 0.46, y: 0.37 }
 /** Blue responder units revealed by the beat 2 radar sweep; each links back to
  *  the incident with a routed arc. */
 const RESPONDERS = [
-  { x: 0.63, y: 0.59, label: "TANOD" },
-  { x: 0.34, y: 0.48, label: "BHW" },
-  { x: 0.55, y: 0.25, label: "BDRRMO" },
+  { x: 0.63, y: 0.59, label: "RESPONDER" },
+  { x: 0.34, y: 0.48, label: "RESPONDER" },
+  { x: 0.55, y: 0.25, label: "RESPONDER" },
 ] as const
 
 /** Green neighbor spots inside the beat 3 awareness dome. */

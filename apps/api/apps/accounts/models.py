@@ -604,6 +604,15 @@ class ServiceHealthDay(models.Model):
     module_key = models.SlugField(max_length=40)
     severity = models.PositiveSmallIntegerField(default=0)
     issues = models.JSONField(default=list, blank=True)
+    checks_total = models.PositiveIntegerField(default=0)
+    operational_checks = models.PositiveIntegerField(default=0)
+    degraded_checks = models.PositiveIntegerField(default=0)
+    down_checks = models.PositiveIntegerField(default=0)
+    not_configured_checks = models.PositiveIntegerField(default=0)
+    unknown_checks = models.PositiveIntegerField(default=0)
+    latency_total_ms = models.PositiveBigIntegerField(default=0)
+    latency_max_ms = models.PositiveIntegerField(default=0)
+    last_sample_bucket = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -612,6 +621,39 @@ class ServiceHealthDay(models.Model):
 
     def __str__(self):
         return f"{self.module_key} {self.day}: {self.severity}"
+
+
+class ServiceHealthState(models.Model):
+    module_key = models.SlugField(max_length=40, unique=True)
+    status = models.CharField(max_length=24, default="unknown")
+    detail = models.CharField(max_length=255, blank=True)
+    message = models.CharField(max_length=255, blank=True)
+    latency_ms = models.PositiveIntegerField(default=0)
+    consecutive_failures = models.PositiveSmallIntegerField(default=0)
+    consecutive_successes = models.PositiveSmallIntegerField(default=0)
+    checked_at = models.DateTimeField()
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["module_key"]
+
+
+class ServiceIncident(models.Model):
+    module_key = models.SlugField(max_length=40, db_index=True)
+    status = models.CharField(max_length=24)
+    message = models.CharField(max_length=255, blank=True)
+    started_at = models.DateTimeField(db_index=True)
+    resolved_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-started_at"]
+        indexes = [
+            models.Index(
+                fields=["module_key", "resolved_at"],
+                name="accounts_s_module__422750_idx",
+            )
+        ]
 
 
 class ResidenceVerificationCase(models.Model):

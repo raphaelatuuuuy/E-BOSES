@@ -6,7 +6,7 @@ from rest_framework.test import APITestCase
 
 from apps.capabilities import MANAGE_USERS
 from apps.concerns.models import Department, Designation, Position
-from apps.emergencies.models import EmergencyCategory, MapDispatchPolicy
+from apps.emergencies.models import EmergencyCategory
 
 User = get_user_model()
 
@@ -32,8 +32,6 @@ class ConfigurationHubTests(APITestCase):
         response = self.client.get("/api/config/summary/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-        # Routing folds into categories and SMS into zones: one setting should
-        # live in one place, not be reachable from two cards.
         sections = response.data["sections"]
         for key in (
             "units",
@@ -42,7 +40,6 @@ class ConfigurationHubTests(APITestCase):
             "categories",
             "classification",
             "dispatch",
-            "zones",
             "verification",
             "privacy",
         ):
@@ -71,24 +68,6 @@ class ConfigurationHubTests(APITestCase):
         response = self.client.get("/api/config/summary/")
         card = response.data["sections"]["classification"]
         self.assertTrue(card["needs_attention"])
-
-    def test_zones_card_flags_a_missing_sms_fallback(self):
-        # SMS lives on the zones card now; an unset number is the actionable
-        # half of it, so it has to drive the warning.
-        response = self.client.get("/api/config/summary/")
-        zones = response.data["sections"]["zones"]
-        self.assertIn("No SMS fallback number", zones["detail"])
-        self.assertTrue(zones["needs_attention"])
-
-    def test_zones_card_clears_once_sms_is_set(self):
-        policy = MapDispatchPolicy.current()
-        policy.emergency_sms_number = "+639171234567"
-        policy.save(update_fields=["emergency_sms_number"])
-
-        response = self.client.get("/api/config/summary/")
-        zones = response.data["sections"]["zones"]
-        self.assertIn("SMS fallback ready", zones["detail"])
-        self.assertFalse(zones["needs_attention"])
 
     def test_summary_hides_sections_the_official_cannot_access(self):
         kagawad = User.objects.create_user(

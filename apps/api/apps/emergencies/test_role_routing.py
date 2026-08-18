@@ -7,6 +7,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentProfile
+from apps.concerns.test_helpers import grant_position
 
 from .models import (
     EmergencyAlert,
@@ -49,6 +50,7 @@ class RoleBasedResponderRoutingTests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
+        grant_position(self.official)
         self.bhw = self.responder("feat6-bhw@example.com", "+639610000003", User.ResponderUnit.BHW)
         self.tanod = self.responder("feat6-tanod@example.com", "+639610000004", User.ResponderUnit.TANOD)
         self.backup_bhw = self.responder("feat6-backup@example.com", "+639610000005", User.ResponderUnit.BHW)

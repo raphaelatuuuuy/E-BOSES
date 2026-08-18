@@ -18,6 +18,7 @@ from apps.notifications.models import Notification
 
 from .models import EmergencyAlert, EmergencyAppeal, EmergencyChatAttachment, EmergencyChatMessage, EmergencyEscalation, EmergencyLocationPing, EmergencyMedia, EmergencyResponderAssignment, EmergencyStatusEvent, EmergencyTypeRoleMap, MapGeometry, ResponderShift, WitnessNotification
 from apps.concerns.models import Department
+from apps.concerns.test_helpers import grant_position
 from .views import auto_route_alert
 
 
@@ -63,6 +64,7 @@ class EmergencyAPITests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
+        grant_position(self.official)
         self.responder = User.objects.create_user(
             email="emergency-responder@example.com",
             phone_number="+639360000004",

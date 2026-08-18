@@ -100,9 +100,7 @@ export function SignUpShell({
                 aria-label="Boses — back to landing page"
               >
                 <img src="/contents/logo.webp" alt="E-Boses" className="h-9 w-auto md:h-10" />
-                <span className="font-heading text-xl font-semibold text-primary md:text-2xl">
-                  Boses
-                </span>
+                <span className="text-2xl font-bold text-accent">Boses</span>
               </Link>
               <button
                 type="button"

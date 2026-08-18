@@ -25,7 +25,7 @@ from apps.concerns.ai.pipeline import sam3_classes_for, should_run_sam3
 from apps.concerns.ai.privacy import privacy_cache_key, process_media_privacy
 from apps.concerns.ai.privacy.sam3_client import Sam3NotConfigured, Sam3Unavailable
 from apps.concerns.ai_fixtures import gemma_result, privacy_scan_result
-from apps.concerns.models import Concern, ConcernAiAssessment, ConcernMedia, ConcernMediaRedaction
+from apps.concerns.models import Concern, ConcernAiAssessment, ConcernMedia, ConcernMediaRedaction, Department, Designation, Position
 
 User = get_user_model()
 
@@ -559,6 +559,11 @@ class ManualBlurTests(APITestCase):
         self.official = User.objects.create_user(
             email="manual-blur-official@example.com", phone_number="+639181110004",
             password="pass", role=User.Role.BARANGAY_OFFICIAL, status=User.Status.VERIFIED,
+        )
+        Designation.objects.create(
+            user=self.official,
+            department=Department.objects.get(code="sangguniang-barangay"),
+            position=Position.objects.get(code="barangay-captain"),
         )
         self.concern = Concern.objects.create(
             reporter=self.resident, title="Photo", description="A photo was submitted.",

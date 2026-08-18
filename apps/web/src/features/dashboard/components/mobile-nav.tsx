@@ -280,7 +280,7 @@ export function MobileNav() {
                       className={cn(
                         "flex h-12 items-center gap-3 rounded-xl px-3 text-[15px] transition-colors",
                         active
-                          ? "bg-brand-orange-soft font-semibold text-brand-navy"
+                          ? "font-semibold text-brand-navy"
                           : "font-medium text-neutral-700 hover:bg-neutral-50 hover:text-brand-navy",
                       )}
                     >

@@ -9,6 +9,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import AuditLog
+from apps.concerns.test_helpers import grant_position
 
 from .models import (
     EmergencyAlert,
@@ -92,6 +93,7 @@ class EmergencyPrivacyAccessMatrixTests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
+        grant_position(self.official)
 
         self.alert = EmergencyAlert.objects.create(
             reporter=self.owner,

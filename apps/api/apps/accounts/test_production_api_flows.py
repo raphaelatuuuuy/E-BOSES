@@ -10,6 +10,7 @@ from rest_framework.test import APIClient, APITestCase
 
 from apps.accounts.models import ResidentProfile
 from apps.concerns.models import Concern
+from apps.concerns.test_helpers import grant_position
 from apps.emergencies.models import EmergencyAlert
 
 
@@ -44,6 +45,7 @@ class ProductionAPIFlowTests(APITestCase):
         self.official = self._user(
             "flow-official@example.invalid", "+639170000003", User.Role.BARANGAY_OFFICIAL, "Ana", "Cruz"
         )
+        grant_position(self.official)
 
     def _user(self, email, phone, role, first_name, last_name):
         User = get_user_model()

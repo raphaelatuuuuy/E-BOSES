@@ -667,6 +667,38 @@
   border-top-color: rgba(5, 9, 20, 0.9);
 }
 
+.eboses-coverage-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  text-shadow: 0 1px 4px rgba(5, 9, 20, 0.9);
+}
+.eboses-coverage-label__name {
+  font-family: "Saans", sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9aa5c9;
+}
+.eboses-coverage-label__name.is-covered {
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #ffffff;
+}
+.eboses-coverage-label__sub {
+  font-family: "Saans", sans-serif;
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #6d78a3;
+}
+
 .eboses-map-pin {
   position: relative;
   display: flex;
