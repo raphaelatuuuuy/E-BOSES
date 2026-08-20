@@ -163,13 +163,13 @@ export default function OfficialCommunityContentPage() {
             <div key={stat.label} className="min-w-0">
               <dd
                 className={cn(
-                  "text-section tabular-nums",
+                  "text-[1.75rem] leading-none tabular-nums font-light tracking-tight",
                   stat.alarm ? "text-sos" : "text-brand-navy",
                 )}
               >
                 {stat.value}
               </dd>
-              <dt className="mt-1 text-meta text-neutral-500">{stat.label}</dt>
+              <dt className="mt-2 text-meta text-neutral-500">{stat.label}</dt>
             </div>
           ))}
         </dl>

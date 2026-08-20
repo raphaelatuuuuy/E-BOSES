@@ -11,6 +11,7 @@ from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
+from rest_framework.exceptions import ValidationError as ApiValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -44,7 +45,7 @@ from apps.concerns.units import (
     assigned_legacy_unit,
     department_ids_for_code,
 )
-from apps.geo_services import invalidate_coverage_cache, validate_emergency_location
+from apps.geo_services import search_boundaries_online, validate_emergency_location
 
 from .models import (
     EmergencyAlert,
@@ -1191,6 +1192,215 @@ class EmergencySmsInboundView(APIView):
         return SmsInboundView.as_view()(request._request)
 
 
+class BoundarySearchView(APIView):
+    """Barangay boundaries, for picking the one a station covers."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        touch_last_seen(request.user)
+        if not can_configure_emergencies(request.user, CONFIGURE_GEOGRAPHY):
+            return capability_denied(CONFIGURE_GEOGRAPHY)
+        query = " ".join((request.query_params.get("q") or "").split())
+
+        def same_place(name: str, locality: str) -> tuple[str, str]:
+            """
+            Key for one real barangay.
+
+            The PSGC import and the older OSM rows both hold e.g. Marikina
+            Heights, spelling its city "City of Marikina" and "Marikina", so
+            matching on the raw pair would list it twice.
+            """
+            place = locality.strip().lower()
+            for prefix in ("city of ", "municipality of ", "the municipality of "):
+                if place.startswith(prefix):
+                    place = place[len(prefix) :]
+            place = place.removesuffix(" city").strip()
+            return name.strip().lower(), place
+
+        def row(boundary: MapGeometry) -> dict:
+            return {
+                "id": boundary.pk,
+                "source": "saved",
+                "name": boundary.name,
+                "locality": boundary.locality,
+                "osm_id": boundary.osm_id,
+                "is_home": boundary.is_home,
+                "geometry": boundary.geometry,
+            }
+
+        # This station's own barangay always leads, so "home" is one click away.
+        home = list(
+            MapGeometry.objects.filter(
+                kind=MapGeometry.Kind.BOUNDARY, is_active=True, is_home=True
+            )[:1]
+        )
+        results = [row(boundary) for boundary in home]
+        if not query:
+            return Response(results)
+
+        if not any(query.lower() in item["name"].lower() for item in results):
+            results = []
+
+        # The imported PSGC/NAMRIA set answers first: it is the PSA's own
+        # boundary data and covers barangays OSM never mapped. Every word has
+        # to appear somewhere, so "san mateo" and "mateo san" both land.
+        local = MapGeometry.objects.filter(kind=MapGeometry.Kind.BOUNDARY, is_active=True)
+        for term in query.split():
+            local = local.filter(
+                models.Q(name__icontains=term) | models.Q(locality__icontains=term)
+            )
+
+        seen = {same_place(item["name"], item["locality"]) for item in results}
+        # Home first, then the PSGC rows, which carry the PSA's own spelling.
+        for boundary in local.order_by("-is_home", "-osm_type", "name")[:60]:
+            key = same_place(boundary.name, boundary.locality)
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(row(boundary))
+            if len(results) >= 25:
+                break
+
+        # Only when nothing is held locally is the slow, paced upstream asked.
+        if not results:
+            for hit in search_boundaries_online(query):
+                key = same_place(hit["name"], hit["locality"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append(hit)
+
+        return Response(results)
+
+
+class ActiveCommunityBoundariesView(APIView):
+    """
+    Barangays already running as their own community, with their outlines.
+
+    The coverage editor draws these so an official can see who is next door
+    before dragging a zone across them: two stations accepting reports for the
+    same street is a dispatch argument nobody wins.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from apps.emergencies.public_api import normalize_locality, served_barangay_names
+
+        touch_last_seen(request.user)
+        if not can_configure_emergencies(request.user, CONFIGURE_GEOGRAPHY):
+            return capability_denied(CONFIGURE_GEOGRAPHY)
+
+        served = served_barangay_names()
+        rows = MapGeometry.objects.filter(
+            kind=MapGeometry.Kind.BOUNDARY, is_active=True
+        ).filter(models.Q(is_home=True) | models.Q(name__in=served))
+
+        seen = set()
+        results = []
+        for boundary in rows.order_by("-is_home", "name", "pk")[:50]:
+            key = (boundary.name.strip().lower(), normalize_locality(boundary.locality))
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(
+                {
+                    "id": boundary.pk,
+                    "name": boundary.name,
+                    "locality": boundary.locality,
+                    "is_home": boundary.is_home,
+                    "geometry": boundary.geometry,
+                }
+            )
+        return Response(results)
+
+
+MIN_BOUNDARY_POINTS = 3
+MAX_BOUNDARY_POINTS = 2000
+
+
+def parse_boundary_geometry(value):
+    """A GeoJSON Polygon safe to store as a barangay outline.
+
+    The map hands over whatever the official dragged, so the ring is checked
+    here rather than trusted: an unclosed or two-point ring would render as a
+    broken edge on every map that reads this row.
+    """
+    if not isinstance(value, dict) or value.get("type") != "Polygon":
+        raise ApiValidationError("geometry must be a GeoJSON Polygon.")
+    rings = value.get("coordinates")
+    if not isinstance(rings, list) or not rings:
+        raise ApiValidationError("geometry must carry at least one ring.")
+
+    cleaned = []
+    for ring in rings:
+        if not isinstance(ring, list):
+            raise ApiValidationError("Each ring must be a list of points.")
+        if len(ring) > MAX_BOUNDARY_POINTS:
+            raise ApiValidationError("That outline has too many points.")
+        points = []
+        for position in ring:
+            if not isinstance(position, (list, tuple)) or len(position) < 2:
+                raise ApiValidationError("Each point must be a [longitude, latitude] pair.")
+            try:
+                lng = float(position[0])
+                lat = float(position[1])
+            except (TypeError, ValueError):
+                raise ApiValidationError("Each point must be a [longitude, latitude] pair.")
+            if not (-180 <= lng <= 180) or not (-90 <= lat <= 90):
+                raise ApiValidationError("A point falls outside the range of the earth.")
+            points.append([round(lng, 7), round(lat, 7)])
+        # A ring may arrive open or closed; the count that matters is of the
+        # corners it actually has, so the repeated closing point is set aside.
+        if len(points) > 1 and points[0] == points[-1]:
+            points.pop()
+        if len(points) < MIN_BOUNDARY_POINTS:
+            raise ApiValidationError("Each ring needs at least three distinct points.")
+        # GeoJSON rings close on themselves.
+        points.append(list(points[0]))
+        cleaned.append(points)
+    return {"type": "Polygon", "coordinates": cleaned}
+
+
+class BoundaryDetailView(APIView):
+    """Edits one barangay outline, so an official can correct the drawn edge."""
+
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_configure_emergencies(request.user, CONFIGURE_GEOGRAPHY):
+            return capability_denied(CONFIGURE_GEOGRAPHY)
+        boundary = get_object_or_404(
+            MapGeometry, pk=pk, kind=MapGeometry.Kind.BOUNDARY, is_active=True
+        )
+        geometry = parse_boundary_geometry(request.data.get("geometry"))
+        boundary.geometry = geometry
+        boundary.save(update_fields=["geometry", "updated_at"])
+        create_audit_log(
+            "map_boundary.updated",
+            actor=request.user,
+            metadata={
+                "boundary_id": boundary.pk,
+                "name": boundary.name,
+                "points": len(geometry["coordinates"][0]),
+            },
+            request_meta=request_meta(request),
+        )
+        return Response(
+            {
+                "id": boundary.pk,
+                "source": "saved",
+                "name": boundary.name,
+                "locality": boundary.locality,
+                "osm_id": boundary.osm_id,
+                "is_home": boundary.is_home,
+                "geometry": boundary.geometry,
+            }
+        )
+
+
 class MapDispatchPolicyView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1220,140 +1430,6 @@ class MapDispatchPolicyView(APIView):
             request_meta=request_meta(request),
         )
         return Response(MapDispatchPolicySerializer(policy).data)
-
-
-def _coverage_geometry_payload(row):
-    return {
-        "id": row.pk,
-        "name": row.name,
-        "locality": row.locality,
-        "is_home": row.is_home,
-        "geometry": row.geometry,
-    }
-
-
-def _connected_from_home(selected_ids, adjacency, home_id):
-    """Ids reachable from home by walking only through the selected set."""
-    if home_id not in selected_ids:
-        return set()
-    reached = {home_id}
-    frontier = [home_id]
-    while frontier:
-        current = frontier.pop()
-        for neighbor in adjacency.get(current, ()):
-            if neighbor in selected_ids and neighbor not in reached:
-                reached.add(neighbor)
-                frontier.append(neighbor)
-    return reached
-
-
-class CoverageAreaView(APIView):
-    """Which barangays this station answers for.
-
-    Coverage may only grow outward from home through shared borders, so the
-    saved set is validated for connectivity here rather than trusting the map.
-    """
-
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        touch_last_seen(request.user)
-        if not can_configure_emergencies(request.user, CONFIGURE_GEOGRAPHY):
-            return capability_denied(CONFIGURE_GEOGRAPHY)
-        return Response(self._payload())
-
-    def put(self, request):
-        touch_last_seen(request.user)
-        if not can_configure_emergencies(request.user, CONFIGURE_GEOGRAPHY):
-            return capability_denied(CONFIGURE_GEOGRAPHY)
-
-        raw = request.data.get("covered")
-        if not isinstance(raw, list):
-            return Response({"detail": "covered must be a list of boundary ids."}, status=400)
-        try:
-            selected = {int(value) for value in raw}
-        except (TypeError, ValueError):
-            return Response({"detail": "covered must contain boundary ids."}, status=400)
-
-        home = MapGeometry.objects.filter(
-            kind=MapGeometry.Kind.BOUNDARY, is_active=True, is_home=True
-        ).first()
-        if not home:
-            return Response({"detail": "No home barangay is configured."}, status=409)
-
-        selected.add(home.pk)
-        rows = list(
-            MapGeometry.objects.filter(
-                kind=MapGeometry.Kind.BOUNDARY, is_active=True, pk__in=selected
-            )
-        )
-        if len(rows) != len(selected):
-            return Response({"detail": "One or more barangays no longer exist."}, status=400)
-
-        adjacency = self._adjacency()
-        reached = _connected_from_home(selected, adjacency, home.pk)
-        if reached != selected:
-            orphaned = sorted(
-                row.name for row in rows if row.pk in selected - reached
-            )
-            return Response(
-                {
-                    "detail": (
-                        "Coverage must be one connected area. "
-                        f"These do not touch it: {', '.join(orphaned)}."
-                    )
-                },
-                status=400,
-            )
-
-        policy = MapDispatchPolicy.current()
-        policy.covered.set(rows)
-        policy.updated_by = request.user
-        policy.save(update_fields=["updated_by", "updated_at"])
-        invalidate_coverage_cache()
-
-        create_audit_log(
-            "coverage_area.updated",
-            actor=request.user,
-            metadata={"covered": sorted(row.name for row in rows)},
-            request_meta=request_meta(request),
-        )
-        return Response(self._payload())
-
-    def _adjacency(self):
-        adjacency: dict[int, set[int]] = {}
-        pairs = MapGeometry.neighbors.through.objects.values_list(
-            "from_mapgeometry_id", "to_mapgeometry_id"
-        )
-        for left, right in pairs:
-            adjacency.setdefault(left, set()).add(right)
-            adjacency.setdefault(right, set()).add(left)
-        return adjacency
-
-    def _payload(self):
-        policy = MapDispatchPolicy.current()
-        covered = policy.covered_geometries()
-        covered_ids = {row.pk for row in covered}
-
-        adjacency = self._adjacency()
-        available_ids = set()
-        for row_id in covered_ids:
-            available_ids |= adjacency.get(row_id, set())
-        available_ids -= covered_ids
-
-        available = list(
-            MapGeometry.objects.filter(
-                kind=MapGeometry.Kind.BOUNDARY, is_active=True, pk__in=available_ids
-            ).order_by("name")
-        )
-        home = next((row for row in covered if row.is_home), None)
-
-        return {
-            "home_id": home.pk if home else None,
-            "home_locality": home.locality if home else "",
-            "covered": [_coverage_geometry_payload(row) for row in covered],
-            "available": [_coverage_geometry_payload(row) for row in available],
-        }
 
 
 class MyActiveEmergencyView(APIView):

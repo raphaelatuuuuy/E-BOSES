@@ -158,7 +158,7 @@ function SidebarRow({
         </span>
       ) : null}
       {iconOnly ? (
-        <span className={cn("pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-50 w-52 -translate-y-1/2 translate-x-1 rounded-xl px-6 pb-5 pt-5 text-center opacity-0 shadow-[0_14px_35px_rgba(15,23,42,0.16)] ring-1 transition-[opacity,transform] duration-150 ease-out before:absolute before:left-[-6px] before:top-1/2 before:size-3 before:-translate-y-1/2 before:rotate-45 before:border-b before:border-l group-hover:translate-x-0 group-hover:opacity-100", tooltipSurface)}>
+        <span className={cn("pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-[1100] w-52 -translate-y-1/2 translate-x-1 rounded-xl px-6 pb-5 pt-5 text-center opacity-0 shadow-[0_14px_35px_rgba(15,23,42,0.16)] ring-1 transition-[opacity,transform] duration-150 ease-out before:absolute before:left-[-6px] before:top-1/2 before:size-3 before:-translate-y-1/2 before:rotate-45 before:border-b before:border-l group-hover:translate-x-0 group-hover:opacity-100", tooltipSurface)}>
           <span className="flex items-center justify-center gap-2">
             {LeftRelatedIcon ? (
               <span
@@ -343,7 +343,7 @@ overview: [FileChartColumnIcon, ChartSplineIcon],
       <div className="relative shrink-0 px-3 pb-4 pt-2">
           <div>
           {open ? (
-            <ul className={cn("absolute bottom-6 left-[calc(100%+6px)] z-50 flex w-52 flex-col gap-0.5 rounded-xl p-3 shadow-[0_14px_35px_rgba(15,23,42,0.16)] ring-1 before:absolute before:bottom-4 before:left-[-6px] before:size-3 before:rotate-45 before:border-b before:border-l", accountSurfaceClass)}>
+            <ul className={cn("absolute bottom-6 left-[calc(100%+6px)] z-[1100] flex w-52 flex-col gap-0.5 rounded-xl p-3 shadow-[0_14px_35px_rgba(15,23,42,0.16)] ring-1 before:absolute before:bottom-4 before:left-[-6px] before:size-3 before:rotate-45 before:border-b before:border-l", accountSurfaceClass)}>
               <li>
                 {isResident ? (
                   <button

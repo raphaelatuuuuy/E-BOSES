@@ -9,6 +9,13 @@ import type leaflet from "leaflet"
 import { cn } from "@workspace/ui/lib/utils"
 import { apiRequest } from "@/lib/api"
 import { reverseGeocode } from "@/lib/geocode"
+import type { MapDispatchPolicy } from "@/features/dashboard/api"
+import {
+  drawCoverage,
+  insideCoverage,
+  OUT_OF_SCOPE_MESSAGE,
+  type CoverageInput,
+} from "@/features/dashboard/components/map/coverage-layer"
 
 const DEFAULT_CENTER: [number, number] = [14.6507, 121.1133]
 
@@ -43,6 +50,7 @@ type MapContext = {
     max_longitude: number
   }
   boundary: { name: string; geometry: unknown }
+  dispatch_policy: MapDispatchPolicy | null
   soft_buffer_meters: number
   hard_reject_meters: number
 }
@@ -131,6 +139,7 @@ export default function LocationPickerModal({
   const reverseTimer = useRef<number | null>(null)
   const ignoreMove = useRef(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const resizeRef = useRef<ResizeObserver | null>(null)
 
   const [previewParts, setPreviewParts] = useState<AddressParts>({
     primary: initialAddress || "Move the map to adjust",
@@ -147,6 +156,12 @@ export default function LocationPickerModal({
   const [searchFocused, setSearchFocused] = useState(false)
   const [mapContext, setMapContext] = useState<MapContext | null>(null)
   const [locationClass, setLocationClass] = useState<LocationClass | null>(null)
+  // Runs on every frame of a pan, so the pin can refuse itself while the map is
+  // still moving. The server call behind `locationClass` is debounced and stays
+  // the authority; this only drives the cursor and the notice.
+  const [outOfScope, setOutOfScope] = useState(false)
+  const coverageRef = useRef<CoverageInput>({})
+  const coverageLayerRef = useRef<leaflet.LayerGroup | null>(null)
 
   const scheduleReverseAndValidate = useCallback((lat: number, lng: number) => {
     setPreviewLatLng({ lat, lng })
@@ -256,6 +271,14 @@ export default function LocationPickerModal({
         maxZoom: 19,
       }).addTo(map)
 
+      coverageLayerRef.current = L.layerGroup().addTo(map)
+
+      map.on("move", () => {
+        if (!map) return
+        const c = map.getCenter()
+        setOutOfScope(!insideCoverage(c.lat, c.lng, coverageRef.current))
+      })
+
       map.on("moveend", () => {
         if (ignoreMove.current || !map) return
         const c = map.getCenter()
@@ -263,6 +286,16 @@ export default function LocationPickerModal({
       })
 
       mapRef.current = map
+      // The picker mounts into a portal that is still sizing itself, so one
+      // frame is not enough: Leaflet measured a collapsed box and painted no
+      // tiles. Re-measure on every box change instead.
+      const observer = new ResizeObserver(() => {
+        const box = containerRef.current?.getBoundingClientRect()
+        if (!box?.width || !box.height) return
+        mapRef.current?.invalidateSize({ animate: false })
+      })
+      if (containerRef.current) observer.observe(containerRef.current)
+      resizeRef.current = observer
       requestAnimationFrame(() => {
         map?.invalidateSize()
         const c = map?.getCenter()
@@ -275,6 +308,9 @@ export default function LocationPickerModal({
     return () => {
       cancelled = true
       if (reverseTimer.current) window.clearTimeout(reverseTimer.current)
+      resizeRef.current?.disconnect()
+      resizeRef.current = null
+      coverageLayerRef.current = null
       try {
         map?.off()
         map?.remove()
@@ -286,30 +322,29 @@ export default function LocationPickerModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- init once per open
   }, [open, scheduleReverseAndValidate])
 
-  // Draw barangay boundary when context loads (no service/POI markers)
+  // The barangay edge and the acceptance zone, drawn from the same policy the
+  // server validates against — so what the resident is allowed to pin is
+  // visible before they try, not only after a rejection.
   useEffect(() => {
     const map = mapRef.current
-    if (!open || !map || !mapContext) return
+    const group = coverageLayerRef.current
+    if (!open || !map || !group || !mapContext) return
+    const boundary = (mapContext.boundary?.geometry ?? null) as never
+    coverageRef.current = { boundary, policy: mapContext.dispatch_policy }
     void import("leaflet").then((L) => {
-      const geometry = mapContext.boundary?.geometry as leaflet.GeoJSON | null
-      if (geometry) {
-        L.geoJSON(geometry as never, {
-          style: {
-            color: "#ff6a1a",
-            weight: 2,
-            fillColor: "#ff6a1a",
-            fillOpacity: 0.04,
-            opacity: 0.75,
-          },
-        }).addTo(map)
-        try {
-          map.fitBounds(L.geoJSON(geometry as never).getBounds(), {
-            padding: [28, 28],
-            maxZoom: 16,
-          })
-        } catch {
-          /* ignore */
-        }
+      if (!coverageLayerRef.current) return
+      group.clearLayers()
+      drawCoverage(L, group, {
+        boundary,
+        policy: mapContext.dispatch_policy,
+      })
+      const center = map.getCenter()
+      setOutOfScope(!insideCoverage(center.lat, center.lng, coverageRef.current))
+      if (!boundary) return
+      try {
+        map.fitBounds(L.geoJSON(boundary).getBounds(), { padding: [28, 28], maxZoom: 16 })
+      } catch {
+        /* ignore */
       }
     })
   }, [open, mapContext])
@@ -358,6 +393,7 @@ export default function LocationPickerModal({
     const lat = previewLatLng?.lat ?? center?.lat
     const lng = previewLatLng?.lng ?? center?.lng
     if (lat == null || lng == null) return
+    if (outOfScope) return
     if (locationClass && !locationClass.accepted) {
       return
     }
@@ -411,7 +447,8 @@ export default function LocationPickerModal({
     streetPrimary !== "Selected location" &&
     !/^lat\b/i.test(streetPrimary) &&
     !/^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(streetPrimary)
-  const canConfirm = (!locationClass || locationClass.accepted) && hasUsableStreet && !geocoding
+  const canConfirm =
+    !outOfScope && (!locationClass || locationClass.accepted) && hasUsableStreet && !geocoding
 
   if (!open) return null
 
@@ -483,6 +520,19 @@ export default function LocationPickerModal({
           visibility: hidden !important;
           pointer-events: none !important;
         }
+        .eboses-map-blocked.leaflet-container,
+        .eboses-map-blocked .leaflet-grab,
+        .eboses-map-blocked .leaflet-interactive {
+          cursor: not-allowed !important;
+        }
+        .eboses-map-blocked::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: 500;
+          pointer-events: none;
+          background: rgba(220, 38, 38, 0.08);
+        }
       `}</style>
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div
@@ -509,12 +559,18 @@ export default function LocationPickerModal({
             sheetMode === "expanded" && "eboses-map-search-expanded",
           )}
         >
-          <div ref={containerRef} className="absolute inset-0 z-0" />
+          <div
+            ref={containerRef}
+            className={cn("absolute inset-0 z-0", outOfScope && "eboses-map-blocked")}
+          />
 
           {sheetMode !== "expanded" ? (
             <>
               <span
-                className="eboses-pin-pulse absolute left-1/2 top-1/2 size-3 rounded-full bg-brand-blue"
+                className={cn(
+                  "absolute left-1/2 top-1/2 size-3 rounded-full",
+                  outOfScope ? "bg-sos" : "eboses-pin-pulse bg-brand-blue",
+                )}
                 style={{
                   marginLeft: -6,
                   marginTop: -6,
@@ -527,34 +583,52 @@ export default function LocationPickerModal({
                   sheetMode === "peek" ? "bottom-[116px]" : "bottom-[88px]",
                 )}
               >
-                {locationClass?.warning ? (
+                {!outOfScope && locationClass?.warning ? (
                   <p className="pointer-events-none max-w-[min(100%,320px)] rounded-xl bg-neutral-100 px-3 py-2 text-center text-[12px] font-medium text-neutral-600 shadow-sm ring-1 ring-neutral-200">
                     {locationClass.warning}
                   </p>
                 ) : null}
-                {locationClass && !locationClass.accepted ? (
-                  <p className="pointer-events-none max-w-[min(100%,320px)] rounded-xl bg-sos/10 px-3 py-2 text-center text-[12px] font-medium text-sos shadow-sm ring-1 ring-sos/30/80">
+                {!outOfScope && locationClass && !locationClass.accepted ? (
+                  <p className="pointer-events-none max-w-[min(100%,320px)] rounded-xl bg-sos/10 px-3 py-2 text-center text-[12px] font-medium text-sos shadow-sm ring-1 ring-sos/30">
                     {locationClass.message}
                   </p>
                 ) : null}
-                <button
-                  type="button"
-                  onClick={handleConfirm}
-                  disabled={!canConfirm || geocoding}
-                  className={cn(
-                    "pointer-events-auto flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)] transition-transform",
-                    canConfirm
-                      ? "hover:scale-[1.02] active:scale-[0.99]"
-                      : "cursor-not-allowed opacity-60",
-                  )}
-                >
-                  <span className="text-[16px] font-semibold leading-none text-neutral-900">
-                    Use this location
-                  </span>
-                  <span className="mt-1.5 line-clamp-2 text-[14px] font-medium leading-snug text-neutral-500">
-                    {geocoding ? "Finding address…" : previewParts.primary}
-                  </span>
-                </button>
+
+                {/* Out of scope is a refusal, not a warning stacked above a
+                    button the resident can still press. The action is replaced
+                    outright until they move back inside. */}
+                {outOfScope ? (
+                  <p
+                    role="status"
+                    className="pointer-events-none flex max-w-[min(100%,340px)] flex-col items-center rounded-full bg-sos px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)]"
+                  >
+                    <span className="text-[15px] font-semibold leading-none text-white">
+                      {OUT_OF_SCOPE_MESSAGE}
+                    </span>
+                    <span className="mt-1.5 text-[13px] font-medium leading-snug text-white/80">
+                      Move the map back inside the highlighted area.
+                    </span>
+                  </p>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleConfirm}
+                    disabled={!canConfirm || geocoding}
+                    className={cn(
+                      "pointer-events-auto flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)] transition-transform",
+                      canConfirm
+                        ? "hover:scale-[1.02] active:scale-[0.99]"
+                        : "cursor-not-allowed opacity-60",
+                    )}
+                  >
+                    <span className="text-[16px] font-semibold leading-none text-neutral-900">
+                      Use this location
+                    </span>
+                    <span className="mt-1.5 line-clamp-2 text-[14px] font-medium leading-snug text-neutral-500">
+                      {geocoding ? "Finding address…" : previewParts.primary}
+                    </span>
+                  </button>
+                )}
               </div>
             </>
           ) : null}

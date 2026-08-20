@@ -23,10 +23,8 @@ function FloatingLabelInput({
   const [hasValue, setHasValue] = React.useState(() => value != null && String(value) !== "")
 
   React.useEffect(() => {
-    const el = inputRef.current
-    if (!el) return
-    setHasValue(el.value !== "")
-  }, [id])
+    setHasValue(value != null && String(value) !== "")
+  }, [id, value])
 
   const isFloating = focused || hasValue
 

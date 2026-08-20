@@ -30,7 +30,11 @@ from apps.capabilities import (
     capabilities_for,
 )
 from apps.concerns.models import ConcernCategory, Department, Position, RoutingRule
-from apps.emergencies.models import EmergencyCategory, EmergencyTypeRoleMap
+from apps.emergencies.models import (
+    EmergencyCategory,
+    EmergencyTypeRoleMap,
+    MapDispatchPolicy,
+)
 
 
 def _plural(count: int, singular: str, plural: str | None = None) -> str:
@@ -161,42 +165,21 @@ def _dispatch():
 
 
 def _coverage():
-    """Coverage is the barangays this station accepts reports from.
+    """The coverage area card: the barangay and the acceptance zone.
 
-    An empty coverage area is not possible — home is always covered — so the
-    only thing worth flagging is boundary data that never loaded, which would
-    silently fall back to a bounding box.
+    This is geography — which area a station answers for — not the emergency
+    types it routes (that is the dispatch card).
     """
-    from apps.emergencies.models import MapDispatchPolicy, MapGeometry
-
-    covered = MapDispatchPolicy.current().covered_geometries()
-    covered_ids = {row.pk for row in covered}
-
-    adjacency = MapGeometry.neighbors.through.objects.values_list(
-        "from_mapgeometry_id", "to_mapgeometry_id"
+    policy = MapDispatchPolicy.current()
+    zone = (
+        f"{policy.acceptance_radius_meters} m radius"
+        if not policy.acceptance_geometry
+        else "Drawn zone"
     )
-    available: set[int] = set()
-    for left, right in adjacency:
-        if left in covered_ids:
-            available.add(right)
-        if right in covered_ids:
-            available.add(left)
-    available -= covered_ids
-
-    outside = sorted(
-        {row.locality for row in covered if row.locality and row.locality != "Marikina"}
-    )
-    if outside:
-        detail = f"Includes {', '.join(outside)}"
-    elif available:
-        detail = f"{_plural(len(available), 'neighbour')} available to add"
-    else:
-        detail = "No neighbouring barangays are mapped"
-
     return {
-        "status": _plural(len(covered), "barangay") + " covered",
-        "detail": detail,
-        "needs_attention": not covered,
+        "status": f"{zone} · {policy.barangay}",
+        "detail": f"Reports outside: {policy.get_out_of_zone_action_display()}",
+        "needs_attention": False,
     }
 
 

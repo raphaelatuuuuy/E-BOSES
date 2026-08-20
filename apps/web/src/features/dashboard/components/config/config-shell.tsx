@@ -22,6 +22,10 @@ export interface ConfigStat {
   /** Renders in the alarm tone. Use for "3 categories have no unit", never for
    *  a merely large number. */
   alarm?: boolean
+  /** Override classes for the value element. */
+  valueClassName?: string
+  /** Override classes for the label element. */
+  labelClassName?: string
 }
 
 /** Where you are, not merely how to leave. Matches the Help Center trail. */
@@ -86,6 +90,7 @@ export function ConfigShell({
   stats,
   action,
   children,
+  className,
 }: {
   icon: LucideIcon
   eyebrow: string
@@ -94,6 +99,7 @@ export function ConfigShell({
   stats?: ConfigStat[]
   action?: ReactNode
   children: ReactNode
+  className?: string
 }) {
   return (
     // White ground, like the Help Center. The official shell paints `bg-canvas`
@@ -102,7 +108,7 @@ export function ConfigShell({
     <div className="min-h-full bg-white">
       {/* pb-40 on a phone clears the floating bottom nav, which was sitting on
           top of the last row and the pager. */}
-      <div className="mx-auto w-full max-w-[1100px] px-6 pt-10 pb-40 sm:px-10 sm:pb-28">
+      <div className={cn("mx-auto w-full max-w-[1100px] px-6 pt-10 pb-40 sm:px-10 sm:pb-28", className)}>
         <ConfigBreadcrumb
           trail={[
             { label: "Configuration", to: "/dashboard/configuration" },
@@ -136,13 +142,14 @@ export function ConfigShell({
               <div key={stat.label} className="min-w-0">
                 <dd
                   className={cn(
-                    "text-section tabular-nums",
-                    stat.alarm ? "text-sos" : "text-brand-navy"
+                    "text-[1.75rem] leading-none tabular-nums font-light tracking-tight",
+                    stat.alarm ? "text-sos" : "text-brand-navy",
+                    stat.valueClassName
                   )}
                 >
                   {stat.value}
                 </dd>
-                <dt className="mt-1 text-meta text-neutral-500">
+                <dt className={cn("mt-2 text-meta text-neutral-500", stat.labelClassName)}>
                   {stat.label}
                 </dt>
               </div>

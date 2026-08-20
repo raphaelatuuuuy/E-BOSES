@@ -10,6 +10,8 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
+import { glyphPinHtml, glyphPinSize, type MarkerTone } from "@/features/dashboard/components/map/markers"
+
 /**
  * One colour per advisory tag. The map areas, markers and tooltips read the
  * tag's own colour, so a community event reads green and a flooding advisory
@@ -127,23 +129,44 @@ export const ADVISORY_TAGS: AdvisoryTagMeta[] = [
 ]
 
 export function advisoryMeta(tag: string | null | undefined): AdvisoryTagMeta {
+  const normalized = (tag ?? "").trim().toLowerCase()
   return (
-    ADVISORY_TAGS.find((meta) => meta.value === tag) ??
+    ADVISORY_TAGS.find((meta) => meta.value.toLowerCase() === normalized) ??
     ADVISORY_TAGS[ADVISORY_TAGS.length - 1]!
   )
 }
 
-/** Inline SVG (stroke-based) for Leaflet divIcon markers. */
-export function advisoryMarkerHtml(tag: string | null | undefined, size = 26): string {
+/**
+ * What to print for a tag. Announcements predating this list carry their own
+ * wording ("Public Works"), and calling those "General advisory" contradicts
+ * what the editor shows — so an unknown tag prints itself.
+ */
+export function advisoryLabel(tag: string | null | undefined): string {
+  const raw = (tag ?? "").trim()
+  if (!raw) return ADVISORY_TAGS[ADVISORY_TAGS.length - 1]!.label
+  const match = ADVISORY_TAGS.find((meta) => meta.value.toLowerCase() === raw.toLowerCase())
+  return match?.label ?? raw
+}
+
+/** Leaflet divIcon markup — the same circle-with-glyph every map record uses. */
+export function advisoryMarkerHtml(
+  tag: string | null | undefined,
+  size = 26,
+  tone: MarkerTone = "light",
+  selected = false,
+): string {
   const meta = advisoryMeta(tag)
-  const paths = meta.svgPaths
-    .map(
-      (d) =>
-        `<path d="${d}" fill="none" stroke="#ffffff" stroke-width="${meta.svgStrokeWidth}" stroke-linecap="round" stroke-linejoin="round"/>`,
-    )
-    .join("")
-  return `<div style="position:relative;width:${size}px;height:${size}px">
-    <div style="position:absolute;inset:0;border-radius:999px;background:${meta.color};box-shadow:0 0 8px 1px ${meta.color},0 0 18px 4px ${meta.color}88"></div>
-    <svg viewBox="0 0 24 24" style="position:absolute;left:50%;top:50%;width:${Math.round(size * 0.5)}px;height:${Math.round(size * 0.5)}px;transform:translate(-50%,-50%)">${paths}</svg>
-  </div>`
+  return glyphPinHtml({
+    paths: meta.svgPaths,
+    color: meta.color,
+    size,
+    selected,
+    tone,
+    strokeWidth: meta.svgStrokeWidth,
+    hoverGrow: true,
+  })
+}
+
+export function advisoryMarkerSize(size = 26, selected = false) {
+  return glyphPinSize(size, selected)
 }

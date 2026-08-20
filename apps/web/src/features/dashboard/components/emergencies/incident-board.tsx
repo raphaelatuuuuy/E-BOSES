@@ -4,6 +4,9 @@ import { FileIcon, LoaderCircleIcon, PhoneIcon, PlayIcon, ShieldCheckIcon, UserC
 import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
 import { fullTimestamp } from "@/features/dashboard/components/record/emergency-adapter"
 import { isActiveEmergency } from "@/features/dashboard/components/alerts-map/lib"
+import { dotPinHtml, MAP_COLORS } from "@/features/dashboard/components/map/markers"
+import { drawCoverage } from "@/features/dashboard/components/map/coverage-layer"
+import { loadCoverageContext } from "@/features/dashboard/lib/use-coverage"
 import { drawRoute, routeRenderGeometry } from "@/features/dashboard/lib/route-line"
 import {
   AuthenticatedMediaImage,
@@ -44,6 +47,7 @@ function formatDistance(meters: number | null) {
 
 function IncidentMap({ alert }: { alert: EmergencyAlert }) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const resizeRef = useRef<ResizeObserver | null>(null)
   const assignment = alert.current_assignment
   const route = assignment?.route ?? alert.route ?? null
   const incident = coord(alert.latitude, alert.longitude)
@@ -122,49 +126,67 @@ function IncidentMap({ alert }: { alert: EmergencyAlert }) {
       L.marker(incident, {
         icon: L.divIcon({
           className: "eboses-map-pin-wrap",
-
-          iconSize: [30, 56],
-          iconAnchor: [15, 56 - 26],
-          html: `<div style="position:relative;width:30px;height:56px;">
-                   <span style="position:absolute;left:50%;top:0;transform:translateX(-50%);
+          iconSize: [16, 16],
+          iconAnchor: [8, 8],
+          html: `<div style="position:relative;width:16px;height:16px">
+                   <span style="position:absolute;left:50%;bottom:calc(100% + 10px);transform:translateX(-50%);
                                 max-width:220px;overflow:hidden;text-overflow:ellipsis;
                                 white-space:nowrap;background:rgba(15,23,42,.92);color:#fff;
                                 font-size:11px;font-weight:600;line-height:1.3;
                                 padding:3px 9px;border-radius:7px;
                                 box-shadow:0 3px 10px rgba(0,0,0,.3);pointer-events:none;">${escapedHtml(locationLabel)}</span>
-                   <span class="eboses-map-pin" style="position:absolute;left:50%;top:calc(50% + 2px);transform:translate(-50%,-50%);--pin:var(--color-map-incident);--core:13px">
-                     <span class="eboses-map-pin__glow"></span>
-                     <span class="eboses-map-pin__ring"></span>
-                     <span class="eboses-map-pin__core"></span>
-                   </span>
+                   ${dotPinHtml({ color: MAP_COLORS.emergency, size: 16 })}
                  </div>`,
         }),
         title: locationLabel,
+        zIndexOffset: 900,
       }).addTo(map)
 
       if (responder) {
         L.marker(responder, {
           icon: L.divIcon({
             className: "eboses-map-pin-wrap",
-            iconSize: [26, 26],
-            iconAnchor: [13, 13],
-            html: `<span class="eboses-map-pin" style="--pin:var(--color-map-responder);--core:11px">
-                     <span class="eboses-map-pin__glow"></span>
-                     <span class="eboses-map-pin__core"></span>
-                   </span>`,
+            iconSize: [13, 13],
+            iconAnchor: [6.5, 6.5],
+            html: dotPinHtml({ color: MAP_COLORS.responder, size: 13, live: false }),
           }),
           title: responderName(assignment?.responder),
         }).addTo(map)
       }
 
+      const coverageGroup = L.layerGroup().addTo(map)
+      void loadCoverageContext()
+        .then((context) => {
+          if (cancelled) return
+          drawCoverage(L, coverageGroup, {
+            boundary: context.boundary?.geometry ?? null,
+            policy: context.dispatch_policy,
+          })
+        })
+        .catch(() => {
+          // Without the outline the incident pin is still the point of this map.
+        })
+
       map.setView(incident, 16)
 
-      requestAnimationFrame(() => map?.invalidateSize())
+      // A single frame was not always enough: this map lives inside a sheet
+      // that is still animating open, so it measured a container mid-transition
+      // and painted nothing.
+      const observer = new ResizeObserver(() => {
+        const box = containerRef.current?.getBoundingClientRect()
+        if (!box?.width || !box.height) return
+        map?.invalidateSize({ animate: false })
+      })
+      if (containerRef.current) observer.observe(containerRef.current)
+      resizeRef.current = observer
+      requestAnimationFrame(() => map?.invalidateSize({ animate: false }))
     }
 
     void init()
     return () => {
       cancelled = true
+      resizeRef.current?.disconnect()
+      resizeRef.current = null
       map?.remove()
     }
 

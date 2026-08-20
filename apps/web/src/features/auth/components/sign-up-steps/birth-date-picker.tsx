@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ChevronDownIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon } from "lucide-react"
 import dayjs from "dayjs"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -76,37 +76,62 @@ function SelectField({
   options: Array<{ value: string; label: string }>
   className?: string
 }) {
+  const [open, setOpen] = React.useState(false)
+  const ref = React.useRef<HTMLDivElement>(null)
+
+  React.useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [])
+
+  const selectedLabel = options.find((o) => o.value === value)?.label ?? ""
+
   return (
-    <div className={cn("relative min-w-0", className)}>
-      <select
+    <div ref={ref} className={cn("relative min-w-0", className)}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
         aria-label={label}
         aria-invalid={Boolean(invalid)}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
         className={cn(
-          "peer box-border h-[60px] w-full appearance-none truncate rounded-[12px] bg-white pb-2.5 pl-[0.7rem] pr-8 pt-[1.75rem] text-base leading-5 text-neutral-800 outline-none transition-[border-width,border-color]",
-          "border-2 border-input focus-visible:border-[3px] focus-visible:border-primary",
-          "aria-invalid:border-destructive aria-invalid:focus-visible:border-destructive",
-          "disabled:cursor-not-allowed disabled:opacity-50",
+          "flex w-full items-center gap-3 rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-left text-[16px] text-neutral-900 outline-none transition-colors",
+          "hover:border-neutral-400 focus:border-neutral-500",
+          "aria-invalid:border-destructive aria-invalid:focus:border-destructive",
+          open && "border-neutral-400",
         )}
       >
-        <option value="">—</option>
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-      <span
-        aria-hidden
-        className="pointer-events-none absolute left-[calc(0.7rem+2px)] top-2.5 z-[1] text-[11px] font-medium leading-[14px] text-neutral-800 peer-focus-visible:left-[calc(0.7rem+3px)] peer-aria-invalid:text-destructive"
-      >
-        {label}
-      </span>
-      <ChevronDownIcon
-        aria-hidden
-        className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-neutral-500"
-      />
+        <span className={cn("flex-1 truncate font-medium", !selectedLabel && "text-neutral-400")}>
+          {selectedLabel || label}
+        </span>
+        <ChevronDownIcon className={cn("size-4 shrink-0 text-neutral-400 transition-transform", open && "rotate-180")} />
+      </button>
+
+      {open && (
+        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white shadow-lg [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" style={{ maxHeight: '180px', overflowY: 'auto' }}>
+          <div className="py-1">
+            {options.map((option) => {
+              const isSelected = value === option.value
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => { onChange(option.value); setOpen(false) }}
+                  className={cn(
+                    "flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] transition hover:bg-neutral-50",
+                    isSelected ? "font-medium text-neutral-900" : "text-neutral-700",
+                  )}
+                >
+                  <span className="flex-1 min-w-0">{option.label}</span>
+                  {isSelected && <CheckIcon className="size-4 shrink-0 text-green-600" strokeWidth={2} />}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -84,6 +84,9 @@ class MapDispatchPolicy(models.Model):
     acceptance_center_latitude = models.DecimalField(max_digits=10, decimal_places=7, default=14.6507000)
     acceptance_center_longitude = models.DecimalField(max_digits=10, decimal_places=7, default=121.1133000)
     acceptance_radius_meters = models.PositiveIntegerField(default=800)
+    # A drawn acceptance zone (GeoJSON Polygon). When set it replaces the
+    # circle, so a barangay whose coverage is not round can trace it instead.
+    acceptance_geometry = models.JSONField(null=True, blank=True)
     out_of_zone_action = models.CharField(
         max_length=16,
         choices=OutOfZoneAction.choices,
@@ -130,29 +133,14 @@ class MapDispatchPolicy(models.Model):
         obj, _ = cls.objects.get_or_create(pk=1, defaults={"barangay": "Marikina Heights"})
         return obj
 
-    def covered_geometries(self):
-        """Boundaries this barangay answers for; home alone until coverage is set."""
-        if self.pk:
-            rows = list(self.covered.filter(is_active=True).order_by("name", "id"))
-            if rows:
-                return rows
-        return list(
-            MapGeometry.objects.filter(
-                kind=MapGeometry.Kind.BOUNDARY, is_active=True, is_home=True
-            ).order_by("name", "id")
-        )
-
     def as_payload(self):
         return {
             "id": self.pk,
             "barangay": self.barangay,
-            "covered": [
-                {"id": row.pk, "name": row.name, "locality": row.locality, "is_home": row.is_home}
-                for row in self.covered_geometries()
-            ],
             "acceptance_center_latitude": float(self.acceptance_center_latitude),
             "acceptance_center_longitude": float(self.acceptance_center_longitude),
             "acceptance_radius_meters": int(self.acceptance_radius_meters),
+            "acceptance_geometry": self.acceptance_geometry,
             "out_of_zone_action": self.out_of_zone_action,
             "witness_radius_meters": int(self.witness_radius_meters),
             "responder_nearby_radius_meters": int(self.responder_nearby_radius_meters),

@@ -8,31 +8,34 @@ const OPTIONS = [
   {
     value: "male",
     label: "Male",
-    iconBg: "bg-neutral-100",
-    iconRing: "ring-neutral-200",
-    iconColor: "text-brand-navy",
-    selectedBg: "bg-neutral-100/70",
-    selectedBorder: "border-brand-navy",
+    iconBg: "bg-blue-50",
+    iconRing: "ring-blue-200",
+    iconColor: "text-blue-600",
+    selectedBg: "bg-blue-50",
+    selectedBorder: "border-blue-500",
+    selectedLabel: "text-blue-700",
     Icon: MaleIcon,
   },
   {
     value: "female",
     label: "Female",
-    iconBg: "bg-neutral-100",
-    iconRing: "ring-neutral-200",
-    iconColor: "text-brand-navy",
-    selectedBg: "bg-neutral-100",
-    selectedBorder: "border-brand-navy",
+    iconBg: "bg-rose-50",
+    iconRing: "ring-rose-200",
+    iconColor: "text-rose-500",
+    selectedBg: "bg-rose-50",
+    selectedBorder: "border-rose-500",
+    selectedLabel: "text-rose-700",
     Icon: FemaleIcon,
   },
   {
     value: "prefer_not_to_say",
     label: "Prefer not to say",
     iconBg: "bg-neutral-100",
-    iconRing: "ring-neutral-200/90",
+    iconRing: "ring-neutral-200",
     iconColor: "text-neutral-500",
-    selectedBg: "bg-neutral-50",
+    selectedBg: "bg-neutral-100",
     selectedBorder: "border-neutral-400",
+    selectedLabel: "text-neutral-700",
     Icon: PreferNotIcon,
   },
 ] as const
@@ -145,7 +148,9 @@ export function GenderStep({ values, errors, onChange, onContinue }: GenderStepP
               >
                 <Icon className="size-5" />
               </span>
-              <span>{option.label}</span>
+              <span className={selected ? cn("font-semibold", option.selectedLabel) : ""}>
+                {option.label}
+              </span>
             </button>
           )
         })}

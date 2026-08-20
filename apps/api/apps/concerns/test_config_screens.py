@@ -40,11 +40,19 @@ class ConfigurationHubTests(APITestCase):
             "categories",
             "classification",
             "dispatch",
+            "coverage",
             "verification",
             "privacy",
         ):
             self.assertIn(key, sections, f"{key} missing from the hub")
             self.assertIn("needs_attention", sections[key])
+
+    def test_coverage_card_names_the_zone_and_the_barangay(self):
+        response = self.client.get("/api/config/summary/")
+        card = response.data["sections"]["coverage"]
+        # The card speaks geography, not emergency types — that is dispatch's job.
+        self.assertNotIn("emergency", card["status"].lower())
+        self.assertFalse(card["needs_attention"])
 
     def test_classification_card_avoids_model_jargon(self):
         # The card used to read "Relevance 0.65 · duplicate 0.85". Officials

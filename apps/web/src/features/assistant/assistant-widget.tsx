@@ -209,7 +209,7 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
       } else {
         push(
           "assistant",
-          "I could not reach the assistant service just now. Please choose a topic below, or call the Marikina City hotline 161 for urgent matters.",
+          "I could not reach the assistant service just now. Please try again in a moment, or choose a topic below.",
         )
       }
     } finally {
@@ -250,7 +250,7 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
           aria-label="Open the E-Boses Assistant"
           style={{ position: "fixed", right: "1.5rem", bottom: "1.5rem" }}
           className={cn(
-            "group z-50 flex h-14 items-center rounded-full transition-[background-color,box-shadow] duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+            "group z-40 flex h-14 items-center rounded-full transition-[background-color,box-shadow] duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
             onDark
               ? "bg-white text-brand-navy shadow-[0_8px_28px_rgba(0,0,0,0.5)] hover:bg-neutral-100"
               : "bg-nav-bg text-white shadow-[0_8px_28px_rgba(5,13,51,0.4)] ring-1 ring-white/15 hover:bg-brand-navy",
@@ -276,7 +276,7 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
         role="dialog"
         aria-label="E-Boses Assistant"
         style={{ position: "fixed", right: "1.5rem", bottom: "1.5rem" }}
-        className="eb-assistant-panel z-50 flex h-[min(38rem,calc(100dvh-3rem))] w-[min(25rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-3xl border border-black/5 bg-white shadow-[0_24px_64px_rgba(5,13,51,0.28)]"
+        className="eb-assistant-panel z-40 flex h-[min(38rem,calc(100dvh-3rem))] w-[min(25rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-3xl border border-black/5 bg-white shadow-[0_24px_64px_rgba(5,13,51,0.28)]"
       >
         <header className="flex items-center gap-2.5 border-b border-neutral-200 bg-white px-4 py-3">
           <img
@@ -410,7 +410,7 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
             </button>
           </div>
           <p className="mt-2.5 text-center text-[11px] leading-normal text-neutral-400">
-            For urgent matters, call the Marikina City hotline 161.
+            Please be kind and respectful to your neighbours.
           </p>
         </div>
       </section>

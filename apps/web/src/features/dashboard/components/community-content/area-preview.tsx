@@ -30,16 +30,46 @@ export function AreaPreview({
   useEffect(() => {
     let cancelled = false
     const created = { map: null as leaflet.Map | null }
+    let styleEl: HTMLStyleElement | null = null
 
     void (async () => {
       const L = (await import("leaflet")).default
       await import("leaflet/dist/leaflet.css")
       if (cancelled || !containerRef.current || created.map) return
-      // Leaflet re-inits into the same node if Strict Mode remounts — clear
-      // the stale `_leaflet_id` first or L.map() returns the removed map.
       if ((containerRef.current as HTMLDivElement & { _leaflet_id?: number })._leaflet_id) {
         containerRef.current.innerHTML = ""
       }
+
+      // Inject into <head> so Tailwind v4 Preflight can't override tile sizing
+      styleEl = document.createElement("style")
+      styleEl.textContent = `
+        .eboses-area-preview-map img.leaflet-tile,
+        .eboses-area-preview-map .leaflet-tile,
+        .eboses-area-preview-map .leaflet-container img {
+          max-width: none !important;
+          max-height: none !important;
+          width: 256px !important;
+          height: 256px !important;
+          mix-blend-mode: normal !important;
+        }
+        .eboses-area-preview-map .leaflet-tile-pane {
+          isolation: isolate;
+        }
+        .eboses-area-preview-map.leaflet-container {
+          width: 100%;
+          height: 100%;
+          background: #eef0f3;
+          font-family: inherit;
+        }
+        .eboses-area-preview-map .leaflet-tile-pane,
+        .eboses-area-preview-map .leaflet-overlay-pane,
+        .eboses-area-preview-map .leaflet-marker-pane,
+        .eboses-area-preview-map .leaflet-tooltip-pane {
+          z-index: auto;
+        }
+        .eboses-area-preview-map .leaflet-control-attribution { display: none; }
+      `;
+      document.head.appendChild(styleEl)
 
       const map = L.map(containerRef.current, {
         center: [14.6507, 121.1133],
@@ -55,7 +85,6 @@ export function AreaPreview({
         preferCanvas: true,
       })
       created.map = map
-      containerRef.current.classList.add("eboses-area-preview-map")
       L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
         attribution: "",
         maxZoom: 19,
@@ -63,6 +92,9 @@ export function AreaPreview({
       }).addTo(map)
       mapRef.current = map
       map.invalidateSize()
+      requestAnimationFrame(() => map.invalidateSize())
+      setTimeout(() => map.invalidateSize(), 300)
+      setTimeout(() => map.invalidateSize(), 600)
       if (typeof ResizeObserver !== "undefined" && containerRef.current) {
         const observer = new ResizeObserver(() => map.invalidateSize())
         observer.observe(containerRef.current)
@@ -114,6 +146,7 @@ export function AreaPreview({
 
     return () => {
       cancelled = true
+      styleEl?.remove()
       observerRef.current?.disconnect()
       observerRef.current = null
       mapRef.current?.remove()
@@ -123,14 +156,7 @@ export function AreaPreview({
 
   return (
     <div className={`pointer-events-none overflow-hidden rounded-xl border border-line-tint ${className}`}>
-      <div ref={containerRef} className="h-40 w-full" />
-      <style>{`
-        .eboses-area-preview-map.leaflet-container {
-          background: #eef0f3;
-          font-family: inherit;
-        }
-        .eboses-area-preview-map .leaflet-control-attribution { display: none; }
-      `}</style>
+      <div ref={containerRef} className="eboses-area-preview-map h-40 w-full" />
     </div>
   )
 }

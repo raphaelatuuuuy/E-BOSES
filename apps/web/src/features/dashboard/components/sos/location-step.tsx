@@ -5,6 +5,14 @@ import { Loader2Icon, LocateFixedIcon, MinusIcon, PlusIcon } from "lucide-react"
 import type leaflet from "leaflet"
 import { cn } from "@workspace/ui/lib/utils"
 import { apiRequest } from "@/lib/api"
+import {
+  drawCoverage,
+  insideCoverage,
+  OUT_OF_SCOPE_MESSAGE,
+  type CoverageInput,
+} from "@/features/dashboard/components/map/coverage-layer"
+import { loadCoverageContext } from "@/features/dashboard/lib/use-coverage"
+import { dotPinHtml, MAP_COLORS } from "@/features/dashboard/components/map/markers"
 
 const DEFAULT_CENTER: [number, number] = [14.6507, 121.1133]
 
@@ -60,6 +68,9 @@ export function SosLocationStep({
   const isOnlineRef = useRef(isOnline)
   const validationRequestRef = useRef(0)
   const onChangeRef = useRef(onChange)
+  const resizeRef = useRef<ResizeObserver | null>(null)
+  const coverageRef = useRef<CoverageInput>({})
+  const [outOfScope, setOutOfScope] = useState(false)
 
   async function validatePin(lat: number, lng: number) {
     const requestId = ++validationRequestRef.current
@@ -231,44 +242,29 @@ export function SosLocationStep({
         }
       ).addTo(map)
 
+      const coverageGroup = L.layerGroup().addTo(map)
       try {
-        const context = await apiRequest<{
-          map?: {
-            boundary?: { geometry?: object | null }
-            dispatch_policy?: {
-              acceptance_center_latitude?: number
-              acceptance_center_longitude?: number
-              acceptance_radius_meters?: number
-            }
+        const context = await loadCoverageContext()
+        if (!cancelled) {
+          coverageRef.current = {
+            boundary: context.boundary?.geometry ?? null,
+            policy: context.dispatch_policy,
           }
-        }>("/locations/map-context/")
-        if (!cancelled && context.map) {
-          const boundaryGeometry = context.map.boundary?.geometry
-          if (boundaryGeometry) {
-            L.geoJSON(boundaryGeometry as Parameters<typeof L.geoJSON>[0], {
-              style: { color: "#2563eb", weight: 2, fillColor: "#2563eb", fillOpacity: 0.06 },
-              interactive: false,
-            }).addTo(map)
-          }
-          const policy = context.map.dispatch_policy
-          if (policy?.acceptance_center_latitude != null && policy.acceptance_center_longitude != null) {
-            L.circle(
-              [policy.acceptance_center_latitude, policy.acceptance_center_longitude],
-              {
-                radius: Math.max(100, Number(policy.acceptance_radius_meters) || 800),
-                color: "#d97706",
-                fillColor: "#d97706",
-                fillOpacity: 0.08,
-                weight: 2,
-                dashArray: "6 6",
-                interactive: false,
-              },
-            ).addTo(map)
-          }
+          drawCoverage(L, coverageGroup, coverageRef.current)
+          const c = map.getCenter()
+          setOutOfScope(!insideCoverage(c.lat, c.lng, coverageRef.current))
         }
       } catch {
         // The backend still validates the pin when the SOS is submitted.
       }
+
+      // Fires while the map is still moving, so the pin can say no before the
+      // resident lets go rather than a third of a second afterwards.
+      map.on("move", () => {
+        if (!map) return
+        const c = map.getCenter()
+        setOutOfScope(!insideCoverage(c.lat, c.lng, coverageRef.current))
+      })
 
       map.on("moveend", () => {
         if (ignoreMove.current || !map) return
@@ -292,12 +288,23 @@ export function SosLocationStep({
       })
 
       mapRef.current = map
-      requestAnimationFrame(() => map?.invalidateSize())
+      // This step mounts inside a wizard panel that is still transitioning, so
+      // a single frame measured a collapsed box and no tiles ever painted.
+      const observer = new ResizeObserver(() => {
+        const box = containerRef.current?.getBoundingClientRect()
+        if (!box?.width || !box.height) return
+        mapRef.current?.invalidateSize({ animate: false })
+      })
+      if (containerRef.current) observer.observe(containerRef.current)
+      resizeRef.current = observer
+      requestAnimationFrame(() => map?.invalidateSize({ animate: false }))
     }
 
     void init()
     return () => {
       cancelled = true
+      resizeRef.current?.disconnect()
+      resizeRef.current = null
       if (geocodeTimer) window.clearTimeout(geocodeTimer)
       try {
         map?.off()
@@ -326,7 +333,10 @@ export function SosLocationStep({
       <div className="relative min-h-[220px] flex-1 overflow-hidden rounded-xl border border-neutral-200 bg-tint">
         <div
           ref={containerRef}
-          className="sos-loc-map absolute inset-0 z-0 h-full w-full"
+          className={cn(
+            "sos-loc-map absolute inset-0 z-0 h-full w-full",
+            outOfScope && "is-blocked",
+          )}
           aria-label="Emergency location map. Drag the map to move the centered pin."
         />
         <div className="absolute right-2 top-2 z-[600] flex flex-col overflow-hidden rounded-md border border-neutral-200 bg-white shadow-sm">
@@ -360,13 +370,19 @@ export function SosLocationStep({
           </button>
         </div>
         {(() => {
-          const message = friendlyLocationMessage(value?.locationCheck)
+          // Out of scope wins: the server check runs on a debounce, so during a
+          // drag it still reports the previous pin as fine.
+          const message = outOfScope
+            ? `${OUT_OF_SCOPE_MESSAGE}. You may call 911.`
+            : friendlyLocationMessage(value?.locationCheck)
           if (!message) return null
           return (
             <div
               className={cn(
                 "absolute bottom-2 left-2 right-2 z-[600] rounded-lg border px-3 py-2 text-[12px] font-semibold shadow-sm backdrop-blur-sm",
-                "border-white/70 bg-white/95 text-neutral-700",
+                outOfScope
+                  ? "border-sos/40 bg-sos text-white"
+                  : "border-white/70 bg-white/95 text-neutral-700",
               )}
               role="status"
               aria-live="polite"
@@ -381,17 +397,30 @@ export function SosLocationStep({
           aria-hidden
         >
           <span
-            className="absolute block size-3.5 rounded-full border-[2.5px] border-white bg-brand-blue shadow-[0_2px_8px_rgba(37,99,235,.45)]"
+            className="absolute block"
             style={{ marginLeft: -7, marginTop: -7 }}
-          />
-          <span
-            className="absolute size-5 rounded-full bg-brand-blue/20"
-            style={{ marginLeft: -10, marginTop: -10 }}
+            dangerouslySetInnerHTML={{
+              __html: dotPinHtml({
+                color: outOfScope ? MAP_COLORS.emergency : MAP_COLORS.you,
+                size: 14,
+                live: !outOfScope,
+              }),
+            }}
           />
         </div>
         <style>{`
           .sos-loc-map.leaflet-container { width:100%; height:100%; background:#e8eef5; }
           .sos-loc-map img.leaflet-tile { max-width:none !important; }
+          .sos-loc-map.is-blocked.leaflet-container,
+          .sos-loc-map.is-blocked .leaflet-grab { cursor: not-allowed !important; }
+          .sos-loc-map.is-blocked::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            z-index: 450;
+            pointer-events: none;
+            background: rgba(220, 38, 38, 0.08);
+          }
         `}</style>
       </div>
 

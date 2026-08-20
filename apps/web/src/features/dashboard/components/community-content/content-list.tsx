@@ -24,7 +24,7 @@ import {
   SheetSecondaryButton,
   SheetTextarea,
 } from "@/features/dashboard/components/sheet-dialog"
-import { advisoryMeta } from "./advisory-tags"
+import { advisoryLabel, advisoryMeta } from "./advisory-tags"
 import { AreaPreview } from "./area-preview"
 import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import {
@@ -689,7 +689,7 @@ function AnnouncementRow({
           <dl className="mt-3 flex flex-wrap gap-x-8 gap-y-2">
             <div>
               <dt className={factClass.dt}>Type</dt>
-              <dd className={factClass.dd}>{advisoryMeta(item.tag).label}</dd>
+              <dd className={factClass.dd}>{advisoryLabel(item.tag)}</dd>
             </div>
             <div>
               <dt className={factClass.dt}>Audience</dt>

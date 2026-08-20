@@ -1,6 +1,6 @@
-import { Link } from "react-router-dom"
-import { ArrowRightIcon, MenuIcon, XIcon } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { Link, useLocation, useNavigate } from "react-router-dom"
+import { ArrowRightIcon, MenuIcon, MinusIcon } from "lucide-react"
+import { useEffect, useRef, useState, type MouseEvent } from "react"
 
 type NavLink = { label: string; href?: string; to?: string }
 
@@ -9,30 +9,35 @@ const NAV_LINKS: NavLink[] = [
   { label: "How E-Boses helps", href: "#about" },
   { label: "How it works", href: "#how-it-works" },
   { label: "Resident benefits", href: "#impact" },
-  { label: "Contact", href: "#contact" },
   { label: "Help Center", to: "/help" },
+  { label: "Active Communities", to: "/communities" },
 ]
+
+const PANEL_LINKS: NavLink[] = [...NAV_LINKS, { label: "Sign in", to: "/sign-in" }]
 
 const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
+const OUTLINE_CTA = "min-h-10 items-center rounded-none border border-white/20 px-5 text-sm font-medium text-white/85 transition-colors hover:border-white/40 hover:bg-white/5 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+const SOLID_CTA = "min-h-10 items-center gap-2 rounded-none bg-accent px-3 text-sm font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground sm:px-5"
+const NAV_DEMO_CTA = "min-h-9 items-center rounded-none bg-accent px-4 text-xs font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+
 export function Navbar() {
-  const [mobileOpen, setMobileOpen] = useState(false)
-  const [scrolled, setScrolled] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const [hidden, setHidden] = useState(false)
+  const [scrolled, setScrolled] = useState(false)
   const lastScrollY = useRef(0)
   const menuButtonRef = useRef<HTMLButtonElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
-  const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     let frame = 0
     const update = () => {
       frame = 0
       const y = window.scrollY
-      setScrolled(y > 24)
       const delta = y - lastScrollY.current
       if (y >= 80 && delta > 6) setHidden(true)
       if (delta < -6) setHidden(false)
+      setScrolled(y > 10)
       lastScrollY.current = y
     }
     const onScroll = () => {
@@ -47,21 +52,21 @@ export function Navbar() {
   }, [])
 
   useEffect(() => {
-    if (!mobileOpen) return
+    if (!menuOpen) return
     document.body.style.overflow = "hidden"
-    closeButtonRef.current?.focus()
     const menuButton = menuButtonRef.current
+    panelRef.current?.querySelector<HTMLElement>(FOCUSABLE)?.focus()
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setMobileOpen(false)
+        setMenuOpen(false)
         return
       }
-      if (event.key !== "Tab" || !menuRef.current) return
-      const focusable = Array.from(menuRef.current.querySelectorAll<HTMLElement>(FOCUSABLE))
+      if (event.key !== "Tab" || !panelRef.current || !menuButton) return
+      const focusable = [menuButton, ...Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE))]
       const first = focusable[0]
       const last = focusable.at(-1)
-      if (!first || !last) return
+      if (!last) return
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault()
         last.focus()
@@ -77,96 +82,98 @@ export function Navbar() {
       document.removeEventListener("keydown", onKeyDown)
       menuButton?.focus()
     }
-  }, [mobileOpen])
+  }, [menuOpen])
 
-  const closeMenu = () => setMobileOpen(false)
+  const closeMenu = () => setMenuOpen(false)
+  const tab = menuOpen ? 0 : -1
+  const location = useLocation()
+  const navigate = useNavigate()
+
+  const goToAnchor = (event: MouseEvent<HTMLAnchorElement>, href?: string) => {
+    event.preventDefault()
+    closeMenu()
+    if (!href) return
+    const scroll = () => document.getElementById(href.slice(1))?.scrollIntoView({ behavior: "smooth" })
+    if (location.pathname === "/") {
+      scroll()
+    } else {
+      navigate("/" + href)
+      requestAnimationFrame(() => requestAnimationFrame(scroll))
+    }
+  }
 
   return (
-    <>
-      <header className={`sticky top-0 z-40 w-full bg-transparent transition-transform duration-200 ${hidden && !mobileOpen ? "-translate-y-full" : "translate-y-0"}`}>
-        <div
-          aria-hidden
-          className={`pointer-events-none absolute inset-0 -z-10 border-b border-white/10 bg-landing-bg/70 backdrop-blur-md transition-opacity duration-200 ${scrolled ? "opacity-100" : "opacity-0"}`}
-        />
-        <div className="px-5 md:px-10 lg:px-16">
-          <div className="mx-auto flex h-20 max-w-7xl items-center justify-between">
-            <Link to="/" className="flex shrink-0 items-center rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground">
-              <img src="/contents/logo.webp" alt="E-Boses" className="h-10 w-auto object-contain" />
-              <span className="text-2xl font-bold text-accent px-2">Boses</span>
+    <header className={`sticky top-0 z-50 w-full transition-transform duration-200 motion-reduce:transition-none ${hidden && !menuOpen ? "-translate-y-full" : "translate-y-0"}`}>
+      <div className={`px-5 transition-colors duration-200 md:px-10 lg:px-16 ${menuOpen || scrolled ? "bg-landing-bg border-b border-white/8" : "bg-transparent"}`}>
+        <div className="mx-auto flex h-20 max-w-7xl items-center gap-3 min-[1600px]:max-w-[92rem] min-[1600px]:gap-8">
+          <Link to="/" onClick={closeMenu} className="flex shrink-0 items-center rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground">
+            <img src="/contents/logo.webp" alt="E-Boses" className="h-10 w-auto object-contain" />
+            <span className="px-2 text-2xl font-bold text-accent">Boses</span>
+          </Link>
+
+          <div className="ml-auto flex shrink-0 items-center gap-3">
+            <Link
+              to="/book-demo"
+              onClick={closeMenu}
+              className={`${NAV_DEMO_CTA} ${menuOpen ? "hidden" : "inline-flex"}`}
+            >
+              Book a Demo
             </Link>
-
-            <nav aria-label="Primary navigation" className="hidden items-center gap-7 lg:flex">
-              {NAV_LINKS.map((link) => {
-                const className = "min-h-11 py-3 text-sm font-medium text-white/70 transition-colors hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
-                return link.to ? (
-                  <Link key={link.label} to={link.to} className={className}>
-                    {link.label}
-                  </Link>
-                ) : (
-                  <a key={link.label} href={link.href} className={className}>
-                    {link.label}
-                  </a>
-                )
-              })}
-            </nav>
-
-            <Link to="/sign-in" className="hidden min-h-11 items-center px-4 text-sm font-semibold text-white underline decoration-primary decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground lg:inline-flex">
-              Sign in
-            </Link>
-
-            <button ref={menuButtonRef} type="button" onClick={() => setMobileOpen(true)} className="inline-flex size-11 items-center justify-center rounded-full text-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground lg:hidden" aria-label="Open menu" aria-expanded={mobileOpen} aria-controls="mobile-navigation">
-              <MenuIcon className="size-5" strokeWidth={1.5} aria-hidden="true" />
+            <button
+              ref={menuButtonRef}
+              type="button"
+              onClick={() => setMenuOpen((open) => !open)}
+              className="inline-flex size-11 items-center justify-center rounded-full text-white transition-colors hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+              aria-label={menuOpen ? "Close menu" : "Open menu"}
+              aria-expanded={menuOpen}
+              aria-controls="primary-menu"
+            >
+              {menuOpen ? <MinusIcon className="size-6" strokeWidth={1.5} aria-hidden="true" /> : <MenuIcon className="size-6" strokeWidth={1.5} aria-hidden="true" />}
             </button>
           </div>
         </div>
-      </header>
+      </div>
 
-      <div ref={menuRef} id="mobile-navigation" role="dialog" aria-modal="true" aria-label="Navigation menu" aria-hidden={!mobileOpen} className={`fixed inset-0 z-[60] flex flex-col overflow-hidden bg-landing-bg text-white transition-[opacity,transform] duration-300 ease-out lg:hidden ${mobileOpen ? "translate-y-0 opacity-100" : "pointer-events-none invisible -translate-y-5 opacity-0"}`}>
-        <img
-          src="/contents/marikina-heights.svg"
-          alt=""
-          aria-hidden="true"
-          className="pointer-events-none absolute left-1/2 top-1/2 w-[120%] -translate-x-1/2 -translate-y-1/2 opacity-[0.03]"
-        />
-        <div className="relative z-10 flex h-20 items-center justify-between px-5 pt-4">
-          <Link to="/" onClick={closeMenu} tabIndex={mobileOpen ? 0 : -1} className="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground">
-            <img src="/contents/logo.webp" alt="E-Boses" className="h-10 w-auto object-contain" />
-          </Link>
-          <button ref={closeButtonRef} type="button" onClick={closeMenu} className="flex size-11 items-center justify-center rounded-full text-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground" aria-label="Close menu" tabIndex={mobileOpen ? 0 : -1}>
-            <XIcon className="size-5" strokeWidth={1.5} aria-hidden="true" />
-          </button>
-        </div>
+      <div
+        ref={panelRef}
+        id="primary-menu"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Navigation menu"
+        aria-hidden={!menuOpen}
+        className={`absolute inset-x-0 top-20 grid transition-[grid-template-rows] duration-300 ease-out ${menuOpen ? "grid-rows-[1fr]" : "pointer-events-none grid-rows-[0fr]"}`}
+      >
+        <div className="overflow-hidden bg-landing-bg">
+          <div className="scrollbar-hide max-h-[calc(100dvh-5rem)] overflow-y-auto px-5 pb-8 md:px-10 lg:px-16">
+            <div className="mx-auto max-w-7xl">
+              <nav aria-label="Menu navigation" className="flex flex-col items-start pt-4">
+                {PANEL_LINKS.map((link, index) => {
+                  const className = `min-h-14 py-2 text-left text-2xl font-semibold text-white transition-[opacity,transform] duration-300 ease-out hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground motion-reduce:translate-y-0 sm:text-3xl ${menuOpen ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"}`
+                  const style = menuOpen ? { transitionDelay: `${60 + index * 40}ms` } : undefined
+                  return link.to ? (
+                    <Link key={link.label} to={link.to} onClick={closeMenu} style={style} tabIndex={tab} className={className}>
+                      {link.label}
+                    </Link>
+                  ) : (
+                    <a key={link.label} href={link.href} onClick={(event) => goToAnchor(event, link.href)} style={style} tabIndex={tab} className={className}>
+                      {link.label}
+                    </a>
+                  )
+                })}
+              </nav>
 
-        <nav aria-label="Mobile navigation" className="relative z-10 flex flex-col px-5 pt-6">
-          {NAV_LINKS.map((link, index) => {
-            const className = `flex min-h-14 items-center justify-between border-b border-white/10 py-4 text-xl font-semibold text-white transition-[opacity,transform] duration-300 ease-out focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-foreground ${mobileOpen ? "translate-y-0 opacity-100" : "translate-y-5 opacity-0"}`
-            const inner = (
-              <>
-                {link.label}<ArrowRightIcon className="size-5 text-accent" strokeWidth={1.5} aria-hidden="true" />
-              </>
-            )
-            const delay = mobileOpen ? { transitionDelay: `${120 + index * 45}ms` } : undefined
-            return link.to ? (
-              <Link key={link.label} to={link.to} onClick={closeMenu} style={delay} tabIndex={mobileOpen ? 0 : -1} className={className}>
-                {inner}
-              </Link>
-            ) : (
-              <a key={link.label} href={link.href} onClick={closeMenu} style={delay} tabIndex={mobileOpen ? 0 : -1} className={className}>
-                {inner}
-              </a>
-            )
-          })}
-          <Link to="/sign-in" onClick={closeMenu} style={mobileOpen ? { transitionDelay: `${120 + NAV_LINKS.length * 45}ms` } : undefined} tabIndex={mobileOpen ? 0 : -1} className={`flex min-h-14 items-center justify-between border-b border-white/10 py-4 text-xl font-semibold text-white transition-[opacity,transform] duration-300 ease-out focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-foreground ${mobileOpen ? "translate-y-0 opacity-100" : "translate-y-5 opacity-0"}`}>
-            Sign in<ArrowRightIcon className="size-5 text-accent" strokeWidth={1.5} aria-hidden="true" />
-          </Link>
-        </nav>
-
-        <div className="relative z-10 mt-auto p-5 pb-8">
-          <Link to="/sign-up" onClick={closeMenu} style={mobileOpen ? { transitionDelay: `${120 + (NAV_LINKS.length + 1) * 45}ms` } : undefined} tabIndex={mobileOpen ? 0 : -1} className={`flex min-h-12 w-full items-center justify-center bg-accent px-6 font-semibold text-white transition-[opacity,transform] duration-300 ease-out hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground ${mobileOpen ? "translate-y-0 opacity-100" : "translate-y-5 opacity-0"}`}>
-            Create an account to report
-          </Link>
+              <div className="mt-8 flex flex-col gap-3">
+                <Link to="/create-community" onClick={closeMenu} tabIndex={tab} className={`${OUTLINE_CTA} flex min-h-12 w-full justify-center`}>
+                  Make your Own Community
+                </Link>
+                <Link to="/book-demo" onClick={closeMenu} tabIndex={tab} className={`${SOLID_CTA} flex min-h-12 w-full justify-center`}>
+                  Book a Demo <ArrowRightIcon className="size-4" strokeWidth={2} aria-hidden="true" />
+                </Link>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-    </>
+    </header>
   )
 }

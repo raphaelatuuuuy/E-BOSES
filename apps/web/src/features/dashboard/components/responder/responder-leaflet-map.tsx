@@ -17,6 +17,19 @@ import {
   MapStackButton,
   MapStackDivider,
 } from "@/features/dashboard/components/map-control-stack"
+import {
+  concernMarkerHtml,
+  concernMarkerSize,
+} from "@/features/dashboard/components/map/concern-marker"
+import {
+  dotPinHtml,
+  glyphPinHtml,
+  glyphPinSize,
+  GLYPHS,
+  MAP_COLORS,
+} from "@/features/dashboard/components/map/markers"
+import { drawCoverage } from "@/features/dashboard/components/map/coverage-layer"
+import { useCoverageContext } from "@/features/dashboard/lib/use-coverage"
 import type { Concern } from "@/features/dashboard/api"
 import type { EmergencyAlert, EmergencyRoute } from "@/features/dashboard/emergency-api"
 
@@ -33,16 +46,20 @@ function validCoord(lat?: string | number | null, lng?: string | number | null) 
   return [latitude, longitude] as leaflet.LatLngTuple
 }
 
-const INCIDENT_PIN_SIZE = { selected: 28, idle: 22 } as const
+const INCIDENT_PIN = 26
 
 function incidentPinSize(active: boolean) {
-  return active ? INCIDENT_PIN_SIZE.selected : INCIDENT_PIN_SIZE.idle
+  return glyphPinSize(INCIDENT_PIN, active)
 }
 
 function incidentPinHtml(active = false) {
-  const size = incidentPinSize(active)
-  const glyph = Math.round(size * 0.48)
-  return `<div style="width:${size}px;height:${size}px;border-radius:999px;background:#f23b35;display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 0 0 2px rgba(242,59,53,0.18),0 6px 16px rgba(15,23,42,.35);backdrop-filter:blur(2px)"><svg width="${glyph}" height="${glyph}" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>`
+  return glyphPinHtml({
+    paths: GLYPHS.emergency,
+    color: MAP_COLORS.emergency,
+    size: INCIDENT_PIN,
+    selected: active,
+    live: true,
+  })
 }
 
 /**
@@ -51,9 +68,11 @@ function incidentPinHtml(active = false) {
  * stale position can never be mistaken for a live one.
  */
 function responderDotHtml(stale: boolean) {
-  return stale
-    ? `<div class="eboses-responder-dot eboses-responder-dot--stale"></div>`
-    : `<div class="eboses-responder-dot"><span class="eboses-responder-halo"></span></div>`
+  return dotPinHtml({
+    color: stale ? MAP_COLORS.responderOffDuty : MAP_COLORS.you,
+    size: 13,
+    live: !stale,
+  })
 }
 
 /**
@@ -104,6 +123,10 @@ export function ResponderLeafletMap({
   // why the auto-fit was keyed away from position ticks in the first place.
   // Dragging turns it back off, so it never wins an argument with a thumb.
   const [follow, setFollow] = useState(false)
+  const coverage = useCoverageContext()
+  const coverageRef = useRef<leaflet.LayerGroup | null>(null)
+  const resizeRef = useRef<ResizeObserver | null>(null)
+
   useEffect(() => {
     let cancelled = false
     let map: leaflet.Map | null = null
@@ -123,14 +146,28 @@ export function ResponderLeafletMap({
         attributionControl: false,
       })
       mapRef.current = map
-      // Matches the Alert Map: staff maps share one dark basemap so the
-      // official side does not switch visual language between screens.
-      containerRef.current?.classList.add("eboses-map-dark")
 
       L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
         attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
         maxZoom: 20,
+        subdomains: "abcd",
+        keepBuffer: 6,
+        updateWhenIdle: true,
       }).addTo(map)
+
+      // Leaflet measures its container once, at construction. This map mounts
+      // inside a panel that is still resolving its height, so without a
+      // re-measure it was built against a 0px box and painted no tiles at all.
+      const observer = new ResizeObserver(() => {
+        const box = containerRef.current?.getBoundingClientRect()
+        if (!box?.width || !box.height) return
+        mapRef.current?.invalidateSize({ animate: false })
+      })
+      if (containerRef.current) observer.observe(containerRef.current)
+      resizeRef.current = observer
+      requestAnimationFrame(() => map?.invalidateSize({ animate: false }))
+      // Below the incident layer on purpose: coverage is context, not a record.
+      coverageRef.current = L.layerGroup().addTo(map)
       layerRef.current = L.layerGroup().addTo(map)
       map.on("dragstart", () => setFollow(false))
     }
@@ -138,13 +175,29 @@ export function ResponderLeafletMap({
     void init()
     return () => {
       cancelled = true
+      resizeRef.current?.disconnect()
+      resizeRef.current = null
       if (map) map.remove()
       mapRef.current = null
       LRef.current = null
       layerRef.current = null
+      coverageRef.current = null
       routeRef.current = null
     }
   }, [])
+
+  // The barangay edge and the acceptance zone, so a crew can see the limit
+  // they are dispatched inside without opening the official's screen.
+  useEffect(() => {
+    const L = LRef.current
+    const group = coverageRef.current
+    if (!L || !group || !coverage) return
+    group.clearLayers()
+    drawCoverage(L, group, {
+      boundary: coverage.boundary?.geometry ?? null,
+      policy: coverage.dispatch_policy,
+    })
+  }, [coverage])
 
   useEffect(() => {
     const L = LRef.current
@@ -186,12 +239,20 @@ export function ResponderLeafletMap({
       const coord = validCoord(concern.latitude, concern.longitude)
       if (!coord) continue
       bounds.push(coord)
-      L.circleMarker(coord, {
-        radius: concern.id === selectedConcernId ? 11 : 8,
-        color: "#07145f",
-        weight: 3,
-        fillColor: "#ff8133",
-        fillOpacity: 1,
+      const picked = concern.id === selectedConcernId
+      const box = concernMarkerSize(picked)
+      L.marker(coord, {
+        icon: L.divIcon({
+          className: "",
+          html: concernMarkerHtml({
+            category: concern.category,
+            status: concern.status,
+            selected: picked,
+          }),
+          iconSize: [box, box],
+          iconAnchor: [box / 2, box / 2],
+        }),
+        zIndexOffset: picked ? 600 : 200,
       })
         .addTo(layer)
         .on("click", () => onSelectConcern(concern.id))
@@ -206,10 +267,10 @@ export function ResponderLeafletMap({
         icon: L.divIcon({
           html: responderDotHtml(positionStale),
           className: "",
-          iconSize: [12, 12],
-          iconAnchor: [6, 6],
+          iconSize: [13, 13],
+          iconAnchor: [6.5, 6.5],
         }),
-        zIndexOffset: 400,
+        zIndexOffset: 1200,
       })
         .addTo(layer)
         .bindTooltip(
@@ -288,42 +349,6 @@ export function ResponderLeafletMap({
       {/* Scoped to this map's classes only, so the marker stays self-contained
           and can never colour anything on other Leaflet maps. */}
       <style>{`
-        .responder-map-scope .eboses-responder-dot {
-          position: relative;
-          width: 12px;
-          height: 12px;
-        }
-        .responder-map-scope .eboses-responder-dot::after {
-          content: "";
-          position: absolute;
-          inset: 0;
-          border-radius: 999px;
-          background: #3d9bff;
-          border: 2px solid #fff;
-          box-shadow: 0 1px 4px rgba(15, 23, 42, 0.4);
-        }
-        .responder-map-scope .eboses-responder-dot--stale::after {
-          background: #94a3b8;
-          border-color: rgba(255, 255, 255, 0.75);
-        }
-        .responder-map-scope .eboses-responder-halo {
-          position: absolute;
-          inset: 0;
-          border-radius: 999px;
-          background: rgba(61, 155, 255, 0.45);
-          animation: eboses-responder-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
-        }
-        @keyframes eboses-responder-ping {
-          0% { transform: scale(1); opacity: 0.7; }
-          75%, 100% { transform: scale(2.6); opacity: 0; }
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .responder-map-scope .eboses-responder-halo {
-            animation: none;
-            transform: scale(1.8);
-            opacity: 0.25;
-          }
-        }
         .responder-map-scope .eboses-responder-tip {
           padding: 4px 8px;
           border-radius: 8px;

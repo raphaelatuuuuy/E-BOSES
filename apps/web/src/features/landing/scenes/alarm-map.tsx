@@ -2,7 +2,6 @@
 import { Component, Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react"
 import gsap from "gsap"
 import { useGSAP } from "@gsap/react"
-import { MapPinIcon, PhoneIcon } from "lucide-react"
 
 import { MM, prefersReducedMotion } from "../landing-theme"
 import { AlarmMap2D } from "./alarm-map-2d"
@@ -148,41 +147,6 @@ export function AlarmMap() {
           ) : (
             <AlarmMap2D progress={progress} />
           )}
-        </div>
-      </div>
-
-      {/* Emergency-help card: sits AFTER the pinned wrapper so it never pushes
-          the map or beat copy off-screen while pinned. */}
-      <div id="emergency-help" className="mx-auto max-w-7xl scroll-mt-24 pb-20 pt-4">
-        <div className="rounded-lg border border-white/10 bg-white/[0.03] p-6 md:p-8">
-          <div className="flex flex-col gap-7 md:flex-row md:items-center md:justify-between md:gap-10">
-            <div className="min-w-0">
-              <p className="font-mono text-[11px] font-bold uppercase tracking-[0.3em] text-primary">
-                Emergency help
-              </p>
-              <p className="mt-2 max-w-md text-sm leading-relaxed text-white/60">
-                If someone is in immediate danger, call the city hotline directly.
-              </p>
-              <a
-                href="https://www.google.com/maps/search/?api=1&query=Barangay+Hall+Marikina+Heights+Marikina+City"
-                target="_blank" rel="noreferrer"
-                className="mt-3 inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-landing-cream underline decoration-primary decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
-              >
-                <MapPinIcon className="size-4" strokeWidth={1.5} aria-hidden /> Barangay Hall, Marikina Heights
-              </a>
-            </div>
-            <div className="flex shrink-0 flex-col gap-2 md:items-end">
-              <a
-                href="tel:161"
-                className="inline-flex min-h-12 w-full items-center justify-center gap-3 bg-accent px-8 text-lg font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white md:w-auto"
-              >
-                <PhoneIcon className="size-5" strokeWidth={2.5} aria-hidden /> Call 161
-              </a>
-              <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-white/45 md:text-right">
-                Marikina City emergency hotline
-              </p>
-            </div>
-          </div>
         </div>
       </div>
     </section>

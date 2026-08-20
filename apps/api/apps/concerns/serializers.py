@@ -1,3 +1,4 @@
+import json
 import re
 
 from rest_framework import serializers
@@ -39,6 +40,56 @@ from .models import (
 from apps.geo_services import validate_report_location
 
 
+AREA_ADDRESS_SEGMENTS = {
+    "marikina heights",
+    "marist village",
+    "marikina city",
+    "marikina",
+    "metro manila",
+    "philippines",
+}
+MACHINE_ADDRESS_PREFIXES = (
+    "sms fallback coordinates",
+    "pinned coordinates",
+    "pinned location",
+    "pending",
+)
+COORDINATE_ADDRESS_RE = re.compile(r"-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}")
+HOUSE_NUMBER_RE = re.compile(r"^[\d]+[A-Za-z]?(\s*[-/]\s*[\dA-Za-z]+)?\s+")
+
+
+def public_street_address(address, barangay):
+    """Street name plus barangay, with the house number dropped.
+
+    The public feed must say where a concern was pinned without naming the
+    house that reported it: "99 Champaca Street" becomes "Champaca Street,
+    Marikina Heights".
+    """
+    barangay = (barangay or "").strip()
+    value = (address or "").strip()
+    lowered = value.lower()
+    if (
+        not value
+        or COORDINATE_ADDRESS_RE.search(lowered)
+        or lowered.startswith(MACHINE_ADDRESS_PREFIXES)
+    ):
+        return barangay
+
+    street = ""
+    for part in value.split(","):
+        segment = part.strip().strip(",").strip()
+        if not segment or segment.lower() in AREA_ADDRESS_SEGMENTS:
+            continue
+        street = HOUSE_NUMBER_RE.sub("", segment).strip()
+        break
+
+    if not street:
+        return barangay
+    if not barangay or street.lower() == barangay.lower():
+        return street
+    return f"{street}, {barangay}"
+
+
 class ConcernMediaUploadSerializer(serializers.Serializer):
     media = serializers.FileField(
         allow_empty_file=False,
@@ -76,8 +127,8 @@ class PublicUserSerializer(serializers.ModelSerializer):
         profile = getattr(obj, "resident_profile", None)
         if profile:
             first_name = profile.first_name.strip()
-            last_initial = profile.last_name.strip()[:1]
-            return f"{first_name} {last_initial}.".strip() if last_initial else first_name
+            last_name = profile.last_name.strip()
+            return f"{first_name} {last_name}".strip() if last_name else first_name
         return (obj.email.split("@", 1)[0] or "E-Boses user").replace(".", " ")
 
     def get_initials(self, obj):
@@ -916,7 +967,7 @@ class ConcernSerializer(serializers.ModelSerializer):
 
     def get_address(self, obj):
         if self.is_privacy_safe():
-            return obj.barangay
+            return public_street_address(obj.address, obj.barangay)
         return obj.address
 
     def get_latitude(self, obj):
@@ -1325,6 +1376,11 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             "image",
             "image_url",
             "image_alt",
+            "place_label",
+            "latitude",
+            "longitude",
+            "affected_streets",
+            "area_geometry",
             "date_label",
             "status_label",
             "created_at",
@@ -1332,6 +1388,24 @@ class AnnouncementSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("created_at", "updated_at", "notification_sent_at", "image_url")
         extra_kwargs = {"image": {"required": False, "write_only": True}}
+
+    def to_internal_value(self, data):
+        # Multipart uploads carry the area as JSON text, so decode it before the
+        # JSONFields see it and store the raw string.
+        area_fields = ("affected_streets", "area_geometry")
+        if not any(isinstance(data.get(field), str) for field in area_fields):
+            return super().to_internal_value(data)
+
+        decoded = {key: data.get(key) for key in data}
+        for field in area_fields:
+            value = decoded.get(field)
+            if not isinstance(value, str):
+                continue
+            try:
+                decoded[field] = json.loads(value) if value else None
+            except ValueError:
+                raise serializers.ValidationError({field: "Must be valid JSON."})
+        return super().to_internal_value(decoded)
 
     def validate_image(self, value):
         if not value:

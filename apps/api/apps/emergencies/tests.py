@@ -1446,6 +1446,106 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(streets["Santa Elena Street"]["osm_ids"], ["W73964486"])
         self.assertEqual(streets["Santa Elena Street"]["geometries"][0]["type"], "LineString")
 
+    def _boundary_row(self, **overrides):
+        cache.delete("live-map-static-geometry:v2")
+        MapGeometry.objects.filter(kind=MapGeometry.Kind.BOUNDARY).delete()
+        fields = {
+            "kind": MapGeometry.Kind.BOUNDARY,
+            "name": "Marikina Heights",
+            "osm_type": "R",
+            "osm_id": 371327,
+            "is_home": True,
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[121.1, 14.6], [121.2, 14.6], [121.2, 14.7], [121.1, 14.6]]],
+            },
+        }
+        fields.update(overrides)
+        return MapGeometry.objects.create(**fields)
+
+    def test_official_edits_barangay_boundary_and_every_map_redraws_it(self):
+        boundary = self._boundary_row()
+        self.client.force_authenticate(self.official)
+        moved = [[121.11, 14.61], [121.21, 14.61], [121.21, 14.71]]
+
+        response = self.client.patch(
+            f"/api/locations/boundaries/{boundary.pk}/",
+            {"geometry": {"type": "Polygon", "coordinates": [moved]}},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        boundary.refresh_from_db()
+        ring = boundary.geometry["coordinates"][0]
+        # An open ring is closed on the way in, so the stored outline is valid.
+        self.assertEqual(ring[0], ring[-1])
+        self.assertEqual(len(ring), 4)
+        self.assertEqual(ring[0], [121.11, 14.61])
+
+        # The edit has to reach the maps, not sit behind the geometry cache.
+        snapshot = self.client.get("/api/dashboard/official/live-map/")
+        self.assertEqual(snapshot.status_code, status.HTTP_200_OK)
+        self.assertEqual(snapshot.data["map"]["boundary"]["geometry"]["coordinates"][0], ring)
+
+    def test_boundary_edit_rejects_a_ring_that_is_not_a_shape(self):
+        boundary = self._boundary_row()
+        self.client.force_authenticate(self.official)
+
+        response = self.client.patch(
+            f"/api/locations/boundaries/{boundary.pk}/",
+            {"geometry": {"type": "Polygon", "coordinates": [[[121.1, 14.6], [121.2, 14.6]]]}},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_resident_cannot_edit_a_barangay_boundary(self):
+        boundary = self._boundary_row()
+        original = boundary.geometry
+        self.client.force_authenticate(self.resident)
+
+        response = self.client.patch(
+            f"/api/locations/boundaries/{boundary.pk}/",
+            {
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[121.11, 14.61], [121.21, 14.61], [121.21, 14.71]]],
+                }
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        boundary.refresh_from_db()
+        self.assertEqual(boundary.geometry, original)
+
+    def test_live_map_snapshot_prefers_home_boundary_over_other_active_boundaries(self):
+        cache.delete("live-map-static-geometry:v2")
+        MapGeometry.objects.all().delete()
+        MapGeometry.objects.create(
+            kind=MapGeometry.Kind.BOUNDARY,
+            name="Alpha Barangay",
+            osm_type="R",
+            osm_id=999999,
+            is_home=False,
+            geometry={"type": "Polygon", "coordinates": [[[121.0, 14.5], [121.1, 14.5], [121.1, 14.6], [121.0, 14.5]]]},
+        )
+        MapGeometry.objects.create(
+            kind=MapGeometry.Kind.BOUNDARY,
+            name="Marikina Heights",
+            osm_type="R",
+            osm_id=371327,
+            is_home=True,
+            geometry={"type": "Polygon", "coordinates": [[[121.1, 14.6], [121.2, 14.6], [121.2, 14.7], [121.1, 14.6]]]},
+        )
+        self.client.force_authenticate(self.official)
+
+        response = self.client.get("/api/dashboard/official/live-map/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["map"]["boundary"]["name"], "Marikina Heights")
+        self.assertEqual(response.data["map"]["boundary"]["osm_relation_id"], 371327)
+
     def test_location_ping_updates_current_user_and_broadcasts_live_map(self):
         from asgiref.sync import async_to_sync
         from channels.layers import get_channel_layer

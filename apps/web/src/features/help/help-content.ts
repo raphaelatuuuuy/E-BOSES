@@ -69,8 +69,8 @@ export const HELP_COLLECTIONS: HelpCollection[] = [
           {
             kind: "text",
             body: {
-              en: "E-Boses accounts are for residents of Barangay Marikina Heights. Registration takes a few minutes and needs a working mobile number.",
-              fil: "Ang E-Boses account ay para sa mga residente ng Barangay Marikina Heights. Ilang minuto lang ang pagpaparehistro at kailangan ng gumaganang cellphone number.",
+              en: "E-Boses accounts are for verified residents of the barangay. Registration takes a few minutes and needs a working mobile number.",
+              fil: "Ang E-Boses account ay para sa mga verified na residente ng barangay. Ilang minuto lang ang pagpaparehistro at kailangan ng gumaganang cellphone number.",
             },
           },
           {
@@ -136,8 +136,8 @@ export const HELP_COLLECTIONS: HelpCollection[] = [
                 fil: "Aktibong Philippine cellphone number, gagamitin sa one time password at sa mga alerto.",
               },
               {
-                en: "Home address within Barangay Marikina Heights.",
-                fil: "Tirahan sa loob ng Barangay Marikina Heights.",
+                en: "Home address within your barangay.",
+                fil: "Tirahan sa loob ng inyong barangay.",
               },
               {
                 en: "A document showing your residency, such as a barangay certificate or a utility bill.",
@@ -166,8 +166,8 @@ export const HELP_COLLECTIONS: HelpCollection[] = [
           {
             kind: "text",
             body: {
-              en: "Any resident of Barangay Marikina Heights who is at least 18 years old may register, using a Philippine mobile number. One account is allowed per mobile number.",
-              fil: "Puwedeng magparehistro ang sinumang residente ng Barangay Marikina Heights na 18 taong gulang pataas, gamit ang Philippine cellphone number. Isang account lang bawat cellphone number.",
+              en: "Any verified resident of the barangay who is at least 18 years old may register, using a Philippine mobile number. One account is allowed per mobile number.",
+              fil: "Puwedeng magparehistro ang sinumang verified na residente ng barangay na 18 taong gulang pataas, gamit ang Philippine cellphone number. Isang account lang bawat cellphone number.",
             },
           },
           {
@@ -474,8 +474,8 @@ export const HELP_COLLECTIONS: HelpCollection[] = [
           {
             kind: "note",
             body: {
-              en: "If you are in danger, move to safety first. You can also call the Marikina City hotline 161 directly.",
-              fil: "Kung nasa panganib kayo, lumikas muna sa ligtas na lugar. Puwede rin kayong tumawag agad sa Marikina City hotline 161.",
+              en: "If you are in danger, move to safety first. You can also call your local emergency hotline directly.",
+              fil: "Kung nasa panganib kayo, lumikas muna sa ligtas na lugar. Puwede rin kayong tumawag agad sa inyong lokal na emergency hotline.",
             },
           },
         ],
@@ -848,8 +848,8 @@ export const HELP_COLLECTIONS: HelpCollection[] = [
           {
             kind: "text",
             body: {
-              en: "Questions about this policy can be directed to the Barangay Hall of Marikina Heights.",
-              fil: "Maaaring ipaabot sa Barangay Hall ng Marikina Heights ang mga tanong tungkol sa patakarang ito.",
+              en: "Questions about this policy can be directed to your barangay hall.",
+              fil: "Maaaring ipaabot sa inyong barangay hall ang mga tanong tungkol sa patakarang ito.",
             },
           },
         ],
@@ -1046,8 +1046,8 @@ export const HELP_COLLECTIONS: HelpCollection[] = [
           {
             kind: "note",
             body: {
-              en: "The assistant can make mistakes. For anything urgent, use the emergency button or call the Marikina City hotline 161.",
-              fil: "Puwedeng magkamali ang assistant. Para sa anumang agarang bagay, gamitin ang emergency button o tumawag sa Marikina City hotline 161.",
+              en: "The assistant can make mistakes. For anything urgent, use the emergency button or call your local emergency hotline.",
+              fil: "Puwedeng magkamali ang assistant. Para sa anumang agarang bagay, gamitin ang emergency button o tumawag sa inyong lokal na emergency hotline.",
             },
           },
         ],
@@ -1167,8 +1167,8 @@ export const HELP_COLLECTIONS: HelpCollection[] = [
           {
             kind: "text",
             body: {
-              en: "Visit the barangay hall at Marikina Heights, Marikina City during office hours, or call the Marikina City hotline 161 for urgent matters.",
-              fil: "Bisitahin ang barangay hall sa Marikina Heights, Marikina City sa oras ng opisina, o tumawag sa Marikina City hotline 161 para sa mga agarang bagay.",
+              en: "Visit your barangay hall during office hours, or call your local emergency hotline for urgent matters.",
+              fil: "Bisitahin ang inyong barangay hall sa oras ng opisina, o tumawag sa inyong lokal na emergency hotline para sa mga agarang bagay.",
             },
           },
           {

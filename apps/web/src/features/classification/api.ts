@@ -155,3 +155,37 @@ export function testConcernSubmission(input: { file?: File | null; category: str
   if (input.file) body.append("file", input.file)
   return apiRequest<ReportValidationResult>("/concerns/classification/test-submission/", { method: "POST", body })
 }
+
+export type ValidationActivityItem = {
+  id: string
+  submitted_at: string
+  description: string
+  category: string
+  category_label: string
+  location: string
+  outcome: "accepted" | "flagged" | "rejected" | "held"
+  outcome_label: string
+  public_id?: string
+}
+
+export type ValidationActivityResponse = {
+  results: ValidationActivityItem[]
+  count: number
+  stats: {
+    scanned: number
+    auto_validated: number
+    flagged: number
+    held_for_review: number
+    rejected: number
+  }
+}
+
+export function getValidationActivity(params?: { days?: number; category?: string }) {
+  const query = new URLSearchParams()
+  if (params?.days) query.set("days", String(params.days))
+  if (params?.category) query.set("category", params.category)
+  const qs = query.toString()
+  return apiRequest<ValidationActivityResponse>(
+    `/concerns/classification/activity/${qs ? `?${qs}` : ""}`
+  )
+}

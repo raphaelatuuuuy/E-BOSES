@@ -118,6 +118,7 @@ class MapDispatchPolicySerializer(serializers.ModelSerializer):
             "acceptance_center_latitude",
             "acceptance_center_longitude",
             "acceptance_radius_meters",
+            "acceptance_geometry",
             "out_of_zone_action",
             "witness_radius_meters",
             "responder_nearby_radius_meters",
@@ -128,7 +129,10 @@ class MapDispatchPolicySerializer(serializers.ModelSerializer):
             "updated_by",
             "updated_at",
         )
-        read_only_fields = ("id", "barangay", "updated_by", "updated_at")
+        # `barangay` is writable: the coverage screen picks which barangay this
+        # station answers for. The row is keyed on pk, not on the name, so a
+        # rename cannot fork a second policy.
+        read_only_fields = ("id", "updated_by", "updated_at")
 
     def validate_acceptance_radius_meters(self, value):
         if not 100 <= value <= 5000:

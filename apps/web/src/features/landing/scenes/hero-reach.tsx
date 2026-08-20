@@ -117,16 +117,10 @@ export function HeroReach() {
         <div className="hero-ctas mt-7 flex flex-wrap items-center justify-center gap-5">
           <Link
             to="/sign-up"
-            className="inline-flex min-h-12 items-center gap-3 bg-accent px-7 font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
+            className="inline-flex min-h-12 items-center gap-3 rounded-full bg-accent px-7 font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
           >
             Create an account to report <ArrowRightIcon aria-hidden className="size-5" strokeWidth={1.5} />
           </Link>
-          <a
-            href="#emergency-help"
-            className="inline-flex min-h-12 items-center font-semibold text-landing-cream underline decoration-primary decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
-          >
-            Need emergency help?
-          </a>
         </div>
       </div>
 

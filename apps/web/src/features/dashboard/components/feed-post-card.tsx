@@ -349,7 +349,10 @@ export function FeedPostCard({
   const [menuOpenPost, setMenuOpenPost] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
 
-  const incidentStreet = streetSegment(post.address) || streetSegment(post.reporter.street)
+  const street = streetSegment(post.address) || streetSegment(post.reporter.street)
+  const barangay = (post.barangay || "").trim()
+  const pinnedLocation =
+    [street, barangay].filter(Boolean).join(", ") || "Location pinned on the map"
   const commentFieldId = `feed-post-comment-${post.id}`
   // The comment icon counts every row shown in the thread: real comments plus
   // the resolution banner and the "neighbours also reported" entries.
@@ -396,45 +399,33 @@ export function FeedPostCard({
                 <p className={cn("truncate font-bold text-neutral-900", FS.author)}>
                   {post.reporter.full_name}
                 </p>
-                <p
-                  className={cn(
-                    "flex max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5 text-neutral-500",
-                    FS.meta,
-                  )}
-                >
-                  {incidentStreet ? (
-                    <>
-                      <span className="inline-flex min-w-0 max-w-full items-center gap-1">
-                        <MapPinIcon
-                          className="size-3 shrink-0 text-neutral-400"
-                          strokeWidth={2.3}
-                          aria-hidden
-                        />
-                        <span className="min-w-0 break-words">{incidentStreet}</span>
+                <div className="text-[13px] leading-snug text-neutral-500 sm:text-[14px]">
+                  <p className="flex max-w-full flex-wrap items-center gap-x-1 gap-y-0.5">
+                    <span className="shrink-0">{categoryLabel(post.category)}</span>
+                    <span className="inline-flex min-w-0 max-w-full items-center gap-1">
+                      <span aria-hidden>·</span>
+                      <MapPinIcon
+                        className="size-3 shrink-0 text-neutral-400"
+                        strokeWidth={2.3}
+                        aria-hidden
+                      />
+                      <span className="min-w-0 break-words">{pinnedLocation}</span>
+                    </span>
+                  </p>
+                  <p className="mt-0.5 flex max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                    <span className="shrink-0">{timeAgo(post.created_at)}</span>
+                    <GlobeIcon className={cn(IC.xxs, "shrink-0")} strokeWidth={STROKE} aria-hidden />
+                    {statusGroupOf(post.status) === "closed" ? (
+                      <span className="inline-flex shrink-0 items-center gap-1">
+                        <span aria-hidden>·</span>
+                        <span className="inline-flex items-center gap-1 font-medium text-status-closed">
+                          <CircleCheck className="size-3.5 shrink-0" strokeWidth={2.4} />
+                          {statusLabelOf(post.status, "resident", "concern")}
+                        </span>
                       </span>
-                      <span className="shrink-0" aria-hidden>
-                        ·
-                      </span>
-                    </>
-                  ) : null}
-                  <span className="shrink-0">{categoryLabel(post.category)}</span>
-                  <span className="shrink-0" aria-hidden>
-                    ·
-                  </span>
-                  <span className="shrink-0">{timeAgo(post.created_at)}</span>
-                  <GlobeIcon className={cn(IC.xxs, "shrink-0")} strokeWidth={STROKE} />
-                  {statusGroupOf(post.status) === "closed" ? (
-                    <>
-                      <span className="shrink-0" aria-hidden>
-                        ·
-                      </span>
-                      <span className="inline-flex shrink-0 items-center gap-1 font-medium text-status-closed">
-                        <CircleCheck className="size-3.5 shrink-0" strokeWidth={2.4} />
-                        {statusLabelOf(post.status, "resident", "concern")}
-                      </span>
-                    </>
-                  ) : null}
-                </p>
+                    ) : null}
+                  </p>
+                </div>
               </div>
               {!hideMoreMenu ? (
                 <PostMoreMenu

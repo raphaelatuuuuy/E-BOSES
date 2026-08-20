@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import {
   InboxIcon,
   ChevronLeftIcon,
-  FileTextIcon,
+  CircleQuestionMarkIcon,
   LockIcon,
   UserIcon,
   XIcon,
@@ -272,34 +272,32 @@ export function SettingsWorkspace({
 
   const accountFlows = (
     <>
-      {addressFlowOpen ? (
-        <AddressConfirmFlow
-          initialAddress={displayAddress}
-          onClose={() => setAddressFlowOpen(false)}
-          onSaved={(nextAddress) => {
-            setAddress(nextAddress)
-            void refreshUser()
-            toast.success("Address updated")
-          }}
-        />
-      ) : null}
+      <AddressConfirmFlow
+        initialAddress={displayAddress}
+        open={addressFlowOpen}
+        onClose={() => setAddressFlowOpen(false)}
+        onSaved={(nextAddress) => {
+          setAddress(nextAddress)
+          void refreshUser()
+          toast.success("Address updated")
+        }}
+      />
 
-      {lifecycleOpen ? (
-        <AccountLifecycleFlow
-          onClose={() => {
-            setLifecycleOpen(false)
-            void listAccountRequests()
-              .then(setAccountRequests)
-              .catch(() => undefined)
-          }}
-          onDeactivated={() => {
-            setLifecycleOpen(false)
-            void refreshUser().finally(() => {
-              navigate("/account-inactive", { replace: true })
-            })
-          }}
-        />
-      ) : null}
+      <AccountLifecycleFlow
+        open={lifecycleOpen}
+        onClose={() => {
+          setLifecycleOpen(false)
+          void listAccountRequests()
+            .then(setAccountRequests)
+            .catch(() => undefined)
+        }}
+        onDeactivated={() => {
+          setLifecycleOpen(false)
+          void refreshUser().finally(() => {
+            navigate("/account-inactive", { replace: true })
+          })
+        }}
+      />
     </>
   )
 
@@ -404,10 +402,10 @@ export function SettingsWorkspace({
                       showChevron
                     />
                     <SheetOptionRow
-                      title="Privacy policy"
-                      description="How your data is used and protected"
-                      leading={<FileTextIcon className="size-5" strokeWidth={1.75} />}
-                      onClick={() => window.open("/privacy", "_blank", "noopener")}
+                      title="Help center"
+                      description="Guides, FAQs and how-to articles"
+                      leading={<CircleQuestionMarkIcon className="size-5" strokeWidth={1.75} />}
+                      onClick={() => navigate("/help")}
                       showChevron
                     />
                   </SheetList>
@@ -528,10 +526,10 @@ export function SettingsWorkspace({
                   onClick={() => setPanel("notifications")}
                 />
                 <HubRow
-                  icon={FileTextIcon}
-                  label="Privacy policy"
-                  description="How your data is used and protected"
-                  onClick={() => window.open("/privacy", "_blank", "noopener")}
+                  icon={CircleQuestionMarkIcon}
+                  label="Help center"
+                  description="Guides, FAQs and how-to articles"
+                  onClick={() => navigate("/help")}
                 />
               </div>
 

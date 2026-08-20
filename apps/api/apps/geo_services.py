@@ -210,7 +210,7 @@ def get_active_boundary_geometry() -> dict | None:
 
         boundary = (
             MapGeometry.objects.filter(kind=MapGeometry.Kind.BOUNDARY, is_active=True)
-            .order_by("name", "id")
+            .order_by("-is_home", "name", "id")
             .first()
         )
         if boundary and boundary.geometry:
@@ -229,10 +229,10 @@ def dispatch_policy_payload() -> dict[str, Any]:
         return {
             "id": None,
             "barangay": "Marikina Heights",
-            "covered": [],
             "acceptance_center_latitude": MARIKINA_HEIGHTS_CENTER["latitude"],
             "acceptance_center_longitude": MARIKINA_HEIGHTS_CENTER["longitude"],
             "acceptance_radius_meters": 800,
+            "acceptance_geometry": None,
             "out_of_zone_action": "review",
             "witness_radius_meters": 250,
             "responder_nearby_radius_meters": 100,
@@ -246,111 +246,25 @@ def dispatch_policy_payload() -> dict[str, Any]:
         }
 
 
-COVERAGE_CACHE_KEY = "coverage-boundaries:v1"
-COVERAGE_CACHE_TTL = 300
-
-
-def covered_boundaries() -> list[dict[str, Any]]:
-    """The barangay boundaries this station answers for.
-
-    Cached because classify_location runs once per POI and per search result;
-    an uncached read would put a query behind every marker on the map.
-    """
-    cached = cache.get(COVERAGE_CACHE_KEY)
-    if cached is not None:
-        return cached
-
-    rows: list[dict[str, Any]] = []
-    try:
-        from apps.emergencies.models import MapDispatchPolicy
-
-        for row in MapDispatchPolicy.current().covered_geometries():
-            if row.geometry:
-                rows.append(
-                    {
-                        "id": row.pk,
-                        "name": row.name,
-                        "locality": row.locality,
-                        "is_home": row.is_home,
-                        "geometry": row.geometry,
-                    }
-                )
-    except Exception as exc:  # noqa: BLE001 — migrations / empty DB
-        logger.debug("Coverage boundary load skipped: %s", exc)
-
-    if not rows:
-        geometry = get_active_boundary_geometry()
-        if geometry:
-            rows = [
-                {
-                    "id": None,
-                    "name": "Marikina Heights",
-                    "locality": "Marikina",
-                    "is_home": True,
-                    "geometry": geometry,
-                }
-            ]
-
-    cache.set(COVERAGE_CACHE_KEY, rows, COVERAGE_CACHE_TTL)
-    return rows
-
-
-def invalidate_coverage_cache() -> None:
-    cache.delete(COVERAGE_CACHE_KEY)
-    cache.delete(MAP_CONTEXT_CACHE_KEY)
-
-
-def coverage_label() -> str:
-    names = [row["name"] for row in covered_boundaries()]
-    if not names:
-        return "Barangay Marikina Heights"
-    if len(names) == 1:
-        return f"Barangay {names[0]}"
-    return f"your coverage area ({len(names)} barangays)"
-
-
-def coverage_result(latitude: float, longitude: float) -> dict[str, Any]:
-    """Where a pin sits relative to the configured coverage area."""
-    lat = float(latitude)
-    lng = float(longitude)
-    action = dispatch_policy_payload().get("out_of_zone_action") or "review"
-
-    nearest_name = ""
-    nearest_distance: float | None = None
-    for row in covered_boundaries():
-        if point_in_geojson(lng, lat, row["geometry"]) is True:
-            return {
-                "within": True,
-                "barangay": row["name"],
-                "locality": row["locality"],
-                "distance_meters": 0,
-                "action": action,
-            }
-        distance = distance_to_geojson_boundary_meters(lng, lat, row["geometry"])
-        if distance is not None and (nearest_distance is None or distance < nearest_distance):
-            nearest_distance = distance
-            nearest_name = row["name"]
-
-    return {
-        "within": False,
-        "barangay": None,
-        "nearest": nearest_name,
-        "distance_meters": round(nearest_distance) if nearest_distance is not None else None,
-        "action": action,
-    }
-
-
 def acceptance_zone_result(latitude: float, longitude: float) -> dict[str, Any]:
-    """Back-compatible shape for callers written against the old radius zone."""
-    result = coverage_result(latitude, longitude)
+    policy = dispatch_policy_payload()
+    distance = haversine_meters(
+        float(latitude),
+        float(longitude),
+        float(policy["acceptance_center_latitude"]),
+        float(policy["acceptance_center_longitude"]),
+    )
+    radius = int(policy["acceptance_radius_meters"])
+    # A drawn zone replaces the circle when one has been saved.
+    geometry = policy.get("acceptance_geometry")
+    inside_drawn = point_in_geojson(float(longitude), float(latitude), geometry)
     return {
-        "center_latitude": MARIKINA_HEIGHTS_CENTER["latitude"],
-        "center_longitude": MARIKINA_HEIGHTS_CENTER["longitude"],
-        "radius_meters": None,
-        "barangay": result.get("barangay"),
-        "distance_meters": result.get("distance_meters") or 0,
-        "within": result["within"],
-        "action": result["action"],
+        "center_latitude": policy["acceptance_center_latitude"],
+        "center_longitude": policy["acceptance_center_longitude"],
+        "radius_meters": radius,
+        "distance_meters": round(distance),
+        "within": inside_drawn if inside_drawn is not None else distance <= radius,
+        "action": policy["out_of_zone_action"],
     }
 
 
@@ -359,10 +273,9 @@ def is_inside_barangay_boundary(latitude: float, longitude: float) -> bool:
     lng = float(longitude)
     if not (-90 <= lat <= 90 and -180 <= lng <= 180):
         return False
-    boundaries = covered_boundaries()
-    if boundaries:
-        return coverage_result(lat, lng)["within"]
-    return point_in_bbox(lat, lng, MARIKINA_HEIGHTS_BOUNDS)
+    geometry = get_active_boundary_geometry()
+    in_poly = point_in_geojson(lng, lat, geometry)
+    return bool(in_poly is True or (in_poly is None and point_in_bbox(lat, lng, MARIKINA_HEIGHTS_BOUNDS)))
 
 
 def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
@@ -385,99 +298,88 @@ def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
             "distance_meters": None,
         }
 
-    boundaries = covered_boundaries()
+    geometry = get_active_boundary_geometry()
+    in_poly = point_in_geojson(lng, lat, geometry)
+    in_heights_bbox = point_in_bbox(lat, lng, MARIKINA_HEIGHTS_BOUNDS)
     in_city = point_in_bbox(lat, lng, MARIKINA_CITY_BOUNDS)
     dist_bbox = meters_outside_bbox(lat, lng, MARIKINA_HEIGHTS_BOUNDS)
+    boundary_distance = (
+        distance_to_geojson_boundary_meters(lng, lat, geometry)
+        if in_poly is False
+        else None
+    )
+    distance_outside = boundary_distance if boundary_distance is not None else dist_bbox
 
-    if not boundaries:
-        # No geometry loaded yet: fall back to the operational bbox so location
-        # checks stay usable on a fresh database.
-        if point_in_bbox(lat, lng, MARIKINA_HEIGHTS_BOUNDS):
-            return {
-                "status": "inside",
-                "zone": "barangay",
-                "accepted": True,
-                "warning": None,
-                "message": "Location is inside Barangay Marikina Heights.",
-                "distance_meters": 0,
-            }
-        return {
-            "status": "far",
-            "zone": "far",
-            "accepted": False,
-            "warning": None,
-            "message": "Location is outside Barangay Marikina Heights.",
-            "distance_meters": round(dist_bbox),
-        }
-
-    coverage = coverage_result(lat, lng)
-    label = coverage_label()
-
-    if coverage["within"]:
-        return {
+    if in_poly is True or (in_poly is None and in_heights_bbox):
+        result = {
             "status": "inside",
             "zone": "barangay",
             "accepted": True,
             "warning": None,
-            "message": f"Location is inside Barangay {coverage['barangay']}.",
+            "message": "Location is inside Barangay Marikina Heights.",
             "distance_meters": 0,
-            "coverage": coverage,
-            "acceptance_zone": acceptance_zone_result(lat, lng),
         }
+        zone = acceptance_zone_result(lat, lng)
+        result["acceptance_zone"] = zone
+        if not zone["within"]:
+            if zone["action"] == "block":
+                result.update({
+                    "status": "far",
+                    "zone": "outside_acceptance_zone",
+                    "accepted": False,
+                    "message": "Location is outside the official acceptance zone.",
+                })
+            else:
+                result["warning"] = "Location is inside the barangay but outside the official acceptance zone."
+                result["message"] = "Inside barangay; outside configured acceptance zone."
+        return result
 
-    distance_outside = coverage["distance_meters"]
-    if distance_outside is None:
-        distance_outside = dist_bbox
-
-    if not in_city and distance_outside > HARD_REJECT_METERS:
+    # Outside polygon or bbox
+    if not in_city and dist_bbox > HARD_REJECT_METERS:
         return {
             "status": "far",
             "zone": "outside_city",
             "accepted": False,
             "warning": None,
-            "message": f"Location is too far from {label}. Choose a place in or near Marikina.",
-            "distance_meters": round(distance_outside),
-            "coverage": coverage,
+            "message": "Location is too far from Barangay Marikina Heights. Choose a place in or near Marikina.",
+            "distance_meters": round(dist_bbox),
         }
 
     if distance_outside <= SOFT_BUFFER_METERS:
-        if coverage["action"] == "block":
-            return {
-                "status": "far",
-                "zone": "outside_coverage",
-                "accepted": False,
-                "warning": None,
-                "message": f"Location is outside {label}.",
-                "distance_meters": round(distance_outside),
-                "coverage": coverage,
-                "acceptance_zone": acceptance_zone_result(lat, lng),
-            }
-        return {
+        result = {
             "status": "edge",
             "zone": "edge_buffer",
             "accepted": True,
             "warning": (
-                f"This pin is just outside {coverage['nearest'] or 'the barangay'} "
+                "This pin is just outside the barangay boundary "
                 f"(~{round(distance_outside)} m). Continue only if the concern is on the edge."
             ),
-            "message": "Near the edge of your coverage area.",
+            "message": "Near the barangay boundary.",
             "distance_meters": round(distance_outside),
-            "coverage": coverage,
-            "acceptance_zone": acceptance_zone_result(lat, lng),
         }
+        zone = acceptance_zone_result(lat, lng)
+        result["acceptance_zone"] = zone
+        if not zone["within"] and zone["action"] == "block":
+            result.update({
+                "status": "far",
+                "zone": "outside_acceptance_zone",
+                "accepted": False,
+                "warning": None,
+                "message": "Location is outside the official acceptance zone.",
+            })
+        return result
 
     if distance_outside <= HARD_REJECT_METERS and in_city:
         return {
             "status": "far",
-            "zone": "outside_coverage",
+            "zone": "outside_barangay",
             "accepted": False,
             "warning": None,
             "message": (
-                f"Location is outside {label}. "
-                "Please pin a place inside a covered barangay (or within a few hundred meters of the edge)."
+                "Location is outside Barangay Marikina Heights. "
+                "Please pin a place inside the barangay (or within a few hundred meters of the boundary)."
             ),
             "distance_meters": round(distance_outside),
-            "coverage": coverage,
         }
 
     return {
@@ -485,9 +387,8 @@ def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
         "zone": "far",
         "accepted": False,
         "warning": None,
-        "message": f"Location is too far from {label}.",
+        "message": "Location is too far from Barangay Marikina Heights.",
         "distance_meters": round(distance_outside),
-        "coverage": coverage,
     }
 
 
@@ -1077,35 +978,30 @@ def validate_emergency_location(latitude, longitude):
     if latitude is None or longitude is None:
         raise ValidationError("Latitude and longitude must be provided together.")
     if not is_inside_barangay_boundary(latitude, longitude):
-        raise ValidationError(f"Emergency location must be inside {coverage_label()}.")
+        raise ValidationError("Emergency location must be inside Barangay Marikina Heights.")
+    if not acceptance_zone_result(latitude, longitude).get("within"):
+        raise ValidationError("Emergency location must be inside the official acceptance zone.")
 
 
 def validate_report_location(latitude, longitude):
     if latitude is None or longitude is None:
         raise ValidationError("Latitude and longitude must be provided together.")
-
-    label = coverage_label()
-    result = classify_location(latitude, longitude)
-
-    if result["status"] == "inside":
+    if not is_inside_barangay_boundary(latitude, longitude):
+        raise ValidationError("Location must be inside Barangay Marikina Heights.")
+    zone = acceptance_zone_result(latitude, longitude)
+    if zone.get("within"):
         return {"action": "accept", "summary": "Required report checks passed. Advanced analysis is pending."}
-
-    # A pin well outside coverage is rejected outright. Only the soft edge — a
-    # pin within a few hundred metres of a covered boundary — is left to the
-    # configured out-of-zone action, because that is the case GPS drift and
-    # roadside addresses actually produce.
-    if not result.get("accepted"):
-        raise ValidationError(f"Location must be inside {label}.")
-
-    action = (result.get("coverage") or {}).get("action") or "review"
+    action = zone.get("action") or dispatch_policy_payload().get("out_of_zone_action") or "review"
+    if action == "block":
+        raise ValidationError("Location must be inside the official acceptance zone.")
     if action == "warn":
         return {
             "action": "warn",
-            "summary": f"Location is just outside {label}.",
+            "summary": "Location is inside the barangay but outside the official acceptance zone.",
         }
     return {
         "action": "review",
-        "summary": f"Location is just outside {label} and needs official review.",
+        "summary": "Location is outside the official acceptance zone and needs official review.",
     }
 
 
@@ -1342,6 +1238,73 @@ def nominatim_search(query: str, limit: int = 1):
     )
 
 
+def search_boundaries_online(query: str, limit: int = 12) -> list[dict[str, Any]]:
+    """
+    Administrative outlines matching a name, straight from OSM.
+
+    The saved MapGeometry rows only cover barangays this deployment has already
+    imported, so a station configuring coverage for a barangay nobody has
+    touched would search an empty table. This asks Nominatim for the real
+    polygon instead of inventing one.
+    """
+    # Pasted addresses arrive with newlines and commas; collapse them so the
+    # upstream query is one line.
+    normalized = " ".join((query or "").replace(",", " ").split())
+    if len(normalized) < 3:
+        return []
+
+    # Nominatim ranks place *nodes* above the administrative *relation* that
+    # actually carries the outline, so a small limit returns points only. Ask
+    # for a wide page and keep the polygons out of it.
+    upstream_limit = max(limit * 2, 25)
+    key = (
+        "nominatim-boundary:v2:"
+        f"{hashlib.sha256(normalized.lower().encode()).hexdigest()[:24]}:{upstream_limit}"
+    )
+    payload = _nominatim_get(
+        NOMINATIM_SEARCH_URL,
+        {
+            "q": normalized,
+            "format": "jsonv2",
+            "limit": upstream_limit,
+            "countrycodes": "ph",
+            "addressdetails": 1,
+            "polygon_geojson": 1,
+        },
+        key,
+    )
+    if not isinstance(payload, list):
+        return []
+
+    found: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        geometry = item.get("geojson")
+        if not isinstance(geometry, dict) or geometry.get("type") not in {"Polygon", "MultiPolygon"}:
+            continue
+        address = item.get("address") or {}
+        display = item.get("display_name") or ""
+        found.append(
+            {
+                "id": None,
+                "source": "osm",
+                "name": item.get("name") or display.split(",")[0].strip(),
+                "locality": address.get("city")
+                or address.get("town")
+                or address.get("municipality")
+                or address.get("province")
+                or "",
+                "osm_id": item.get("osm_id"),
+                "is_home": False,
+                "geometry": geometry,
+            }
+        )
+        if len(found) >= limit:
+            break
+    return found
+
+
 REVERSE_GEOCODE_CACHE_PREFIX = "reverse-geocode:v1:"
 REVERSE_GEOCODE_CACHE_TTL = 60 * 60 * 24 * 30  # street names change slowly
 REVERSE_GEOCODE_TIMEOUT = 6.0
@@ -1492,16 +1455,6 @@ def map_context_payload() -> dict[str, Any]:
             "osm_relation_id": MARIKINA_HEIGHTS_OSM_RELATION_ID,
             "geometry": geometry,
         },
-        "coverage": [
-            {
-                "id": row["id"],
-                "name": row["name"],
-                "locality": row["locality"],
-                "is_home": row["is_home"],
-                "geometry": row["geometry"],
-            }
-            for row in covered_boundaries()
-        ],
         "streets": streets[:80],  # keep payload light
         "pois": pois,
         "poi_types": POI_TYPE_META,

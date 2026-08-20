@@ -159,8 +159,11 @@ function DashboardContent() {
               className={cn(
                 "flex min-h-svh min-w-0 flex-col",
                 hideMobileNav || chrome.fullBleedMap ? "overflow-hidden" : "overflow-x-hidden pb-24",
-                // Staff pages are card-on-canvas; residents stay on white.
-                isResident || chrome.fullBleedMap ? "bg-white" : "bg-canvas",
+                // Staff pages are card-on-canvas; residents and officials stay
+                // on white. Leaving officials on canvas here — while desktop
+                // put them on white — left a grey band under short pages,
+                // behind the floating mobile nav.
+                isResident || isOfficialRole || chrome.fullBleedMap ? "bg-white" : "bg-canvas",
               )}
             >
               {/* Full-bleed maps carry their own top bar and own the viewport

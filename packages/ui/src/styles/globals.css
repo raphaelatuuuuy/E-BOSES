@@ -629,6 +629,26 @@
   }
 }
 
+.leaflet-tile,
+img.leaflet-tile,
+.leaflet-pane img,
+.leaflet-tile-container img {
+  max-width: none !important;
+  max-height: none !important;
+}
+
+/*
+ * Leaflet gives its panes z-index 400-700, which escape the map and paint over
+ * the sidebar, the mobile nav and any tooltip that crosses the map. Isolating
+ * the container traps those layers inside it, so a map always sits below the
+ * app's own chrome.
+ */
+.leaflet-container {
+  position: relative;
+  z-index: 0;
+  isolation: isolate;
+}
+
 .eboses-map-dark .leaflet-tile-pane {
   filter: invert(1) hue-rotate(190deg) brightness(0.92) contrast(0.9) saturate(0.55);
 }
@@ -665,38 +685,6 @@
 }
 .eboses-map-dark .leaflet-tooltip::before {
   border-top-color: rgba(5, 9, 20, 0.9);
-}
-
-.eboses-coverage-label {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  white-space: nowrap;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-  text-shadow: 0 1px 4px rgba(5, 9, 20, 0.9);
-}
-.eboses-coverage-label__name {
-  font-family: "Saans", sans-serif;
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #9aa5c9;
-}
-.eboses-coverage-label__name.is-covered {
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  color: #ffffff;
-}
-.eboses-coverage-label__sub {
-  font-family: "Saans", sans-serif;
-  font-size: 9.5px;
-  font-weight: 500;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: #6d78a3;
 }
 
 .eboses-map-pin {
@@ -740,6 +728,94 @@
   100% {
     transform: scale(1.35);
     opacity: 0;
+  }
+}
+
+/* One pin language for every Leaflet map in the app. A record (concern,
+   emergency, advisory) is a filled circle carrying its own glyph; a person or
+   a single confirmed place is a plain dot. Only --pin changes per map. */
+.eboses-pin {
+  position: relative;
+  display: block;
+  width: var(--size);
+  height: var(--size);
+}
+.eboses-pin__halo {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: var(--pin);
+  opacity: 0.45;
+  animation: eboses-pin-halo 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+  will-change: transform, opacity;
+}
+.eboses-pin__disc {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: var(--pin);
+  border: var(--ring) solid #ffffff;
+  color: #ffffff;
+  box-shadow: 0 3px 10px rgb(15 23 42 / 0.32);
+}
+.eboses-pin__disc svg {
+  width: 54%;
+  height: 54%;
+}
+.eboses-pin__core {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: var(--pin);
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 8px rgb(15 23 42 / 0.4);
+}
+.eboses-pin.is-dark .eboses-pin__disc,
+.eboses-pin.is-dark .eboses-pin__core {
+  border-color: rgb(255 255 255 / 0.92);
+  box-shadow:
+    0 0 0 1px rgb(2 6 23 / 0.55),
+    0 0 14px var(--pin);
+}
+.eboses-pin--dot.is-live .eboses-pin__core {
+  animation: eboses-pin-blink 1.8s ease-in-out infinite;
+}
+@keyframes eboses-pin-halo {
+  0% {
+    transform: scale(1);
+    opacity: 0.45;
+  }
+  70%,
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+@keyframes eboses-pin-blink {
+  0%,
+  100% {
+    box-shadow:
+      0 2px 8px rgb(15 23 42 / 0.4),
+      0 0 0 0 var(--pin);
+  }
+  50% {
+    box-shadow:
+      0 2px 8px rgb(15 23 42 / 0.4),
+      0 0 10px 3px var(--pin);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .eboses-pin__halo,
+  .eboses-pin--dot.is-live .eboses-pin__core,
+  .eboses-map-pin__ring {
+    animation: none;
+  }
+  .eboses-pin__halo {
+    transform: scale(1.7);
+    opacity: 0.2;
   }
 }
 

@@ -315,7 +315,7 @@ class ResidentDashboardAPITests(APITestCase):
         for private_field in ("email", "phone_number", "date_of_birth", "gender", "current_latitude", "current_longitude"):
             self.assertNotIn(private_field, reporter)
         self.assertEqual(reporter["street"], "")
-        self.assertEqual(public_item["address"], "Marikina Heights")
+        self.assertEqual(public_item["address"], "Exact Home Street, Marikina Heights")
         self.assertIsNone(public_item["latitude"])
         self.assertIsNone(public_item["longitude"])
         self.assertTrue(public_item["media"][0]["preview_url"])
@@ -323,7 +323,7 @@ class ResidentDashboardAPITests(APITestCase):
 
         public_detail = self.client.get(f"/api/concerns/{concern.public_id}/")
         self.assertEqual(public_detail.status_code, status.HTTP_200_OK)
-        self.assertEqual(public_detail.data["address"], "Marikina Heights")
+        self.assertEqual(public_detail.data["address"], "Exact Home Street, Marikina Heights")
         self.assertIsNone(public_detail.data["latitude"])
         self.assertEqual(public_detail.data["reporter"]["street"], "")
         self.assertEqual(public_detail.data["media"][0]["raw_url"], "")
@@ -555,16 +555,7 @@ class ResidentDashboardAPITests(APITestCase):
                 [121.1000, 14.6400],
             ]],
         }
-        covered = [
-            {
-                "id": 1,
-                "name": "Marikina Heights",
-                "locality": "Marikina",
-                "is_home": True,
-                "geometry": boundary,
-            }
-        ]
-        with patch("apps.geo_services.covered_boundaries", return_value=covered):
+        with patch("apps.geo_services.get_active_boundary_geometry", return_value=boundary):
             result = classify_location(14.6605, 121.1150)
 
         self.assertEqual(result["status"], "edge")
@@ -601,7 +592,7 @@ class ResidentDashboardAPITests(APITestCase):
             status=Concern.Status.SUBMITTED,
             visibility=Concern.Visibility.COMMUNITY,
             validation_status=Concern.ValidationStatus.PENDING,
-            address="Exact House 123",
+            address="123 Exact House Street",
             latitude="14.6500000",
             longitude="121.1100000",
             location_source="manual_pin",
@@ -614,7 +605,7 @@ class ResidentDashboardAPITests(APITestCase):
             status=Concern.Status.UNDER_REVIEW,
             visibility=Concern.Visibility.COMMUNITY,
             validation_status=Concern.ValidationStatus.ACCEPTED,
-            address="Exact House 456",
+            address="456 Exact House Street",
             latitude="14.6600000",
             longitude="121.1200000",
             location_source="manual_pin",
@@ -627,7 +618,7 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual([item["id"] for item in response.data], [accepted.pk])
         self.assertNotIn(pending.pk, [item["id"] for item in response.data])
-        self.assertEqual(response.data[0]["address"], "Marikina Heights")
+        self.assertEqual(response.data[0]["address"], "Exact House Street, Marikina Heights")
         self.assertIsNone(response.data[0]["latitude"])
         self.assertIsNone(response.data[0]["longitude"])
         self.assertEqual(response.data[0]["location_source"], "")

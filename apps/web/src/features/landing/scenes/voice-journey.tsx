@@ -239,7 +239,7 @@ export function VoiceJourney() {
               </div>
             </div>
             <div className="vj-pin mt-3.5 flex items-center gap-2 rounded-lg bg-accent/15 px-3 py-2 text-sm text-primary">
-              <MapPinIcon className="size-4" strokeWidth={1.5} aria-hidden /> Marikina Heights
+              <MapPinIcon className="size-4" strokeWidth={1.5} aria-hidden /> Location attached
             </div>
             {/* Sweeps the whole card, not just the photo; clipped by the card's
                 own overflow-hidden so it never bleeds past the rounded edges. */}

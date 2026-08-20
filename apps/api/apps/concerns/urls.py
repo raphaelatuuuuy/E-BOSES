@@ -60,6 +60,7 @@ from .views import (
     RoutingRuleListCreateView,
 )
 from .classification_api import (
+    OfficialClassificationActivityView,
     OfficialClassificationResetView,
     OfficialClassificationSubmissionTestView,
     OfficialClassificationStatsView,
@@ -86,6 +87,7 @@ urlpatterns = [
     path("department-chat/threads/<int:thread_id>/messages/", DepartmentChatMessageListCreateView.as_view(), name="department-chat-message-list"),
     path("classification/", OfficialClassificationView.as_view(), name="classification-configuration"),
     path("classification/stats/", OfficialClassificationStatsView.as_view(), name="classification-stats"),
+    path("classification/activity/", OfficialClassificationActivityView.as_view(), name="classification-activity"),
     path("classification/reset/", OfficialClassificationResetView.as_view(), name="classification-reset"),
     path("classification/test-text/", OfficialClassificationTextTestView.as_view(), name="classification-test-text"),
     path("classification/test-submission/", OfficialClassificationSubmissionTestView.as_view(), name="classification-test-submission"),

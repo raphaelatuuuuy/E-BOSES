@@ -313,7 +313,8 @@ export default function OfficialCategoriesPage() {
     const rule = rules
       .filter((item) => item.category === category.id && item.is_active)
       .sort((a, b) => b.priority - a.priority)[0]
-    return rule?.department_detail ?? category.department_detail ?? null
+    const unit = rule?.department_detail ?? category.department_detail ?? null
+    return unit?.is_active ? unit : null
   }
 
   const filtered = useMemo(() => {
@@ -384,7 +385,7 @@ export default function OfficialCategoriesPage() {
       title="Concern categories"
       description="What residents can report, and which barangay unit answers each one."
       stats={[
-        { label: "Categories", value: filtered.length },
+        { label: "Categories", value: categories.filter((c) => c.is_active).length },
         { label: "No unit assigned", value: unrouted.length, alarm: unrouted.length > 0 },
         { label: "Units available", value: units.filter((u) => u.is_active).length },
       ]}

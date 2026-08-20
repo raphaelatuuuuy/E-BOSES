@@ -827,7 +827,7 @@ export function CreateReportDialog({
                     el.style.height = "auto"
                     el.style.height = `${Math.min(Math.max(el.scrollHeight, 72), 220)}px`
                   }}
-                   placeholder="What's happening in your barangay?"
+                   placeholder="Share the issue you're experiencing..."
                    className="max-h-[220px] min-h-[72px] w-full resize-none overflow-y-auto border-0 bg-transparent text-[17px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400"
                   />
 

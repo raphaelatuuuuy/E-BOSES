@@ -42,18 +42,19 @@ export function MiddleNameStep({
         </Field>
       </div>
 
-      <div className="mt-8 flex items-center justify-between gap-3">
+      <div className="mt-8 flex items-center justify-end gap-3">
         <button
           type="button"
           onClick={onSkip}
-          className="rounded-full px-4 py-2 text-sm font-semibold text-neutral-600 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
+          className="inline-flex h-12 items-center justify-center rounded-full px-6 text-base font-semibold text-neutral-600 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
         >
           Skip
         </button>
         <button
           type="button"
           onClick={onContinue}
-          className="inline-flex h-12 items-center justify-center rounded-full bg-primary px-8 text-base font-semibold text-white transition-colors hover:bg-brand-orange-strong"
+          disabled={!values.middleName?.trim()}
+          className="inline-flex h-12 items-center justify-center rounded-full bg-primary px-8 text-base font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-primary"
         >
           Continue
         </button>

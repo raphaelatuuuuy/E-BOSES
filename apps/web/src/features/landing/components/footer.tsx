@@ -1,5 +1,5 @@
-import { Link } from "react-router-dom"
-import { MapPinIcon, PhoneIcon } from "lucide-react"
+import { Link, useLocation, useNavigate } from "react-router-dom"
+import { ArrowRightIcon, MailIcon, PhoneIcon } from "lucide-react"
 
 type PlatformLink = { label: string; href?: string; to?: string }
 
@@ -7,11 +7,22 @@ const PLATFORM_LINKS: PlatformLink[] = [
   { label: "How it Works", href: "#how-it-works" },
   { label: "Community", href: "#community" },
   { label: "Resident Benefits", href: "#impact" },
-  { label: "Contact", href: "#contact" },
+  { label: "Active Communities", to: "/communities" },
   { label: "Help Center", to: "/help" },
 ]
 
 export function Footer() {
+  const location = useLocation()
+  const navigate = useNavigate()
+
+  const scrollTo = (href: string) => {
+    const id = href.slice(1)
+    if (location.pathname === "/") {
+      document.getElementById(id)?.scrollIntoView({ behavior: "smooth" })
+    } else {
+      navigate("/" + href)
+    }
+  }
   return (
     <footer className="relative overflow-hidden border-t border-white/10 bg-linear-to-b from-landing-bg to-landing-bg text-white">    
       {/* Backdrop: ember horizon. Deep red-orange glow rising from the bottom
@@ -58,8 +69,8 @@ export function Footer() {
                 <span className="text-lg font-bold text-primary">Boses</span>
               </Link>
               <p className="mt-3 text-sm leading-relaxed text-white/40">
-                E-Boses helps Marikina Heights residents report local concerns, send emergency
-                alerts, and follow updates in one place.
+                E-Boses gives communities one place to report local concerns, send emergency
+                alerts, and follow every update until it is resolved.
               </p>
             </div>
           </div>
@@ -76,9 +87,13 @@ export function Footer() {
                           {link.label}
                         </Link>
                       ) : (
-                        <a className="transition-colors hover:text-primary" href={link.href}>
+                        <button
+                          type="button"
+                          className="transition-colors hover:text-primary"
+                          onClick={() => scrollTo(link.href!)}
+                        >
                           {link.label}
-                        </a>
+                        </button>
                       )}
                     </li>
                   ))}
@@ -99,14 +114,32 @@ export function Footer() {
             <h4 className="mb-6 font-bold text-white">Contact</h4>
             <ul className="space-y-4 text-sm text-white/50">
               <li className="flex items-start gap-3">
-                <MapPinIcon className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
-                <span>Barangay Hall, Marikina Heights, Marikina City</span>
+                <MailIcon className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
+                <a className="break-all transition-colors hover:text-primary" href="mailto:eboses@gmail.com">
+                  eboses@gmail.com
+                </a>
               </li>
               <li className="flex items-start gap-3">
                 <PhoneIcon className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
-                <span>Marikina City hotline 161</span>
+                <a className="transition-colors hover:text-primary" href="tel:09613065905">
+                  09613065905
+                </a>
               </li>
             </ul>
+            <div className="mt-6 flex flex-col items-start gap-3">
+              <Link
+                to="/create-community"
+                className="inline-flex min-h-10 w-60 items-center justify-center rounded-none border border-white/20 px-5 text-sm font-medium text-white/85 transition-colors hover:border-white/40 hover:bg-white/5 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+              >
+                Make your Own Community
+              </Link>
+              <Link
+                to="/book-demo"
+                className="inline-flex min-h-10 w-60 items-center justify-center gap-2 rounded-none border border-accent bg-accent px-5 text-sm font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+              >
+                Book a Demo <ArrowRightIcon className="size-4" strokeWidth={2} aria-hidden />
+              </Link>
+            </div>
           </div>
         </div>
 

@@ -8,21 +8,26 @@ import type {
   ResidentMapEmergency,
 } from "@/features/dashboard/api"
 import {
-  categoryMeta,
-  emergencyBrief,
   isLocalGps,
   MAP_BOUNDS,
   validCoord,
 } from "@/features/dashboard/lib/resident-map-utils"
-import { timeAgo } from "@/features/dashboard/lib/format"
-import { formatFixTime } from "@/features/dashboard/lib/last-known-position"
-import { advisoryMeta, advisoryMarkerHtml } from "@/features/dashboard/components/community-content/advisory-tags"
-import { MAP_COLORS } from "@/features/dashboard/components/alerts-map/lib"
+import {
+  advisoryMeta,
+  advisoryMarkerHtml,
+  advisoryMarkerSize,
+} from "@/features/dashboard/components/community-content/advisory-tags"
 import {
   concernMarkerHtml,
   concernMarkerSize,
-  isResolvedStatus,
 } from "@/features/dashboard/components/map/concern-marker"
+import {
+  dotPinHtml,
+  glyphPinHtml,
+  glyphPinSize,
+  GLYPHS,
+  MAP_COLORS,
+} from "@/features/dashboard/components/map/markers"
 import { geoJsonToRing, polygonCentroid } from "@/features/dashboard/components/community-content/area-lib"
 import { geoJsonToLines } from "@/features/dashboard/components/alerts-map/lib"
 
@@ -38,27 +43,23 @@ export type MapApi = {
   zoomOut: () => void
 }
 
-/** Ongoing SOS pin — red pulse-style dot */
-function emergencyDotHtml() {
-  return `<div style="position:relative;width:26px;height:26px">
-    <div style="position:absolute;inset:0;border-radius:999px;background:rgba(220,38,38,.28)"></div>
-    <div style="position:absolute;left:50%;top:50%;width:14px;height:14px;transform:translate(-50%,-50%);border-radius:999px;background:#dc2626;border:2.5px solid #fff;box-shadow:0 2px 10px rgba(220,38,38,.45)"></div>
-  </div>`
+const EMERGENCY_PIN = 28
+
+/** Ongoing SOS — the same circle-and-glyph an official and a responder see. */
+function emergencyPinHtml(selected: boolean) {
+  return glyphPinHtml({
+    paths: GLYPHS.emergency,
+    color: MAP_COLORS.emergency,
+    size: EMERGENCY_PIN,
+    selected,
+    live: false,
+  })
 }
+
+const USER_PIN = 10
 
 function userPinHtml() {
-  return `<div style="position:relative;width:28px;height:28px">
-    <div style="position:absolute;inset:0;border-radius:999px;background:rgba(59,130,246,.25)"></div>
-    <div style="position:absolute;left:50%;top:50%;width:14px;height:14px;transform:translate(-50%,-50%);border-radius:999px;background:#3b82f6;border:3px solid #fff;box-shadow:0 2px 10px rgba(37,99,235,.45)"></div>
-  </div>`
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
+  return dotPinHtml({ color: MAP_COLORS.you, size: USER_PIN })
 }
 
 /**
@@ -84,9 +85,12 @@ export function ResidentLeafletMap({
   onSelectAnnouncement,
   onReady,
   onMapInteract,
+  policy,
 }: {
   center: { latitude: number; longitude: number; zoom: number }
   boundary?: ResidentAlertsMapSnapshot["map"]["boundary"] | null
+  /** Acceptance zone from the barangay's dispatch policy, drawn read-only. */
+  policy?: ResidentAlertsMapSnapshot["map"]["dispatch_policy"]
   posts: Concern[]
   emergencies?: ResidentMapEmergency[]
   /** Published barangay advisories that carry a drawn affected area. */
@@ -113,6 +117,7 @@ export function ResidentLeafletMap({
     Map<number, { roads: Array<{ casing: leaflet.Polyline; core: leaflet.Polyline }>; wide: string | null }>
   >(new Map())
   const highlightGroupRef = useRef<leaflet.LayerGroup | null>(null)
+  const coverageGroupRef = useRef<leaflet.LayerGroup | null>(null)
   const hoverIdRef = useRef<number | null>(null)
   const focusIdRef = useRef<number | null>(null)
   const onMapInteractRef = useRef(onMapInteract)
@@ -144,9 +149,7 @@ export function ResidentLeafletMap({
         const ring = geoJsonToRing(boundary.geometry as GeoJsonPolygon)
         if (ring.length >= 3) {
           L.polygon(ring, {
-            color: entry.wide,
-            weight: 2,
-            opacity: 0.9,
+            stroke: false,
             fillColor: entry.wide,
             fillOpacity: 0.15,
             interactive: false,
@@ -214,6 +217,7 @@ export function ResidentLeafletMap({
 
       // Hover-only barangay fill: sits beneath every advisory road/marker.
       highlightGroupRef.current = L.layerGroup().addTo(map)
+      coverageGroupRef.current = L.layerGroup().addTo(map)
       groupRef.current = L.layerGroup().addTo(map)
       mapRef.current = map
 
@@ -302,6 +306,7 @@ export function ResidentLeafletMap({
       mapRef.current = null
       LRef.current = null
       groupRef.current = null
+      coverageGroupRef.current = null
       boundaryLayerRef.current = null
       fittedGeomKeyRef.current = ""
       highlightGroupRef.current = null
@@ -328,6 +333,8 @@ export function ResidentLeafletMap({
       }
       boundaryLayerRef.current = null
     }
+    // Kept off the map (not `.addTo(map)`) so the dashed barangay outline stays
+    // hidden — the layer only exists here to feed `fitBoundary()` its bounds.
     boundaryLayerRef.current = L.geoJSON(boundary.geometry as Parameters<typeof L.geoJSON>[0], {
       style: {
         color: "#64748b",
@@ -337,7 +344,7 @@ export function ResidentLeafletMap({
         opacity: 0.75,
         dashArray: "4 4",
       },
-    }).addTo(map)
+    })
     try {
       const bounds = boundaryLayerRef.current.getBounds()
       if (bounds.isValid()) {
@@ -355,6 +362,16 @@ export function ResidentLeafletMap({
     }
   }, [mapReady, boundaryGeomKey, boundary?.geometry])
 
+  // The acceptance-zone radius stays hidden on the resident map — it's an
+  // internal dispatch limit, not something a resident needs drawn over the
+  // barangay.
+  useEffect(() => {
+    if (!mapReady) return
+    const group = coverageGroupRef.current
+    if (!group) return
+    group.clearLayers()
+  }, [mapReady, policy])
+
   useEffect(() => {
     if (!mapReady) return
     const L = LRef.current
@@ -371,29 +388,12 @@ export function ResidentLeafletMap({
         icon: L.divIcon({
           className: "",
           html: userPinHtml(),
-          iconSize: [28, 28],
-          iconAnchor: [14, 14],
+          iconSize: [USER_PIN, USER_PIN],
+          iconAnchor: [USER_PIN / 2, USER_PIN / 2],
         }),
         zIndexOffset: 1200,
         keyboard: false,
       })
-      userMarker.bindTooltip(
-        `<div style="font:600 12px/1.5 system-ui,sans-serif;color:#0f172a;max-width:200px">
-          <div style="font-weight:800;color:#1d4ed8;margin-bottom:1px">You</div>
-          ${
-            userPosAt != null && Number.isFinite(userPosAt)
-              ? `<div style="font-weight:500;color:#64748b">Last known: ${escapeHtml(formatFixTime(userPosAt))}</div>`
-              : ""
-          }
-        </div>`,
-        {
-          direction: "top",
-          offset: [0, -10],
-          opacity: 1,
-          className: "eboses-em-tip",
-          permanent: false,
-        },
-      )
       userMarker.addTo(group)
     }
 
@@ -419,30 +419,6 @@ export function ResidentLeafletMap({
         L.DomEvent.stopPropagation(e)
         onSelect(post.id)
       })
-      const meta = categoryMeta[post.category]
-      const catLabel = meta?.label ?? post.category.replace(/_/g, " ")
-      marker.bindTooltip(
-        `<div style="font:600 11px/1.45 system-ui,sans-serif;color:#0f172a;max-width:200px">
-          <div style="font-weight:800;color:${meta?.color ?? "#475569"}">${escapeHtml(catLabel)}</div>
-          ${
-            isResolvedStatus(post.status)
-              ? `<div style="font-weight:700;color:${MAP_COLORS.resolved}">Resolved</div>`
-              : ""
-          }
-          ${
-            post.created_at
-              ? `<div style="font-weight:500;color:#64748b">Posted ${escapeHtml(timeAgo(post.created_at))} ago</div>`
-              : ""
-          }
-        </div>`,
-        {
-          direction: "top",
-          offset: [0, -8],
-          opacity: 1,
-          className: "eboses-em-tip",
-          permanent: false,
-        },
-      )
       marker.addTo(group)
     }
 
@@ -452,15 +428,16 @@ export function ResidentLeafletMap({
     /** One advisory marker, wherever the advisory's anchor turns out to be. */
     const addAdvisoryMarker = (announcement: Announcement, at: leaflet.LatLngTuple) => {
       const id = announcement.id
-      const tagColor = advisoryMeta(announcement.tag).color
+      const selected = selectedAnnouncementId === id
+      const pinSize = advisoryMarkerSize(26, selected)
       const marker = L.marker(at, {
         icon: L.divIcon({
           className: "",
-          html: advisoryMarkerHtml(announcement.tag),
-          iconSize: [26, 26],
-          iconAnchor: [13, 13],
+          html: advisoryMarkerHtml(announcement.tag, 26, "light", selected),
+          iconSize: [pinSize, pinSize],
+          iconAnchor: [pinSize / 2, pinSize / 2],
         }),
-        zIndexOffset: 600,
+        zIndexOffset: selected ? 700 : 600,
         keyboard: true,
       })
       marker.on("mouseover", () => {
@@ -486,36 +463,6 @@ export function ResidentLeafletMap({
           applyAdvisoryFocus(hoverIdRef.current)
         })
       }
-      marker.bindTooltip(
-        `<div style="font:600 11px/1.45 system-ui,sans-serif;color:#0f172a;max-width:220px">
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
-            <span style="font-weight:800;color:${tagColor}">${escapeHtml(announcement.tag || "Announcement")}</span>
-            ${
-              announcement.is_pinned
-                ? `<span style="font-size:9px;font-weight:800;letter-spacing:.04em;color:#fff;background:${tagColor};border-radius:999px;padding:1px 6px">PINNED</span>`
-                : ""
-            }
-          </div>
-          <div style="font-weight:800;color:#0f172a;margin-bottom:2px">${escapeHtml(announcement.title)}</div>
-          ${
-            announcement.place_label
-              ? `<div style="font-weight:600;color:#475569">${escapeHtml(announcement.place_label)}</div>`
-              : ""
-          }
-          ${
-            announcement.created_at
-              ? `<div style="font-weight:500;color:#64748b">Posted ${escapeHtml(timeAgo(announcement.created_at))} ago</div>`
-              : ""
-          }
-        </div>`,
-        {
-          direction: "top",
-          offset: [0, -14],
-          opacity: 1,
-          className: "eboses-em-tip",
-          permanent: false,
-        },
-      )
       marker.addTo(group)
     }
 
@@ -594,41 +541,16 @@ export function ResidentLeafletMap({
       const pos = validCoord(em.latitude, em.longitude)
       if (!pos) continue
       const selected = selectedEmergencyId === em.id
-      const brief = emergencyBrief(em)
+      const box = glyphPinSize(EMERGENCY_PIN, selected)
       const marker = L.marker(pos, {
         icon: L.divIcon({
           className: "",
-          html: emergencyDotHtml(),
-          iconSize: [26, 26],
-          iconAnchor: [13, 13],
+          html: emergencyPinHtml(selected),
+          iconSize: [box, box],
+          iconAnchor: [box / 2, box / 2],
         }),
         zIndexOffset: selected ? 1100 : 800,
       })
-      marker.bindTooltip(
-        `<div style="font:600 11px/1.25 system-ui,sans-serif;color:#0f172a;max-width:180px">
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
-            <span style="color:#dc2626;font-weight:800">${escapeHtml(brief.title)}</span>
-            ${
-              brief.status.live
-                ? `<span style="font-size:9px;font-weight:800;letter-spacing:.04em;color:#fff;background:#dc2626;border-radius:999px;padding:1px 6px">LIVE</span>`
-                : ""
-            }
-          </div>
-          <div style="font-weight:600;color:#b91c1c;margin-bottom:2px">${escapeHtml(brief.status.label)}</div>
-          ${
-            em.created_at
-              ? `<div style="font-weight:500;color:#64748b">Posted ${escapeHtml(timeAgo(em.created_at))} ago</div>`
-              : ""
-          }
-        </div>`,
-        {
-          direction: "top",
-          offset: [0, -12],
-          opacity: 1,
-          className: "eboses-em-tip",
-          permanent: false,
-        },
-      )
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e)
         onSelectEmergency?.(em.id)
@@ -637,7 +559,7 @@ export function ResidentLeafletMap({
     }
     // Re-apply after a rebuild: a selection survives while a hover does not.
     applyAdvisoryFocus(focusIdRef.current)
-  }, [mapReady, posts, emergencies, announcements, selectedId, selectedEmergencyId, userPos, userPosAt, onSelect, onSelectEmergency, onSelectAnnouncement, boundary?.geometry, center.latitude, center.longitude, applyAdvisoryFocus])
+  }, [mapReady, posts, emergencies, announcements, selectedId, selectedEmergencyId, selectedAnnouncementId, userPos, userPosAt, onSelect, onSelectEmergency, onSelectAnnouncement, boundary?.geometry, center.latitude, center.longitude, applyAdvisoryFocus])
 
   useEffect(() => {
     if (!mapReady || selectedId == null || !mapRef.current) return
@@ -684,19 +606,9 @@ export function ResidentLeafletMap({
         .eboses-alerts-map .leaflet-tile-pane,
         .eboses-alerts-map .leaflet-overlay-pane,
         .eboses-alerts-map .leaflet-shadow-pane,
-        .eboses-alerts-map .leaflet-marker-pane,
-        .eboses-alerts-map .leaflet-tooltip-pane,
-        .eboses-alerts-map .leaflet-popup-pane {
+        .eboses-alerts-map .leaflet-marker-pane {
           z-index: auto;
         }
-        .eboses-em-tip {
-          background: #fff !important;
-          border: 1px solid #e5e7eb !important;
-          border-radius: 10px !important;
-          box-shadow: 0 6px 18px rgba(15,23,42,.14) !important;
-          padding: 6px 8px !important;
-        }
-        .eboses-em-tip::before { border-top-color: #fff !important; }
         .eboses-alerts-map img.leaflet-tile,
         .eboses-alerts-map .leaflet-tile,
         .eboses-alerts-map .eboses-map-tiles {
@@ -704,9 +616,90 @@ export function ResidentLeafletMap({
           max-height: none !important;
           width: 256px !important;
           height: 256px !important;
+          mix-blend-mode: normal !important;
+        }
+        .eboses-alerts-map .leaflet-tile-pane {
+          isolation: isolate;
         }
         .eboses-alerts-map .leaflet-container img {
           max-width: none !important;
+        }
+        /* Current-location pin only loses its ring; every record pin (concern,
+           emergency, advisory) keeps its white border. */
+        .eboses-alerts-map .eboses-pin__core {
+          border: none;
+        }
+        .eboses-alerts-map .eboses-pin__disc,
+        .eboses-alerts-map .eboses-pin__core {
+          box-shadow: none;
+        }
+        /* Soft tint background + solid glyph colour instead of a bold filled
+           disc, plus true centering for the icon inside it. */
+        .eboses-alerts-map .eboses-pin__disc {
+          background: color-mix(in srgb, var(--pin) 16%, white);
+          color: var(--pin);
+          transition: background-color 160ms ease, color 160ms ease;
+        }
+        .eboses-alerts-map .eboses-pin__disc svg {
+          display: block;
+        }
+        /* Community reports: neutral grey until hovered or opened, then they
+           pick up their category colour and grow slightly. */
+        .eboses-alerts-map .eboses-pin--glyph.is-idle-neutral {
+          transition: transform 160ms ease;
+          transform-origin: 50% 50%;
+        }
+        .eboses-alerts-map .eboses-pin--glyph.is-idle-neutral .eboses-pin__disc {
+          background: #e5e7eb;
+          color: #6b7280;
+        }
+        .eboses-alerts-map .eboses-pin--glyph.is-idle-neutral:hover,
+        .eboses-alerts-map .eboses-pin--glyph.is-idle-neutral:focus-visible {
+          transform: scale(1.12);
+        }
+        .eboses-alerts-map .eboses-pin--glyph.is-idle-neutral:hover .eboses-pin__disc,
+        .eboses-alerts-map .eboses-pin--glyph.is-idle-neutral:focus-visible .eboses-pin__disc {
+          background: color-mix(in srgb, var(--pin) 16%, white);
+          color: var(--pin);
+        }
+        /* Advisory pins: same "grow slightly" affordance as reports, without
+           the neutral/colour swap (advisories already show their tag colour). */
+        .eboses-alerts-map .eboses-pin--glyph.is-hover-grow {
+          transition: transform 160ms ease;
+          transform-origin: 50% 50%;
+        }
+        .eboses-alerts-map .eboses-pin--glyph.is-hover-grow:hover,
+        .eboses-alerts-map .eboses-pin--glyph.is-hover-grow:focus-visible {
+          transform: scale(1.12);
+        }
+        /* Current-location dot: much quieter halo/blink than the shared
+           default, since it's a constant fixture rather than a live alert. */
+        .eboses-alerts-map .eboses-pin--dot .eboses-pin__halo {
+          opacity: 0.22;
+          animation: eboses-pin-halo-minimal 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+        }
+        @keyframes eboses-pin-halo-minimal {
+          0% {
+            transform: scale(1);
+            opacity: 0.22;
+          }
+          70%,
+          100% {
+            transform: scale(1.5);
+            opacity: 0;
+          }
+        }
+        .eboses-alerts-map .eboses-pin--dot.is-live .eboses-pin__core {
+          animation: eboses-pin-blink-minimal 2.4s ease-in-out infinite;
+        }
+        @keyframes eboses-pin-blink-minimal {
+          0%,
+          100% {
+            box-shadow: 0 0 0 0 var(--pin);
+          }
+          50% {
+            box-shadow: 0 0 3px 1px var(--pin);
+          }
         }
       `}</style>
       <div

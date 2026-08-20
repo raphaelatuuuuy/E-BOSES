@@ -145,7 +145,7 @@ ANSWERS = {
             "- Visit the barangay office during office hours for anything needing a signature "
             "or an original document.\n"
             f"- Email {support_email()} for account and app questions.\n"
-            "- Call 161 for Marikina Rescue, or 911.\n"
+            "- Call 161 for local rescue services, or 911.\n"
             "\n"
             "If an emergency is happening right now, do not wait for a reply here. Use the "
             "emergency button in the app or call 161."
@@ -162,7 +162,7 @@ ANSWERS = {
             "4. Send. On-duty responders are alerted immediately.\n"
             "\n"
             "You can also text the barangay emergency number if you have no mobile data. "
-            "Send HELP followed by the type and the place, for example: HELP FIRE Champaca Street."
+            "Send HELP followed by the type and the place, for example: HELP FIRE Main Street."
         ),
         "suggestions": [TRACK_REPORT, CONTACT_SUPPORT],
     },

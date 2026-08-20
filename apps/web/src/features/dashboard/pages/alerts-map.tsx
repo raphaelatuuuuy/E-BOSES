@@ -25,6 +25,7 @@ import {
   isResolvedRecord,
   isActiveEmergency,
   defaultLayers,
+  emptyLiveMapSnapshot,
   formatTime,
   MAP_COLORS,
   mergeUpdate,
@@ -34,6 +35,12 @@ import {
 } from "@/features/dashboard/components/alerts-map/lib"
 
 const SHEET_COLLAPSED = 56
+
+/**
+ * Stable identity, created once. The map is memoised on its props, so handing
+ * it a fresh empty snapshot each render would rebuild every layer.
+ */
+const PENDING_SNAPSHOT = emptyLiveMapSnapshot()
 
 /**
  * The alert feed, as a panel that floats over the map.
@@ -49,6 +56,7 @@ function AlertsList({
   feedItems,
   onSelect,
   isCollapsed,
+  areaName,
 }: {
   feedChips: readonly string[]
   feedChip: string
@@ -56,14 +64,15 @@ function AlertsList({
   feedItems: Array<{ kind: "emergency" | "concern"; id: number; title: string; sub: string; time: string; priority?: string }>
   onSelect: (selection: Selection) => void
   isCollapsed?: boolean
+  areaName?: string
 }) {
+  const heading = areaName ? `Alerts in ${areaName}` : "Alerts in your coverage area"
+
   if (isCollapsed) {
     return (
       <div className="flex min-h-0 flex-col text-white">
         <div className="shrink-0 px-4 pb-2 pt-0.5 text-center">
-          <p className="text-[10px] font-semibold text-white/50">
-            Alerts in Marikina Heights
-          </p>
+          <p className="text-[10px] font-semibold text-white/50">{heading}</p>
         </div>
       </div>
     )
@@ -72,9 +81,7 @@ function AlertsList({
   return (
     <div className="flex min-h-0 flex-col text-white">
       <div className="shrink-0 px-4 pt-3.5 text-center">
-        <p className="text-[10px] font-semibold text-white/40">
-          Alerts in Marikina Heights
-        </p>
+        <p className="text-[10px] font-semibold text-white/40">{heading}</p>
       </div>
 
       <div className="shrink-0 px-4 pb-3 pt-3">
@@ -363,8 +370,7 @@ export default function AlertsMapPage() {
    * means the number and the pins can never disagree.
    */
   const mapCounts = useMemo(() => {
-    if (!snapshot) return null
-    const withLocation = snapshot.people.filter(
+    const withLocation = (snapshot?.people ?? []).filter(
       (person) => validCoord(person.latitude, person.longitude) !== null,
     )
     const byRole = (role: string) => withLocation.filter((person) => person.role === role).length
@@ -374,17 +380,10 @@ export default function AlertsMapPage() {
       officials: byRole("barangay_official"),
       emergencies: visibleEmergencies.length,
       concerns: visibleConcerns.length,
-      advisories: (snapshot.advisories ?? []).length,
+      advisories: (snapshot?.advisories ?? []).length,
       resolved: resolvedRecords.concerns.length + resolvedRecords.emergencies.length,
     }
   }, [snapshot, visibleConcerns, visibleEmergencies, resolvedRecords])
-
-  if (!loaded) {
-    // Needs `h-full` for the same reason the real return below does (see the
-    // comment there): on desktop the shell's <main> is a block with a definite
-    // height, so `flex-1` alone is inert and the skeleton collapses to 0px.
-    return <div className="h-full min-h-0 w-full flex-1 animate-pulse bg-nav-bg" />
-  }
 
   // Desktop left panel: list, or the detail panel with its own back/close chrome.
   // Gated on the JS `isDesktop` flag (not just the `lg:block` CSS class) so the
@@ -408,7 +407,7 @@ export default function AlertsMapPage() {
       snapshot ? <div className="staff-dark min-h-0 overflow-y-auto">{<DetailPanel selected={selected} snapshot={snapshot} onClose={clearSelection} onEmergencyUpdated={updateEmergency} />}</div> : null
     )
   ) : (
-    <AlertsList feedChips={feedChips} feedChip={feedChip} onFeedChipChange={setFeedChip} feedItems={feedItems} onSelect={setSelected} />
+    <AlertsList feedChips={feedChips} feedChip={feedChip} onFeedChipChange={setFeedChip} feedItems={feedItems} onSelect={setSelected} areaName={snapshot?.map.boundary.name} />
   )
 
 
@@ -434,18 +433,25 @@ export default function AlertsMapPage() {
         }
       }}
     >
-      {snapshot && mapCounts ? (
-        <AlertsLeafletMap
-          snapshot={snapshot}
-          layers={layers}
-          selected={selected}
-          selectedStreetNames={mapSelectedStreetNames}
-          onSelect={selectOnMap}
-          onToggleLayer={toggleLayer}
-          onResetLayers={resetLayers}
-          onPolicyUpdated={updatePolicy}
-          counts={mapCounts}
-        />
+      {/* Mounted before the fetch resolves: tiles, controls and the legend are
+          the map's own chrome and do not need a single record to be useful.
+          The snapshot only fills them in. */}
+      <AlertsLeafletMap
+        snapshot={snapshot ?? PENDING_SNAPSHOT}
+        layers={layers}
+        selected={selected}
+        selectedStreetNames={mapSelectedStreetNames}
+        onSelect={selectOnMap}
+        onToggleLayer={toggleLayer}
+        onResetLayers={resetLayers}
+        onPolicyUpdated={updatePolicy}
+        counts={mapCounts}
+      />
+
+      {!loaded ? (
+        <div className="pointer-events-none absolute left-1/2 top-3 z-[650] -translate-x-1/2 rounded-full border border-white/10 bg-nav-bg/85 px-3 py-1.5 text-[11.5px] font-semibold text-white/70 backdrop-blur-md">
+          Loading alerts…
+        </div>
       ) : null}
 
       {error ? (
@@ -531,6 +537,7 @@ export default function AlertsMapPage() {
             feedItems={feedItems}
             onSelect={setSelected}
             isCollapsed={sheetHeight <= SHEET_COLLAPSED + 24}
+            areaName={snapshot?.map.boundary.name}
           />
         </div>
       </div>

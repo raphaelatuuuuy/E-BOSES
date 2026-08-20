@@ -931,6 +931,44 @@ export function getMapDispatchPolicy() {
   return apiRequest<MapDispatchPolicy>("/emergencies/map-dispatch-policy/")
 }
 
+export interface BarangayBoundary {
+  /** null for a boundary that came straight from OSM, not the local table. */
+  id: number | null
+  /** "custom" is client-side only: a name typed by an official. */
+  source: "saved" | "osm" | "custom"
+  name: string
+  locality: string
+  osm_id: number
+  is_home: boolean
+  geometry: LiveMapGeometry | null
+}
+
+export function searchBarangayBoundaries(query: string) {
+  const search = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ""
+  return apiRequest<BarangayBoundary[]>(`/locations/boundaries/${search}`)
+}
+
+export interface ActiveCommunity {
+  id: number
+  name: string
+  locality: string
+  is_home: boolean
+  geometry: LiveMapGeometry | null
+}
+
+/** Barangays already running as their own community, outlines included. */
+export function listActiveCommunities() {
+  return apiRequest<ActiveCommunity[]>("/locations/active-communities/")
+}
+
+/** Saves a corrected barangay outline; every map reads this same row. */
+export function updateBarangayBoundary(id: number, geometry: GeoJsonPolygon) {
+  return apiRequest<BarangayBoundary>(`/locations/boundaries/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify({ geometry }),
+  })
+}
+
 export function updateMapDispatchPolicy(payload: Partial<MapDispatchPolicy>) {
   return apiRequest<MapDispatchPolicy>("/emergencies/map-dispatch-policy/", {
     method: "PATCH",
@@ -1085,6 +1123,8 @@ export interface MapDispatchPolicy {
   acceptance_center_latitude: number | string
   acceptance_center_longitude: number | string
   acceptance_radius_meters: number
+  /** Drawn acceptance zone. When present it replaces the circle. */
+  acceptance_geometry: GeoJsonPolygon | null
   out_of_zone_action: "block" | "warn" | "review"
   witness_radius_meters: number
   responder_nearby_radius_meters: number
@@ -1209,6 +1249,8 @@ export interface ResidentAlertsMapSnapshot {
     provider: "OpenStreetMap"
     center: { latitude: number; longitude: number; zoom: number }
     boundary: { osm_relation_id: number; name: string; geometry?: LiveMapGeometry | null }
+    /** The acceptance zone, so a resident sees the same limit an official set. */
+    dispatch_policy?: MapDispatchPolicy | null
   }
   concerns: ResidentMapConcern[]
   emergencies: ResidentMapEmergency[]

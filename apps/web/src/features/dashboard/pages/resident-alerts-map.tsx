@@ -12,6 +12,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react"
+import { createPortal } from "react-dom"
 import {
   AlertTriangleIcon,
   ChevronLeftIcon,
@@ -545,11 +546,23 @@ export default function ResidentAlertsMapPage() {
   const isDesktop = useIsDesktop()
   const [weatherOpen, setWeatherOpen] = useState(false)
   const weatherPanelRef = useRef<HTMLDivElement>(null)
+  const weatherChipWrapRef = useRef<HTMLDivElement>(null)
+  const weatherPopoverRef = useRef<HTMLDivElement>(null)
+  const [weatherPopoverRect, setWeatherPopoverRect] = useState<{
+    top: number
+    right: number
+    maxHeight: number
+  } | null>(null)
   const [locating, setLocating] = useState(false)
   /** Officially-configured concern categories (filter chips), from the classification config. */
   const [filterCats, setFilterCats] = useState<CategoryChip[]>([])
   /** Desktop left alerts panel collapsed vs open. */
   const [alertsOpen, setAlertsOpen] = useState(true)
+  /** Desktop alerts panel size — null until the resident drags the corner. */
+  const [alertsPanelSize, setAlertsPanelSize] = useState<{ width: number; height: number } | null>(null)
+  const alertsPanelRef = useRef<HTMLElement>(null)
+  const [alertsPanelResizing, setAlertsPanelResizing] = useState(false)
+  const alertsPanelResizeStartRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null)
   /** Epoch ms of the last stored GPS fix — shown under the user pin. */
   const [userKnownAt, setUserKnownAt] = useState<number | null>(() => {
     const stored = readLastKnownPosition(user?.id ?? null)
@@ -562,7 +575,10 @@ export default function ResidentAlertsMapPage() {
     function onPointerDown(e: PointerEvent) {
       const root = weatherPanelRef.current
       if (!root) return
-      if (e.target instanceof Node && !root.contains(e.target)) {
+      const insideTrigger = e.target instanceof Node && root.contains(e.target)
+      const insidePopover =
+        e.target instanceof Node && !!weatherPopoverRef.current?.contains(e.target)
+      if (!insideTrigger && !insidePopover) {
         setWeatherOpen(false)
       }
     }
@@ -577,6 +593,62 @@ export default function ResidentAlertsMapPage() {
       document.removeEventListener("keydown", onKeyDown)
     }
   }, [weatherOpen, isDesktop])
+
+  // The map root clips overflow for its rounded corners, which used to crop
+  // the weather popover's bottom edge and let the legend chip (same z-index,
+  // later in paint order) sit on top of it. Portaling it to <body> with a
+  // measured, viewport-relative position escapes both problems.
+  useEffect(() => {
+    if (!weatherOpen || !isDesktop) return
+    function measure() {
+      const el = weatherChipWrapRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      setWeatherPopoverRect({
+        top: rect.bottom + 8,
+        right: Math.max(16, window.innerWidth - rect.right),
+        maxHeight: Math.max(200, window.innerHeight - rect.bottom - 24),
+      })
+    }
+    measure()
+    window.addEventListener("resize", measure)
+    return () => window.removeEventListener("resize", measure)
+  }, [weatherOpen, isDesktop])
+
+  // Desktop alerts panel: drag the bottom-right corner to resize. No visible
+  // grip — just a hit zone in the corner with a resize cursor.
+  useEffect(() => {
+    if (!alertsPanelResizing) return
+    function onMove(e: PointerEvent) {
+      const start = alertsPanelResizeStartRef.current
+      if (!start) return
+      const maxWidth = Math.min(640, window.innerWidth - 32)
+      const maxHeight = Math.min(window.innerHeight - 32, Math.round(window.innerHeight * 0.9))
+      const width = Math.min(maxWidth, Math.max(280, start.w + (e.clientX - start.x)))
+      const height = Math.min(maxHeight, Math.max(220, start.h + (e.clientY - start.y)))
+      setAlertsPanelSize({ width, height })
+    }
+    function onUp() {
+      setAlertsPanelResizing(false)
+      alertsPanelResizeStartRef.current = null
+    }
+    window.addEventListener("pointermove", onMove)
+    window.addEventListener("pointerup", onUp)
+    window.addEventListener("pointercancel", onUp)
+    return () => {
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("pointerup", onUp)
+      window.removeEventListener("pointercancel", onUp)
+    }
+  }, [alertsPanelResizing])
+
+  function onAlertsPanelResizeStart(e: ReactPointerEvent<HTMLDivElement>) {
+    e.preventDefault()
+    const rect = alertsPanelRef.current?.getBoundingClientRect()
+    if (!rect) return
+    alertsPanelResizeStartRef.current = { x: e.clientX, y: e.clientY, w: rect.width, h: rect.height }
+    setAlertsPanelResizing(true)
+  }
 
   const sheetSnaps = useCallback(() => {
     const vh = typeof window !== "undefined" ? window.innerHeight : 800
@@ -964,6 +1036,16 @@ export default function ResidentAlertsMapPage() {
     if (!isDesktop) snapSheetTo("peek")
   }
 
+  function toggleOrOpen(alreadySelected: boolean, open: () => void) {
+    if (alreadySelected) {
+      clearSelection()
+      setAlertsOpen(false)
+      if (!isDesktop) snapSheetTo("peek")
+      return
+    }
+    open()
+  }
+
   function openEmergency(id: number, write = false) {
     setSelectedId(null)
     setExpandedPost(null)
@@ -1322,6 +1404,7 @@ export default function ResidentAlertsMapPage() {
         <ResidentLeafletMap
           center={mapMeta.center}
           boundary={mapMeta.boundary}
+          policy={mapMeta.dispatch_policy}
           posts={filtered}
           emergencies={filteredEmergencies}
           announcements={visibleAnnouncements}
@@ -1331,10 +1414,14 @@ export default function ResidentAlertsMapPage() {
           userPos={userPos}
           userPosAt={userKnownAt}
           onSelect={(id) => {
-            void openPost(id, false)
+            toggleOrOpen(selectedId === id, () => void openPost(id, false))
           }}
-          onSelectEmergency={(id) => openEmergency(id)}
-          onSelectAnnouncement={(id) => openAnnouncement(id, false)}
+          onSelectEmergency={(id) => {
+            toggleOrOpen(selectedEmergencyId === id, () => openEmergency(id))
+          }}
+          onSelectAnnouncement={(id) => {
+            toggleOrOpen(selectedAnnouncementId === id, () => openAnnouncement(id, false))
+          }}
           onMapInteract={collapseSheetForMap}
           onReady={(api) => {
             mapApiRef.current = api
@@ -1409,7 +1496,7 @@ export default function ResidentAlertsMapPage() {
           </MapControlButton>
         </MapControlStack>
 
-        <div className="relative flex flex-col items-end">
+        <div ref={weatherChipWrapRef} className="relative flex flex-col items-end">
           <MapChip
             tone="light"
             label="Weather"
@@ -1428,10 +1515,23 @@ export default function ResidentAlertsMapPage() {
               {weather.temperature != null ? `${Math.round(weather.temperature)}°C` : "—"}
             </span>
           </MapChip>
+        </div>
+      </div>
 
-          {/* Desktop: popover under weather chip — closes on outside click / Escape */}
-          {weatherOpen && isDesktop ? (
-            <section className="scrollbar-hide absolute right-0 top-[calc(100%+0.5rem)] z-40 max-h-[min(70svh,520px)] w-[min(calc(100vw-1.5rem),340px)] overflow-y-auto overscroll-contain rounded-xl border border-neutral-200 bg-white p-4 text-neutral-900 shadow-lg">
+      {/* Desktop: popover under weather chip, portaled to <body> so the map's
+          overflow-hidden root can't clip it and it always paints above every
+          other map overlay (legend, controls, sheet). */}
+      {weatherOpen && isDesktop && weatherPopoverRect && typeof document !== "undefined"
+        ? createPortal(
+            <section
+              ref={weatherPopoverRef}
+              style={{
+                top: weatherPopoverRect.top,
+                right: weatherPopoverRect.right,
+                maxHeight: weatherPopoverRect.maxHeight,
+              }}
+              className="scrollbar-hide fixed z-[100] w-[min(calc(100vw-1.5rem),340px)] overflow-y-auto overscroll-contain rounded-xl border border-neutral-200 bg-white p-4 text-neutral-900 shadow-lg"
+            >
               <div className="flex items-start justify-between gap-3 border-b border-neutral-200 pb-3">
                 <div className="min-w-0">
                   <h2 className="truncate text-[15px] font-semibold">{weather.placeName}</h2>
@@ -1444,10 +1544,10 @@ export default function ResidentAlertsMapPage() {
                 )}
               </div>
               <WeatherDetails weather={weather} />
-            </section>
-          ) : null}
-        </div>
-      </div>
+            </section>,
+            document.body,
+          )
+        : null}
 
       {/* Below the map, clear of the control column, so the legend never covers
           the barangay. Collapsed it is one icon. */}
@@ -1622,7 +1722,15 @@ export default function ResidentAlertsMapPage() {
 
       {isDesktop ? (
         alertsOpen ? (
-          <aside className="absolute left-4 top-4 z-20 flex w-[min(100%,380px)] max-h-[min(72vh,620px)] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)]">
+          <aside
+            ref={alertsPanelRef}
+            className="absolute left-4 top-4 z-20 flex w-[min(100%,380px)] max-h-[min(72vh,620px)] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)]"
+            style={
+              alertsPanelSize
+                ? { width: alertsPanelSize.width, maxHeight: alertsPanelSize.height }
+                : undefined
+            }
+          >
             <div className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-100 px-3">
               <CircleAlertIcon className="size-5 shrink-0 text-neutral-800" strokeWidth={2.25} />
               <button
@@ -1636,6 +1744,12 @@ export default function ResidentAlertsMapPage() {
               </button>
             </div>
             {panelBody}
+            {/* Corner resize hit zone — no visible grip by design. */}
+            <div
+              onPointerDown={onAlertsPanelResizeStart}
+              className="absolute bottom-0 right-0 size-4 touch-none cursor-nwse-resize"
+              aria-hidden
+            />
           </aside>
         ) : (
           <button

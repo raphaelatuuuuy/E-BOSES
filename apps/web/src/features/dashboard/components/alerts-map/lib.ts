@@ -11,6 +11,7 @@ import {
   isEmergencyActive,
 } from "@/features/dashboard/components/record/status"
 import { formatTime as formatDateTime } from "@/features/dashboard/components/emergencies/lib"
+import { personDotHtml } from "@/features/dashboard/components/map/markers"
 import { roleLabelOf } from "@/features/dashboard/lib/people"
 
 export type LayerKey =
@@ -40,6 +41,49 @@ export const defaultLayers: Record<LayerKey, boolean> = {
   advisories: true,
   resolved: false,
   acceptance_zone: false,
+}
+
+/**
+ * A map with nothing on it yet. The page mounts Leaflet against this the
+ * moment it renders, so tiles, controls and the legend are on screen while the
+ * first snapshot is still in flight instead of after it.
+ */
+export function emptyLiveMapSnapshot(): LiveMapSnapshot {
+  return {
+    map: {
+      provider: "OpenStreetMap",
+      center: { latitude: 14.6507, longitude: 121.1133, zoom: 15 },
+      boundary: { osm_relation_id: 0, name: "", geometry: null },
+      streets: { streets: [], groups: {} },
+      dispatch_policy: {
+        id: null,
+        barangay: "",
+        acceptance_center_latitude: 14.6507,
+        acceptance_center_longitude: 121.1133,
+        acceptance_radius_meters: 800,
+        acceptance_geometry: null,
+        out_of_zone_action: "review",
+        witness_radius_meters: 250,
+        responder_nearby_radius_meters: 100,
+        emergency_sms_number: "",
+        updated_at: null,
+      },
+    },
+    people: [],
+    concerns: [],
+    emergencies: [],
+    routes: [],
+    advisories: [],
+    summary: {
+      active_alerts: 0,
+      concerns: 0,
+      emergencies: 0,
+      residents: 0,
+      responders: 0,
+      officials: 0,
+    },
+    generated_at: "",
+  }
 }
 
 export const activeConcernStatuses = new Set<string>(ACTIVE_CONCERN_STATUSES)
@@ -114,25 +158,10 @@ export function geoJsonToLines(geometry?: LiveMapGeometry | null): leaflet.LatLn
   return []
 }
 
-export const MAP_COLORS = {
-  emergency: "#f23b35",
-  concern: "#ff6a1a",
-  structure: "#7f8db8",
-  route: "#ff6a1a",
-  advisory: "#f2a03d",
-  responder: "#2563eb",
-  responderAssigned: "#4dc4ff",
-  responderOffDuty: "#5d6785",
-  resolved: "#16a34a",
-} as const
+export { MAP_COLORS } from "@/features/dashboard/components/map/markers"
 
 export function markerDotHtml(color: string, pulse = false) {
-  const core = pulse ? 11 : 8
-  return `<span class="eboses-map-pin${pulse ? " is-live" : ""}" style="--pin:${color};--core:${core}px">
-    <span class="eboses-map-pin__glow"></span>
-    ${pulse ? '<span class="eboses-map-pin__ring"></span>' : ""}
-    <span class="eboses-map-pin__core"></span>
-  </span>`
+  return personDotHtml(color, pulse, "dark")
 }
 
 export function mergeUpdate(snapshot: LiveMapSnapshot, message: LiveMapUpdate): LiveMapSnapshot {

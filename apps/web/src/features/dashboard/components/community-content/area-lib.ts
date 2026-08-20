@@ -22,6 +22,100 @@ export interface AreaPickerValue {
 
 export const emptyArea: AreaPickerValue = { streets: [], geometry: null, mode: "auto" }
 
+export interface DrawnShape {
+  id: string
+  kind: "polygon" | "line"
+  points: [number, number][]
+}
+
+export function shapeIsUsable(shape: DrawnShape): boolean {
+  return shape.kind === "polygon" ? shape.points.length >= 3 : shape.points.length >= 2
+}
+
+/**
+ * One GeoJSON Polygon for everything the user drew. Lines become ~30 m
+ * corridors so a stroke still stores as an area, and overlapping shapes are
+ * unioned. A MultiPolygon collapses to its largest member because the backend
+ * and the previews expect a single ring.
+ */
+export async function shapesToPolygon(shapes: DrawnShape[]): Promise<GeoJsonPolygon | null> {
+  const usable = shapes.filter(shapeIsUsable)
+  if (usable.length === 0) return null
+
+  try {
+    const [bufferModule, unionModule, helpers] = await Promise.all([
+      import("@turf/buffer"),
+      import("@turf/union"),
+      import("@turf/helpers"),
+    ])
+    const buffer = bufferModule.default ?? bufferModule.buffer
+    const union = unionModule.default ?? unionModule.union
+    const { lineString, polygon, featureCollection } = helpers
+
+    const features: Array<{ geometry: GeoJsonGeometry }> = []
+    for (const shape of usable) {
+      if (shape.kind === "line") {
+        const line = lineString(shape.points.map(([lat, lng]) => [lng, lat] as [number, number]))
+        const buffered = buffer(line as never, CORRIDOR_RADIUS_KM, {
+          units: "kilometers",
+        }) as unknown as { geometry?: GeoJsonGeometry } | null
+        if (buffered?.geometry) features.push({ geometry: buffered.geometry })
+        continue
+      }
+      const ring = shape.points.map(([lat, lng]) => [lng, lat] as [number, number])
+      const first = ring[0]
+      if (!first) continue
+      ring.push(first)
+      const shaped = polygon([ring]) as unknown as { geometry?: GeoJsonGeometry }
+      if (shaped.geometry) features.push({ geometry: shaped.geometry })
+    }
+    if (features.length === 0) return null
+
+    let merged: GeoJsonGeometry | null = features[0]?.geometry ?? null
+    for (let i = 1; i < features.length; i++) {
+      if (!merged) break
+      const result = union(
+        featureCollection([
+          { type: "Feature", properties: {}, geometry: merged },
+          { type: "Feature", properties: {}, geometry: features[i]!.geometry },
+        ] as never) as never,
+      ) as unknown as { geometry?: GeoJsonGeometry } | null
+      if (result?.geometry) merged = result.geometry
+    }
+
+    return largestRing(merged)
+  } catch {
+    return null
+  }
+}
+
+/** Largest outer ring of a Polygon/MultiPolygon, as a plain GeoJSON Polygon. */
+function largestRing(geometry: GeoJsonGeometry | null): GeoJsonPolygon | null {
+  if (!geometry) return null
+  let coordinates: number[][][] | null = null
+  if (geometry.type === "Polygon") {
+    coordinates = geometry.coordinates as number[][][]
+  } else if (geometry.type === "MultiPolygon") {
+    const parts = (geometry.coordinates as number[][][][]) ?? []
+    let largest = parts[0] ?? null
+    let largestArea = -1
+    for (const part of parts) {
+      const area = polygonRingArea(part[0] ?? [])
+      if (area > largestArea) {
+        largestArea = area
+        largest = part
+      }
+    }
+    coordinates = largest
+  }
+  const ring = coordinates?.[0]
+  if (!ring || ring.length < 4) return null
+  return {
+    type: "Polygon",
+    coordinates: [ring.map(([lng, lat]) => [lng, lat] as [number, number])],
+  }
+}
+
 export function areaFromAnnouncement(
   affectedStreets: string[] | undefined,
   areaGeometry: GeoJsonPolygon | null | undefined,

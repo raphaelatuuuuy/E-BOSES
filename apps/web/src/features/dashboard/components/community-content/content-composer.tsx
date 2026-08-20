@@ -73,7 +73,7 @@ function localDateTime(value: string | null | undefined) {
 const inputClass =
   "w-full rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[15px] font-normal text-neutral-900 outline-none transition-colors focus:border-neutral-500"
 
-const labelClass = "grid gap-1 text-[13px] font-medium text-neutral-500"
+const labelClass = "grid gap-1 text-[13px] font-normal text-neutral-500"
 
 const SCHEDULE_PRESETS = [
   { key: "now", label: "Now", icon: ClockIcon },
@@ -659,7 +659,13 @@ export function ContentComposer({
               : "Optional"}
           </span>
         </div>
-        <AreaPicker context={areaContext} value={area} onChange={setArea} tag={announcement.tag} />
+        <AreaPicker
+          context={areaContext}
+          value={area}
+          onChange={setArea}
+          tag={announcement.tag}
+          excludeId={editingAnnouncement}
+        />
       </div>
 
       <div className="flex gap-2 pt-2">

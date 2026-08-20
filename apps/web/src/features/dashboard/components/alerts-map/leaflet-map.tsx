@@ -34,6 +34,14 @@ import {
 } from "@/features/dashboard/components/map/map-chrome"
 import { MapLegend, type MapLegendRow } from "@/features/dashboard/components/map/map-legend"
 import {
+  concernGlyph,
+  dotPinHtml,
+  glyphPinHtml,
+  glyphPinSize,
+  GLYPHS,
+  personDotHtml,
+} from "@/features/dashboard/components/map/markers"
+import {
   type LayerKey,
   type Selection,
   type StreetLine,
@@ -42,7 +50,6 @@ import {
   isResolvedRecord,
   isActiveEmergency,
   MAP_COLORS,
-  markerDotHtml,
   policyNumber,
   validCoord,
 } from "./lib"
@@ -77,7 +84,6 @@ function AlertsLeafletMapInner({
   // through refs keeps that effect stable while still seeing the props the
   // page loaded with.
   const initialSnapshotRef = useRef(snapshot)
-  const initialLayersRef = useRef(layers)
   /**
    * Two groups, not one.
    *
@@ -237,11 +243,12 @@ function AlertsLeafletMapInner({
           myLocationRef.current = L.marker([coords.latitude, coords.longitude], {
             icon: L.divIcon({
               className: "",
-              html: markerDotHtml("var(--color-ice)", true),
-              iconSize: [30, 30],
-              iconAnchor: [15, 15],
+              html: dotPinHtml({ color: MAP_COLORS.you, size: 14, tone: "dark" }),
+              iconSize: [14, 14],
+              iconAnchor: [7, 7],
             }),
             interactive: false,
+            zIndexOffset: 1200,
           }).addTo(map)
         }
         toast.success(`You are here, within ${Math.round(coords.accuracy)} m`)
@@ -298,13 +305,6 @@ function AlertsLeafletMapInner({
       alertLayersRef.current = L.layerGroup().addTo(map)
       peopleLayersRef.current = L.layerGroup().addTo(map)
       mapRef.current = map
-      if (initialSnapshotRef.current.map.boundary.geometry) {
-        boundaryRef.current = L.geoJSON(initialSnapshotRef.current.map.boundary.geometry as Parameters<typeof L.geoJSON>[0], {
-          style: { color: MAP_COLORS.structure, weight: 1.5, fillColor: MAP_COLORS.structure, fillOpacity: 0.05, opacity: 0.5 },
-        }).addTo(map)
-        map.fitBounds(boundaryRef.current.getBounds(), { padding: [18, 18] })
-        if (!initialLayersRef.current.boundary && boundaryRef.current) map.removeLayer(boundaryRef.current)
-      }
       // Leaflet measures the container exactly once, at construction. On
       // mobile this page mounts before the flex chain has resolved a height,
       // so the map was built against a 0px box and never painted a single
@@ -343,13 +343,52 @@ function AlertsLeafletMapInner({
     }
   }, [])
 
+  // The edge is built from whatever geometry the snapshot currently holds, not
+  // from the one captured at mount. That is what lets the map paint before the
+  // first snapshot lands, and what makes an official's boundary edit show up
+  // here without a reload.
+  const boundaryGeometry = snapshot.map.boundary.geometry ?? null
+  const boundaryFittedRef = useRef(false)
+  useEffect(() => {
+    const map = mapRef.current
+    const L = LRef.current
+    if (!map || !L) return
+    if (boundaryRef.current) {
+      map.removeLayer(boundaryRef.current)
+      boundaryRef.current = null
+    }
+    if (!boundaryGeometry) return
+    const layer = L.geoJSON(boundaryGeometry as Parameters<typeof L.geoJSON>[0], {
+      style: {
+        color: MAP_COLORS.structure,
+        weight: 1.5,
+        fillColor: MAP_COLORS.structure,
+        fillOpacity: 0.05,
+        opacity: 0.5,
+      },
+      interactive: false,
+    })
+    boundaryRef.current = layer
+    if (layers.boundary) layer.addTo(map)
+    if (!boundaryFittedRef.current) {
+      const bounds = layer.getBounds()
+      if (bounds.isValid()) {
+        boundaryFittedRef.current = true
+        map.fitBounds(bounds, { padding: [18, 18] })
+      }
+    }
+    // layers.boundary is handled by the toggle effect below; keeping it out of
+    // here stops a checkbox from rebuilding a few-hundred-point polygon.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boundaryGeometry, mapReady])
+
   useEffect(() => {
     const map = mapRef.current
     const boundary = boundaryRef.current
     if (!map || !boundary) return
     if (layers.boundary && !map.hasLayer(boundary)) boundary.addTo(map)
     if (!layers.boundary && map.hasLayer(boundary)) map.removeLayer(boundary)
-  }, [layers.boundary, mapReady])
+  }, [layers.boundary, boundaryGeometry, mapReady])
 
   // Acceptance zone circle — grey ring showing the pin-acceptance limit, draggable & resizable
   const acceptanceZoneRef = useRef<leaflet.Circle | null>(null)
@@ -383,16 +422,13 @@ function AlertsLeafletMapInner({
     }).addTo(map)
     acceptanceZoneRef.current = circle
 
-    // Drag circle directly — capture mouse events to move the circle
+    // Drag the circle by its body. The move/up listeners are attached on press
+    // and dropped on release: leaving a `mousemove` handler on the map made
+    // Leaflet resolve a container point into a LatLng on every single pointer
+    // move across the whole map, which is what made this screen feel heavy
+    // next to the coverage-area editor.
     let dragging = false
     let dragOffset = { lat: 0, lng: 0 }
-    const onCircleMouseDown = (e: leaflet.LeafletMouseEvent) => {
-      dragging = true
-      const circleCenter = circle.getLatLng()
-      dragOffset = { lat: e.latlng.lat - circleCenter.lat, lng: e.latlng.lng - circleCenter.lng }
-      map.dragging.disable()
-    }
-    circle.on("mousedown", onCircleMouseDown)
 
     const onMapMouseMove = (e: leaflet.LeafletMouseEvent) => {
       if (!dragging) return
@@ -405,15 +441,25 @@ function AlertsLeafletMapInner({
       const eastLng = newCenter.lng + (currentRadius / 111320) * Math.cos(newCenter.lat * Math.PI / 180)
       handle.setLatLng([newCenter.lat, eastLng])
     }
-    map.on("mousemove", onMapMouseMove)
 
     const onMapMouseUp = () => {
       if (!dragging) return
       dragging = false
+      map.off("mousemove", onMapMouseMove)
+      map.off("mouseup", onMapMouseUp)
       map.dragging.enable()
       updateZoneDraft(circle.getLatLng(), circle.getRadius())
     }
-    map.on("mouseup", onMapMouseUp)
+
+    const onCircleMouseDown = (e: leaflet.LeafletMouseEvent) => {
+      dragging = true
+      const circleCenter = circle.getLatLng()
+      dragOffset = { lat: e.latlng.lat - circleCenter.lat, lng: e.latlng.lng - circleCenter.lng }
+      map.dragging.disable()
+      map.on("mousemove", onMapMouseMove)
+      map.on("mouseup", onMapMouseUp)
+    }
+    circle.on("mousedown", onCircleMouseDown)
 
     // Center draggable marker (moves the circle)
     const centerMarker = L.marker(centerLatLng, {
@@ -602,7 +648,7 @@ function AlertsLeafletMapInner({
           const marker = L.marker(centroid, {
             icon: L.divIcon({
               className: "",
-              html: advisoryMarkerHtml(advisory.tag, 26),
+              html: advisoryMarkerHtml(advisory.tag, 26, "dark"),
               iconSize: [26, 26],
               iconAnchor: [13, 13],
             }),
@@ -644,7 +690,7 @@ function AlertsLeafletMapInner({
         const marker = L.marker(centroid ?? [snapshot.map.center.latitude, snapshot.map.center.longitude], {
           icon: L.divIcon({
             className: "",
-            html: advisoryMarkerHtml(advisory.tag, 26),
+            html: advisoryMarkerHtml(advisory.tag, 26, "dark"),
             iconSize: [26, 26],
             iconAnchor: [13, 13],
           }),
@@ -656,7 +702,7 @@ function AlertsLeafletMapInner({
         const marker = L.marker(anchor, {
           icon: L.divIcon({
             className: "",
-            html: advisoryMarkerHtml(advisory.tag, 26),
+            html: advisoryMarkerHtml(advisory.tag, 26, "dark"),
             iconSize: [26, 26],
             iconAnchor: [13, 13],
           }),
@@ -687,9 +733,21 @@ function AlertsLeafletMapInner({
       if (!isActiveConcern(concern) && !(layers.resolved && concernResolved)) continue
       const coord = validCoord(concern.latitude, concern.longitude)
       if (!coord) continue
-      const color = concernResolved ? MAP_COLORS.resolved : MAP_COLORS.concern
+      const focused = selected?.kind === "concern" && selected.id === concern.id
+      const box = glyphPinSize(26, focused)
       const marker = L.marker(coord, {
-        icon: L.divIcon({ className: "", html: markerDotHtml(color), iconSize: [30, 30], iconAnchor: [15, 15] }),
+        icon: L.divIcon({
+          className: "",
+          html: glyphPinHtml({
+            paths: concernResolved ? GLYPHS.resolved : concernGlyph(concern.category),
+            color: concernResolved ? MAP_COLORS.resolved : MAP_COLORS.concern,
+            selected: focused,
+            tone: "dark",
+          }),
+          iconSize: [box, box],
+          iconAnchor: [box / 2, box / 2],
+        }),
+        zIndexOffset: focused ? 700 : 200,
       })
       const handleClick = () => onSelect({ kind: "concern", id: concern.id })
       marker.on("click", handleClick)
@@ -705,16 +763,23 @@ function AlertsLeafletMapInner({
       if (!isActiveEmergency(emergency) && !(layers.resolved && emergencyResolved)) continue
       const coord = validCoord(emergency.latitude, emergency.longitude)
       if (!coord) continue
+      const focused = selected?.kind === "emergency" && selected.id === emergency.id
+      const box = glyphPinSize(28, focused)
       const marker = L.marker(coord, {
         icon: L.divIcon({
           className: "",
-          html: markerDotHtml(
-            emergencyResolved ? MAP_COLORS.resolved : MAP_COLORS.emergency,
-            !emergencyResolved,
-          ),
-          iconSize: [30, 30],
-          iconAnchor: [15, 15],
+          html: glyphPinHtml({
+            paths: emergencyResolved ? GLYPHS.resolved : GLYPHS.emergency,
+            color: emergencyResolved ? MAP_COLORS.resolved : MAP_COLORS.emergency,
+            size: 28,
+            selected: focused,
+            live: !emergencyResolved,
+            tone: "dark",
+          }),
+          iconSize: [box, box],
+          iconAnchor: [box / 2, box / 2],
         }),
+        zIndexOffset: focused ? 800 : 400,
       })
       const handleClick = () => onSelect({ kind: "emergency", id: emergency.id })
       marker.on("click", handleClick)
@@ -731,6 +796,8 @@ function AlertsLeafletMapInner({
     layers.concerns,
     layers.emergencies,
     layers.resolved,
+    selected?.kind,
+    selected?.id,
     onSelect,
     mapReady,
   ])
@@ -789,19 +856,22 @@ function AlertsLeafletMapInner({
       // dispatcher allocates, so they get their own hue, and the one assigned
       // to the selected incident is lifted out of the rest.
       const color = !isResponder
-        ? MAP_COLORS.structure
+        ? person.role === "barangay_official"
+          ? MAP_COLORS.official
+          : MAP_COLORS.structure
         : isAssigned
           ? MAP_COLORS.responderAssigned
           : person.is_on_duty
             ? MAP_COLORS.responder
             : MAP_COLORS.responderOffDuty
 
+      const box = isFocused ? 13 : 10
       const marker = L.marker(coord, {
         icon: L.divIcon({
           className: "",
-          html: markerDotHtml(color, isFocused),
-          iconSize: [30, 30],
-          iconAnchor: [15, 15],
+          html: personDotHtml(color, isFocused, "dark"),
+          iconSize: [box, box],
+          iconAnchor: [box / 2, box / 2],
         }),
         title: isResponder
           ? `${person.full_name}${person.is_on_duty ? "" : " (off duty)"}`

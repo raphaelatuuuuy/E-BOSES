@@ -114,11 +114,14 @@ def street_catalog_payload():
     return _group_streets(streets)
 
 
+STATIC_MAP_CACHE_KEY = "live-map-static-geometry:v2"
+
+
 def static_map_payload():
-    cached = cache.get("live-map-static-geometry:v2")
+    cached = cache.get(STATIC_MAP_CACHE_KEY)
     if cached:
         return cached
-    boundary = MapGeometry.objects.filter(kind=MapGeometry.Kind.BOUNDARY, is_active=True).order_by("name", "id").first()
+    boundary = MapGeometry.objects.filter(kind=MapGeometry.Kind.BOUNDARY, is_active=True).order_by("-is_home", "name", "id").first()
     street_rows = list(
         MapGeometry.objects.filter(kind=MapGeometry.Kind.STREET, is_active=True)
         .order_by("name", "osm_id")
@@ -133,7 +136,7 @@ def static_map_payload():
         }
     if not street_rows:
         payload = {"boundary": boundary_payload, "streets": street_catalog_payload()}
-        cache.set("live-map-static-geometry:v2", payload, 300)
+        cache.set(STATIC_MAP_CACHE_KEY, payload, 300)
         return payload
     by_name = {}
     for row in street_rows:
@@ -151,7 +154,7 @@ def static_map_payload():
             street["geometries"].append(row["geometry"])
     streets = sorted(by_name.values(), key=lambda item: item["name"].casefold())
     payload = {"boundary": boundary_payload, "streets": _group_streets(streets)}
-    cache.set("live-map-static-geometry:v2", payload, 300)
+    cache.set(STATIC_MAP_CACHE_KEY, payload, 300)
     return payload
 
 

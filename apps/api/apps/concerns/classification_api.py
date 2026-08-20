@@ -231,6 +231,77 @@ class OfficialClassificationStatsView(APIView):
         })
 
 
+class OfficialClassificationActivityView(APIView):
+    """Recent validation activity for the Activity tab."""
+    permission_classes = [IsAuthenticated, HasRolePermission, HasCapability]
+    required_permission = "concerns.manage"
+    required_capability = CONFIGURE_CLASSIFICATION
+
+    def get(self, request):
+        days = int(request.query_params.get("days", 30))
+        category = request.query_params.get("category", "")
+        since = timezone.now() - timedelta(days=days)
+
+        concern_filter = {
+            "created_at__gte": since,
+            "validation_status__in": [
+                Concern.ValidationStatus.ACCEPTED,
+                Concern.ValidationStatus.REJECTED,
+                Concern.ValidationStatus.PENDING,
+            ],
+        }
+        if category:
+            concern_filter["category"] = category
+
+        qs = (
+            Concern.objects.filter(**concern_filter)
+            .select_related("assigned_department")
+            .order_by("-created_at")[:200]
+        )
+
+        results = []
+        for concern in qs:
+            if concern.validation_status == Concern.ValidationStatus.ACCEPTED:
+                outcome = "accepted"
+                outcome_label = "Accepted"
+            elif concern.validation_status == Concern.ValidationStatus.REJECTED:
+                outcome = "rejected"
+                outcome_label = "Rejected"
+            else:
+                outcome = "held"
+                outcome_label = "Held for review"
+
+            results.append({
+                "id": str(concern.pk),
+                "submitted_at": concern.created_at.isoformat(),
+                "description": (concern.description or "")[:120],
+                "category": concern.category,
+                "category_label": concern.get_category_display(),
+                "location": concern.address or concern.barangay or "",
+                "outcome": outcome,
+                "outcome_label": outcome_label,
+                "public_id": str(concern.public_id) if concern.public_id else None,
+            })
+
+        since_stats = timezone.now() - timedelta(days=days)
+        base = Concern.objects.filter(created_at__gte=since_stats)
+        if category:
+            base = base.filter(category=category)
+
+        return Response({
+            "results": results,
+            "count": len(results),
+            "stats": {
+                "scanned": base.count(),
+                "auto_validated": base.filter(validation_status=Concern.ValidationStatus.ACCEPTED).count(),
+                "flagged": base.exclude(validation_status=Concern.ValidationStatus.ACCEPTED)
+                    .exclude(validation_status=Concern.ValidationStatus.REJECTED).count(),
+                "held_for_review": base.filter(validation_status=Concern.ValidationStatus.PENDING).count(),
+                "rejected": base.filter(validation_status=Concern.ValidationStatus.REJECTED).count(),
+            },
+        })
+
+
 class OfficialClassificationResetView(APIView):
     permission_classes = [IsAuthenticated, HasRolePermission, HasCapability]
     required_permission = "concerns.manage"

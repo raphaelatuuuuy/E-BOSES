@@ -50,6 +50,9 @@ const LandingPage = lazy(() => import("@/features/landing/landing-page"))
 const HelpPage = lazy(() => import("@/features/help/help-page"))
 const HelpCollectionPage = lazy(() => import("@/features/help/help-collection-page"))
 const HelpArticlePage = lazy(() => import("@/features/help/help-article-page"))
+const ActiveCommunitiesPage = lazy(() => import("@/features/communities/active-communities-page"))
+const CreateCommunityPage = lazy(() => import("@/features/landing/pages/create-community-page"))
+const BookDemoPage = lazy(() => import("@/features/landing/pages/book-demo-page"))
 const AssistantWidget = lazy(() => import("@/features/assistant/assistant-widget"))
 
 function ProtectedDashboard() {
@@ -384,6 +387,9 @@ function AppRoutes() {
       <Route path="/help" element={<HelpPage />} />
       <Route path="/help/c/:collectionSlug" element={<HelpCollectionPage />} />
       <Route path="/help/a/:articleSlug" element={<HelpArticlePage />} />
+      <Route path="/communities" element={<ActiveCommunitiesPage />} />
+      <Route path="/create-community" element={<CreateCommunityPage />} />
+      <Route path="/book-demo" element={<BookDemoPage />} />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   )
@@ -397,6 +403,9 @@ const ASSISTANT_PATHS = [
   "/forgot-password",
   "/forgot-password-otp",
   "/new-password",
+  "/communities",
+  "/create-community",
+  "/book-demo",
 ]
 
 function AssistantMount() {
@@ -428,7 +437,12 @@ function MaintenanceGate({ children }: { children: ReactNode }) {
   const location = useLocation()
 
   const staff = user?.role === "barangay_official"
-  const exempt = location.pathname === "/" || location.pathname.startsWith("/help")
+  const exempt =
+    location.pathname === "/" ||
+    location.pathname.startsWith("/help") ||
+    location.pathname === "/communities" ||
+    location.pathname === "/create-community" ||
+    location.pathname === "/book-demo"
 
   if (status?.maintenance && !staff && !exempt) {
     return <MaintenancePage />

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import {
   AlertTriangleIcon,
-  BrainCircuitIcon,
+  BotIcon,
   IdCardLanyard,
   MapIcon,
   ShieldCheckIcon,
@@ -99,7 +99,7 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
         key: "classification",
         label: "Report checking",
         description: "What happens to a report before it reaches your queue",
-        icon: BrainCircuitIcon,
+        icon: BotIcon,
         to: "/dashboard/configuration/classification",
         capability: CAPABILITIES.configureClassification,
       },
@@ -114,7 +114,7 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
       {
         key: "coverage",
         label: "Coverage area",
-        description: "Which barangays this station answers for",
+        description: "The area where your station accepts reports",
         icon: MapIcon,
         to: "/dashboard/configuration/coverage",
         capability: CAPABILITIES.configureGeography,

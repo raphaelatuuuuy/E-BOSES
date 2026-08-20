@@ -8,6 +8,17 @@ import { cn } from "@workspace/ui/lib/utils"
 import { matchMarikinaHeightsStreet } from "@/features/auth/lib/marikina-heights-streets"
 import { reverseGeocodeToMarikinaStreet } from "@/features/auth/lib/reverse-geocode"
 import { reverseGeocode } from "@/lib/geocode"
+import { dotPinHtml } from "@/features/dashboard/components/map/markers"
+import { drawCoverage } from "@/features/dashboard/components/map/coverage-layer"
+import { loadCoverageContext } from "@/features/dashboard/lib/use-coverage"
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+}
 
 type ReportLocationMapProps = {
   latitude: number | string | null | undefined
@@ -210,6 +221,7 @@ export function ReportLocationMap({
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
+  const coverageRef = useRef<leaflet.LayerGroup | null>(null)
 
   const lat = Number(latitude)
   const lng = Number(longitude)
@@ -258,46 +270,42 @@ export function ReportLocationMap({
         className: "eboses-report-map-tiles",
       }).addTo(map)
 
-      function createPinIcon(streetAddress?: string | null) {
-        const hasLabel = Boolean(streetAddress)
-        const iconSize: [number, number] = hasLabel ? [18, 34] : [18, 18]
-        const iconAnchor: [number, number] = hasLabel ? [9, 34] : [9, 9]
-        const labelHtml = hasLabel
-          ? `<span style="
-              position:absolute;left:50%;bottom:100%;transform:translateX(-50%);
-              margin-bottom:6px;white-space:nowrap;max-width:200px;
-              background:rgba(255,255,255,.95);color:#171717;
-              font-size:11px;font-weight:600;line-height:1.3;
-              padding:3px 8px;border-radius:6px;
-              box-shadow:0 2px 8px rgba(0,0,0,.12);
-              pointer-events:none;
-            ">${streetAddress}</span>`
-          : ""
-        return L.divIcon({
-          className: "eboses-report-pin",
-          html: `
-            <div style="position:relative;width:${iconSize[0]}px;height:${iconSize[1]}px;">
-              ${labelHtml}
-              <span style="
-                position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
-                width:18px;height:18px;border-radius:999px;
-                background:rgba(43,127,255,.22);
-              "></span>
-              <span style="
-                position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
-                width:12px;height:12px;
-                border-radius:999px;
-                background:#2b7fff;border:2.5px solid #fff;
-                box-shadow:0 2px 8px rgba(37,99,235,.45);
-              "></span>
-            </div>
-          `,
-          iconSize,
-          iconAnchor,
-        })
-      }
+      const labelHtml = streetLabel
+        ? `<span style="
+            position:absolute;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%);
+            white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;
+            background:rgba(255,255,255,.95);color:#171717;
+            font-size:11px;font-weight:600;line-height:1.3;
+            padding:3px 8px;border-radius:6px;
+            box-shadow:0 2px 8px rgba(0,0,0,.12);
+            pointer-events:none;
+          ">${escapeHtml(streetLabel)}</span>`
+        : ""
 
-      L.marker([lat, lng], { icon: createPinIcon(streetLabel), interactive: false }).addTo(map)
+      L.marker([lat, lng], {
+        icon: L.divIcon({
+          className: "eboses-report-pin",
+          html: `<div style="position:relative;width:14px;height:14px">${labelHtml}${dotPinHtml({ size: 14 })}</div>`,
+          iconSize: [14, 14],
+          iconAnchor: [7, 7],
+        }),
+        interactive: false,
+        zIndexOffset: 900,
+      }).addTo(map)
+
+      coverageRef.current = L.layerGroup().addTo(map)
+      void loadCoverageContext()
+        .then((context) => {
+          const group = coverageRef.current
+          if (cancelled || !group) return
+          drawCoverage(L, group, {
+            boundary: context.boundary?.geometry ?? null,
+            policy: context.dispatch_policy,
+          })
+        })
+        .catch(() => {
+          // The pin is still correct without the outline around it.
+        })
 
       mapRef.current = map
       resizeObserverRef.current?.disconnect()
@@ -327,6 +335,7 @@ export function ReportLocationMap({
       cancelled = true
       resizeObserverRef.current?.disconnect()
       resizeObserverRef.current = null
+      coverageRef.current = null
       try {
         map?.off()
         map?.remove()
