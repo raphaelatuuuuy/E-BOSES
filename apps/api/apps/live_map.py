@@ -16,7 +16,7 @@ from rest_framework.views import APIView
 from apps.accounts.services import validate_location_pair
 from apps.accounts.views import touch_last_seen
 from apps.concerns.models import Concern
-from apps.emergencies.models import EmergencyAlert, MapGeometry
+from apps.emergencies.models import EmergencyAlert, EmergencyCategory, MapGeometry
 from apps.notifications.services import broadcast_live_map_event
 
 MARIKINA_HEIGHTS_OSM_RELATION_ID = 371327
@@ -518,8 +518,14 @@ def resident_alerts_map_snapshot(request=None):
     )
     concerns = [resident_concern_payload(c, request=request) for c in concerns_qs]
 
+    # Categories an official has marked private (e.g. domestic violence, child
+    # protection) never reach the resident map, regardless of status.
+    hidden_types = set(
+        EmergencyCategory.objects.filter(visible_to_residents=False).values_list("code", flat=True)
+    )
     alerts_qs = (
         EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE)
+        .exclude(type__in=hidden_types)
         .prefetch_related("media")
         .order_by("-created_at")[:100]
     )

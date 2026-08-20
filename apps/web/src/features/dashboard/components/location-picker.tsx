@@ -205,11 +205,37 @@ export default function LocationPickerModal({
     if (!open) return
     let cancelled = false
     let map: leaflet.Map | null = null
+    let styleEl: HTMLStyleElement | null = null
 
     async function init() {
       const L = await import("leaflet")
       await import("leaflet/dist/leaflet.css")
       if (cancelled || !containerRef.current) return
+
+      containerRef.current.classList.add("eboses-location-picker-map")
+
+      // Same fix as the AreaPicker/pin maps: the tile-size override has to
+      // exist in <head> before Leaflet lays out its tile pane, or the 256px
+      // tiles collapse under Tailwind Preflight's `img { max-width: 100% }`
+      // and the map paints blank.
+      styleEl = document.createElement("style")
+      styleEl.textContent = `
+        .eboses-location-picker-map.leaflet-container {
+          width: 100%;
+          height: 100%;
+          font-family: inherit;
+        }
+        .eboses-location-picker-map .leaflet-tile-pane { isolation: isolate; }
+        .eboses-location-picker-map img.leaflet-tile,
+        .eboses-location-picker-map .leaflet-tile {
+          max-width: none !important;
+          max-height: none !important;
+          width: 256px !important;
+          height: 256px !important;
+          mix-blend-mode: normal !important;
+        }
+      `
+      document.head.appendChild(styleEl)
 
       const center: [number, number] =
         initialLat != null && initialLng != null
@@ -311,6 +337,7 @@ export default function LocationPickerModal({
       resizeRef.current?.disconnect()
       resizeRef.current = null
       coverageLayerRef.current = null
+      styleEl?.remove()
       try {
         map?.off()
         map?.remove()

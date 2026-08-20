@@ -205,6 +205,7 @@ export function SosLocationStep({
     let cancelled = false
     let map: leaflet.Map | null = null
     let geocodeTimer: number | undefined
+    let styleEl: HTMLStyleElement | null = null
 
     async function init() {
       const L = await import("leaflet")
@@ -222,6 +223,30 @@ export function SosLocationStep({
         }
         el._leaflet_id = undefined
       }
+
+      // Same fix as the AreaPicker/pin maps: the tile-size override has to
+      // exist in <head> before Leaflet lays out its tile pane, or the 256px
+      // tiles collapse under Tailwind Preflight's `img { max-width: 100% }`
+      // and the map paints blank.
+      styleEl = document.createElement("style")
+      styleEl.textContent = `
+        .sos-loc-map.leaflet-container {
+          width: 100%;
+          height: 100%;
+          background: #e8eef5;
+          font-family: inherit;
+        }
+        .sos-loc-map .leaflet-tile-pane { isolation: isolate; }
+        .sos-loc-map img.leaflet-tile,
+        .sos-loc-map .leaflet-tile {
+          max-width: none !important;
+          max-height: none !important;
+          width: 256px !important;
+          height: 256px !important;
+          mix-blend-mode: normal !important;
+        }
+      `
+      document.head.appendChild(styleEl)
 
       const center: [number, number] = value
         ? [value.lat, value.lng]
@@ -306,6 +331,7 @@ export function SosLocationStep({
       resizeRef.current?.disconnect()
       resizeRef.current = null
       if (geocodeTimer) window.clearTimeout(geocodeTimer)
+      styleEl?.remove()
       try {
         map?.off()
         map?.remove()
@@ -409,8 +435,6 @@ export function SosLocationStep({
           />
         </div>
         <style>{`
-          .sos-loc-map.leaflet-container { width:100%; height:100%; background:#e8eef5; }
-          .sos-loc-map img.leaflet-tile { max-width:none !important; }
           .sos-loc-map.is-blocked.leaflet-container,
           .sos-loc-map.is-blocked .leaflet-grab { cursor: not-allowed !important; }
           .sos-loc-map.is-blocked::after {

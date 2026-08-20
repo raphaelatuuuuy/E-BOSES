@@ -228,6 +228,44 @@ class ConcernClassificationApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNone(response.data["accuracy"])
 
+    @override_settings(OLLAMA_API_KEY="test-key")
+    @patch("ollama.Client")
+    def test_sample_generator_returns_a_generated_description(self, client):
+        client.return_value.chat.return_value = SimpleNamespace(
+            message=SimpleNamespace(content="May malaking butas sa kalsada malapit sa ilaw-dagitab.")
+        )
+        self.client.force_authenticate(self.official)
+
+        response = self.client.post(
+            "/api/concerns/classification/generate-sample/",
+            {"category": "infrastructure", "mode": "matching", "language": "filipino"},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["description"], "May malaking butas sa kalsada malapit sa ilaw-dagitab.")
+        sent = client.return_value.chat.call_args
+        self.assertIn("marikina heights", sent.kwargs["messages"][1]["content"].lower())
+
+    @override_settings(OLLAMA_API_KEY="")
+    def test_sample_generator_requires_an_api_key(self):
+        self.client.force_authenticate(self.official)
+        response = self.client.post(
+            "/api/concerns/classification/generate-sample/",
+            {"category": "infrastructure", "mode": "matching", "language": "filipino"},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    def test_sample_generator_rejects_unknown_mode_and_language(self):
+        self.client.force_authenticate(self.official)
+        for payload in (
+            {"category": "infrastructure", "mode": "made-up", "language": "filipino"},
+            {"category": "infrastructure", "mode": "matching", "language": "klingon"},
+        ):
+            response = self.client.post("/api/concerns/classification/generate-sample/", payload, format="multipart")
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
 
 class ClassificationServiceStatusTests(APITestCase):
     """The config screen reports whether each service is working, in words."""

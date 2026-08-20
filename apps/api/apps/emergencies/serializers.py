@@ -65,6 +65,7 @@ class EmergencyCategorySerializer(serializers.ModelSerializer):
             "is_covered",
             "sort_order",
             "is_active",
+            "visible_to_residents",
             "created_at",
             "updated_at",
         )

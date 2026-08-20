@@ -84,6 +84,7 @@ export function ConfigBreadcrumb({
 
 export function ConfigShell({
   icon: Icon,
+  iconAction,
   eyebrow,
   title,
   description,
@@ -93,6 +94,8 @@ export function ConfigShell({
   className,
 }: {
   icon: LucideIcon
+  /** A small button rendered right beside the icon badge — e.g. a quick "add" shortcut. */
+  iconAction?: ReactNode
   eyebrow: string
   title: string
   description: string
@@ -125,6 +128,7 @@ export function ConfigShell({
             <span className="hidden size-16 shrink-0 items-center justify-center rounded-2xl bg-brand-navy text-white sm:flex">
               <Icon className="size-7" strokeWidth={1.7} aria-hidden />
             </span>
+            {iconAction ? <div className="shrink-0 self-center sm:self-start sm:mt-1">{iconAction}</div> : null}
             <div className="min-w-0">
               <h1 className="text-page-title text-balance text-brand-navy">{title}</h1>
               <p className="mt-3 max-w-2xl text-read leading-relaxed text-neutral-500">

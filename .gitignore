@@ -78,5 +78,4 @@ tmp/
 #
 .kilo
 tests/
-supabase/
 AGENTS.md

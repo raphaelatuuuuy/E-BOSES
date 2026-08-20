@@ -270,6 +270,7 @@ export default function OfficialDispatchRulesPage() {
       String(draft.sort_order ?? categories.length * 10 + 10)
     )
     payload.append("is_active", String(draft.is_active ?? true))
+    payload.append("visible_to_residents", String(draft.visible_to_residents ?? true))
     if (draft.iconFile) payload.append("icon_image", draft.iconFile)
     try {
       await apiRequest(
@@ -331,6 +332,7 @@ export default function OfficialDispatchRulesPage() {
       custom_icon_label: value?.custom_icon_label ?? "",
       icon_image_url: value?.icon_image_url ?? "",
       is_active: value?.is_active ?? true,
+      visible_to_residents: value?.visible_to_residents ?? true,
     })
 
   const filtered = useMemo(() => {
@@ -353,7 +355,7 @@ export default function OfficialDispatchRulesPage() {
         <ConfigHeroAction
           icon={PlusIcon}
           onClick={() => {
-            setDraft({ icon_key: "siren", is_active: true })
+            setDraft({ icon_key: "siren", is_active: true, visible_to_residents: true })
             setOriginalDraft(null)
             setEditOpen(true)
           }}
@@ -568,6 +570,34 @@ export default function OfficialDispatchRulesPage() {
                   window.setTimeout(() => fileInputRef.current?.click(), 0)
                 }
               />
+            </div>
+
+            <div className="space-y-2">
+              <p className={labelCls}>Alerts map</p>
+              <button
+                type="button"
+                onClick={() =>
+                  setDraft((current) => ({
+                    ...current,
+                    visible_to_residents: !(current?.visible_to_residents ?? true),
+                  }))
+                }
+                className="flex w-full items-center gap-3 rounded-[14px] border-[1.5px] border-neutral-200 px-4 py-3 text-left transition hover:bg-neutral-50"
+              >
+                <span className="flex-1 text-[15px]">
+                  <span className="block text-[15px] font-medium text-neutral-900">
+                    Visible to residents
+                  </span>
+                  <span className="block text-[13px] text-neutral-500">
+                    Active alerts under this type show as pins on the resident alerts map
+                  </span>
+                </span>
+                {draft.visible_to_residents !== false ? (
+                  <CircleCheck className="size-5 text-green-600" />
+                ) : (
+                  <span className="size-5 rounded-full border-[1.5px] border-neutral-300" />
+                )}
+              </button>
             </div>
 
             <input

@@ -220,7 +220,7 @@ class UserSummarySerializer(serializers.ModelSerializer):
 
     def get_middleName(self, obj):
         profile = self.profile(obj)
-        return profile.middle_name if profile else ""
+        return profile.middle_name if profile else obj.middle_name
 
     def get_lastName(self, obj):
         profile = self.profile(obj)
@@ -253,7 +253,7 @@ class UserSummarySerializer(serializers.ModelSerializer):
 
     def get_gender(self, obj):
         profile = self.profile(obj)
-        return profile.gender if profile else ""
+        return profile.gender if profile else obj.gender
 
     def get_avatar(self, obj):
         profile = self.profile(obj)
@@ -274,7 +274,7 @@ class UserSummarySerializer(serializers.ModelSerializer):
         elif obj.role == User.Role.FIRST_RESPONDER and obj.responder_unit:
             prefix = responder_unit_map.get(obj.responder_unit)
         if prefix:
-            gender = (profile.gender if profile else "") or ""
+            gender = (profile.gender if profile else obj.gender) or ""
             if gender == "male":
                 return f"{prefix}-male"
             if gender == "female":
@@ -379,6 +379,45 @@ class StaffAccountUpdateSerializer(serializers.Serializer):
     responder_unit = serializers.ChoiceField(
         choices=User.ResponderUnit.choices, allow_blank=True, required=False
     )
+    first_name = serializers.CharField(max_length=50, required=False)
+    middle_name = serializers.CharField(max_length=50, allow_blank=True, required=False)
+    last_name = serializers.CharField(max_length=50, required=False)
+    gender = serializers.ChoiceField(choices=User.Gender.choices, allow_blank=True, required=False)
+    email = serializers.EmailField(required=False)
+    phone_number = serializers.RegexField(regex=r"^\+63\d{10}$", required=False)
+
+    def validate_first_name(self, value):
+        if not NAME_PATTERN.fullmatch(value):
+            raise serializers.ValidationError(NAME_MESSAGE)
+        return value
+
+    def validate_last_name(self, value):
+        if not NAME_PATTERN.fullmatch(value):
+            raise serializers.ValidationError(NAME_MESSAGE)
+        return value
+
+    def validate_middle_name(self, value):
+        if value == "":
+            return value
+        if not NAME_PATTERN.fullmatch(value):
+            raise serializers.ValidationError(NAME_MESSAGE)
+        return value
+
+    def validate_email(self, value):
+        email = value.strip().lower()
+        if get_user_model().objects.filter(email__iexact=email).exclude(pk=self.instance.pk).exists():
+            raise serializers.ValidationError("Another account already uses this email.")
+        return email
+
+    def validate_phone_number(self, value):
+        if (
+            get_user_model()
+            .objects.filter(phone_number__in=phone_number_variants(value))
+            .exclude(pk=self.instance.pk)
+            .exists()
+        ):
+            raise serializers.ValidationError("Another account already uses this phone number.")
+        return value
 
     def validate(self, attrs):
         if not attrs:
@@ -576,8 +615,13 @@ class AdminCreateUserSerializer(serializers.Serializer):
     email = serializers.EmailField()
     phone_number = serializers.RegexField(regex=r"^\+63\d{10}$")
     password = serializers.CharField(min_length=8, max_length=128, write_only=True)
+    first_name = serializers.CharField(max_length=50)
+    middle_name = serializers.CharField(max_length=50, allow_blank=True, required=False, default="")
+    last_name = serializers.CharField(max_length=50)
+    gender = serializers.ChoiceField(choices=User.Gender.choices, allow_blank=True, required=False, default="")
     role = serializers.ChoiceField(
         choices=[
+            (User.Role.RESIDENT, "Resident"),
             (User.Role.BARANGAY_OFFICIAL, "Barangay Official"),
             (User.Role.FIRST_RESPONDER, "First Responder"),
         ]
@@ -607,11 +651,25 @@ class AdminCreateUserSerializer(serializers.Serializer):
             raise serializers.ValidationError("An account with this phone number already exists.")
         return value
 
+    def validate_first_name(self, value):
+        if not NAME_PATTERN.fullmatch(value):
+            raise serializers.ValidationError(NAME_MESSAGE)
+        return value
+
+    def validate_last_name(self, value):
+        if not NAME_PATTERN.fullmatch(value):
+            raise serializers.ValidationError(NAME_MESSAGE)
+        return value
+
+    def validate_middle_name(self, value):
+        if value == "":
+            return value
+        if not NAME_PATTERN.fullmatch(value):
+            raise serializers.ValidationError(NAME_MESSAGE)
+        return value
+
     def validate(self, attrs):
         role = attrs.get("role")
-        responder_unit = attrs.get("responder_unit", "")
-        if role == User.Role.FIRST_RESPONDER and not responder_unit:
-            raise serializers.ValidationError({"responder_unit": "Select the responder's operational unit."})
         if role != User.Role.FIRST_RESPONDER:
             attrs["responder_unit"] = ""
         return attrs

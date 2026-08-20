@@ -63,10 +63,8 @@ from .views import (
     ResponderDirectoryView,
     ResponderUpdateView,
 )
-from .supabase_hooks import SupabaseSendSmsHookView
 
 urlpatterns = [
-    path("hooks/supabase/send-sms/", SupabaseSendSmsHookView.as_view(), name="supabase-send-sms-hook"),
     path("residence-proof-options/", ResidenceProofOptionsView.as_view(), name="residence-proof-options"),
     path("verification/me/", VerificationMeView.as_view(), name="verification-me"),
     path("ocr/config/draft/", OCRDraftConfigurationView.as_view(), name="ocr-config-draft"),

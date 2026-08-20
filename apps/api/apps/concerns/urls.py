@@ -62,6 +62,7 @@ from .views import (
 from .classification_api import (
     OfficialClassificationActivityView,
     OfficialClassificationResetView,
+    OfficialClassificationSampleGeneratorView,
     OfficialClassificationSubmissionTestView,
     OfficialClassificationStatsView,
     OfficialClassificationTextTestView,
@@ -91,6 +92,7 @@ urlpatterns = [
     path("classification/reset/", OfficialClassificationResetView.as_view(), name="classification-reset"),
     path("classification/test-text/", OfficialClassificationTextTestView.as_view(), name="classification-test-text"),
     path("classification/test-submission/", OfficialClassificationSubmissionTestView.as_view(), name="classification-test-submission"),
+    path("classification/generate-sample/", OfficialClassificationSampleGeneratorView.as_view(), name="classification-generate-sample"),
     path("classification/precheck/", ResidentConcernPrecheckView.as_view(), name="classification-precheck"),
     path("", ConcernListCreateView.as_view(), name="concern-create"),
     path("media/check/", ConcernMediaCheckView.as_view(), name="concern-media-check"),

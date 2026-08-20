@@ -122,30 +122,12 @@ ASGI_APPLICATION = "config.asgi.application"
 
 IS_TEST_RUN = "test" in sys.argv
 if IS_TEST_RUN:
-    AUTH_BACKEND = "local"
     STORAGE_BACKEND = "local"
 # Reverse geocoding calls Nominatim. Tests must stay hermetic and must not
 # depend on the machine having internet, so it is off by default under test.
 REVERSE_GEOCODE_ENABLED = env.bool("REVERSE_GEOCODE_ENABLED", default=not IS_TEST_RUN)
 
-# Supabase can replace PostgreSQL, Auth, and media independently. Local remains
-# the safe default so a developer never writes to the cloud by accident.
-DATABASE_TARGET = env("DATABASE_TARGET", default="local")
-AUTH_BACKEND = env("AUTH_BACKEND", default="local")
 STORAGE_BACKEND = env("STORAGE_BACKEND", default="local")
-SUPABASE_URL = env("SUPABASE_URL", default="").rstrip("/")
-SUPABASE_PUBLISHABLE_KEY = env("SUPABASE_PUBLISHABLE_KEY", default="")
-SUPABASE_SECRET_KEY = env("SUPABASE_SECRET_KEY", default="")
-SUPABASE_DATABASE_URL = env("SUPABASE_DATABASE_URL", default="")
-SUPABASE_DATABASE_POOLER_URL = env("SUPABASE_DATABASE_POOLER_URL", default="")
-SUPABASE_SSLMODE = env("SUPABASE_SSLMODE", default="require")
-SUPABASE_AUTH_HOOK_SECRET = env("SUPABASE_AUTH_HOOK_SECRET", default="")
-SUPABASE_JWT_AUDIENCE = env("SUPABASE_JWT_AUDIENCE", default="authenticated")
-SUPABASE_JWT_SECRET = env("SUPABASE_JWT_SECRET", default="")
-SUPABASE_AUTO_LINK_USERS = env.bool("SUPABASE_AUTO_LINK_USERS", default=False)
-SUPABASE_ORIGINAL_BUCKET = env("SUPABASE_ORIGINAL_BUCKET", default="original-photos")
-SUPABASE_PROTECTED_BUCKET = env("SUPABASE_PROTECTED_BUCKET", default="protected-photos")
-SUPABASE_SIGNED_URL_TTL_SECONDS = env.int("SUPABASE_SIGNED_URL_TTL_SECONDS", default=300)
 
 # Database
 if "test" in sys.argv:
@@ -163,27 +145,8 @@ else:
         f'{env("DB_PORT", default="5432")}/'
         f'{env("DB_NAME", default="e_boses")}'
     )
-    if DATABASE_TARGET == "supabase":
-        database_url = SUPABASE_DATABASE_POOLER_URL or SUPABASE_DATABASE_URL
-        if not database_url:
-            raise ImproperlyConfigured(
-                "DATABASE_TARGET=supabase requires SUPABASE_DATABASE_POOLER_URL or SUPABASE_DATABASE_URL."
-            )
-    elif DATABASE_TARGET == "local":
-        database_url = env("LOCAL_DATABASE_URL", default=env("DATABASE_URL", default=default_database_url))
-    else:
-        raise ImproperlyConfigured("DATABASE_TARGET must be local or supabase.")
+    database_url = env("LOCAL_DATABASE_URL", default=env("DATABASE_URL", default=default_database_url))
     DATABASES = {"default": env.db_url_config(database_url)}
-    if DATABASE_TARGET == "supabase":
-        DATABASES["default"].setdefault("OPTIONS", {})["sslmode"] = SUPABASE_SSLMODE
-    # Close the database connection after each request. Reusing connections
-    # across requests is not safe on Supabase: the free-tier pool is 15
-    # connections, the development server opens one per thread, and idle
-    # connections quickly exhaust the pool and produce "max clients reached"
-    # errors. A fresh TCP connection costs roughly one network round-trip,
-    # which is acceptable for the current data volume.
-    DATABASES["default"]["CONN_MAX_AGE"] = 0
-    DATABASES["default"]["CONN_HEALTH_CHECKS"] = False
     if ENABLE_GIS:
         DATABASES["default"]["ENGINE"] = "django.contrib.gis.db.backends.postgis"
 
@@ -373,14 +336,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "accounts.User"
 
 # REST Framework
-if AUTH_BACKEND == "supabase":
-    if not SUPABASE_URL:
-        raise ImproperlyConfigured("AUTH_BACKEND=supabase requires SUPABASE_URL.")
-    DEFAULT_AUTHENTICATION_CLASSES = ("apps.accounts.supabase_auth.SupabaseJWTAuthentication",)
-elif AUTH_BACKEND == "local":
-    DEFAULT_AUTHENTICATION_CLASSES = ("rest_framework_simplejwt.authentication.JWTAuthentication",)
-else:
-    raise ImproperlyConfigured("AUTH_BACKEND must be local or supabase.")
+DEFAULT_AUTHENTICATION_CLASSES = ("rest_framework_simplejwt.authentication.JWTAuthentication",)
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
@@ -663,15 +619,11 @@ WEB_PUSH_SUBJECT = env("WEB_PUSH_SUBJECT", default=f"mailto:{DEFAULT_FROM_EMAIL}
 
 SUPPORT_EMAIL = env("SUPPORT_EMAIL", default=DEFAULT_FROM_EMAIL)
 
-# Supabase is the production media target. Local disk stays the development
-# default. Cloudinary remains only as a short rollback option during migration.
+# Local disk is the development default. Cloudinary remains an available
+# rollback option.
 CLOUDINARY_URL = env("CLOUDINARY_URL", default="")
-if STORAGE_BACKEND not in {"local", "supabase", "cloudinary"}:
-    raise ImproperlyConfigured("STORAGE_BACKEND must be local, supabase, or cloudinary.")
-if STORAGE_BACKEND == "supabase" and not (SUPABASE_URL and SUPABASE_SECRET_KEY):
-    raise ImproperlyConfigured(
-        "STORAGE_BACKEND=supabase requires SUPABASE_URL and SUPABASE_SECRET_KEY."
-    )
+if STORAGE_BACKEND not in {"local", "cloudinary"}:
+    raise ImproperlyConfigured("STORAGE_BACKEND must be local or cloudinary.")
 if STORAGE_BACKEND == "cloudinary" and CLOUDINARY_URL:
     os.environ.setdefault("CLOUDINARY_URL", CLOUDINARY_URL)
     THIRD_PARTY_APPS = [*THIRD_PARTY_APPS, "cloudinary", "cloudinary_storage"]

@@ -44,6 +44,11 @@ class User(AbstractUser):
         BARANGAY_OFFICIAL = "barangay_official", "Barangay Official"
         FIRST_RESPONDER = "first_responder", "First Responder"
 
+    class Gender(models.TextChoices):
+        MALE = "male", "Male"
+        FEMALE = "female", "Female"
+        PREFER_NOT_TO_SAY = "prefer_not_to_say", "Prefer not to say"
+
     class ResponderUnit(models.TextChoices):
         TANOD = "tanod", "Barangay Tanod"
         BHW = "bhw", "Barangay Health Worker"
@@ -59,8 +64,13 @@ class User(AbstractUser):
 
     username = None
     email = models.EmailField(unique=True)
-    supabase_user_id = models.UUIDField(null=True, blank=True, unique=True)
     phone_number = models.CharField(max_length=16, unique=True, blank=True)
+    # `first_name`/`last_name` come from AbstractUser. `middle_name` and
+    # `gender` don't exist there, and a staff account (official, responder)
+    # has no `ResidentProfile` to hold them, so they live here as the
+    # fallback `UserSummarySerializer` already uses for first/last name.
+    middle_name = models.CharField(max_length=50, blank=True)
+    gender = models.CharField(max_length=20, choices=Gender.choices, blank=True)
     role = models.CharField(max_length=32, choices=Role.choices, default=Role.RESIDENT)
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.PENDING_OTP)
     email_verified_at = models.DateTimeField(null=True, blank=True)

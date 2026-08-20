@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta
 from difflib import SequenceMatcher
 from django.conf import settings
@@ -27,6 +28,9 @@ from apps.concerns.models import (
     ConcernMedia,
 )
 from apps.capabilities import CONFIGURE_CLASSIFICATION, HasCapability
+from apps.geo_services import validate_report_location
+
+logger = logging.getLogger(__name__)
 
 
 class ClassificationConfigurationSerializer(serializers.ModelSerializer):
@@ -61,6 +65,9 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
                     "key": code,
                     "label": labels[code],
                     "enabled": code in (obj.enabled_categories or Concern.Category.values),
+                    "photo_required": False,
+                    "description_required": True,
+                    "location_required": True,
                 }
                 for code in Concern.Category.values
             ]
@@ -70,6 +77,9 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
                 "key": category.code,
                 "label": category.name,
                 "enabled": category.code in enabled_codes or not enabled_codes,
+                "photo_required": category.photo_required,
+                "description_required": category.description_required,
+                "location_required": category.location_required,
             }
             for category in categories
         ]
@@ -82,7 +92,14 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         categories = validated_data.pop("categories", None)
         if categories is not None:
-            valid_codes = set(Concern.Category.values)
+            # Match the same source `_categories_payload` reads from — barangays
+            # that have created real categories use those codes, not the legacy
+            # fixed enum, so validating against the enum alone silently dropped
+            # every real category's enabled/disabled choice on save.
+            real_codes = set(
+                ConcernCategory.objects.filter(is_active=True).values_list("code", flat=True)
+            )
+            valid_codes = real_codes or set(Concern.Category.values)
             enabled = [
                 str(item.get("key"))
                 for item in categories
@@ -366,7 +383,7 @@ class OfficialClassificationSubmissionTestView(APIView):
             return Response({"description": ["Enter a sample description."]}, status=status.HTTP_400_BAD_REQUEST)
 
         config = ConcernClassificationConfiguration.current()
-        uploaded = request.FILES.get("file")
+        uploaded = _first_uploaded(request)
         image, image_error = _prepared_image_from_upload(uploaded)
         result = classification_payload(
             title=title,
@@ -387,8 +404,128 @@ class OfficialClassificationSubmissionTestView(APIView):
             "image_uploaded": bool(uploaded),
             "image_error": image_error,
             "privacy": privacy,
+            "location": _location_dry_run(request),
             **_review_details(result),
         })
+
+
+class OfficialClassificationSampleGeneratorView(APIView):
+    permission_classes = [IsAuthenticated, HasRolePermission, HasCapability]
+    required_permission = "concerns.manage"
+    required_capability = CONFIGURE_CLASSIFICATION
+    parser_classes = [MultiPartParser]
+
+    SAMPLE_MODES = {
+        "matching": "a report that matches the selected category and any attached photo",
+        "unrelated": "a report that is clearly about something else, not the selected category",
+        "harassment": "an abusive or harassing message",
+        "spam": "an obvious spam or promotional message",
+        "urgent": "a report of an immediate danger or serious incident needing urgent attention",
+        "low_quality": "a vague, short, low-information message",
+    }
+    SAMPLE_LANGUAGES = {
+        "filipino": "Filipino",
+        "english": "English",
+        "hybrid": "Taglish (a natural Filipino-English mix, as residents write)",
+        "bisaya": "Bisaya (Cebuano)",
+        "ilocano": "Ilocano",
+        "hiligaynon": "Hiligaynon",
+        "kapampangan": "Kapampangan",
+        "waray": "Waray",
+    }
+
+    def post(self, request):
+        category = str(request.data.get("category", ""))
+        mode = str(request.data.get("mode", "matching"))
+        language = str(request.data.get("language", "filipino"))
+        if category not in Concern.Category.values:
+            return Response({"category": ["Choose a valid concern category."]}, status=status.HTTP_400_BAD_REQUEST)
+        if mode not in self.SAMPLE_MODES:
+            return Response({"mode": ["Unknown sample mode."]}, status=status.HTTP_400_BAD_REQUEST)
+        if language not in self.SAMPLE_LANGUAGES:
+            return Response({"language": ["Unknown sample language."]}, status=status.HTTP_400_BAD_REQUEST)
+        if not getattr(settings, "OLLAMA_API_KEY", ""):
+            return Response({"detail": "Sample generation is not configured. Set OLLAMA_API_KEY."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        image = None
+        uploaded = _first_uploaded(request)
+        if mode == "matching" and uploaded:
+            image, _ = _prepared_image_from_upload(uploaded)
+
+        try:
+            description = _generate_sample_description(
+                category=category,
+                mode=mode,
+                language=language,
+                image=image,
+                minimum_length=ConcernClassificationConfiguration.current().minimum_description_length,
+            )
+        except Exception as exc:
+            logger.warning("Sample generation failed: %s", exc.__class__.__name__)
+            return Response({"detail": "The sample could not be generated right now. Try again later."}, status=status.HTTP_502_BAD_GATEWAY)
+        return Response({"description": description})
+
+
+def _generate_sample_description(*, category: str, mode: str, language: str, image, minimum_length) -> str:
+    """Ask Gemma to write one resident-style sample report. Plain text, not JSON."""
+    from ollama import Client
+
+    from apps.concerns.ai.gemma_analyzer import _response_content
+
+    client = Client(
+        host=getattr(settings, "OLLAMA_HOST", "https://ollama.com"),
+        headers={"Authorization": f"Bearer {getattr(settings, 'OLLAMA_API_KEY', '')}"},
+        timeout=float(getattr(settings, "OLLAMA_TIMEOUT_SECONDS", 120)),
+    )
+    category_label = dict(Concern.Category.choices).get(category, category)
+    scenario = OfficialClassificationSampleGeneratorView.SAMPLE_MODES[mode]
+    language_label = OfficialClassificationSampleGeneratorView.SAMPLE_LANGUAGES[language]
+    photo_note = " Describe only issues consistent with what you can actually see in the attached photo." if image is not None else ""
+    prompt = (
+        "You write sample test reports for E-Boses, a barangay civic concern system in the Philippines.\n"
+        "Write the text exactly as a resident of Marikina Heights would type it into the app.\n"
+        f"Category the report will be filed under: {category_label}\n"
+        f"Scenario: {scenario}.\n"
+        f"Write it in {language_label}.\n"
+        f"The report must be at least {int(minimum_length)} characters long, one to three short sentences, "
+        "with enough detail to sound real but nothing that names a real person."
+        f"{photo_note}\n"
+        "Return the report text only. No quotes, no labels, no Markdown."
+    )
+    message = {"role": "user", "content": prompt}
+    if image is not None:
+        message["images"] = [image.data]
+    response = client.chat(
+        getattr(settings, "OLLAMA_TEXT_MODEL", "gemma4:31b"),
+        messages=[
+            {"role": "system", "content": "Return plain text only. No Markdown, no JSON, no surrounding quotes."},
+            message,
+        ],
+        options={"temperature": 0.9},
+        stream=False,
+    )
+    return _response_content(response).strip()
+
+
+def _first_uploaded(request):
+    """The primary sample photo: a legacy single `file` field, or the first of
+    the `files` list the tester sends when an official attaches several."""
+    files = request.FILES.getlist("files")
+    return request.FILES.get("file") or (files[0] if files else None)
+
+
+def _location_dry_run(request):
+    """Run the same barangay-boundary + acceptance-zone check a real report
+    gets, without saving anything. None when no pin was sent."""
+    latitude = request.data.get("latitude")
+    longitude = request.data.get("longitude")
+    if latitude in (None, "") or longitude in (None, ""):
+        return None
+    try:
+        validated = validate_report_location(latitude, longitude)
+    except DjangoValidationError as error:
+        return {"accepted": False, "action": "block", "message": "; ".join(error.messages)}
+    return {"accepted": validated.get("action") == "accept", **validated}
 
 
 class ResidentConcernPrecheckView(APIView):

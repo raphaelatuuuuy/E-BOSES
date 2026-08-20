@@ -507,7 +507,7 @@ export default function OfficialCategoriesPage() {
             </div>
 
             <div className="space-y-2">
-              <p className={labelCls}>Community feed</p>
+              <p className={labelCls}>Community feed & map</p>
               <button
                 type="button"
                 onClick={() => setDraft((current) => ({ ...current, public_feed_allowed: !(current?.public_feed_allowed ?? true) }))}
@@ -515,7 +515,7 @@ export default function OfficialCategoriesPage() {
               >
                 <span className="flex-1 text-[15px]">
                   <span className="block text-[15px] font-medium text-neutral-900">Allow public sharing</span>
-                  <span className="block text-[13px] text-neutral-500">Residents can choose to show this report in the community feed</span>
+                  <span className="block text-[13px] text-neutral-500">Residents can choose to show this report in the community feed and as a pin on the alerts map</span>
                 </span>
                 {draft.public_feed_allowed !== false ? <CircleCheck className="size-5 text-green-600" /> : <span className="size-5 rounded-full border-[1.5px] border-neutral-300" />}
               </button>

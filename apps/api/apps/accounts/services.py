@@ -1112,9 +1112,6 @@ def register_resident(validated_data, request_meta=None):
     phone_challenge.consumed_at = timezone.now()
     phone_challenge.save(update_fields=["consumed_at"])
     create_audit_log("auth.registered", actor=user, target_user=user, request_meta=request_meta)
-    if settings.AUTH_BACKEND == "supabase":
-        from .supabase_admin import provision_supabase_user
-        provision_supabase_user(user, validated_data["password"])
     queue_user_verification(user, trigger=VerificationCheck.Trigger.REGISTRATION)
     return user
 

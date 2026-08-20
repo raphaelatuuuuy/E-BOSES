@@ -172,19 +172,6 @@ class RegisterView(APIView):
                 return Response(exc.error_dict, status=status.HTTP_400_BAD_REQUEST)
             message = exc.message if hasattr(exc, "message") else str(exc)
             return Response({"proof": [message]}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as exc:
-            from .supabase_admin import SupabaseProvisioningError
-            if isinstance(exc, SupabaseProvisioningError):
-                return Response(
-                    {"detail": "Account creation is temporarily unavailable. No local account was saved."},
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-            raise
-        if settings.AUTH_BACKEND == "supabase":
-            return Response(
-                {"access": "", "user": UserSummarySerializer(user).data},
-                status=status.HTTP_201_CREATED,
-            )
         return token_response(user, status.HTTP_201_CREATED)
 
 
@@ -1424,8 +1411,19 @@ class StaffAccountUpdateView(APIView):
         serializer.instance = target
         serializer.is_valid(raise_exception=True)
 
+        # A resident carries their name/gender on `ResidentProfile`, which
+        # `UserSummarySerializer` reads in preference to the bare User
+        # fields — write there too, or the edit would silently not show.
+        profile = getattr(target, "resident_profile", None)
+        profile_only_fields = {"middle_name", "gender"}
+        profile_fields = []
         fields = []
         for field, value in serializer.validated_data.items():
+            if profile is not None and field in ({"first_name", "last_name"} | profile_only_fields):
+                setattr(profile, field, value)
+                profile_fields.append(field)
+                if field in profile_only_fields:
+                    continue
             setattr(target, field, value)
             fields.append(field)
 
@@ -1435,6 +1433,8 @@ class StaffAccountUpdateView(APIView):
             target.responder_unit = ""
             fields.append("responder_unit")
 
+        if profile_fields:
+            profile.save(update_fields=[*dict.fromkeys(profile_fields), "updated_at"])
         target.save(update_fields=[*dict.fromkeys(fields), "updated_at"])
 
         if target.role == User.Role.FIRST_RESPONDER:
@@ -1444,7 +1444,7 @@ class StaffAccountUpdateView(APIView):
             "account.staff_updated",
             actor=request.user,
             target_user=target,
-            metadata={"fields": fields},
+            metadata={"fields": sorted({*fields, *profile_fields})},
             request_meta=request_meta(request),
         )
         return Response(UserSummarySerializer(target).data)

@@ -4,6 +4,9 @@ export type ConcernCategory = {
   key: string
   label: string
   enabled: boolean
+  photo_required: boolean
+  description_required: boolean
+  location_required: boolean
 }
 
 /** Whether a service is working, in the three words officials see. */
@@ -93,6 +96,13 @@ export type ReportValidationResult = {
   image_review_succeeded?: boolean | null
   image_uploaded?: boolean
   image_error?: "" | "rejected" | "unreadable"
+  /** null when no pin was sent; accepted=false when the pin was blocked. */
+  location?: {
+    accepted: boolean
+    action: "accept" | "warn" | "review" | "block"
+    summary?: string
+    message?: string
+  } | null
 }
 
 export function getConcernClassificationConfig() {
@@ -136,6 +146,9 @@ function normalizeConfig(raw: RawJson): ConcernClassificationConfig {
       key: category.key ?? category.code,
       label: category.label ?? category.name,
       enabled: category.enabled !== false,
+      photo_required: category.photo_required === true,
+      description_required: category.description_required !== false,
+      location_required: category.location_required !== false,
     })),
   }
 }
@@ -147,13 +160,59 @@ export function testConcernReport(category: string, description: string) {
   })
 }
 
-export function testConcernSubmission(input: { file?: File | null; category: string; title?: string; description: string }) {
+export function testConcernSubmission(input: {
+  files?: File[]
+  category: string
+  title?: string
+  description: string
+  latitude?: number | null
+  longitude?: number | null
+}) {
   const body = new FormData()
   body.append("category", input.category)
   body.append("title", input.title || "Sample report")
   body.append("description", input.description)
-  if (input.file) body.append("file", input.file)
+  for (const file of input.files ?? []) body.append("files", file)
+  if (input.latitude != null && input.longitude != null) {
+    body.append("latitude", String(input.latitude))
+    body.append("longitude", String(input.longitude))
+  }
   return apiRequest<ReportValidationResult>("/concerns/classification/test-submission/", { method: "POST", body })
+}
+
+export type SampleMode =
+  | "matching"
+  | "unrelated"
+  | "harassment"
+  | "spam"
+  | "urgent"
+  | "low_quality"
+
+export type SampleLanguage =
+  | "filipino"
+  | "english"
+  | "hybrid"
+  | "bisaya"
+  | "ilocano"
+  | "hiligaynon"
+  | "kapampangan"
+  | "waray"
+
+export function generateSampleDescription(input: {
+  files?: File[]
+  category: string
+  mode: SampleMode
+  language: SampleLanguage
+}) {
+  const body = new FormData()
+  body.append("category", input.category)
+  body.append("mode", input.mode)
+  body.append("language", input.language)
+  for (const file of input.files ?? []) body.append("files", file)
+  return apiRequest<{ description: string }>("/concerns/classification/generate-sample/", {
+    method: "POST",
+    body,
+  })
 }
 
 export type ValidationActivityItem = {

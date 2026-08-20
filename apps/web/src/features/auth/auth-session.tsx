@@ -4,8 +4,6 @@ import * as React from "react"
 import { getMe, type AuthUser, type UserStatus } from "@/features/auth/api"
 import { ApiError, clearAuthTokens, getAccessToken, logoutSession, refreshSession, setAuthTokens } from "@/lib/api"
 import { clearLastKnownPositions } from "@/features/dashboard/lib/last-known-position"
-import { getSupabaseSession, onSupabaseAuthChange, signOutSupabase } from "@/features/auth/supabase-auth"
-import { supabaseAuthEnabled } from "@/lib/supabase"
 
 interface AuthSessionContextValue {
   user: AuthUser | null
@@ -55,17 +53,6 @@ export function AuthSessionProvider({ children }: { children: React.ReactNode })
       setLoading(true)
     }
     try {
-      if (supabaseAuthEnabled) {
-        const { data, error } = await getSupabaseSession()
-        if (error || !data.session) {
-          clearSession()
-          return null
-        }
-        setAuthTokens(data.session.access_token)
-        const nextUser = await getMe()
-        setUser(nextUser)
-        return nextUser
-      }
       if (!getAccessToken()) {
         const session = await refreshSession()
         if (session) {
@@ -93,19 +80,6 @@ export function AuthSessionProvider({ children }: { children: React.ReactNode })
     void refreshUser()
   }, [refreshUser])
 
-  React.useEffect(() => {
-    if (!supabaseAuthEnabled) return
-    const { data } = onSupabaseAuthChange((access) => {
-      if (access) {
-        setAuthTokens(access)
-        void refreshUser()
-      } else {
-        clearSession()
-      }
-    })
-    return () => data.subscription.unsubscribe()
-  }, [clearSession, refreshUser])
-
   const setAuthenticatedUser = React.useCallback((nextUser: AuthUser, access: string) => {
     setAuthTokens(access)
     setUser(nextUser)
@@ -115,8 +89,7 @@ export function AuthSessionProvider({ children }: { children: React.ReactNode })
   const signOut = React.useCallback(async () => {
     setLoading(true)
     try {
-      if (supabaseAuthEnabled) await signOutSupabase()
-      else await logoutSession()
+      await logoutSession()
     } finally {
       clearSession()
       setLoading(false)

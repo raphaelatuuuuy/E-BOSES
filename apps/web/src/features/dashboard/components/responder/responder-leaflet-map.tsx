@@ -130,6 +130,7 @@ export function ResponderLeafletMap({
   useEffect(() => {
     let cancelled = false
     let map: leaflet.Map | null = null
+    let styleEl: HTMLStyleElement | null = null
 
     async function init() {
       const L = await import("leaflet")
@@ -137,6 +138,30 @@ export function ResponderLeafletMap({
       if (cancelled || !containerRef.current) return
 
       LRef.current = L
+
+      // Same fix as the AreaPicker/pin maps: the tile-size override has to
+      // exist in <head> before Leaflet lays out its tile pane, or the 256px
+      // tiles collapse under Tailwind Preflight's `img { max-width: 100% }`
+      // and the map paints blank.
+      styleEl = document.createElement("style")
+      styleEl.textContent = `
+        .responder-map-scope .leaflet-container {
+          width: 100%;
+          height: 100%;
+          font-family: inherit;
+        }
+        .responder-map-scope .leaflet-tile-pane { isolation: isolate; }
+        .responder-map-scope img.leaflet-tile,
+        .responder-map-scope .leaflet-tile {
+          max-width: none !important;
+          max-height: none !important;
+          width: 256px !important;
+          height: 256px !important;
+          mix-blend-mode: normal !important;
+        }
+      `
+      document.head.appendChild(styleEl)
+
       map = L.map(containerRef.current, {
         center: BARANGAY_CENTER,
         zoom: 15,
@@ -177,6 +202,7 @@ export function ResponderLeafletMap({
       cancelled = true
       resizeRef.current?.disconnect()
       resizeRef.current = null
+      styleEl?.remove()
       if (map) map.remove()
       mapRef.current = null
       LRef.current = null

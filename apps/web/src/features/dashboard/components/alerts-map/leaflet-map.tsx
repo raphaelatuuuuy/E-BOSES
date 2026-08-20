@@ -275,12 +275,38 @@ function AlertsLeafletMapInner({
   useEffect(() => {
     let cancelled = false
     let map: leaflet.Map | null = null
+    let styleEl: HTMLStyleElement | null = null
 
     async function init() {
       const L = await import("leaflet")
       await import("leaflet/dist/leaflet.css")
       if (cancelled || !containerRef.current) return
       LRef.current = L
+
+      // Same fix as the AreaPicker/pin maps: the tile-size override has to
+      // exist in <head> before Leaflet lays out its tile pane, or the 256px
+      // tiles collapse under Tailwind Preflight's `img { max-width: 100% }`
+      // and the map paints blank.
+      styleEl = document.createElement("style")
+      styleEl.textContent = `
+        .eboses-map-dark.leaflet-container {
+          width: 100%;
+          height: 100%;
+          background: #0b1020;
+          font-family: inherit;
+        }
+        .eboses-map-dark .leaflet-tile-pane { isolation: isolate; }
+        .eboses-map-dark img.leaflet-tile,
+        .eboses-map-dark .leaflet-tile {
+          max-width: none !important;
+          max-height: none !important;
+          width: 256px !important;
+          height: 256px !important;
+          mix-blend-mode: normal !important;
+        }
+      `
+      document.head.appendChild(styleEl)
+
       map = L.map(containerRef.current, {
         center: [initialSnapshotRef.current.map.center.latitude, initialSnapshotRef.current.map.center.longitude],
         zoom: initialSnapshotRef.current.map.center.zoom,
@@ -338,6 +364,7 @@ function AlertsLeafletMapInner({
       resizeObserverRef.current?.disconnect()
       resizeObserverRef.current = null
       framedRef.current = false
+      styleEl?.remove()
       map?.remove()
       if (mapRef.current === map) mapRef.current = null
     }

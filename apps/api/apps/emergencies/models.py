@@ -268,6 +268,10 @@ class EmergencyCategory(models.Model):
     icon_image = models.FileField(storage=PublicMediaStorage(), upload_to="emergency-category-icons/", blank=True)
     sort_order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
+    # Whether alerts of this category show on the resident alerts map. Off by
+    # exception (e.g. domestic violence, child protection) so a resident never
+    # sees a pin that could out a neighbour's private emergency.
+    visible_to_residents = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
