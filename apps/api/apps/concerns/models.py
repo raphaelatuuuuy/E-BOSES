@@ -432,6 +432,11 @@ class ConcernVote(models.Model):
 
 
 class ConcernComment(models.Model):
+    class Status(models.TextChoices):
+        VISIBLE = "visible", "Visible"
+        HIDDEN = "hidden", "Hidden"
+        REMOVED = "removed", "Removed"
+
     concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="comments")
     author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="concern_comments")
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE, related_name="replies")
@@ -439,6 +444,8 @@ class ConcernComment(models.Model):
     # Kept after first edit so readers can preview the original text
     original_body = models.TextField(blank=True, default="")
     is_edited = models.BooleanField(default=False)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.VISIBLE)
+    moderation_note = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -519,19 +526,41 @@ class ContentFlag(models.Model):
         ACTION_TAKEN = "action_taken", "Action Taken"
         TAKEN_DOWN = "taken_down", "Taken Down"
 
-    concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="flags")
+    # Exactly one of concern (a post-level flag, optionally with `comment` set
+    # for a concern-comment flag), announcement_comment, or emergency_comment
+    # is populated per flag — the target this flag is about.
+    concern = models.ForeignKey(Concern, null=True, blank=True, on_delete=models.CASCADE, related_name="flags")
     comment = models.ForeignKey(ConcernComment, null=True, blank=True, on_delete=models.CASCADE, related_name="flags")
+    announcement_comment = models.ForeignKey(
+        "AnnouncementComment", null=True, blank=True, on_delete=models.CASCADE, related_name="flags"
+    )
+    emergency_comment = models.ForeignKey(
+        "emergencies.EmergencyCommunityComment", null=True, blank=True, on_delete=models.CASCADE, related_name="flags"
+    )
     reporter = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="content_flags")
     reason = models.CharField(max_length=24, choices=Reason.choices)
     note = models.CharField(max_length=255, blank=True)
     status = models.CharField(max_length=24, choices=Status.choices, default=Status.SUBMITTED)
     reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="reviewed_content_flags")
     staff_note = models.CharField(max_length=255, blank=True)
+    # True when execute_takedown()/dismissal was decided by the community
+    # moderation model with no human reviewer — reviewed_by stays null.
+    auto_moderated = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-created_at"]
+
+    @property
+    def target_kind(self):
+        if self.announcement_comment_id:
+            return "announcement_comment"
+        if self.emergency_comment_id:
+            return "emergency_comment"
+        if self.comment_id:
+            return "concern_comment"
+        return "concern"
 
 class ConcernAiAssessment(models.Model):
     class Status(models.TextChoices):
@@ -573,6 +602,53 @@ class ConcernAiAssessment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+class LlmDecisionLog(models.Model):
+    """Append-only record of every LLM decision — real or simulated.
+
+    Unlike ConcernAiAssessment (overwritten on reprocess, one row per concern),
+    a row here is never updated after creation. This is the audit trail;
+    ConcernAiAssessment remains the current-state cache the queue UI reads.
+    """
+
+    class RunKind(models.TextChoices):
+        PRODUCTION = "production", "Production"
+        SIMULATION = "simulation", "Simulation"
+
+    class Domain(models.TextChoices):
+        CONCERN = "concern", "Concern"
+        EMERGENCY = "emergency", "Emergency"
+        COMMUNITY = "community", "Community content"
+
+    run_kind = models.CharField(max_length=16, choices=RunKind.choices)
+    domain = models.CharField(max_length=16, choices=Domain.choices)
+    concern = models.ForeignKey(
+        Concern, null=True, blank=True, on_delete=models.SET_NULL, related_name="llm_decision_logs"
+    )
+    content_flag = models.ForeignKey(
+        "ContentFlag", null=True, blank=True, on_delete=models.SET_NULL, related_name="llm_decision_logs"
+    )
+    performed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="llm_decision_logs"
+    )
+    model_version = models.CharField(max_length=80, blank=True)
+    input_snapshot = models.JSONField(default=dict, blank=True)
+    output_snapshot = models.JSONField(default=dict, blank=True)
+    resident_message = models.TextField(blank=True)
+    recommended_action = models.CharField(max_length=32, blank=True)
+    assigned_department = models.ForeignKey(
+        "Department", null=True, blank=True, on_delete=models.SET_NULL, related_name="llm_decision_logs"
+    )
+    routing_reason = models.CharField(max_length=255, blank=True)
+    duration_ms = models.PositiveIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["domain", "run_kind", "created_at"], name="llm_log_domain_kind_created"),
+        ]
+
+
 class ConcernClassificationConfiguration(models.Model):
     """Published settings used by the concern AI adapters.
 
@@ -595,6 +671,27 @@ class ConcernClassificationConfiguration(models.Model):
         WARN = "warn", "Warn resident"
         BLOCK = "block", "Block submission"
 
+    class SpamAction(models.TextChoices):
+        AUTO_REJECT = "auto_reject", "Reject automatically"
+        HOLD = "hold", "Hold for review"
+
+    class AbusiveAction(models.TextChoices):
+        HOLD = "hold", "Hold for review"
+        AUTO_REJECT = "auto_reject", "Reject automatically"
+
+    class ThreatAction(models.TextChoices):
+        ACCEPT_FLAG_NOTIFY = "accept_flag_notify", "Accept, flag & notify"
+        HOLD = "hold", "Hold for review"
+
+    class SensitiveContentAction(models.TextChoices):
+        RESTRICT_HOLD = "restrict_hold", "Restrict & hold for review"
+        AUTO_BLUR_ACCEPT = "auto_blur_accept", "Auto-blur & accept"
+
+    class StreetImageryAction(models.TextChoices):
+        WARN = "warn", "Warn reviewer only"
+        RESUBMIT = "request_resubmission", "Request resubmission"
+        REJECT = "reject", "Reject automatically"
+
     nlp_provider = models.CharField(max_length=32, default="ollama_cloud")
     nlp_model = models.CharField(max_length=120, default="gemma4:31b")
     relevance_threshold = models.FloatField(default=0.65)
@@ -612,6 +709,17 @@ class ConcernClassificationConfiguration(models.Model):
     resolved_match_lookback_days = models.PositiveIntegerField(default=90)
     flag_suspicious = models.BooleanField(default=True)
     flag_irrelevant = models.BooleanField(default=True)
+    content_safety_spam_action = models.CharField(max_length=24, choices=SpamAction.choices, default=SpamAction.AUTO_REJECT)
+    content_safety_abusive_action = models.CharField(max_length=24, choices=AbusiveAction.choices, default=AbusiveAction.HOLD)
+    content_safety_threat_action = models.CharField(max_length=24, choices=ThreatAction.choices, default=ThreatAction.ACCEPT_FLAG_NOTIFY)
+    content_safety_sensitive_action = models.CharField(max_length=24, choices=SensitiveContentAction.choices, default=SensitiveContentAction.RESTRICT_HOLD)
+    require_ongoing_emergency_confirmation = models.BooleanField(default=True)
+    street_imagery_enabled = models.BooleanField(default=False)
+    street_imagery_categories = models.JSONField(default=list, blank=True)
+    street_imagery_radius_meters = models.PositiveIntegerField(default=50)
+    street_imagery_action = models.CharField(max_length=24, choices=StreetImageryAction.choices, default=StreetImageryAction.RESUBMIT)
+    photo_duplicate_llm_enabled = models.BooleanField(default=True)
+    photo_duplicate_candidate_limit = models.PositiveSmallIntegerField(default=3)
     enabled_categories = models.JSONField(default=list, blank=True)
     suspicious_terms = models.JSONField(default=list, blank=True)
     category_keywords = models.JSONField(default=dict, blank=True)

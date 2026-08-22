@@ -147,6 +147,17 @@ else:
     )
     database_url = env("LOCAL_DATABASE_URL", default=env("DATABASE_URL", default=default_database_url))
     DATABASES = {"default": env.db_url_config(database_url)}
+    db_config = DATABASES["default"]
+    # Persistent connections: without CONN_MAX_AGE every request opens a fresh
+    # Postgres connection (TCP + TLS + auth) over the WAN, which is the single
+    # biggest reason the API crawls once the remote DB is up. 60 s is long
+    # enough to reuse a connection across several requests but short enough that
+    # a dropped connection is detected and re-established.
+    db_config.setdefault("CONN_MAX_AGE", 60)
+    db_config.setdefault("CONN_HEALTH_CHECKS", True)
+    db_config.setdefault("OPTIONS", {})
+    db_config["OPTIONS"].setdefault("connect_timeout", 5)
+    db_config["OPTIONS"].setdefault("options", "-c statement_timeout=15000")
     if ENABLE_GIS:
         DATABASES["default"]["ENGINE"] = "django.contrib.gis.db.backends.postgis"
 
@@ -200,14 +211,27 @@ if IS_TEST_RUN:
         "default": {
             "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
             "LOCATION": "eboses-tests",
-        }
+        },
+        # Same backing store as "default" (LocMemCache shares storage per
+        # location): suites that call cache.clear() in setUp must also wipe
+        # throttle counters or rate-limit tests leak 429s into each other.
+        "throttling": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "eboses-tests",
+        },
     }
 else:
+    # Rate limiting runs against the shared Redis on every request (anon +
+    # user + scoped throttles each do a cache get+set), which is 3-6 WAN
+    # round trips per API call. Throttles are per-process state, so they live
+    # on a process-local cache instead; the shared Redis keeps serving things
+    # that genuinely need cross-process visibility (ip-intel cache,
+    # service-status snapshots, POI caches).
     CACHES = {
+        # Prefix-scoped clear(): the stock RedisCacheClient.clear() calls
+        # FLUSHDB, which would wipe the Celery broker and Channels data
+        # sharing the same Upstash DB (Upstash has no separate DBs).
         "default": {
-            # Prefix-scoped clear(): the stock RedisCacheClient.clear() calls
-            # FLUSHDB, which would wipe the Celery broker and Channels data
-            # sharing the same Upstash DB (Upstash has no separate DBs).
             "BACKEND": "config.cache_backend.PrefixScopedRedisCache",
             "LOCATION": env("CACHE_REDIS_URL", default=REDIS_URL),
             "KEY_PREFIX": "eboses",
@@ -221,7 +245,11 @@ else:
                 "socket_connect_timeout": 3,
                 "socket_timeout": 5,
             },
-        }
+        },
+        "throttling": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "eboses-throttling",
+        },
     }
 CELERY_TASK_DEFAULT_QUEUE = env("CELERY_TASK_DEFAULT_QUEUE", default="eboses")
 CELERY_TASK_ACKS_LATE = True
@@ -252,6 +280,14 @@ CELERY_BEAT_SCHEDULE = {
     "complete-unblocked-deletions": {
         "task": "apps.accounts.privacy_tasks.complete_unblocked_deletions_task",
         "schedule": 3600.0,
+        "options": {"queue": "eboses"},
+    },
+    # Requeues concern AI/privacy/moderation jobs orphaned by a broker outage.
+    # The enqueue helpers no longer run provider pipelines inline on the
+    # request thread, so this sweep is what guarantees the work still happens.
+    "retry-pending-concern-jobs": {
+        "task": "apps.concerns.tasks.retry_pending_concern_jobs_task",
+        "schedule": 300.0,
         "options": {"queue": "eboses"},
     },
     "ocr-health-canary": {
@@ -347,10 +383,13 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 20,
+    # Throttles keep their counters on CACHES["throttling"] (process-local):
+    # the default DRF classes would do 3-6 round trips to the hosted Redis
+    # per request just to count.
     "DEFAULT_THROTTLE_CLASSES": (
-        "rest_framework.throttling.AnonRateThrottle",
-        "rest_framework.throttling.UserRateThrottle",
-        "rest_framework.throttling.ScopedRateThrottle",
+        "apps.throttling.LocalAnonRateThrottle",
+        "apps.throttling.LocalUserRateThrottle",
+        "apps.throttling.LocalScopedRateThrottle",
     ),
     "DEFAULT_THROTTLE_RATES": {
         "anon": "200/hour",
@@ -665,7 +704,10 @@ RESEND_FROM_EMAIL = env("RESEND_FROM_EMAIL", default=DEFAULT_FROM_EMAIL)
 RESEND_FROM_NAME = env("RESEND_FROM_NAME", default="E-Boses")
 RESEND_REPLY_TO = env("RESEND_REPLY_TO", default="")
 RESEND_WEBHOOK_SECRET = env("RESEND_WEBHOOK_SECRET", default="")
-RESEND_DELIVERY_TIMEOUT_SECONDS = env.float("RESEND_DELIVERY_TIMEOUT_SECONDS", default=20.0)
+RESEND_DELIVERY_TIMEOUT_SECONDS = env.float("RESEND_DELIVERY_TIMEOUT_SECONDS", default=10.0)
+# SMTP sends have no per-call timeout of their own; without this a stalled
+# mail server hangs the sending thread indefinitely.
+EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=10)
 ACCOUNT_EMAIL_PROVIDER = env("ACCOUNT_EMAIL_PROVIDER", default="disabled")
 OTP_EMAIL_LOGO_URL = env("OTP_EMAIL_LOGO_URL", default="")
 OTP_EMAIL_EXPIRY_TEXT = env("OTP_EMAIL_EXPIRY_TEXT", default="This code expires in 5 minutes.")
@@ -686,6 +728,9 @@ OLLAMA_API_KEY = env("OLLAMA_API_KEY", default="")
 OLLAMA_HOST = env("OLLAMA_HOST", default="https://ollama.com")
 OLLAMA_TEXT_MODEL = env("OLLAMA_TEXT_MODEL", default="gemma4:31b")
 OLLAMA_TIMEOUT_SECONDS = env.int("OLLAMA_TIMEOUT_SECONDS", default=120)
+# The resident precheck answers while the resident waits, so its text call
+# gets a much tighter budget than the pipeline's.
+OLLAMA_PRECHECK_TEXT_TIMEOUT_SECONDS = env.int("OLLAMA_PRECHECK_TEXT_TIMEOUT_SECONDS", default=8)
 OLLAMA_ENABLE_IMAGE_ANALYSIS = env.bool("OLLAMA_ENABLE_IMAGE_ANALYSIS", default=True)
 # Image requests carry a multi-hundred-KB payload and are the ones that time
 # out, so they get their own budget instead of borrowing the text timeout.

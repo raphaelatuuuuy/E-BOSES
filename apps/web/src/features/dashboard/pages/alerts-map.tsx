@@ -247,6 +247,13 @@ export default function AlertsMapPage() {
     let socket: WebSocket | null = null
     let reconnectTimer: number | undefined
     let closed = false
+    let attempts = 0
+
+    const reconnectDelay = () => {
+      attempts += 1
+      const backoff = Math.min(30_000, 1500 * 2 ** attempts)
+      return backoff / 2 + Math.random() * (backoff / 2)
+    }
 
     async function connect() {
       try {
@@ -257,7 +264,7 @@ export default function AlertsMapPage() {
         )
       } catch {
         if (!closed) {
-          reconnectTimer = window.setTimeout(() => void connect(), 5000)
+          reconnectTimer = window.setTimeout(() => void connect(), reconnectDelay())
         }
         return
       }
@@ -276,9 +283,12 @@ export default function AlertsMapPage() {
           // Polling keeps the page correct if a live patch is malformed.
         }
       }
+      socket.onopen = () => {
+        attempts = 0
+      }
       socket.onclose = () => {
         if (!closed) {
-          reconnectTimer = window.setTimeout(() => void connect(), 5000)
+          reconnectTimer = window.setTimeout(() => void connect(), reconnectDelay())
         }
       }
       socket.onerror = () => socket?.close()

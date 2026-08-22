@@ -430,16 +430,28 @@ def queue_sms(
 
 
 def _dispatch(message_id: int, destination: str, body: str) -> None:
-    """Send through Celery when a broker is reachable, otherwise inline."""
+    """Send through Celery when a broker is reachable.
+
+    A broker outage must not hang the request thread: delivery args cannot be
+    reconstructed later (destinations are stored hashed, OTP bodies are never
+    persisted), so in production the row simply stays QUEUED for operator
+    visibility while local development — where no worker runs — still delivers
+    inline.
+    """
     from .tasks import send_outbound_sms_task
 
     try:
         send_outbound_sms_task.delay(message_id, destination, body)
-    except Exception:
-        # No broker (local dev, tests, a Redis blip). Delivering inline is
-        # slower but an emergency reply must not be lost to infrastructure.
-        logger.warning("Celery unavailable for SMS #%s; sending inline.", message_id)
-        deliver(message_id, destination, body)
+    except Exception as exc:
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+            logger.warning("Celery unavailable for SMS #%s; sending inline (dev).", message_id)
+            deliver(message_id, destination, body)
+            return
+        logger.error(
+            "Celery broker unavailable; SMS #%s stays QUEUED (%s).",
+            message_id,
+            exc.__class__.__name__,
+        )
 
 
 def deliver(message_id: int, destination: str, body: str) -> str:

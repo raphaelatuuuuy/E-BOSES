@@ -1,4 +1,75 @@
 from celery import shared_task
+from django.conf import settings
+
+
+def enqueue_emergency_created_broadcast(alert_id):
+    """Queue the emergency.created live-map broadcast off the request thread.
+
+    Building the payload plus its OSRM route can block for seconds; when the
+    broker is unreachable, local development still broadcasts inline.
+    """
+    from .tasks import broadcast_emergency_created_task
+
+    try:
+        broadcast_emergency_created_task.delay(alert_id)
+    except Exception:
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+            broadcast_emergency_created_task.run(alert_id)
+
+
+def enqueue_emergency_media_preview(kind: str, media_id: int):
+    """Generate an emergency photo's SAM3-blurred preview in a worker.
+
+    Without this, the first person to open an alert eats the whole Roboflow
+    round trip synchronously. When the broker is unreachable, local development
+    still renders inline; production falls back to first-viewer rendering,
+    which the preview endpoints already handle.
+    """
+    from .tasks import generate_emergency_media_preview_task
+
+    try:
+        generate_emergency_media_preview_task.delay(kind, media_id)
+    except Exception:
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+            generate_emergency_media_preview_task.run(kind, media_id)
+
+
+@shared_task(time_limit=120, soft_time_limit=90)
+def generate_emergency_media_preview_task(kind: str, media_id: int):
+    from .media_services import ensure_emergency_media_preview
+
+    if kind == "chat":
+        from .models import EmergencyChatAttachment
+
+        media = EmergencyChatAttachment.objects.filter(pk=media_id).first()
+        if not media or media.media_type != "image":
+            return {"media_id": media_id, "skipped": True}
+    else:
+        from .models import EmergencyMedia
+
+        media = EmergencyMedia.objects.filter(pk=media_id).first()
+        if not media:
+            return {"media_id": media_id, "skipped": True}
+    ensure_emergency_media_preview(media)
+    return {"media_id": media_id, "preview": True}
+
+
+@shared_task(time_limit=60, soft_time_limit=45)
+def broadcast_emergency_created_task(alert_id):
+    """Broadcast emergency.created with its routing enrichment to the live map."""
+    from apps.notifications.services import broadcast_live_map_event
+
+    from .live_map import emergency_payload, route_for_assignment
+    from .models import EmergencyAlert
+
+    alert = EmergencyAlert.objects.filter(pk=alert_id).first()
+    if not alert:
+        return {"alert_id": alert_id, "skipped": True}
+    broadcast_live_map_event(
+        "emergency.created",
+        {"emergency": emergency_payload(alert), "route": route_for_assignment(alert)},
+    )
+    return {"alert_id": alert_id, "broadcast": True}
 
 
 @shared_task(time_limit=60, soft_time_limit=45)

@@ -55,6 +55,11 @@ export function PhilippinesMap({ figures, loading = false }: Props) {
   const activeRow = rows.find((row) => row.region.name === active)
   const activeFigures = activeRow?.data
 
+  const coveredGlowPath = useMemo(
+    () => rows.filter((row) => row.step >= 0).map((row) => row.region.d).join(" "),
+    [rows],
+  )
+
   function enter(name: string, d: string) {
     setActive(name)
     setGlowPath(d)
@@ -104,6 +109,15 @@ export function PhilippinesMap({ figures, loading = false }: Props) {
               </feMerge>
             </filter>
           </defs>
+
+          <path
+            d={coveredGlowPath}
+            fill={PEAK_FILL}
+            filter={`url(#${glowId})`}
+            pointerEvents="none"
+            aria-hidden
+            style={{ opacity: 0.4 }}
+          />
 
           <path
             d={glowPath}

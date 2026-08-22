@@ -26,6 +26,33 @@ def _notification_body(concern: Concern, status: str) -> str:
     return f"Your report status has been updated to {status}."
 
 
+def _deliver_notification_after_commit(notification) -> None:
+    """Queue WebSocket + push delivery in a worker, never on the request thread.
+
+    Browser-push fan-out blocks up to 15 s per subscription. When the broker is
+    unreachable, local development (no worker running) still delivers inline;
+    production leaves the row for the recipient's poll fallback and logs it.
+    """
+    from .tasks import deliver_notification_task
+
+    def _deliver():
+        try:
+            deliver_notification_task.delay(notification.pk)
+        except Exception as exc:
+            if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+                deliver_notification_task.run(notification.pk)
+            else:
+                import logging
+
+                logging.getLogger(__name__).error(
+                    "Broker unavailable; notification #%s delivery deferred (%s).",
+                    notification.pk,
+                    exc.__class__.__name__,
+                )
+
+    transaction.on_commit(_deliver)
+
+
 def _report_updates_enabled(concern: Concern) -> bool:
     settings_obj = getattr(concern.reporter, "resident_settings", None)
     return settings_obj is None or settings_obj.report_updates
@@ -710,7 +737,7 @@ def create_user_notification(
         body=body,
         metadata=metadata or {},
     )
-    transaction.on_commit(lambda: broadcast_notification(notification))
+    _deliver_notification_after_commit(notification)
     return notification
 
 
@@ -748,7 +775,7 @@ def create_emergency_notification(
         body=body or f"Emergency status updated to {alert.status.replace('_', ' ')}.",
         metadata=metadata or {},
     )
-    transaction.on_commit(lambda: broadcast_notification(notification))
+    _deliver_notification_after_commit(notification)
     return notification
 
 
@@ -769,6 +796,21 @@ def notify_emergency_status(alert, *, type: str, body: str = "") -> None:
     if notification_type:
         create_emergency_notification(alert=alert, type=notification_type, body=body)
     broadcast_emergency_update(alert)
+
+
+def notify_flag_review_dismissed(*, flag_reporter, concern: Concern, staff_note: str) -> None:
+    from .models import Notification
+
+    create_user_notification(
+        recipient=flag_reporter,
+        concern=concern,
+        type=Notification.Type.FLAG_DISMISSED,
+        title="Flag report reviewed",
+        body=(
+            f"Your report was reviewed, however the content stays up. "
+            f"Official note: {staff_note}"
+        ),
+    )
 
 
 def notify_status_change(concern: Concern) -> None:

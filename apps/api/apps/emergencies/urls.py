@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .community_api import (
+    EmergencyCommentFlagCreateView,
     EmergencyCommunityCommentDetailView,
     EmergencyCommunityCommentListCreateView,
 )
@@ -89,6 +90,11 @@ urlpatterns = [
         "<int:pk>/community-comments/<int:comment_id>/",
         EmergencyCommunityCommentDetailView.as_view(),
         name="emergency-community-comment-detail",
+    ),
+    path(
+        "<int:pk>/community-comments/<int:comment_id>/flags/",
+        EmergencyCommentFlagCreateView.as_view(),
+        name="emergency-community-comment-flag-create",
     ),
     path("<int:pk>/chat/", EmergencyChatView.as_view(), name="emergency-chat"),
     path("<int:pk>/assign/", EmergencyAssignView.as_view(), name="emergency-assign"),

@@ -938,4 +938,18 @@ class ServiceStatusView(APIView):
 
     def get(self, request):
         fresh = request.query_params.get("refresh") == "1"
-        return Response(collect(use_cache=not fresh, run_checks=fresh, record=fresh))
+        if not fresh:
+            return Response(collect(use_cache=True))
+        # Probing everything (Gemma, SAM3, Resend, SMS, Nominatim, ...) can
+        # block for well over a minute; it runs in a worker and the caller
+        # polls this endpoint until the snapshot changes.
+        from django.conf import settings as django_settings
+
+        try:
+            record_service_health_task.delay()
+            return Response({**collect(use_cache=True), "refresh_scheduled": True})
+        except Exception:
+            if getattr(django_settings, "IS_LOCAL_DEVELOPMENT", False):
+                record_service_health_task.run()
+                return Response(collect(use_cache=False))
+            raise

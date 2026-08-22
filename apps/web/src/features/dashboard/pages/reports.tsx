@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import {
+  ArrowUpDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   EyeOffIcon,
@@ -10,11 +11,18 @@ import {
   PlayIcon,
   SearchIcon,
   SlidersHorizontalIcon,
+  InfoIcon,
+  Network,
+  HardHat,
+  CircleCheck,
+  CircleX,
+  TriangleAlert,
 } from "lucide-react"
 
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { useDebouncedCallback } from "@/hooks/use-debounced-callback"
 import {
   listManagedConcerns,
   listMyConcerns,
@@ -38,6 +46,7 @@ import {
   formatDate,
   useMinWidth,
 } from "@/features/dashboard/components/concerns/concern-display"
+import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 import { FilterRail } from "@/features/dashboard/components/workspace/filter-rail"
 import { QueueTableHeader } from "@/features/dashboard/components/workspace/queue-row"
 import { EmptyState } from "@/features/dashboard/components/record/empty-state"
@@ -71,7 +80,50 @@ import {
 import { OpsBar, OpsBarButton } from "@/features/dashboard/components/workspace/ops-bar"
 import { OpsTabs } from "@/features/dashboard/components/workspace/ops-tabs"
 
-const residentReportsPageSize = 5
+const residentReportsPageSize = 10
+
+type SortKey = "date" | "status" | "category"
+
+function StatusIcon({ status, className }: { status: string; className?: string }) {
+  const cls = cn("size-3.5 shrink-0", className)
+  switch (status) {
+    case "submitted":
+    case "under_review":
+      return <InfoIcon className={cls} />
+    case "assigned":
+      return <Network className={cls} />
+    case "in_progress":
+      return <HardHat className={cls} />
+    case "resolved":
+      return <CircleCheck className={cls} />
+    case "rejected":
+      return <CircleX className={cls} />
+    case "appealed":
+      return <TriangleAlert className={cls} />
+    default:
+      return <InfoIcon className={cls} />
+  }
+}
+
+const RESIDENT_STATUS_TEXT: Record<string, string> = {
+  submitted: "text-blue-600",
+  under_review: "text-blue-600",
+  assigned: "text-indigo-600",
+  in_progress: "text-amber-600",
+  resolved: "text-emerald-600",
+  rejected: "text-red-600",
+  appealed: "text-violet-600",
+}
+
+const RESIDENT_STATUS_LABEL: Record<string, string> = {
+  submitted: "Submitted",
+  under_review: "Under review",
+  assigned: "Assigned",
+  in_progress: "In progress",
+  resolved: "Resolved",
+  rejected: "Rejected",
+  appealed: "Appealed",
+}
 
 const RELEVANCE_BADGE: Record<string, string> = {
   relevant: "Shows the issue",
@@ -84,7 +136,6 @@ const RELEVANCE_BADGE: Record<string, string> = {
 function filterReports(reports: Concern[], filter: string) {
   if (filter === "All") return reports
   if (filter === "Active") {
-
     return reports.filter((report) => !["resolved", "rejected", "appealed"].includes(report.status))
   }
   if (filter === "Resolved") {
@@ -101,6 +152,30 @@ function filterReports(reports: Concern[], filter: string) {
     )
   }
   return reports
+}
+
+function searchReports(reports: Concern[], query: string) {
+  const q = query.trim().toLowerCase()
+  if (!q) return reports
+  return reports.filter((report) => [
+    report.tracking_id,
+    report.title,
+    report.description,
+    report.address,
+    categoryLabels[report.category],
+  ].some((v) => v?.toLowerCase().includes(q)))
+}
+
+function sortReports(reports: Concern[], key: SortKey, asc: boolean) {
+  const sorted = [...reports]
+  sorted.sort((a, b) => {
+    let cmp = 0
+    if (key === "date") cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    else if (key === "status") cmp = a.status.localeCompare(b.status)
+    else if (key === "category") cmp = a.category.localeCompare(b.category)
+    return asc ? cmp : -cmp
+  })
+  return sorted
 }
 
 const officialFilters = [
@@ -261,6 +336,8 @@ function OfficialConcernDashboard({
           latitude={current.latitude}
           longitude={current.longitude}
           streetAddress={current.community_incident?.address || current.address}
+          category={current.category}
+          iconKey={current.category_ref?.icon_key}
           heightClassName="h-44"
         />
       }
@@ -661,6 +738,9 @@ export default function ReportsPage() {
   const [error, setError] = useState("")
   const [statusDialogOpen, setStatusDialogOpen] = useState(false)
   const filterScrollRef = useWheelScroll<HTMLDivElement>()
+  const [residentSearch, setResidentSearch] = useState("")
+  const [sortKey, setSortKey] = useState<SortKey>("date")
+  const [sortAsc, setSortAsc] = useState(false)
 
   const statusDialogMode: StatusDialogMode = "assigned"
   const routeReportId = reportId ?? null
@@ -684,23 +764,22 @@ export default function ReportsPage() {
     }
   }, [isOfficial])
 
+  const eventRefresh = useDebouncedCallback(() => void loadReports(), 3000)
+
   useEffect(() => {
 
     const first = window.setTimeout(() => void loadReports(), 0)
-    function refresh() {
-      void loadReports()
-    }
-    const interval = window.setInterval(refresh, 30000)
-    window.addEventListener("eboses:report-created", refresh)
-    window.addEventListener("eboses:concern-updated", refresh)
+    const interval = window.setInterval(eventRefresh, 30000)
+    window.addEventListener("eboses:report-created", eventRefresh)
+    window.addEventListener("eboses:concern-updated", eventRefresh)
     return () => {
       window.clearTimeout(first)
       window.clearInterval(interval)
-      window.removeEventListener("eboses:report-created", refresh)
-      window.removeEventListener("eboses:concern-updated", refresh)
+      window.removeEventListener("eboses:report-created", eventRefresh)
+      window.removeEventListener("eboses:concern-updated", eventRefresh)
     }
 
-  }, [loadReports])
+  }, [loadReports, eventRefresh])
 
   const [prevRouteId, setPrevRouteId] = useState(routeReportId)
   if (prevRouteId !== routeReportId) {
@@ -773,7 +852,10 @@ export default function ReportsPage() {
       </div>
     )
 
-  const filtered = filterReports(reports, activeFilter)
+  const baseFiltered = filterReports(reports, activeFilter)
+  const searched = searchReports(baseFiltered, residentSearch)
+  const sorted = sortReports(searched, sortKey, sortAsc)
+  const filtered = sorted
   const totalPages = Math.max(1, Math.ceil(filtered.length / residentReportsPageSize))
   const currentPage = Math.min(reportPage, totalPages)
   const pagedReports = filtered.slice((currentPage - 1) * residentReportsPageSize, currentPage * residentReportsPageSize)
@@ -821,11 +903,17 @@ export default function ReportsPage() {
     )
   }
 
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) setSortAsc(!sortAsc)
+    else { setSortKey(key); setSortAsc(true) }
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white">
       <div
         className="min-w-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-[calc(7.5rem+env(safe-area-inset-bottom))] pt-4 md:px-6 md:pb-10 md:pt-6 lg:px-6 lg:pb-8"
       >
+        {/* Header */}
         <div className="mb-5">
           <div className="flex items-center gap-2">
             <button
@@ -839,56 +927,104 @@ export default function ReportsPage() {
             <h1 className="text-[20px] font-bold tracking-tight text-neutral-900 sm:text-2xl">
               My reports
             </h1>
+            <span className="ml-1 inline-flex h-5 items-center rounded-full bg-neutral-100 px-2 text-[11px] font-semibold text-neutral-500">
+              {reports.length}
+            </span>
           </div>
           <p className="mt-1 text-sm text-neutral-500">
             Track status and updates on reports you submitted.
           </p>
         </div>
 
-        {}
-        <section
-          className="flex min-w-0 flex-col items-stretch gap-5"
-          style={{ width: "min(100%, 52rem)" }}
-        >
-          <div
-            ref={filterScrollRef}
-            className="scrollbar-hide w-full min-w-0 overflow-x-auto overscroll-x-contain pb-0.5 [-webkit-overflow-scrolling:touch] touch-pan-x"
-            role="tablist"
-            aria-label="Report status filters"
-          >
-            <div className="flex min-w-max flex-nowrap gap-2">
-            {filters.map((filter) => (
-              <button
-                key={filter}
-                type="button"
-                role="tab"
-                data-filter-option
-                aria-selected={activeFilter === filter}
-                aria-pressed={activeFilter === filter}
-                onClick={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  setActiveFilter(filter)
-                  setReportPage(1)
-                }}
-                className={cn(
-                  "relative z-10 h-10 shrink-0 cursor-pointer rounded-full border px-4 text-[13px] font-semibold whitespace-nowrap transition-colors",
-                  activeFilter === filter
-                    ? "border-brand-orange bg-brand-orange text-white"
-                    : "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:bg-neutral-50",
-                )}
-              >
-                {filter}
-              </button>
-            ))}
+        {/* Filters + Search + Sort row */}
+        <section className="flex min-w-0 flex-col items-stretch gap-3">
+          {/* Top bar: filters, search, sort */}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            {/* Filters */}
+            <div
+              ref={filterScrollRef}
+              className="scrollbar-hide min-w-0 overflow-x-auto overscroll-x-contain pb-0.5 [-webkit-overflow-scrolling:touch] touch-pan-x"
+              role="tablist"
+              aria-label="Report status filters"
+            >
+              <div className="flex min-w-max flex-nowrap gap-2">
+                {filters.map((filter) => (
+                  <button
+                    key={filter}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeFilter === filter}
+                    aria-pressed={activeFilter === filter}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      setActiveFilter(filter)
+                      setReportPage(1)
+                    }}
+                    className={cn(
+                      "relative z-10 h-9 shrink-0 cursor-pointer rounded-full border px-3.5 text-[12px] font-semibold whitespace-nowrap transition-colors",
+                      activeFilter === filter
+                        ? "border-brand-orange bg-brand-orange text-white"
+                        : "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:bg-neutral-50",
+                    )}
+                  >
+                    {filter}
+                    {filter === "All" && reports.length > 0 && (
+                      <span className="ml-1.5 inline-flex h-4 items-center rounded-full bg-white/20 px-1 text-[10px]">
+                        {reports.length}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Search + Sort */}
+            <div className="flex items-center gap-2">
+              <label className="flex h-9 items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 transition-colors focus-within:border-neutral-300">
+                <SearchIcon className="size-3.5 shrink-0 text-neutral-400" />
+                <input
+                  value={residentSearch}
+                  onChange={(e) => { setResidentSearch(e.target.value); setReportPage(1) }}
+                  placeholder="Search reports…"
+                  className="w-36 min-w-0 bg-transparent text-[13px] text-neutral-900 outline-none placeholder:text-neutral-400 sm:w-48"
+                />
+              </label>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => toggleSort(sortKey === "date" ? "date" : sortKey)}
+                  className="flex h-9 items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-3 text-[12px] font-medium text-neutral-600 transition-colors hover:bg-neutral-50"
+                >
+                  <ArrowUpDownIcon className="size-3.5" />
+                  <span className="hidden sm:inline">{sortKey === "date" ? "Date" : sortKey === "status" ? "Status" : "Category"}</span>
+                </button>
+              </div>
             </div>
           </div>
 
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          {error ? <p className="text-sm text-red-500">{error}</p> : null}
 
-          {}
+          {/* Table */}
           <div className="w-full overflow-hidden rounded-lg border border-neutral-200 bg-white">
-            <div className="flex flex-col divide-y divide-neutral-100">
+            {/* Table header */}
+            <div className="grid grid-cols-[3fr_1.2fr_1fr_0.8fr] items-center gap-2 border-b border-neutral-100 bg-neutral-50/80 px-4 py-2.5">
+              <button type="button" onClick={() => toggleSort("date")} className="flex items-center gap-1 text-left text-[11px] font-semibold uppercase tracking-wider text-neutral-400">
+                Report
+                <ArrowUpDownIcon className="size-3" />
+              </button>
+              <button type="button" onClick={() => toggleSort("category")} className="flex items-center gap-1 text-left text-[11px] font-semibold uppercase tracking-wider text-neutral-400">
+                Category
+                <ArrowUpDownIcon className="size-3" />
+              </button>
+              <button type="button" onClick={() => toggleSort("status")} className="flex items-center gap-1 text-left text-[11px] font-semibold uppercase tracking-wider text-neutral-400">
+                Status
+                <ArrowUpDownIcon className="size-3" />
+              </button>
+              <span className="text-right text-[11px] font-semibold uppercase tracking-wider text-neutral-400">Date</span>
+            </div>
+
+            {/* Table rows */}
+            <div className="flex flex-col divide-y divide-neutral-50">
               {pagedReports.map((report) => {
                 const isSelected = selected?.id === report.id
                 return (
@@ -897,53 +1033,84 @@ export default function ReportsPage() {
                     type="button"
                     onClick={() => selectReport(report)}
                     className={cn(
-                      "flex min-h-[68px] w-full items-center gap-3 px-4 py-3.5 text-left transition-colors",
-                      isSelected ? "bg-neutral-50" : "bg-white hover:bg-neutral-50/80",
+                      "grid grid-cols-[3fr_1.2fr_1fr_0.8fr] items-center gap-2 px-4 py-3 text-left transition-colors",
+                      isSelected ? "bg-neutral-50" : "hover:bg-neutral-50/80",
                     )}
                   >
-                    <ReportIcon report={report} size="sm" />
-                    <div className="min-w-0 flex-1">
-<p className="line-clamp-2 text-[15px] font-medium leading-snug text-neutral-900">
-	                        {report.tracking_id}
-	                      </p>
-                      <p className="mt-0.5 truncate text-[13px] text-neutral-500">
-                        {categoryLabels[report.category]}
-                        <span className="mx-1 text-neutral-300">·</span>
-                        {formatDate(report.created_at)}
-                      </p>
+                    {/* Report: icon + description */}
+                    <div className="min-w-0 flex items-center gap-2.5">
+                      <ReportIcon report={report} size="sm" />
+                      <div className="min-w-0">
+                        <p className="truncate text-[13px] font-medium text-neutral-800">
+                          {report.title || report.description.slice(0, 80)}
+                          {(report.title ? report.title.length > 80 : report.description.length > 80) ? "…" : ""}
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-neutral-400">
+                          {report.address?.replace(/,?\s*Marikina( Heights)?$/, "") || ""}
+                        </p>
+                      </div>
                     </div>
 
-                    <ChevronRightIcon className="size-4 shrink-0 text-neutral-300" />
+                    {/* Category: neutral icon, no bg */}
+                    <div className="flex items-center gap-1.5">
+                      {(() => {
+                        const Icon = resolveIconByKey(report.category_ref?.icon_key)
+                        return Icon ? <Icon className="size-3.5 shrink-0 text-neutral-500" /> : null
+                      })()}
+                      <span className="truncate text-[12px] text-neutral-600">
+                        {categoryLabels[report.category]}
+                      </span>
+                    </div>
+
+                    {/* Status: no badge, just icon + text */}
+                    <div className="flex items-center gap-1">
+                      <StatusIcon status={report.status} className={RESIDENT_STATUS_TEXT[report.status] ?? "text-neutral-500"} />
+                      <span className={cn("text-[11px] font-medium uppercase", RESIDENT_STATUS_TEXT[report.status] ?? "text-neutral-500")}>
+                        {RESIDENT_STATUS_LABEL[report.status] ?? report.status}
+                      </span>
+                    </div>
+
+                    {/* Date + time */}
+                    <div className="text-right">
+                      <p className="text-[11px] font-normal text-neutral-400">
+                        {formatDate(report.created_at)}
+                      </p>
+                      <p className="text-[10px] text-neutral-300">
+                        {new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit" }).format(new Date(report.created_at))}
+                      </p>
+                    </div>
                   </button>
                 )
               })}
-              {filtered.length === 0 ? (
+
+              {pagedReports.length === 0 && (
                 <EmptyState
                   title={
-                    activeFilter === "All"
+                    activeFilter === "All" && !residentSearch
                       ? "No reports yet."
-                      : `No ${activeFilter.toLowerCase()} reports.`
+                      : `No ${activeFilter.toLowerCase()} reports found.`
                   }
                 />
-              ) : null}
+              )}
             </div>
 
-            {filtered.length > 0 ? (
-              <div className="flex items-center justify-between gap-3 border-t border-neutral-100 px-4 py-3">
-                <p className="text-[12px] font-medium text-neutral-500">
+            {/* Pagination footer */}
+            {filtered.length > 0 && (
+              <div className="flex items-center justify-between border-t border-neutral-100 px-4 py-3">
+                <p className="text-[12px] text-neutral-500">
                   {firstShown}–{lastShown} of {filtered.length}
                 </p>
                 <div className="flex items-center gap-0.5">
                   <button
                     type="button"
-                    onClick={() => setReportPage((value) => Math.max(1, value - 1))}
-                    className="flex size-8 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-50 disabled:opacity-40"
+                    onClick={() => setReportPage((v) => Math.max(1, v - 1))}
                     disabled={currentPage <= 1}
+                    className="flex size-8 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-50 disabled:opacity-40"
                     aria-label="Previous page"
                   >
                     <ChevronLeftIcon className="size-3.5" />
                   </button>
-                  {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => (
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
                     <button
                       key={page}
                       type="button"
@@ -961,16 +1128,16 @@ export default function ReportsPage() {
                   ))}
                   <button
                     type="button"
-                    onClick={() => setReportPage((value) => Math.min(totalPages, value + 1))}
-                    className="flex size-8 items-center justify-center rounded-md text-neutral-600 hover:bg-neutral-50 disabled:opacity-40"
+                    onClick={() => setReportPage((v) => Math.min(totalPages, v + 1))}
                     disabled={currentPage >= totalPages}
+                    className="flex size-8 items-center justify-center rounded-md text-neutral-600 hover:bg-neutral-50 disabled:opacity-40"
                     aria-label="Next page"
                   >
                     <ChevronRightIcon className="size-3.5" />
                   </button>
                 </div>
               </div>
-            ) : null}
+            )}
           </div>
         </section>
       </div>

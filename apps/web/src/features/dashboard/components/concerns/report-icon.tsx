@@ -1,48 +1,11 @@
-import {
-  ArrowRightIcon,
-  DropletsIcon,
-  HomeIcon,
-  LeafIcon,
-  LightbulbIcon,
-  MapPinIcon,
-  MegaphoneIcon,
-  PawPrintIcon,
-  ShieldAlertIcon,
-  TagsIcon,
-  Trash2Icon,
-  WrenchIcon,
-} from "lucide-react"
+import { TagsIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
 import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
-import { categoryStyles } from "@/features/dashboard/components/concerns/concern-display"
+import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 import type { Concern } from "@/features/dashboard/api"
 
-const CATEGORY_ICON_BY_KEY = {
-  tag: TagsIcon,
-  wrench: WrenchIcon,
-  leaf: LeafIcon,
-  "shield-alert": ShieldAlertIcon,
-  trash: Trash2Icon,
-  lightbulb: LightbulbIcon,
-  road: ArrowRightIcon,
-  droplets: DropletsIcon,
-  home: HomeIcon,
-  "map-pin": MapPinIcon,
-  "paw-print": PawPrintIcon,
-  megaphone: MegaphoneIcon,
-} as const
-
-/**
- * The thumbnail for a concern row: its first photo, or the category glyph.
- *
- * Split out of `concern-display.tsx`, which exported this component alongside
- * sixteen helpers and constants. A module that mixes components with other
- * exports is not a valid Fast Refresh boundary, so every edit to any of those
- * helpers forced a full page reload instead of a hot update — painful on the
- * concerns workspace, where reproducing state means re-selecting a report.
- */
 export function ReportIcon({
   report,
   size = "md",
@@ -89,9 +52,7 @@ export function ReportIcon({
     )
   }
 
-  const configuredIcon = CATEGORY_ICON_BY_KEY[report.category_ref?.icon_key as keyof typeof CATEGORY_ICON_BY_KEY]
-  const style = categoryStyles[report.category]
-  const Icon = style.icon
+  const ResolvedIcon = resolveIconByKey(report.category_ref?.icon_key) ?? TagsIcon
 
   return (
     <span
@@ -100,14 +61,7 @@ export function ReportIcon({
         size === "sm" ? "size-9" : "size-10",
       )}
     >
-      {configuredIcon ? (
-        (() => {
-          const ConfiguredIcon = configuredIcon
-          return <ConfiguredIcon className={size === "sm" ? "size-4" : "size-5"} strokeWidth={2} />
-        })()
-      ) : (
-        <Icon className={size === "sm" ? "size-4" : "size-5"} strokeWidth={2} />
-      )}
+      <ResolvedIcon className={size === "sm" ? "size-4" : "size-5"} strokeWidth={2} />
     </span>
   )
 }

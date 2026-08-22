@@ -2,7 +2,8 @@ import hashlib
 import ipaddress
 
 from django.conf import settings
-from rest_framework.throttling import SimpleRateThrottle
+from django.core.cache import caches
+from rest_framework.throttling import AnonRateThrottle, SimpleRateThrottle, ScopedRateThrottle, UserRateThrottle
 
 
 def client_ip(request):
@@ -25,14 +26,42 @@ def _digest(value):
     return hashlib.sha256(value.encode()).hexdigest()[:32]
 
 
-class ClientIPThrottle(SimpleRateThrottle):
+class LocalCacheRateThrottle(SimpleRateThrottle):
+    """Rate limiting on the process-local cache, never the shared Redis.
+
+    Every request consults anon/user/scoped throttles; against the hosted
+    Upstash Redis that is 3-6 WAN round trips per API call. Throttle counters
+    are per-process state anyway, so they live in CACHES["throttling"].
+    """
+
+    def __init__(self):
+        self.cache = caches["throttling"]
+        super().__init__()
+
+
+class LocalAnonRateThrottle(LocalCacheRateThrottle, AnonRateThrottle):
+    pass
+
+
+class LocalUserRateThrottle(LocalCacheRateThrottle, UserRateThrottle):
+    pass
+
+
+class LocalScopedRateThrottle(LocalCacheRateThrottle, ScopedRateThrottle):
+    # ScopedRateThrottle resolves scope/rate per view inside allow_request();
+    # its own empty __init__ must win over the base one.
+    def __init__(self):
+        self.cache = caches["throttling"]
+
+
+class ClientIPThrottle(LocalCacheRateThrottle):
     scope = "client_ip"
 
     def get_cache_key(self, request, view):
         return self.cache_format % {"scope": self.scope, "ident": _digest(client_ip(request))}
 
 
-class LoginIdentifierThrottle(SimpleRateThrottle):
+class LoginIdentifierThrottle(LocalCacheRateThrottle):
     scope = "login_identifier"
 
     def get_cache_key(self, request, view):
@@ -44,7 +73,7 @@ class LoginIPThrottle(ClientIPThrottle):
     scope = "login_ip"
 
 
-class RefreshSessionThrottle(SimpleRateThrottle):
+class RefreshSessionThrottle(LocalCacheRateThrottle):
     scope = "refresh_session"
 
     def get_cache_key(self, request, view):

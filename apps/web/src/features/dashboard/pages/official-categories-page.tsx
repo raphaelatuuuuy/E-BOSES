@@ -1,25 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
-  ArrowRightIcon,
   CircleCheck,
   ChevronDownIcon,
   ChevronUpIcon,
-  DropletsIcon,
   FolderOpenIcon,
-  HomeIcon,
-  LeafIcon,
-  LightbulbIcon,
-  MapPinIcon,
-  MegaphoneIcon,
-  PawPrintIcon,
   PlusIcon,
-  ShieldAlertIcon,
   TagsIcon,
-  Trash2Icon,
-  WrenchIcon,
   CircleX,
 } from "lucide-react"
+import * as LucideIcons from "lucide-react"
 import { toast } from "sonner"
+import { cn } from "@workspace/ui/lib/utils"
+import { resolveIconByKey, resolveIconName } from "@/features/dashboard/components/concerns/resolve-icon"
 
 import { apiRequest } from "@/lib/api"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
@@ -68,23 +60,8 @@ interface RoutingRule {
 
 type Draft = Partial<Category> & { iconFile?: File | null }
 
-const ICONS = [
-  ["tag", "Tag", TagsIcon],
-  ["wrench", "Wrench", WrenchIcon],
-  ["leaf", "Leaf", LeafIcon],
-  ["shield-alert", "Safety", ShieldAlertIcon],
-  ["trash", "Trash", Trash2Icon],
-  ["lightbulb", "Light", LightbulbIcon],
-  ["road", "Road", ArrowRightIcon],
-  ["droplets", "Water", DropletsIcon],
-  ["home", "Home", HomeIcon],
-  ["map-pin", "Map pin", MapPinIcon],
-  ["paw-print", "Animal", PawPrintIcon],
-  ["megaphone", "Notice", MegaphoneIcon],
-] as const
-
 function iconFor(key: string | undefined) {
-  return ICONS.find(([value]) => value === key)?.[2] ?? TagsIcon
+  return resolveIconByKey(key) ?? TagsIcon
 }
 
 function slugify(value: string) {
@@ -219,17 +196,70 @@ function RequirementDropdown({
   )
 }
 
+/** Curated list of common Lucide icons for quick selection. */
+const QUICK_ICONS: Array<[string, string, React.ComponentType<{ className?: string; strokeWidth?: number }>]> = [
+  ["TagsIcon", "Tag", LucideIcons.TagsIcon],
+  ["WrenchIcon", "Wrench", LucideIcons.WrenchIcon],
+  ["LeafIcon", "Leaf", LucideIcons.LeafIcon],
+  ["ShieldAlertIcon", "Safety", LucideIcons.ShieldAlertIcon],
+  ["Trash2Icon", "Trash", LucideIcons.Trash2Icon],
+  ["LightbulbIcon", "Light", LucideIcons.LightbulbIcon],
+  ["ArrowRightIcon", "Road", LucideIcons.ArrowRightIcon],
+  ["DropletsIcon", "Water", LucideIcons.DropletsIcon],
+  ["HomeIcon", "Home", LucideIcons.HomeIcon],
+  ["MapPinIcon", "Map pin", LucideIcons.MapPinIcon],
+  ["PawPrintIcon", "Animal", LucideIcons.PawPrintIcon],
+  ["MegaphoneIcon", "Notice", LucideIcons.MegaphoneIcon],
+  ["TrafficConeIcon", "Traffic", LucideIcons.TrafficConeIcon],
+  ["FlameIcon", "Fire", LucideIcons.FlameIcon],
+  ["BikeIcon", "Bike", LucideIcons.BikeIcon],
+  ["CarIcon", "Car", LucideIcons.CarIcon],
+  ["TreePineIcon", "Tree", LucideIcons.TreePineIcon],
+  ["DropletIcon", "Drop", LucideIcons.DropletIcon],
+  ["ZapIcon", "Electric", LucideIcons.ZapIcon],
+  ["ShieldCheckIcon", "Shield", LucideIcons.ShieldCheckIcon],
+  ["HeartIcon", "Heart", LucideIcons.HeartIcon],
+  ["BellIcon", "Bell", LucideIcons.BellIcon],
+  ["SirenIcon", "Siren", LucideIcons.SirenIcon],
+  ["PencilIcon", "Pencil", LucideIcons.PencilIcon],
+  ["CameraIcon", "Camera", LucideIcons.CameraIcon],
+  ["PhoneIcon", "Phone", LucideIcons.PhoneIcon],
+  ["AlertTriangleIcon", "Alert", LucideIcons.AlertTriangleIcon],
+  ["InfoIcon", "Info", LucideIcons.InfoIcon],
+]
+
+/** Format PascalCase icon name: "TrafficConeIcon" → "Traffic Cone", "FlameIcon" → "Flame" */
+function formatIconName(name: string): string {
+  if (!name) return ""
+  return name.replace(/Icon$/i, "").replace(/([a-z])([A-Z])/g, "$1 $2").trim()
+}
+
 function IconDropdown({ value, onChange }: { value: string; onChange: (key: string) => void }) {
   const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState("")
   const ref = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
   }, [])
 
-  const current = ICONS.find(([k]) => k === value) ?? ICONS[0]
-  const CurrentIcon = current[2]
+  useEffect(() => { if (open && inputRef.current) inputRef.current.focus() }, [open])
+
+  const CurrentIcon = resolveIconByKey(value) ?? TagsIcon
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return QUICK_ICONS
+    const q = search.toLowerCase()
+    return QUICK_ICONS.filter(([, name]) => name.toLowerCase().includes(q))
+  }, [search])
+
+  const matchedName = useMemo(() => {
+    const trimmed = search.trim()
+    if (!trimmed) return null
+    return resolveIconName(trimmed)
+  }, [search])
 
   return (
     <div ref={ref} className="relative">
@@ -238,23 +268,73 @@ function IconDropdown({ value, onChange }: { value: string; onChange: (key: stri
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-navy text-white">
           <CurrentIcon className="size-4" strokeWidth={1.7} />
         </span>
-        <span className="flex-1 truncate font-medium">{current[1]}</span>
+        <span className="flex-1 truncate font-medium">
+          {formatIconName(value) || "Tag"}
+        </span>
         {open ? <ChevronUpIcon className="size-4 shrink-0 text-neutral-400" /> : <ChevronDownIcon className="size-4 shrink-0 text-neutral-400" />}
       </button>
       {open && (
-        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white shadow-lg [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" style={{ maxHeight: '110px', overflowY: 'auto' }}>
-          <div className="py-1">
-            {ICONS.map(([key, name, Icon]) => (
-              <button key={key} type="button"
-                onClick={() => { onChange(key); setOpen(false) }}
-                className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-neutral-700 transition hover:bg-neutral-50">
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-brand-navy text-white">
-                  <Icon className="size-3.5" strokeWidth={1.7} />
-                </span>
-                {name}
-              </button>
-            ))}
+        <div className="absolute z-50 mt-1 w-full rounded-[14px] border-[1.5px] border-neutral-200 bg-white shadow-lg [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" style={{ maxHeight: '380px' }}>
+          {/* Search input */}
+          <div className="border-b border-neutral-100 px-3 py-2">
+            <input
+              ref={inputRef}
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && matchedName) {
+                  onChange(matchedName)
+                  setSearch("")
+                  setOpen(false)
+                }
+              }}
+              placeholder="Search or type an icon name…"
+              className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-[13px] text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white"
+            />
           </div>
+          {/* Quick-select grid */}
+          <div className="overflow-y-auto pb-4 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" style={{ maxHeight: '200px' }}>
+            <div className="grid grid-cols-6 gap-1 px-2 pt-2 pb-0">
+              {filtered.map(([key, name, Icon]) => (
+                <button
+                  key={key}
+                  type="button"
+                  title={name}
+                  onClick={() => { onChange(key); setSearch(""); setOpen(false) }}
+                  className={cn(
+                    "flex size-10 items-center justify-center rounded-lg text-neutral-600 transition-colors hover:bg-neutral-100",
+                    value === key && "bg-brand-navy text-white hover:bg-brand-navy/90",
+                  )}
+                >
+                  <Icon className="size-5" strokeWidth={1.7} />
+                </button>
+              ))}
+            </div>
+            {filtered.length === 0 && !matchedName && (
+              <p className="py-3 text-center text-[12px] text-neutral-400">No quick icons match</p>
+            )}
+          </div>
+          {/* Custom: any Lucide name */}
+          {search.trim() && matchedName && !filtered.some(([k]) => k === matchedName) ? (
+            <div className="border-t border-neutral-100 px-3 py-2.5">
+              <button
+                type="button"
+                onClick={() => { onChange(matchedName); setSearch(""); setOpen(false) }}
+                className="flex w-full items-center gap-3 rounded-lg bg-neutral-50 px-3 py-2.5 text-left text-[13px] text-neutral-700 transition hover:bg-neutral-100"
+              >
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-brand-navy text-white">
+                  {(() => { const Ic = resolveIconByKey(matchedName); return Ic ? <Ic className="size-3.5" strokeWidth={1.7} /> : null })()}
+                </span>
+                <span className="flex-1">
+                  <span className="font-medium text-neutral-900">{formatIconName(matchedName)}</span>
+                  <span className="ml-2 text-[11px] text-neutral-400">← custom</span>
+                </span>
+                <span className="text-[11px] font-semibold text-accent">Use</span>
+              </button>
+            </div>
+          ) : null}
+
         </div>
       )}
     </div>

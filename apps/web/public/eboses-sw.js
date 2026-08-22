@@ -1,4 +1,4 @@
-self.__EBOSES_CACHE = "eboses-shell-v4"
+self.__EBOSES_CACHE = "eboses-shell-v5"
 self.__EBOSES_SHELL = ["/", "/dashboard", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"]
 
 self.addEventListener("install", (event) => {
@@ -56,16 +56,26 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (url.pathname.startsWith("/contents/") || url.pathname.startsWith("/assets/")) {
-    event.respondWith((async () => {
-      const cached = await caches.match(request)
-      const network = fetch(request).then(async (response) => {
+    const revalidate = (async () => {
+      try {
+        const response = await fetch(request)
         if (response.ok) {
           const cache = await caches.open(self.__EBOSES_CACHE)
           await cache.put(request, response.clone())
         }
         return response
-      }).catch(() => cached)
-      return cached || network
+      } catch {
+        return null
+      }
+    })()
+
+    event.respondWith((async () => {
+      const cached = await caches.match(request)
+      if (cached) {
+        event.waitUntil(revalidate)
+        return cached
+      }
+      return (await revalidate) || Response.error()
     })())
   }
 })

@@ -2,10 +2,10 @@ import {
   concernGlyph,
   glyphPinHtml,
   glyphPinSize,
-  GLYPHS,
   MAP_COLORS,
   type MarkerTone,
 } from "@/features/dashboard/components/map/markers"
+import { lucideIconPaths } from "@/features/dashboard/components/map/lucide-glyphs"
 
 const RESOLVED_STATUSES = new Set(["resolved", "partially_resolved"])
 
@@ -17,25 +17,26 @@ export function isResolvedStatus(status: string) {
 
 export function concernMarkerHtml({
   category,
+  iconKey,
   status,
   selected,
   tone = "light",
 }: {
   category: string
+  iconKey?: string
   status: string
   selected: boolean
   tone?: MarkerTone
 }) {
   const resolved = isResolvedStatus(status)
+  const paths = (iconKey ? lucideIconPaths(iconKey) : null) ?? concernGlyph(category)
   return glyphPinHtml({
-    paths: resolved ? GLYPHS.resolved : concernGlyph(category),
-    color: resolved ? MAP_COLORS.resolved : MAP_COLORS.concern,
+    paths,
+    color: resolved ? MAP_COLORS.resident : MAP_COLORS.concern,
     size: BASE_SIZE,
     selected,
     tone,
-    // A resolved report always reads green — only open (non-resolved)
-    // reports go neutral-grey until hovered or opened.
-    idleNeutral: !resolved,
+    idleNeutral: false,
   })
 }
 

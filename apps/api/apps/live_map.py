@@ -5,7 +5,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -238,7 +238,7 @@ def emergency_payload(alert):
         "type": alert.type,
         "note": alert.note,
         "status": alert.status,
-        "address": alert.address,
+        "address": alert.resolved_location or alert.address or "",
         "barangay": alert.barangay,
         "latitude": decimal_string(alert.latitude),
         "longitude": decimal_string(alert.longitude),
@@ -251,29 +251,18 @@ def emergency_payload(alert):
     }
 
 
-def route_for_responder_assignment(alert, assignment):
-    if not assignment:
-        return None
-    # An SMS emergency may carry a readable area but no pin. There is nothing to
-    # route to until reverse geocoding or the reporter supplies coordinates.
-    if alert.latitude is None or alert.longitude is None:
-        return None
-    origin = assignment_last_location(assignment)
-    if not origin:
-        return None
-    cache_key = "live-map-route:%s:%s:%s:%s" % (
-        round(float(origin["latitude"]), 5),
-        round(float(origin["longitude"]), 5),
-        round(float(alert.latitude), 5),
-        round(float(alert.longitude), 5),
-    )
+def _osrm_route(*, origin_lat, origin_lng, dest_lat, dest_lng, cache_key):
+    """The actual OSRM request plus its 60s cache and status/geometry parsing.
+
+    Shared by `route_for_responder_assignment` (a real assignment's live route)
+    and `route_preview_for_responder` (a hypothetical preview with no alert or
+    assignment at all), so both go through the exact same OSRM call, timeout
+    and caching behavior instead of two copies drifting apart.
+    """
     cached = cache.get(cache_key)
     if cached:
-        return {**cached, "assignment_id": assignment.pk, "responder_id": assignment.responder_id}
+        return dict(cached)
     route = {
-        "alert_id": alert.pk,
-        "assignment_id": assignment.pk,
-        "responder_id": assignment.responder_id,
         "status": "unavailable",
         "distance_meters": None,
         "eta_seconds": None,
@@ -281,7 +270,7 @@ def route_for_responder_assignment(alert, assignment):
     }
     try:
         base_url = getattr(settings, "OSM_ROUTE_URL", "https://router.project-osrm.org/route/v1/driving")
-        url = f"{base_url}/{origin['longitude']},{origin['latitude']};{alert.longitude},{alert.latitude}"
+        url = f"{base_url}/{origin_lng},{origin_lat};{dest_lng},{dest_lat}"
         response = httpx.get(
             url,
             params={"overview": "full", "geometries": "geojson", "steps": "false"},
@@ -301,6 +290,67 @@ def route_for_responder_assignment(alert, assignment):
         pass
     cache.set(cache_key, route, 60)
     return route
+
+
+def route_for_responder_assignment(alert, assignment):
+    if not assignment:
+        return None
+    # An SMS emergency may carry a readable area but no pin. There is nothing to
+    # route to until reverse geocoding or the reporter supplies coordinates.
+    if alert.latitude is None or alert.longitude is None:
+        return None
+    origin = assignment_last_location(assignment)
+    if not origin:
+        return None
+    cache_key = "live-map-route:%s:%s:%s:%s" % (
+        round(float(origin["latitude"]), 5),
+        round(float(origin["longitude"]), 5),
+        round(float(alert.latitude), 5),
+        round(float(alert.longitude), 5),
+    )
+    route = _osrm_route(
+        origin_lat=float(origin["latitude"]),
+        origin_lng=float(origin["longitude"]),
+        dest_lat=float(alert.latitude),
+        dest_lng=float(alert.longitude),
+        cache_key=cache_key,
+    )
+    return {
+        **route,
+        "alert_id": alert.pk,
+        "assignment_id": assignment.pk,
+        "responder_id": assignment.responder_id,
+    }
+
+
+def route_preview_for_responder(responder, *, latitude, longitude):
+    """Hypothetical route/ETA preview from a responder's current live position
+    to an arbitrary (lat, lng) — no real EmergencyAlert or assignment involved.
+
+    Used by the emergency-domain simulation endpoint to preview what routing a
+    candidate responder would look like, without ever creating a real
+    EmergencyResponderAssignment row.
+    """
+    if responder.current_latitude is None or responder.current_longitude is None:
+        return {"status": "unavailable"}
+    origin_lat = float(responder.current_latitude)
+    origin_lng = float(responder.current_longitude)
+    dest_lat = float(latitude)
+    dest_lng = float(longitude)
+    cache_key = "live-map-route-preview:%s:%s:%s:%s:%s" % (
+        responder.pk,
+        round(origin_lat, 5),
+        round(origin_lng, 5),
+        round(dest_lat, 5),
+        round(dest_lng, 5),
+    )
+    return _osrm_route(
+        origin_lat=origin_lat,
+        origin_lng=origin_lng,
+        dest_lat=dest_lat,
+        dest_lng=dest_lng,
+        cache_key=cache_key,
+    )
 
 
 def route_for_assignment(alert):
@@ -476,7 +526,7 @@ def resident_emergency_payload(alert, request=None):
         "barangay": alert.barangay,
         "latitude": decimal_string(alert.latitude),
         "longitude": decimal_string(alert.longitude),
-        "address": alert.address or "",
+        "address": alert.resolved_location or alert.address or "",
         "preview_url": None,
         "created_at": alert.created_at,
         "updated_at": alert.updated_at,
@@ -523,8 +573,14 @@ def resident_alerts_map_snapshot(request=None):
     hidden_types = set(
         EmergencyCategory.objects.filter(visible_to_residents=False).values_list("code", flat=True)
     )
+    # Include active emergencies plus recently resolved/closed (last 7 days)
+    from datetime import timedelta
+    recently_resolved_cutoff = timezone.now() - timedelta(days=7)
     alerts_qs = (
-        EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE)
+        EmergencyAlert.objects.filter(
+            models.Q(status__in=EMERGENCY_ACTIVE)
+            | models.Q(status__in={"resolved", "closed", "cancelled"}, updated_at__gte=recently_resolved_cutoff)
+        )
         .exclude(type__in=hidden_types)
         .prefetch_related("media")
         .order_by("-created_at")[:100]
@@ -606,7 +662,9 @@ class LocationPingView(APIView):
         request.user.location_updated_at = timezone.now()
         request.user.save(update_fields=["current_latitude", "current_longitude", "location_updated_at", "updated_at"])
         payload = person_payload(request.user)
-        broadcast_live_map_event("location.updated", {"person": payload})
+        # group_send is a synchronous round trip to the remote Redis; keep it
+        # off this hot 60/min endpoint's critical path.
+        transaction.on_commit(lambda: broadcast_live_map_event("location.updated", {"person": payload}))
         return Response(
             {
                 "accepted": True,
@@ -772,30 +830,31 @@ class LocationSearchView(APIView):
             return Response({"results": []})
 
         context = map_context_payload()
+        area_name = (context.get("boundary") or {}).get("name") or "Marikina Heights"
         q_lower = q.casefold()
         local_hits = []
         for street in context.get("streets") or []:
             name = street.get("name") or ""
             if q_lower not in name.casefold():
                 continue
-            # Street catalog is Heights-local; pin to center (map still lets user adjust)
+            # Street catalog is barangay-local; pin to center (map still lets user adjust)
             local_hits.append(
                 {
                     "lat": CENTER["latitude"],
                     "lng": CENTER["longitude"],
-                    "label": f"{name}, Marikina Heights",
+                    "label": f"{name}, {area_name}",
                     "primary": name,
-                    "secondary": "Marikina Heights, Marikina City",
+                    "secondary": f"{area_name}, Marikina City",
                     "source": "street_catalog",
                 }
             )
 
         remote = []
         try:
-            # Tight viewbox around Heights + query biased to Marikina (blocks QC Katipunan, etc.)
+            # Tight viewbox around the barangay + query biased to Marikina (blocks QC Katipunan, etc.)
             viewbox = search_viewbox_with_buffer()
             queries = [
-                f"{q}, Marikina Heights, Marikina, Philippines",
+                f"{q}, {area_name}, Marikina, Philippines",
                 f"{q}, Marikina City, Philippines",
                 q,
             ]
@@ -879,7 +938,7 @@ class LocationSearchView(APIView):
                                 "lng": lng,
                                 "label": item.get("display_name") or primary,
                                 "primary": primary,
-                                "secondary": secondary or "Marikina Heights",
+                                "secondary": secondary or area_name,
                                 "source": "nominatim",
                             }
                         )
@@ -889,7 +948,7 @@ class LocationSearchView(APIView):
         except Exception:
             remote = []
 
-        # Prefer remote coords; fill with local street names; both re-filtered near Heights
+        # Prefer remote coords; fill with local street names; both re-filtered near the barangay
         pool = remote + local_hits
         ranked = filter_and_rank_search_results(pool, limit=8)
         results = [

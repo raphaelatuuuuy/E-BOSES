@@ -56,6 +56,15 @@ function emergencyPinHtml(selected: boolean) {
   })
 }
 
+/** Speech-bubble tooltip above a pin showing a photo preview only. */
+function photoTooltipHtml(photoUrl: string) {
+  return `
+    <div style="position:relative;background:#fff;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.15);padding:5px;pointer-events:none;opacity:0;transition:opacity 150ms ease;">
+      <img src="${photoUrl}" alt="" style="display:block;width:160px;height:108px;object-fit:cover;border-radius:6px;" onload="this.parentElement.style.opacity='1'" onerror="this.parentElement.style.display='none'" />
+      <div style="position:absolute;bottom:0;left:50%;transform:translate(-50%,100%);width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:6px solid #fff;"></div>
+    </div>`
+}
+
 const USER_PIN = 10
 
 function userPinHtml() {
@@ -415,6 +424,20 @@ export function ResidentLeafletMap({
         }),
         zIndexOffset: selected ? 900 : 100,
       })
+      // Photo tooltip on hover
+      const photoUrl = post.media?.[0]?.preview_url
+      if (photoUrl) {
+        marker.bindTooltip(
+          () => photoTooltipHtml(photoUrl),
+          {
+            direction: "top",
+            offset: [0, -pinSize / 2 - 4],
+            opacity: 1,
+            className: "eboses-photo-tooltip",
+            permanent: false,
+          },
+        )
+      }
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e)
         onSelect(post.id)
@@ -452,6 +475,19 @@ export function ResidentLeafletMap({
         L.DomEvent.stopPropagation(e)
         onSelectAnnouncement?.(id)
       })
+      // Photo tooltip on hover
+      if (announcement.image_url) {
+        marker.bindTooltip(
+          () => photoTooltipHtml(announcement.image_url!),
+          {
+            direction: "top",
+            offset: [0, -pinSize / 2 - 4],
+            opacity: 1,
+            className: "eboses-photo-tooltip",
+            permanent: false,
+          },
+        )
+      }
       const icon = marker.getElement()
       if (icon) {
         icon.addEventListener("focus", () => {
@@ -551,6 +587,19 @@ export function ResidentLeafletMap({
         }),
         zIndexOffset: selected ? 1100 : 800,
       })
+      // Photo tooltip on hover
+      if (em.preview_url) {
+        marker.bindTooltip(
+          () => photoTooltipHtml(em.preview_url!),
+          {
+            direction: "top",
+            offset: [0, -box / 2 - 4],
+            opacity: 1,
+            className: "eboses-photo-tooltip",
+            permanent: false,
+          },
+        )
+      }
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e)
         onSelectEmergency?.(em.id)
@@ -688,18 +737,36 @@ export function ResidentLeafletMap({
             transform: scale(1.5);
             opacity: 0;
           }
-        }
-        .eboses-alerts-map .eboses-pin--dot.is-live .eboses-pin__core {
+        }        .eboses-alerts-map .eboses-pin--dot.is-live .eboses-pin__core {
           animation: eboses-pin-blink-minimal 2.4s ease-in-out infinite;
         }
         @keyframes eboses-pin-blink-minimal {
-          0%,
-          100% {
+          0%, 100% {
             box-shadow: 0 0 0 0 var(--pin);
           }
           50% {
             box-shadow: 0 0 3px 1px var(--pin);
           }
+        }
+        /* Elevate tooltip pane above marker pane so tooltips never sit behind pins */
+        .eboses-alerts-map .leaflet-tooltip-pane {
+          z-index: 2000 !important;
+        }
+        /* Photo preview tooltips above pins */
+        .eboses-photo-tooltip {
+          background: transparent !important;
+          border: none !important;
+          box-shadow: none !important;
+          padding: 0 !important;
+          margin: 0 !important;
+          z-index: 1500 !important;
+        }
+        .eboses-photo-tooltip::before {
+          display: none !important;
+        }
+        .eboses-photo-tooltip .leaflet-tooltip-content {
+          margin: 0 !important;
+          padding: 0 !important;
         }
       `}</style>
       <div

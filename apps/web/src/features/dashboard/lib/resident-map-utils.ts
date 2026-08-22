@@ -219,8 +219,35 @@ export function emergencyStatusLabel(status: string): { label: string; live: boo
   return { label: "Active", live: true }
 }
 
+/** Capitalize first letter only: "FLOOD" → "Flood", "fire_accident" → "Fire accident" */
+function titleCase(s: string): string {
+  if (!s) return s
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+/** Extract a readable street from the address, skipping generic placeholders. */
+function readableStreet(address: string | undefined, barangay: string | undefined): string {
+  const raw = (address || "").trim()
+  if (!raw) return barangay || "this area"
+  // Split by comma and take the first meaningful segment
+  const parts = raw.split(",").map((p) => p.trim()).filter(Boolean)
+  for (const part of parts) {
+    const lower = part.toLowerCase()
+    // Skip generic placeholders
+    if (lower === "pinned location on map") continue
+    if (lower === "marikina heights" || lower === "marikina" || lower === "marikina city") continue
+    if (lower === "pending") continue
+    return part
+  }
+  return barangay || "this area"
+}
+
 export function emergencyBrief(em: ResidentMapEmergency) {
-  const type = (em.type_label || em.type || "Emergency").replace(/_/g, " ")
+  const type = titleCase((em.type_label || em.type || "Emergency").replace(/_/g, " "))
   const st = emergencyStatusLabel(em.status)
-  return { title: type, status: st }
+  const street = readableStreet(em.address, em.barangay)
+  const safetyNote = st.live
+    ? `An ongoing ${type.toLowerCase()} emergency around ${street}. Stay away from the area and follow instructions from barangay officials.`
+    : `A ${type.toLowerCase()} emergency was reported around ${street}.`
+  return { title: type, status: st, street, safetyNote }
 }

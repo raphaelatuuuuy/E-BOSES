@@ -20,9 +20,10 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.concerns.ai import process_concern_ai
+from apps.concerns.ai.duplicate_detector import report_fingerprints
 from apps.concerns.ai.gemma_analyzer import GemmaAnalyzer, parse_gemma_result, payload_from_result
 from apps.concerns.ai_fixtures import gemma_result
-from apps.concerns.models import Concern, ConcernAiAssessment, ConcernClassificationConfiguration, Department, Designation, Position
+from apps.concerns.models import Concern, ConcernAiAssessment, ConcernClassificationConfiguration, ContentFlag, Department, Designation, LlmDecisionLog, Position
 
 
 def png_upload(name="safe.png"):
@@ -170,9 +171,8 @@ class ConcernClassificationApiTests(APITestCase):
         self.assertTrue(response.data["privacy_scan_required"])
         self.assertEqual(response.data["detected_objects"], ["vehicle", "residential gate"])
         self.assertTrue(response.data["image_uploaded"])
-        # The normalised image is handed to the analyzer, not a list of labels.
-        self.assertIsNotNone(classify.call_args.kwargs["image"])
-        self.assertEqual(classify.call_args.kwargs["image"].mime_type, "image/jpeg")
+        # The tester still hands the normalised photo set straight to the analyzer.
+        self.assertEqual(classify.call_args.kwargs["images"][0].mime_type, "image/jpeg")
 
     @patch("apps.concerns.classification_api.validate_concern_media_file", side_effect=lambda uploaded: uploaded)
     @patch("apps.concerns.classification_api.classification_payload")
@@ -202,7 +202,10 @@ class ConcernClassificationApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data["can_submit"])
-        self.assertIsNotNone(classify.call_args.kwargs["image"])
+        # Precheck validates photos locally but never uploads them to the
+        # model — the resident is waiting on the response.
+        self.assertIsNone(classify.call_args.kwargs["images"])
+        self.assertTrue(classify.call_args.kwargs["image_uploaded"])
 
     def test_resident_precheck_blocks_low_information_text(self):
         self.client.force_authenticate(self.resident)
@@ -221,6 +224,185 @@ class ConcernClassificationApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(response.data["can_submit"])
         self.assertEqual(response.data["field_errors"]["description"], "Add a clearer description of the issue.")
+
+    @override_settings(OLLAMA_API_KEY="test-key")
+    @patch("apps.concerns.ai.classification.GemmaAnalyzer")
+    def test_resident_precheck_model_failure_does_not_block(self, analyzer_cls):
+        """When Gemma itself fails, the resident is not told to "add a clearer
+        description" — nothing was reviewed, so the report goes to an official."""
+        analyzer_cls.return_value.analyze.side_effect = RuntimeError("provider down")
+        self.client.force_authenticate(self.resident)
+
+        response = self.client.post(
+            "/api/concerns/classification/precheck/",
+            {
+                "category": "others",
+                "title": "test",
+                "description": "May nakaharang na sasakyan sa kalsada malapit sa amin.",
+                "latitude": "14.6507",
+                "longitude": "121.1029",
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["can_submit"])
+        self.assertIn("could not run", response.data["message"])
+
+    @patch("apps.concerns.classification_api.validate_concern_media_file", side_effect=lambda uploaded: uploaded)
+    @patch("apps.concerns.classification_api.classification_payload")
+    def test_resident_precheck_sends_all_photos_and_returns_verdicts(self, classify, _validate):
+        classify.return_value = payload_from_result(
+            gemma_result(
+                category="vehicle",
+                evidence_relationship="supports_report",
+                image_review_succeeded=True,
+                photo_verdicts=[
+                    {"index": 0, "relevance": "supports_report", "note": "Shows the blocked driveway."},
+                    {"index": 1, "relevance": "contradicts_report", "note": "Shows a parked motorcycle only."},
+                ],
+            ),
+            selected_category="vehicle",
+        )
+        self.client.force_authenticate(self.resident)
+
+        response = self.client.post(
+            "/api/concerns/classification/precheck/",
+            {
+                "media": [png_upload("first.png"), png_upload("second.png")],
+                "category": "vehicle",
+                "title": "Blocked driveway",
+                "description": "May sasakyang nakaharang sa driveway.",
+                "latitude": "14.6507",
+                "longitude": "121.1029",
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["can_submit"])
+        self.assertIsNone(classify.call_args.kwargs["images"])
+        self.assertTrue(classify.call_args.kwargs["image_uploaded"])
+        verdicts = response.data["photo_verdicts"]
+        self.assertEqual([item["state"] for item in verdicts], ["relevant", "unrelated"])
+        self.assertEqual(verdicts[0]["message"], "")
+
+    @patch("apps.concerns.classification_api.validate_concern_media_file", side_effect=lambda uploaded: uploaded)
+    @patch("apps.concerns.classification_api.classification_payload")
+    def test_resident_precheck_fills_the_confirm_dialog_fields(self, classify, _validate):
+        classify.return_value = payload_from_result(
+            gemma_result(
+                category="environment",
+                evidence_relationship="supports_report",
+                image_review_succeeded=True,
+                urgent_attention=True,
+                recommended_action="escalate_as_emergency",
+            ),
+            selected_category="vehicle",
+        )
+        self.client.force_authenticate(self.resident)
+
+        response = self.client.post(
+            "/api/concerns/classification/precheck/",
+            {
+                "media": png_upload(),
+                "category": "vehicle",
+                "title": "Blocked driveway",
+                "description": "May sasakyang nakaharang sa driveway.",
+                "latitude": "14.6507",
+                "longitude": "121.1029",
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["category_confirm_required"])
+        self.assertTrue(response.data["suggested_category_label"])
+        self.assertEqual(response.data["emergency_triage"]["is_emergency"], True)
+        self.assertEqual(response.data["emergency_triage"]["escalation_offered"], True)
+        self.assertIsNotNone(response.data["resolved_address"])
+        self.assertIsNone(response.data["active_duplicate"])
+        self.assertIsNone(response.data["resolved_match"])
+
+    @patch("apps.concerns.classification_api.classification_payload")
+    def test_resident_precheck_suggests_an_active_duplicate(self, classify):
+        classify.return_value = payload_from_result(
+            gemma_result(category="vehicle", evidence_relationship="supports_report", image_review_succeeded=True),
+            selected_category="vehicle",
+        )
+        fingerprints = report_fingerprints(
+            barangay="Marikina Heights",
+            category="vehicle",
+            title="Blocked driveway",
+            description="May sasakyang nakaharang sa driveway.",
+            latitude="14.6507",
+            longitude="121.1029",
+            precision=ConcernClassificationConfiguration.current().report_duplicate_location_precision,
+        )
+        existing = Concern.objects.create(
+            reporter=self.resident,
+            title="Blocked driveway",
+            description="May sasakyang nakaharang sa driveway.",
+            category="vehicle",
+            report_fingerprint=fingerprints["report_fingerprint"],
+            report_text_fingerprint=fingerprints["report_text_fingerprint"],
+            report_location_bucket=fingerprints["report_location_bucket"],
+        )
+        self.client.force_authenticate(self.resident)
+
+        response = self.client.post(
+            "/api/concerns/classification/precheck/",
+            {
+                "category": "vehicle",
+                "title": "Blocked driveway",
+                "description": "May sasakyang nakaharang sa driveway.",
+                "latitude": "14.6507",
+                "longitude": "121.1029",
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        duplicate = response.data["active_duplicate"]
+        self.assertIsNotNone(duplicate)
+        self.assertEqual(duplicate["concern_id"], existing.pk)
+        self.assertEqual(duplicate["tracking_id"], existing.tracking_id)
+        self.assertEqual(duplicate["reporter_count"], 1)
+
+    def test_create_honors_duplicate_of_and_recurrence_of(self):
+        self.client.force_authenticate(self.resident)
+        original = Concern.objects.create(
+            reporter=self.resident,
+            title="Blocked drain",
+            description="May nakabara sa drainage sa kalsada.",
+            category="infrastructure",
+        )
+        second = Concern.objects.create(
+            reporter=self.resident,
+            title="Blocked drain again",
+            description="Bumalik ang bara sa drainage.",
+            category="infrastructure",
+        )
+        response = self.client.post(
+            "/api/concerns/",
+            {
+                "title": "Blocked drain round three",
+                "description": "Ang drainage sa kalsada ay nabara muli ngayon.",
+                "category": "infrastructure",
+                "visibility": "community",
+                "address": "Bayan-Bayanan St.",
+                "latitude": "14.6515000",
+                "longitude": "121.1207000",
+                "location_source": "manual_pin",
+                "duplicate_of": str(original.pk),
+                "recurrence_of": str(second.pk),
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        created = Concern.objects.get(pk=response.data["id"])
+        self.assertEqual(created.duplicate_of_id, original.pk)
+        self.assertEqual(created.recurrence_of_id, second.pk)
 
     def test_stats_do_not_claim_unmeasured_accuracy(self):
         self.client.force_authenticate(self.official)
@@ -366,7 +548,8 @@ class ConcernAiTextProviderPipelineTests(TestCase):
             title=concern.title,
             description=concern.description,
             selected_category=concern.category,
-            image=None,
+            images=[],
+            image_uploaded=False,
         )
         review = assessment.raw_result["review"]
         self.assertEqual(review["provider"], "ollama_cloud")
@@ -581,3 +764,82 @@ class GemmaParserTests(TestCase):
 
         self.assertFalse(payload["category_match"])
         self.assertEqual(payload["outcome"], "needs_review")
+
+
+from apps.concerns.ai.community_moderation_analyzer import FAIL_OPEN_RESULT
+
+
+class CommunityModerationSimulationViewTests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.official = User.objects.create_user(
+            email="community-sim-official@example.com", phone_number="+639180000101",
+            password="pass", role=User.Role.BARANGAY_OFFICIAL, status=User.Status.VERIFIED,
+        )
+        grant_captain(self.official)
+        self.resident = User.objects.create_user(
+            email="community-sim-resident@example.com", phone_number="+639180000102",
+            password="pass", role=User.Role.RESIDENT, status=User.Status.VERIFIED,
+        )
+
+    @patch("apps.concerns.ai.community_moderation_analyzer.analyze_flagged_content")
+    def test_official_can_simulate_a_flagged_comment(self, analyze):
+        analyze.return_value = {
+            "assessment": "clearly_violates",
+            "matched_reason": "abusive",
+            "recommended_disposition": "take_down",
+            "short_explanation": "Hostile language directed at staff.",
+        }
+        self.client.force_authenticate(self.official)
+        response = self.client.post("/api/concerns/classification/test-community/", {
+            "content_text": "Kayong mga tanod, wala kayong ginagawa.",
+            "reason": ContentFlag.Reason.ABUSIVE,
+            "reporter_note": "",
+        }, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["assessment"], "clearly_violates")
+        self.assertEqual(response.data["matched_reason"], "abusive")
+        self.assertEqual(response.data["recommended_disposition"], "take_down")
+        self.assertEqual(LlmDecisionLog.objects.count(), 1)
+        log = LlmDecisionLog.objects.get()
+        self.assertEqual(log.run_kind, LlmDecisionLog.RunKind.SIMULATION)
+        self.assertEqual(log.domain, LlmDecisionLog.Domain.COMMUNITY)
+        self.assertEqual(log.performed_by_id, self.official.pk)
+        self.assertEqual(log.recommended_action, "take_down")
+        # Never persisted: the simulation must not create a real flag.
+        self.assertEqual(ContentFlag.objects.count(), 0)
+
+    def test_resident_cannot_simulate(self):
+        self.client.force_authenticate(self.resident)
+        response = self.client.post("/api/concerns/classification/test-community/", {
+            "content_text": "some text", "reason": ContentFlag.Reason.OTHER,
+        }, format="json")
+        self.assertEqual(response.status_code, 403)
+
+    def test_blank_content_text_is_rejected(self):
+        self.client.force_authenticate(self.official)
+        response = self.client.post("/api/concerns/classification/test-community/", {
+            "content_text": "   ", "reason": ContentFlag.Reason.OTHER,
+        }, format="json")
+        self.assertEqual(response.status_code, 400)
+
+    def test_invalid_reason_is_rejected(self):
+        self.client.force_authenticate(self.official)
+        response = self.client.post("/api/concerns/classification/test-community/", {
+            "content_text": "some text", "reason": "not_a_real_reason",
+        }, format="json")
+        self.assertEqual(response.status_code, 400)
+
+    @patch(
+        "apps.concerns.ai.community_moderation_analyzer.analyze_flagged_content",
+        return_value=dict(FAIL_OPEN_RESULT),
+    )
+    def test_analyzer_failure_fails_open_and_still_logs(self, analyze):
+        self.client.force_authenticate(self.official)
+        response = self.client.post("/api/concerns/classification/test-community/", {
+            "content_text": "some text", "reason": ContentFlag.Reason.OTHER,
+        }, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["recommended_disposition"], "dismiss")
+        self.assertEqual(LlmDecisionLog.objects.count(), 1)

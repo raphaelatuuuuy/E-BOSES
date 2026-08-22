@@ -57,6 +57,7 @@ def serialize_report(concern, *, is_primary):
         "public_id": str(concern.public_id),
         "tracking_id": concern.tracking_id,
         "reporter_name": reporter_name(concern.reporter),
+        "reporter_id": concern.reporter_id,
         "is_primary": is_primary,
         "description": concern.description or "",
         "category": concern.category,

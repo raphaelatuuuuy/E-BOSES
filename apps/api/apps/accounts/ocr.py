@@ -205,6 +205,7 @@ def _submit_payload(
     filename: str,
     mime: str,
     source_url: str | None = None,
+    max_retries=None,
 ) -> OCRResponse:
     started = time.monotonic()
     api_key = getattr(settings, "OCRSPACE_API_KEY", "")
@@ -214,7 +215,9 @@ def _submit_payload(
     overlay = bool(getattr(settings, "OCRSPACE_OVERLAY", True))
     connect_timeout = getattr(settings, "OCRSPACE_CONNECT_TIMEOUT", 10)
     read_timeout = getattr(settings, "OCRSPACE_READ_TIMEOUT", 60)
-    max_retries = max(1, int(getattr(settings, "OCRSPACE_MAX_RETRIES", 3) or 3))
+    # Interactive callers (sign-up detect) pass a single attempt so a stalled
+    # provider cannot hold their request through the full retry budget.
+    retries = max(1, int(max_retries or getattr(settings, "OCRSPACE_MAX_RETRIES", 3) or 3))
 
     if not api_key:
         raise OCRProviderAuthenticationError("OCR.space is not configured.")
@@ -244,7 +247,7 @@ def _submit_payload(
             timeout=(connect_timeout, read_timeout),
         )
 
-    resp = _request_with_retries(attempt_post, max_retries=max_retries, what="submit")
+    resp = _request_with_retries(attempt_post, max_retries=retries, what="submit")
     _raise_for_status(resp)
     payload_json = _response_json(resp)
     response = _parse_ocrspace_payload(payload_json)
@@ -315,7 +318,9 @@ def ocr_file(file_path: str) -> list[dict]:
     return ocr_file_with_metadata(file_path).lines
 
 
-def ocr_bytes_with_metadata(image_bytes: bytes, *, suffix=".png", deskew: bool = True) -> OCRResponse:
+def ocr_bytes_with_metadata(
+    image_bytes: bytes, *, suffix=".png", deskew: bool = True, max_retries=None
+) -> OCRResponse:
     """Submit in-memory bytes without ever exposing a public document URL.
 
     When ``deskew`` is True, attempts ID-card auto-crop/deskew so small or tilted
@@ -367,7 +372,7 @@ def ocr_bytes_with_metadata(image_bytes: bytes, *, suffix=".png", deskew: bool =
             image_height = None
 
     mime = _mime_for_suffix(out_suffix)
-    response = _submit_payload(payload, filename=f"document{out_suffix}", mime=mime)
+    response = _submit_payload(payload, filename=f"document{out_suffix}", mime=mime, max_retries=max_retries)
     return OCRResponse(
         lines=response.lines,
         job_id=response.job_id,

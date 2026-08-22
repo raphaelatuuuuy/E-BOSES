@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
+  ArrowUpIcon,
   ChevronUpIcon,
   Loader2Icon,
   MessageCircleIcon,
   MicIcon,
   PaperclipIcon,
   PlayIcon,
-  SendIcon,
   SquareIcon,
   XIcon,
 } from "lucide-react"
@@ -81,6 +81,7 @@ export function ReportChatPanel({
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [hasOlder, setHasOlder] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [socketLive, setSocketLive] = useState(false)
   const [sending, setSending] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -158,6 +159,7 @@ export function ReportChatPanel({
       }
       socket.onopen = () => {
         attempts = 0
+        setSocketLive(true)
       }
       socket.onmessage = (event) => {
         try {
@@ -172,6 +174,7 @@ export function ReportChatPanel({
         }
       }
       socket.onclose = () => {
+        setSocketLive(false)
         if (closed) return
         attempts += 1
         reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** attempts))
@@ -201,9 +204,9 @@ export function ReportChatPanel({
       .catch(() => {
 
         })
-    }, 6000)
+    }, socketLive ? 30000 : 6000)
     return () => window.clearInterval(id)
-  }, [open, concernId, showHistory])
+  }, [open, concernId, showHistory, socketLive])
 
   useEffect(() => {
     scrollToBottom()
@@ -321,7 +324,7 @@ export function ReportChatPanel({
         </div>
       ) : null}
 
-      {showHistory ? <div className={cn("scrollbar-hide min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 py-3", plain && "max-h-[340px]")}>
+      {showHistory ? <div className={cn("scrollbar-hide min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 py-3", plain && "max-h-none")}>
         {hasOlder ? (
           <div className="flex justify-center">
             <button
@@ -422,116 +425,139 @@ export function ReportChatPanel({
       ) : null}
 
       {!disabled ? (
-        <div className="relative border-t border-slate-100 p-2.5">
+        <div className="px-4 pb-4 pt-1">
           {attachment && !recording && !readyFile ? (
-            <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-line-tint bg-canvas px-3 py-2 text-xs font-semibold text-brand-navy">
-              <span className="flex min-w-0 items-center gap-2 truncate"><PaperclipIcon className="size-4 shrink-0" />{attachment.name}</span>
-              <button type="button" onClick={() => setAttachment(null)} className="rounded-full p-1 hover:bg-white" aria-label="Remove attachment"><XIcon className="size-4" /></button>
+            <div className="mb-2 flex items-center gap-2">
+              {attachment.type.startsWith("image/") ? (
+                <div className="relative shrink-0">
+                  <img
+                    src={URL.createObjectURL(attachment)}
+                    alt={attachment.name}
+                    className="h-20 w-20 rounded-xl object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setAttachment(null)}
+                    className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
+                    aria-label="Remove attachment"
+                  >
+                    <XIcon className="size-3" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-medium text-neutral-600">
+                  <span className="flex min-w-0 items-center gap-2 truncate"><PaperclipIcon className="size-3.5 shrink-0" />{attachment.name}</span>
+                  <button type="button" onClick={() => setAttachment(null)} className="rounded-full p-0.5 hover:bg-neutral-200" aria-label="Remove attachment"><XIcon className="size-3.5" /></button>
+                </div>
+              )}
             </div>
           ) : null}
-          {attachmentError ? <p className="mb-2 text-xs font-semibold text-sos">{attachmentError}</p> : null}
-          <div className="flex items-end gap-2">
+          {attachmentError ? <p className="mb-2 text-[11px] font-medium text-red-500">{attachmentError}</p> : null}
           {recording || readyFile ? (
-            <>
-              <div
-                className={cn(
-                  "flex h-12 min-w-0 flex-1 items-center gap-3 rounded-xl border px-4",
-                  recording ? "border-sos/30 bg-sos/10 text-sos" : "border-brand-orange/30 bg-brand-orange/5 text-brand-orange",
-                )}
-                aria-label={recording ? `Recording ${formatVoiceTime(recordSeconds)}` : `Voice note ready, ${formatVoiceTime(durationSeconds)}`}
-              >
-                <span className={cn("size-2 shrink-0 rounded-full", recording ? "animate-pulse bg-sos" : "bg-brand-orange")} aria-hidden />
-                <span className="flex h-8 min-w-0 flex-1 items-center gap-[2px] overflow-hidden">
-                  {(levels.length ? levels : [0.2, 0.2, 0.2, 0.2]).map((level, index) => (
-                    <span key={index} className="w-[3px] shrink-0 rounded-full bg-current transition-[height] duration-100 ease-out" style={{ height: `${3 + level * 22}px` }} />
-                  ))}
-                </span>
-                <span className={cn("shrink-0 font-mono text-[13px] font-semibold tabular-nums", recording ? "text-sos" : "text-brand-navy")}>
-                  {formatVoiceTime(recording ? recordSeconds : durationSeconds)}
-                </span>
-              </div>
+            <div className="mx-auto flex w-fit items-center gap-2.5 rounded-full border border-neutral-200 bg-white py-2 pl-4 pr-2">
               {recording ? (
+                <span className="size-2 shrink-0 rounded-full animate-pulse bg-red-500" aria-hidden />
+              ) : null}
+              <div className="flex items-center gap-[2px]">
+                {Array.from({ length: 30 }, (_, i) => {
+                  const level = levels[i] ?? 0.08
+                  return (
+                    <span
+                      key={i}
+                      className="w-[2.5px] shrink-0 rounded-full bg-neutral-900"
+                      style={{ height: `${4 + level * 14}px` }}
+                    />
+                  )
+                })}
+              </div>
+              <span className="shrink-0 font-mono text-[11px] font-semibold tabular-nums text-neutral-900">
+                {formatVoiceTime(recording ? recordSeconds : durationSeconds)}
+              </span>
+              <div className="flex items-center gap-1">
+                {recording ? (
+                  <button
+                    type="button"
+                    onClick={() => void stopRecording()}
+                    aria-label="Stop recording"
+                    className="flex size-8 items-center justify-center rounded-full bg-neutral-900 text-white hover:bg-neutral-800"
+                  >
+                    <SquareIcon className="size-3" fill="currentColor" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={sending}
+                    onClick={() => void sendReadyVoiceNote()}
+                    aria-label="Send voice note"
+                    className="flex size-8 items-center justify-center rounded-full bg-neutral-900 text-white hover:bg-neutral-800 disabled:opacity-50"
+                  >
+                    {sending ? <Loader2Icon className="size-3 animate-spin" /> : <ArrowUpIcon className="size-3" strokeWidth={2.4} />}
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() => void stopRecording()}
-                  aria-label="Stop recording"
-                  title="Stop recording"
-                  className="flex size-10 shrink-0 items-center justify-center rounded-full bg-sos text-white hover:bg-sos-bright"
+                  onClick={() => (recording ? cancelRecording() : discardRecording())}
+                  aria-label="Cancel voice note"
+                  className="flex size-8 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
                 >
-                  <SquareIcon className="size-4" fill="currentColor" />
+                  <XIcon className="size-3.5" />
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  disabled={sending}
-                  onClick={() => void sendReadyVoiceNote()}
-                  aria-label="Send voice note"
-                  className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
-                >
-                  {sending ? <Loader2Icon className="size-4 animate-spin" /> : <SendIcon className="size-4" />}
-                </button>
-              )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 rounded-full border border-neutral-200 bg-white py-1.5 pl-4 pr-1.5 transition-colors focus-within:border-neutral-300">
               <button
                 type="button"
-                onClick={() => (recording ? cancelRecording() : discardRecording())}
-                aria-label="Cancel voice note"
-                title="Cancel voice note"
-                className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+                onClick={() => void startRecording()}
+                disabled={sending}
+                aria-label="Record a voice note"
+                className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-50"
               >
-                <XIcon className="size-5" />
+                <MicIcon className="size-4" />
               </button>
-            </>
-          ) : (
-            <>
-            <button
-              type="button"
-              onClick={() => void startRecording()}
-              disabled={sending}
-              aria-label="Record a voice note"
-              title="Record a voice note"
-              className={cn(
-                "flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-500 disabled:opacity-50",
-                "hover:bg-neutral-100",
-              )}
-            >
-              <MicIcon className="size-4" />
-            </button>
-            <label className={cn("flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-full text-neutral-500 hover:bg-neutral-100")} aria-label="Attach image or video">
-              <PaperclipIcon className="size-4" />
-              <input type="file" accept="image/*,video/mp4,video/webm,video/quicktime" className="sr-only" onChange={(event) => { void chooseAttachment(event.target.files?.[0]); event.currentTarget.value = "" }} />
-            </label>
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault()
-                  void handleSend()
-                }
-              }}
-              rows={1}
-              placeholder="Enter a message"
-              className="max-h-28 min-h-10 flex-1 resize-none rounded-xl border border-neutral-200 bg-canvas px-3 py-2 text-[14px] text-neutral-900 outline-none transition-all placeholder:text-neutral-400 focus:border-brand-orange focus:ring-2 focus:ring-brand-orange/25"
-            />
-            <button
-              type="button"
-              disabled={sending || recording || (!draft.trim() && !attachment)}
-              onClick={() => void handleSend()}
-              className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
-              aria-label="Send message"
-            >
-              {sending ? (
-                <Loader2Icon className="size-4 animate-spin" />
-              ) : (
-                <SendIcon className="size-4" />
-              )}
-            </button>
-            </>
+              <label className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600" aria-label="Attach image or video">
+                <PaperclipIcon className="size-4" />
+                <input type="file" accept="image/*,video/mp4,video/webm,video/quicktime" className="sr-only" onChange={(event) => { void chooseAttachment(event.target.files?.[0]); event.currentTarget.value = "" }} />
+              </label>
+              <input
+                type="text"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault()
+                    void handleSend()
+                  }
+                }}
+                placeholder="Ask a follow-up..."
+                className="h-10 min-w-0 flex-1 bg-transparent text-[14px] text-neutral-900 outline-none placeholder:text-neutral-400"
+              />
+              <button
+                type="button"
+                disabled={sending || recording || (!draft.trim() && !attachment)}
+                onClick={() => void handleSend()}
+                className={cn(
+                  "flex size-10 shrink-0 items-center justify-center rounded-full transition-all duration-150",
+                  (draft.trim() || attachment)
+                    ? "bg-neutral-900 text-white hover:bg-neutral-800"
+                    : "bg-neutral-100 text-neutral-300",
+                )}
+                aria-label="Send message"
+              >
+                {sending ? (
+                  <Loader2Icon className="size-4 animate-spin" />
+                ) : (
+                  <ArrowUpIcon className="size-4" strokeWidth={2.4} />
+                )}
+              </button>
+            </div>
           )}
-          </div>
+          <p className="mt-2.5 text-center text-[11px] leading-normal text-neutral-400">
+            Please be kind and respectful to your neighbours.
+          </p>
         </div>
       ) : (
-        <p className="border-t border-slate-100 px-3 py-2.5 text-center text-[12px] text-neutral-400">
+        <p className="px-4 py-3 text-center text-[12px] text-neutral-400">
           Chat is closed for this report.
         </p>
       )}

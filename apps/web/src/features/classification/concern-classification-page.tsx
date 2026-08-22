@@ -1,15 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
-  Ban,
   BotIcon,
-  ChevronDownIcon,
-  CircleCheck,
+  CircleQuestionMarkIcon,
   LoaderCircleIcon,
+  MessageSquareIcon,
+  RotateCcwIcon,
   SearchIcon,
   TestTube2Icon,
-  TriangleAlert,
-  PlusIcon,
-  UploadCloudIcon,
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -19,6 +16,7 @@ import { usePageTitle } from "@/hooks/use-page-title"
 import { ConfigShell, ConfigHeroAction } from "@/features/dashboard/components/config/config-shell"
 import {
   SheetDialog,
+  SheetIconButton,
   SheetList,
   SheetOptionRow,
   SheetPrimaryButton,
@@ -29,14 +27,14 @@ import {
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 
 import {
+  RuleMenu,
+} from "./shared"
+import {
   getConcernClassificationConfig,
+  getLlmDecisionLog,
   getValidationActivity,
   saveConcernClassificationConfig,
-  testConcernSubmission,
-  generateSampleDescription,
   type ConcernClassificationConfig,
-  type ReportValidationResult,
-  type SampleLanguage,
   type ValidationActivityResponse,
 } from "./api"
 import {
@@ -45,7 +43,12 @@ import {
   MISMATCH_OPTIONS,
   STRICTNESS_PRESETS,
 } from "./strictness"
-import { LocationPinMap, type LocationPin } from "./location-pin-map"
+import { ConcernTestWorkspace } from "./test-workspace-concerns"
+import { EmergencyTestWorkspace } from "./test-workspace-emergencies"
+import { SmsChatInput, SmsChatPanel, SmsCommandGuide, SmsTestWorkspace, SenderPill } from "./test-workspace-sms"
+import { testSmsSimulation } from "./api"
+import { CommunityModerationTestWorkspace } from "./test-workspace-community"
+import { DecisionLogTab } from "./decision-log-tab"
 
 const defaults: ConcernClassificationConfig = {
   revision: 0,
@@ -62,131 +65,16 @@ const defaults: ConcernClassificationConfig = {
   report_duplicate_distance_meters: 100,
   report_duplicate_similarity_threshold: 0.88,
   report_duplicate_location_precision: 4,
+  street_imagery_enabled: false,
+  street_imagery_categories: [],
+  street_imagery_radius_meters: 50,
+  street_imagery_action: "request_resubmission",
+  photo_duplicate_llm_enabled: true,
+  photo_duplicate_candidate_limit: 3,
   flag_irrelevant: true,
   suspicious_terms: ["test", "testing", "asdf", "qwerty", "12345"],
   category_keywords: {},
   categories: [],
-}
-
-/* ─── Result copy ─── */
-
-const SAMPLE_PRIVACY_COPY: Record<string, string> = {
-  unchecked: "The image could not be checked automatically for sensitive details, so it stays private.",
-  not_required: "No sensitive details requiring automatic protection were identified during the initial review.",
-  protected: "Sensitive details were protected before public display.",
-  sensitive_review_required: "Possible sensitive visual content was found. The image stays restricted.",
-  no_match_found: "No matching sensitive region was confirmed. The image stays restricted.",
-  not_configured: "Automatic privacy protection is not switched on, so the image stays restricted.",
-  failed: "Automatic privacy protection could not be completed. The original image remains restricted.",
-}
-
-function SectionLabel({ children }: { children: ReactNode }) {
-  return (
-    <p className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{children}</p>
-  )
-}
-
-function readable(value: string | null | undefined) {
-  return value ? value.replace(/_/g, " ") : "Not provided"
-}
-
-function displayValue(value: string | null | undefined) {
-  const normalized = readable(value)
-  const labels: Record<string, string> = {
-    "needs review": "Automatic result uncertain",
-    "supports report": "Text and photo match",
-    "partially supports report": "Photo partly supports the report",
-    "contradicts report": "Text and photo may not match",
-    "no useful image evidence": "Photo does not confirm the report",
-    "image unavailable": "No photo was submitted",
-    "image review failed": "Photo could not be reviewed automatically",
-    accept: "Accept and continue processing",
-    "accept with privacy review": "Continue using the protected image",
-    "manual review": "Apply safe intake fallback",
-    "request more information": "Request additional details",
-    "escalate as emergency": "Notify the appropriate emergency personnel",
-    "reject as irrelevant": "Review as a potentially unrelated submission",
-  }
-  return labels[normalized] ?? normalized
-}
-
-function categoryLabel(config: ConcernClassificationConfig, key: string | null | undefined) {
-  if (!key) return "Not clear"
-  return config.categories.find((category) => category.key === key)?.label ?? readable(key)
-}
-
-/* ─── Rule menu ─── */
-
-function RuleMenu({
-  value,
-  options,
-  onChange,
-  full = false,
-  label,
-  className,
-}: {
-  value: string
-  options: { value: string; label: string }[]
-  onChange: (value: string) => void
-  full?: boolean
-  label?: string
-  className?: string
-}) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [open, setOpen] = useState(false)
-
-  useEffect(() => {
-    if (!open) return
-    function onDown(event: MouseEvent) {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)
-    }
-    document.addEventListener("mousedown", onDown)
-    return () => document.removeEventListener("mousedown", onDown)
-  }, [open])
-
-  const current = options.find((option) => option.value === value)
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className={cn(
-          "flex h-8 items-center gap-1.5 rounded-full border border-neutral-200 bg-white pl-3 pr-2 text-xs font-semibold text-neutral-700 transition-colors hover:border-neutral-300",
-          full && "h-11 w-full rounded-[14px] border-[1.5px] border-neutral-300 px-4 text-[15px] font-medium text-neutral-900",
-          open && "border-neutral-400",
-          className,
-        )}
-      >
-        <span className="min-w-0 flex-1 truncate text-left">{label ?? current?.label ?? value}</span>
-        <ChevronDownIcon className={cn("size-3.5 shrink-0 text-neutral-400 transition-transform", open && "rotate-180")} />
-      </button>
-      {open ? (
-        <div
-          className={cn(
-            "absolute top-full z-[1200] mt-1.5 overflow-hidden rounded-2xl border border-neutral-200 bg-white py-1 shadow-xl",
-            full ? "left-0 right-0" : "right-0 w-60",
-          )}
-        >
-          {options.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => {
-                onChange(option.value)
-                setOpen(false)
-              }}
-              className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-[13px] font-medium text-neutral-900 transition-colors hover:bg-neutral-50"
-            >
-              <span className="min-w-0 flex-1 truncate">{option.label}</span>
-              {option.value === value ? (
-                <CircleCheck className="size-4 shrink-0 text-green-600" strokeWidth={2} />
-              ) : null}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  )
 }
 
 /* ─── Configure dialog ─── */
@@ -199,6 +87,7 @@ function ConfigureDialog({
   onSave,
   busy,
   dirty,
+  onOpenTest,
 }: {
   open: boolean
   onClose: () => void
@@ -207,17 +96,14 @@ function ConfigureDialog({
   onSave: () => void
   busy: boolean
   dirty: boolean
+  onOpenTest: () => void
 }) {
   const strictness = detectStrictness(config)
-  const [testOpen, setTestOpen] = useState(false)
 
   return (
     <SheetDialog
       open={open}
-      onClose={() => {
-        setTestOpen(false)
-        onClose()
-      }}
+      onClose={onClose}
       title="Validation rules"
       description="Set how the system handles reports before they reach your queue."
       size="wide"
@@ -226,7 +112,7 @@ function ConfigureDialog({
           type="button"
           aria-label="Test a sample report"
           title="Test a sample report"
-          onClick={() => setTestOpen(true)}
+          onClick={() => { onOpenTest(); onClose() }}
           className="flex size-9 items-center justify-center rounded-full text-neutral-900 transition-colors hover:bg-neutral-100"
         >
           <TestTube2Icon className="size-[18px]" />
@@ -367,33 +253,53 @@ function ConfigureDialog({
         <SheetOptionRow
           title="Spam or unrelated submission"
           trailing={
-            <span className="rounded-full bg-neutral-100 px-3 py-1.5 text-xs font-semibold text-neutral-600">
-              Reject automatically
-            </span>
+            <RuleMenu
+              value={config.content_safety_spam_action ?? "auto_reject"}
+              options={[
+                { value: "auto_reject", label: "Reject automatically" },
+                { value: "hold", label: "Hold for review" },
+              ]}
+              onChange={(value) => onUpdate("content_safety_spam_action", value as ConcernClassificationConfig["content_safety_spam_action"])}
+            />
           }
         />
         <SheetOptionRow
           title="Abusive or harassing language"
           trailing={
-            <span className="rounded-full bg-neutral-100 px-3 py-1.5 text-xs font-semibold text-neutral-600">
-              Hold for review
-            </span>
+            <RuleMenu
+              value={config.content_safety_abusive_action ?? "hold"}
+              options={[
+                { value: "hold", label: "Hold for review" },
+                { value: "auto_reject", label: "Reject automatically" },
+              ]}
+              onChange={(value) => onUpdate("content_safety_abusive_action", value as ConcernClassificationConfig["content_safety_abusive_action"])}
+            />
           }
         />
         <SheetOptionRow
           title="Possible threat or danger"
           trailing={
-            <span className="rounded-full bg-neutral-100 px-3 py-1.5 text-xs font-semibold text-neutral-600">
-              Accept, flag & notify
-            </span>
+            <RuleMenu
+              value={config.content_safety_threat_action ?? "accept_flag_notify"}
+              options={[
+                { value: "accept_flag_notify", label: "Accept, flag & notify" },
+                { value: "hold", label: "Hold for review" },
+              ]}
+              onChange={(value) => onUpdate("content_safety_threat_action", value as ConcernClassificationConfig["content_safety_threat_action"])}
+            />
           }
         />
         <SheetOptionRow
           title="Sensitive or graphic content"
           trailing={
-            <span className="rounded-full bg-neutral-100 px-3 py-1.5 text-xs font-semibold text-neutral-600">
-              Restrict & hold for review
-            </span>
+            <RuleMenu
+              value={config.content_safety_sensitive_action ?? "restrict_hold"}
+              options={[
+                { value: "restrict_hold", label: "Restrict & hold for review" },
+                { value: "auto_blur_accept", label: "Auto-blur & accept" },
+              ]}
+              onChange={(value) => onUpdate("content_safety_sensitive_action", value as ConcernClassificationConfig["content_safety_sensitive_action"])}
+            />
           }
         />
       </SheetList>
@@ -450,7 +356,118 @@ function ConfigureDialog({
             </div>
           }
         />
+        <SheetToggleRow
+          id="photo-duplicate-llm"
+          label="Compare photos with AI"
+          description="When a likely match is found, the AI also compares the photos to confirm it is the same issue."
+          checked={config.photo_duplicate_llm_enabled !== false}
+          onChange={(checked) => onUpdate("photo_duplicate_llm_enabled", checked)}
+        />
+        {config.photo_duplicate_llm_enabled !== false ? (
+          <SheetOptionRow
+            title="Photos compared per check"
+            trailing={
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={5}
+                  value={config.photo_duplicate_candidate_limit ?? 3}
+                  onChange={(e) => onUpdate("photo_duplicate_candidate_limit", Number(e.target.value))}
+                  className="h-8 w-16 rounded-full border border-neutral-200 px-3 text-xs font-semibold text-neutral-700 outline-none focus:border-neutral-400"
+                />
+                <span className="text-xs text-neutral-500">max</span>
+              </div>
+            }
+          />
+        ) : null}
       </SheetList>
+
+      {/* Street view verification */}
+      <SheetSectionLabel>Street view verification</SheetSectionLabel>
+      <p className="mb-2 text-xs text-neutral-500">
+        For selected categories, the system fetches the newest street-level photo of the pinned location and compares it with the submitted photo.
+      </p>
+      <SheetToggleRow
+        id="street-imagery-enabled"
+        label="Verify reports against street imagery"
+        description="Runs only for the categories chosen below and only when a photo and pin are present."
+        checked={config.street_imagery_enabled === true}
+        onChange={(checked) => onUpdate("street_imagery_enabled", checked)}
+      />
+      {config.street_imagery_enabled === true ? (
+        <SheetList className="mt-3">
+          <div className="px-4 py-3">
+            <p className="mb-2 text-xs font-medium text-neutral-600">Categories to verify</p>
+            <div className="flex flex-wrap gap-1.5">
+              {config.categories.filter((c) => c.enabled).map((category) => {
+                const active = (config.street_imagery_categories ?? []).includes(category.key)
+                return (
+                  <button
+                    key={category.key}
+                    type="button"
+                    onClick={() => {
+                      const current = config.street_imagery_categories ?? []
+                      onUpdate(
+                        "street_imagery_categories",
+                        active ? current.filter((key) => key !== category.key) : [...current, category.key],
+                      )
+                    }}
+                    className={cn(
+                      "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                      active
+                        ? "border-brand-navy bg-brand-navy text-white"
+                        : "border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300 hover:text-neutral-800",
+                    )}
+                  >
+                    {category.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          <SheetOptionRow
+            title="Search radius"
+            trailing={
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={10}
+                  value={config.street_imagery_radius_meters ?? 50}
+                  onChange={(e) => onUpdate("street_imagery_radius_meters", Number(e.target.value))}
+                  className="h-8 w-16 rounded-full border border-neutral-200 px-3 text-xs font-semibold text-neutral-700 outline-none focus:border-neutral-400"
+                />
+                <span className="text-xs text-neutral-500">meters</span>
+              </div>
+            }
+          />
+          <SheetOptionRow
+            title="When the street photo does not show the issue"
+            trailing={
+              <RuleMenu
+                value={config.street_imagery_action ?? "request_resubmission"}
+                options={[
+                  { value: "warn", label: "Warn reviewer only" },
+                  { value: "request_resubmission", label: "Request resubmission" },
+                  { value: "reject", label: "Reject automatically" },
+                ]}
+                onChange={(value) => onUpdate("street_imagery_action", value as ConcernClassificationConfig["street_imagery_action"])}
+              />
+            }
+          />
+        </SheetList>
+      ) : null}
+
+      {/* Emergency triage */}
+      <SheetSectionLabel>Emergency triage</SheetSectionLabel>
+      <p className="mb-2 text-xs text-neutral-500">How the system confirms a matched emergency before routing it.</p>
+      <SheetToggleRow
+        id="ongoing-emergency-confirmation"
+        label="Ask if this is an ongoing emergency"
+        description="Before routing a matched emergency type to a responder, confirm with the resident that it is still happening."
+        checked={config.require_ongoing_emergency_confirmation !== false}
+        onChange={(checked) => onUpdate("require_ongoing_emergency_confirmation", checked)}
+      />
 
       {/* 5. Fallback */}
       <SheetSectionLabel>If automated validation is unavailable</SheetSectionLabel>
@@ -470,12 +487,20 @@ function ConfigureDialog({
         />
       </SheetList>
 
-      <TestDialog open={testOpen} onClose={() => setTestOpen(false)} config={config} />
     </SheetDialog>
   )
 }
 
 /* ─── Test dialog ─── */
+
+const TEST_TABS = [
+  { key: "concerns", label: "Concerns" },
+  { key: "emergencies", label: "Emergencies" },
+  { key: "sms", label: "SMS" },
+  { key: "community", label: "Community content" },
+  { key: "log", label: "Log" },
+] as const
+type TestTabKey = (typeof TEST_TABS)[number]["key"]
 
 function TestDialog({
   open,
@@ -486,16 +511,132 @@ function TestDialog({
   onClose: () => void
   config: ConcernClassificationConfig
 }) {
+  const [tab, setTab] = useState<TestTabKey>("concerns")
+  const [smsPanelOpen, setSmsPanelOpen] = useState(false)
+  const [smsHelpOpen, setSmsHelpOpen] = useState(false)
+  const [smsMessage, setSmsMessage] = useState("")
+  const [smsSender, setSmsSender] = useState<"registered" | "unknown">("registered")
+  const [smsResult, setSmsResult] = useState<import("./api").SmsSimulationResult | null>(null)
+  const [smsBusy, setSmsBusy] = useState(false)
+
+  async function runSms() {
+    const text = smsMessage.trim()
+    if (!text) return
+    setSmsBusy(true)
+    try {
+      setSmsResult(await testSmsSimulation({ message: text, sender: smsSender }))
+    } catch (error) {
+      toast.error(describeApiError(error, "The sample text could not be processed."))
+    } finally {
+      setSmsBusy(false)
+    }
+  }
+
+  function resetSms() {
+    setSmsMessage("")
+    setSmsSender("registered")
+    setSmsResult(null)
+    setSmsBusy(false)
+  }
+
   return (
+    <>
     <SheetDialog
       open={open}
-      onClose={onClose}
-      title="Test a sample report"
-      description="Use one resident-style description and an optional photo. Nothing is filed."
+      onClose={() => {
+        setTab("concerns")
+        resetSms()
+        setSmsPanelOpen(false)
+        setSmsHelpOpen(false)
+        onClose()
+      }}
+      title="LLM Decisions"
+      description="Test how automatic review classifies concerns, emergencies, SMS texts, and community content — nothing here is filed."
       size="wide"
+      actions={
+        tab === "sms" ? (
+          <button
+            type="button"
+            onClick={() => setSmsPanelOpen(true)}
+            aria-label="Open SMS preview"
+            title="Open SMS preview"
+            className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
+          >
+            <MessageSquareIcon className="size-[18px]" strokeWidth={2} />
+          </button>
+        ) : null
+      }
     >
-      <TestWorkspace config={config} />
+      <div className="mb-5 flex gap-0.5 rounded-full bg-neutral-100 p-1">
+        {TEST_TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => { setTab(t.key); if (t.key !== "sms") setSmsPanelOpen(false) }}
+            className={cn(
+              "flex-1 rounded-full py-2 text-[13px] font-medium transition-colors",
+              tab === t.key ? "bg-white text-neutral-900 shadow-sm" : "text-neutral-400 hover:bg-white/60 hover:text-neutral-900",
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === "concerns" ? <ConcernTestWorkspace config={config} /> : null}
+      {tab === "emergencies" ? <EmergencyTestWorkspace /> : null}
+      {tab === "sms" ? (
+        <SmsTestWorkspace
+          message={smsMessage}
+          setMessage={setSmsMessage}
+          sender={smsSender}
+          setSender={setSmsSender}
+          result={smsResult}
+          busy={smsBusy}
+        />
+      ) : null}
+      {tab === "community" ? <CommunityModerationTestWorkspace /> : null}
+      {tab === "log" ? <DecisionLogTab /> : null}
     </SheetDialog>
+
+    <SheetDialog
+      open={smsPanelOpen}
+      onClose={() => setSmsPanelOpen(false)}
+      onBack={() => setSmsPanelOpen(false)}
+      title="SMS Preview"
+      size="wide"
+      actions={
+        <>
+          <SenderPill sender={smsSender} setSender={setSmsSender} />
+          <SheetIconButton label="Sample commands" onClick={() => setSmsHelpOpen(true)} className="bg-transparent text-neutral-400 hover:bg-transparent hover:text-neutral-700">
+            <CircleQuestionMarkIcon className="size-6" strokeWidth={2} />
+          </SheetIconButton>
+          <SheetIconButton label="Reset simulation" onClick={resetSms} className="bg-transparent text-neutral-400 hover:bg-transparent hover:text-neutral-700">
+            <RotateCcwIcon className="size-6" strokeWidth={2} />
+          </SheetIconButton>
+        </>
+      }
+      footer={
+        <SmsChatInput
+          message={smsMessage}
+          setMessage={setSmsMessage}
+          busy={smsBusy}
+          onSend={() => void runSms()}
+        />
+      }
+    >
+      <SmsChatPanel message={smsMessage} result={smsResult} busy={smsBusy} />
+    </SheetDialog>
+
+    <SheetDialog
+      open={smsHelpOpen}
+      onClose={() => setSmsHelpOpen(false)}
+      onBack={() => setSmsHelpOpen(false)}
+      title="Sample commands"
+      description="What a resident can text the hotline."
+    >
+      <SmsCommandGuide />
+    </SheetDialog>
+    </>
   )
 }
 
@@ -684,382 +825,6 @@ function ActivityTab({ config }: { config: ConcernClassificationConfig }) {
   )
 }
 
-/* ─── Test workspace ─── */
-
-const SAMPLE_LANGUAGE_OPTIONS: { value: SampleLanguage; label: string }[] = [
-  { value: "filipino", label: "Filipino" },
-  { value: "english", label: "English" },
-  { value: "hybrid", label: "Hybrid (Taglish)" },
-  { value: "bisaya", label: "Bisaya" },
-  { value: "ilocano", label: "Ilocano" },
-  { value: "hiligaynon", label: "Hiligaynon" },
-  { value: "kapampangan", label: "Kapampangan" },
-  { value: "waray", label: "Waray" },
-]
-
-function verdictMeta(action: string | null | undefined) {
-  const value = (action ?? "accept").replace(/_/g, " ")
-  if (value === "reject as irrelevant") return { icon: Ban, tone: "text-sos" }
-  if (["escalate as emergency", "request more information", "manual review"].includes(value)) {
-    return { icon: TriangleAlert, tone: "text-amber-500" }
-  }
-  return { icon: CircleCheck, tone: "text-green-600" }
-}
-
-function TestWorkspace({ config }: { config: ConcernClassificationConfig }) {
-  const [selectedCategory, setSelectedCategory] = useState("infrastructure")
-  const [files, setFiles] = useState<File[]>([])
-  const [pin, setPin] = useState<LocationPin | null>(null)
-  const previews = useMemo(() => files.map((file) => URL.createObjectURL(file)), [files])
-  useEffect(() => {
-    return () => previews.forEach((url) => URL.revokeObjectURL(url))
-  }, [previews])
-  const [description, setDescription] = useState("")
-  const [sampleLanguage, setSampleLanguage] = useState<SampleLanguage>("filipino")
-  const [generating, setGenerating] = useState(false)
-  const [reportResult, setReportResult] = useState<ReportValidationResult | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [height, setHeight] = useState(112)
-  const textareaDragRef = useRef<{ startY: number; startHeight: number } | null>(null)
-  const fileRef = useRef<HTMLInputElement | null>(null)
-
-  const MAX_PHOTOS = 3
-
-  const activeCategories = useMemo(
-    () => config.categories.filter((category) => category.enabled),
-    [config.categories],
-  )
-
-  const firstActiveKey = activeCategories[0]?.key
-  if (activeCategories.length && firstActiveKey && !activeCategories.some((c) => c.key === selectedCategory)) {
-    setSelectedCategory(firstActiveKey)
-  }
-
-  async function runTest() {
-    if (!description.trim()) return
-    setBusy(true)
-    setReportResult(null)
-    try {
-      setReportResult(
-        await testConcernSubmission({
-          files,
-          category: selectedCategory,
-          description: description.trim(),
-          latitude: pin?.lat ?? null,
-          longitude: pin?.lng ?? null,
-        }),
-      )
-    } catch (error) {
-      toast.error(describeApiError(error, "The sample report could not be checked."))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function generateSample() {
-    if (generating) return
-    setGenerating(true)
-    setReportResult(null)
-    try {
-      const { description: next } = await generateSampleDescription({
-        files,
-        category: selectedCategory,
-        mode: "matching",
-        language: sampleLanguage,
-      })
-      setDescription(next)
-    } catch (error) {
-      toast.error(describeApiError(error, "The sample could not be generated."))
-    } finally {
-      setGenerating(false)
-    }
-  }
-
-  const verdict = verdictMeta(reportResult?.recommended_action)
-  // Mirrors the category's own Report requirements (photo/description/location)
-  // from the Categories screen, so the button only goes active once this
-  // sample would actually satisfy what that category demands.
-  const requirements = activeCategories.find((category) => category.key === selectedCategory)
-  const descriptionOk =
-    !requirements?.description_required || description.trim().length >= config.minimum_description_length
-  const photoOk = !requirements?.photo_required || files.length > 0
-  const locationOk = !requirements?.location_required || pin != null
-  const canCheck = descriptionOk && photoOk && locationOk
-
-  return (
-    <div className="space-y-5">
-      <div>
-        <label className="mb-1.5 block text-[13px] font-semibold text-neutral-500">Filed under</label>
-        <RuleMenu
-          full
-          value={selectedCategory}
-          options={activeCategories.map((category) => ({ value: category.key, label: category.label }))}
-          onChange={setSelectedCategory}
-        />
-      </div>
-
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/jpeg,image/png"
-        multiple
-        className="hidden"
-        onChange={(event) => {
-          const picked = Array.from(event.target.files ?? []).slice(0, MAX_PHOTOS - files.length)
-          if (picked.length) {
-            setFiles((prev) => [...prev, ...picked].slice(0, MAX_PHOTOS))
-            setReportResult(null)
-          }
-          event.target.value = ""
-        }}
-      />
-
-      <div>
-        <div className="grid grid-cols-3 gap-3">
-          {previews.map((url, index) => (
-            <div key={url} className="group relative">
-              <img
-                src={url}
-                alt={`Sample photo ${index + 1}`}
-                className="aspect-square w-full rounded-xl border border-neutral-200 object-cover"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  setFiles((prev) => prev.filter((_, i) => i !== index))
-                  setReportResult(null)
-                }}
-                aria-label={`Remove photo ${index + 1}`}
-                className="absolute right-1.5 top-1.5 flex size-7 items-center justify-center rounded-full bg-neutral-800/50 text-neutral-200 transition-colors hover:bg-neutral-800/70"
-              >
-                <XIcon className="size-4" strokeWidth={2.5} aria-hidden />
-              </button>
-            </div>
-          ))}
-          {files.length < MAX_PHOTOS ? (
-            <button
-              type="button"
-              onClick={() => fileRef.current?.click()}
-              className={cn(
-                "flex items-center justify-center rounded-xl bg-neutral-100 text-center transition-colors hover:bg-neutral-200",
-                files.length === 0
-                  ? "col-span-3 aspect-[3/1] w-full flex-col gap-1.5"
-                  : "aspect-square w-full"
-              )}
-            >
-              {files.length === 0 ? (
-                <>
-                  <UploadCloudIcon className="size-8 text-neutral-400" strokeWidth={1.5} aria-hidden />
-                  <span className="text-[13px] font-medium text-neutral-500">Add a sample photo</span>
-                </>
-              ) : (
-                <PlusIcon className="size-8 text-neutral-400" strokeWidth={1.5} aria-hidden />
-              )}
-            </button>
-          ) : null}
-        </div>
-      </div>
-
-      <div>
-        <div className="relative">
-          <textarea
-            value={description}
-            onChange={(event) => {
-              setDescription(event.target.value)
-              setReportResult(null)
-            }}
-            maxLength={255}
-            placeholder="Describe what happened, where it is, and what needs attention."
-            style={{ height }}
-            className="w-full resize-none rounded-[14px] border-[1.5px] border-neutral-300 bg-white p-4 pb-8 text-[15px] font-medium text-neutral-900 outline-none transition-colors focus:border-neutral-500"
-          />
-          <span className="pointer-events-none absolute bottom-2.5 right-3 text-xs font-medium tabular-nums text-neutral-400">
-            {description.length}/255
-          </span>
-          <div
-            aria-hidden
-            className="absolute inset-x-0 bottom-0 z-10 h-1.5 cursor-ns-resize touch-none"
-            onPointerDown={(event) => {
-              textareaDragRef.current = { startY: event.clientY, startHeight: height }
-              event.currentTarget.setPointerCapture(event.pointerId)
-            }}
-            onPointerMove={(event) => {
-              const drag = textareaDragRef.current
-              if (!drag) return
-              setHeight(Math.min(320, Math.max(112, drag.startHeight + (event.clientY - drag.startY))))
-            }}
-            onPointerUp={() => {
-              textareaDragRef.current = null
-            }}
-          />
-        </div>
-        <div className="mt-1.5 flex flex-wrap items-center justify-end gap-3">
-          <span className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={() => void generateSample()}
-              disabled={generating}
-              className="text-[13px] font-semibold text-brand-navy underline underline-offset-4 transition-opacity hover:opacity-75 disabled:opacity-60"
-            >
-              {generating ? "Generating…" : "Generate sample"}
-            </button>
-            <RuleMenu
-              className="border-transparent bg-transparent hover:border-transparent"
-              value={sampleLanguage}
-              options={SAMPLE_LANGUAGE_OPTIONS}
-              onChange={(value) => setSampleLanguage(value as SampleLanguage)}
-            />
-          </span>
-        </div>
-      </div>
-
-      <div>
-        <label className="mb-1.5 block text-[13px] font-semibold text-neutral-500">Location</label>
-        <LocationPinMap pin={pin} onPinChange={setPin} />
-      </div>
-
-      <SheetPrimaryButton
-        type="button"
-        onClick={() => void runTest()}
-        disabled={!canCheck || busy}
-        className="bg-brand-navy text-white hover:bg-brand-navy/85 disabled:bg-neutral-200 disabled:text-neutral-400 disabled:hover:bg-neutral-200"
-      >
-        {busy ? "Checking…" : "Check this sample"}
-      </SheetPrimaryButton>
-
-      {reportResult ? (
-        <div className="space-y-5 border-t border-neutral-200 pt-5">
-          <div className="flex items-start gap-3">
-            <verdict.icon className={cn("mt-0.5 size-5 shrink-0", verdict.tone)} strokeWidth={2} aria-hidden />
-            <div>
-              <p className="text-[16px] font-bold leading-snug text-neutral-900">
-                {displayValue(reportResult.recommended_action || "accept")}
-              </p>
-              {reportResult.explanation ? (
-                <p className="mt-1 text-[14px] leading-relaxed text-neutral-500">{reportResult.explanation}</p>
-              ) : null}
-            </div>
-          </div>
-
-          {reportResult.location ? (
-            <div className="flex items-start gap-3">
-              {reportResult.location.accepted ? (
-                <CircleCheck className="mt-0.5 size-5 shrink-0 text-green-600" strokeWidth={2} aria-hidden />
-              ) : reportResult.location.action === "block" ? (
-                <Ban className="mt-0.5 size-5 shrink-0 text-sos" strokeWidth={2} aria-hidden />
-              ) : (
-                <TriangleAlert className="mt-0.5 size-5 shrink-0 text-amber-500" strokeWidth={2} aria-hidden />
-              )}
-              <p className="text-[14px] font-medium leading-relaxed text-neutral-900">
-                {reportResult.location.accepted
-                  ? "The pinned location passes the boundary and acceptance-zone checks."
-                  : reportResult.location.summary ||
-                    reportResult.location.message ||
-                    "The pinned location is outside the barangay area."}
-              </p>
-            </div>
-          ) : null}
-
-          {reportResult.image_uploaded && reportResult.image_review_succeeded === false ? (
-            <p className="text-[13px] font-medium text-neutral-500">
-              The photo could not be described — this result was written from the text alone.
-            </p>
-          ) : null}
-
-          {previews[0] ? (
-            <div className="space-y-3">
-              <figure>
-                <img
-                  src={previews[0]}
-                  alt="The sample photo as submitted"
-                  className="max-h-40 w-full rounded-[14px] border border-neutral-200 object-contain"
-                />
-                <figcaption className="mt-1 text-[11px] font-bold uppercase tracking-wide text-neutral-400">
-                  {reportResult.privacy?.protected_image ? "As submitted" : "Sample photo"}
-                </figcaption>
-              </figure>
-              {reportResult.privacy?.protected_image ? (
-                <figure>
-                  <img
-                    src={reportResult.privacy.protected_image}
-                    alt="The sample photo with sensitive areas blurred"
-                    className="max-h-40 w-full rounded-[14px] border border-green-200 object-contain"
-                  />
-                  <figcaption className="mt-1 text-[11px] font-bold uppercase tracking-wide text-neutral-400">
-                    What residents would see
-                  </figcaption>
-                </figure>
-              ) : null}
-            </div>
-          ) : null}
-
-          <div>
-            <SectionLabel>What was found</SectionLabel>
-            <ul className="mt-1.5 space-y-1">
-              {[
-                reportResult.text_assessment,
-                reportResult.category_match === true
-                  ? "The selected category matches the concern."
-                  : reportResult.category_match === false
-                    ? `The report reads more like ${categoryLabel(config, reportResult.primary_category)} than ${categoryLabel(config, selectedCategory)}.`
-                    : "",
-                reportResult.image_uploaded
-                  ? displayValue(reportResult.evidence_relationship)
-                  : "No photo was submitted.",
-                reportResult.urgent_attention
-                  ? "This may describe immediate danger."
-                  : "No immediate danger was identified.",
-                reportResult.duplicate ? "A very similar report was filed recently." : "",
-              ]
-                .filter(Boolean)
-                .map((line) => (
-                  <li key={line as string} className="flex gap-2 text-sm font-medium leading-relaxed text-neutral-900">
-                    <span aria-hidden className="mt-2 size-1 shrink-0 rounded-full bg-neutral-400" />
-                    <span className="min-w-0 break-words">{line}</span>
-                  </li>
-                ))}
-            </ul>
-          </div>
-
-          {reportResult.detected_objects?.length ? (
-            <div>
-              <SectionLabel>Observed in the photo</SectionLabel>
-              <p className="mt-1.5 text-sm font-medium capitalize text-neutral-900">
-                {reportResult.detected_objects.join(" · ")}
-              </p>
-            </div>
-          ) : null}
-
-          {reportResult.image_uploaded ? (
-            <div>
-              <SectionLabel>Privacy protection</SectionLabel>
-              <p className="mt-1.5 text-sm font-medium leading-relaxed text-neutral-900">
-                {SAMPLE_PRIVACY_COPY[reportResult.privacy?.state ?? "unchecked"]}
-              </p>
-              {reportResult.privacy?.detected_classes?.length ? (
-                <p className="mt-1 text-sm font-medium text-neutral-700">
-                  Sensitive areas: {reportResult.privacy.detected_classes.join(" · ")}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-
-          {reportResult.missing_information?.length ? (
-            <div>
-              <SectionLabel>Additional information needed</SectionLabel>
-              <ul className="mt-1.5 space-y-1">
-                {reportResult.missing_information.map((item) => (
-                  <li key={item} className="text-sm font-medium text-neutral-900">· {item}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
 /* ─── Main page ─── */
 
 export default function ConcernClassificationPage() {
@@ -1069,6 +834,8 @@ export default function ConcernClassificationPage() {
   const [busy, setBusy] = useState("")
   const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null)
   const [configureOpen, setConfigureOpen] = useState(false)
+  const [testOpen, setTestOpen] = useState(false)
+  const [logCount, setLogCount] = useState<number | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -1083,6 +850,20 @@ export default function ConcernClassificationPage() {
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    void getLlmDecisionLog({ page: 1, page_size: 1 })
+      .then((response) => {
+        if (!cancelled) setLogCount(response.count)
+      })
+      .catch(() => {
+        // Non-critical: the stat just stays blank if the log can't be reached.
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const strictness = detectStrictness(config)
@@ -1134,6 +915,7 @@ export default function ConcernClassificationPage() {
         { label: "Reports checked", value: config.metrics?.tested ?? 0 },
         { label: "Went straight through", value: config.metrics?.auto_validated ?? 0 },
         { label: "Rejected by rules", value: config.metrics?.rejected ?? 0 },
+        { label: "Logged decisions", value: logCount ?? "—" },
       ]}
       action={
         <ConfigHeroAction onClick={() => setConfigureOpen(true)}>
@@ -1151,7 +933,10 @@ export default function ConcernClassificationPage() {
         onSave={() => void save()}
         busy={busy === "save"}
         dirty={dirty}
+        onOpenTest={() => setTestOpen(true)}
       />
+
+      <TestDialog open={testOpen} onClose={() => setTestOpen(false)} config={config} />
     </ConfigShell>
   )
 }

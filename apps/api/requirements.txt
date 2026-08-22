@@ -40,6 +40,10 @@ opencv-python-headless>=4.8,<5
 # Python <3.13, and this project runs 3.13.
 ollama>=0.5,<1
 
+# Street-level imagery search (Google panorama lookup near a concern pin).
+# Tile downloads are handled by apps.concerns.ai.street_imagery itself.
+streetview>=0.1
+
 # Official OCR template testing
 easyocr>=1.7,<2
 cloudinary==1.45.0

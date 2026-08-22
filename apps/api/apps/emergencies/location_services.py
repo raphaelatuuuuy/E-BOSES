@@ -89,9 +89,10 @@ def resolve_alert_location(alert_id: int) -> dict:
     )
     if result["location"]:
         alert.resolved_location = result["location"]
-        # Fill `address` only when nothing better is there, so an address the
-        # resident confirmed on the map is never silently replaced.
-        if not (alert.address or "").strip() or alert.address == "SMS fallback coordinates":
+        # Fill `address` when empty or generic — never silently replace a real
+        # street the resident typed or confirmed on the map.
+        _GENERIC = {"", "sms fallback coordinates", "pinned location on map", "marikina heights"}
+        if (alert.address or "").strip().lower() in _GENERIC or "pinned location" in (alert.address or "").lower():
             alert.address = result["location"]
     alert.location_confidence = classify_location_confidence(alert)
     alert.save(

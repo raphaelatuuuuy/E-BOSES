@@ -500,7 +500,7 @@ class ResidentDashboardAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("duplicate media upload detected", response.data["media"][0])
+        self.assertIn("This photo was already uploaded before", response.data["media"][0])
         self.assertFalse(Concern.objects.filter(title="Duplicate evidence").exists())
 
     def test_concern_media_hash_is_stored(self):
@@ -541,7 +541,7 @@ class ResidentDashboardAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("Location must be inside Barangay Marikina Heights", str(response.data))
+        self.assertIn("Location is too far from Barangay Marikina Heights", str(response.data))
         self.assertFalse(Concern.objects.filter(title="Outside boundary").exists())
 
     def test_location_outside_active_polygon_uses_real_boundary_distance(self):
@@ -1062,10 +1062,10 @@ class PhaseOneFoundationAPITests(APITestCase):
             file_size=media.size,
         )
 
-        def analyze(*, title, description, selected_category, image):
+        def analyze(*, title, description, selected_category, images, image_uploaded):
             # The photo must reach Gemma normalised, not as raw upload bytes.
-            self.assertIsNotNone(image)
-            self.assertEqual(image.mime_type, "image/jpeg")
+            self.assertEqual(len(images), 1)
+            self.assertEqual(images[0].mime_type, "image/jpeg")
             return gemma_result(
                 category=Concern.Category.INFRASTRUCTURE,
                 detected_objects=["traffic light", "road"],

@@ -134,6 +134,7 @@ class BeatScheduleTests(TestCase):
         "service-health-sample",
         "service-health-worker-heartbeat",
         "complete-unblocked-deletions",
+        "retry-pending-concern-jobs",
     }
 
     def test_every_expected_entry_is_present(self):

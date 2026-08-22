@@ -20,6 +20,7 @@ class Notification(models.Model):
         CONCERN_MENTION = "concern_mention", "Concern Mention"
         FLAG_DISMISSED = "flag_dismissed", "Flag Dismissed"
         POST_TAKEN_DOWN = "post_taken_down", "Post Taken Down"
+        COMMENT_TAKEN_DOWN = "comment_taken_down", "Comment Taken Down"
         CHAT_MESSAGE = "chat_message", "Chat Message"
         EMERGENCY_SUBMITTED = "emergency_submitted", "Emergency Submitted"
         EMERGENCY_ROUTED = "emergency_routed", "Emergency Routed"

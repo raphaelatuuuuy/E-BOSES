@@ -10,6 +10,9 @@ export interface StreetCoordinates {
   displayName: string
 }
 
+const geocodeCache = new Map<string, StreetCoordinates | null>()
+const GEOCODE_CACHE_MAX = 300
+
 /**
  * Forward-geocode a Marikina Heights street (and optional house number)
  * via OpenStreetMap Nominatim so the map pin sits on the actual road.
@@ -21,6 +24,11 @@ export async function geocodeMarikinaStreet(
   const house = houseNumber?.trim()
   const streetName = street?.trim()
   if (!streetName) return null
+
+  const cacheKey = `${house ?? ""}|${streetName.toLowerCase()}`
+  if (geocodeCache.has(cacheKey)) {
+    return geocodeCache.get(cacheKey) ?? null
+  }
 
   const queries = [
     [house, streetName, "Marikina Heights", "Marikina City", "Metro Manila", "Philippines"]
@@ -53,14 +61,23 @@ export async function geocodeMarikinaStreet(
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue
       // Stay roughly in Marikina area
       if (lat < 14.6 || lat > 14.7 || lng < 121.05 || lng > 121.2) continue
-      return {
+      const result = {
         lat,
         lng,
         displayName: hit?.display_name || streetName,
       }
+      if (geocodeCache.size >= GEOCODE_CACHE_MAX) {
+        geocodeCache.delete(geocodeCache.keys().next().value as string)
+      }
+      geocodeCache.set(cacheKey, result)
+      return result
     } catch {
       // try next query
     }
   }
+  if (geocodeCache.size >= GEOCODE_CACHE_MAX) {
+    geocodeCache.delete(geocodeCache.keys().next().value as string)
+  }
+  geocodeCache.set(cacheKey, null)
   return null
 }

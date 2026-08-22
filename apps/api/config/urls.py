@@ -8,6 +8,7 @@ from config.health import health_check
 from apps.concerns.community_api import (
     AnnouncementAreaContextView,
     AnnouncementCommentDetailView,
+    AnnouncementCommentFlagCreateView,
     AnnouncementCommentListCreateView,
     BarangayEventCalendarView,
 )
@@ -67,6 +68,11 @@ urlpatterns = [
         "api/announcements/<int:announcement_id>/comments/<int:comment_id>/",
         AnnouncementCommentDetailView.as_view(),
         name="announcement-comment-detail",
+    ),
+    path(
+        "api/announcements/comments/<int:comment_id>/flags/",
+        AnnouncementCommentFlagCreateView.as_view(),
+        name="announcement-comment-flag-create",
     ),
     path("api/barangay-events/calendar/", BarangayEventCalendarView.as_view(), name="barangay-event-calendar"),
     path("api/announcements/manage/", AnnouncementManageListCreateView.as_view(), name="announcement-manage"),

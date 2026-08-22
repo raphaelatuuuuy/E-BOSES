@@ -323,14 +323,10 @@ class ConcernCategorySerializer(serializers.ModelSerializer):
         return request.build_absolute_uri(obj.icon_image.url) if request else obj.icon_image.url
 
     def validate_icon_key(self, value):
-        value = (value or "tag").strip().lower()
-        allowed = {
-            "tag", "wrench", "leaf", "shield-alert", "trash", "lightbulb",
-            "road", "droplets", "home", "map-pin", "paw-print", "megaphone",
-        }
-        if value not in allowed:
-            raise serializers.ValidationError("Choose one of the supported concern icons.")
-        return value
+        value = (value or "tag").strip()
+        if not value:
+            return "tag"
+        return value[:48]
 
     def validate_icon_image(self, value):
         if not value:
@@ -664,6 +660,8 @@ class ContentFlagSerializer(serializers.ModelSerializer):
     reporter = PublicUserSerializer(read_only=True)
     reporter_full_name = serializers.SerializerMethodField()
     comment = serializers.IntegerField(required=False, allow_null=True)
+    target = serializers.SerializerMethodField()
+    reviewed_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = ContentFlag
@@ -677,16 +675,86 @@ class ContentFlagSerializer(serializers.ModelSerializer):
             "note",
             "status",
             "staff_note",
+            "auto_moderated",
+            "reviewed_by_name",
+            "target",
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("id", "concern", "reporter", "status", "staff_note", "created_at", "updated_at")
+        read_only_fields = (
+            "id",
+            "concern",
+            "reporter",
+            "status",
+            "staff_note",
+            "auto_moderated",
+            "created_at",
+            "updated_at",
+        )
+
+    def get_reviewed_by_name(self, obj):
+        return self._content_author_name(obj.reviewed_by) if obj.reviewed_by_id else None
 
     def get_reporter_full_name(self, obj):
         profile = getattr(obj.reporter, "resident_profile", None)
         if profile:
             return f"{profile.first_name.strip()} {profile.last_name.strip()}".strip()
         return obj.reporter.email.split("@", 1)[0].replace(".", " ")
+
+    @staticmethod
+    def _content_author_name(user):
+        if not user:
+            return ""
+        profile = getattr(user, "resident_profile", None)
+        if profile:
+            name = f"{profile.first_name.strip()} {profile.last_name.strip()}".strip()
+            if name:
+                return name
+        return user.email.split("@", 1)[0].replace(".", " ")
+
+    @staticmethod
+    def _excerpt(text):
+        return (text or "").strip()[:160]
+
+    def get_target(self, obj):
+        """One shape for every `target_kind`, so the frontend never needs a
+        per-row follow-up fetch to render a flag regardless of what it targets.
+        """
+        kind = obj.target_kind
+        if kind == "announcement_comment":
+            comment = obj.announcement_comment
+            return {
+                "kind": kind,
+                "excerpt": self._excerpt(comment.body),
+                "author_name": self._content_author_name(comment.author),
+                "post_title": comment.announcement.title if comment.announcement_id else None,
+            }
+        if kind == "emergency_comment":
+            comment = obj.emergency_comment
+            alert = comment.alert
+            return {
+                "kind": kind,
+                "excerpt": self._excerpt(comment.body),
+                "author_name": self._content_author_name(comment.author),
+                "post_title": f"{alert.get_type_display()} emergency" if alert else None,
+            }
+        if kind == "concern_comment":
+            comment = obj.comment
+            return {
+                "kind": kind,
+                "excerpt": self._excerpt(comment.body),
+                "author_name": self._content_author_name(comment.author),
+                "post_title": obj.concern.title if obj.concern_id else None,
+            }
+        concern = obj.concern
+        if not concern:
+            return {"kind": kind, "excerpt": "", "author_name": "", "post_title": None}
+        return {
+            "kind": kind,
+            "excerpt": self._excerpt(f"{concern.title}\n{concern.description}"),
+            "author_name": self._content_author_name(concern.reporter),
+            "post_title": None,
+        }
 
 
 class ContentFlagReviewSerializer(serializers.Serializer):
@@ -1271,6 +1339,18 @@ class ConcernCreateSerializer(serializers.Serializer):
     longitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
     location_source = serializers.ChoiceField(choices=("gps", "manual_pin"), required=False, allow_blank=True)
     location_accuracy = serializers.FloatField(required=False, allow_null=True)
+    duplicate_of = serializers.IntegerField(required=False, allow_null=True)
+    recurrence_of = serializers.IntegerField(required=False, allow_null=True)
+
+    def validate_duplicate_of(self, value):
+        if value and not Concern.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("The linked report does not exist.")
+        return value
+
+    def validate_recurrence_of(self, value):
+        if value and not Concern.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("The linked report does not exist.")
+        return value
 
     def validate_address(self, value: str) -> str:
         """Persist a human street line with the report — reject Lat/Lng placeholders."""

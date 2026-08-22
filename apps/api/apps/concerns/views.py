@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+import logging
 import re
 
 from django.contrib.auth import get_user_model
@@ -125,7 +126,8 @@ from .services import (
     ensure_concern_media_preview,
     user_can_access_concern_media_raw,
 )
-from .tasks import enqueue_concern_ai
+from .tasks import enqueue_concern_ai, enqueue_content_moderation_ai
+from .moderation import execute_takedown
 
 
 ACTIVE_STATUSES = {
@@ -147,6 +149,50 @@ def create_timeline_entry(*, concern, event_type, message, actor=None, status=""
         is_custom=is_custom,
         metadata=metadata or {},
     )
+
+
+GENERIC_ADDRESS_PATTERNS = {
+    "pinned location on map",
+    "marikina heights",
+    "marikina heights subdivision",
+    "marikina",
+    "location needs confirmation",
+    "",
+}
+
+
+def _schedule_concern_location(concern_id: int) -> None:
+    """Reverse-geocode a concern's address after save if it looks generic.
+
+    The location picker already reverse-gecodes when a resident pins a spot,
+    but some concerns arrive with placeholder text or just a barangay name.
+    Nominatim paces itself and can take seconds, so the lookup runs in a Celery
+    task — mirroring the emergency path — instead of inside on_commit on the
+    request thread.
+    """
+    from django.conf import settings
+
+    try:
+        from apps.concerns.models import Concern
+        from apps.concerns.tasks import reverse_geocode_concern_task
+
+        concern = Concern.objects.filter(pk=concern_id).only("latitude", "longitude", "address").first()
+        if not concern or concern.latitude is None or concern.longitude is None:
+            return
+        addr = (concern.address or "").strip().lower()
+        if addr and addr not in GENERIC_ADDRESS_PATTERNS and "pinned location" not in addr:
+            return  # address already looks good
+        try:
+            reverse_geocode_concern_task.delay(concern_id)
+        except Exception:
+            if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+                reverse_geocode_concern_task.run(concern_id)
+            else:
+                logging.getLogger(__name__).warning(
+                    "Broker unavailable; concern %s address left for manual review.", concern_id
+                )
+    except Exception:
+        logging.getLogger(__name__).debug("Concern location resolution failed for %s", concern_id, exc_info=True)
 
 
 def user_is_department_member(user, department):
@@ -420,7 +466,7 @@ class ConcernMediaCheckView(APIView):
             media_phash_blocks = phash_blocks_file(raw_content)
             if media_hash in current_hashes or ConcernMedia.objects.filter(sha256_hash=media_hash).exists():
                 return Response(
-                    {"media": ["duplicate media upload detected."]},
+                    {"media": ["This photo was already uploaded before."]},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             if media_looks_duplicate(media_phash, media_phash_blocks, [*existing_phashes, *current_phashes]):
@@ -528,7 +574,7 @@ class ConcernListCreateView(APIView):
             media_phash = phash_file(raw_content)
             media_phash_blocks = phash_blocks_file(raw_content)
             if media_hash in media_hashes or ConcernMedia.objects.filter(sha256_hash=media_hash).exists():
-                return Response({"media": ["duplicate media upload detected."]}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"media": ["This photo was already uploaded before."]}, status=status.HTTP_400_BAD_REQUEST)
             if media_looks_duplicate(media_phash, media_phash_blocks, [*existing_phashes, *current_phashes]):
                 return Response(
                     {"media": ["This image appears to have been uploaded before."]},
@@ -583,6 +629,8 @@ class ConcernListCreateView(APIView):
             ip_org=ip_meta.get("org", ""),
             ip_verdict=ip_meta.get("verdict", ""),
             ip_score=ip_meta.get("score"),
+            duplicate_of_id=serializer.validated_data.get("duplicate_of"),
+            recurrence_of_id=serializer.validated_data.get("recurrence_of"),
         )
         concern.tracking_number = f"RPT-{concern.created_at.year}-{concern.pk:06d}"
         concern.save(update_fields=["tracking_number"])
@@ -627,6 +675,7 @@ class ConcernListCreateView(APIView):
         from apps.notifications.services import broadcast_live_map_event
         transaction.on_commit(lambda: broadcast_live_map_event("concern.created", {"concern": concern_payload(decorated)}))
         transaction.on_commit(lambda: enqueue_concern_ai(concern.pk))
+        transaction.on_commit(lambda: _schedule_concern_location(concern.pk))
         return Response(ConcernSerializer(decorated, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
@@ -905,6 +954,7 @@ class ContentFlagCreateView(APIView):
             metadata={"concern_id": concern.pk, "flag_id": flag.pk, "reason": flag.reason},
             request_meta=request_meta(request),
         )
+        transaction.on_commit(lambda: enqueue_content_moderation_ai(flag.pk))
         return Response(ContentFlagSerializer(flag, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 class ContentFlagListView(APIView):
@@ -916,7 +966,19 @@ class ContentFlagListView(APIView):
             return Response({"detail": "You do not have permission to view content flags."}, status=status.HTTP_403_FORBIDDEN)
         flags = ContentFlag.objects.select_related(
             "concern",
+            "concern__reporter",
+            "concern__reporter__resident_profile",
             "comment",
+            "comment__author",
+            "comment__author__resident_profile",
+            "announcement_comment",
+            "announcement_comment__author",
+            "announcement_comment__author__resident_profile",
+            "announcement_comment__announcement",
+            "emergency_comment",
+            "emergency_comment__author",
+            "emergency_comment__author__resident_profile",
+            "emergency_comment__alert",
             "reporter",
             "reporter__resident_profile",
         )
@@ -930,6 +992,18 @@ def _can_take_down(concern):
     return concern.status == Concern.Status.REJECTED or Concern.Status.REJECTED in LEGAL_STATUS_TRANSITIONS.get(
         concern.status, set()
     )
+
+
+def _flag_target_author(flag):
+    """Whoever authored the flagged content, whatever kind it is."""
+    kind = flag.target_kind
+    if kind == "concern_comment":
+        return flag.comment.author
+    if kind == "announcement_comment":
+        return flag.announcement_comment.author
+    if kind == "emergency_comment":
+        return flag.emergency_comment.author
+    return flag.concern.reporter if flag.concern_id else None
 
 
 class ContentFlagReviewView(APIView):
@@ -947,10 +1021,27 @@ class ContentFlagReviewView(APIView):
         decision = serializer.validated_data["status"]
         staff_note = serializer.validated_data["staff_note"]
         flag = get_object_or_404(
-            ContentFlag.objects.select_related("concern", "concern__reporter", "reporter"),
+            ContentFlag.objects.select_related(
+                "concern",
+                "concern__reporter",
+                "comment",
+                "comment__author",
+                "announcement_comment",
+                "announcement_comment__author",
+                "emergency_comment",
+                "emergency_comment__author",
+                "reporter",
+            ),
             pk=pk,
         )
-        if decision == ContentFlag.Status.TAKEN_DOWN and not _can_take_down(flag.concern):
+        # A closed-post terminal-state guard only makes sense for a whole-post
+        # takedown. Hiding an already-hidden comment is harmless and idempotent,
+        # so comment-kind flags skip this check entirely.
+        if (
+            decision == ContentFlag.Status.TAKEN_DOWN
+            and flag.target_kind == "concern"
+            and not _can_take_down(flag.concern)
+        ):
             return Response(
                 {"detail": "This report is already closed and can no longer be taken down."},
                 status=status.HTTP_409_CONFLICT,
@@ -960,91 +1051,29 @@ class ContentFlagReviewView(APIView):
         flag.reviewed_by = request.user
         flag.save(update_fields=["status", "staff_note", "reviewed_by", "updated_at"])
 
+        target_author = _flag_target_author(flag)
         if decision == ContentFlag.Status.TAKEN_DOWN:
-            self._take_down(flag, staff_note, request)
-        elif flag.reporter_id != flag.concern.reporter_id:
+            execute_takedown(flag, staff_note, actor=request.user, request=request)
+        elif target_author is not None and flag.reporter_id != target_author.pk:
             self._notify_flag_reporter_dismissed(flag, staff_note)
 
         create_audit_log(
             "content.flag_reviewed",
             actor=request.user,
-            target_user=flag.concern.reporter,
+            target_user=flag.concern.reporter if flag.concern_id else target_author,
             metadata={"flag_id": flag.pk, "concern_id": flag.concern_id, "status": flag.status},
             request_meta=request_meta(request),
         )
         return Response(ContentFlagSerializer(flag, context={"request": request}).data)
 
-    def _take_down(self, flag, staff_note, request):
-        from apps.notifications.models import Notification
-
-        concern = flag.concern
-        concern.status = Concern.Status.REJECTED
-        concern.rejection_code = "content_violation"
-        concern.status_version += 1
-        concern.update_text = staff_note[:255]
-        concern.archived_at = timezone.now()
-        concern.save(
-            update_fields=[
-                "status",
-                "rejection_code",
-                "status_version",
-                "update_text",
-                "archived_at",
-                "updated_at",
-            ]
-        )
-        reason_label = flag.get_reason_display()
-        create_timeline_entry(
-            concern=concern,
-            event_type=ConcernTimelineEntry.EventType.STATUS_CHANGE,
-            status=Concern.Status.REJECTED,
-            actor=request.user,
-            message=f"Post taken down due to a content violation ({reason_label}). {staff_note}",
-        )
-        body = (
-            f"Your report was taken down because it was flagged as {reason_label}. "
-            f"Official note: {staff_note}\nYou can appeal this decision."
-        )
-        create_user_notification(
-            recipient=concern.reporter,
-            concern=concern,
-            type=Notification.Type.POST_TAKEN_DOWN,
-            title="Post taken down",
-            body=body,
-        )
-        if flag.reporter_id != concern.reporter_id:
-            create_user_notification(
-                recipient=flag.reporter,
-                concern=concern,
-                type=Notification.Type.POST_TAKEN_DOWN,
-                title="Flag acted on",
-                body=(
-                    f"The post you flagged as {reason_label} has been removed. "
-                    f"Official note: {staff_note}"
-                ),
-            )
-        # Push the updated concern so open feeds hide the post without a reload.
-        from apps.live_map import concern_payload
-        from apps.notifications.services import broadcast_live_map_event
-
-        decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
-        transaction.on_commit(
-            lambda: broadcast_live_map_event("concern.updated", {"concern": concern_payload(decorated)})
-        )
-
     @staticmethod
     def _notify_flag_reporter_dismissed(flag, staff_note):
-        from apps.notifications.models import Notification
+        from apps.notifications.services import notify_flag_review_dismissed
 
-        create_user_notification(
-            recipient=flag.reporter,
+        notify_flag_review_dismissed(
+            flag_reporter=flag.reporter,
             concern=flag.concern,
-            type=Notification.Type.FLAG_DISMISSED,
-            title="Flag report reviewed",
-            body=(
-                f"Your report was reviewed, however the post stays up. "
-                f"Official note: {staff_note}"
-            ),
+            staff_note=staff_note,
         )
 
 

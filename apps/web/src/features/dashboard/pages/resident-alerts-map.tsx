@@ -35,6 +35,7 @@ import {
   WindIcon,
   XIcon,
 } from "lucide-react"
+import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 
@@ -149,7 +150,9 @@ function statusLabel(status: string): { label: string; tone: "active" | "closed"
   return { label: "Active", tone: "active" }
 }
 
-function CategoryIcon({ category, className }: { category: ConcernCategory; className?: string }) {
+function CategoryIcon({ category, iconKey, className }: { category: ConcernCategory; iconKey?: string; className?: string }) {
+  const Resolved = resolveIconByKey(iconKey)
+  if (Resolved) return <Resolved className={className} />
   if (category === "infrastructure") return <TrafficConeIcon className={className} />
   if (category === "environment") return <LeafIcon className={className} />
   if (category === "public_safety") return <ShieldCheckIcon className={className} />
@@ -297,8 +300,13 @@ function FeedPreviewCard({
     >
       <button type="button" onClick={onOpen} className="w-full px-3 py-3 text-left sm:px-3.5">
         <div className="flex items-start gap-2.5 sm:gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-600 sm:size-10">
-            <CategoryIcon category={post.category} className="size-5" />
+          <span className={cn(
+            "flex size-9 shrink-0 items-center justify-center rounded-full sm:size-10",
+            st.tone === "closed"
+              ? "bg-neutral-100 text-neutral-500"
+              : "bg-orange-50 text-orange-500",
+          )}>
+            <CategoryIcon category={post.category} iconKey={post.category_ref?.icon_key} className="size-5" />
           </span>
           <div className="min-w-0 flex-1 overflow-hidden">
             <div className="flex items-start justify-between gap-2">
@@ -312,25 +320,20 @@ function FeedPreviewCard({
                   return `${(atWord.length >= 24 ? atWord : slice).trim()}...`
                 })()}
               </p>
-              <span className="shrink-0 text-[11px] font-semibold text-neutral-500 sm:text-[12px]">
-                {categoryLabel(post.category)}
-              </span>
+              {st.tone === "closed" ? (
+                <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold text-status-closed sm:text-[12px]">
+                  <CircleCheck className="size-3.5 shrink-0" strokeWidth={2.4} />
+                  {st.label}
+                </span>
+              ) : st.tone === "appealed" ? (
+                <span className="shrink-0 text-[11px] font-semibold text-neutral-600 sm:text-[12px]">{st.label}</span>
+              ) : null}
             </div>
             <p className="mt-0.5 flex items-center gap-x-1.5 text-[11px] text-neutral-500 sm:text-[12px]">
-              {st.tone === "closed" ? (
-                <>
-                  <span className="inline-flex shrink-0 items-center gap-1 font-semibold text-status-closed">
-                    <CircleCheck className="size-3.5 shrink-0" strokeWidth={2.4} />
-                    {st.label}
-                  </span>
-                  <span aria-hidden>·</span>
-                </>
-              ) : st.tone === "appealed" ? (
-                <>
-                  <span className="shrink-0 font-semibold text-neutral-600">{st.label}</span>
-                  <span aria-hidden>·</span>
-                </>
-              ) : null}
+              <span className="text-neutral-500">
+                {categoryLabel(post.category)}
+              </span>
+              <span aria-hidden>·</span>
               <span>{[dist, ago].filter(Boolean).join(" · ")}</span>
             </p>
             {snippet ? (
@@ -381,6 +384,7 @@ function AnnouncementListItem({
   const place =
     announcement.place_label ||
     (announcement.affected_streets?.length ? announcement.affected_streets.join(" · ") : "")
+  const ago = timeAgo(announcement.created_at)
 
   return (
     <div
@@ -395,12 +399,11 @@ function AnnouncementListItem({
             <TagIcon className="size-4 sm:size-5" strokeWidth={1.9} />
           </span>
           <div className="min-w-0 flex-1 overflow-hidden">
-            <p className="truncate text-[11px] font-semibold text-neutral-500 sm:text-[12px]">Barangay Hall</p>
-            <p className="mt-0.5 text-[11px] text-neutral-500 sm:text-[12px]">
-              {[announcement.date_label, place].filter(Boolean).join(" · ")}
-            </p>
-            <p className="mt-2 break-words text-[13px] font-bold leading-snug text-neutral-900 sm:text-[14px]">
+            <p className="break-words text-[13px] font-bold leading-snug text-neutral-900 sm:text-[14px]">
               {announcement.title}
+            </p>
+            <p className="mt-1 text-[11px] text-neutral-500 sm:text-[12px]">
+              {[place, ago].filter(Boolean).join(" · ")}
             </p>
             {announcement.body ? (
               <p className="mt-1.5 line-clamp-2 break-words text-[12px] leading-snug text-neutral-600 sm:text-[13px]">
@@ -837,9 +840,18 @@ export default function ResidentAlertsMapPage() {
   useEffect(() => {
     let socket: WebSocket | null = null
     let reconnectTimer: number | undefined
+    let reloadTimer: number | undefined
     let closed = false
     let attempts = 0
     const seen = new Set<string>()
+
+    const scheduleReload = () => {
+      if (reloadTimer != null) return
+      reloadTimer = window.setTimeout(() => {
+        reloadTimer = undefined
+        void load(true)
+      }, 2500)
+    }
 
     async function connect() {
       try {
@@ -875,7 +887,7 @@ export default function ResidentAlertsMapPage() {
             if (message.payload.removed || message.payload.concern.status === "rejected") {
               setPosts((current) => current.filter((post) => post.id !== resource.id))
             } else {
-              void load(true)
+              scheduleReload()
             }
           } else if (message.payload?.emergency) {
             const emergency = message.payload.emergency
@@ -903,6 +915,7 @@ export default function ResidentAlertsMapPage() {
     return () => {
       closed = true
       if (reconnectTimer) window.clearTimeout(reconnectTimer)
+      if (reloadTimer != null) window.clearTimeout(reloadTimer)
       socket?.close()
     }
   }, [load, user?.id])
@@ -1342,10 +1355,13 @@ export default function ResidentAlertsMapPage() {
               <ul className="flex flex-col gap-2">
                 {/* Emergencies first when All / Emergencies filter */}
                 {[...filteredEmergencies]
-                  .sort(
-                    (a, b) =>
-                      (distanceForEmergency(a) ?? 1e9) - (distanceForEmergency(b) ?? 1e9),
-                  )
+                  .sort((a, b) => {
+                    // Resolved/closed at the bottom
+                    const aResolved = ["resolved", "closed", "cancelled"].includes(a.status)
+                    const bResolved = ["resolved", "closed", "cancelled"].includes(b.status)
+                    if (aResolved !== bResolved) return aResolved ? 1 : -1
+                    return (distanceForEmergency(a) ?? 1e9) - (distanceForEmergency(b) ?? 1e9)
+                  })
                   .map((em) => (
                     <li key={`em-${em.id}`}>
                       <EmergencyPreviewCard
@@ -1369,7 +1385,13 @@ export default function ResidentAlertsMapPage() {
                   </li>
                 ))}
                 {[...filtered]
-                  .sort((a, b) => (distanceFor(a) ?? 1e9) - (distanceFor(b) ?? 1e9))
+                  .sort((a, b) => {
+                    // Resolved/rejected at the bottom
+                    const aClosed = ["resolved", "rejected"].includes(a.status)
+                    const bClosed = ["resolved", "rejected"].includes(b.status)
+                    if (aClosed !== bClosed) return aClosed ? 1 : -1
+                    return (distanceFor(a) ?? 1e9) - (distanceFor(b) ?? 1e9)
+                  })
                   .map((post) => (
                     <li key={post.id}>
                       <FeedPreviewCard

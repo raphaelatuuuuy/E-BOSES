@@ -250,7 +250,7 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
           aria-label="Open the E-Boses Assistant"
           style={{ position: "fixed", right: "1.5rem", bottom: "1.5rem" }}
           className={cn(
-            "group z-40 flex h-14 items-center rounded-full transition-[background-color,box-shadow] duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+            "group z-[60] flex h-14 items-center rounded-full transition-[background-color,box-shadow] duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
             onDark
               ? "bg-white text-brand-navy shadow-[0_8px_28px_rgba(0,0,0,0.5)] hover:bg-neutral-100"
               : "bg-nav-bg text-white shadow-[0_8px_28px_rgba(5,13,51,0.4)] ring-1 ring-white/15 hover:bg-brand-navy",
@@ -276,39 +276,29 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
         role="dialog"
         aria-label="E-Boses Assistant"
         style={{ position: "fixed", right: "1.5rem", bottom: "1.5rem" }}
-        className="eb-assistant-panel z-40 flex h-[min(38rem,calc(100dvh-3rem))] w-[min(25rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-3xl border border-black/5 bg-white shadow-[0_24px_64px_rgba(5,13,51,0.28)]"
+        className="eb-assistant-panel z-[60] flex h-[min(38rem,calc(100dvh-3rem))] w-[min(25rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-3xl border border-black/5 bg-white shadow-[0_24px_64px_rgba(5,13,51,0.28)]"
       >
-        <header className="flex items-center gap-2.5 border-b border-neutral-200 bg-white px-4 py-3">
-          <img
-            src="/contents/logo.webp"
-            alt=""
-            aria-hidden
-            className="size-7 shrink-0 object-contain"
-          />
-          <p className="min-w-0 flex-1 truncate text-[16px] font-bold leading-none tracking-tight text-brand-navy">
-            E-Boses Assistant
-          </p>
+        <header className="flex items-center justify-end gap-2 bg-white px-4 pb-1 pt-3">
           <button
             type="button"
             onClick={resetChat}
-            disabled={busy || bubbles.length === 0}
             aria-label="Start a new conversation"
             title="Start a new conversation"
-            className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-brand-navy disabled:opacity-40 disabled:hover:bg-transparent"
+            className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-brand-navy"
           >
-            <RotateCwIcon className="size-4.5" strokeWidth={2} aria-hidden />
+            <RotateCwIcon className="size-5" strokeWidth={2} aria-hidden />
           </button>
           <button
             type="button"
             onClick={() => setOpen(false)}
             aria-label="Close the assistant"
-            className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-brand-navy"
+            className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-brand-navy"
           >
             <XIcon className="size-5" strokeWidth={2} aria-hidden />
           </button>
         </header>
 
-        <div ref={scrollRef} className="eb-assistant-scroll flex-1 space-y-3.5 overflow-y-auto px-5 py-4">
+        <div ref={scrollRef} className="eb-assistant-scroll flex-1 space-y-3.5 overflow-y-auto px-5 pb-4 pt-1">
           <div className="flex items-center gap-3">
             <span aria-hidden className="h-px flex-1 bg-neutral-200" />
             <span className="text-[12px] font-medium text-neutral-400">{todayLabel()}</span>

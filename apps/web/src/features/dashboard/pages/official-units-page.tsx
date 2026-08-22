@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { ActivityIcon, AmbulanceIcon, BabyIcon, BadgeAlertIcon, BellIcon, CircleCheck, ChevronDownIcon, ChevronUpIcon, CloudRainWindIcon, FlameIcon, HeartCrackIcon, HomeIcon, MapPinIcon, PillIcon, PlusIcon, ShieldAlertIcon, SirenIcon, StethoscopeIcon, UsersIcon, WavesIcon, ZapIcon } from "lucide-react"
+import { CircleCheck, ChevronDownIcon, ChevronUpIcon, PlusIcon, SirenIcon, UsersIcon } from "lucide-react"
+import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 import { toast } from "sonner"
 
 import { apiRequest } from "@/lib/api"
@@ -145,24 +146,7 @@ function EditDialog({
   )
 }
 
-const ICONS_MAP: Record<string, typeof SirenIcon> = {
-  siren: SirenIcon,
-  activity: ActivityIcon,
-  ambulance: AmbulanceIcon,
-  baby: BabyIcon,
-  "badge-alert": BadgeAlertIcon,
-  bell: BellIcon,
-  "cloud-rain-wind": CloudRainWindIcon,
-  flame: FlameIcon,
-  "heart-crack": HeartCrackIcon,
-  home: HomeIcon,
-  "map-pin": MapPinIcon,
-  pill: PillIcon,
-  "shield-alert": ShieldAlertIcon,
-  stethoscope: StethoscopeIcon,
-  waves: WavesIcon,
-  zap: ZapIcon,
-}
+
 
 function EmergencyTypeDropdown({ categories, selected, onChange }: {
   categories: EmergencyCategory[]; selected: string[]; onChange: (types: string[]) => void
@@ -195,7 +179,7 @@ function EmergencyTypeDropdown({ categories, selected, onChange }: {
         <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white shadow-lg [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" style={{ maxHeight: '110px', overflowY: 'auto' }}>
           <div className="py-1">
             {active.map((category) => {
-              const Icon = ICONS_MAP[category.icon_key] ?? SirenIcon
+              const Icon = resolveIconByKey(category.icon_key) ?? SirenIcon
               const isSelected = selected.includes(category.code)
               return (
                 <button key={category.code} type="button"

@@ -35,6 +35,7 @@ export function SheetDialog({
   children,
   footer,
   className,
+  bodyClassName,
 }: {
   open: boolean
   onClose: () => void
@@ -51,6 +52,7 @@ export function SheetDialog({
   /** Pinned under the scroll area — use for the primary action. */
   footer?: ReactNode
   className?: string
+  bodyClassName?: string
 }) {
   useEffect(() => {
     if (!open) return
@@ -117,7 +119,7 @@ export function SheetDialog({
           </div>
         </div>
 
-        <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-6">
+        <div className={cn("scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-6", bodyClassName)}>
           {children}
         </div>
 

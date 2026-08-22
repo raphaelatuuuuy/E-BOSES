@@ -986,9 +986,17 @@ def validate_emergency_location(latitude, longitude):
 def validate_report_location(latitude, longitude):
     if latitude is None or longitude is None:
         raise ValidationError("Latitude and longitude must be provided together.")
-    if not is_inside_barangay_boundary(latitude, longitude):
-        raise ValidationError("Location must be inside Barangay Marikina Heights.")
-    zone = acceptance_zone_result(latitude, longitude)
+    # `classify_location` — not the raw polygon test — because the polygon
+    # boundary is a precise line (often the centerline of a street) while a
+    # phone's GPS is commonly off by 5-20m. The ~280m SOFT_BUFFER_METERS edge
+    # buffer exists specifically for this; a report pinned just outside the
+    # exact polygon was being hard-rejected even though it was clearly a real
+    # Marikina Heights address, because this function bypassed the buffer and
+    # called the zero-tolerance check directly.
+    boundary = classify_location(latitude, longitude)
+    if not boundary.get("accepted"):
+        raise ValidationError(boundary.get("message") or "Location must be inside Barangay Marikina Heights.")
+    zone = boundary.get("acceptance_zone") or acceptance_zone_result(latitude, longitude)
     if zone.get("within"):
         return {"action": "accept", "summary": "Required report checks passed. Advanced analysis is pending."}
     action = zone.get("action") or dispatch_policy_payload().get("out_of_zone_action") or "review"
@@ -1451,7 +1459,7 @@ def map_context_payload() -> dict[str, Any]:
         "hard_reject_meters": HARD_REJECT_METERS,
         "dispatch_policy": dispatch_policy_payload(),
         "boundary": {
-            "name": "Marikina Heights",
+            "name": boundary.get("name") or "Marikina Heights",
             "osm_relation_id": MARIKINA_HEIGHTS_OSM_RELATION_ID,
             "geometry": geometry,
         },

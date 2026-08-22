@@ -299,7 +299,7 @@ def check_image_quality_soft(content: bytes) -> None:
             width, height = image.size
             if width < 120 or height < 80:
                 raise ValidationError(
-                    "Proof image is too small. Use a clearer, larger photo of your ID."
+                    "Proof image is too small. Use a clearer, larger photo."
                 )
             grayscale = image.convert("L")
             stats = ImageStat.Stat(grayscale)
@@ -312,7 +312,7 @@ def check_image_quality_soft(content: bytes) -> None:
 
     # Only reject pure blank / solid-color frames
     if contrast < 5.0:
-        raise ValidationError("Proof image has no visible detail. Upload a photo of your document.")
+        raise ValidationError("Proof image has no visible detail. Upload a clearer photo.")
 
 
 def ela_metrics(content: bytes) -> dict[str, float] | None:

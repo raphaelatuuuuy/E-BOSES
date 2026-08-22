@@ -1,3 +1,4 @@
+import base64
 import logging
 from datetime import timedelta
 from difflib import SequenceMatcher
@@ -19,13 +20,17 @@ from apps.concerns.ai.classification import (
     classification_payload,
 )
 from apps.concerns.ai.duplicate_detector import report_fingerprints
-from apps.concerns.ai.image_prep import prepare_image_for_gemma
+from apps.concerns.ai.gemma_analyzer import compare_photo_duplicates, verify_street_context
+from apps.concerns.ai.image_prep import PreparedImage, prepare_image_for_gemma
+from apps.concerns.ai.street_imagery import fetch_latest_street_imagery
 from apps.concerns.models import (
     Concern,
     ConcernAiAssessment,
     ConcernCategory,
     ConcernClassificationConfiguration,
     ConcernMedia,
+    ContentFlag,
+    LlmDecisionLog,
 )
 from apps.capabilities import CONFIGURE_CLASSIFICATION, HasCapability
 from apps.geo_services import validate_report_location
@@ -52,6 +57,12 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
             "report_duplicate_detection_enabled", "report_duplicate_action",
             "report_duplicate_lookback_days", "report_duplicate_distance_meters",
             "report_duplicate_similarity_threshold", "report_duplicate_location_precision",
+            "content_safety_spam_action", "content_safety_abusive_action",
+            "content_safety_threat_action", "content_safety_sensitive_action",
+            "require_ongoing_emergency_confirmation",
+            "street_imagery_enabled", "street_imagery_categories",
+            "street_imagery_radius_meters", "street_imagery_action",
+            "photo_duplicate_llm_enabled", "photo_duplicate_candidate_limit",
             "categories", "metrics", "services", "updated_by", "updated_at",
         )
         read_only_fields = ("id", "updated_by", "updated_at")
@@ -363,8 +374,112 @@ class OfficialClassificationTextTestView(APIView):
             "explanation": result["notice"],
             "image_uploaded": False,
             "image_error": "",
-            **_review_details(result),
+            **_review_details(result, selected_category=category, image_uploaded=False, title=title, description=description),
         })
+
+
+def _street_imagery_preview(config, *, category: str, latitude, longitude, images: list[PreparedImage]) -> dict | None:
+    """Run the street-imagery ground-truth check on a sample report.
+
+    Mirrors `_street_imagery_check` from the real pipeline but also returns the
+    panorama as a data URI so the tester can see exactly which image was judged.
+    Every uploaded sample photo is sent, not just the first.
+    """
+    if not config.street_imagery_enabled:
+        return None
+    if category not in (config.street_imagery_categories or []):
+        return None
+    if not images or latitude in (None, "") or longitude in (None, ""):
+        return {"status": "skipped", "reason": "missing_photo_or_location"}
+    try:
+        imagery = fetch_latest_street_imagery(
+            latitude=float(latitude),
+            longitude=float(longitude),
+            radius_meters=config.street_imagery_radius_meters,
+        )
+    except Exception as exc:
+        logger.warning("Street imagery preview failed: %s", exc.__class__.__name__)
+        return {"status": "no_coverage"}
+    if imagery is None:
+        return {"status": "no_coverage"}
+
+    street_prepared = PreparedImage(data=imagery.image_b64, mime_type="image/jpeg", telemetry={})
+    verdict = verify_street_context(submitted=images, street=street_prepared)
+    payload = {
+        "status": "checked" if verdict else "skipped",
+        "verdict": verdict["verdict"] if verdict else "inconclusive",
+        "explanation": verdict["explanation"] if verdict else "The street comparison could not run right now.",
+        "pano_id": imagery.pano_id,
+        "captured_date": imagery.captured_date,
+        "distance_meters": imagery.distance_meters,
+        "latitude": imagery.latitude,
+        "longitude": imagery.longitude,
+        "image": f"data:image/jpeg;base64,{imagery.image_b64}",
+    }
+    return payload
+
+
+def _photo_dedup_llm_preview(config, *, category: str, latitude, longitude, images: list[PreparedImage]) -> dict | None:
+    """Visually compare the sample photo(s) against recent real concern photos."""
+    if not config.photo_duplicate_llm_enabled or not images:
+        return None
+    limit = max(1, int(config.photo_duplicate_candidate_limit))
+    since = timezone.now() - timedelta(days=config.report_duplicate_lookback_days)
+    pool = (
+        Concern.objects.filter(category=category, created_at__gte=since)
+        .exclude(status=Concern.Status.REJECTED)
+        .prefetch_related("media")
+        .order_by("-created_at")[:200]
+    )
+    origin_lat = float(latitude) if latitude not in (None, "") else None
+    origin_lon = float(longitude) if longitude not in (None, "") else None
+
+    candidates: list[dict] = []
+    for other in pool:
+        if len(candidates) >= limit:
+            break
+        if origin_lat is not None and other.latitude is not None:
+            distance = _preview_haversine(origin_lat, origin_lon, float(other.latitude), float(other.longitude))
+            if distance > config.report_duplicate_distance_meters:
+                continue
+        media = next((m for m in other.media.all() if m.mime_type.startswith("image/")), None)
+        if media is None:
+            continue
+        try:
+            with media.file.open("rb") as handle:
+                raw = handle.read()
+        except (OSError, ValueError, NotImplementedError):
+            continue
+        prepared = prepare_image_for_gemma(raw, filename=media.original_filename, mime_type=media.mime_type)
+        if prepared is None:
+            continue
+        candidates.append({
+            "concern_id": other.pk,
+            "tracking_id": other.tracking_id,
+            "captured_at": other.created_at.date().isoformat(),
+            "image": prepared,
+        })
+    if not candidates:
+        return None
+
+    comparisons = compare_photo_duplicates(submitted_images=images, candidates=candidates)
+    return {
+        "checked": bool(comparisons),
+        "skip_reason": "" if comparisons else "vision_check_unavailable",
+        "candidate_count": len(candidates),
+        "comparisons": comparisons or [],
+    }
+
+
+def _preview_haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    import math
+
+    radius = 6371000.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_phi = math.radians(lat2 - lat1)
+    d_lambda = math.radians(lon2 - lon1)
+    a = math.sin(d_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
+    return 2 * radius * math.asin(math.sqrt(a))
 
 
 class OfficialClassificationSubmissionTestView(APIView):
@@ -383,29 +498,43 @@ class OfficialClassificationSubmissionTestView(APIView):
             return Response({"description": ["Enter a sample description."]}, status=status.HTTP_400_BAD_REQUEST)
 
         config = ConcernClassificationConfiguration.current()
-        uploaded = _first_uploaded(request)
-        image, image_error = _prepared_image_from_upload(uploaded)
+        # A sample can carry several photos (the tester allows up to three) —
+        # every one of them is prepared and sent, not just the first, so
+        # classification, street imagery, and photo dedup all see the whole set.
+        uploaded_files = request.FILES.getlist("files") or (
+            [request.FILES.get("file")] if request.FILES.get("file") else []
+        )
+        images, image_errors, _prepared_indices = _prepared_images_from_uploads(uploaded_files)
         result = classification_payload(
             title=title,
             description=description,
             selected_category=selected_category,
             configuration=config,
-            image=image,
+            images=images or None,
+            image_uploaded=bool(uploaded_files),
         )
         duplicate, duplicate_similarity = _duplicate_preview(config, title=title, description=description)
         details = result.get("details") or {}
-        privacy = _privacy_dry_run(uploaded, details)
+        # The privacy preview demonstrates blur behaviour, not evidentiary
+        # review — kept to the first photo to avoid returning N protected
+        # images the tester UI has no multi-photo panel for yet.
+        privacy = _privacy_dry_run(uploaded_files[0] if uploaded_files else None, details)
+        latitude = request.data.get("latitude")
+        longitude = request.data.get("longitude")
+        image_error = next(iter(image_errors.values()), "")
         return Response({
             "classification": result["outcome"],
             "category_match": result["category_match"],
             "duplicate": duplicate,
             "duplicate_similarity": round(duplicate_similarity, 4),
             "explanation": result["notice"],
-            "image_uploaded": bool(uploaded),
+            "image_uploaded": bool(uploaded_files),
             "image_error": image_error,
             "privacy": privacy,
             "location": _location_dry_run(request),
-            **_review_details(result),
+            "street_imagery": _street_imagery_preview(config, category=selected_category, latitude=latitude, longitude=longitude, images=images),
+            "photo_duplicate_llm": _photo_dedup_llm_preview(config, category=selected_category, latitude=latitude, longitude=longitude, images=images),
+            **_review_details(result, selected_category=selected_category, image_uploaded=bool(uploaded_files), title=title, description=description),
         })
 
 
@@ -435,9 +564,26 @@ class OfficialClassificationSampleGeneratorView(APIView):
     }
 
     def post(self, request):
+        domain = str(request.data.get("domain", "concern"))
+        language = str(request.data.get("language", "filipino"))
+
+        if domain == "community":
+            reason = str(request.data.get("reason", ""))
+            if reason not in ContentFlag.Reason.values:
+                return Response({"reason": ["Choose a valid flag reason."]}, status=status.HTTP_400_BAD_REQUEST)
+            if language not in self.SAMPLE_LANGUAGES:
+                return Response({"language": ["Unknown sample language."]}, status=status.HTTP_400_BAD_REQUEST)
+            if not getattr(settings, "OLLAMA_API_KEY", ""):
+                return Response({"detail": "Sample generation is not configured. Set OLLAMA_API_KEY."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            try:
+                description = _generate_community_sample_content(reason=reason, language=language)
+            except Exception as exc:
+                logger.warning("Community sample generation failed: %s", exc.__class__.__name__)
+                return Response({"detail": "The sample could not be generated right now. Try again later."}, status=status.HTTP_502_BAD_GATEWAY)
+            return Response({"description": description})
+
         category = str(request.data.get("category", ""))
         mode = str(request.data.get("mode", "matching"))
-        language = str(request.data.get("language", "filipino"))
         if category not in Concern.Category.values:
             return Response({"category": ["Choose a valid concern category."]}, status=status.HTTP_400_BAD_REQUEST)
         if mode not in self.SAMPLE_MODES:
@@ -479,6 +625,8 @@ def _generate_sample_description(*, category: str, mode: str, language: str, ima
     )
     category_label = dict(Concern.Category.choices).get(category, category)
     scenario = OfficialClassificationSampleGeneratorView.SAMPLE_MODES[mode]
+    if mode == "matching" and image is None:
+        scenario = "a report that matches the selected category"
     language_label = OfficialClassificationSampleGeneratorView.SAMPLE_LANGUAGES[language]
     photo_note = " Describe only issues consistent with what you can actually see in the attached photo." if image is not None else ""
     prompt = (
@@ -500,6 +648,48 @@ def _generate_sample_description(*, category: str, mode: str, language: str, ima
         messages=[
             {"role": "system", "content": "Return plain text only. No Markdown, no JSON, no surrounding quotes."},
             message,
+        ],
+        options={"temperature": 0.9},
+        stream=False,
+    )
+    return _response_content(response).strip()
+
+
+COMMUNITY_FLAG_SCENARIOS = {
+    "irrelevant": "a community post or comment that is completely off-topic and unrelated to barangay matters",
+    "false_info": "a community post or comment that spreads false or misleading information",
+    "sensitive": "a community post or comment that shares private or sensitive details about another resident without their consent",
+    "abusive": "a community post or comment using insulting, abusive, or harassing language toward a resident or barangay official",
+    "other": "a community post or comment a resident flagged for an unclear or unusual reason",
+}
+
+
+def _generate_community_sample_content(*, reason: str, language: str) -> str:
+    """Ask Gemma to write one sample flagged community post/comment. Plain text, not JSON."""
+    from ollama import Client
+
+    from apps.concerns.ai.gemma_analyzer import _response_content
+
+    client = Client(
+        host=getattr(settings, "OLLAMA_HOST", "https://ollama.com"),
+        headers={"Authorization": f"Bearer {getattr(settings, 'OLLAMA_API_KEY', '')}"},
+        timeout=float(getattr(settings, "OLLAMA_TIMEOUT_SECONDS", 120)),
+    )
+    scenario = COMMUNITY_FLAG_SCENARIOS.get(reason, COMMUNITY_FLAG_SCENARIOS["other"])
+    language_label = OfficialClassificationSampleGeneratorView.SAMPLE_LANGUAGES[language]
+    prompt = (
+        "You write sample flagged content for E-Boses, a barangay community feed in the Philippines.\n"
+        "Write the text exactly as a resident's post or comment would appear in the app.\n"
+        f"Scenario: {scenario}.\n"
+        f"Write it in {language_label}.\n"
+        "One to two short sentences, realistic in tone, and it must not name a real real-world public figure.\n"
+        "Return the post text only. No quotes, no labels, no Markdown."
+    )
+    response = client.chat(
+        getattr(settings, "OLLAMA_TEXT_MODEL", "gemma4:31b"),
+        messages=[
+            {"role": "system", "content": "Return plain text only. No Markdown, no JSON, no surrounding quotes."},
+            {"role": "user", "content": prompt},
         ],
         options={"temperature": 0.9},
         stream=False,
@@ -543,30 +733,53 @@ class ResidentConcernPrecheckView(APIView):
         description = str(request.data.get("description", ""))[:5000]
         if category_ref and category_ref.description_required and len(description.strip()) < 20:
             return Response({"description": ["Describe the issue before submitting."]}, status=status.HTTP_400_BAD_REQUEST)
-        uploaded = request.FILES.get("media") or request.FILES.get("file")
-        if category_ref and category_ref.photo_required and not uploaded:
+        uploaded_files = request.FILES.getlist("media") or (
+            [request.FILES.get("file")] if request.FILES.get("file") else []
+        )
+        if category_ref and category_ref.photo_required and not uploaded_files:
             return Response({"media": ["Add at least one clear photo as evidence."]}, status=status.HTTP_400_BAD_REQUEST)
         if category_ref and category_ref.location_required and (request.data.get("latitude") is None or request.data.get("longitude") is None):
             return Response({"address": ["Pin where the issue is located."]}, status=status.HTTP_400_BAD_REQUEST)
 
         config = ConcernClassificationConfiguration.current()
-        image, _image_error = _prepared_image_from_upload(uploaded)
+        images, image_errors, prepared_indices = _prepared_images_from_uploads(uploaded_files)
+        # Text analysis only, on a short budget: the resident is waiting on
+        # this response. Photos are validated locally (so rejected/unreadable
+        # files still get feedback) but never uploaded to the model here — the
+        # full image review + SAM3 privacy scan run in the pipeline after the
+        # report is actually submitted.
         result = classification_payload(
             title=title,
             description=description,
             selected_category=selected_category,
             configuration=config,
-            image=image,
+            images=None,
+            image_uploaded=bool(uploaded_files),
+            text_timeout=getattr(settings, "OLLAMA_PRECHECK_TEXT_TIMEOUT_SECONDS", 8),
         )
         duplicate_feedback = _report_duplicate_feedback(config, request=request, selected_category=selected_category, title=title, description=description)
-        return Response(
-            _resident_feedback(
+        payload = _resident_feedback(
+            result,
+            selected_category=selected_category,
+            image_uploaded=bool(uploaded_files),
+            photo_count=len(uploaded_files),
+            image_errors=image_errors,
+            prepared_indices=prepared_indices,
+            duplicate_feedback=duplicate_feedback,
+        )
+        payload.update(
+            _precheck_extras(
+                request,
                 result,
                 selected_category=selected_category,
-                image_uploaded=bool(uploaded),
+                category_ref=category_ref,
+                config=config,
+                uploaded_files=uploaded_files,
+                image_errors=image_errors,
                 duplicate_feedback=duplicate_feedback,
             )
         )
+        return Response(payload)
 
 
 def _duplicate_preview(config, *, title: str, description: str) -> tuple[bool, float]:
@@ -697,6 +910,27 @@ def _prepared_image_from_upload(uploaded):
     return image, "" if image else "unreadable"
 
 
+def _prepared_images_from_uploads(uploaded_files):
+    """Prepare every attached photo for one multi-image Gemma call.
+
+    Returns (images, errors_by_file_index, prepared_indices). `prepared_indices`
+    maps each prepared image's position in `images` back to its original file
+    index, so a photo that failed to prepare never shifts the verdicts of the
+    ones that followed it.
+    """
+    images = []
+    errors = {}
+    prepared_indices = []
+    for index, uploaded in enumerate(uploaded_files):
+        image, error = _prepared_image_from_upload(uploaded)
+        if image is not None:
+            images.append(image)
+            prepared_indices.append(index)
+        elif error:
+            errors[index] = error
+    return images, errors, prepared_indices
+
+
 def _rewind(uploaded) -> None:
     try:
         uploaded.seek(0)
@@ -726,27 +960,34 @@ def _report_duplicate_feedback(config, *, request, selected_category: str, title
         "action": config.report_duplicate_action,
         "tracking_id": match.tracking_id,
         "message": "A similar report may already exist near this location. Check it first or continue if this is a new issue.",
+        "concern_id": match.pk,
+        "title": match.title,
+        "summary": match.summary or match.description[:160],
+        "reporter_count": 1 + Concern.objects.filter(duplicate_of_id=match.pk).count(),
+        "status": match.status,
+        "distance_meters": None,
     }
 
 
-def _resident_feedback(result: dict, *, selected_category: str, image_uploaded: bool, duplicate_feedback: dict | None = None) -> dict:
-    details = result.get("details") or {}
+def _resident_message_text(
+    details: dict,
+    *,
+    selected_category: str,
+    image_uploaded: bool,
+    duplicate_feedback: dict | None = None,
+) -> str:
     primary = details.get("primary_category") or ""
     relationship = details.get("evidence_relationship") or ""
-    field_errors = {}
     messages = []
-    can_submit = True
-    needs_revision = False
-    if result.get("outcome") == "needs_review" and not primary:
-        field_errors["description"] = "Add a clearer description of the issue."
-        can_submit = False
-        needs_revision = True
-    if primary and primary != selected_category:
+    if details.get("failure_type"):
+        # The model itself could not run. Nothing was actually reviewed, so a
+        # "clearer description" demand would be a lie — the report is routed
+        # to an official instead.
+        messages.append("The automatic review could not run. An official will review it.")
+    if primary and selected_category and primary != selected_category:
         messages.append(f"Your description sounds like {primary.replace('_', ' ')}, but you selected {selected_category.replace('_', ' ')}.")
-        needs_revision = True
     if relationship in {"contradicts_report", "no_useful_image_evidence"}:
         messages.append("The photo does not clearly show the issue described.")
-        needs_revision = True
     elif relationship == "image_review_failed":
         # The resident did attach something. Say so, and do not block them:
         # our inability to read it is not their problem to fix.
@@ -760,21 +1001,68 @@ def _resident_feedback(result: dict, *, selected_category: str, image_uploaded: 
     if duplicate_feedback and duplicate_feedback.get("found"):
         action = duplicate_feedback.get("action")
         if action == ConcernClassificationConfiguration.ReportDuplicateAction.BLOCK:
+            messages.append("A similar report already exists near this location. Add new details only if this is a different issue.")
+        elif action == ConcernClassificationConfiguration.ReportDuplicateAction.WARN:
+            messages.append("A similar report may already exist near this location.")
+        else:
+            messages.append(duplicate_feedback.get("message") or "A similar report may already exist near this location.")
+    return " ".join(messages) or details.get("short_explanation") or "Report check completed."
+
+
+def _resident_feedback(
+    result: dict,
+    *,
+    selected_category: str,
+    image_uploaded: bool,
+    photo_count: int = 0,
+    image_errors: dict | None = None,
+    prepared_indices: list | None = None,
+    duplicate_feedback: dict | None = None,
+) -> dict:
+    details = result.get("details") or {}
+    primary = details.get("primary_category") or ""
+    relationship = details.get("evidence_relationship") or ""
+    field_errors = {}
+    can_submit = True
+    needs_revision = False
+    if not details.get("failure_type") and result.get("outcome") == "needs_review" and not primary:
+        field_errors["description"] = "Add a clearer description of the issue."
+        can_submit = False
+        needs_revision = True
+    if primary and primary != selected_category:
+        needs_revision = True
+    if relationship in {"contradicts_report", "no_useful_image_evidence"}:
+        needs_revision = True
+    if duplicate_feedback and duplicate_feedback.get("found"):
+        action = duplicate_feedback.get("action")
+        if action == ConcernClassificationConfiguration.ReportDuplicateAction.BLOCK:
             field_errors["description"] = "A similar report already exists near this location."
             can_submit = False
             needs_revision = True
-            messages.append("A similar report already exists near this location. Add new details only if this is a different issue.")
-        elif action == ConcernClassificationConfiguration.ReportDuplicateAction.OFFICIAL_REVIEW:
-            messages.append("A similar report may already exist. It will be checked by an official.")
-        else:
-            messages.append(duplicate_feedback.get("message") or "A similar report may already exist near this location.")
+        elif action != ConcernClassificationConfiguration.ReportDuplicateAction.WARN:
             needs_revision = True
+    message = _resident_message_text(
+        details,
+        selected_category=selected_category,
+        image_uploaded=image_uploaded,
+        duplicate_feedback=duplicate_feedback,
+    )
     return {
         "can_submit": can_submit,
         "needs_revision": needs_revision,
         "field_errors": field_errors,
-        "message": " ".join(messages) or details.get("short_explanation") or "Report check completed.",
+        "message": message,
         "suggested_category": primary,
+        "suggested_category_label": "",
+        "category_confirm_required": False,
+        "photo_required": False,
+        "photo_verdicts": _photo_verdict_payload(
+            details,
+            photo_count=photo_count,
+            image_errors=image_errors or {},
+            prepared_indices=prepared_indices or [],
+        ),
+        "assigned_unit": None,
         "photo_feedback": details.get("photo_assessment") or "",
         "result": {
             "classification": result.get("outcome"),
@@ -785,13 +1073,235 @@ def _resident_feedback(result: dict, *, selected_category: str, image_uploaded: 
     }
 
 
-def _review_details(result: dict) -> dict:
+def _photo_verdict_payload(details: dict, *, photo_count: int, image_errors: dict, prepared_indices: list) -> list[dict]:
+    """One frontend verdict per attached photo, in file order.
+
+    A verdict per photo comes from the model only for the images that were
+    actually sent; a photo that could not be prepared is "unsupported" and one
+    that was sent but never reviewed is "unclear" — both non-blocking.
+    """
+    if photo_count <= 0:
+        return []
+    relationship = details.get("evidence_relationship") or ""
+    review_failed = details.get("image_review_succeeded") is False
+    model_verdicts = {item["index"]: item for item in details.get("photo_verdicts") or []}
+    relevance_to_state = {
+        "supports_report": "relevant",
+        "contradicts_report": "unrelated",
+        "neutral": "unclear",
+        "unclear": "unclear",
+    }
+    unclear_message = "The photo does not clearly show the issue described."
+    review_failed_message = "Your photo could not be checked automatically. An official will review it."
+    payload = []
+    for index in range(photo_count):
+        if index in image_errors:
+            payload.append(
+                {"index": index, "state": "unsupported", "message": "This photo could not be read. An official will review it."}
+            )
+            continue
+        if review_failed:
+            payload.append({"index": index, "state": "unclear", "message": review_failed_message})
+            continue
+        model_index = prepared_indices.index(index) if index in prepared_indices else None
+        verdict = model_verdicts.get(model_index) if model_index is not None else None
+        if verdict is None:
+            state = "unrelated" if relationship == "contradicts_report" else "unclear"
+            payload.append({"index": index, "state": state, "message": unclear_message})
+            continue
+        state = relevance_to_state.get(verdict.get("relevance"), "unclear")
+        message = "" if state == "relevant" else (verdict.get("note") or unclear_message)
+        payload.append({"index": index, "state": state, "message": message})
+    return payload
+
+
+def _assigned_unit_for_category(category_ref: ConcernCategory | None) -> dict | None:
+    """The unit a report under this category would be routed to, per the
+    barangay's configured routing rules. None when the category has no active
+    rule pointing at a department."""
+    if not category_ref:
+        return None
+    rule = category_ref.routing_rules.filter(is_active=True).select_related("department").first()
+    if not rule or not rule.department_id:
+        return None
+    return {"code": rule.department.code, "name": rule.department.name}
+
+
+def _precheck_extras(request, result, *, selected_category, category_ref, config, uploaded_files, image_errors, duplicate_feedback) -> dict:
+    """The fields the frontend dialogs read: category confirm, duplicate,
+    resolved match, emergency triage, resolved address, privacy preview,
+    assigned unit and photo requirement. Each has a safe None/false default so
+    the chain simply skips when there is nothing to show."""
+    details = result.get("details") or {}
+    payload = {"photo_required": bool(category_ref and category_ref.photo_required)}
+
+    primary = details.get("primary_category") or ""
+    if primary and primary != selected_category:
+        category = ConcernCategory.objects.filter(code=primary, is_active=True).first()
+        label = category.name if category else dict(Concern.Category.choices).get(primary, primary.replace("_", " ").title())
+        payload["suggested_category_label"] = label
+        payload["category_confirm_required"] = True
+
+    payload["assigned_unit"] = _assigned_unit_for_category(category_ref)
+
+    active_duplicate = None
+    if duplicate_feedback and duplicate_feedback.get("found"):
+        if duplicate_feedback.get("action") == ConcernClassificationConfiguration.ReportDuplicateAction.WARN:
+            active_duplicate = {
+                "concern_id": duplicate_feedback.get("concern_id"),
+                "tracking_id": duplicate_feedback.get("tracking_id"),
+                "title": duplicate_feedback.get("title"),
+                "summary": duplicate_feedback.get("summary"),
+                "reporter_count": duplicate_feedback.get("reporter_count"),
+                "distance_meters": duplicate_feedback.get("distance_meters"),
+                "status": duplicate_feedback.get("status"),
+            }
+    payload["active_duplicate"] = active_duplicate
+
+    payload["resolved_match"] = _find_resolved_match(
+        config,
+        selected_category=selected_category,
+        title=request.data.get("title", ""),
+        description=request.data.get("description", ""),
+    )
+
+    emergency_triage = None
+    if details.get("urgent_attention"):
+        matched_type = details.get("matched_emergency_type") or ""
+        emergency_triage = {
+            "is_emergency": True,
+            "matched_type": matched_type,
+            "reason": details.get("emergency_routing_reason") or details.get("short_explanation") or "The report may need immediate attention.",
+            "escalation_offered": True,
+        }
+    payload["emergency_triage"] = emergency_triage
+
+    payload["resolved_address"] = _resolved_address(
+        request.data.get("latitude"),
+        request.data.get("longitude"),
+        local_only=True,
+    )
+    # The resident precheck never calls SAM3 — the real privacy scan runs in
+    # the pipeline after submission. Officials testing templates still get the
+    # live dry run through the sample-tester endpoint.
+    from apps.concerns.ai.pipeline import privacy_classes_for
+
+    review_ok = result.get("details", {}).get("image_review_succeeded") is True
+    requested = privacy_classes_for(result.get("details") or {}, image_uploaded=bool(uploaded_files), gemma_image_review_succeeded=review_ok)
+    payload["privacy_preview"] = {
+        "state": "deferred",
+        "requested_classes": requested,
+        "detected_classes": [],
+        "protected_image": "",
+    }
+    return payload
+
+
+def _find_resolved_match(config, *, selected_category: str, title, description) -> dict | None:
+    """A recently resolved report about the same issue, so the resident learns
+    it was already fixed instead of re-reporting it."""
+    if not config.resolved_match_detection_enabled:
+        return None
+    candidate = f"{title} {description}".strip().lower()
+    if not candidate:
+        return None
+    lookback = int(getattr(config, "resolved_match_lookback_days", 90) or 90)
+    cutoff = timezone.now() - timedelta(days=lookback)
+    pool = (
+        Concern.objects.filter(
+            status=Concern.Status.RESOLVED,
+            category=selected_category,
+            created_at__gte=cutoff,
+        )
+        .only("pk", "tracking_number", "created_at", "title", "description", "summary")
+        .order_by("-created_at")[:200]
+    )
+    best = None
+    best_score = 0.0
+    for concern in pool:
+        text = f"{concern.title} {concern.description}".strip().lower()
+        score = SequenceMatcher(None, candidate, text).ratio()
+        if score > best_score:
+            best, best_score = concern, score
+    if best is None or best_score < 0.55:
+        return None
+    resolved_at = None
+    entry = best.timeline_entries.filter(event_type="resolution").order_by("-created_at").first()
+    if entry is not None:
+        resolved_at = entry.created_at.isoformat()
+    return {
+        "concern_id": best.pk,
+        "tracking_id": best.tracking_id,
+        "summary": best.summary or best.description[:160],
+        "resolved_at": resolved_at,
+        "preview_url": "",
+    }
+
+
+def _resolved_address(latitude, longitude, *, local_only=False) -> dict | None:
+    """The street-level address for a pin, used to pre-fill the report form.
+
+    `local_only` skips the Nominatim round trip (up to ~9 s with pacing) and
+    answers from the local street index — that is the precheck path, where the
+    resident is waiting and Nominatim would only refine an already-usable
+    street guess.
+    """
+    if latitude in (None, "") or longitude in (None, ""):
+        return None
+    try:
+        lat, lng = float(latitude), float(longitude)
+    except (TypeError, ValueError):
+        return None
+    from apps.geo_services import nearest_known_street, nominatim_reverse
+
+    address = ""
+    street = ""
+    house_number = ""
+    if not local_only:
+        try:
+            address = str((nominatim_reverse(lat, lng) or {}).get("display_name") or "")
+        except Exception:
+            address = ""
+    if not address:
+        known = nearest_known_street(lat, lng)
+        if known.get("street"):
+            street = known["street"]
+            house_number = known.get("house_number") or ""
+    primary = ""
+    if house_number:
+        primary = f"{house_number} {street}".strip()
+    elif street:
+        primary = street
+    secondary = "Marikina Heights, Marikina" if address else ""
+    if not primary:
+        primary = "Pinned location"
+    return {
+        "address": address or primary,
+        "address_primary": primary,
+        "address_secondary": secondary,
+        "latitude": lat,
+        "longitude": lng,
+    }
+
+
+def _formatted_title_preview(title, description, details) -> dict:
+    official_title = (title or "").strip()[:140] or (description or "").strip()[:60] or "Untitled sample report"
+    summary = (details.get("text_assessment") or "").strip() or (description or "").strip()[:300]
+    return {"official_title": official_title, "summary": summary}
+
+
+def _review_details(result: dict, *, selected_category: str, image_uploaded: bool, title: str = "", description: str = "") -> dict:
     """The sample-test payload, mirroring the fields the real assistant shows.
 
     No model name, no provider, no confidence number. What an official sees when
     they try a sample is the same vocabulary they see on a real report.
     """
     details = result.get("details") or {}
+    category_ref = (
+        ConcernCategory.objects.filter(code=selected_category, is_active=True).first()
+        if selected_category
+        else None
+    )
     return {
         "relevance": details.get("relevance"),
         "primary_category": details.get("primary_category"),
@@ -809,4 +1319,107 @@ def _review_details(result: dict) -> dict:
         "recommended_action": details.get("recommended_action"),
         "short_explanation": details.get("short_explanation"),
         "image_review_succeeded": details.get("image_review_succeeded"),
+        "resident_message": _resident_message_text(details, selected_category=selected_category, image_uploaded=image_uploaded),
+        "matched_emergency_type": details.get("matched_emergency_type"),
+        "emergency_routing_reason": details.get("emergency_routing_reason"),
+        "ongoing_emergency_confirmation_required": bool(details.get("ongoing_emergency_confirmation_required")),
+        "title_preview": _formatted_title_preview(title, description, details),
+        "assigned_unit": _assigned_unit_for_category(category_ref),
     }
+
+
+LLM_DECISION_LOG_PAGE_SIZE = 25
+
+
+class LlmDecisionLogListView(APIView):
+    """Paginated read of the LLM decision audit trail for the config screen."""
+    permission_classes = [IsAuthenticated, HasRolePermission, HasCapability]
+    required_permission = "concerns.manage"
+    required_capability = CONFIGURE_CLASSIFICATION
+
+    def get(self, request):
+        qs = LlmDecisionLog.objects.select_related("assigned_department")
+
+        domain = request.query_params.get("domain", "")
+        if domain in LlmDecisionLog.Domain.values:
+            qs = qs.filter(domain=domain)
+
+        run_kind = request.query_params.get("run_kind", "")
+        if run_kind in LlmDecisionLog.RunKind.values:
+            qs = qs.filter(run_kind=run_kind)
+
+        try:
+            page = max(1, int(request.query_params.get("page", 1)))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = max(1, min(100, int(request.query_params.get("page_size", LLM_DECISION_LOG_PAGE_SIZE))))
+        except (TypeError, ValueError):
+            page_size = LLM_DECISION_LOG_PAGE_SIZE
+
+        count = qs.count()
+        start = (page - 1) * page_size
+        rows = qs[start:start + page_size]
+
+        results = [
+            {
+                "id": row.pk,
+                "run_kind": row.run_kind,
+                "domain": row.domain,
+                "created_at": row.created_at.isoformat(),
+                "recommended_action": row.recommended_action,
+                "resident_message": row.resident_message,
+                "assigned_department": (
+                    {"id": row.assigned_department_id, "name": row.assigned_department.name}
+                    if row.assigned_department_id
+                    else None
+                ),
+                "routing_reason": row.routing_reason,
+                "model_version": row.model_version,
+                "duration_ms": row.duration_ms,
+                "input_snapshot": row.input_snapshot,
+                "output_snapshot": row.output_snapshot,
+            }
+            for row in rows
+        ]
+        return Response({"results": results, "count": count})
+
+
+class CommunityModerationSimulationView(APIView):
+    """Text-only simulation of the community-content moderation pass, for the
+    admin test workspace. Same analyzer call `run_content_moderation_ai_task`
+    uses in production — nothing is persisted beyond the LlmDecisionLog row.
+    """
+    permission_classes = [IsAuthenticated, HasRolePermission, HasCapability]
+    required_permission = "concerns.manage"
+    required_capability = CONFIGURE_CLASSIFICATION
+    parser_classes = [JSONParser]
+
+    def post(self, request):
+        from apps.concerns.ai.community_moderation_analyzer import (
+            analyze_flagged_content,
+            model_version_in_use,
+        )
+
+        content_text = str(request.data.get("content_text", ""))[:2000]
+        reason = str(request.data.get("reason", ""))
+        reporter_note = str(request.data.get("reporter_note", ""))[:500]
+        if not content_text.strip():
+            return Response({"content_text": ["Enter the flagged content text."]}, status=status.HTTP_400_BAD_REQUEST)
+        if reason not in ContentFlag.Reason.values:
+            return Response({"reason": ["Choose a valid flag reason."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = analyze_flagged_content(content_text=content_text, reason=reason, reporter_note=reporter_note)
+        model_version = model_version_in_use()
+
+        LlmDecisionLog.objects.create(
+            run_kind=LlmDecisionLog.RunKind.SIMULATION,
+            domain=LlmDecisionLog.Domain.COMMUNITY,
+            performed_by=request.user,
+            model_version=model_version,
+            input_snapshot={"content_text": content_text, "reason": reason, "reporter_note": reporter_note},
+            output_snapshot=result,
+            resident_message=result.get("short_explanation", ""),
+            recommended_action=result.get("recommended_disposition", ""),
+        )
+        return Response({**result, "model_version": model_version})

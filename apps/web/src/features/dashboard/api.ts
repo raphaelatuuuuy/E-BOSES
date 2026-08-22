@@ -151,9 +151,16 @@ export interface ConcernAiAssessment {
   updated_at: string
 }
 
+export interface ContentFlagTarget {
+  kind: "concern" | "concern_comment" | "announcement_comment" | "emergency_comment"
+  excerpt: string
+  author_name: string
+  post_title: string | null
+}
+
 export interface ContentFlag {
   id: number
-  concern: number
+  concern: number | null
   comment: number | null
   reporter: PublicUser
   reporter_full_name?: string
@@ -161,6 +168,9 @@ export interface ContentFlag {
   note: string
   status: "submitted" | "reviewed" | "dismissed" | "action_taken" | "taken_down"
   staff_note: string
+  auto_moderated: boolean
+  reviewed_by_name: string | null
+  target: ContentFlagTarget
   created_at: string
   updated_at: string
 }
@@ -324,6 +334,7 @@ export interface CommunityIncidentReport {
   public_id: string
   tracking_id: string
   reporter_name: string
+  reporter_id: number
   is_primary: boolean
   description: string
   category: ConcernCategory
@@ -510,8 +521,7 @@ export interface ConcernResolvedMatch {
 
 export interface ConcernEmergencyTriage {
   is_emergency: boolean
-  types: string[]
-  confidence: number
+  matched_type: string
   reason: string
   escalation_offered: boolean
 }
@@ -784,6 +794,24 @@ export function sendConcernChat(concernId: number, body: string, media?: File | 
 
 export function flagConcern(id: number, payload: { reason: string; note?: string; comment?: number | null }) {
   return apiRequest<ContentFlag>(`/concerns/${id}/flags/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function flagAnnouncementComment(commentId: number, payload: { reason: string; note?: string }) {
+  return apiRequest<ContentFlag>(`/announcements/comments/${commentId}/flags/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function flagEmergencyComment(
+  alertId: number,
+  commentId: number,
+  payload: { reason: string; note?: string },
+) {
+  return apiRequest<ContentFlag>(`/emergencies/${alertId}/community-comments/${commentId}/flags/`, {
     method: "POST",
     body: JSON.stringify(payload),
   })

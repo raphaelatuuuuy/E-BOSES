@@ -1,3 +1,7 @@
+import { createElement, type ComponentType } from "react"
+import { renderToStaticMarkup } from "react-dom/server"
+import * as lucideIcons from "lucide-react"
+
 export const MAP_COLORS = {
   emergency: "#f23b35",
   concern: "#ff6a1a",
@@ -45,6 +49,31 @@ export const GLYPHS = {
 
 export function concernGlyph(category: string): readonly string[] {
   return GLYPHS[category as keyof typeof GLYPHS] ?? GLYPHS.other
+}
+
+/**
+ * Render a Lucide icon's SVG inline as a string for use in Leaflet divIcon HTML.
+ * This avoids React rendering — just raw SVG with the icon's path data.
+ * Falls back to null if the icon can't be resolved.
+ */
+const LUCIDE_SVG_CACHE = new Map<string, string>()
+
+export function lucideIconSvgHtml(iconKey: string | undefined | null): string | null {
+  if (!iconKey) return null
+  const cached = LUCIDE_SVG_CACHE.get(iconKey)
+  if (cached !== undefined) return cached || null
+
+  let html = ""
+  try {
+    const icon = (lucideIcons as unknown as Record<string, ComponentType<{ size?: number; strokeWidth?: number }>>)[
+      iconKey
+    ]
+    if (icon) html = renderToStaticMarkup(createElement(icon, { size: 16, strokeWidth: 2.2 }))
+  } catch {
+    html = ""
+  }
+  LUCIDE_SVG_CACHE.set(iconKey, html)
+  return html || null
 }
 
 /**

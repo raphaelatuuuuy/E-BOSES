@@ -3,8 +3,7 @@ import { Link } from "react-router-dom"
 import { cn } from "@workspace/ui/lib/utils"
 
 /**
- * Logo + wordmark on the form column — mobile / tablet only.
- * On desktop/laptop, branding lives on the left carousel (AuthSidePanel).
+ * Logo + wordmark on the form column, above the page heading.
  * Clicking it returns to the landing page.
  */
 export function AuthPageLogo({ className }: { className?: string }) {
@@ -12,7 +11,7 @@ export function AuthPageLogo({ className }: { className?: string }) {
     <Link
       to="/"
       className={cn(
-        "flex shrink-0 items-center gap-2 px-6 py-4 md:px-12 lg:hidden",
+        "flex shrink-0 items-center gap-2 px-6 py-4 md:px-12",
         className,
       )}
       aria-label="Boses — back to landing page"

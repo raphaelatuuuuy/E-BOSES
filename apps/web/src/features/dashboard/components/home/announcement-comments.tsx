@@ -14,6 +14,7 @@ import {
   fromAnnouncementComment,
   mentionUsersOf,
 } from "@/features/dashboard/components/comments"
+import { ReportPostDialog, type ReportTarget } from "@/features/dashboard/components/report-post-dialog"
 
 export function AnnouncementComments({
   announcementId,
@@ -28,6 +29,7 @@ export function AnnouncementComments({
   const { user } = useAuthSession()
   const [comments, setComments] = useState<AnnouncementComment[]>([])
   const [open, setOpen] = useState(autoFocusComposer)
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -95,9 +97,16 @@ export function AnnouncementComments({
           onSubmit={submit}
           onDelete={remove}
           onRemove={canModerate ? remove : undefined}
+          onReport={(commentId) => setReportTarget({ kind: "announcement_comment", commentId })}
           emptyState="No comments yet. Be the first to reply."
         />
       ) : null}
+
+      <ReportPostDialog
+        open={reportTarget != null}
+        onClose={() => setReportTarget(null)}
+        target={reportTarget}
+      />
     </div>
   )
 }

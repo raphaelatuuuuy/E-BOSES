@@ -69,6 +69,8 @@ export interface CommentThreadProps {
   onDelete?: (commentId: number) => Promise<void> | void
   /** Moderation removal, distinct from an author deleting their own comment. */
   onRemove?: (commentId: number) => Promise<void> | void
+  /** A resident flagging someone else's comment for staff review. */
+  onReport?: (commentId: number) => void
   allowReplies?: boolean
   renderTrailing?: (comment: UnifiedComment) => ReactNode
   className?: string
@@ -91,6 +93,7 @@ export function CommentThread({
   onEdit,
   onDelete,
   onRemove,
+  onReport,
   allowReplies = false,
   renderTrailing,
   className,
@@ -191,6 +194,9 @@ export function CommentThread({
         ) : null}
         {!comment.isMine && onRemove ? (
           <CommentAction onClick={() => void onRemove(comment.id)}>Hide</CommentAction>
+        ) : null}
+        {!comment.isMine && onReport ? (
+          <CommentAction onClick={() => onReport(comment.id)}>Report</CommentAction>
         ) : null}
       </>
     )

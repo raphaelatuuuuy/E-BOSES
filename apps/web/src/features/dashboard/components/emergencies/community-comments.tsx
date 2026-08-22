@@ -13,6 +13,7 @@ import {
   fromEmergencyComment,
   mentionUsersOf,
 } from "@/features/dashboard/components/comments"
+import { ReportPostDialog, type ReportTarget } from "@/features/dashboard/components/report-post-dialog"
 
 export function EmergencyCommunityComments({
   alertId,
@@ -27,6 +28,7 @@ export function EmergencyCommunityComments({
 }) {
   const { user } = useAuthSession()
   const [comments, setComments] = useState<EmergencyCommunityComment[]>([])
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -73,20 +75,29 @@ export function EmergencyCommunityComments({
   const unified = visible.map(fromEmergencyComment)
 
   return (
-    <CommentThread
-      comments={unified}
-      sessionUser={user}
-      mentionUsers={mentionUsersOf(unified)}
-      allowReplies={acceptsComments}
-      autoFocusComposer={autoFocusComposer}
-      placeholder="Share what you can see"
-      onSubmit={submit}
-      onDelete={remove}
-      onRemove={canModerate ? remove : undefined}
-      emptyState="No community updates yet. Share what you can see if it would help responders."
-      closedNotice={
-        acceptsComments ? undefined : "This emergency is closed, so new comments are not accepted."
-      }
-    />
+    <>
+      <CommentThread
+        comments={unified}
+        sessionUser={user}
+        mentionUsers={mentionUsersOf(unified)}
+        allowReplies={acceptsComments}
+        autoFocusComposer={autoFocusComposer}
+        placeholder="Share what you can see"
+        onSubmit={submit}
+        onDelete={remove}
+        onRemove={canModerate ? remove : undefined}
+        onReport={(commentId) => setReportTarget({ kind: "emergency_comment", alertId, commentId })}
+        emptyState="No community updates yet. Share what you can see if it would help responders."
+        closedNotice={
+          acceptsComments ? undefined : "This emergency is closed, so new comments are not accepted."
+        }
+      />
+
+      <ReportPostDialog
+        open={reportTarget != null}
+        onClose={() => setReportTarget(null)}
+        target={reportTarget}
+      />
+    </>
   )
 }

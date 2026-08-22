@@ -377,7 +377,7 @@ def detect_residence_proof(
 
     if cloud_allowed:
         provider = FallbackOCRProvider(
-            primary=OCRSpaceProvider(),
+            primary=OCRSpaceProvider(max_retries=1),
             fallback_factory=lambda: EasyOCRProvider(gpu=False),
             caller="signup.detect",
         )

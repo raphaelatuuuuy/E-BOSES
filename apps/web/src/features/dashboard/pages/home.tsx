@@ -11,6 +11,7 @@ import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { useAuthSession } from "@/features/auth/auth-session"
+import { useDebouncedCallback } from "@/hooks/use-debounced-callback"
 import {
   geocodeMarikinaStreet,
   MARIKINA_HEIGHTS_CENTER,
@@ -168,22 +169,21 @@ export default function HomePage() {
     loadHomeRef.current = loadHome
   })
 
+  const eventRefresh = useDebouncedCallback(() => void loadHomeRef.current(), 3000)
+
   useEffect(() => {
     if (authLoading) return
     const initialLoad = window.setTimeout(() => void loadHomeRef.current(), 0)
-    function refresh() {
-      void loadHomeRef.current()
-    }
-    const interval = window.setInterval(refresh, 30000)
-    window.addEventListener("eboses:report-created", refresh)
-    window.addEventListener("eboses:concern-updated", refresh)
+    const interval = window.setInterval(eventRefresh, 30000)
+    window.addEventListener("eboses:report-created", eventRefresh)
+    window.addEventListener("eboses:concern-updated", eventRefresh)
     return () => {
       window.clearTimeout(initialLoad)
       window.clearInterval(interval)
-      window.removeEventListener("eboses:report-created", refresh)
-      window.removeEventListener("eboses:concern-updated", refresh)
+      window.removeEventListener("eboses:report-created", eventRefresh)
+      window.removeEventListener("eboses:concern-updated", eventRefresh)
     }
-  }, [authLoading])
+  }, [authLoading, eventRefresh])
 
   async function handleVote(post: Concern) {
     const nextVote = post.user_vote === 1 ? 0 : 1

@@ -272,6 +272,7 @@ export function ResponderLeafletMap({
           className: "",
           html: concernMarkerHtml({
             category: concern.category,
+            iconKey: concern.category_ref?.icon_key,
             status: concern.status,
             selected: picked,
           }),

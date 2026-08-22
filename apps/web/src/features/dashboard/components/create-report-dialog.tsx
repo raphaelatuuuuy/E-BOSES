@@ -2,18 +2,16 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } 
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import {
-  CircleEllipsisIcon,
   GlobeIcon,
   ImageIcon,
   LayoutGridIcon,
-  LeafIcon,
   LockIcon,
   MapPinIcon,
   PlusIcon,
-  ShieldCheckIcon,
-  TrafficConeIcon,
+  TagsIcon,
   XIcon,
 } from "lucide-react"
+import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -35,21 +33,15 @@ import { ReportStatusDialog } from "@/features/dashboard/components/report-statu
 import { statusModeFromReport } from "@/features/dashboard/components/report-status-mode"
 import { ApiError } from "@/lib/api"
 import { useCategoryOptions } from "@/features/dashboard/lib/concern-categories"
+import { listEmergencyCategories, type EmergencyCategory } from "@/features/dashboard/emergency-api"
 
 const LocationPickerModal = lazy(() => import("@/features/dashboard/components/location-picker"))
-
-const CATEGORY_ICONS: Record<string, typeof TrafficConeIcon> = {
-  infrastructure: TrafficConeIcon,
-  environment: LeafIcon,
-  public_safety: ShieldCheckIcon,
-  others: CircleEllipsisIcon,
-}
 
 interface ConcernOption {
   label: string
   value: string
   desc: string
-  icon: typeof TrafficConeIcon
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>
   customIconLabel?: string
   iconImageUrl?: string
 }
@@ -168,7 +160,7 @@ export function CreateReportDialog({
     label: category.name,
     value: category.code,
     desc: category.description || category.department?.name || "",
-    icon: CATEGORY_ICONS[category.code] ?? CircleEllipsisIcon,
+    icon: resolveIconByKey(category.icon_key) ?? TagsIcon,
     customIconLabel: category.custom_icon_label,
     iconImageUrl: category.icon_image_url,
   }))
@@ -204,6 +196,7 @@ export function CreateReportDialog({
   const [draftRestored, setDraftRestored] = useState(false)
   const [resolvedMatch, setResolvedMatch] = useState<ConcernResolvedMatch | null>(null)
   const [emergencyConfirm, setEmergencyConfirm] = useState<ConcernEmergencyTriage | null>(null)
+  const [emergencyCategories, setEmergencyCategories] = useState<EmergencyCategory[]>([])
   const [duplicateConfirm, setDuplicateConfirm] = useState<ConcernActiveDuplicate | null>(null)
   const [categoryConfirm, setCategoryConfirm] = useState<{ code: string; label: string } | null>(null)
   const [photoVerdicts, setPhotoVerdicts] = useState<ConcernPhotoVerdict[]>([])
@@ -234,6 +227,19 @@ export function CreateReportDialog({
   const rawStreet = (user?.address || "").split(",")[0]?.trim() || ""
   const userStreet =
     !rawStreet || rawStreet.toLowerCase() === "pending" ? "" : rawStreet
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    void listEmergencyCategories()
+      .then((items) => {
+        if (!cancelled) setEmergencyCategories(items)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [open])
 
   useEffect(() => () => previewUrls.forEach((url) => URL.revokeObjectURL(url)), [previewUrls])
 
@@ -689,6 +695,9 @@ export function CreateReportDialog({
       (!(!publicFeedAllowed) || visibility === "private")
   )
   const isControlled = controlledOpen !== undefined
+  const matchedEmergencyLabel = emergencyConfirm
+    ? emergencyCategories.find((category) => category.code === emergencyConfirm.matched_type)?.label
+    : undefined
 
   return (
     <>
@@ -1362,7 +1371,7 @@ export function CreateReportDialog({
               id="emergency-confirm-title"
               className="text-center text-[20px] font-semibold tracking-tight text-neutral-900"
             >
-              This looks like an emergency
+              {matchedEmergencyLabel ? `This looks like a ${matchedEmergencyLabel} emergency` : "This looks like an emergency"}
             </h2>
             <p className="mt-2 text-center text-[13px] leading-snug text-neutral-500">
               {emergencyConfirm.reason || "Send it straight to Emergency Response, or submit it as a normal report."}
@@ -1370,7 +1379,7 @@ export function CreateReportDialog({
             <button
               type="button"
               onClick={() => {
-                const type = emergencyConfirm.types[0] || "disaster"
+                const type = emergencyConfirm.matched_type || "disaster"
                 setEmergencyConfirm(null)
                 void finalizeSubmit({ escalate: true, emergencyType: type })
               }}

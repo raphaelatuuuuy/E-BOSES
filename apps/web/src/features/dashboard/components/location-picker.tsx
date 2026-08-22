@@ -3,13 +3,18 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { toast } from "sonner"
-import { SearchIcon, XIcon } from "lucide-react"
+import { HomeIcon, LocateFixedIcon, SearchIcon, XIcon } from "lucide-react"
 import type leaflet from "leaflet"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { apiRequest } from "@/lib/api"
 import { reverseGeocode } from "@/lib/geocode"
 import type { MapDispatchPolicy } from "@/features/dashboard/api"
+import {
+  MapControlStack,
+  MapStackButton,
+  MapStackDivider,
+} from "@/features/dashboard/components/map-control-stack"
 import {
   drawCoverage,
   insideCoverage,
@@ -250,45 +255,6 @@ export default function LocationPickerModal({
         zoomControl: false,
         attributionControl: false,
       })
-      L.control.zoom({ position: "topright" }).addTo(map)
-      containerRef.current.querySelector(".leaflet-control-zoom")?.classList.add("eboses-map-zoom")
-
-      // Jump to the device's position — sits directly under the zoom buttons.
-      class LocateControl extends L.Control {
-        constructor() {
-          super({ position: "topright" })
-        }
-        override onAdd(_map: leaflet.Map) {
-          const btn = L.DomUtil.create("button", "eboses-map-locate")
-          btn.type = "button"
-          btn.setAttribute("aria-label", "Use my current location")
-          btn.title = "Use my current location"
-          btn.innerHTML =
-            '<svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>'
-          L.DomEvent.disableClickPropagation(btn)
-          L.DomEvent.on(btn, "click", () => {
-            if (!navigator.geolocation) {
-              toast.error("Location is not supported in this browser.")
-              return
-            }
-            navigator.geolocation.getCurrentPosition(
-              (position) => {
-                _map.setView(
-                  [position.coords.latitude, position.coords.longitude],
-                  Math.max(_map.getZoom(), 15),
-                  { animate: true },
-                )
-              },
-              () => {
-                toast.error("Could not get your location. Check the browser permission and try again.")
-              },
-              { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 },
-            )
-          })
-          return btn
-        }
-      }
-      new LocateControl().addTo(map)
 
       // Clean Carto light basemap (sign-up style — not busy)
       L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
@@ -364,6 +330,8 @@ export default function LocationPickerModal({
       drawCoverage(L, group, {
         boundary,
         policy: mapContext.dispatch_policy,
+        showBoundary: false,
+        showZone: false,
       })
       const center = map.getCenter()
       setOutOfScope(!insideCoverage(center.lat, center.lng, coverageRef.current))
@@ -412,6 +380,37 @@ export default function LocationPickerModal({
     window.setTimeout(() => {
       ignoreMove.current = false
     }, 500)
+  }
+
+  function recenter() {
+    const map = mapRef.current
+    if (!map) return
+    const boundary = coverageRef.current.boundary
+    if (boundary) {
+      void import("leaflet").then((L) => {
+        try {
+          map.fitBounds(L.geoJSON(boundary as never).getBounds(), { padding: [18, 18], maxZoom: 16 })
+        } catch {
+          map.setView(DEFAULT_CENTER, 15)
+        }
+      })
+    } else {
+      map.setView(DEFAULT_CENTER, 15)
+    }
+  }
+
+  function locate() {
+    const map = mapRef.current
+    if (!map) return
+    if (!navigator.geolocation) {
+      toast.error("Location is not available on this device.")
+      return
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => map.setView([position.coords.latitude, position.coords.longitude], 16),
+      () => toast.error("Could not get your current location."),
+      { enableHighAccuracy: true, timeout: 10000 },
+    )
   }
 
   function handleConfirm() {
@@ -491,61 +490,18 @@ export default function LocationPickerModal({
           height: 12px;
           margin: -6px 0 0 -6px;
           border-radius: 9999px;
-          background: rgba(43, 127, 255, 0.35);
+          background: rgba(0, 0, 0, 0.35);
           animation: eboses-pin-scan 1.8s ease-out infinite;
           pointer-events: none;
         }
         .eboses-pin-pulse::after {
           animation-delay: 0.9s;
-          background: rgba(43, 127, 255, 0.22);
+          background: rgba(0, 0, 0, 0.22);
         }
         @keyframes eboses-pin-scan {
           0% { transform: scale(1); opacity: 0.7; }
           70% { transform: scale(2.8); opacity: 0; }
           100% { transform: scale(2.8); opacity: 0; }
-        }
-        .eboses-map-zoom.leaflet-control-zoom {
-          border: none !important;
-          border-radius: 10px !important;
-          overflow: hidden;
-          box-shadow: 0 4px 14px rgba(0,0,0,0.28) !important;
-        }
-        .eboses-map-zoom .leaflet-control-zoom-in,
-        .eboses-map-zoom .leaflet-control-zoom-out {
-          width: 36px !important;
-          height: 36px !important;
-          line-height: 36px !important;
-          font-size: 22px !important;
-          font-weight: 700 !important;
-          color: #18181b !important;
-          background: #fff !important;
-          border: none !important;
-          border-bottom: 1px solid #e4e4e7 !important;
-        }
-        .eboses-map-zoom .leaflet-control-zoom-out { border-bottom: none !important; }
-        .eboses-map-zoom a:hover { background: #f4f4f5 !important; color: #000 !important; }
-        .eboses-map-locate {
-          display: flex !important;
-          align-items: center;
-          justify-content: center;
-          width: 36px !important;
-          height: 36px !important;
-          color: #3f3f46 !important;
-          background: #fff !important;
-          border: none !important;
-          border-radius: 10px !important;
-          box-shadow: 0 4px 14px rgba(0,0,0,0.28) !important;
-          cursor: pointer;
-          outline: none;
-        }
-        .eboses-map-locate:hover { background: #f4f4f5 !important; color: #000 !important; }
-        .eboses-map-search-expanded .eboses-map-locate {
-          visibility: hidden !important;
-          pointer-events: none !important;
-        }
-        .eboses-map-search-expanded .leaflet-control-zoom {
-          visibility: hidden !important;
-          pointer-events: none !important;
         }
         .eboses-map-blocked.leaflet-container,
         .eboses-map-blocked .leaflet-grab,
@@ -591,49 +547,55 @@ export default function LocationPickerModal({
             className={cn("absolute inset-0 z-0", outOfScope && "eboses-map-blocked")}
           />
 
+          <MapControlStack className="absolute right-3 top-3 z-[1100] border-0 bg-white">
+            <MapStackButton
+              className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
+              label="Recenter to the barangay"
+              onClick={recenter}
+            >
+              <HomeIcon className="size-5" strokeWidth={1.8} aria-hidden />
+            </MapStackButton>
+            <MapStackDivider className="bg-neutral-200" />
+            <MapStackButton
+              className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
+              label="Use my current location"
+              onClick={locate}
+            >
+              <LocateFixedIcon className="size-5" strokeWidth={1.8} aria-hidden />
+            </MapStackButton>
+          </MapControlStack>
+
           {sheetMode !== "expanded" ? (
             <>
-              <span
-                className={cn(
-                  "absolute left-1/2 top-1/2 size-3 rounded-full",
-                  outOfScope ? "bg-sos" : "eboses-pin-pulse bg-brand-blue",
-                )}
-                style={{
-                  marginLeft: -6,
-                  marginTop: -6,
-                  boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
-                }}
-              />
+              {!outOfScope ? (
+                <span
+                  className="eboses-pin-pulse absolute left-1/2 top-1/2 size-3 rounded-full bg-neutral-900"
+                  style={{
+                    marginLeft: -6,
+                    marginTop: -6,
+                    boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
+                  }}
+                />
+              ) : null}
               <div
                 className={cn(
                   "pointer-events-none absolute inset-x-0 z-[1100] flex flex-col items-center gap-2 px-4",
                   sheetMode === "peek" ? "bottom-[116px]" : "bottom-[88px]",
                 )}
               >
-                {!outOfScope && locationClass?.warning ? (
-                  <p className="pointer-events-none max-w-[min(100%,320px)] rounded-xl bg-neutral-100 px-3 py-2 text-center text-[12px] font-medium text-neutral-600 shadow-sm ring-1 ring-neutral-200">
-                    {locationClass.warning}
-                  </p>
-                ) : null}
-                {!outOfScope && locationClass && !locationClass.accepted ? (
-                  <p className="pointer-events-none max-w-[min(100%,320px)] rounded-xl bg-sos/10 px-3 py-2 text-center text-[12px] font-medium text-sos shadow-sm ring-1 ring-sos/30">
-                    {locationClass.message}
-                  </p>
-                ) : null}
-
                 {/* Out of scope is a refusal, not a warning stacked above a
                     button the resident can still press. The action is replaced
                     outright until they move back inside. */}
                 {outOfScope ? (
                   <p
                     role="status"
-                    className="pointer-events-none flex max-w-[min(100%,340px)] flex-col items-center rounded-full bg-sos px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)]"
+                    className="pointer-events-none flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)]"
                   >
-                    <span className="text-[15px] font-semibold leading-none text-white">
+                    <span className="text-[15px] font-semibold leading-none text-neutral-900">
                       {OUT_OF_SCOPE_MESSAGE}
                     </span>
-                    <span className="mt-1.5 text-[13px] font-medium leading-snug text-white/80">
-                      Move the map back inside the highlighted area.
+                    <span className="mt-1.5 text-[13px] font-medium leading-snug text-neutral-500">
+                      Move the map back to a covered area.
                     </span>
                   </p>
                 ) : (
@@ -690,7 +652,7 @@ export default function LocationPickerModal({
                   onBlur={() => {
                     window.setTimeout(() => setSearchFocused(false), 180)
                   }}
-                  placeholder="Search streets in Marikina Heights"
+                  placeholder={`Search streets in ${mapContext?.boundary?.name ?? "Marikina Heights"}`}
                   autoComplete="off"
                   className={cn(
                     "h-11 w-full rounded-full border border-neutral-200 bg-white pl-10 pr-4 text-[15px] text-neutral-900 outline-none",
@@ -705,14 +667,14 @@ export default function LocationPickerModal({
                 "scrollbar-hide min-h-0 flex-1 list-none overflow-y-auto",
                 sheetMode === "collapsed" && "hidden",
                 sheetMode === "peek" && "pointer-events-none select-none",
+                sheetMode === "expanded" && hasQuery && results.length === 0 && !searching &&
+                  "flex flex-col justify-center",
               )}
             >
               {searching ? (
                 <li className="px-5 py-3 text-[14px] text-neutral-500">Searching…</li>
               ) : results.length === 0 && hasQuery ? (
-                <li className="px-5 py-3 text-[14px] text-neutral-500">
-                  No places found inside Marikina Heights (or its edge buffer)
-                </li>
+                <li className="px-5 py-3 text-center text-[14px] text-neutral-500">No results found</li>
               ) : (
                 results.map((item) => (
                   <li

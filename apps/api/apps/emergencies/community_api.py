@@ -1,9 +1,12 @@
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated
+from apps.accounts.services import create_audit_log
+from apps.accounts.views import request_meta, touch_last_seen
 from apps.concerns.community_api import (
     CommentBodySerializer,
     CommentRemovalSerializer,
@@ -11,6 +14,9 @@ from apps.concerns.community_api import (
     display_name,
     is_official,
 )
+from apps.concerns.models import ContentFlag
+from apps.concerns.serializers import ContentFlagSerializer
+from apps.concerns.tasks import enqueue_content_moderation_ai
 
 from .models import EmergencyAlert, EmergencyCommunityComment
 
@@ -97,3 +103,45 @@ class EmergencyCommunityCommentDetailView(APIView):
         comment.moderation_note = serializer.validated_data.get("reason", "")
         comment.save(update_fields=["status", "moderation_note", "updated_at"])
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class EmergencyCommentFlagCreateView(APIView):
+    """A resident flagging one emergency community comment for moderation.
+
+    Mirrors `AnnouncementCommentFlagCreateView` (concerns/community_api.py)
+    and `ContentFlagCreateView` (concerns/views.py) but targets
+    `ContentFlag.emergency_comment`.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk, comment_id):
+        touch_last_seen(request.user)
+        comment = get_object_or_404(
+            EmergencyCommunityComment, pk=comment_id, alert_id=pk
+        )
+        serializer = ContentFlagSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        flag = ContentFlag.objects.create(
+            emergency_comment=comment,
+            reporter=request.user,
+            reason=serializer.validated_data["reason"],
+            note=serializer.validated_data.get("note", ""),
+        )
+        create_audit_log(
+            "content.flag_submitted",
+            actor=request.user,
+            target_user=comment.author,
+            metadata={
+                "emergency_comment_id": comment.pk,
+                "alert_id": pk,
+                "flag_id": flag.pk,
+                "reason": flag.reason,
+            },
+            request_meta=request_meta(request),
+        )
+        transaction.on_commit(lambda: enqueue_content_moderation_ai(flag.pk))
+        return Response(
+            ContentFlagSerializer(flag, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )

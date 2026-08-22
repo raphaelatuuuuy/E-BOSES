@@ -83,7 +83,7 @@ const SUPPORT_STATUS_WORDS: Record<string, string> = {
 }
 
 /** How often the Chat tab watches for a resident message while it is closed. */
-const CHAT_UNREAD_POLL_MS = 20_000
+const CHAT_UNREAD_POLL_MS = 45_000
 
 export function DispatchOverviewCard({
   alert,

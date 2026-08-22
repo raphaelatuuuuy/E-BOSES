@@ -93,6 +93,7 @@ from .serializers import (
 )
 from . import responder_actions, vocabulary
 from .location_services import classify_location_confidence, schedule_location_resolution
+from .tasks import enqueue_emergency_media_preview
 from .media_services import (
     ensure_chat_attachment_preview,
     ensure_emergency_media_preview,
@@ -1148,7 +1149,7 @@ class EmergencyCreateView(APIView):
         if alert.latitude is not None and alert.longitude is not None:
             schedule_location_resolution(alert)
         for uploaded_file, validated_file, media_hash, media_phash in media_files:
-            EmergencyMedia.objects.create(
+            media = EmergencyMedia.objects.create(
                 alert=alert,
                 file=validated_file,
                 original_filename=uploaded_file.name,
@@ -1157,6 +1158,9 @@ class EmergencyCreateView(APIView):
                 sha256_hash=media_hash,
                 phash=media_phash,
             )
+            transaction.on_commit(
+                lambda media_id=media.pk: enqueue_emergency_media_preview("media", media_id)
+            )
         create_audit_log(
             "emergency.created",
             actor=request.user,
@@ -1164,9 +1168,9 @@ class EmergencyCreateView(APIView):
             metadata={"alert_id": alert.pk, "type": alert.type},
             request_meta=request_meta(request),
         )
-        from apps.live_map import emergency_payload, route_for_assignment
-        from apps.notifications.services import broadcast_live_map_event
-        transaction.on_commit(lambda: broadcast_live_map_event("emergency.created", {"emergency": emergency_payload(alert), "route": route_for_assignment(alert)}))
+        from apps.emergencies.tasks import enqueue_emergency_created_broadcast
+
+        transaction.on_commit(lambda: enqueue_emergency_created_broadcast(alert.pk))
         # An emergency raised in the app gets the same SMS acknowledgement as
         # one texted in, so a resident who loses data still knows it landed.
         transaction.on_commit(lambda: send_app_emergency_sms(alert))
@@ -1580,7 +1584,7 @@ class EmergencyDutyView(APIView):
             )
         from apps.live_map import person_payload
         from apps.notifications.services import broadcast_live_map_event
-        broadcast_live_map_event("location.updated", {"person": person_payload(request.user)})
+        transaction.on_commit(lambda: broadcast_live_map_event("location.updated", {"person": person_payload(request.user)}))
         return Response({
             "is_on_duty": request.user.is_on_duty,
             "responder_unit": request.user.responder_unit,
@@ -1681,7 +1685,7 @@ class ResponderShiftStartView(APIView):
 
         from apps.live_map import person_payload
         from apps.notifications.services import broadcast_live_map_event
-        broadcast_live_map_event("location.updated", {"person": person_payload(request.user)})
+        transaction.on_commit(lambda: broadcast_live_map_event("location.updated", {"person": person_payload(request.user)}))
         create_audit_log(
             "responder.shift_started",
             actor=request.user,
@@ -1725,7 +1729,7 @@ class ResponderShiftEndView(APIView):
 
         from apps.live_map import person_payload
         from apps.notifications.services import broadcast_live_map_event
-        broadcast_live_map_event("location.updated", {"person": person_payload(request.user)})
+        transaction.on_commit(lambda: broadcast_live_map_event("location.updated", {"person": person_payload(request.user)}))
         create_audit_log(
             "responder.shift_ended",
             actor=request.user,
@@ -2081,6 +2085,10 @@ class EmergencyChatView(APIView):
                     if attachment.file.name:
                         attachment.file.storage.delete(attachment.file.name)
                     raise
+                if attachment_metadata.get("media_type") == "image":
+                    transaction.on_commit(
+                        lambda attachment_id=attachment.pk: enqueue_emergency_media_preview("chat", attachment_id)
+                    )
         message = (
             EmergencyChatMessage.objects.select_related("sender", "sender__resident_profile")
             .get(pk=message.pk)

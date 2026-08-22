@@ -1555,11 +1555,12 @@ class EmergencyAPITests(APITestCase):
         async_to_sync(channel_layer.group_add)("official_live_map", channel_name)
         self.client.force_authenticate(self.resident)
 
-        response = self.client.post(
-            "/api/locations/ping/",
-            {"latitude": "14.6516000", "longitude": "121.1208000", "accuracy": 8, "source": "active_session"},
-            format="json",
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                "/api/locations/ping/",
+                {"latitude": "14.6516000", "longitude": "121.1208000", "accuracy": 8, "source": "active_session"},
+                format="json",
+            )
         message = async_to_sync(asyncio.wait_for)(channel_layer.receive(channel_name), timeout=1)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)

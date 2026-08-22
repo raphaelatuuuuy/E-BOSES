@@ -7,7 +7,7 @@ import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
 
-import { flagConcern } from "@/features/dashboard/api"
+import { flagAnnouncementComment, flagConcern, flagEmergencyComment } from "@/features/dashboard/api"
 import {
   SheetDialog,
   SheetList,
@@ -173,16 +173,22 @@ const NOTE_MAX = 255
 
 type Step = "category" | "subreason" | "details"
 
+export type ReportTarget =
+  | { kind: "concern"; concernId: number }
+  | { kind: "concern_comment"; concernId: number; commentId: number }
+  | { kind: "announcement_comment"; commentId: number }
+  | { kind: "emergency_comment"; alertId: number; commentId: number }
+
 type ReportPostDialogProps = {
   open: boolean
-  concernId: number | null
+  target: ReportTarget | null
   onClose: () => void
   onSubmitted?: () => void
 }
 
 export function ReportPostDialog({
   open,
-  concernId,
+  target,
   onClose,
   onSubmitted,
 }: ReportPostDialogProps) {
@@ -196,9 +202,9 @@ export function ReportPostDialog({
   const category = REPORT_CATEGORIES.find((c) => c.id === categoryId) ?? null
   const subReason = category?.children.find((c) => c.id === subReasonId) ?? null
 
-  // Reset the form whenever the dialog (re)opens or targets a new concern —
+  // Reset the form whenever the dialog (re)opens or targets something new —
   // render-adjust instead of a sync setState effect.
-  const dialogKey = open ? (concernId ?? "open") : "closed"
+  const dialogKey = open ? JSON.stringify(target) : "closed"
   const [prevDialogKey, setPrevDialogKey] = useState(dialogKey)
   if (prevDialogKey !== dialogKey) {
     setPrevDialogKey(dialogKey)
@@ -247,7 +253,7 @@ export function ReportPostDialog({
   }
 
   async function handleSubmit() {
-    if (!concernId || !category) return
+    if (!target || !category) return
     const detailTitle = subReason?.title || category.title
     if (category.apiReason === "other" && !note.trim()) {
       toast.error("Please add a short note about why you’re reporting.")
@@ -257,10 +263,19 @@ export function ReportPostDialog({
     try {
       const noteParts = [detailTitle]
       if (note.trim()) noteParts.push(note.trim())
-      await flagConcern(concernId, {
+      const payload = {
         reason: category.apiReason,
         note: noteParts.join(" — ").slice(0, NOTE_MAX),
-      })
+      }
+      if (target.kind === "concern") {
+        await flagConcern(target.concernId, payload)
+      } else if (target.kind === "concern_comment") {
+        await flagConcern(target.concernId, { ...payload, comment: target.commentId })
+      } else if (target.kind === "announcement_comment") {
+        await flagAnnouncementComment(target.commentId, payload)
+      } else {
+        await flagEmergencyComment(target.alertId, target.commentId, payload)
+      }
       toast.success("Report submitted for review")
       onSubmitted?.()
       onClose()
