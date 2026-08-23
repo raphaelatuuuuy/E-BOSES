@@ -24,6 +24,7 @@ from apps.concerns.ai.duplicate_detector import report_fingerprints
 from apps.concerns.ai.gemma_analyzer import GemmaAnalyzer, parse_gemma_result, payload_from_result
 from apps.concerns.ai_fixtures import gemma_result
 from apps.concerns.models import Concern, ConcernAiAssessment, ConcernClassificationConfiguration, ContentFlag, Department, Designation, LlmDecisionLog, Position
+from apps.concerns.test_helpers import ensure_test_profile, grant_position
 
 
 def png_upload(name="safe.png"):
@@ -37,11 +38,7 @@ def png_upload(name="safe.png"):
 
 
 def grant_captain(user):
-    Designation.objects.create(
-        user=user,
-        department=Department.objects.get(code="sangguniang-barangay"),
-        position=Position.objects.get(code="barangay-captain"),
-    )
+    return grant_position(user)
 
 
 class ConcernClassificationApiTests(APITestCase):
@@ -56,6 +53,7 @@ class ConcernClassificationApiTests(APITestCase):
             email="classification-resident@example.com", phone_number="+639180000002",
             password="pass", role=User.Role.RESIDENT, status=User.Status.VERIFIED,
         )
+        ensure_test_profile(self.resident)
 
     def test_only_official_can_read_and_update_configuration(self):
         self.client.force_authenticate(self.resident)

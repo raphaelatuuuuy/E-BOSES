@@ -46,6 +46,15 @@ class EmailAvailabilitySerializer(serializers.Serializer):
     email = serializers.EmailField()
 
 
+class CommunityResolveSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    latitude = serializers.FloatField(min_value=-90, max_value=90)
+    longitude = serializers.FloatField(min_value=-180, max_value=180)
+    accuracy_meters = serializers.FloatField(min_value=0, max_value=100000, required=False, allow_null=True)
+    address = serializers.JSONField(required=False, default=dict)
+    source = serializers.ChoiceField(choices=["gps", "search", "manual"])
+
+
 class RegisterSerializer(serializers.Serializer):
     email = serializers.EmailField()
     email_otp_code = serializers.RegexField(regex=r"^\d{6}$", write_only=True)
@@ -57,7 +66,8 @@ class RegisterSerializer(serializers.Serializer):
     last_name = serializers.CharField(max_length=50)
     date_of_birth = serializers.DateField()
     address = serializers.CharField(max_length=200)
-    barangay = serializers.CharField(max_length=120, required=False, default="Marikina Heights")
+    barangay = serializers.CharField(max_length=120, required=False, default="")
+    community_resolution_token = serializers.CharField(write_only=True)
     proof = serializers.FileField(
         allow_empty_file=False,
         # Light check only — C2PA/authenticity already ran at /register/proof/check/
@@ -233,14 +243,11 @@ class UserSummarySerializer(serializers.ModelSerializer):
         return profile.address if profile else ""
 
     def get_barangay(self, obj):
-        # Root cause of UI "Pending": ResidentProfile.barangay defaults to "Pending"
-        # (and may never be updated after registration). This product is scoped to
-        # Marikina Heights — never surface the placeholder string to clients.
         profile = self.profile(obj)
         raw = (profile.barangay if profile else "") or ""
         raw = raw.strip()
         if not raw or raw.lower() == "pending":
-            return "Marikina Heights"
+            return getattr(getattr(profile, "community", None), "name", "")
         return raw
 
     def get_date_of_birth(self, obj):

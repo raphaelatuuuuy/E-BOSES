@@ -1,5 +1,12 @@
 import { forwardRef, useImperativeHandle, useState } from "react"
-import { ArrowLeft, CreditCard, IdCard, LoaderCircle } from "lucide-react"
+import {
+  ArrowLeft,
+  CreditCard,
+  Eye,
+  EyeOff,
+  IdCard,
+  LoaderCircle,
+} from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
@@ -201,15 +208,55 @@ const OcrTemplateBuilderPage = forwardRef<
       open
       title={proofDisplayName || "New document"}
       subtitle={
-        availableOnSignup
-          ? "Residents can choose this on sign-up"
-          : "Hidden from residents at sign-up for now"
+        missingSampleLabels.length
+          ? `Add a ${missingSampleLabels.join(" and ")} sample photo to offer this`
+          : availableOnSignup
+            ? "Residents can choose this when they register"
+            : "Hidden from residents for now"
       }
       onClose={() => void backToList()}
       saveState={autoSaveState}
       doneDisabled={!edited}
       actions={
-        <div className="flex items-center rounded-full border border-neutral-200 p-0.5">
+        <div className="flex items-center gap-1.5">
+          {/* Offering the document was a full-width switch at the bottom of a
+              long scroll, restating in a sentence what the subtitle above
+              already says. It is one binary about this document, so it belongs
+              with the other one, and the subtitle is its label. */}
+          <button
+            type="button"
+            onClick={() => {
+              if (missingSamples.length > 0) {
+                validateRequiredSamples(selectedDocument)
+                return
+              }
+              setEdited(true)
+              void setProofAvailableOnSignup(selectedDocument.key, !availableOnSignup)
+            }}
+            aria-pressed={availableOnSignup}
+            title={
+              missingSampleLabels.length
+                ? `Add a ${missingSampleLabels.join(" and ")} sample photo first`
+                : availableOnSignup
+                  ? "Offered to residents — tap to hide"
+                  : "Hidden from residents — tap to offer"
+            }
+            className={cn(
+              "flex size-8 items-center justify-center rounded-full border transition-colors",
+              missingSamples.length > 0
+                ? "border-neutral-200 text-neutral-300"
+                : availableOnSignup
+                  ? "border-neutral-200 bg-neutral-100 text-neutral-900 hover:bg-neutral-200"
+                  : "border-neutral-200 text-neutral-400 hover:text-neutral-900"
+            )}
+          >
+            {availableOnSignup ? (
+              <Eye className="size-4" aria-hidden />
+            ) : (
+              <EyeOff className="size-4" aria-hidden />
+            )}
+          </button>
+          <div className="flex items-center rounded-full border border-neutral-200 p-0.5">
           <button
             type="button"
             onClick={() => changeCaptureMode("one")}
@@ -237,7 +284,8 @@ const OcrTemplateBuilderPage = forwardRef<
             )}
           >
             <CreditCard className="size-4" aria-hidden />
-          </button>
+            </button>
+          </div>
         </div>
       }
     >
@@ -291,18 +339,6 @@ const OcrTemplateBuilderPage = forwardRef<
         }}
         saving={saving}
         tested={mergedTestResult.tested}
-        availableOnSignup={availableOnSignup}
-        onAvailabilityChange={(next) => {
-          if (next && !validateRequiredSamples(selectedDocument)) return
-          setEdited(true)
-          void setProofAvailableOnSignup(selectedDocument.key, next)
-        }}
-        availabilityHint={
-          missingSampleLabels.length
-            ? `Add a ${missingSampleLabels.join(" and ")} sample photo first.`
-            : "Residents can choose this document when they register."
-        }
-        signupDisabled={missingSamples.length > 0}
         checksFor={
           <RulesStep
             document={selectedDocument}
@@ -349,10 +385,10 @@ const OcrTemplateBuilderPage = forwardRef<
             type="button"
             onClick={() => void runTestAll()}
             disabled={testRunning}
-            className="flex h-[52px] w-full items-center justify-center gap-2 rounded-full bg-brand-navy text-[17px] font-semibold text-white transition-colors hover:bg-accent disabled:bg-neutral-200 disabled:text-neutral-400 disabled:hover:bg-neutral-200"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[14px] font-medium text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 disabled:text-neutral-300"
           >
             {testRunning ? (
-              <LoaderCircle className="size-4 animate-spin" />
+              <LoaderCircle className="size-4 animate-spin" aria-hidden />
             ) : null}
             {testRunning
               ? (() => {
@@ -366,7 +402,9 @@ const OcrTemplateBuilderPage = forwardRef<
                   }
                   return "Testing"
                 })()
-              : "Test sample"}
+              : mergedTestResult.tested
+                ? "Test again"
+                : "Test sample"}
           </button>
         }
       />

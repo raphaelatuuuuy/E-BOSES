@@ -195,7 +195,15 @@ class AnnouncementAreaContextView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        return Response(static_map_payload())
+        from apps.community_scope import community_ids_for_user, selected_community
+        from apps.emergencies.models import Community
+
+        community = selected_community(request.user, request.query_params.get("community_id"))
+        if not community:
+            community = Community.objects.filter(
+                pk__in=community_ids_for_user(request.user), status=Community.Status.ACTIVE
+            ).order_by("name").first()
+        return Response(static_map_payload(community))
 
 
 class BarangayEventCalendarView(APIView):
@@ -233,7 +241,7 @@ class ConcernReopenRequestView(APIView):
     def post(self, request, pk):
         from .models import Concern, ConcernTimelineEntry
         from .serializers import ConcernSerializer
-        from .views import decorate_concerns
+        from .views import decorate_concerns, operational_concern_or_404
 
         concern = get_object_or_404(Concern, pk=pk)
         if concern.reporter_id != request.user.pk and not can_resolve_concerns(request.user):
@@ -241,6 +249,8 @@ class ConcernReopenRequestView(APIView):
                 {"detail": "Only the reporter can ask to reopen this report."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if concern.reporter_id != request.user.pk:
+            concern = operational_concern_or_404(request.user, pk)
         if concern.status not in {Concern.Status.RESOLVED, Concern.Status.REJECTED}:
             return Response(
                 {"detail": "Only a resolved or rejected report can be reopened."},

@@ -447,6 +447,7 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
             "category_needs_confirmation",
             "unresolved_fields",
             "media_warnings",
+            "media_integrity",
             "resolution_report",
             "status_version",
             "media",

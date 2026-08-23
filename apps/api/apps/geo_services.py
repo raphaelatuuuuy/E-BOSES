@@ -159,6 +159,52 @@ def point_in_geojson(longitude: float, latitude: float, geometry: dict | None) -
     return None
 
 
+def point_in_geojson_inclusive(
+    longitude: float,
+    latitude: float,
+    geometry: dict | None,
+    *,
+    edge_tolerance_meters: float = 0.001,
+) -> bool | None:
+    inside = point_in_geojson(longitude, latitude, geometry)
+    if inside is not False or not geometry:
+        return inside
+    coordinates = geometry.get("coordinates") or []
+    polygons = [coordinates] if geometry.get("type") == "Polygon" else coordinates
+    if geometry.get("type") not in {"Polygon", "MultiPolygon"}:
+        return None
+    for polygon in polygons:
+        if not polygon:
+            continue
+        distance = _distance_to_ring_meters(longitude, latitude, polygon[0])
+        if distance is not None and distance <= edge_tolerance_meters:
+            return True
+    return False
+
+
+def active_community_for_point(latitude, longitude):
+    from apps.emergencies.models import Community
+
+    latitude = float(latitude)
+    longitude = float(longitude)
+    candidates = Community.objects.filter(
+        status=Community.Status.ACTIVE,
+        boundary__is_active=True,
+        boundary__kind="boundary",
+    ).select_related("boundary")
+    matches = []
+    for community in candidates:
+        bbox = (community.bbox_min_latitude, community.bbox_min_longitude, community.bbox_max_latitude, community.bbox_max_longitude)
+        if all(value is not None for value in bbox) and not (
+            float(bbox[0]) <= latitude <= float(bbox[2])
+            and float(bbox[1]) <= longitude <= float(bbox[3])
+        ):
+            continue
+        if point_in_geojson_inclusive(longitude, latitude, community.boundary.geometry):
+            matches.append(community)
+    return matches[0] if len(matches) == 1 else None
+
+
 def _distance_to_ring_meters(longitude: float, latitude: float, ring: list) -> float | None:
     """Return the approximate shortest distance from a point to a GeoJSON ring."""
     if not ring or len(ring) < 2:
@@ -220,17 +266,20 @@ def get_active_boundary_geometry() -> dict | None:
     return None
 
 
-def dispatch_policy_payload() -> dict[str, Any]:
+def dispatch_policy_payload(community=None) -> dict[str, Any]:
     try:
         from apps.emergencies.models import MapDispatchPolicy
 
-        return MapDispatchPolicy.current().as_payload()
+        policy = MapDispatchPolicy.objects.filter(community=community).first() if community else MapDispatchPolicy.current()
+        if policy:
+            return policy.as_payload()
+        raise LookupError("No dispatch policy configured")
     except Exception:
         return {
             "id": None,
-            "barangay": "Marikina Heights",
-            "acceptance_center_latitude": MARIKINA_HEIGHTS_CENTER["latitude"],
-            "acceptance_center_longitude": MARIKINA_HEIGHTS_CENTER["longitude"],
+            "barangay": community.name if community else "Community",
+            "acceptance_center_latitude": float(community.center_latitude) if community else MARIKINA_HEIGHTS_CENTER["latitude"],
+            "acceptance_center_longitude": float(community.center_longitude) if community else MARIKINA_HEIGHTS_CENTER["longitude"],
             "acceptance_radius_meters": 800,
             "acceptance_geometry": None,
             "out_of_zone_action": "review",
@@ -977,39 +1026,22 @@ def validate_barangay_location(latitude, longitude):
 def validate_emergency_location(latitude, longitude):
     if latitude is None or longitude is None:
         raise ValidationError("Latitude and longitude must be provided together.")
-    if not is_inside_barangay_boundary(latitude, longitude):
-        raise ValidationError("Emergency location must be inside Barangay Marikina Heights.")
-    if not acceptance_zone_result(latitude, longitude).get("within"):
-        raise ValidationError("Emergency location must be inside the official acceptance zone.")
+    community = active_community_for_point(latitude, longitude)
+    if not community:
+        raise ValidationError("Emergency location must be inside an active community boundary.")
+    return community
 
 
 def validate_report_location(latitude, longitude):
     if latitude is None or longitude is None:
         raise ValidationError("Latitude and longitude must be provided together.")
-    # `classify_location` — not the raw polygon test — because the polygon
-    # boundary is a precise line (often the centerline of a street) while a
-    # phone's GPS is commonly off by 5-20m. The ~280m SOFT_BUFFER_METERS edge
-    # buffer exists specifically for this; a report pinned just outside the
-    # exact polygon was being hard-rejected even though it was clearly a real
-    # Marikina Heights address, because this function bypassed the buffer and
-    # called the zero-tolerance check directly.
-    boundary = classify_location(latitude, longitude)
-    if not boundary.get("accepted"):
-        raise ValidationError(boundary.get("message") or "Location must be inside Barangay Marikina Heights.")
-    zone = boundary.get("acceptance_zone") or acceptance_zone_result(latitude, longitude)
-    if zone.get("within"):
-        return {"action": "accept", "summary": "Required report checks passed. Advanced analysis is pending."}
-    action = zone.get("action") or dispatch_policy_payload().get("out_of_zone_action") or "review"
-    if action == "block":
-        raise ValidationError("Location must be inside the official acceptance zone.")
-    if action == "warn":
-        return {
-            "action": "warn",
-            "summary": "Location is inside the barangay but outside the official acceptance zone.",
-        }
+    community = active_community_for_point(latitude, longitude)
+    if not community:
+        raise ValidationError("Location must be inside an active community boundary.")
     return {
-        "action": "review",
-        "summary": "Location is outside the official acceptance zone and needs official review.",
+        "action": "accept",
+        "community_id": community.pk,
+        "summary": "Required report checks passed. Advanced analysis is pending.",
     }
 
 

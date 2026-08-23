@@ -1071,12 +1071,17 @@ def create_registration_profile(user, validated_data):
     proof_sides = validated_data.get("_proof_sides") or [ResidenceProof.Side.SINGLE] * len(proof_files)
     profile = ResidentProfile.objects.create(
         user=user,
+        community=validated_data["_community_resolution"].community,
         first_name=validated_data["first_name"],
         middle_name=validated_data.get("middle_name", ""),
         last_name=validated_data["last_name"],
         date_of_birth=validated_data["date_of_birth"],
         address=validated_data["address"],
-        barangay=validated_data.get("barangay") or "Marikina Heights",
+        barangay=validated_data["_community_resolution"].community.name,
+        home_latitude=validated_data["_community_resolution"].latitude,
+        home_longitude=validated_data["_community_resolution"].longitude,
+        home_accuracy_meters=validated_data["_community_resolution"].accuracy_meters,
+        home_location_source=validated_data["_community_resolution"].source,
         gender=validated_data.get("gender", ""),
         avatar=validated_data.get("avatar", ""),
     )
@@ -1158,6 +1163,19 @@ def register_resident(validated_data, request_meta=None):
         validated_data["phone_otp_code"],
         allow_verified=True,
     )
+    from .community_resolution import resolve_token
+
+    resolution = resolve_token(
+        validated_data["community_resolution_token"],
+        email=email,
+        consume=True,
+        email_challenge=email_challenge,
+    )
+    resolved_address = str((resolution.address or {}).get("full") or "").strip().casefold()
+    submitted_address = str(validated_data.get("address") or "").strip().casefold()
+    if resolved_address != submitted_address:
+        raise ValidationError({"community_resolution_token": ["The address changed. Confirm the community again."]})
+    validated_data["_community_resolution"] = resolution
     proof_files = validate_residence_proof_uploads(registration_proof_files(validated_data))
     validated_data["proof_files"] = proof_files
     # Select and validate the published policy before creating the account.
@@ -1173,6 +1191,7 @@ def register_resident(validated_data, request_meta=None):
         proof_type,
         proof_files,
         validated_data.get("proof_sides"),
+        configuration=resolution.configuration,
     )
     validated_data["proof_type"] = proof_type
     validated_data["_ocr_configuration"] = configuration

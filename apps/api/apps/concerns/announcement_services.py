@@ -27,11 +27,26 @@ def notify_announcement_published(announcement: Announcement) -> int:
         Announcement.Audience.OFFICIALS: [User.Role.BARANGAY_OFFICIAL],
         Announcement.Audience.ALL: [User.Role.RESIDENT, User.Role.FIRST_RESPONDER, User.Role.BARANGAY_OFFICIAL],
     }
+    roles = role_by_audience.get(announcement.audience, role_by_audience[Announcement.Audience.ALL])
+    target_department_ids = list(announcement.target_departments.values_list("id", flat=True))
+    community_filter = Q()
+    if User.Role.RESIDENT in roles:
+        community_filter |= Q(role=User.Role.RESIDENT, resident_profile__community_id=announcement.community_id)
+    staff_roles = [role for role in roles if role != User.Role.RESIDENT]
+    if staff_roles:
+        staff_filter = Q(
+            role__in=staff_roles,
+            designations__is_active=True,
+            designations__department__community_id=announcement.community_id,
+        )
+        if target_department_ids:
+            staff_filter &= Q(designations__department_id__in=target_department_ids)
+        community_filter |= staff_filter
     recipient_ids = list(
-        User.objects.filter(
-            status=User.Status.VERIFIED,
-            role__in=role_by_audience.get(announcement.audience, role_by_audience[Announcement.Audience.ALL]),
-        ).values_list("id", flat=True)
+        User.objects.filter(status=User.Status.VERIFIED, is_active=True)
+        .filter(community_filter)
+        .distinct()
+        .values_list("id", flat=True)
     )
     metadata = {
         "announcement_id": announcement.pk,
@@ -55,6 +70,7 @@ def notify_announcement_published(announcement: Announcement) -> int:
     rows = [
         Notification(
             recipient_id=recipient_id,
+            community=announcement.community,
             type=Notification.Type.ANNOUNCEMENT,
             title=announcement.title,
             body=announcement.body[:240],

@@ -23,7 +23,7 @@ import {
   MapPinIcon,
   MegaphoneIcon,
   MinusIcon,
-  PersonStandingIcon,
+  FootprintsIcon,
   PlusIcon,
   SearchIcon,
   ShieldCheckIcon,
@@ -111,7 +111,7 @@ import { isEmergencyActive } from "@/features/dashboard/components/emergencies/l
 type ChipKey = "all" | "emergencies" | (string & {})
 type CategoryChip = { key: string; label: string }
 
-const BARANGAY = "Marikina Heights"
+const BARANGAY = "Community"
 
 const MODE_CHIPS: CategoryChip[] = [
   { key: "all", label: "All" },
@@ -444,6 +444,7 @@ export default function ResidentAlertsMapPage() {
   usePageTitle("Alerts Map")
   const navigate = useNavigate()
   const { user } = useAuthSession()
+  const initialCommunityName = (user?.barangay || "").trim()
   const [posts, setPosts] = useState<Concern[]>([])
   const [emergencies, setEmergencies] = useState<ResidentMapEmergency[]>([])
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
@@ -455,7 +456,11 @@ export default function ResidentAlertsMapPage() {
       longitude: BARANGAY_CENTER.lng,
       zoom: 15,
     },
-    boundary: { osm_relation_id: 371327, name: BARANGAY, geometry: null },
+    boundary: {
+      osm_relation_id: 371327,
+      name: initialCommunityName.toLowerCase() === "pending" ? "" : initialCommunityName,
+      geometry: null,
+    },
   }))
   const [loading, setLoading] = useState(true)
   const [filterLoading, setFilterLoading] = useState(false)
@@ -471,7 +476,7 @@ export default function ResidentAlertsMapPage() {
     const stored = readLastKnownPosition(user?.id ?? null)
     if (!stored) return null
     const seed = { lat: stored.latitude, lng: stored.longitude }
-    return isLocalGps(seed) ? seed : null
+    return isLocalGps(seed, mapMeta.boundary.geometry) ? seed : null
   })
   const mapApiRef = useRef<MapApi | null>(null)
   const isDesktop = useIsDesktop()
@@ -559,7 +564,7 @@ export default function ResidentAlertsMapPage() {
     if (fromMap) return fromMap
     const fromUser = (user?.barangay || "").trim()
     if (fromUser && fromUser.toLowerCase() !== "pending") return fromUser
-    return BARANGAY
+    return ""
   })()
   const weather = useBarangayWeather(weatherLat, weatherLng, weatherPlace)
 
@@ -755,7 +760,7 @@ export default function ResidentAlertsMapPage() {
       (pos) => {
         const next = { lat: pos.coords.latitude, lng: pos.coords.longitude }
         // Ignore GPS outside the area — caused "13000 km away" labels
-        if (isLocalGps(next)) {
+        if (isLocalGps(next, mapMeta.boundary.geometry)) {
           writeLastKnownPosition(pos, user?.id ?? null)
           setUserPos(next)
           setUserKnownAt(pos.timestamp || Date.now())
@@ -772,7 +777,7 @@ export default function ResidentAlertsMapPage() {
 
   // Distance origin: local GPS when near MH, else barangay center (never far-away device GPS)
   const origin = useMemo(() => {
-    if (userPos && isLocalGps(userPos)) return userPos
+    if (userPos && isLocalGps(userPos, mapMeta.boundary.geometry)) return userPos
     if (mapMeta?.center) {
       return { lat: mapMeta.center.latitude, lng: mapMeta.center.longitude }
     }
@@ -935,9 +940,9 @@ export default function ResidentAlertsMapPage() {
       (pos) => {
         const next = { lat: pos.coords.latitude, lng: pos.coords.longitude }
         setLocating(false)
-        if (!isLocalGps(next)) {
+        if (!isLocalGps(next, mapMeta.boundary.geometry)) {
           setUserPos(null)
-          toast.error("Your location is outside Marikina Heights")
+          toast.error(weatherPlace ? `Your location is outside ${weatherPlace}` : "Your location is outside this community")
           window.setTimeout(() => {
             mapApiRef.current?.invalidateSize()
             mapApiRef.current?.fitBoundary(48)
@@ -1136,7 +1141,7 @@ export default function ResidentAlertsMapPage() {
           <div className="flex shrink-0 items-center gap-2.5 bg-white px-4 pb-2 pt-3 sm:pt-4">
             <div className="min-w-0 flex-1">
               <h1 className="text-[18px] font-bold leading-tight tracking-tight text-neutral-900 sm:text-[20px]">
-                {weatherOpen ? "Weather in" : "Alerts in"}{" "}
+                {weatherOpen ? (weatherPlace ? "Weather in" : "Local weather") : (weatherPlace ? "Alerts in" : "Local alerts")}{" "}
                 <span className="text-brand-orange" style={{ color: "var(--color-brand-orange)" }}>
                   {weatherPlace}
                 </span>
@@ -1194,7 +1199,7 @@ export default function ResidentAlertsMapPage() {
                 }
                 body={
                   chip === "emergencies"
-                    ? "Active SOS alerts in Marikina Heights will show here."
+                    ? `Active SOS alerts${weatherPlace ? ` in ${weatherPlace}` : ""} will show here.`
                     : chip === "announcements"
                       ? "Official barangay advisories will appear here."
                       : "Concerns with a location appear here."
@@ -1378,12 +1383,12 @@ export default function ResidentAlertsMapPage() {
             }}
             onClick={() => mapApiRef.current?.toggleStreetViewPick()}
           >
-            <PersonStandingIcon className="size-5" strokeWidth={1.9} />
+            <FootprintsIcon className="size-5" strokeWidth={1.9} />
           </MapControlButton>
         </MapControlStack>
 
         {svPick ? (
-          <div className="pointer-events-none absolute right-0 top-[calc(100%+8px)] w-max max-w-[min(15rem,calc(100vw-1.5rem))] rounded-lg bg-nav-bg/90 px-2.5 py-1.5 text-[11.5px] font-semibold text-white/85 shadow-md backdrop-blur">
+          <div className="pointer-events-none absolute right-0 top-[calc(100%+8px)] w-max max-w-[min(15rem,calc(100vw-1.5rem))] rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-neutral-700 shadow-md">
             Click the map to start Street View · Esc cancels
           </div>
         ) : null}
@@ -1472,7 +1477,7 @@ export default function ResidentAlertsMapPage() {
             <span className="mb-1 h-1.5 w-11 rounded-full bg-neutral-300" />
             {sheetMode === "hidden" || sheetHeight <= sheetSnaps().hidden + 8 ? (
               <p className="pb-1 text-[13px] font-semibold text-neutral-700">
-                Alerts in {weatherPlace}
+                {weatherPlace ? `Alerts in ${weatherPlace}` : "Local alerts"}
                 {mapItemCount > 0 ? ` · ${mapItemCount}` : ""}
               </p>
             ) : null}
@@ -1507,7 +1512,7 @@ export default function ResidentAlertsMapPage() {
                         onClick={() => snapSheetTo("expanded")}
                       >
                         <p className="text-[15px] font-bold text-neutral-900">
-                          {weatherOpen ? "Weather in" : "Alerts in"}{" "}
+                          {weatherOpen ? (weatherPlace ? "Weather in" : "Local weather") : (weatherPlace ? "Alerts in" : "Local alerts")}{" "}
                           <span className="text-brand-orange" style={{ color: "var(--color-brand-orange)" }}>
                             {weatherPlace}
                           </span>
@@ -1614,7 +1619,7 @@ export default function ResidentAlertsMapPage() {
                         }
                         body={
                           chip === "emergencies"
-                            ? "Active SOS alerts in Marikina Heights will show here."
+                            ? `Active SOS alerts${weatherPlace ? ` in ${weatherPlace}` : ""} will show here.`
                             : chip === "announcements"
                               ? "Official barangay advisories will appear here."
                               : "Concerns with a location appear here."

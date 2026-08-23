@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import logging
 from datetime import timedelta
@@ -29,6 +30,14 @@ from .models import (
     ResidenceVerificationCase,
     User,
     VerificationCheck,
+)
+from .id_integrity import RESUBMIT_MESSAGE as ID_RESUBMIT_MESSAGE
+from .id_integrity import authenticity_score as id_authenticity_score
+from .id_pipeline import (
+    STAGE_INTEGRITY,
+    _safe_id_integrity,
+    gate_payload,
+    run_pre_ocr_gate,
 )
 from .ocr import (
     OCRProviderAuthenticationError,
@@ -180,22 +189,30 @@ def _claim_identity_identifiers(case, candidates):
     return matches
 
 
-def published_configuration():
+def published_configuration(*, community=None, community_id=None):
+    queryset = OCRConfigurationVersion.objects.filter(
+        scope="residence_proof",
+        status=OCRConfigurationVersion.Status.PUBLISHED,
+    )
+    resolved_id = community_id or getattr(community, "pk", None)
+    if resolved_id is not None:
+        queryset = queryset.filter(community_id=resolved_id)
     return (
-        OCRConfigurationVersion.objects.filter(
-            scope="residence_proof",
-            status=OCRConfigurationVersion.Status.PUBLISHED,
-        )
+        queryset
         .prefetch_related("document_types__fields", "rules")
         .first()
     )
 
 
-def draft_configuration():
-    return OCRConfigurationVersion.objects.filter(
+def draft_configuration(*, community=None, community_id=None):
+    queryset = OCRConfigurationVersion.objects.filter(
         scope="residence_proof",
         status=OCRConfigurationVersion.Status.DRAFT,
-    ).first()
+    )
+    resolved_id = community_id or getattr(community, "pk", None)
+    if resolved_id is not None:
+        queryset = queryset.filter(community_id=resolved_id)
+    return queryset.first()
 
 
 def document_type_for_registration(code: str, *, configuration=None):
@@ -232,8 +249,11 @@ def normalize_proof_sides(document_type, proof_files, proof_sides=None):
     return sides
 
 
-def validate_registration_selection(proof_type, proof_files, proof_sides=None):
-    configuration, document_type = document_type_for_registration(proof_type)
+def validate_registration_selection(proof_type, proof_files, proof_sides=None, *, configuration=None):
+    configuration, document_type = document_type_for_registration(
+        proof_type,
+        configuration=configuration,
+    )
     sides = normalize_proof_sides(document_type, proof_files, proof_sides)
     for proof_file in proof_files:
         claimed = (getattr(proof_file, "content_type", "") or "").lower()
@@ -273,19 +293,45 @@ class _SubmittedProfile:
         self.date_of_birth = dob or None
 
 
+def align_to_template_sample(content: bytes, document_type, side: str | None) -> tuple[bytes, dict]:
+    """Warp a submission into the frame its field regions were drawn in.
+
+    Only worth doing when regions exist — without them extraction is label-based
+    and geometry does not matter. When it succeeds the stored fractions mean
+    what they meant in Mark Areas, whatever angle, distance, or quarter turn the
+    photo was taken at. When it fails the bytes come back untouched: a wrong
+    warp is worse than no warp, because it moves every box at once.
+    """
+    meta = {"aligned": False, "reason": "no_regions"}
+    if not content or not document_uses_field_regions(document_type):
+        return content, meta
+    try:
+        from .document_align import align_bytes_to_sample, sample_bytes_for_side
+
+        sample = sample_bytes_for_side(document_type, side)
+        if not sample:
+            return content, {"aligned": False, "reason": "no_sample"}
+        return align_bytes_to_sample(content, sample)
+    except Exception:
+        logger.exception("Alignment to template sample failed; using the photo as sent")
+        return content, {"aligned": False, "reason": "error"}
+
+
 def detect_residence_proof(
     proof_file,
     *,
     hint_type: str | None = None,
     side: str | None = None,
     submitted_profile: dict | None = None,
+    configuration=None,
+    forensics: dict | None = None,
 ) -> dict:
     """Classify an uploaded/captured proof against published enabled templates.
 
     Used at sign-up so the ID type dropdown can auto-select. Does not create a case.
     When ``side`` is front/back, only fields for that side are extracted and validated.
     """
-    configuration = published_configuration()
+    configuration = configuration or published_configuration()
     if configuration is None:
         return {
             "detected": False,
@@ -334,6 +380,46 @@ def detect_residence_proof(
     if hint_type:
         hint = next((item for item in enabled_types if item.code == hint_type), None)
 
+    # The file and picture checks run on the bytes as the resident sent them.
+    # Deskew and CLAHE below exist to help OCR read text; they also flatten
+    # grain, sharpen edges, and shift geometry, which is exactly the evidence
+    # those checks read.
+    original_content = content
+
+    # File check, then picture check, then OCR — and OCR only if both passed.
+    # Nothing below this point is worth paying for on a document the picture
+    # already disqualified: clean text off a cartoon ID proves nothing.
+    #
+    # The reference sample can only be compared against a known template. When
+    # the resident picked an ID type from the dropdown — the normal case — that
+    # is the hint. When they did not, the layout comparison has nothing to
+    # compare to, so the picture is judged on its own and the gate still runs
+    # first rather than waiting for OCR to name a type.
+    gate_type = hint if hint is not None else (enabled_types[0] if len(enabled_types) == 1 else None)
+    gate = run_pre_ocr_gate(
+        contents=[original_content],
+        document_type=gate_type,
+        configuration=configuration,
+        forensics=forensics,
+        run_forensics=False,
+    )
+    integrity = gate.get("integrity")
+    if not gate["passed"]:
+        return {
+            "detected": False,
+            "document_type": (
+                {"code": gate_type.code, "name": gate_type.name} if gate_type else None
+            ),
+            "match_score": 0.0,
+            "confidence": None,
+            "extracted_fields": {},
+            "template_match": None,
+            "id_integrity": integrity,
+            "pipeline": gate_payload(gate),
+            "reasons": [gate["message"]],
+            "message": gate["message"],
+        }
+
     # Do not spend another hosted request while the configured provider circuit
     # is open. A missing key is handled by the normal fallback path and is not a
     # circuit outage.
@@ -351,7 +437,20 @@ def detect_residence_proof(
 
     deskew_meta = {"deskewed": False, "skipped_for_regions": use_regions}
     enhance_meta = {"enhanced": False}
-    if not use_regions:
+    align_meta = {"aligned": False, "reason": "no_regions"}
+    if use_regions:
+        # Regions are fractions of the Mark Areas sample, so the submission has
+        # to be put in that frame before they mean anything. Skipping this is
+        # what let a sideways phone photo read "MALE" out of the name box.
+        aligned, align_meta = align_to_template_sample(
+            content,
+            preselected or hint,
+            side,
+        )
+        if align_meta.get("aligned") and aligned:
+            content = aligned
+            filename = "aligned.jpg"
+    else:
         # Auto-crop/deskew ID card when possible (small/tilted/off-center uploads)
         try:
             from .document_deskew import deskew_id_card_bytes
@@ -398,6 +497,7 @@ def detect_residence_proof(
                     "probe": "sign_up_detect",
                     "deskew": deskew_meta,
                     "enhance": enhance_meta,
+                    "align": align_meta,
                     "regions": use_regions,
                 },
             )
@@ -411,6 +511,8 @@ def detect_residence_proof(
             "confidence": None,
             "extracted_fields": {},
             "template_match": None,
+            "id_integrity": integrity,
+            "pipeline": gate_payload(gate),
             "reasons": ["OCR service unavailable."],
             "message": "We could not read the document right now. Try again in a moment.",
         }
@@ -423,6 +525,8 @@ def detect_residence_proof(
             "confidence": None,
             "extracted_fields": {},
             "template_match": None,
+            "id_integrity": integrity,
+            "pipeline": gate_payload(gate),
             "reasons": ["Unexpected detection error."],
             "message": "We could not read the document. Try a clearer photo.",
         }
@@ -446,6 +550,39 @@ def detect_residence_proof(
         detected_type = enabled_types[0]
         type_score = max(float(type_score or 0), 0.2)
 
+    # The gate ran before OCR with no template to compare layouts against, and
+    # classification has now named one. Comparing against the barangay's stored
+    # sample is the one thing that could not be done earlier, so it runs here —
+    # after the text was read, but still before the resident is told anything.
+    if (
+        detected_type is not None
+        and gate_type is None
+        and (integrity or {}).get("compared_to_sample") is False
+    ):
+        second_pass = _safe_id_integrity(
+            content=original_content,
+            document_type=detected_type,
+            configuration=configuration,
+        )
+        if second_pass is not None:
+            integrity = second_pass
+
+    if integrity and integrity.get("flagged"):
+        return {
+            "detected": False,
+            "document_type": (
+                {"code": detected_type.code, "name": detected_type.name} if detected_type else None
+            ),
+            "match_score": round(float(type_score or 0), 4),
+            "confidence": None,
+            "extracted_fields": {},
+            "template_match": None,
+            "id_integrity": integrity,
+            "pipeline": {**gate_payload(gate), "blocked_by": STAGE_INTEGRITY, "reached": STAGE_INTEGRITY},
+            "reasons": [ID_RESUBMIT_MESSAGE],
+            "message": ID_RESUBMIT_MESSAGE,
+        }
+
     line_count = len(lines or [])
     if detected_type is None:
         reasons = [
@@ -460,6 +597,8 @@ def detect_residence_proof(
             "confidence": None,
             "extracted_fields": {},
             "template_match": None,
+            "id_integrity": integrity,
+            "pipeline": gate_payload(gate),
             "reasons": reasons,
             "message": (
                 "We could not read enough text from this photo. Use a clearer, well-lit image of your document."
@@ -480,6 +619,8 @@ def detect_residence_proof(
             "confidence": 0.0,
             "extracted_fields": {},
             "template_match": None,
+            "id_integrity": integrity,
+            "pipeline": gate_payload(gate),
             "reasons": ["No readable text found in the photo"],
             "message": "We could not read any text from this photo. Retake with better lighting and hold steady.",
         }
@@ -593,6 +734,8 @@ def detect_residence_proof(
             "extracted_fields": extracted,
             "template_match": template_match,
             "field_checks": field_checks,
+            "id_integrity": integrity,
+            "pipeline": gate_payload(gate),
             "reasons": reasons,
             "message": primary,
         }
@@ -609,6 +752,9 @@ def detect_residence_proof(
         "template_match": template_match,
         "field_checks": field_checks,
         "deskew": deskew_meta,
+        "align": align_meta,
+        "id_integrity": integrity,
+        "pipeline": gate_payload(gate),
         "reasons": [],
         "message": f"Your {detected_type.name} looks good.",
     }
@@ -618,6 +764,7 @@ def detect_residence_proof(
 def create_registration_case(user, proofs, *, configuration, document_type, sides):
     case = ResidenceVerificationCase.objects.create(
         user=user,
+        community=configuration.community,
         configuration=configuration,
         document_type=document_type,
         status=ResidenceVerificationCase.Status.AWAITING_EMAIL,
@@ -776,6 +923,33 @@ def process_verification_case(case_id, *, trigger=VerificationCheck.Trigger.SYST
     case, attempts = prepare_case_attempt(case_id, trigger)
     if not attempts:
         return case
+
+    # File check and picture check before a single OCR request is spent. `detect`
+    # already ran this while the resident was on the upload step, but that
+    # endpoint is a convenience and a submission can reach registration without
+    # it. One flagged photo condemns the case: a forged front does not become
+    # acceptable because the back is genuine.
+    try:
+        proof_contents = [_read_private_file(attempt.proof.file) for attempt in attempts]
+    except Exception:
+        logger.exception("Could not read stored proof files for case_id=%s", case_id)
+        safe_error = OCRProviderUnavailable("Stored proof files could not be read.")
+        return fail_case_attempts(case.pk, attempts, safe_error)
+
+    gate = run_pre_ocr_gate(
+        contents=proof_contents,
+        document_type=case.document_type,
+        configuration=case.configuration,
+        run_forensics=True,
+    )
+    if not gate["passed"]:
+        return reject_case_before_ocr(case.pk, attempts, gate)
+
+    # Deliberately after the gate. Picking a provider can itself end the case —
+    # no key, or an open circuit, routes to manual review — and a document the
+    # file check already rejected must not be queued for an official just
+    # because OCR happened to be down. The layers that reached a verdict get to
+    # keep it.
     if provider is None:
         # Always prefer hosted OCR.space, falling back to local EasyOCR only
         # when the primary actually fails. The circuit breaker still tracks
@@ -805,9 +979,17 @@ def process_verification_case(case_id, *, trigger=VerificationCheck.Trigger.SYST
     per_side_extracted = []
     profile = case.user.resident_profile
     use_regions = document_uses_field_regions(case.document_type)
+
+    align_metas = []
     try:
-        for attempt in attempts:
-            content = _read_private_file(attempt.proof.file)
+        for index, attempt in enumerate(attempts):
+            content = proof_contents[index]
+            attempt_side = (getattr(attempt.proof, "side", None) or "single").strip().lower()
+            if use_regions:
+                content, align_meta = align_to_template_sample(
+                    content, case.document_type, attempt_side
+                )
+                align_metas.append(align_meta)
             response = provider.recognize(
                 content,
                 suffix=suffix_for_filename(attempt.proof.original_filename),
@@ -840,6 +1022,7 @@ def process_verification_case(case_id, *, trigger=VerificationCheck.Trigger.SYST
                         "probe": "verification",
                         "side": proof_side,
                         "regions": use_regions,
+                        "align": align_metas[index] if index < len(align_metas) else None,
                     },
                 )
     except OCRProviderError as exc:
@@ -878,7 +1061,72 @@ def process_verification_case(case_id, *, trigger=VerificationCheck.Trigger.SYST
         all_lines,
         extracted=merged,
     )
-    return finalize_case_attempts(case.pk, attempts, responses, engine)
+
+    return finalize_case_attempts(
+        case.pk,
+        attempts,
+        responses,
+        engine,
+        integrity=gate.get("integrity"),
+        gate=gate,
+    )
+
+
+@transaction.atomic
+def reject_case_before_ocr(case_id, attempts, gate):
+    """Close a case the file or picture check stopped, without reading any text.
+
+    Rejection, never manual review. The picture-check queue has no screen behind
+    it, so a resident sent there waits on nobody; being told to submit a real
+    document is something they can act on.
+    """
+    case = ResidenceVerificationCase.objects.select_for_update().select_related("user").get(pk=case_id)
+    now = timezone.now()
+    if case.decision_source == ResidenceVerificationCase.DecisionSource.OFFICIAL or case.status in TERMINAL_CASE_STATUSES:
+        VerificationCheck.objects.filter(pk__in=[item.pk for item in attempts]).update(
+            status=VerificationCheck.Status.CANCELLED,
+            completed_at=now,
+            failure_reason="Superseded by an official decision.",
+            retryable=False,
+        )
+        return case
+
+    integrity = gate.get("integrity")
+    for attempt in attempts:
+        attempt.status = VerificationCheck.Status.FAILED
+        attempt.ocr_confidence = Decimal("0")
+        attempt.extracted_fields = {}
+        attempt.rule_results = []
+        attempt.retryable = False
+        attempt.failure_reason_code = ResidenceVerificationCase.ReviewReason.MEDIA_INTEGRITY
+        attempt.failure_reason = gate.get("message", "")[:255]
+        attempt.authenticity_score = id_authenticity_score(integrity)
+        attempt.metadata = {
+            "provider": PROVIDER,
+            "pipeline": gate_payload(gate),
+            "id_integrity": integrity or {"checked": False},
+            "ocr_skipped": True,
+        }
+        attempt.completed_at = now
+        attempt.save()
+
+    case.status = ResidenceVerificationCase.Status.REJECTED
+    case.review_reason = ""
+    case.retry_eligible = False
+    case.decision_source = ResidenceVerificationCase.DecisionSource.SYSTEM
+    case.decision_reason = gate.get("message", "")
+    case.decided_at = now
+    case.completed_at = now
+    case.processing_started_at = None
+    case.revision += 1
+    case.save()
+    if case.user.status != User.Status.SUSPENDED:
+        case.user.status = User.Status.REJECTED
+        case.user.save(update_fields=["status", "updated_at"])
+        from .email_services import send_account_email_after_commit
+
+        send_account_email_after_commit(case.user, "verification_rejected")
+    return case
 
 
 @transaction.atomic
@@ -912,9 +1160,22 @@ def fail_case_attempts(case_id, attempts, error):
 
 
 @transaction.atomic
-def finalize_case_attempts(case_id, attempts, responses, engine):
+def finalize_case_attempts(case_id, attempts, responses, engine, *, integrity=None, gate=None):
     case = ResidenceVerificationCase.objects.select_for_update().select_related("user").get(pk=case_id)
     now = timezone.now()
+
+    # The picture check can only ever make the outcome worse. A genuine-looking
+    # card never rescues a document the published rules already rejected, and a
+    # flag never routes to manual review — that queue has no screen behind it,
+    # so a resident sent there waits on nobody. They are told to submit a real
+    # document instead, which is something they can act on.
+    integrity_flagged = bool(integrity and integrity.get("flagged"))
+    if integrity_flagged and engine.outcome != "reject":
+        engine = dataclasses.replace(
+            engine,
+            outcome="reject",
+            review_reason=ResidenceVerificationCase.ReviewReason.MEDIA_INTEGRITY,
+        )
     if case.decision_source == ResidenceVerificationCase.DecisionSource.OFFICIAL or case.status in TERMINAL_CASE_STATUSES:
         VerificationCheck.objects.filter(pk__in=[item.pk for item in attempts]).update(
             status=VerificationCheck.Status.CANCELLED,
@@ -969,12 +1230,15 @@ def finalize_case_attempts(case_id, attempts, responses, engine):
         attempt.ocr_address = str(
             (engine.extracted_fields.get("address") or engine.extracted_fields.get("service_address") or {}).get("value", "")
         )[:255]
+        attempt.authenticity_score = id_authenticity_score(integrity)
         attempt.metadata = {
             "provider": PROVIDER,
             "detected_document_type": engine.detected_document_type_code,
             "document_type_score": engine.document_type_score,
             "document_type_mismatch": engine.document_type_mismatch,
             "duplicate_identity_matches": duplicate_identity_matches,
+            "id_integrity": integrity or {"checked": False},
+            "pipeline": gate_payload(gate),
         }
         attempt.completed_at = now
         attempt.save()
@@ -1010,7 +1274,11 @@ def finalize_case_attempts(case_id, attempts, responses, engine):
         case.review_reason = ""
         case.retry_eligible = False
         case.decision_source = ResidenceVerificationCase.DecisionSource.SYSTEM
-        case.decision_reason = "Published OCR rules rejected the submitted document."
+        case.decision_reason = (
+            ID_RESUBMIT_MESSAGE
+            if integrity_flagged
+            else "Published OCR rules rejected the submitted document."
+        )
         case.decided_at = now
         case.completed_at = now
         case.processing_started_at = None
@@ -1339,18 +1607,45 @@ def process_test_run(test_run_id, *, provider=None, force=False, side: str | Non
         test_side = (getattr(test_run.sample, "name", None) or "").strip().lower() or None
     if test_side not in {None, "front", "back", "single"}:
         test_side = None
+    # Same order the resident's submission runs in: file check, picture check,
+    # then text. An official testing a template sees what a resident would get,
+    # including which stage stopped it — not a description of it.
+    try:
+        image_bytes = _read_private_file(field_file)
+    except Exception:
+        return fail_test_run(test_run_id, OCRProviderError("The test file could not be read."))
+
+    gate = run_pre_ocr_gate(
+        contents=[image_bytes],
+        document_type=test_run.document_type,
+        configuration=test_run.configuration,
+        forensics=(test_run.metadata or {}).get("forensics"),
+    )
+    if not gate["passed"]:
+        return finalize_blocked_test_run(test_run_id, gate, side=test_side)
+
     try:
         use_regions = document_uses_field_regions(test_run.document_type)
-        image_bytes = _read_private_file(field_file)
+        ocr_bytes, align_meta = (
+            align_to_template_sample(image_bytes, test_run.document_type, test_side)
+            if use_regions
+            else (image_bytes, {"aligned": False, "reason": "no_regions"})
+        )
         response = _recognize_with_cache(
             provider,
-            image_bytes,
+            ocr_bytes,
             suffix=suffix_for_filename(test_run.original_filename or getattr(test_run.sample, "original_filename", "")),
             deskew=not use_regions,
         )
         record_provider_success(
             latency_ms=response.latency_ms,
-            details={"model": response.model, "probe": "test", "side": test_side, "regions": use_regions},
+            details={
+                "model": response.model,
+                "probe": "test",
+                "side": test_side,
+                "regions": use_regions,
+                "align": align_meta,
+            },
             provider_key=OFFICIAL_OCR_PROVIDER,
         )
         simulated = (test_run.metadata or {}).get("simulated_profile") or {}
@@ -1367,6 +1662,7 @@ def process_test_run(test_run_id, *, provider=None, force=False, side: str | Non
             side=test_side,
             page_size=page_size,
         )
+        test_integrity = gate.get("integrity")
     except OCRProviderError as exc:
         record_provider_failure(exc, provider_key=OFFICIAL_OCR_PROVIDER, configured=True)
         return fail_test_run(test_run_id, exc)
@@ -1395,6 +1691,8 @@ def process_test_run(test_run_id, *, provider=None, force=False, side: str | Non
         # without a schema change.
         extracted = dict(engine.extracted_fields or {})
         extracted["__template_match__"] = template_match
+        extracted["__id_integrity__"] = test_integrity or {"checked": False}
+        extracted["__pipeline__"] = gate_payload(gate)
         if test_side:
             extracted["__test_side__"] = test_side
         is_easyocr = response.job_id == "local-easyocr"
@@ -1403,9 +1701,11 @@ def process_test_run(test_run_id, *, provider=None, force=False, side: str | Non
             "provider": "easyocr" if is_easyocr else "ocrspace",
             "model": response.model,
             "profile_source": profile_source,
+            "align": align_meta,
         }
         template_ok = bool(template_match.get("passed", True))
-        outcome_passed = engine.outcome == "passed" and template_ok
+        integrity_ok = not (test_integrity or {}).get("flagged")
+        outcome_passed = engine.outcome == "passed" and template_ok and integrity_ok
         test_run.status = OCRTestRun.Status.PASSED if outcome_passed else OCRTestRun.Status.WARNING
         test_run.provider_job_id = response.job_id
         test_run.ocr_confidence = Decimal(str(engine.confidence))
@@ -1463,6 +1763,41 @@ def process_test_run(test_run_id, *, provider=None, force=False, side: str | Non
         test_run.completed_at = timezone.now()
         test_run.save()
         return test_run
+
+
+@transaction.atomic
+def finalize_blocked_test_run(test_run_id, gate, *, side=None):
+    """Close a test run the file or picture check stopped, with no OCR result.
+
+    FAILED, not ERROR: nothing broke. The pipeline reached a verdict and the
+    verdict was no, which is exactly what the resident would have been told.
+    Empty extracted fields are the honest answer — no text was read, so the
+    results panel must not imply any was.
+    """
+    test_run = OCRTestRun.objects.select_for_update().get(pk=test_run_id)
+    extracted = {
+        "__template_match__": None,
+        "__id_integrity__": gate.get("integrity") or {"checked": False},
+        "__pipeline__": gate_payload(gate),
+    }
+    if side:
+        extracted["__test_side__"] = side
+    test_run.status = OCRTestRun.Status.FAILED
+    test_run.provider_job_id = ""
+    test_run.ocr_confidence = Decimal("0")
+    test_run.extracted_fields = extracted
+    test_run.rule_results = []
+    test_run.metadata = {
+        **(test_run.metadata or {}),
+        "provider": "none",
+        "ocr_skipped": True,
+        "blocked_by": gate.get("blocked_by"),
+    }
+    test_run.error_code = ResidenceVerificationCase.ReviewReason.MEDIA_INTEGRITY
+    test_run.error_message = (gate.get("message") or "")[:255]
+    test_run.completed_at = timezone.now()
+    test_run.save()
+    return test_run
 
 
 @transaction.atomic

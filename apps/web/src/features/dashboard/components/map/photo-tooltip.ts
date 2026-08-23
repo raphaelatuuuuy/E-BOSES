@@ -1,13 +1,10 @@
-import type { MarkerTone } from "@/features/dashboard/components/map/markers"
+import type leaflet from "leaflet"
 
-const SURFACE: Record<MarkerTone, string> = {
-  light: "#ffffff",
-  dark: "#0b1020",
-}
-
-const SHELL: Record<MarkerTone, string> = {
-  light: "box-shadow:0 2px 10px rgba(0,0,0,.15);",
-  dark: "border:1px solid rgba(255,255,255,.12);box-shadow:0 10px 26px rgba(0,0,0,.5);",
+/** What every map hover card shows: a photo when there is one, always words. */
+export type MapTip = {
+  image?: string | null
+  title?: string | null
+  excerpt?: string | null
 }
 
 function escapeHtml(value: string) {
@@ -18,25 +15,83 @@ function escapeHtml(value: string) {
     .replace(/"/g, "&quot;")
 }
 
-export function photoTooltipHtml(photoUrl: string, tone: MarkerTone = "light", caption?: string | null) {
-  const surface = SURFACE[tone]
-  const label = caption
-    ? `<div style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 2px 1px;font-size:11.5px;font-weight:600;line-height:1.25;color:${tone === "dark" ? "#f2f5fa" : "#0f172a"};">${escapeHtml(caption)}</div>`
-    : ""
-  return `
-    <div style="position:relative;background:${surface};border-radius:10px;${SHELL[tone]}padding:5px;pointer-events:none;opacity:0;transition:opacity 150ms ease;">
-      <img src="${photoUrl}" alt="" style="display:block;width:160px;height:108px;object-fit:cover;border-radius:6px;" onload="this.parentElement.style.opacity='1'" onerror="this.style.display='none'" />
-      ${label}
-      <div style="position:absolute;bottom:0;left:50%;transform:translate(-50%,100%);width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:6px solid ${surface};"></div>
-    </div>`
+/** Empty when the tip carries nothing, so callers can skip binding entirely. */
+export function mapTipKey(tip: MapTip | null | undefined) {
+  if (!tip) return ""
+  const parts = [tip.image, tip.title, tip.excerpt].map((part) => part?.trim() ?? "")
+  return parts.some(Boolean) ? parts.join("|") : ""
 }
 
-export function photoTooltipOptions(pinSize: number) {
-  return {
-    direction: "top" as const,
-    offset: [0, -pinSize / 2 - 4] as [number, number],
-    opacity: 1,
-    className: "eboses-photo-tooltip",
-    permanent: false,
-  }
+/** The one card markup — Street View's mini map and every hover map share it. */
+export function mapCardHtml(tip: MapTip) {
+  const image = tip.image
+    ? `<img class="eboses-sv-pop__img" src="${escapeHtml(tip.image)}" alt="" />`
+    : ""
+  const title = tip.title?.trim()
+    ? `<p class="eboses-sv-pop__title">${escapeHtml(tip.title.trim())}</p>`
+    : ""
+  const excerpt = tip.excerpt?.trim()
+    ? `<p class="eboses-sv-pop__desc">${escapeHtml(tip.excerpt.trim())}</p>`
+    : ""
+  return `<div class="eboses-sv-pop__body">${image}${title}${excerpt}</div>`
+}
+
+function hoverCard(L: typeof leaflet, pinSize: number) {
+  return L.popup({
+    className: "eboses-sv-pop",
+    closeButton: false,
+    // Slides the map so a card opened near an edge is never cut off.
+    autoPan: true,
+    autoPanPadding: L.point(12, 12),
+    maxWidth: 240,
+    offset: L.point(0, -pinSize / 2 + 6),
+  })
+}
+
+/** Null when there is nothing worth showing, so callers can skip the hover. */
+export function makeHoverCard(
+  L: typeof leaflet,
+  tip: MapTip | null | undefined,
+  pinSize: number,
+) {
+  if (!tip || !mapTipKey(tip)) return null
+  return hoverCard(L, pinSize).setContent(mapCardHtml(tip))
+}
+
+/** Brings the hovered pin to the middle of the view, then opens its card. */
+export function openHoverCard(map: leaflet.Map, card: leaflet.Popup, marker: leaflet.Marker) {
+  const at = marker.getLatLng()
+  card.setLatLng(at)
+  map.panTo(at, { animate: true, duration: 0.25 })
+  map.openPopup(card)
+}
+
+/**
+ * Hover card on a marker. A popup rather than a tooltip: only popups auto-pan
+ * the map to stay whole. It is never bound to the marker, so a click still
+ * belongs to whatever selection the map does.
+ */
+export function bindHoverCard(
+  L: typeof leaflet,
+  map: leaflet.Map,
+  marker: leaflet.Marker,
+  tip: MapTip | null | undefined,
+  pinSize: number,
+) {
+  marker.off("mouseover")
+  const card = makeHoverCard(L, tip, pinSize)
+  if (!card) return
+  marker.on("mouseover", () => openHoverCard(map, card, marker))
+}
+
+/**
+ * Closing on the marker's own mouseout would fight the auto-pan: the pan
+ * slides the pin out from under the cursor and the card would flicker shut
+ * the moment it opened. Leaving the map closes it instead.
+ */
+export function closeHoverCardsOnLeave(map: leaflet.Map) {
+  const host = map.getContainer()
+  const close = () => map.closePopup()
+  host.addEventListener("mouseleave", close)
+  return () => host.removeEventListener("mouseleave", close)
 }

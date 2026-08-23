@@ -742,8 +742,8 @@ img.leaflet-tile,
   inset: 0;
   border-radius: 9999px;
   background: var(--pin);
-  opacity: 0.45;
-  animation: eboses-pin-halo 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+  opacity: 0.28;
+  animation: eboses-pin-halo 2.8s cubic-bezier(0, 0, 0.2, 1) infinite;
   will-change: transform, opacity;
 }
 .eboses-pin__disc {
@@ -829,31 +829,73 @@ img.leaflet-tile,
 .eboses-map-dark .leaflet-tooltip-pane {
   z-index: 2000 !important;
 }
-.eboses-photo-tooltip {
-  z-index: 1500 !important;
-  margin: 0 !important;
-  border: none !important;
-  background: transparent !important;
-  padding: 0 !important;
-  box-shadow: none !important;
-}
-.eboses-photo-tooltip::before {
-  display: none !important;
-}
-.eboses-photo-tooltip .leaflet-tooltip-content {
-  margin: 0 !important;
-  padding: 0 !important;
-}
 .eboses-sv-pick,
 .eboses-sv-pick .leaflet-container,
 .eboses-sv-pick .leaflet-interactive,
 .eboses-map-light.eboses-sv-pick,
 .eboses-map-dark.eboses-sv-pick,
 .eboses-alerts-map.eboses-sv-pick {
-  cursor: crosshair !important;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="%23111827" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 3.11-2 5.66-2 8.68V16a2 2 0 1 1-4 0Z"/><path d="M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 3.11 2 5.66 2 8.68V20a2 2 0 1 0 4 0Z"/><path d="M16 17h4"/><path d="M4 13h4"/></svg>') 14 14, crosshair !important;
+}
+body.eboses-sv-open .eboses-pin__halo,
+body.eboses-sv-open .eboses-pin__core {
+  animation-play-state: paused !important;
+}
+/* Popups outrank every pin, including the tooltip pane the alerts map lifts. */
+.leaflet-popup-pane {
+  z-index: 2100 !important;
+}
+/* The card is a bubble over its pin; a click belongs to the pin underneath. */
+.eboses-sv-pop {
+  pointer-events: none;
+}
+.eboses-sv-pop .leaflet-popup-content-wrapper {
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.16);
+  font-family: var(--font-sans, ui-sans-serif), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, Arial, sans-serif;
+}
+.eboses-sv-pop .leaflet-popup-content {
+  margin: 8px 10px;
+  width: 224px !important;
+  line-height: 1.4;
+}
+.eboses-sv-pop__body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+/* Outranks Leaflet's own `.leaflet-popup-content p { margin: 18px 0 }`, which
+   otherwise pries the title and the description apart. */
+.eboses-sv-pop .leaflet-popup-content .eboses-sv-pop__body p {
+  margin: 0;
+}
+.eboses-sv-pop__img {
+  display: block;
+  width: 100%;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+.eboses-sv-pop__title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #171717;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.eboses-sv-pop__desc {
+  font-size: 11.5px;
+  color: #525252;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .eboses-pin--dot.is-live .eboses-pin__core {
-  animation: eboses-pin-blink 1.8s ease-in-out infinite;
+  animation: eboses-pin-blink 2.8s ease-in-out infinite;
 }
 .eboses-pin--glyph.is-live .eboses-pin__halo {
   opacity: 0.3;
@@ -893,11 +935,11 @@ img.leaflet-tile,
 @keyframes eboses-pin-halo {
   0% {
     transform: scale(1);
-    opacity: 0.45;
+    opacity: 0.28;
   }
   70%,
   100% {
-    transform: scale(2.6);
+    transform: scale(1.9);
     opacity: 0;
   }
 }
@@ -906,12 +948,12 @@ img.leaflet-tile,
   100% {
     box-shadow:
       0 2px 8px rgb(15 23 42 / 0.4),
-      0 0 0 0 var(--pin);
+      0 0 0 0 color-mix(in srgb, var(--pin) 55%, transparent);
   }
   50% {
     box-shadow:
       0 2px 8px rgb(15 23 42 / 0.4),
-      0 0 10px 3px var(--pin);
+      0 0 7px 2px color-mix(in srgb, var(--pin) 55%, transparent);
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -929,11 +971,22 @@ img.leaflet-tile,
 .sos-timeline__ahead {
   background-image: linear-gradient(
     to bottom,
-    rgb(255 255 255 / 0.28) 0 3px,
+    rgb(203 213 225 / 0.9) 0 3px,
     transparent 3px 7px
   );
   background-size: 1px 7px;
   background-repeat: repeat-y;
+}
+
+.dialog-resize-grip {
+  resize: both;
+}
+.dialog-resize-grip::-webkit-resizer {
+  display: none;
+}
+.dialog-resize-grip::after {
+  display: none !important;
+  content: none !important;
 }
 
 @keyframes sosTimelineBreathe {

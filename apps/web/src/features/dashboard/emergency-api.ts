@@ -55,12 +55,18 @@ export function transferEmergency(id: number, departmentCode: string, reason: st
 
 export function requestEmergencyBackup(
   id: number,
-  payload: { backup_type: string; reason: string; urgency: string },
+  payload: { target_department_id: number; reason: string; urgency: string; idempotency_key: string },
 ) {
   return apiRequest<EmergencyAlert>(`/emergencies/${id}/request-backup/`, {
     method: "POST",
     body: JSON.stringify(payload),
   })
+}
+
+export interface EmergencyBackupUnit { id: number; code: string; name: string }
+
+export function getEmergencyBackupUnits(id: number) {
+  return apiRequest<EmergencyBackupUnit[]>(`/emergencies/${id}/request-backup/`)
 }
 
 export function revealReporterContact(id: number) {

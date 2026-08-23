@@ -1,3 +1,5 @@
+import uuid
+
 from django.conf import settings as django_settings
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -117,12 +119,23 @@ class ResidentProfile(models.Model):
         PREFER_NOT_TO_SAY = "prefer_not_to_say", "Prefer not to say"
 
     user = models.OneToOneField(django_settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="resident_profile")
+    community = models.ForeignKey(
+        "emergencies.Community",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="residents",
+    )
     first_name = models.CharField(max_length=50)
     middle_name = models.CharField(max_length=50, blank=True)
     last_name = models.CharField(max_length=50)
     date_of_birth = models.DateField()
     address = models.CharField(max_length=200)
     barangay = models.CharField(max_length=120, default="Marikina Heights")
+    home_latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    home_longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    home_accuracy_meters = models.FloatField(null=True, blank=True)
+    home_location_source = models.CharField(max_length=16, blank=True)
     gender = models.CharField(max_length=20, choices=Gender.choices, blank=True)
     avatar = models.CharField(max_length=30, blank=True)
     profile_completed_at = models.DateTimeField(null=True, blank=True)
@@ -248,6 +261,41 @@ class EmailOTPChallenge(models.Model):
         return timezone.now() >= self.expires_at
 
 
+class CommunityResolution(models.Model):
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    email_hash = models.CharField(max_length=64, db_index=True)
+    email_challenge = models.ForeignKey(
+        "EmailOTPChallenge",
+        null=True,
+        on_delete=models.PROTECT,
+        related_name="community_resolutions",
+    )
+    community = models.ForeignKey(
+        "emergencies.Community",
+        on_delete=models.CASCADE,
+        related_name="signup_resolutions",
+    )
+    configuration = models.ForeignKey(
+        "OCRConfigurationVersion",
+        on_delete=models.PROTECT,
+        related_name="signup_resolutions",
+    )
+    latitude = models.DecimalField(max_digits=10, decimal_places=7)
+    longitude = models.DecimalField(max_digits=10, decimal_places=7)
+    accuracy_meters = models.FloatField(null=True, blank=True)
+    address = models.JSONField(default=dict, blank=True)
+    source = models.CharField(max_length=16)
+    boundary_revision = models.PositiveIntegerField()
+    expires_at = models.DateTimeField(db_index=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["community", "expires_at"], name="accounts_comm_res_expiry"),
+        ]
+
+
 class OCRConfigurationVersion(models.Model):
     """Immutable-after-publish OCR policy snapshot for residence verification."""
 
@@ -256,6 +304,13 @@ class OCRConfigurationVersion(models.Model):
         PUBLISHED = "published", "Published"
         ARCHIVED = "archived", "Archived"
 
+    community = models.ForeignKey(
+        "emergencies.Community",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="ocr_configurations",
+    )
     scope = models.CharField(max_length=64, default="residence_proof")
     version = models.PositiveIntegerField()
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
@@ -290,21 +345,21 @@ class OCRConfigurationVersion(models.Model):
     class Meta:
         ordering = ["-version"]
         constraints = [
-            models.UniqueConstraint(fields=["scope", "version"], name="accounts_ocr_cfg_scope_version_uniq"),
+            models.UniqueConstraint(fields=["community", "scope", "version"], name="accounts_ocr_cfg_comm_scope_ver_uniq"),
             models.UniqueConstraint(
-                fields=["scope"],
+                fields=["community", "scope"],
                 condition=models.Q(status="draft"),
-                name="accounts_ocr_cfg_one_draft_per_scope",
+                name="accounts_ocr_cfg_one_draft_per_comm",
             ),
             models.UniqueConstraint(
-                fields=["scope"],
+                fields=["community", "scope"],
                 condition=models.Q(status="published"),
-                name="accounts_ocr_cfg_one_published_per_scope",
+                name="accounts_ocr_cfg_one_pub_per_comm",
             ),
             models.CheckConstraint(condition=models.Q(version__gte=1), name="accounts_ocr_cfg_version_gte_1"),
             models.CheckConstraint(condition=models.Q(revision__gte=1), name="accounts_ocr_cfg_revision_gte_1"),
         ]
-        indexes = [models.Index(fields=["scope", "status"], name="acct_ocr_cfg_scope_status")]
+        indexes = [models.Index(fields=["community", "scope", "status"], name="acct_ocr_cfg_comm_status")]
 
     def __str__(self):
         return f"{self.scope} v{self.version} ({self.status})"
@@ -682,6 +737,9 @@ class ResidenceVerificationCase(models.Model):
         DOCUMENT_TYPE_MISMATCH = "document_type_mismatch", "Document type mismatch"
         RULE_MISMATCH = "rule_mismatch", "Validation rule mismatch"
         DUPLICATE_IDENTITY = "duplicate_identity", "Possible duplicate identity"
+        # A rejection code, never a review destination. The picture check tells
+        # the resident to submit a real document; nothing is queued for staff.
+        MEDIA_INTEGRITY = "media_integrity", "Document did not look genuine"
         RESUBMISSION_REQUIRED = "resubmission_required", "Request a new submission"
         OFFICIAL_REQUESTED = "official_requested", "Official requested review"
         LEGACY_PENDING = "legacy_pending", "Legacy pending verification"
@@ -694,6 +752,13 @@ class ResidenceVerificationCase(models.Model):
     user = models.ForeignKey(
         django_settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
+        related_name="residence_verification_cases",
+    )
+    community = models.ForeignKey(
+        "emergencies.Community",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
         related_name="residence_verification_cases",
     )
     configuration = models.ForeignKey(

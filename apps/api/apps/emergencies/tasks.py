@@ -34,6 +34,88 @@ def enqueue_emergency_media_preview(kind: str, media_id: int):
             generate_emergency_media_preview_task.run(kind, media_id)
 
 
+def enqueue_emergency_media_integrity(alert_id: int):
+    """Check the alert's photos for signs of manipulation, after dispatch.
+
+    Ordering is the whole point. Responders are already moving by the time
+    this runs, and nothing it finds can recall them. A fabricated-looking
+    photo is a reason to warn the responder, never a reason to make somebody
+    in trouble wait for a model to finish thinking.
+    """
+    from .tasks import check_emergency_media_integrity_task
+
+    try:
+        check_emergency_media_integrity_task.delay(alert_id)
+    except Exception:
+        # No inline fallback, even in development: running it here would put
+        # the vision call back on the dispatch path, which is exactly what
+        # this indirection exists to prevent.
+        pass
+
+
+@shared_task(time_limit=180, soft_time_limit=150)
+def check_emergency_media_integrity_task(alert_id: int):
+    from apps.concerns.ai.gemma_analyzer import confirm_media_integrity
+    from apps.concerns.ai.image_prep import prepare_image_for_gemma
+    from apps.concerns.models import ConcernClassificationConfiguration
+
+    from .models import EmergencyAlert
+
+    alert = EmergencyAlert.objects.filter(pk=alert_id).prefetch_related("media").first()
+    if alert is None:
+        return {"alert_id": alert_id, "status": "missing"}
+
+    config = ConcernClassificationConfiguration.current()
+    if not config.media_integrity_enabled:
+        return {"alert_id": alert_id, "status": "disabled"}
+
+    photos = [item for item in alert.media.all() if (item.mime_type or "").startswith("image/")]
+    if not photos:
+        return {"alert_id": alert_id, "status": "no_photo"}
+
+    minimum = float(getattr(config, "media_integrity_min_confidence", None) or 0.70)
+    findings = []
+    for index, media in enumerate(photos):
+        try:
+            with media.file.open("rb") as handle:
+                prepared = prepare_image_for_gemma(handle.read())
+        except Exception:
+            prepared = None
+        if prepared is None:
+            continue
+        # Reuses the concern second-opinion prompt directly. There is no first
+        # pass to confirm here, so the "claim" it is asked to check is the
+        # open question itself.
+        verdict = confirm_media_integrity(
+            image=prepared,
+            verdict="unknown",
+            signals=[],
+            min_confidence=minimum,
+        )
+        if verdict is None:
+            continue
+        findings.append(
+            {
+                "index": index,
+                "media_id": media.pk,
+                "verdict": verdict["verdict"],
+                "confidence": verdict["confidence"],
+                "signals": verdict["signals"],
+                "flagged": bool(verdict["agrees"]),
+            }
+        )
+
+    flagged = [item for item in findings if item["flagged"]]
+    alert.media_integrity = {
+        "status": "checked" if findings else "skipped",
+        "findings": findings,
+        "flagged": bool(flagged),
+        "action": config.media_integrity_emergency_action,
+    }
+    alert.save(update_fields=["media_integrity"])
+    return {"alert_id": alert_id, "status": "checked", "flagged": bool(flagged)}
+
+
 @shared_task(time_limit=120, soft_time_limit=90)
 def generate_emergency_media_preview_task(kind: str, media_id: int):
     from .media_services import ensure_emergency_media_preview

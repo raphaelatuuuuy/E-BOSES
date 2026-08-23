@@ -15,6 +15,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentProfile
+from apps.concerns.test_helpers import active_test_community
 from apps.capabilities import (
     ALL_CAPABILITIES,
     CONFIGURE_DISPATCH,
@@ -302,6 +303,7 @@ class NewUnitDispatchTests(APITestCase):
     """The unification actually delivering what it promised."""
 
     def setUp(self):
+        self.community = active_test_community()
         self.resident = User.objects.create_user(
             email="dispatch-resident@example.com",
             phone_number="+639171110020",
@@ -316,6 +318,7 @@ class NewUnitDispatchTests(APITestCase):
             date_of_birth="1990-01-01",
             address="12 Kalachuchi St",
             barangay="Marikina Heights",
+            community=self.community,
         )
 
     def _on_duty_responder(self, email, phone, department):
@@ -337,6 +340,7 @@ class NewUnitDispatchTests(APITestCase):
             date_of_birth="1990-01-01",
             address="Responder Base",
             barangay="Marikina Heights",
+            community=self.community,
         )
         Designation.objects.create(
             user=responder,
@@ -358,6 +362,7 @@ class NewUnitDispatchTests(APITestCase):
         # model this could never be dispatched to, whatever an official
         # configured, because routing read User.responder_unit.
         brigade = Department.objects.create(
+            community=self.community,
             name="Barangay Fire Brigade",
             code="fire-brigade",
             short_name="Fire Brigade",
@@ -365,6 +370,7 @@ class NewUnitDispatchTests(APITestCase):
             emergency_types=[EmergencyAlert.Type.FIRE],
         )
         EmergencyTypeRoleMap.objects.create(
+            community=self.community,
             emergency_type=EmergencyAlert.Type.FIRE,
             department=brigade,
             responder_unit="tanod",
@@ -395,6 +401,7 @@ class NewUnitDispatchTests(APITestCase):
 
     def test_deactivating_a_unit_stops_it_receiving_alerts(self):
         brigade = Department.objects.create(
+            community=self.community,
             name="Temporary Flood Team",
             code="flood-team",
             responds_to_emergencies=True,

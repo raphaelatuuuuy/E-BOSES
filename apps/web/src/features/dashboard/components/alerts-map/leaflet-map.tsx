@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { HomeIcon, MinusIcon, NavigationIcon, PersonStandingIcon, PlusIcon } from "lucide-react"
+import { FootprintsIcon, HomeIcon, MinusIcon, NavigationIcon, PlusIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import {
@@ -32,7 +32,14 @@ import {
 } from "@/features/dashboard/components/map/markers"
 import { escapeHtml } from "@/features/dashboard/components/map/concern-marker"
 import { lucideIconPaths } from "@/features/dashboard/components/map/lucide-glyphs"
-import { photoTooltipHtml, photoTooltipOptions } from "@/features/dashboard/components/map/photo-tooltip"
+import {
+  type MapTip,
+  bindHoverCard,
+  closeHoverCardsOnLeave,
+  makeHoverCard,
+  mapTipKey,
+  openHoverCard,
+} from "@/features/dashboard/components/map/photo-tooltip"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import {
   type LayerKey,
@@ -71,7 +78,7 @@ type MarkerSpec = {
   box: number
   html: () => string
   z: number
-  tooltip?: string | null
+  tip?: MapTip | null
   onClick?: () => void
 }
 
@@ -81,18 +88,12 @@ type MarkerEntry = {
   lat: number
   lng: number
   z: number
-  tooltip: string | null
-}
-
-function bindTip(marker: leaflet.Marker, box: number, tooltip: string | null) {
-  marker.unbindTooltip()
-  if (tooltip) {
-    marker.bindTooltip(() => photoTooltipHtml(tooltip, "light"), photoTooltipOptions(box))
-  }
+  tipKey: string
 }
 
 function syncMarkers(
   L: typeof leaflet,
+  map: leaflet.Map,
   group: leaflet.LayerGroup,
   entries: Map<string, MarkerEntry>,
   next: MarkerSpec[],
@@ -101,7 +102,8 @@ function syncMarkers(
   for (const spec of next) {
     seen.add(spec.key)
     const [lat, lng] = spec.coord
-    const tooltip = spec.tooltip || null
+    const tip = spec.tip || null
+    const tipKey = mapTipKey(tip)
     const existing = entries.get(spec.key)
     if (!existing) {
       const marker = L.marker(spec.coord, {
@@ -109,9 +111,9 @@ function syncMarkers(
         zIndexOffset: spec.z,
       })
       if (spec.onClick) marker.on("click", spec.onClick)
-      bindTip(marker, spec.box, tooltip)
+      bindHoverCard(L, map, marker, tip, spec.box)
       marker.addTo(group)
-      entries.set(spec.key, { marker, iconKey: spec.iconKey, lat, lng, z: spec.z, tooltip })
+      entries.set(spec.key, { marker, iconKey: spec.iconKey, lat, lng, z: spec.z, tipKey })
       continue
     }
     if (existing.lat !== lat || existing.lng !== lng) {
@@ -127,9 +129,9 @@ function syncMarkers(
       existing.marker.setZIndexOffset(spec.z)
       existing.z = spec.z
     }
-    if (existing.tooltip !== tooltip) {
-      bindTip(existing.marker, spec.box, tooltip)
-      existing.tooltip = tooltip
+    if (existing.tipKey !== tipKey) {
+      bindHoverCard(L, map, existing.marker, tip, spec.box)
+      existing.tipKey = tipKey
     }
   }
   for (const [key, entry] of entries) {
@@ -375,13 +377,6 @@ function AlertsLeafletMapInner({
         .eboses-map-light .leaflet-tooltip-pane {
           z-index: 2000 !important;
         }
-        .eboses-map-light .leaflet-control-attribution {
-          background: rgb(5 13 51 / 0.78);
-          color: rgb(255 255 255 / 0.5);
-        }
-        .eboses-map-light .leaflet-control-attribution a {
-          color: rgb(255 255 255 / 0.65);
-        }
         .eboses-map-light .leaflet-tooltip {
           background: rgba(5, 13, 51, 0.92);
           border: 1px solid rgba(255, 255, 255, 0.12);
@@ -453,6 +448,7 @@ function AlertsLeafletMapInner({
       connectorLayersRef.current = L.layerGroup().addTo(map)
       peopleLayersRef.current = L.layerGroup().addTo(map)
       mapRef.current = map
+      closeHoverCardsOnLeave(map)
 
       const notifyInteract = () => onMapInteractRef.current?.()
       map.on("dragstart", notifyInteract)
@@ -620,8 +616,9 @@ function AlertsLeafletMapInner({
   // none) highlights its street lines instead of drawing an arbitrary blob.
   useEffect(() => {
     const L = LRef.current
+    const map = mapRef.current
     const group = advisoryLayersRef.current
-    if (!L || !group) return
+    if (!L || !map || !group) return
     group.clearLayers()
     advisoryRoadsRef.current.clear()
     highlightGroupRef.current?.clearLayers()
@@ -629,10 +626,12 @@ function AlertsLeafletMapInner({
     focusIdRef.current = null
     if (!layers.advisories) return
 
-    const bindAdvisoryFocus = (id: number, marker: leaflet.Marker) => {
+    const bindAdvisoryFocus = (id: number, marker: leaflet.Marker, tip?: MapTip | null) => {
+      const card = makeHoverCard(L, tip, 26)
       marker.on("mouseover", () => {
         hoverIdRef.current = id
         applyAdvisoryFocus(id)
+        if (card) openHoverCard(map, card, marker)
       })
       marker.on("mouseout", () => {
         hoverIdRef.current = null
@@ -672,7 +671,7 @@ function AlertsLeafletMapInner({
             }),
             keyboard: true,
           }).addTo(group)
-          bindAdvisoryFocus(advisory.id, marker)
+          bindAdvisoryFocus(advisory.id, marker, { image: advisory.image_url, title: advisory.title, excerpt: advisory.body })
         }
         continue
       }
@@ -714,7 +713,7 @@ function AlertsLeafletMapInner({
           }),
           keyboard: true,
         }).addTo(group)
-        bindAdvisoryFocus(advisory.id, marker)
+        bindAdvisoryFocus(advisory.id, marker, { image: advisory.image_url, title: advisory.title, excerpt: advisory.body })
         advisoryRoadsRef.current.set(advisory.id, { roads: [], wide: tagColor })
       } else {
         const marker = L.marker(anchor, {
@@ -727,7 +726,7 @@ function AlertsLeafletMapInner({
           zIndexOffset: 600,
           keyboard: true,
         }).addTo(group)
-        bindAdvisoryFocus(advisory.id, marker)
+        bindAdvisoryFocus(advisory.id, marker, { image: advisory.image_url, title: advisory.title, excerpt: advisory.body })
         if (roads.length > 0) advisoryRoadsRef.current.set(advisory.id, { roads, wide: null })
       }
     }
@@ -738,8 +737,9 @@ function AlertsLeafletMapInner({
   // all of this mounted.
   useEffect(() => {
     const L = LRef.current
+    const map = mapRef.current
     const group = alertLayersRef.current
-    if (!L || !group) return
+    if (!L || !map || !group) return
 
     const specs: MarkerSpec[] = []
 
@@ -780,7 +780,11 @@ function AlertsLeafletMapInner({
               hoverGrow: true,
             }),
           z: focused ? 700 : 200,
-          tooltip: concern.preview_url,
+          tip: {
+            image: concern.preview_url,
+            title: concern.title,
+            excerpt: concern.description,
+          },
           onClick: () => onSelectRef.current({ kind: "concern", id: concern.id }),
         })
       }
@@ -815,13 +819,17 @@ function AlertsLeafletMapInner({
               hoverGrow: true,
             }),
           z: focused ? 800 : 400,
-          tooltip: emergency.preview_url,
+          tip: {
+            image: emergency.preview_url,
+            title: emergency.type.replaceAll("_", " "),
+            excerpt: emergency.note,
+          },
           onClick: () => onSelectRef.current({ kind: "emergency", id: emergency.id }),
         })
       }
     }
 
-    syncMarkers(L, group, alertMarkersRef.current, specs)
+    syncMarkers(L, map, group, alertMarkersRef.current, specs)
   }, [
     snapshot.concerns,
     snapshot.emergencies,
@@ -854,9 +862,10 @@ function AlertsLeafletMapInner({
   // group and touches nothing else on the map.
   useEffect(() => {
     const L = LRef.current
+    const map = mapRef.current
     const group = peopleLayersRef.current
     const connectors = connectorLayersRef.current
-    if (!L || !group || !connectors) return
+    if (!L || !map || !group || !connectors) return
 
     // Every responder committed to an open incident, not only the one on the
     // selected incident. A dispatcher must be able to see who is going where
@@ -928,7 +937,7 @@ function AlertsLeafletMapInner({
       }
     }
 
-    syncMarkers(L, group, peopleMarkersRef.current, specs)
+    syncMarkers(L, map, group, peopleMarkersRef.current, specs)
   }, [
     snapshot.people,
     snapshot.emergencies,
@@ -988,12 +997,12 @@ function AlertsLeafletMapInner({
             }}
             onClick={() => setSvPick((value) => !value)}
           >
-            <PersonStandingIcon className="size-5" strokeWidth={1.9} />
+            <FootprintsIcon className="size-5" strokeWidth={1.9} />
           </MapControlButton>
         </MapControlStack>
 
         {svPick ? (
-          <div className="pointer-events-none absolute right-0 top-[calc(100%+8px)] w-max max-w-[min(15rem,calc(100vw-1.5rem))] rounded-lg bg-nav-bg/90 px-2.5 py-1.5 text-[11.5px] font-semibold text-white/85 shadow-md backdrop-blur">
+          <div className="pointer-events-none absolute right-0 top-[calc(100%+8px)] w-max max-w-[min(15rem,calc(100vw-1.5rem))] rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-neutral-700 shadow-md">
             Click the map to start Street View · Esc cancels
           </div>
         ) : null}

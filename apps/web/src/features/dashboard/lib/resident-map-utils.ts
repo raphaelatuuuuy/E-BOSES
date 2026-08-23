@@ -10,15 +10,6 @@ import type leaflet from "leaflet"
 
 export const BARANGAY_CENTER = { lat: 14.6507, lng: 121.1133 }
 
-export const MAP_BOUNDS = {
-  minLat: 14.58,
-  maxLat: 14.72,
-  minLng: 121.05,
-  maxLng: 121.18,
-}
-
-export const LOCAL_GPS_MAX_M = 25_000
-
 export const categoryMeta: Record<ConcernCategory, { label: string; color: string; bg: string }> = {
   infrastructure: { label: "Infrastructure", color: "#2447b3", bg: "#eef3ff" },
   environment: { label: "Environment", color: "#16a34a", bg: "#e9f9ef" },
@@ -44,15 +35,6 @@ export function formatDistance(meters: number | null) {
   return `${(meters / 1000).toFixed(1)} km away`
 }
 
-export function inMapBounds(lat: number, lng: number) {
-  return (
-    lat >= MAP_BOUNDS.minLat &&
-    lat <= MAP_BOUNDS.maxLat &&
-    lng >= MAP_BOUNDS.minLng &&
-    lng <= MAP_BOUNDS.maxLng
-  )
-}
-
 export function validCoord(lat?: string | number | null, lng?: string | number | null) {
   if (lat == null || lng == null || lat === "" || lng === "") return null
   let latitude = Number(lat)
@@ -72,7 +54,6 @@ export function validCoord(lat?: string | number | null, lng?: string | number |
   if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
     return null
   }
-  if (!inMapBounds(latitude, longitude)) return null
   return [latitude, longitude] as leaflet.LatLngTuple
 }
 
@@ -80,11 +61,37 @@ export function hasMapCoords(post: Concern) {
   return Boolean(validCoord(post.latitude, post.longitude))
 }
 
-export function isLocalGps(pos: { lat: number; lng: number } | null) {
-  if (!pos) return false
-  if (inMapBounds(pos.lat, pos.lng)) return true
-  const d = haversineMeters(BARANGAY_CENTER.lat, BARANGAY_CENTER.lng, pos.lat, pos.lng)
-  return d <= LOCAL_GPS_MAX_M
+export function isLocalGps(
+  pos: { lat: number; lng: number } | null,
+  geometry?: { type?: string; coordinates?: unknown } | null,
+) {
+  if (!pos || !validCoord(pos.lat, pos.lng)) return false
+  const point = pos
+  if (!geometry?.coordinates) return true
+  const polygons = geometry.type === "MultiPolygon"
+    ? geometry.coordinates as number[][][][]
+    : [geometry.coordinates as number[][][]]
+  return polygons.some((polygon) => {
+    function inRing(ring: number[][]) {
+      let inside = false
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const [xi, yi] = ring[i] ?? []
+        const [xj, yj] = ring[j] ?? []
+        if ([xi, yi, xj, yj].some((value) => !Number.isFinite(value))) continue
+        const cross = (point.lng - xi) * (yj - yi) - (point.lat - yi) * (xj - xi)
+        if (Math.abs(cross) < 1e-10
+          && point.lng >= Math.min(xi, xj) && point.lng <= Math.max(xi, xj)
+          && point.lat >= Math.min(yi, yj) && point.lat <= Math.max(yi, yj)) return true
+        const crosses = yi > point.lat !== yj > point.lat
+          && point.lng < ((xj - xi) * (point.lat - yi)) / (yj - yi) + xi
+        if (crosses) inside = !inside
+      }
+      return inside
+    }
+    const outer = polygon[0] ?? []
+    const holes = polygon.slice(1)
+    return inRing(outer) && !holes.some(inRing)
+  })
 }
 
 export function mergeFeedWithMapCoords(

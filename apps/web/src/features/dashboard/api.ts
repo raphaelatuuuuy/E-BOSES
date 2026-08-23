@@ -528,7 +528,7 @@ export interface ConcernEmergencyTriage {
 
 export interface ConcernPhotoVerdict {
   index: number
-  state: "relevant" | "unrelated" | "unclear" | "unsupported"
+  state: "relevant" | "unrelated" | "unclear" | "unsupported" | "flagged"
   message: string
 }
 
@@ -1246,8 +1246,9 @@ export type LiveMapUpdate =
         }
       }
     }
-  | { type: "emergency.created" | "emergency.updated"; payload: { emergency: LiveMapEmergency; route: LiveMapRoute | null } }
+  | { type: "emergency.created" | "emergency.updated"; payload: { emergency: LiveMapEmergency; route: LiveMapRoute | null; routes?: LiveMapRoute[] } }
   | { type: "route.updated"; payload: { route: LiveMapRoute } }
+  | { type: "route.removed"; payload: { alert_id: number; assignment_id?: number } }
 
 export function getOfficialLiveMap() {
   return apiRequest<LiveMapSnapshot>("/dashboard/official/live-map/")
@@ -1474,4 +1475,3 @@ export function removeAnnouncementComment(
     body: JSON.stringify({ reason }),
   })
 }
-

@@ -20,7 +20,11 @@ from apps.concerns.ai.classification import (
     classification_payload,
 )
 from apps.concerns.ai.duplicate_detector import report_fingerprints
-from apps.concerns.ai.gemma_analyzer import compare_photo_duplicates, verify_street_context
+from apps.concerns.ai.gemma_analyzer import (
+    INTEGRITY_FLAGGED_VERDICTS,
+    compare_photo_duplicates,
+    verify_street_context,
+)
 from apps.concerns.ai.image_prep import PreparedImage, prepare_image_for_gemma
 from apps.concerns.ai.street_imagery import fetch_latest_street_imagery
 from apps.concerns.models import (
@@ -63,6 +67,9 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
             "street_imagery_enabled", "street_imagery_categories",
             "street_imagery_radius_meters", "street_imagery_action",
             "photo_duplicate_llm_enabled", "photo_duplicate_candidate_limit",
+            "media_integrity_enabled", "media_integrity_action",
+            "media_integrity_min_confidence", "media_integrity_second_opinion_enabled",
+            "media_integrity_emergency_action",
             "categories", "metrics", "services", "updated_by", "updated_at",
         )
         read_only_fields = ("id", "updated_by", "updated_at")
@@ -159,9 +166,10 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
             value = attrs.get(field, getattr(self.instance, field, None))
             if value is not None and not 0 <= value <= 1:
                 raise serializers.ValidationError({field: "Enter a value from 0 to 1."})
-        value = attrs.get("report_duplicate_similarity_threshold", getattr(self.instance, "report_duplicate_similarity_threshold", None))
-        if value is not None and not 0 <= value <= 1:
-            raise serializers.ValidationError({"report_duplicate_similarity_threshold": "Enter a value from 0 to 1."})
+        for field in ("report_duplicate_similarity_threshold", "media_integrity_min_confidence"):
+            value = attrs.get(field, getattr(self.instance, field, None))
+            if value is not None and not 0 <= value <= 1:
+                raise serializers.ValidationError({field: "Enter a value from 0 to 1."})
         errors = {}
         if "nlp_provider" in attrs and attrs["nlp_provider"] not in ALLOWED_NLP_PROVIDERS:
             errors["nlp_provider"] = f"nlp_provider must be one of {sorted(ALLOWED_NLP_PROVIDERS)}."
@@ -380,6 +388,23 @@ class OfficialClassificationTextTestView(APIView):
         })
 
 
+def _media_integrity_preview(config, *, details: dict, images: list[PreparedImage]) -> dict:
+    """Run the real picture check against the sample photos.
+
+    Same function, same confidence floor, same second opinion as the live
+    pipeline — the point of the tester is that an official can trust what it
+    shows, so nothing here is a simulation of the behaviour.
+    """
+    from apps.concerns.ai.pipeline import _media_integrity_check
+
+    return _media_integrity_check(
+        config,
+        details=details,
+        prepared_images=images or [],
+        image_review_succeeded=details.get("image_review_succeeded"),
+    )
+
+
 def _street_imagery_preview(config, *, category: str, latitude, longitude, images: list[PreparedImage]) -> dict | None:
     """Run the street-imagery ground-truth check on a sample report.
 
@@ -534,6 +559,7 @@ class OfficialClassificationSubmissionTestView(APIView):
             "image_error": image_error,
             "privacy": privacy,
             "location": _location_dry_run(request),
+            "media_integrity": _media_integrity_preview(config, details=details, images=images),
             "street_imagery": _street_imagery_preview(config, category=selected_category, latitude=latitude, longitude=longitude, images=images),
             "photo_duplicate_llm": _photo_dedup_llm_preview(config, category=selected_category, latitude=latitude, longitude=longitude, images=images),
             **_review_details(result, selected_category=selected_category, image_uploaded=bool(uploaded_files), title=title, description=description),
@@ -1095,6 +1121,18 @@ def _photo_verdict_payload(details: dict, *, photo_count: int, image_errors: dic
     }
     unclear_message = "The photo does not clearly show the issue described."
     review_failed_message = "Your photo could not be checked automatically. An official will review it."
+    integrity_message = (
+        "This photo could not be confirmed as an original camera photo. "
+        "Use a photo taken directly from your camera."
+    )
+    # Only flagged verdicts land here — the parser has already dropped anything
+    # below the confidence floor to "inconclusive", and an inconclusive photo
+    # must never show the resident a message.
+    flagged_indices = {
+        int(item.get("index", -1))
+        for item in details.get("media_integrity") or []
+        if item.get("verdict") in INTEGRITY_FLAGGED_VERDICTS
+    }
     payload = []
     for index in range(photo_count):
         if index in image_errors:
@@ -1106,6 +1144,11 @@ def _photo_verdict_payload(details: dict, *, photo_count: int, image_errors: dic
             payload.append({"index": index, "state": "unclear", "message": review_failed_message})
             continue
         model_index = prepared_indices.index(index) if index in prepared_indices else None
+        if model_index is not None and model_index in flagged_indices:
+            # Outranks relevance: a photo that may be fabricated is worth
+            # saying more than "this does not show the issue".
+            payload.append({"index": index, "state": "flagged", "message": integrity_message})
+            continue
         verdict = model_verdicts.get(model_index) if model_index is not None else None
         if verdict is None:
             state = "unrelated" if relationship == "contradicts_report" else "unclear"

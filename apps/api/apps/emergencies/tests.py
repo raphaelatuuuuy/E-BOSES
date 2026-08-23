@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from datetime import timedelta
 from decimal import Decimal
 from io import BytesIO
@@ -16,9 +17,10 @@ from rest_framework.test import APITestCase
 from apps.accounts.models import AuditLog, ResidentProfile
 from apps.notifications.models import Notification
 
-from .models import EmergencyAlert, EmergencyAppeal, EmergencyChatAttachment, EmergencyChatMessage, EmergencyEscalation, EmergencyLocationPing, EmergencyMedia, EmergencyResponderAssignment, EmergencyStatusEvent, EmergencyTypeRoleMap, MapGeometry, ResponderShift, WitnessNotification
+from .models import BackupRequest, EmergencyAlert, EmergencyAppeal, EmergencyAssignmentRoute, EmergencyChatAttachment, EmergencyChatMessage, EmergencyEscalation, EmergencyLocationPing, EmergencyMedia, EmergencyResponderAssignment, EmergencyStatusEvent, EmergencyTypeRoleMap, MapGeometry, ResponderShift, WitnessNotification
 from apps.concerns.models import Department
 from apps.concerns.test_helpers import grant_position
+from apps.concerns.units import sync_responder_designation
 from .views import auto_route_alert
 
 
@@ -64,7 +66,8 @@ class EmergencyAPITests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
-        grant_position(self.official)
+        grant_position(self.official, department_code="bhw")
+        grant_position(self.official, department_code="bdrrmo")
         self.responder = User.objects.create_user(
             email="emergency-responder@example.com",
             phone_number="+639360000004",
@@ -75,19 +78,23 @@ class EmergencyAPITests(APITestCase):
         self.client.force_authenticate(self.resident)
         bhw = Department.objects.get(code="bhw")
         bdrrmo = Department.objects.get(code="bdrrmo")
+        self.community = bhw.community
         # update_or_create, not create: migration 0027 now seeds a default
         # routing table so a fresh barangay dispatches out of the box, and
         # these two rows are part of it.
         EmergencyTypeRoleMap.objects.update_or_create(
+            community=self.community,
             emergency_type=EmergencyAlert.Type.MEDICAL,
             department=bhw,
             defaults={"responder_unit": "bhw", "is_active": True},
         )
         EmergencyTypeRoleMap.objects.update_or_create(
+            community=self.community,
             emergency_type=EmergencyAlert.Type.FIRE,
             department=bdrrmo,
             defaults={"responder_unit": "bdrrmo", "is_active": True},
         )
+        self.attach_responder_unit(self.responder)
 
     def create_alert(self):
         response = self.client.post(
@@ -153,7 +160,7 @@ class EmergencyAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("must be inside Barangay Marikina Heights", str(response.data))
+        self.assertIn("must be inside an active community boundary", str(response.data))
         self.assertFalse(EmergencyAlert.objects.filter(address="Outside boundary").exists())
 
     def test_duplicate_optional_media_is_skipped_without_blocking_alert(self):
@@ -265,6 +272,7 @@ class EmergencyAPITests(APITestCase):
             date_of_birth="1990-01-01",
             address="A Street",
             barangay="Marikina Heights",
+            community=self.community,
         )
         ResidentProfile.objects.create(
             user=witness,
@@ -273,6 +281,7 @@ class EmergencyAPITests(APITestCase):
             date_of_birth="1990-01-01",
             address="B Street",
             barangay="Marikina Heights",
+            community=self.community,
         )
 
         alert = self.create_alert()
@@ -317,7 +326,7 @@ class EmergencyAPITests(APITestCase):
 
         response = self.client.get(f"/api/emergencies/{alert.pk}/")
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_official_assigns_responder_and_responder_sends_location_ping(self):
         alert = self.create_alert()
@@ -393,8 +402,10 @@ class EmergencyAPITests(APITestCase):
                 date_of_birth="1990-01-01",
                 address="Marikina Heights",
                 barangay="Marikina Heights",
+                community=self.community,
             )
-        User.objects.create_user(
+            sync_responder_designation(responder)
+        tanod = User.objects.create_user(
             email="tanod-near@example.com",
             phone_number="+639360000012",
             password="pass",
@@ -406,6 +417,7 @@ class EmergencyAPITests(APITestCase):
             current_longitude="121.1207500",
             location_updated_at=timezone.now(),
         )
+        sync_responder_designation(tanod)
 
         alert = self.create_alert()
 
@@ -492,6 +504,7 @@ class EmergencyAPITests(APITestCase):
             status=get_user_model().Status.VERIFIED,
             responder_unit=get_user_model().ResponderUnit.BHW,
         )
+        self.attach_responder_unit(replacement)
         self.client.force_authenticate(self.official)
 
         response = self.client.post(
@@ -739,6 +752,7 @@ class EmergencyAPITests(APITestCase):
             role=User.Role.FIRST_RESPONDER,
             status=User.Status.VERIFIED,
         )
+        self.attach_responder_unit(second)
         alert = self.create_alert()
         self.client.force_authenticate(self.official)
 
@@ -883,6 +897,7 @@ class EmergencyAPITests(APITestCase):
             role=User.Role.FIRST_RESPONDER,
             status=User.Status.VERIFIED,
         )
+        self.attach_responder_unit(support)
         alert = self.create_alert()
         alert.status = EmergencyAlert.Status.ROUTED
         alert.status_version = 2
@@ -934,6 +949,7 @@ class EmergencyAPITests(APITestCase):
             role=User.Role.FIRST_RESPONDER,
             status=User.Status.VERIFIED,
         )
+        self.attach_responder_unit(support)
         alert = self.create_alert()
         alert.status = EmergencyAlert.Status.EN_ROUTE
         alert.status_version = 7
@@ -971,6 +987,7 @@ class EmergencyAPITests(APITestCase):
             role=User.Role.FIRST_RESPONDER,
             status=User.Status.VERIFIED,
         )
+        self.attach_responder_unit(replacement)
         alert = self.create_alert()
         alert.status = EmergencyAlert.Status.ROUTED
         alert.status_version = 5
@@ -1047,7 +1064,9 @@ class EmergencyAPITests(APITestCase):
             date_of_birth="1990-01-01",
             address="Marikina Heights",
             barangay="Marikina Heights",
+            community=self.community,
         )
+        sync_responder_designation(backup)
         assignment = EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
         assignment.assigned_at = timezone.now() - timedelta(minutes=10)
         assignment.save(update_fields=["assigned_at"])
@@ -1132,7 +1151,7 @@ class EmergencyAPITests(APITestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_arrival_and_resolve_close_emergency(self):
         alert = self.create_alert()
@@ -1207,7 +1226,7 @@ class EmergencyAPITests(APITestCase):
 
         response = self.client.post(f"/api/emergencies/{alert.pk}/acknowledge/", {}, format="json")
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         alert.refresh_from_db()
         self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
 
@@ -1306,11 +1325,7 @@ class EmergencyAPITests(APITestCase):
 
     def test_official_live_map_snapshot_is_official_only(self):
         alert = self.create_alert()
-        self.responder.is_on_duty = True
-        self.responder.current_latitude = "14.6516000"
-        self.responder.current_longitude = "121.1208000"
-        self.responder.location_updated_at = timezone.now()
-        self.responder.save(update_fields=["is_on_duty", "current_latitude", "current_longitude", "location_updated_at", "updated_at"])
+        self.make_on_duty_responder(self.responder)
         EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
 
         self.client.force_authenticate(self.resident)
@@ -1336,6 +1351,7 @@ class EmergencyAPITests(APITestCase):
                 "date_of_birth": "1990-01-01",
                 "address": "123 Private Home Street",
                 "barangay": "Marikina Heights",
+                "community": self.community,
             },
         )
         alert = self.create_alert()
@@ -1412,19 +1428,22 @@ class EmergencyAPITests(APITestCase):
     def test_official_live_map_snapshot_serves_cached_geometry(self):
         cache.delete("live-map-static-geometry:v2")
         MapGeometry.objects.all().delete()
-        MapGeometry.objects.create(
+        boundary = MapGeometry.objects.create(
             kind=MapGeometry.Kind.BOUNDARY,
             name="Marikina Heights",
             osm_type="R",
             osm_id=371327,
             geometry={"type": "Polygon", "coordinates": [[[121.1, 14.6], [121.2, 14.6], [121.2, 14.7], [121.1, 14.6]]]},
         )
+        self.community.boundary = boundary
+        self.community.save(update_fields=["boundary", "updated_at"])
         MapGeometry.objects.create(
             kind=MapGeometry.Kind.STREET,
             name="Santa Elena Street",
             osm_type="W",
             osm_id=73964486,
             street_type="residential",
+            locality="Marikina Heights",
             geometry={"type": "LineString", "coordinates": [[121.11, 14.65], [121.12, 14.66]]},
         )
         MapGeometry.objects.create(
@@ -1433,6 +1452,7 @@ class EmergencyAPITests(APITestCase):
             osm_type="W",
             osm_id=4357042,
             street_type="residential",
+            locality="Marikina Heights",
             geometry={"type": "LineString", "coordinates": [[121.10, 14.64], [121.11, 14.65]]},
         )
         self.client.force_authenticate(self.official)
@@ -1462,7 +1482,10 @@ class EmergencyAPITests(APITestCase):
             },
         }
         fields.update(overrides)
-        return MapGeometry.objects.create(**fields)
+        boundary = MapGeometry.objects.create(**fields)
+        self.community.boundary = boundary
+        self.community.save(update_fields=["boundary", "updated_at"])
+        return boundary
 
     def test_official_edits_barangay_boundary_and_every_map_redraws_it(self):
         boundary = self._boundary_row()
@@ -1531,7 +1554,7 @@ class EmergencyAPITests(APITestCase):
             is_home=False,
             geometry={"type": "Polygon", "coordinates": [[[121.0, 14.5], [121.1, 14.5], [121.1, 14.6], [121.0, 14.5]]]},
         )
-        MapGeometry.objects.create(
+        home_boundary = MapGeometry.objects.create(
             kind=MapGeometry.Kind.BOUNDARY,
             name="Marikina Heights",
             osm_type="R",
@@ -1539,6 +1562,8 @@ class EmergencyAPITests(APITestCase):
             is_home=True,
             geometry={"type": "Polygon", "coordinates": [[[121.1, 14.6], [121.2, 14.6], [121.2, 14.7], [121.1, 14.6]]]},
         )
+        self.community.boundary = home_boundary
+        self.community.save(update_fields=["boundary", "updated_at"])
         self.client.force_authenticate(self.official)
 
         response = self.client.get("/api/dashboard/official/live-map/")
@@ -1547,13 +1572,13 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(response.data["map"]["boundary"]["name"], "Marikina Heights")
         self.assertEqual(response.data["map"]["boundary"]["osm_relation_id"], 371327)
 
-    def test_location_ping_updates_current_user_and_broadcasts_live_map(self):
+    def test_location_ping_updates_current_user_without_broadcasting_private_location(self):
         from asgiref.sync import async_to_sync
         from channels.layers import get_channel_layer
 
         channel_layer = get_channel_layer()
         channel_name = async_to_sync(channel_layer.new_channel)("test.live-map")
-        async_to_sync(channel_layer.group_add)("official_live_map", channel_name)
+        async_to_sync(channel_layer.group_add)(f"official_live_map_community_{self.community.pk}", channel_name)
         self.client.force_authenticate(self.resident)
 
         with self.captureOnCommitCallbacks(execute=True):
@@ -1562,14 +1587,11 @@ class EmergencyAPITests(APITestCase):
                 {"latitude": "14.6516000", "longitude": "121.1208000", "accuracy": 8, "source": "active_session"},
                 format="json",
             )
-        message = async_to_sync(asyncio.wait_for)(channel_layer.receive(channel_name), timeout=1)
-
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.resident.refresh_from_db()
         self.assertEqual(str(self.resident.current_latitude), "14.6516000")
-        self.assertEqual(message["type"], "live_map.update")
-        self.assertEqual(message["payload"]["type"], "location.updated")
-        self.assertEqual(message["payload"]["payload"]["person"]["id"], self.resident.pk)
+        with self.assertRaises(asyncio.TimeoutError):
+            async_to_sync(asyncio.wait_for)(channel_layer.receive(channel_name), timeout=0.05)
 
     def test_location_ping_rejects_out_of_bounds_coordinates(self):
         self.client.force_authenticate(self.resident)
@@ -1584,11 +1606,109 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(response.data.get("accepted", True))
 
+    @patch("apps.live_map.httpx.get")
+    def test_route_api_returns_complete_geometry_and_changes_own_profile(self, route_get):
+        cache.clear()
+        route_get.return_value.raise_for_status.return_value = None
+        route_get.return_value.json.return_value = {
+            "routes": [{
+                "distance": 420.0,
+                "duration": 95.0,
+                "geometry": {"type": "LineString", "coordinates": [[121.1208, 14.6516], [121.12069, 14.65149]]},
+                "legs": [{
+                    "summary": "Narra Street",
+                    "steps": [{
+                        "distance": 420.0,
+                        "duration": 95.0,
+                        "name": "Narra Street",
+                        "ref": "",
+                        "maneuver": {"type": "turn", "modifier": "right", "bearing_after": 90, "location": [121.1207, 14.6515]},
+                    }],
+                }],
+            }],
+            "waypoints": [
+                {"location": [121.1208, 14.6516], "distance": 1.0},
+                {"location": [121.12069, 14.65149], "distance": 3.5},
+            ],
+        }
+        self.make_on_duty_responder(self.responder)
+        alert = self.direct_alert(status=EmergencyAlert.Status.ROUTED)
+        assignment = EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
+        self.client.force_authenticate(self.responder)
+
+        compact = self.client.get(f"/api/emergencies/{alert.pk}/route/")
+        detailed = self.client.get(f"/api/emergencies/{alert.pk}/route/?steps=1")
+        walking = self.client.post(
+            f"/api/emergencies/{alert.pk}/route/",
+            {"profile": "foot"},
+            format="json",
+        )
+
+        self.assertEqual(compact.status_code, status.HTTP_200_OK)
+        self.assertEqual(compact.data["steps"], [])
+        self.assertEqual(compact.data["summary"], "Narra Street")
+        self.assertEqual(compact.data["destination_snap"]["meters"], 3.5)
+        self.assertEqual(compact.data["approach"]["geometry"]["coordinates"][-1], [float(alert.longitude), float(alert.latitude)])
+        self.assertEqual(detailed.data["steps"][0]["modifier"], "right")
+        self.assertEqual(walking.status_code, status.HTTP_200_OK)
+        self.assertEqual(walking.data["profile"], "foot")
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.travel_profile, "foot")
+        self.assertTrue(route_get.call_args_list[-1].args[0].endswith("/walking/121.1208,14.6516;121.1207,14.6515"))
+
+    @patch("apps.live_map.httpx.get")
+    def test_route_api_keeps_last_good_route_when_provider_fails(self, route_get):
+        cache.clear()
+        route_get.return_value.raise_for_status.return_value = None
+        route_get.return_value.json.return_value = {
+            "routes": [{
+                "distance": 420.0,
+                "duration": 95.0,
+                "geometry": {"type": "LineString", "coordinates": [[121.1208, 14.6516], [121.12069, 14.65149]]},
+                "legs": [{"summary": "Narra Street", "steps": []}],
+            }],
+            "waypoints": [
+                {"location": [121.1208, 14.6516], "distance": 1.0},
+                {"location": [121.12069, 14.65149], "distance": 3.5},
+            ],
+        }
+        self.make_on_duty_responder(self.responder)
+        alert = self.direct_alert(status=EmergencyAlert.Status.ROUTED)
+        assignment = EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
+        self.client.force_authenticate(self.responder)
+
+        good = self.client.get(f"/api/emergencies/{alert.pk}/route/?steps=1&refresh=1")
+        route_get.side_effect = RuntimeError("route provider unavailable")
+        stale = self.client.get(f"/api/emergencies/{alert.pk}/route/?steps=1&refresh=1")
+
+        self.assertEqual(good.status_code, status.HTTP_200_OK)
+        self.assertEqual(stale.status_code, status.HTTP_200_OK)
+        self.assertEqual(stale.data["status"], "stale")
+        self.assertEqual(stale.data["geometry"], good.data["geometry"])
+        self.assertEqual(stale.data["destination_snap"], good.data["destination_snap"])
+        self.assertEqual(stale.data["eta_seconds"], good.data["eta_seconds"])
+        stored = EmergencyAssignmentRoute.objects.get(assignment=assignment)
+        self.assertEqual(stored.status, "stale")
+        self.assertEqual(stored.error_code, "provider_unavailable")
+
     def make_on_duty_responder(self, user, *, unit=None, first_name="Ready"):
         User = get_user_model()
         user.responder_unit = unit or User.ResponderUnit.BHW
         user.is_on_duty = True
-        user.save(update_fields=["responder_unit", "is_on_duty", "updated_at"])
+        user.current_latitude = "14.6516000"
+        user.current_longitude = "121.1208000"
+        user.location_updated_at = timezone.now()
+        user.save(update_fields=[
+            "responder_unit", "is_on_duty", "current_latitude",
+            "current_longitude", "location_updated_at", "updated_at",
+        ])
+        self.attach_responder_unit(user, unit=unit, first_name=first_name)
+        return user
+
+    def attach_responder_unit(self, user, *, unit=None, first_name="Ready"):
+        User = get_user_model()
+        user.responder_unit = unit or User.ResponderUnit.BHW
+        user.save(update_fields=["responder_unit", "updated_at"])
         ResidentProfile.objects.get_or_create(
             user=user,
             defaults={
@@ -1597,8 +1717,10 @@ class EmergencyAPITests(APITestCase):
                 "date_of_birth": "1990-01-01",
                 "address": "Marikina Heights",
                 "barangay": "Marikina Heights",
+                "community": self.community,
             },
         )
+        sync_responder_designation(user)
         return user
 
     def direct_alert(self, **overrides):
@@ -1610,6 +1732,7 @@ class EmergencyAPITests(APITestCase):
             "longitude": "121.1207000",
             "address": "Private home address",
             "barangay": "Marikina Heights",
+            "community": self.community,
         }
         values.update(overrides)
         return EmergencyAlert.objects.create(**values)
@@ -1658,9 +1781,11 @@ class EmergencyAPITests(APITestCase):
         self.assertTrue(AuditLog.objects.filter(action="emergency.claimed", actor=self.responder, metadata__alert_id=alert.pk).exists())
 
     def test_claim_without_resident_profile_returns_controlled_403(self):
+        self.responder.resident_profile.delete()
         self.responder.is_on_duty = True
         self.responder.responder_unit = get_user_model().ResponderUnit.BHW
         self.responder.save(update_fields=["is_on_duty", "responder_unit", "updated_at"])
+        self.responder = get_user_model().objects.get(pk=self.responder.pk)
         alert = self.direct_alert()
         self.client.force_authenticate(self.responder)
 
@@ -1679,35 +1804,51 @@ class EmergencyAPITests(APITestCase):
         alert = self.direct_alert(status=EmergencyAlert.Status.ROUTED)
         original = EmergencyResponderAssignment.objects.create(alert=alert, responder=first)
         self.client.force_authenticate(first)
+        department = Department.objects.get(code="bhw", community=self.community)
+        key = str(uuid.uuid4())
+        payload = {
+            "target_department_id": department.pk,
+            "reason": "Need another pair of hands",
+            "urgency": "high",
+            "idempotency_key": key,
+        }
 
-        initial = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", {"backup_type": "medical", "reason": "Need another pair of hands", "urgency": "high"}, format="json")
-        repeated = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", {"backup_type": "medical", "reason": "Need another pair of hands", "urgency": "high"}, format="json")
+        initial = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", payload, format="json")
+        repeated = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", payload, format="json")
 
-        self.assertEqual(initial.status_code, status.HTTP_200_OK)
+        self.assertEqual(initial.status_code, status.HTTP_201_CREATED)
         self.assertEqual(repeated.status_code, status.HTTP_200_OK)
         original.refresh_from_db()
         self.assertEqual(original.status, EmergencyResponderAssignment.Status.ASSIGNED)
         self.assertEqual(alert.assignments.filter(status=EmergencyResponderAssignment.Status.ASSIGNED).count(), 2)
         self.assertEqual(initial.data["current_assignment"]["id"], original.pk)
         self.assertEqual([item["id"] for item in initial.data["active_assignments"]], [original.pk, alert.assignments.get(responder=second).pk])
-        self.assertEqual(alert.escalations.count(), 2)
+        self.assertEqual(BackupRequest.objects.filter(alert=alert).count(), 1)
+        self.assertEqual(initial.data["backup_request"]["id"], repeated.data["backup_request"]["id"])
 
     def test_backup_authorization_and_no_candidate(self):
         alert = self.direct_alert(status=EmergencyAlert.Status.ROUTED)
         self.make_on_duty_responder(self.responder)
         EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
+        department = Department.objects.get(code="bhw", community=self.community)
+        payload = {
+            "target_department_id": department.pk,
+            "reason": "Need another pair of hands",
+            "urgency": "high",
+            "idempotency_key": str(uuid.uuid4()),
+        }
         self.client.force_authenticate(self.other)
-        denied = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", {"backup_type": "medical", "reason": "Need another pair of hands", "urgency": "high"}, format="json")
+        denied = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", payload, format="json")
         self.client.force_authenticate(self.responder)
-        unavailable = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", {"backup_type": "medical", "reason": "Need another pair of hands", "urgency": "high"}, format="json")
+        unavailable = self.client.post(f"/api/emergencies/{alert.pk}/request-backup/", payload, format="json")
 
-        self.assertEqual(denied.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(denied.status_code, status.HTTP_404_NOT_FOUND)
         # With nobody free the request is still recorded and escalated to an
         # official rather than rejected outright.
-        self.assertEqual(unavailable.status_code, status.HTTP_200_OK)
+        self.assertEqual(unavailable.status_code, status.HTTP_201_CREATED)
         alert.refresh_from_db()
-        self.assertEqual(alert.status, EmergencyAlert.Status.BACKUP_REQUESTED)
-        self.assertTrue(alert.escalations.exists())
+        self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
+        self.assertEqual(alert.backup_requests.get().status, BackupRequest.Status.PENDING_MANUAL)
 
     def test_first_ping_needs_no_acknowledgement_and_quantizes_browser_gps(self):
         alert = self.direct_alert(status=EmergencyAlert.Status.ROUTED)
@@ -1773,7 +1914,9 @@ class EmergencyAPITests(APITestCase):
             date_of_birth="1990-01-01",
             address="Marikina Heights",
             barangay="Marikina Heights",
+            community=self.community,
         )
+        sync_responder_designation(responder)
         alert = self.create_alert()
         request = RequestFactory().post("/api/emergencies/")
 
@@ -1973,8 +2116,8 @@ class EmergencyAPITests(APITestCase):
         assigned = self.client.get("/api/emergencies/assigned/")
         alert.refresh_from_db()
 
-        self.assertEqual(detail.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertEqual(chat.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+        self.assertEqual(chat.status_code, status.HTTP_200_OK)
         self.assertEqual(raw.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(assigned.status_code, status.HTTP_200_OK)
         self.assertEqual(assigned.data["results"], [])

@@ -28,6 +28,12 @@ from apps.emergencies.selectors import active_responder_shift_for_update
 from apps.system_state import maintenance_blocks
 
 from .models import AccountRequest, AuditLog, DataSubjectRequest, OTPChallenge, ResidenceProof, ResidentSettings
+from .community_resolution import (
+    CommunityResolutionError,
+    create_resolution,
+    resolve_token,
+    verified_resident_count,
+)
 from .permissions import user_has_role_permission
 from .privacy_services import (
     PrivacyRequestConflict,
@@ -46,6 +52,7 @@ from .serializers import (
     AccountRequestReviewSerializer,
     AdminCreateUserSerializer,
     ChangePasswordSerializer,
+    CommunityResolveSerializer,
     LoginRejected,
     LoginSerializer,
     LoginSerializer,
@@ -181,6 +188,8 @@ class RegisterView(APIView):
         validated_data["proof_sides"] = request.data.getlist("proof_side")
         try:
             user = register_resident(validated_data, request_meta(request))
+        except CommunityResolutionError as exc:
+            return Response({"code": exc.code, "detail": exc.detail}, status=exc.status_code)
         except OTPVerificationError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except (DuplicateProofError, ValidationError) as exc:
@@ -218,22 +227,77 @@ class EmailAvailabilityView(APIView):
 
 
 class CommunityPreviewView(APIView):
-    """Public stats for the sign-up “verified peek” (neighbor count, etc.)."""
+    """Community data for a previously resolved sign-up location."""
 
     permission_classes = [AllowAny]
     authentication_classes = []
     throttle_scope = "auth"
 
-    def get(self, request):
-        User = get_user_model()
-        # Simple count: every registered account with role=resident.
-        neighbors = User.objects.filter(role=User.Role.RESIDENT).count()
-        return Response(
+    def post(self, request):
+        token = request.data.get("token") or ""
+        email = request.data.get("email") or ""
+        try:
+            resolution = resolve_token(token, email=email)
+        except CommunityResolutionError as exc:
+            return Response({"code": exc.code, "detail": exc.detail}, status=exc.status_code)
+        response = Response(
             {
-                "barangay": "Marikina Heights",
-                "neighbors": neighbors,
+                "community": {
+                    "id": str(resolution.community.public_id),
+                    "name": resolution.community.name,
+                },
+                "neighbors": verified_resident_count(resolution.community),
             }
         )
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+class CommunityResolveView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_scope = "auth"
+
+    def post(self, request):
+        serializer = CommunityResolveSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            resolution, token = create_resolution(**serializer.validated_data)
+        except CommunityResolutionError as exc:
+            return Response({"code": exc.code, "detail": exc.detail}, status=exc.status_code)
+
+        from .ocr_api import _document_payload
+
+        documents = [
+            _document_payload(item)
+            for item in resolution.configuration.document_types.filter(enabled=True).order_by("display_order", "id")
+        ]
+        community = resolution.community
+        response = Response(
+            {
+                "token": token,
+                "community": {
+                    "id": str(community.public_id),
+                    "code": community.code,
+                    "name": community.name,
+                    "center": {
+                        "latitude": float(community.center_latitude),
+                        "longitude": float(community.center_longitude),
+                    },
+                    "boundary": community.boundary.geometry if community.boundary_id else None,
+                    "boundary_revision": community.boundary_revision,
+                },
+                "weather_coordinates": {
+                    "latitude": float(community.center_latitude),
+                    "longitude": float(community.center_longitude),
+                },
+                "neighbors": verified_resident_count(community),
+                "ocr_version": resolution.configuration.version,
+                "proof_options": documents,
+            }
+        )
+        response["Cache-Control"] = "no-store"
+        return response
 
 
 class PhoneOTPRequestView(APIView):
@@ -359,6 +423,13 @@ class ResidenceProofCheckView(APIView):
     throttle_scope = "proof_preflight"
 
     def post(self, request):
+        try:
+            resolution = resolve_token(
+                request.data.get("community_resolution_token") or "",
+                email=request.data.get("email") or "",
+            )
+        except CommunityResolutionError as exc:
+            return Response({"code": exc.code, "detail": exc.detail}, status=exc.status_code)
         proof_files = request.FILES.getlist("proof")
         if not proof_files:
             return Response(
@@ -383,7 +454,7 @@ class ResidenceProofCheckView(APIView):
                 from .ocr_runtime import document_type_for_registration
 
                 # Validate type exists / enabled only — not side completeness
-                document_type_for_registration(proof_type)
+                document_type_for_registration(proof_type, configuration=resolution.configuration)
         except (DuplicateProofError, ValidationError) as exc:
             if hasattr(exc, "message_dict"):
                 return Response(exc.message_dict, status=status.HTTP_400_BAD_REQUEST)
@@ -400,6 +471,13 @@ class ResidenceProofDetectView(APIView):
     throttle_scope = "proof_preflight"
 
     def post(self, request):
+        try:
+            resolution = resolve_token(
+                request.data.get("community_resolution_token") or "",
+                email=request.data.get("email") or "",
+            )
+        except CommunityResolutionError as exc:
+            return Response({"code": exc.code, "detail": exc.detail}, status=exc.status_code)
         proof_files = request.FILES.getlist("proof")
         if not proof_files:
             proof = request.FILES.get("file") or request.FILES.get("proof")
@@ -422,6 +500,47 @@ class ResidenceProofDetectView(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Stage 1 of the pipeline, and it has to happen here. EXIF tags, C2PA
+        # manifests, and the compression history ELA reads all live in the bytes
+        # the resident sent; the validation below normalizes every upload to
+        # JPEG, which destroys all three. Run it first, then hand the verdict
+        # down so detect does not re-derive it from a re-encode.
+        from .media_forensics import forensics_findings
+        from .id_pipeline import FORENSICS_RESUBMIT_MESSAGE, STAGE_FORENSICS
+
+        forensics = {"checked": False, "flagged": False, "layer": "", "message": ""}
+        for proof_file in proof_files:
+            try:
+                proof_file.seek(0)
+                raw = proof_file.read()
+                proof_file.seek(0)
+            except Exception:
+                continue
+            if not raw:
+                continue
+            result = forensics_findings(raw)
+            if not forensics.get("checked") or result.get("flagged"):
+                forensics = result
+            if result.get("flagged"):
+                break
+        if forensics.get("flagged"):
+            return Response(
+                {
+                    "detected": False,
+                    "message": FORENSICS_RESUBMIT_MESSAGE,
+                    "reasons": [FORENSICS_RESUBMIT_MESSAGE],
+                    "id_integrity": None,
+                    "pipeline": {
+                        "reached": STAGE_FORENSICS,
+                        "blocked_by": STAGE_FORENSICS,
+                        "forensics": forensics,
+                        "message": FORENSICS_RESUBMIT_MESSAGE,
+                        "detail": forensics.get("message") or "",
+                    },
+                },
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
         try:
             from .services import validate_residence_proof_uploads_for_detect
 
@@ -477,6 +596,8 @@ class ResidenceProofDetectView(APIView):
                         hint_type=hint_type,
                         side=side,
                         submitted_profile=submitted_profile,
+                        configuration=resolution.configuration,
+                        forensics=forensics,
                     )
 
                 # OCR.space is an I/O-bound HTTP call, so the two sides can run
@@ -522,6 +643,8 @@ class ResidenceProofDetectView(APIView):
                     hint_type=(request.data.get("proof_type") or "").strip() or None,
                     side=detect_side,
                     submitted_profile=submitted_profile,
+                    configuration=resolution.configuration,
+                    forensics=forensics,
                 )
         except Exception:
             import logging

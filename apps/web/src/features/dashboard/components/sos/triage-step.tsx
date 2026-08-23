@@ -22,7 +22,6 @@ const INJURY_CHOICES: Choice[] = [
   { value: "unknown", label: "Not sure" },
 ]
 
-/** Third question, by category code. Categories without one skip it. */
 const DETAIL_QUESTIONS: Record<string, { question: string; choices: Choice[] }> = {
   fire: {
     question: "Is the fire still spreading?",
@@ -76,6 +75,10 @@ const DETAIL_QUESTIONS: Record<string, { question: string; choices: Choice[] }> 
   },
 }
 
+export function hasDetailQuestion(categoryCode: string) {
+  return Boolean(DETAIL_QUESTIONS[categoryCode])
+}
+
 function BigChoiceRow({
   question,
   choices,
@@ -124,10 +127,12 @@ export function SosTriageStep({
   categoryCode,
   value,
   onChange,
+  error,
 }: {
   categoryCode: string
   value: SosTriageAnswers
   onChange: (next: SosTriageAnswers) => void
+  error?: string
 }) {
   const detail = DETAIL_QUESTIONS[categoryCode]
 
@@ -137,7 +142,7 @@ export function SosTriageStep({
 
   return (
     <div>
-      <p className="mb-5 text-[14px] leading-6 text-white/75">
+      <p className="mb-5 text-[14px] leading-6 text-white/70">
         These help responders bring the right people and equipment. You can skip
         any question.
       </p>
@@ -163,6 +168,12 @@ export function SosTriageStep({
           value={value.detail}
           onSelect={(next) => set("detail", next)}
         />
+      ) : null}
+
+      {error ? (
+        <p className="mt-2 text-[13px] font-medium text-sos-bright" role="alert">
+          {error}
+        </p>
       ) : null}
     </div>
   )

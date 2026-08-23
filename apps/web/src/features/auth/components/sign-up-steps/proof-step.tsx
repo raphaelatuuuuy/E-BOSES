@@ -257,6 +257,8 @@ export function ProofStep({
       sideIndex,
       option: dialogOption,
       alreadyCaptured: others,
+      email: values.email,
+      communityResolutionToken: values.communityResolutionToken,
       onStatus: setCheckStatus,
     })
 
@@ -362,6 +364,8 @@ export function ProofStep({
           file: files[i]!,
           option: dialogOption,
           side,
+          email: values.email,
+          communityResolutionToken: values.communityResolutionToken,
           profile: {
             first_name: values.firstName ?? "",
             middle_name: values.middleName ?? "",

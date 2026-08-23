@@ -118,6 +118,8 @@ def _classification():
         held.append("duplicates")
     if config.flag_irrelevant:
         held.append("off-topic reports")
+    if config.media_integrity_enabled:
+        held.append("edited photos")
 
     return {
         "status": _strictness_label(config.relevance_threshold),

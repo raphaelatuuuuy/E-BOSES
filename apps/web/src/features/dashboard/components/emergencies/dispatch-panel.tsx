@@ -8,9 +8,11 @@ import { Band, Surface } from "@/features/dashboard/components/workspace/band"
 import type { ActiveResponder } from "@/features/dashboard/api"
 import {
   getEmergency,
+  getEmergencyBackupUnits,
   requestEmergencyBackup,
   setEmergencyDisposition,
   type EmergencyAlert,
+  type EmergencyBackupUnit,
 } from "@/features/dashboard/emergency-api"
 import { useReporterPhone } from "@/features/dashboard/lib/use-reporter-phone"
 import {
@@ -96,6 +98,8 @@ export function DispatchPanel({
   const [busyAction, setBusyAction] = useState("")
   const [quickAction, setQuickAction] = useState<QuickAction>(null)
   const [quickReason, setQuickReason] = useState("")
+  const [backupUnits, setBackupUnits] = useState<EmergencyBackupUnit[]>([])
+  const [backupUnitId, setBackupUnitId] = useState<number | null>(null)
   // Reveal-on-demand only: officials keep the number masked until they dial,
   // so the privacy audit records one reveal per call, not one per view.
   const { busy: dialBusy, call: callResident } = useReporterPhone(alert)
@@ -114,12 +118,17 @@ export function DispatchPanel({
       toast.error("Say briefly why this incident needs escalation.")
       return
     }
+    if (!backupUnitId) {
+      toast.error("Choose the backup unit.")
+      return
+    }
     setBusyAction("escalate")
     try {
       const next = await requestEmergencyBackup(alert.id, {
-        backup_type: "other",
+        target_department_id: backupUnitId,
         reason,
         urgency: "high",
+        idempotency_key: crypto.randomUUID(),
       })
       onChanged(next)
       toast.success("Backup support escalated for this incident")
@@ -192,7 +201,7 @@ export function DispatchPanel({
         <div className="grid grid-cols-2 gap-2">
           <ActionButton icon={<PhoneCallIcon className="size-4" />} label={dialBusy ? "Opening…" : "Call resident"} onClick={() => void callResident()} disabled={!alert || dialBusy} />
           <ActionButton icon={<RefreshCwIcon className="size-4" />} label={busyAction === "refresh-team" ? "Refreshing" : "Refresh"} onClick={() => void refreshTeam()} disabled={!alert || Boolean(busyAction)} />
-          <ActionButton icon={<AlertTriangleIcon className="size-4" />} label={busyAction === "escalate" ? "Escalating" : "Escalate"} onClick={() => { setQuickAction({ kind: "escalate" }); setQuickReason("") }} disabled={!alert || Boolean(busyAction)} />
+          <ActionButton icon={<AlertTriangleIcon className="size-4" />} label={busyAction === "escalate" ? "Escalating" : "Escalate"} onClick={() => { setQuickAction({ kind: "escalate" }); setQuickReason(""); if (alert) void getEmergencyBackupUnits(alert.id).then((items) => { setBackupUnits(items); setBackupUnitId(items[0]?.id ?? null) }).catch(() => setBackupUnits([])) }} disabled={!alert || Boolean(busyAction)} />
           <ActionButton tone="danger" icon={<ShieldCheckIcon className="size-4" />} label={busyAction === "false-alarm" ? "Recording" : "False alarm"} onClick={() => { setQuickAction({ kind: "false-alarm" }); setQuickReason("") }} disabled={!alert || Boolean(busyAction)} />
         </div>
 
@@ -203,6 +212,15 @@ export function DispatchPanel({
                 ? "Escalate this incident — the next available on-duty responder is routed in as backup support."
                 : "Record this as a false alarm — the response team is stood down and the disposition is written to the record."}
             </p>
+            {quickAction.kind === "escalate" ? (
+              <label className="mt-2 block text-[11px] font-bold text-severity-moderate-ink">
+                Backup unit
+                <select value={backupUnitId ?? ""} onChange={(event) => setBackupUnitId(Number(event.target.value))} className="mt-1 h-9 w-full rounded-control border border-severity-moderate/40 bg-card px-2 text-xs text-brand-navy">
+                  <option value="">Choose a unit</option>
+                  {backupUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}
+                </select>
+              </label>
+            ) : null}
             <label htmlFor={`dispatch-reason-${alert?.id ?? "none"}`} className="mt-2 block text-[11px] font-bold text-severity-moderate-ink">
               {quickAction.kind === "escalate" ? "Escalation reason" : "Why this is not an emergency"}
             </label>

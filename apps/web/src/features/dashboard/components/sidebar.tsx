@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from "react-router-dom"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   InboxIcon,
   BellRingIcon,
@@ -59,6 +59,50 @@ import { displayPosition } from "@/features/dashboard/lib/position"
  */
 
 type Tone = "light" | "dark"
+
+function SosRailRow({ onHover }: { onHover?: () => void }) {
+  const [activeEmergency, setActiveEmergency] = useState(false)
+
+  useEffect(() => {
+    function onChange(event: Event) {
+      setActiveEmergency(
+        Boolean((event as CustomEvent<{ active?: boolean }>).detail?.active),
+      )
+    }
+    window.addEventListener("eboses:sos-active-change", onChange as EventListener)
+    return () =>
+      window.removeEventListener("eboses:sos-active-change", onChange as EventListener)
+  }, [])
+
+  return (
+    <button
+      type="button"
+      aria-label="Emergency SOS"
+      aria-haspopup="dialog"
+      onMouseEnter={() => {
+        onHover?.()
+        window.dispatchEvent(new CustomEvent("eboses:sos-veil-arm"))
+      }}
+      onFocus={() => {
+        onHover?.()
+        window.dispatchEvent(new CustomEvent("eboses:sos-veil-arm"))
+      }}
+      onBlur={() => window.dispatchEvent(new CustomEvent("eboses:sos-veil-disarm"))}
+      onClick={() => window.dispatchEvent(new CustomEvent("eboses:open-sos"))}
+      className="flex h-12 w-full items-center justify-center rounded-none px-0 transition-colors duration-150"
+    >
+      <span
+        className={cn(
+          "material-symbols-outlined shrink-0 select-none text-[26px] leading-none text-sos transition-transform duration-200 ease-out hover:scale-[1.16]",
+          activeEmergency && "animate-sos-icon-blink",
+        )}
+        aria-hidden
+      >
+        sos
+      </span>
+    </button>
+  )
+}
 
 function isAlarmItem(itemKey: string, count: number) {
   // Only live emergencies / assigned dispatches earn the alarm treatment.
@@ -316,6 +360,11 @@ overview: [FileChartColumnIcon, ChartSplineIcon],
         (isResident || isOfficialRole || isResponderRole) && "justify-center pt-0",
       )}>
         <ul className="flex flex-col gap-1.5">
+          {isResident ? (
+            <li>
+              <SosRailRow onHover={() => setOpen(false)} />
+            </li>
+          ) : null}
           {navItems.map((item) => {
             const active = item.isActive(location.pathname)
             const badgeForItemValue = badgeForItem(item.key)
@@ -492,8 +541,4 @@ overview: [FileChartColumnIcon, ChartSplineIcon],
       )}
     </aside>
   )
-}
-
-export function SidebarSosButton() {
-  return null
 }

@@ -36,6 +36,13 @@ class Concern(models.Model):
     client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
     tracking_number = models.CharField(max_length=32, null=True, blank=True, unique=True)
     reporter = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="concerns")
+    community = models.ForeignKey(
+        "emergencies.Community",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="concerns",
+    )
     category_ref = models.ForeignKey(
         "ConcernCategory",
         null=True,
@@ -98,6 +105,7 @@ class Concern(models.Model):
     class Meta:
         ordering = ["-created_at"]
         indexes = [
+            models.Index(fields=["community", "status", "updated_at"], name="concern_comm_status"),
             models.Index(fields=["barangay", "latitude", "longitude"], name="concern_location_lookup"),
             # Managed queue: filter status (+validation_status), sort newest activity.
             models.Index(fields=["status", "updated_at"], name="concern_status_queue"),
@@ -116,6 +124,23 @@ class Concern(models.Model):
             return self.tracking_number
         year = self.created_at.year if self.created_at else 0
         return f"RPT-{year}-{self.pk:06d}"
+
+    def save(self, *args, **kwargs):
+        if not self.community_id and self.reporter_id:
+            profile = getattr(self.reporter, "resident_profile", None)
+            if profile and profile.community_id:
+                self.community_id = profile.community_id
+        if self.community_id and not self.category_ref_id:
+            category = ConcernCategory.objects.filter(
+                community_id=self.community_id,
+                code=self.category,
+                is_active=True,
+            ).select_related("department").first()
+            if category:
+                self.category_ref = category
+        if self.category_ref_id and not self.assigned_department_id:
+            self.assigned_department_id = self.category_ref.department_id
+        super().save(*args, **kwargs)
 
 
 class ConcernMedia(models.Model):
@@ -203,8 +228,15 @@ class Department(models.Model):
     and officials look them up at different moments.
     """
 
-    name = models.CharField(max_length=120, unique=True)
-    code = models.SlugField(max_length=80, unique=True)
+    community = models.ForeignKey(
+        "emergencies.Community",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="departments",
+    )
+    name = models.CharField(max_length=120)
+    code = models.SlugField(max_length=80)
     short_name = models.CharField(max_length=48, blank=True)
     description = models.CharField(max_length=255, blank=True)
     emergency_role = models.CharField(max_length=255, blank=True)
@@ -225,6 +257,11 @@ class Department(models.Model):
 
     class Meta:
         ordering = ["sort_order", "name"]
+        constraints = [
+            models.UniqueConstraint(fields=["community", "code"], name="concerns_dept_community_code_uniq"),
+            models.UniqueConstraint(fields=["community", "name"], name="concerns_dept_community_name_uniq"),
+        ]
+        indexes = [models.Index(fields=["community", "is_active", "sort_order"], name="concern_dept_comm_active")]
 
     def __str__(self):
         return self.name
@@ -282,8 +319,15 @@ class Designation(models.Model):
 
 
 class ConcernCategory(models.Model):
-    name = models.CharField(max_length=120, unique=True)
-    code = models.SlugField(max_length=80, unique=True)
+    community = models.ForeignKey(
+        "emergencies.Community",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="concern_categories",
+    )
+    name = models.CharField(max_length=120)
+    code = models.SlugField(max_length=80)
     description = models.CharField(max_length=255, blank=True)
     icon_key = models.CharField(max_length=48, default="tag")
     custom_icon_label = models.CharField(max_length=8, blank=True)
@@ -299,6 +343,11 @@ class ConcernCategory(models.Model):
 
     class Meta:
         ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(fields=["community", "code"], name="concerns_cat_community_code_uniq"),
+            models.UniqueConstraint(fields=["community", "name"], name="concerns_cat_community_name_uniq"),
+        ]
+        indexes = [models.Index(fields=["community", "is_active", "name"], name="concern_cat_comm_active")]
 
     def __str__(self):
         return self.name
@@ -468,6 +517,14 @@ class Announcement(models.Model):
         URGENT = "urgent", "Urgent"
 
     title = models.CharField(max_length=160)
+    community = models.ForeignKey(
+        "emergencies.Community",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="announcements",
+    )
+    target_departments = models.ManyToManyField(Department, blank=True, related_name="announcements")
     body = models.TextField()
     tag = models.CharField(max_length=40, default="Barangay")
     audience = models.CharField(max_length=24, choices=Audience.choices, default=Audience.ALL)
@@ -499,6 +556,13 @@ class Announcement(models.Model):
 
 
 class BarangayEvent(models.Model):
+    community = models.ForeignKey(
+        "emergencies.Community",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="events",
+    )
     title = models.CharField(max_length=160)
     detail = models.CharField(max_length=255, blank=True)
     barangay = models.CharField(max_length=120, default="Marikina Heights")
@@ -694,6 +758,22 @@ class ConcernClassificationConfiguration(models.Model):
         RESUBMIT = "request_resubmission", "Request resubmission"
         REJECT = "reject", "Reject automatically"
 
+    class MediaIntegrityAction(models.TextChoices):
+        FLAG_NOTIFY = "flag_notify", "Accept & flag for the reviewer"
+        HOLD = "hold", "Hold for review"
+        RESUBMIT = "request_resubmission", "Ask the resident to resubmit"
+        AUTO_REJECT = "auto_reject", "Reject automatically"
+
+    class EmergencyMediaIntegrityAction(models.TextChoices):
+        # No reject, no resubmit. A photo that looks manipulated is still
+        # possibly attached to a real emergency, so the strongest action
+        # available is holding it for a reviewer — and the alert has already
+        # been dispatched by the time this runs either way. Leaving the two
+        # blocking values out of the enum is what stops a later edit from
+        # reintroducing them by changing one default.
+        FLAG_NOTIFY = "flag_notify", "Accept & flag for the responder"
+        HOLD = "hold", "Hold for review"
+
     nlp_provider = models.CharField(max_length=32, default="ollama_cloud")
     nlp_model = models.CharField(max_length=120, default="gemma4:31b")
     relevance_threshold = models.FloatField(default=0.65)
@@ -720,6 +800,11 @@ class ConcernClassificationConfiguration(models.Model):
     street_imagery_categories = models.JSONField(default=list, blank=True)
     street_imagery_radius_meters = models.PositiveIntegerField(default=50)
     street_imagery_action = models.CharField(max_length=24, choices=StreetImageryAction.choices, default=StreetImageryAction.RESUBMIT)
+    media_integrity_enabled = models.BooleanField(default=True)
+    media_integrity_action = models.CharField(max_length=24, choices=MediaIntegrityAction.choices, default=MediaIntegrityAction.HOLD)
+    media_integrity_min_confidence = models.FloatField(default=0.70)
+    media_integrity_second_opinion_enabled = models.BooleanField(default=True)
+    media_integrity_emergency_action = models.CharField(max_length=24, choices=EmergencyMediaIntegrityAction.choices, default=EmergencyMediaIntegrityAction.FLAG_NOTIFY)
     photo_duplicate_llm_enabled = models.BooleanField(default=True)
     photo_duplicate_candidate_limit = models.PositiveSmallIntegerField(default=3)
     enabled_categories = models.JSONField(default=list, blank=True)

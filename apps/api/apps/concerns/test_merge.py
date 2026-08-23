@@ -3,11 +3,13 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from . import merge_services
-from .models import Concern, ConcernMergeEvent, ConcernMergeSuggestion, Department, Designation, Position
+from .models import Concern, ConcernMergeEvent, ConcernMergeSuggestion, Department
+from .test_helpers import active_test_community, ensure_test_profile, grant_position
 
 
 class MergeTestBase(APITestCase):
     def setUp(self):
+        self.community = active_test_community()
         User = get_user_model()
         self.resident = User.objects.create_user(
             email="merge-resident@example.com",
@@ -23,15 +25,18 @@ class MergeTestBase(APITestCase):
             is_staff=True,
             status=User.Status.VERIFIED,
         )
-        Designation.objects.create(
-            user=self.official,
-            department=Department.objects.get(code="sangguniang-barangay"),
-            position=Position.objects.get(code="kagawad"),
+        ensure_test_profile(self.resident, community=self.community)
+        self.department = Department.objects.get(
+            community=self.community,
+            code="social-services",
         )
+        grant_position(self.official, position_code="staff", department_code=self.department.code)
 
     def make_concern(self, title, **kwargs):
         return Concern.objects.create(
             reporter=kwargs.pop("reporter", self.resident),
+            community=self.community,
+            assigned_department=self.department,
             title=title,
             description=kwargs.pop("description", "Something is broken."),
             **kwargs,

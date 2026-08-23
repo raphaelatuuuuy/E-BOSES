@@ -22,6 +22,7 @@ from apps.concerns.models import (
     Position,
 )
 from apps.emergencies.models import EmergencyAlert
+from apps.concerns.test_helpers import active_test_community
 
 
 class QueryBudgetTests(TestCase):
@@ -30,6 +31,7 @@ class QueryBudgetTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         User = get_user_model()
+        cls.community = active_test_community()
         cls.resident = User.objects.create_user(
             email="query-budget-resident@example.com",
             phone_number="+639180003001",
@@ -44,6 +46,7 @@ class QueryBudgetTests(TestCase):
             date_of_birth="1990-01-01",
             address="Budget Street",
             barangay="Marikina Heights",
+            community=cls.community,
         )
         cls.official = User.objects.create_user(
             email="query-budget-official@example.com",
@@ -59,10 +62,11 @@ class QueryBudgetTests(TestCase):
             date_of_birth="1980-01-01",
             address="Budget Street",
             barangay="Marikina Heights",
+            community=cls.community,
         )
         Designation.objects.create(
             user=cls.official,
-            department=Department.objects.get(code="sangguniang-barangay"),
+            department=Department.objects.get(code="sangguniang-barangay", community=cls.community),
             position=Position.objects.get(code="barangay-captain"),
         )
         cls.responder = User.objects.create_user(
@@ -81,6 +85,7 @@ class QueryBudgetTests(TestCase):
             date_of_birth="1985-01-01",
             address="Budget Street",
             barangay="Marikina Heights",
+            community=cls.community,
         )
 
         statuses = [
@@ -91,6 +96,7 @@ class QueryBudgetTests(TestCase):
         cls.concerns = Concern.objects.bulk_create(
             Concern(
                 reporter=cls.resident,
+                community=cls.community,
                 title=f"Budget concern {i}",
                 description="Query budget filler report.",
                 category=Concern.Category.INFRASTRUCTURE if i % 2 else Concern.Category.ENVIRONMENT,
@@ -109,6 +115,7 @@ class QueryBudgetTests(TestCase):
         cls.alerts = EmergencyAlert.objects.bulk_create(
             EmergencyAlert(
                 reporter=cls.resident,
+                community=cls.community,
                 type=EmergencyAlert.Type.MEDICAL if i % 2 else EmergencyAlert.Type.FIRE,
                 latitude="14.6510000",
                 longitude="121.1150000",
@@ -119,6 +126,7 @@ class QueryBudgetTests(TestCase):
         )
         cls.announcements = Announcement.objects.bulk_create(
             Announcement(
+                community=cls.community,
                 title=f"Budget announcement {i}",
                 body="Body",
                 audience=Announcement.Audience.ALL,

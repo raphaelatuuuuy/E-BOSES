@@ -235,12 +235,11 @@ export function mergeUpdate(snapshot: LiveMapSnapshot, message: LiveMapUpdate): 
     const emergencies = snapshot.emergencies.some((item) => item.id === emergency.id)
       ? snapshot.emergencies.map((item) => item.id === emergency.id ? emergency : item)
       : [emergency, ...snapshot.emergencies]
-    const route = message.payload.route
-    const routes = route
-      ? snapshot.routes.some((item) => item.assignment_id === route.assignment_id)
-        ? snapshot.routes.map((item) => item.assignment_id === route.assignment_id ? route : item)
-        : [...snapshot.routes, route]
-      : snapshot.routes
+    const incoming = message.payload.routes ?? (message.payload.route ? [message.payload.route] : [])
+    const routes = [
+      ...snapshot.routes.filter((item) => item.alert_id !== emergency.id),
+      ...incoming,
+    ]
     return { ...snapshot, emergencies, routes }
   }
   if (message.type === "route.updated") {
@@ -249,6 +248,13 @@ export function mergeUpdate(snapshot: LiveMapSnapshot, message: LiveMapUpdate): 
       ? snapshot.routes.map((item) => item.assignment_id === route.assignment_id ? route : item)
       : [...snapshot.routes, route]
     return { ...snapshot, routes }
+  }
+  if (message.type === "route.removed") {
+    const { alert_id, assignment_id } = message.payload
+    return {
+      ...snapshot,
+      routes: snapshot.routes.filter((route) => assignment_id ? route.assignment_id !== assignment_id : route.alert_id !== alert_id),
+    }
   }
   return snapshot
 }

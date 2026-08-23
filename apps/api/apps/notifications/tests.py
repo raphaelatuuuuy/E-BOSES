@@ -5,7 +5,8 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentSettings
-from apps.concerns.models import Concern
+from apps.concerns.models import Concern, Department
+from apps.concerns.test_helpers import active_test_community, ensure_test_profile
 from apps.emergencies.models import EmergencyAlert, WitnessNotification
 
 from .models import BrowserPushSubscription, Notification
@@ -373,14 +374,25 @@ class LiveMapEventFanoutTests(TestCase):
     def test_public_map_events_fan_out_to_residents_but_location_events_do_not(self, broadcast, resident_broadcast):
         from apps.notifications.services import broadcast_live_map_event
 
-        broadcast_live_map_event("concern.updated", {"concern": {"id": 7}})
+        community = active_test_community()
+        resident = self._user("map-resident@example.com", get_user_model().Role.RESIDENT)
+        ensure_test_profile(resident, community=community)
+        department = Department.objects.get(community=community, code="bhw")
+        concern = Concern.objects.create(
+            reporter=resident,
+            community=community,
+            assigned_department=department,
+            title="Map update",
+        )
+        broadcast_live_map_event("concern.updated", {"concern": {"id": concern.pk}})
         groups = [call.args[0] for call in broadcast.call_args_list]
-        self.assertIn("official_live_map", groups)
+        self.assertIn(f"official_live_map_department_{department.pk}", groups)
+        self.assertIn(f"official_live_map_community_{community.pk}", groups)
         resident_broadcast.assert_called_once()
 
         broadcast.reset_mock()
         resident_broadcast.reset_mock()
         broadcast_live_map_event("location.updated", {"person": {"id": 9, "latitude": "14.65"}})
         groups = [call.args[0] for call in broadcast.call_args_list]
-        self.assertEqual(groups, ["official_live_map"])
+        self.assertEqual(groups, [])
         resident_broadcast.assert_not_called()

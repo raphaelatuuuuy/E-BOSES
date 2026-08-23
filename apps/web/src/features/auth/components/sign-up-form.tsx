@@ -75,6 +75,7 @@ export function SignUpForm({
     proofOptions,
     proofOptionsLoading,
     refreshProofOptions,
+    resolveCommunity,
     canCaptureProof,
     proofCaptureBlockedReason,
   } = form
@@ -244,7 +245,17 @@ export function SignUpForm({
         ) : null}
 
         {step === 7 ? (
+          <VerifiedPeekStep
+            values={values}
+            resolving={proofOptionsLoading}
+            onResolve={resolveCommunity}
+            onContinue={() => goNext()}
+          />
+        ) : null}
+
+        {step === 8 ? (
           <ProofStep
+            key={values.communityResolutionToken}
             values={values}
             errors={errors}
             proofOptions={proofOptions}
@@ -257,14 +268,6 @@ export function SignUpForm({
             onContinue={() => goNext()}
             proofDetect={proofDetect}
             onProofDetectChange={setProofDetect}
-          />
-        ) : null}
-
-        {step === 8 ? (
-          <VerifiedPeekStep
-            street={values.street}
-            houseNumber={values.houseNumber}
-            onContinue={() => goNext()}
           />
         ) : null}
 
@@ -334,7 +337,7 @@ export function SignUpForm({
 
                   <h3 className="font-semibold text-foreground">3. User Eligibility and Registration</h3>
                   <p>
-                    You must be a verified resident of Barangay Marikina Heights, at least 18 years
+                    You must be a verified resident of an active E-Boses community, at least 18 years
                     of age, and not have an existing account with the system. Registration requires
                     the submission of personal information, OTP verification, and a valid
                     government-issued ID for identity verification.

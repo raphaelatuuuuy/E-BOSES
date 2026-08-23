@@ -15,6 +15,7 @@ import { LatestConcernsCard, OutcomesCard } from "@/features/dashboard/component
 import { dailyCounts } from "@/features/dashboard/lib/overview-series"
 import { isMergedChild } from "@/features/dashboard/lib/status-vocabulary"
 import { usePageTitle } from "@/hooks/use-page-title"
+import { useAuthSession } from "@/features/auth/auth-session"
 
 function StatusMasthead({
   live,
@@ -27,6 +28,8 @@ function StatusMasthead({
   loading: boolean
   now: Date
 }) {
+  const { user } = useAuthSession()
+  const communityName = (user?.barangay || "Community").replace(/^Barangay\s+/i, "")
   const alarm = live > 0
 
   return (
@@ -56,7 +59,7 @@ function StatusMasthead({
 
           <h1 className="mt-2 text-display text-foreground">Operations Overview</h1>
           <p className="mt-1.5 text-body text-muted-foreground">
-            Barangay Marikina Heights
+            {communityName}
             <span className="text-faint-foreground"> · </span>
             <span>
               {responders} {responders === 1 ? "responder" : "responders"} on duty

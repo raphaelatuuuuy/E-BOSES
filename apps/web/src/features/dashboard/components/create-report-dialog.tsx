@@ -30,8 +30,8 @@ import {
   type ConcernResolvedMatch,
   type ConcernVisibility,
 } from "@/features/dashboard/api"
-import { Dialog, DialogBody } from "@/features/dashboard/components/dialog"
 import { CameraCaptureDialog } from "@/features/dashboard/components/camera-capture-dialog"
+import { Dialog, DialogBody } from "@/features/dashboard/components/dialog"
 import { ReportStatusDialog } from "@/features/dashboard/components/report-status-dialog"
 import { statusModeFromReport } from "@/features/dashboard/components/report-status-mode"
 import { ApiError } from "@/lib/api"
@@ -184,6 +184,7 @@ export function CreateReportDialog({
   const [visibilityMenuOpen, setVisibilityMenuOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
   const [locationOpen, setLocationOpen] = useState(false)
+  const [cameraOpen, setCameraOpen] = useState(false)
   const [address, setAddress] = useState("")
   const [addressPrimary, setAddressPrimary] = useState("")
   const [addressSecondary, setAddressSecondary] = useState("")
@@ -210,7 +211,6 @@ export function CreateReportDialog({
   const [privacyPreview, setPrivacyPreview] = useState<{ state: string; detected_classes: string[]; protected_image: string } | null>(null)
 
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false)
-  const [cameraOpen, setCameraOpen] = useState(false)
 
   const clientRequestIdRef = useRef(crypto.randomUUID())
   const recurrenceOfRef = useRef<number | null>(null)
@@ -594,6 +594,14 @@ export function CreateReportDialog({
     }
   }
 
+  function handleCameraCapture(files: File[]) {
+    void addFiles(files).then((added) => {
+      // Location is fetched once — and only when a photo actually landed.
+      if (!added.length) return
+      if (!locationPin || locationPin.source !== "gps") void resolveGpsLocation()
+    })
+  }
+
   /** Same as geoPermissionState, for the camera — checked before opening the
    * live capture dialog so an already-denied permission never flashes the
    * camera modal open just to immediately close it. */
@@ -607,14 +615,6 @@ export function CreateReportDialog({
     }
   }
 
-  function handleCameraCapture(files: File[]) {
-    void addFiles(files).then((added) => {
-      // Location is fetched once — and only when a photo actually landed.
-      if (!added.length) return
-      if (!locationPin || locationPin.source !== "gps") void resolveGpsLocation()
-    })
-  }
-
   async function handleCameraButtonClick(liveCameraAvailable: boolean) {
     if (!liveCameraAvailable) {
       cameraInputRef.current?.click()
@@ -625,6 +625,8 @@ export function CreateReportDialog({
       toast.error("Camera is blocked. Allow it via the lock icon in your address bar, then try again.")
       return
     }
+    // Location is asked for while this dialog is still on screen: once the
+    // camera modal is up, a permission prompt lands behind it.
     const state = await geoPermissionState()
     if (state === "denied") {
       toast.error(
@@ -633,7 +635,6 @@ export function CreateReportDialog({
       return
     }
     if (state === "prompt") {
-      // Never asked before — this fires the browser's native allow dialog.
       const ok = await resolveGpsLocation()
       if (!ok) return
     }
@@ -1100,6 +1101,29 @@ export function CreateReportDialog({
                   </div>
 
                   {(() => {
+                    // The ring alone says a photo has a problem but never which
+                    // one. A resident asked to fix something has to be told what.
+                    const notes = photoVerdicts
+                      .filter((verdict) => verdict.message && verdict.state !== "relevant")
+                      .map((verdict) => ({
+                        key: `${verdict.index}-${verdict.state}`,
+                        label: mediaFiles.length > 1 ? `Photo ${verdict.index + 1}` : "",
+                        message: verdict.message,
+                      }))
+                    if (notes.length === 0) return null
+                    return (
+                      <ul className="mt-2 list-none space-y-1 text-xs font-medium text-destructive" role="alert">
+                        {notes.map((note) => (
+                          <li key={note.key}>
+                            {note.label ? `${note.label}: ` : ""}
+                            {note.message}
+                          </li>
+                        ))}
+                      </ul>
+                    )
+                  })()}
+
+                  {(() => {
                   const messages = [
                     fieldErrors.description,
                     fieldErrors.concern,
@@ -1241,7 +1265,9 @@ export function CreateReportDialog({
                       // Live camera where getUserMedia exists; native capture
                       // input (phones without it / insecure contexts) otherwise.
                       const mediaDevices: MediaDevices | undefined = navigator.mediaDevices
-                      const live = Boolean(mediaDevices && typeof mediaDevices.getUserMedia === "function")
+                      const live = Boolean(
+                        mediaDevices && typeof mediaDevices.getUserMedia === "function",
+                      )
                       void handleCameraButtonClick(live)
                     }}
                     disabled={isCheckingMedia || mediaFiles.length >= MAX_FILES}

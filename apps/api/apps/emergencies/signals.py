@@ -1,8 +1,9 @@
 from django.core.cache import cache
-from django.db.models.signals import post_delete, post_save
+from django.db.models import F
+from django.db.models.signals import post_delete, post_save, pre_delete
 from django.dispatch import receiver
 
-from .models import MapGeometry, MapServicePoi
+from .models import Community, MapGeometry, MapServicePoi
 
 
 def _bust_map_poi_caches() -> None:
@@ -44,6 +45,18 @@ def map_service_poi_changed(sender, **kwargs):  # noqa: ARG001
 
 
 @receiver(post_save, sender=MapGeometry)
+def map_geometry_changed(sender, instance, **kwargs):  # noqa: ARG001
+    if instance.kind == MapGeometry.Kind.BOUNDARY:
+        Community.objects.filter(boundary=instance).update(boundary_revision=F("boundary_revision") + 1)
+    _bust_map_geometry_caches()
+
+
+@receiver(pre_delete, sender=MapGeometry)
+def map_geometry_deleting(sender, instance, **kwargs):  # noqa: ARG001
+    if instance.kind == MapGeometry.Kind.BOUNDARY:
+        Community.objects.filter(boundary=instance).update(boundary_revision=F("boundary_revision") + 1)
+
+
 @receiver(post_delete, sender=MapGeometry)
-def map_geometry_changed(sender, **kwargs):  # noqa: ARG001
+def map_geometry_deleted(sender, **kwargs):  # noqa: ARG001
     _bust_map_geometry_caches()

@@ -93,13 +93,15 @@ class EmergencyPrivacyAccessMatrixTests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
-        grant_position(self.official)
+        designation = grant_position(self.official, department_code="bhw")
+        self.community = designation.department.community
 
         self.alert = EmergencyAlert.objects.create(
             reporter=self.owner,
             type=EmergencyAlert.Type.MEDICAL,
             note=self.PRIVATE_NOTE,
             status=EmergencyAlert.Status.EN_ROUTE,
+            community=self.community,
             barangay="Marikina Heights",
             latitude=self.ALERT_LATITUDE,
             longitude=self.ALERT_LONGITUDE,
@@ -213,7 +215,7 @@ class EmergencyPrivacyAccessMatrixTests(APITestCase):
                 self._authenticate(user)
                 response = self.client.get(detail_url)
 
-                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+                self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
                 self._assert_denial_does_not_echo_private_data(response)
 
     def test_chat_history_and_attachment_metadata_follow_the_same_role_matrix(self):
@@ -241,7 +243,7 @@ class EmergencyPrivacyAccessMatrixTests(APITestCase):
                 self._authenticate(user)
                 response = self.client.get(chat_url)
 
-                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+                self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
                 self._assert_denial_does_not_echo_private_data(response)
                 self.assertNotIn("private-chat.png", str(response.data))
 
@@ -302,18 +304,18 @@ class EmergencyPrivacyAccessMatrixTests(APITestCase):
             "accuracy": 5.0,
         }
         denied_roles = {
-            "owner resident": self.owner,
-            "unrelated resident": self.unrelated_resident,
-            "unrelated responder": self.unrelated_responder,
-            "official": self.official,
+            "owner resident": (self.owner, status.HTTP_404_NOT_FOUND),
+            "unrelated resident": (self.unrelated_resident, status.HTTP_404_NOT_FOUND),
+            "unrelated responder": (self.unrelated_responder, status.HTTP_404_NOT_FOUND),
+            "official": (self.official, status.HTTP_404_NOT_FOUND),
         }
 
-        for role_name, user in denied_roles.items():
+        for role_name, (user, expected_status) in denied_roles.items():
             with self.subTest(role=role_name):
                 self._authenticate(user)
                 response = self.client.post(location_url, new_location, format="json")
 
-                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+                self.assertEqual(response.status_code, expected_status)
                 self.assertEqual(self.assignment.location_pings.count(), 1)
                 self._assert_denial_does_not_echo_private_data(response)
 

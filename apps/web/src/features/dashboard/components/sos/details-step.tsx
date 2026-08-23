@@ -50,7 +50,7 @@ export function SosDetailsStep({
 
   return (
     <div className="space-y-4">
-      <p className="text-[14px] leading-6 text-white/75">
+      <p className="text-[14px] leading-6 text-white/70">
         Anything else responders should know before they arrive? Landmarks, gate
         colour, floor number.
       </p>
@@ -60,7 +60,7 @@ export function SosDetailsStep({
         placeholder="Optional note, e.g. second floor, blue gate"
         rows={4}
         maxLength={300}
-        className="w-full resize-none rounded-xl border border-white/15 bg-black/25 px-3.5 py-3 text-[14px] text-white outline-none placeholder:text-white/40 focus:border-brand-orange"
+        className="w-full resize-none rounded-[18px] border border-white/15 bg-black/25 px-4 py-3.5 text-[16px] text-white outline-none placeholder:text-white/40 focus:border-brand-orange"
       />
 
       <div>
@@ -72,7 +72,7 @@ export function SosDetailsStep({
           onChange={(event) => choose(event.target.files?.[0] ?? null)}
         />
         {preview ? (
-          <div className="relative overflow-hidden rounded-xl border border-white/15">
+          <div className="relative overflow-hidden rounded-[18px] border border-white/15">
             <img src={preview} alt="" className="max-h-44 w-full object-cover" />
             <button
               type="button"
@@ -88,7 +88,7 @@ export function SosDetailsStep({
             type="button"
             disabled={!online}
             onClick={() => inputRef.current?.click()}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/25 py-3 text-[14px] font-semibold text-white/75 transition-colors hover:border-white/40 hover:text-white disabled:opacity-45"
+            className="flex w-full items-center justify-center gap-2 rounded-[18px] border border-dashed border-white/25 py-3.5 text-[14px] font-semibold text-white/75 transition-colors hover:border-white/40 hover:text-white disabled:opacity-45"
           >
             <ImagePlusIcon className="size-4" />
             Add a photo

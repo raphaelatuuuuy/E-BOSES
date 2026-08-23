@@ -17,6 +17,7 @@ import { toast } from "sonner"
 import { cn } from "@workspace/ui/lib/utils"
 import { SheetPrimaryButton } from "@/features/dashboard/components/sheet-dialog"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
+import { mediaIntegrityVerdict } from "@/features/dashboard/lib/plain-language"
 
 import {
   generateSampleDescription,
@@ -380,6 +381,28 @@ function ConcernResult({
   }
   if (result.duplicate) {
     findings.push({ icon: CopyIcon, tone: "warn", text: "A very similar report was filed recently." })
+  }
+  // Only a real finding is worth a line. "Nothing found" and "could not tell"
+  // are the ordinary outcomes for almost every photo, and reporting them would
+  // train an official to read past this row.
+  for (const finding of result.media_integrity?.findings ?? []) {
+    if (finding.verdict === "authentic" || finding.verdict === "inconclusive") continue
+    const photoLabel =
+      (result.media_integrity?.findings?.length ?? 0) > 1 ? `Photo ${finding.index + 1}: ` : ""
+    findings.push({
+      icon: Ban,
+      tone: "bad",
+      text: `${photoLabel}${mediaIntegrityVerdict(finding.verdict).label.toLowerCase()}${
+        finding.signals?.length ? ` — ${finding.signals[0]}` : ""
+      }`,
+    })
+  }
+  if (result.media_integrity?.second_opinion === "not_confirmed") {
+    findings.push({
+      icon: ScanLineIcon,
+      tone: "muted",
+      text: "A photo looked edited on the first pass, but the second look disagreed, so nothing was flagged.",
+    })
   }
   if (result.street_imagery?.status === "checked") {
     // Street imagery is a location check only — does the pin sit in the same

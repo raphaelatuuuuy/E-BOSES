@@ -5,7 +5,25 @@ import { toast } from "sonner"
 import { cn } from "@workspace/ui/lib/utils"
 import { getLlmDecisionLog, type LlmDecisionLogDomain, type LlmDecisionLogEntry } from "./api"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
+import { mediaIntegrityVerdict } from "@/features/dashboard/lib/plain-language"
 import { displayValue, readable, verdictMeta } from "./shared"
+
+/**
+ * The picture-check verdict on a run, or null when there is nothing to say.
+ *
+ * "authentic" and "inconclusive" are the ordinary outcomes on the great
+ * majority of runs, so surfacing them on every row would bury the handful
+ * that matter.
+ */
+const QUIET_INTEGRITY_VERDICTS = new Set(["authentic", "inconclusive", ""])
+
+function integrityVerdictOf(snapshot: Record<string, unknown>): string | null {
+  const verdict = snapshot?.media_integrity_overall
+  if (typeof verdict !== "string" || QUIET_INTEGRITY_VERDICTS.has(verdict)) {
+    return null
+  }
+  return verdict
+}
 
 const DOMAIN_FILTERS: { value: LlmDecisionLogDomain | ""; label: string }[] = [
   { value: "", label: "All" },
@@ -193,6 +211,18 @@ export function DecisionLogTab() {
                     {entry.assigned_department ? (
                       <p className="text-[12px] font-medium text-neutral-400">→ {entry.assigned_department.name}</p>
                     ) : null}
+                    {(() => {
+                      // Only shown when the picture check actually reached a
+                      // finding. "Nothing found" and "could not tell" are the
+                      // ordinary outcomes and would be noise on every row.
+                      const verdict = integrityVerdictOf(entry.output_snapshot)
+                      if (!verdict) return null
+                      return (
+                        <p className="text-[12px] font-medium text-destructive">
+                          Photo: {mediaIntegrityVerdict(verdict).label}
+                        </p>
+                      )
+                    })()}
                   </div>
                 </button>
                 {isOpen ? (

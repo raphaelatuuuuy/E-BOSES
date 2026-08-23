@@ -71,11 +71,29 @@ class ConfigurationHubTests(APITestCase):
         config.flag_suspicious = False
         config.flag_irrelevant = False
         config.duplicate_detection_enabled = False
+        # The photo integrity check also holds reports, so the card only warns
+        # once every check is off — not while one is still doing something.
+        config.media_integrity_enabled = False
         config.save()
 
         response = self.client.get("/api/config/summary/")
         card = response.data["sections"]["classification"]
         self.assertTrue(card["needs_attention"])
+
+    def test_classification_card_does_not_warn_while_the_photo_check_runs(self):
+        from apps.concerns.models import ConcernClassificationConfiguration
+
+        config = ConcernClassificationConfiguration.current()
+        config.flag_suspicious = False
+        config.flag_irrelevant = False
+        config.duplicate_detection_enabled = False
+        config.media_integrity_enabled = True
+        config.save()
+
+        response = self.client.get("/api/config/summary/")
+        card = response.data["sections"]["classification"]
+        self.assertFalse(card["needs_attention"])
+        self.assertIn("edited photos", card["detail"])
 
     def test_summary_hides_sections_the_official_cannot_access(self):
         kagawad = User.objects.create_user(

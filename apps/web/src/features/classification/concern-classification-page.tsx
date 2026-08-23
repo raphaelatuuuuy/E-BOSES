@@ -40,6 +40,8 @@ import {
 import {
   applyStrictness,
   detectStrictness,
+  EMERGENCY_MEDIA_INTEGRITY_OPTIONS,
+  MEDIA_INTEGRITY_OPTIONS,
   MISMATCH_OPTIONS,
   STRICTNESS_PRESETS,
 } from "./strictness"
@@ -302,7 +304,49 @@ function ConfigureDialog({
             />
           }
         />
+        <SheetOptionRow
+          title="Edited or AI-made photo"
+          description="Reads the picture itself, not the file. Catches a screenshot of an AI image, an object pasted into a real scene, or a photo of a screen."
+          trailing={
+            <RuleMenu
+              value={config.media_integrity_action ?? "hold"}
+              options={MEDIA_INTEGRITY_OPTIONS.map(({ value, label }) => ({ value, label }))}
+              onChange={(value) => onUpdate("media_integrity_action", value as ConcernClassificationConfig["media_integrity_action"])}
+            />
+          }
+        />
       </SheetList>
+      <SheetToggleRow
+        id="media-integrity-enabled"
+        label="Check photos for editing"
+        description="Turn off to skip the picture check entirely."
+        checked={config.media_integrity_enabled ?? true}
+        onChange={(checked) => onUpdate("media_integrity_enabled", checked)}
+      />
+      {config.media_integrity_enabled === false ? null : (
+        <>
+          <SheetToggleRow
+            id="media-integrity-second-opinion"
+            label="Check a flagged photo twice"
+            description="A flagged photo is looked at again before anything happens. Fewer wrong flags, one extra check."
+            checked={config.media_integrity_second_opinion_enabled ?? true}
+            onChange={(checked) => onUpdate("media_integrity_second_opinion_enabled", checked)}
+          />
+          <SheetList>
+            <SheetOptionRow
+              title="Emergency photos"
+              description="An emergency is always sent to responders first. This check runs after, and can never hold or reject an alert."
+              trailing={
+                <RuleMenu
+                  value={config.media_integrity_emergency_action ?? "flag_notify"}
+                  options={EMERGENCY_MEDIA_INTEGRITY_OPTIONS.map(({ value, label }) => ({ value, label }))}
+                  onChange={(value) => onUpdate("media_integrity_emergency_action", value as ConcernClassificationConfig["media_integrity_emergency_action"])}
+                />
+              }
+            />
+          </SheetList>
+        </>
+      )}
 
       {/* 4. Similar reports */}
       <SheetSectionLabel>Similar reports</SheetSectionLabel>

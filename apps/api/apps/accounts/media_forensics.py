@@ -397,6 +397,29 @@ def visual_tamper_forensics(content: bytes) -> str | None:
     return None
 
 
+def forensics_findings(content: bytes) -> dict:
+    """Layers 1–4 as a verdict instead of an exception.
+
+    `check_media_authenticity` raises, which suits an upload endpoint that only
+    has to say yes or no. The ID pipeline needs the same answer as data — which
+    layer objected, and to what — so it can record the stage that stopped a
+    submission and skip the layers behind it.
+    """
+    for layer, probe in (
+        ("exif", exif_forensics),
+        ("png_metadata", png_metadata_forensics),
+        ("c2pa", c2pa_forensics),
+        ("visual_tamper", visual_tamper_forensics),
+    ):
+        try:
+            message = probe(content)
+        except Exception:
+            continue
+        if message:
+            return {"checked": True, "flagged": True, "layer": layer, "message": message}
+    return {"checked": True, "flagged": False, "layer": "", "message": ""}
+
+
 def check_media_authenticity(content: bytes) -> None:
     """Run forensics Layers 1–4 in order. Raises ValidationError on detection."""
     # Layer 1 → Layer 2 → Layer 3 → Layer 4

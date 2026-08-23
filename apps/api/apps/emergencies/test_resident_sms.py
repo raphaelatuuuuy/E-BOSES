@@ -12,6 +12,8 @@ from django.test import TestCase
 
 from apps.sms import notify, templates
 from apps.sms.models import SmsPurpose
+from apps.concerns.models import Department
+from apps.concerns.test_helpers import grant_position
 
 from .models import EmergencyAlert
 
@@ -110,8 +112,10 @@ class OfficialAlertTests(TestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
+        grant_position(self.official, department_code="bhw")
+        community = Department.objects.get(code="bhw").community
         self.alert = EmergencyAlert.objects.create(
-            reporter=self.resident, type=EmergencyAlert.Type.MEDICAL
+            reporter=self.resident, type=EmergencyAlert.Type.MEDICAL, community=community
         )
 
     def test_officials_are_told_about_a_new_emergency(self):

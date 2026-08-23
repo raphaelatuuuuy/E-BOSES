@@ -55,6 +55,26 @@ RECOMMENDED_ACTIONS = {
     "reject_as_irrelevant",
 }
 
+# Content-level authenticity. The byte-level layer (accounts/media_forensics.py)
+# reads EXIF, PNG chunks, C2PA and ELA, so it catches a Photoshop save or a
+# tagged AI export. It cannot catch a screenshot of an AI image, a UFO pasted
+# into a clean re-save, or a cartoon portrait on an otherwise ordinary JPEG —
+# nothing in the file is wrong, only the scene is. That is what these verdicts
+# are for, and neither layer replaces the other.
+INTEGRITY_VERDICTS = {
+    "authentic",
+    "suspected_edit",
+    "suspected_ai",
+    "impossible_content",
+    "photo_of_screen",
+    "inconclusive",
+}
+
+# "authentic" is the absence of a finding, never proof. Only these act.
+INTEGRITY_FLAGGED_VERDICTS = INTEGRITY_VERDICTS - {"authentic", "inconclusive"}
+
+MAX_INTEGRITY_SIGNALS = 4
+
 # SAM3 is an open-vocabulary segmenter, so Gemma names what to blur rather than
 # picking from a fixed list. The constraint is what SAM3 can actually *see*:
 # short concrete nouns work ("face", "license plate", "id card"), abstractions
@@ -180,6 +200,8 @@ def empty_details() -> dict:
         "short_explanation": "",
         "image_review_succeeded": None,
         "photo_verdicts": [],
+        "media_integrity": [],
+        "media_integrity_overall": "inconclusive",
         "matched_emergency_type": "",
         "emergency_routing_reason": "",
         "ongoing_emergency_confirmation_required": False,
@@ -528,6 +550,33 @@ def build_prompt(
         "relevance (supports_report, contradicts_report, neutral, or unclear), and a one-sentence "
         "note saying what the photo appears to show and whether it matches the described issue. "
         "Never skip a photo that was attached. Return [] when no image is attached.\n"
+        "18. media_integrity: judge each attached photo on whether it looks like a straight, "
+        "unedited camera photo of a real scene. Report only what you can SEE. You cannot read "
+        "file metadata, so never refer to it.\n"
+        "    Signs to look for: an object whose lighting, shadow direction, or scale disagrees "
+        "with the rest of the scene; edges that are unnaturally clean, smeared, or repeated "
+        "(clone stamping); text or logos that are warped, misspelled, or dissolve into scribble; "
+        "hands, faces, or repeated structures with the wrong count or geometry; a scene that "
+        "could not physically occur (a UFO, a cartoon character, a fictional creature, an "
+        "impossible vehicle); a smooth rendered surface unlike camera sensor grain; screen "
+        "glare, moire, pixel grid, or a device bezel, meaning this is a photo of a screen "
+        "rather than of the scene itself.\n"
+        "    verdict is authentic, suspected_edit, suspected_ai, impossible_content, "
+        "photo_of_screen, or inconclusive. Use inconclusive when the photo is too small, dark, "
+        "plain, or blurred to judge — that is a normal, common outcome and is not an accusation.\n"
+        "    confidence is 0.0 to 1.0 and states how sure you are of that verdict.\n"
+        "    signals lists the short concrete things you actually saw, in ordinary words (for "
+        'example: "the shadow of the object falls opposite to every other shadow", "the sign '
+        'text is unreadable scribble"). Leave it empty for authentic and inconclusive.\n'
+        "    Never state that a photo is genuine or proven real. authentic means only that you "
+        "saw no sign of a problem. Return [] when no image is attached.\n"
+        "19. Ordinary phone-photo defects are NOT manipulation. Never flag: compression blocks "
+        "or artefacts, low light, grain, motion blur, a date or time stamp burned in by the "
+        "camera, portrait-mode background blur, a watermark, a rotated or cropped frame, or a "
+        "photo taken at an angle. A real resident's photo usually has several of these.\n"
+        "    media_integrity_overall is the most serious verdict among the photos, using this "
+        "order: impossible_content, suspected_ai, suspected_edit, photo_of_screen, inconclusive, "
+        "authentic.\n"
         f"{unreadable_rule}\n"
         "Example of a good short_explanation: \"The description reports accumulated garbage near the "
         "roadside, and the photo appears to show waste materials in the same area, which supports the "
@@ -555,6 +604,8 @@ def build_prompt(
         '  "recommended_action": null,\n'
         '  "short_explanation": null,\n'
         '  "photo_verdicts": [{"index": 0, "relevance": "supports_report", "note": "The photo shows the reported issue."}],\n'
+        '  "media_integrity": [{"index": 0, "verdict": "authentic", "confidence": 0.0, "signals": [], "note": ""}],\n'
+        '  "media_integrity_overall": null,\n'
         '  "matched_emergency_type": null,\n'
         '  "emergency_routing_reason": null,\n'
         '  "ongoing_emergency_confirmation_required": false\n'
@@ -641,6 +692,21 @@ def parse_gemma_result(
     if not image_attached or image_review_succeeded is False:
         photo_verdicts = []
 
+    min_integrity_confidence = float(
+        getattr(configuration, "media_integrity_min_confidence", None) or 0.70
+    )
+    media_integrity = _coerce_integrity(
+        data.get("media_integrity"),
+        count=photo_count,
+        min_confidence=min_integrity_confidence,
+    )
+    if not image_attached or image_review_succeeded is False:
+        # Same reasoning as detected_objects above: an authenticity claim about
+        # an image nobody managed to look at is invention, and "authentic" would
+        # be the more dangerous of the two possible inventions.
+        media_integrity = []
+    media_integrity_overall = integrity_overall(media_integrity)
+
     suspected = sensitive_classes_from(_as_list(data.get("suspected_sensitive_classes")))
     privacy_required = bool(data.get("privacy_scan_required")) and bool(suspected)
     if image_review_succeeded is False or not image_attached:
@@ -689,6 +755,8 @@ def parse_gemma_result(
         "short_explanation": _clean_text(data.get("short_explanation")),
         "image_review_succeeded": image_review_succeeded,
         "photo_verdicts": photo_verdicts,
+        "media_integrity": media_integrity,
+        "media_integrity_overall": media_integrity_overall,
         "matched_emergency_type": matched_emergency_type,
         "emergency_routing_reason": emergency_routing_reason,
         "ongoing_emergency_confirmation_required": ongoing_emergency_confirmation_required,
@@ -795,6 +863,84 @@ def _coerce_photo_verdicts(value, *, count: int) -> list[dict]:
             }
         )
     return verdicts
+
+
+# Most serious first. Used to pick the overall verdict and to keep the model
+# from downgrading a flagged photo by reporting a calmer overall value.
+_INTEGRITY_SEVERITY = [
+    "impossible_content",
+    "suspected_ai",
+    "suspected_edit",
+    "photo_of_screen",
+    "inconclusive",
+    "authentic",
+]
+
+
+def _coerce_integrity(value, *, count: int, min_confidence: float) -> list[dict]:
+    """Normalise per-photo integrity findings, dropping anything out of contract.
+
+    A verdict below `min_confidence` becomes "inconclusive". A low-confidence
+    guess must never reject a real resident's report, and the alternative —
+    letting the caller compare the number itself — has been forgotten at one
+    call site or another in every version of this file.
+    """
+    findings: list[dict] = []
+    seen = set()
+    for item in _as_list(value):
+        if not isinstance(item, dict):
+            continue
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        if index < 0 or index >= count or index in seen:
+            continue
+        seen.add(index)
+        verdict = str(item.get("verdict") or "").lower().strip()
+        if verdict not in INTEGRITY_VERDICTS:
+            verdict = "inconclusive"
+        try:
+            confidence = round(min(max(float(item.get("confidence") or 0.0), 0.0), 1.0), 3)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if verdict in INTEGRITY_FLAGGED_VERDICTS and confidence < min_confidence:
+            verdict = "inconclusive"
+        signals = (
+            _clean_strings(item.get("signals"))[:MAX_INTEGRITY_SIGNALS]
+            if verdict in INTEGRITY_FLAGGED_VERDICTS
+            else []
+        )
+        findings.append(
+            {
+                "index": index,
+                "verdict": verdict,
+                "confidence": confidence,
+                "signals": signals,
+                "note": _clean_text(item.get("note"))[:200],
+            }
+        )
+    return findings
+
+
+def integrity_overall(findings: list[dict]) -> str:
+    """The most serious verdict across the photos.
+
+    Derived rather than read from the model: asked for both, Gemma will
+    sometimes flag one photo and then report a calm overall value, and the
+    quieter of the two must not be the one that decides.
+    """
+    if not findings:
+        return "inconclusive"
+    verdicts = {str(item.get("verdict") or "inconclusive") for item in findings}
+    for verdict in _INTEGRITY_SEVERITY:
+        if verdict in verdicts:
+            return verdict
+    return "inconclusive"
+
+
+def flagged_integrity_findings(findings: list[dict]) -> list[dict]:
+    return [item for item in findings if item.get("verdict") in INTEGRITY_FLAGGED_VERDICTS]
 
 
 def _json_body(content: str) -> str:
@@ -994,6 +1140,78 @@ def verify_street_context(*, submitted: list[PreparedImage], street: PreparedIma
     return {
         "verdict": verdict,
         "explanation": str(parsed.get("explanation") or "").strip()[:300],
+    }
+
+
+def confirm_media_integrity(
+    *,
+    image: PreparedImage,
+    verdict: str,
+    signals: list[str],
+    min_confidence: float = 0.70,
+) -> dict | None:
+    """Second look at one photo the main analysis flagged.
+
+    A single vision judgement about authenticity is the kind of call that goes
+    wrong on ordinary photos — heavy compression, a burned-in date stamp, an
+    odd shadow on a wet road. Acting on one pass would mean turning real
+    residents away, so a flag has to survive being asked again, cold, with the
+    first answer supplied as a claim to check rather than a conclusion to
+    agree with.
+
+    Returns {"agrees": bool, "verdict": str, "confidence": float,
+    "signals": [...]}, or None when the call failed — the caller treats that
+    as "not confirmed" and the flag is dropped.
+    """
+    listed = "; ".join(signals[:MAX_INTEGRITY_SIGNALS]) or "none given"
+    prompt = (
+        "You are double-checking one photo submitted with a civic concern report "
+        "in a barangay system in the Philippines.\n\n"
+        "An earlier automated check claimed this photo is not a straight, unedited "
+        f"camera photo of a real scene. Its claim was \"{verdict}\", based on: {listed}.\n\n"
+        "That earlier check is often wrong. Do NOT assume it is right and do not try "
+        "to agree with it. Look at the photo yourself and decide independently.\n\n"
+        "Confirm the claim ONLY if you can see the problem yourself and say what it "
+        "is. If the photo looks like an ordinary camera photo, or you cannot tell, "
+        "say so — that is the correct and common answer.\n\n"
+        "These are normal in a real resident's photo and must NEVER confirm a claim: "
+        "compression blocks or artefacts, low light, grain, motion blur, a date or "
+        "time stamp burned in by the camera, portrait-mode background blur, a "
+        "watermark, a rotated or cropped frame, a photo taken at an angle, glare, or "
+        "a dirty lens.\n\n"
+        "Real problems look like: an object whose lighting, shadow direction, or "
+        "scale disagrees with the rest of the scene; edges that are unnaturally "
+        "clean, smeared, or repeated; text or logos that are warped or dissolve into "
+        "scribble; hands, faces, or repeated structures with the wrong count or "
+        "geometry; a scene that could not physically occur; a smooth rendered "
+        "surface unlike camera sensor grain; screen glare, moire, pixel grid, or a "
+        "device bezel showing this is a photo of a screen.\n\n"
+        "verdict must be authentic, suspected_edit, suspected_ai, impossible_content, "
+        "photo_of_screen, or inconclusive.\n"
+        "confidence is 0.0 to 1.0.\n"
+        "signals lists only what you can actually see, in short plain phrases.\n\n"
+        'Respond as JSON: {"verdict": "...", "confidence": 0.0, "signals": []}'
+    )
+    parsed = _vision_json_call(prompt=prompt, images=[image])
+    if not parsed:
+        return None
+    second = str(parsed.get("verdict") or "").lower().strip()
+    if second not in INTEGRITY_VERDICTS:
+        second = "inconclusive"
+    try:
+        confidence = round(min(max(float(parsed.get("confidence") or 0.0), 0.0), 1.0), 3)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    # Both passes must land on a flagged verdict, at confidence. They need not
+    # name the same one: "this portrait is a cartoon" arriving once as
+    # impossible_content and once as suspected_ai is still two independent
+    # findings that something is wrong with the picture.
+    agrees = second in INTEGRITY_FLAGGED_VERDICTS and confidence >= min_confidence
+    return {
+        "agrees": agrees,
+        "verdict": second,
+        "confidence": confidence,
+        "signals": _clean_strings(parsed.get("signals"))[:MAX_INTEGRITY_SIGNALS] if agrees else [],
     }
 
 

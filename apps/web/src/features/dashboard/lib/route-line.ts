@@ -115,75 +115,11 @@ function snapPoint(
   return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null
 }
 
-interface PathAnchor {
-  point: leaflet.LatLngTuple
-  /** Index of the segment the point falls on. */
-  index: number
-}
-
-/**
- * Closest point on the drawn line to a pin — projected onto the nearest
- * segment, not snapped to the nearest vertex. Vertices can be hundreds of
- * metres apart on a straight road, which is what made the dash run to a far
- * corner instead of straight out to the kerb.
- *
- * Longitude is scaled by cos(latitude) so the projection is done in roughly
- * equal units on both axes; without it the foot of the perpendicular skews.
- */
-function projectOnPath(
-  points: leaflet.LatLngTuple[],
-  target: leaflet.LatLngTuple,
-): PathAnchor | null {
-  if (points.length < 2) return null
-
-  const scale = Math.cos((target[0] * Math.PI) / 180) || 1
-  const px = target[1] * scale
-  const py = target[0]
-
-  let best: PathAnchor | null = null
-  let bestDistance = Infinity
-
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const ax = points[index][1] * scale
-    const ay = points[index][0]
-    const dx = points[index + 1][1] * scale - ax
-    const dy = points[index + 1][0] - ay
-    const lengthSquared = dx * dx + dy * dy
-    const t =
-      lengthSquared === 0
-        ? 0
-        : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSquared))
-    const cx = ax + t * dx
-    const cy = ay + t * dy
-    const distance = (px - cx) ** 2 + (py - cy) ** 2
-    if (distance < bestDistance) {
-      bestDistance = distance
-      best = { point: [cy, cx / scale], index }
-    }
-  }
-  return best
-}
-
-/** Everything from the anchor onward, starting exactly on it. */
-function trimFrom(points: leaflet.LatLngTuple[], anchor: PathAnchor) {
-  const next = [anchor.point, ...points.slice(anchor.index + 1)]
-  return next.length > 1 ? next : points
-}
-
-/** Everything up to the anchor, ending exactly on it. */
-function trimTo(points: leaflet.LatLngTuple[], anchor: PathAnchor) {
-  const next = [...points.slice(0, anchor.index + 1), anchor.point]
-  return next.length > 1 ? next : points
-}
-
 /**
  * Split a route payload into the pieces the map draws.
  *
- * The road is trimmed to the stretch that is actually still ahead: it starts
- * exactly where the responder joins it and ends exactly where the incident
- * leaves it. That is what makes the dashes meet the line's ends instead of
- * touching its side, and stops the leg trailing behind a responder who has
- * moved on since the last ping.
+ * Provider waypoints own the road endpoints. This preserves loops and uses
+ * dashed connectors for the exact responder and incident points.
  */
 export function routeRenderGeometry(
   route: RouteGeometrySource | null | undefined,
@@ -192,7 +128,7 @@ export function routeRenderGeometry(
     destination?: leaflet.LatLngTuple | null
   } = {},
 ): RouteRenderGeometry {
-  let road = latLngsFromGeoJson(route?.geometry)
+  const road = latLngsFromGeoJson(route?.geometry)
   const rawApproach = latLngsFromGeoJson(route?.approach?.geometry)
   const approach = rawApproach.length > 1 ? rawApproach : []
   const connectors: leaflet.LatLngTuple[][] = []
@@ -200,9 +136,7 @@ export function routeRenderGeometry(
   const { origin = null, destination = null } = endpoints
 
   if (origin) {
-    const anchor = projectOnPath(road, origin)
-    if (anchor) road = trimFrom(road, anchor)
-    const join = anchor?.point ?? snapPoint(route?.origin_snap)
+    const join = snapPoint(route?.origin_snap) ?? road[0]
     if (join && apart(origin, join)) connectors.push([origin, join])
   }
 
@@ -211,9 +145,7 @@ export function routeRenderGeometry(
       const tail = approach.at(-1)
       if (tail && apart(tail, destination)) connectors.push([tail, destination])
     } else {
-      const anchor = projectOnPath(road, destination)
-      if (anchor) road = trimTo(road, anchor)
-      const join = anchor?.point ?? snapPoint(route?.destination_snap)
+      const join = snapPoint(route?.destination_snap) ?? road.at(-1)
       if (join && apart(join, destination)) connectors.push([join, destination])
     }
   }

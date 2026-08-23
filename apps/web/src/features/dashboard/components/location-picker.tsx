@@ -1,9 +1,15 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { toast } from "sonner"
-import { ArrowLeftIcon, HomeIcon, LocateFixedIcon, SearchIcon } from "lucide-react"
+import {
+  ArrowLeftIcon,
+  FootprintsIcon,
+  HomeIcon,
+  LocateFixedIcon,
+  SearchIcon,
+} from "lucide-react"
 import type leaflet from "leaflet"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -14,6 +20,8 @@ import {
   type AddressParts,
 } from "@/lib/geocode"
 import type { MapDispatchPolicy } from "@/features/dashboard/api"
+import { GLYPHS, glyphPinHtml, MAP_COLORS } from "@/features/dashboard/components/map/markers"
+import { StreetViewModal, type StreetViewCoord, type StreetViewMapPoint } from "@/features/dashboard/components/map/street-view"
 import {
   MapControlStack,
   MapStackButton,
@@ -152,6 +160,9 @@ export default function LocationPickerModal({
   const [outOfScope, setOutOfScope] = useState(false)
   const coverageRef = useRef<CoverageInput>({})
   const coverageLayerRef = useRef<leaflet.LayerGroup | null>(null)
+  const [gpsFix, setGpsFix] = useState<{ lat: number; lng: number } | null>(null)
+  const [svCoord, setSvCoord] = useState<StreetViewCoord | null>(null)
+  const [svPicking, setSvPicking] = useState(false)
 
   // Bottom sheet for mobile
   const locSheet = useBottomSheetSnap({
@@ -407,12 +418,43 @@ export default function LocationPickerModal({
       return
     }
     navigator.geolocation.getCurrentPosition(
-      (position) =>
-        map.setView(pinAdjustedCenter(map, position.coords.latitude, position.coords.longitude, 16), 16),
+      (position) => {
+        setGpsFix({ lat: position.coords.latitude, lng: position.coords.longitude })
+        map.setView(pinAdjustedCenter(map, position.coords.latitude, position.coords.longitude, 16), 16)
+      },
       () => toast.error("Could not get your current location."),
       { enableHighAccuracy: true, timeout: 10000 },
     )
   }
+
+  useEffect(() => {
+    if (!svPicking) return
+    const map = mapRef.current
+    if (!map) return
+    const container = map.getContainer()
+    container.classList.add("eboses-sv-pick")
+    function onMapClick(event: leaflet.LeafletMouseEvent) {
+      const lat = event.latlng.lat
+      const lng = event.latlng.lng
+      if (!insideCoverage(lat, lng, coverageRef.current)) {
+        toast.error(OUT_OF_SCOPE_MESSAGE)
+        return
+      }
+      setSvPicking(false)
+      flyTo(lat, lng)
+      setSvCoord({ lat, lng })
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setSvPicking(false)
+    }
+    map.on("click", onMapClick)
+    document.addEventListener("keydown", onKey)
+    return () => {
+      container.classList.remove("eboses-sv-pick")
+      map.off("click", onMapClick)
+      document.removeEventListener("keydown", onKey)
+    }
+  }, [svPicking])
 
   function handleConfirm() {
     const map = mapRef.current
@@ -452,13 +494,13 @@ export default function LocationPickerModal({
   }
 
   useEffect(() => {
-    if (!open) return
+    if (!open || svCoord || svPicking) return
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose()
     }
     document.addEventListener("keydown", onKey)
     return () => document.removeEventListener("keydown", onKey)
-  }, [open, onClose])
+  }, [open, onClose, svCoord, svPicking])
 
   const hasQuery = search.trim().length >= 2
   const sheetMode: "collapsed" | "peek" | "expanded" = !hasQuery
@@ -476,6 +518,23 @@ export default function LocationPickerModal({
     !/^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(streetPrimary)
   const canConfirm =
     !outOfScope && (!locationClass || locationClass.accepted) && hasUsableStreet && !geocoding
+
+  const svPoints = useMemo<StreetViewMapPoint[]>(
+    () =>
+      gpsFix
+        ? [
+            {
+              id: "you",
+              lat: gpsFix.lat,
+              lng: gpsFix.lng,
+              html: glyphPinHtml({ paths: GLYPHS.userResident, color: MAP_COLORS.you, size: 24 }),
+              size: 24,
+              title: "You are here",
+            },
+          ]
+        : [],
+    [gpsFix],
+  )
 
   if (!open) return null
 
@@ -532,25 +591,39 @@ export default function LocationPickerModal({
         className={cn("absolute inset-0 z-0", outOfScope && "eboses-map-blocked")}
       />
 
-      <MapControlStack className="absolute right-3 top-3 z-[1100] border-0 bg-white">
-        <MapStackButton
-          className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
-          label="Recenter to the barangay"
-          onClick={recenter}
-        >
-          <HomeIcon className="size-5" strokeWidth={1.8} aria-hidden />
-        </MapStackButton>
-        <MapStackDivider className="bg-neutral-200" />
-        <MapStackButton
-          className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
-          label="Use my current location"
-          onClick={locate}
-        >
-          <LocateFixedIcon className="size-5" strokeWidth={1.8} aria-hidden />
-        </MapStackButton>
-      </MapControlStack>
+      {!svCoord ? (
+        <MapControlStack className="absolute right-3 top-3 z-[1100] border-0 bg-white">
+          <MapStackButton
+            className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
+            label="Recenter to the barangay"
+            onClick={recenter}
+          >
+            <HomeIcon className="size-5" strokeWidth={1.8} aria-hidden />
+          </MapStackButton>
+          <MapStackDivider className="bg-neutral-200" />
+          <MapStackButton
+            className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
+            label="Use my current location"
+            onClick={locate}
+          >
+            <LocateFixedIcon className="size-5" strokeWidth={1.8} aria-hidden />
+          </MapStackButton>
+          <MapStackDivider className="bg-neutral-200" />
+          <MapStackButton
+            className={cn(
+              "text-neutral-900 hover:bg-white hover:text-neutral-900",
+              svPicking ? "bg-neutral-100" : "bg-white",
+            )}
+            active={svPicking}
+            label={svPicking ? "Cancel Street View pick" : "Click the map, then open Street View there"}
+            onClick={() => setSvPicking((value) => !value)}
+          >
+            <FootprintsIcon className="size-5" strokeWidth={1.9} aria-hidden />
+          </MapStackButton>
+        </MapControlStack>
+      ) : null}
 
-      {sheetMode !== "expanded" ? (
+      {sheetMode !== "expanded" && !svCoord && !svPicking ? (
         <>
           {!outOfScope ? (
             <span
@@ -605,8 +678,17 @@ export default function LocationPickerModal({
         </>
       ) : null}
 
+      {svPicking && sheetMode !== "expanded" ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-[88px] z-[1100] flex justify-center px-4">
+          <p className="rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-neutral-700 shadow-md">
+            Click the map to open Street View there · Esc cancels
+          </p>
+        </div>
+      ) : null}
+
       {/* Search bottom sheet */}
-      <div
+      {!svCoord ? (
+        <div
         className={cn(
           "absolute inset-x-0 bottom-0 z-[1400] flex h-full flex-col overflow-hidden bg-white",
           "rounded-t-2xl border-t border-neutral-200 shadow-[0_-8px_28px_rgba(0,0,0,0.12)]",
@@ -693,6 +775,7 @@ export default function LocationPickerModal({
           )}
         </ul>
       </div>
+      ) : null}
     </div>
   )
 
@@ -744,6 +827,27 @@ export default function LocationPickerModal({
           </h2>
         </div>
         {mapBody}
+
+        {svCoord ? (
+          <StreetViewModal
+            coord={svCoord}
+            mode="pick"
+            points={svPoints}
+            onMove={(next) => {
+              flyTo(next.lat, next.lng)
+              setSvCoord(next)
+            }}
+            coverage={
+              mapContext
+                ? {
+                    boundary: (mapContext.boundary?.geometry ?? null) as never,
+                    policy: mapContext.dispatch_policy,
+                  }
+                : null
+            }
+            onClose={() => setSvCoord(null)}
+          />
+        ) : null}
       </div>
     </div>,
     document.body,

@@ -17,11 +17,11 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from apps.accounts.models import ResidentProfile
 from apps.concerns.ai.gemma_analyzer import payload_from_result
 from apps.concerns.ai_fixtures import gemma_result
 from apps.concerns.models import LlmDecisionLog
-from apps.concerns.test_helpers import grant_position
+from apps.concerns.test_helpers import ensure_test_profile, grant_position
+from apps.concerns.units import sync_responder_designation
 
 from .models import EmergencyAlert
 from .simulation_api import EmergencySimulationView
@@ -46,7 +46,8 @@ class EmergencySimulationViewTests(TestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
-        grant_position(self.official)
+        designation = grant_position(self.official, department_code="bhw")
+        self.community = designation.department.community
 
     def _post(self, data):
         request = self.factory.post("/api/emergencies/simulate/", data, format="multipart")
@@ -67,14 +68,14 @@ class EmergencySimulationViewTests(TestCase):
             current_longitude="121.1208000",
             location_updated_at=timezone.now(),
         )
-        ResidentProfile.objects.create(
-            user=responder,
+        ensure_test_profile(
+            responder,
+            community=self.community,
             first_name="Bea",
             last_name="Health",
-            date_of_birth="1990-01-01",
             address="Health Center",
-            barangay="Marikina Heights",
         )
+        sync_responder_designation(responder)
         return responder
 
     @patch("apps.concerns.ai.classification.classification_payload")

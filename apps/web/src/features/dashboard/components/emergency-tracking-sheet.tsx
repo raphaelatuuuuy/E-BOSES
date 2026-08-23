@@ -3,8 +3,6 @@ import { createPortal } from "react-dom"
 import {
   CheckIcon,
   CircleDotIcon,
-  Maximize2Icon,
-  Minimize2Icon,
   MinusIcon,
   PlayIcon,
   PlusIcon,
@@ -41,7 +39,6 @@ import {
 } from "@/features/dashboard/lib/authenticated-media"
 import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/record/status"
 import { formatClock } from "@/features/dashboard/lib/responder-format"
-import { useIsDesktop } from "@/features/dashboard/lib/shell"
 import {
   MapControlStack,
   MapStackButton,
@@ -265,11 +262,11 @@ function formatEta(meters: number) {
 
 function EmergencyTrackingMap({
   alert,
-  expanded,
+  wide,
   className,
 }: {
   alert: EmergencyAlert
-  expanded: boolean
+  wide: boolean
   className?: string
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -312,6 +309,7 @@ function EmergencyTrackingMap({
       L.marker([Number(alert.latitude), Number(alert.longitude)], { icon: residentIcon }).addTo(map)
       setMapReady((value) => value + 1)
       requestAnimationFrame(() => map?.invalidateSize())
+      window.setTimeout(() => map?.invalidateSize(), 400)
     }
 
     const responderMarkers = responderMarkerRefs.current
@@ -332,7 +330,7 @@ function EmergencyTrackingMap({
   useEffect(() => {
     mapRef.current?.invalidateSize()
     window.setTimeout(() => mapRef.current?.invalidateSize(), 200)
-  }, [expanded])
+  }, [wide])
 
   useEffect(() => {
     const map = mapRef.current
@@ -442,9 +440,9 @@ function Section({
   className?: string
 }) {
   return (
-    <section className={cn("-mx-4 flex flex-col border-t border-white/10 px-4", className)}>
+    <section className={cn("-mx-5 mt-5 flex flex-col border-t border-neutral-200 px-5 pt-4 first-of-type:mt-0", className)}>
       {label ? (
-        <p className="text-[12px] font-semibold text-white/60">{label}</p>
+        <p className="text-[12px] font-semibold text-neutral-500">{label}</p>
       ) : null}
       <div className={cn("flex min-h-0 flex-col", label ? "mt-3" : undefined)}>{children}</div>
     </section>
@@ -479,7 +477,7 @@ function StatusTimeline({ alert }: { alert: EmergencyAlert }) {
                 "relative z-[1] mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-[10px]",
                 row.state === "done" && "bg-brand-navy text-white",
                 row.state === "current" && "sos-timeline__now bg-brand-orange text-white",
-                row.state === "pending" && "border-2 border-white/25 bg-transparent text-white/40",
+                row.state === "pending" && "border-2 border-neutral-200 bg-white text-neutral-300",
                 row.state === "cancelled" && "bg-sos text-white",
               )}
               aria-hidden
@@ -499,7 +497,7 @@ function StatusTimeline({ alert }: { alert: EmergencyAlert }) {
                 <p
                   className={cn(
                     "text-[13px] font-semibold",
-                    row.state === "pending" ? "text-white/45" : "text-white",
+                    row.state === "pending" ? "text-neutral-400" : "text-neutral-900",
                   )}
                 >
                   {row.label}
@@ -510,17 +508,17 @@ function StatusTimeline({ alert }: { alert: EmergencyAlert }) {
                   ) : null}
                 </p>
                 {row.time ? (
-                  <time className="shrink-0 text-[11px] tabular-nums text-white/50">
+                  <time className="shrink-0 text-[11px] tabular-nums text-neutral-400">
                     {formatClock(row.time)}
                   </time>
                 ) : row.state === "pending" ? (
-                  <span className="shrink-0 text-[11px] text-white/30">Pending</span>
+                  <span className="shrink-0 text-[11px] text-neutral-300">Pending</span>
                 ) : null}
               </div>
               <p
                 className={cn(
                   "mt-0.5 text-[12px] leading-5",
-                  row.state === "pending" ? "text-white/35" : "text-white/70",
+                  row.state === "pending" ? "text-neutral-400" : "text-neutral-500",
                 )}
               >
                 {row.note}
@@ -561,9 +559,9 @@ function MilestoneStepper({ alert }: { alert: EmergencyAlert }) {
       <div className="relative">
         {/* Track spans the node centers: nodes sit centered in their
             flex-1 columns at 10%, 30%, 50%, 70%, 90% of the width. */}
-        <div className="absolute left-[10%] right-[10%] top-[9px] h-0.5 rounded-full bg-white/15" />
+        <div className="absolute left-[10%] right-[10%] top-[9px] h-0.5 rounded-full bg-neutral-200" />
         <div
-          className="absolute left-[10%] top-[9px] h-0.5 rounded-full bg-brand-navy/80 transition-all duration-500"
+          className="absolute left-[10%] top-[9px] h-0.5 rounded-full bg-brand-navy transition-all duration-500"
           style={{ width: `calc(80% * ${Math.max(0, reachedCount - 1) / Math.max(1, milestones.length - 1)})` }}
         />
         <div className="relative z-[1] flex w-full">
@@ -571,10 +569,10 @@ function MilestoneStepper({ alert }: { alert: EmergencyAlert }) {
             <span key={row.key} className="flex flex-1 justify-center">
               <span
                 className={cn(
-                  "flex size-5 items-center justify-center rounded-full border-2 bg-brand-navy",
+                  "flex size-5 items-center justify-center rounded-full border-2",
                   row.state === "done" && "border-neutral-300 bg-brand-navy text-white",
                   row.state === "current" && "sos-timeline__now border-brand-orange bg-brand-orange text-white",
-                  row.state === "pending" && "border-white/25 text-transparent",
+                  row.state === "pending" && "border-neutral-200 bg-white text-transparent",
                   row.state === "cancelled" && "border-sos bg-sos text-white",
                 )}
                 aria-hidden
@@ -597,7 +595,7 @@ function MilestoneStepper({ alert }: { alert: EmergencyAlert }) {
             key={row.key}
             className={cn(
               "flex-1 text-center text-[10px] font-semibold leading-4",
-              row.state === "pending" ? "text-white/45" : "text-white/80",
+              row.state === "pending" ? "text-neutral-400" : "text-neutral-700",
             )}
           >
             {row.label}
@@ -605,7 +603,7 @@ function MilestoneStepper({ alert }: { alert: EmergencyAlert }) {
         ))}
       </div>
       {currentRow?.note ? (
-        <p className="mt-3 border-t border-white/10 pt-3 text-[12px] leading-5 text-white/70">
+        <p className="mt-3 border-t border-neutral-200 pt-3 text-[12px] leading-5 text-neutral-600">
           {currentRow.note}
         </p>
       ) : null}
@@ -665,16 +663,16 @@ function DetailsColumn({
   return (
     <div className="flex flex-1 flex-col pb-2">
       <div className="pb-4">
-        <p className="text-base font-semibold leading-6 text-white">{statusText(alert)}</p>
-        <p className="mt-1 text-[13px] leading-5 text-white/70">{address}</p>
+        <p className="text-base font-semibold leading-6 text-neutral-900">{statusText(alert)}</p>
+        <p className="mt-1 text-[13px] leading-5 text-neutral-500">{address}</p>
         <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
-          {reach ? <span className="tabular-nums text-white/80">{reach}</span> : null}
+          {reach ? <span className="tabular-nums text-neutral-600">{reach}</span> : null}
           {reach ? (
-            <span aria-hidden className="text-white/30">
+            <span aria-hidden className="text-neutral-300">
               ·
             </span>
           ) : null}
-          <span className="text-white/60">{connection}</span>
+          <span className="text-neutral-500">{connection}</span>
         </div>
       </div>
 
@@ -700,7 +698,7 @@ function DetailsColumn({
           />
         ) : (
           <div className="flex min-h-[140px] items-center justify-center">
-            <p className="text-[12px] leading-5 text-white/55">
+            <p className="text-[12px] leading-5 text-neutral-500">
               Chat opens once a responder is assigned to this emergency.
             </p>
           </div>
@@ -715,7 +713,7 @@ function DetailsColumn({
                 <button
                   key={media.id}
                   type="button"
-                  className="overflow-hidden rounded-lg border border-white/15 text-left"
+                  className="overflow-hidden rounded-[18px] border border-neutral-200 text-left"
                   onClick={() => setLightbox({ items: mediaItems, index: mediaIndex })}
                 >
                   <AuthenticatedMediaImage
@@ -728,7 +726,7 @@ function DetailsColumn({
                 <button
                   key={media.id}
                   type="button"
-                  className="flex h-24 items-center justify-center gap-2 rounded-lg border border-white/15 bg-black/20 text-[12px] font-semibold text-white/85 transition-colors hover:border-white/30"
+                  className="flex h-24 items-center justify-center gap-2 rounded-[18px] border border-neutral-200 bg-neutral-100 text-[12px] font-semibold text-neutral-700 transition-colors hover:border-neutral-300"
                   onClick={() => setLightbox({ items: mediaItems, index: mediaIndex })}
                 >
                   <PlayIcon className="size-4" />
@@ -746,12 +744,12 @@ function DetailsColumn({
             {appealHistory.map((appeal) => (
               <div key={appeal.id} className="text-[12px] leading-5">
                 <div className="flex justify-between gap-2">
-                  <span className="font-semibold text-white">Review {appeal.status}</span>
-                  <span className="text-white/50">
+                  <span className="font-semibold text-neutral-900">Review {appeal.status}</span>
+                  <span className="text-neutral-400">
                     {formatClock(appeal.decided_at || appeal.created_at)}
                   </span>
                 </div>
-                <p className="mt-0.5 text-white/70">{appeal.reason}</p>
+                <p className="mt-0.5 text-neutral-600">{appeal.reason}</p>
               </div>
             ))}
           </div>
@@ -760,14 +758,14 @@ function DetailsColumn({
 
       {canAppeal ? (
         <Section label="Request a review">
-          <p className="text-[12px] leading-5 text-white/65">
+          <p className="text-[12px] leading-5 text-neutral-500">
             Use only if this emergency was resolved or recorded incorrectly.
           </p>
           <textarea
             value={appealReason}
             onChange={(e) => setAppealReason(e.target.value)}
             placeholder="Explain what should be reviewed"
-            className="mt-3 min-h-20 w-full resize-none rounded-xl border border-white/15 bg-black/25 px-3 py-2 text-sm text-white outline-none placeholder:text-white/40 focus:border-brand-orange"
+            className="mt-3 min-h-20 w-full resize-none rounded-[18px] border-[1.5px] border-neutral-300 bg-white px-4 py-2.5 text-sm text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-400"
           />
           <Button
             type="button"
@@ -802,8 +800,8 @@ export function EmergencyTrackingSheet({
   onOpenChange: (open: boolean) => void
   onAlertChange?: (alert: EmergencyAlert) => void
 }) {
-  const isDesktop = useIsDesktop()
-  const [expanded, setExpanded] = useState(false)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const [wide, setWide] = useState(false)
   const [detailsExpanded, setDetailsExpanded] = useState(false)
   const [alert, setAlert] = useState<EmergencyAlert | null>(initialAlert)
   const alertRef = useRef<EmergencyAlert | null>(initialAlert)
@@ -836,13 +834,25 @@ export function EmergencyTrackingSheet({
   if (prevOpen !== open) {
     setPrevOpen(open)
     if (!open) {
-      setExpanded(false)
+      setWide(false)
       setDetailsExpanded(false)
       setChatMessage(null)
       setCancelOpen(false)
       setCancelReason("")
     }
   }
+
+  useEffect(() => {
+    if (!open) return
+    const el = panelRef.current
+    if (!el || typeof ResizeObserver === "undefined") return
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? 0
+      setWide(width >= 760)
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [open])
 
   // Stable primitives for the polling/websocket effects: the alert object is
   // replaced on every live update, and reconnecting the socket just because it
@@ -1022,117 +1032,109 @@ export function EmergencyTrackingSheet({
       appealHistory={appealHistory}
       chatOpen={open}
       chatMessage={chatMessage}
-      milestoneMode={isDesktop && expanded}
+      milestoneMode={wide}
     />
   )
 
   const toggleDetails = () => setDetailsExpanded((v) => !v)
 
   return createPortal(
-    <div className="fixed inset-0 z-[260]">
+    <div className="fixed inset-0 z-[400]">
       <button
         type="button"
-        className={cn(
-          "absolute inset-0 bg-black/60",
-          isDesktop && !expanded && "bg-black/45",
-        )}
         aria-label="Close tracking"
         onClick={() => onOpenChange(false)}
+        className="absolute inset-0 bg-black/50 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200"
       />
 
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label="Emergency tracking"
         className={cn(
-          "z-10 flex flex-col overflow-hidden bg-brand-navy text-white",
-          !isDesktop && "fixed inset-0 h-full w-full",
-          isDesktop && !expanded &&
-            "fixed bottom-6 right-6 max-h-[min(720px,calc(100dvh-2rem))] w-[min(400px,calc(100vw-2.5rem))] rounded-2xl border border-white/10 shadow-[0_16px_48px_rgba(0,0,0,0.45)]",
-          isDesktop && expanded &&
-            "fixed left-1/2 top-1/2 max-h-[min(calc(100dvh-3rem),880px)] w-[min(calc(100vw-3rem),1080px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-white/10 shadow-[0_12px_40px_rgba(0,0,0,0.45)]",
+          "relative z-10 flex flex-col overflow-hidden bg-white text-neutral-900 shadow-2xl",
+          "max-lg:fixed max-lg:inset-0 max-lg:h-full max-lg:w-full max-lg:rounded-none",
+          "lg:absolute lg:left-1/2 lg:top-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2",
+          "lg:h-[min(88dvh,820px)] lg:w-[min(920px,92vw)] lg:max-h-[92dvh] lg:max-w-[94vw]",
+          "lg:min-h-[380px] lg:min-w-[420px] lg:rounded-[28px] lg:border lg:border-neutral-200",
+          "lg:resize lg:overflow-auto dialog-resize-grip",
+          "motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-200"
         )}
       >
-        <header className="flex shrink-0 items-center gap-2 bg-sos px-3 py-3 sm:px-4">
-          <div className="min-w-0 flex-1">
-            <h2 className="truncate text-[15px] font-bold sm:text-base">{headline(alert)}</h2>
+        <div className="flex shrink-0 items-start gap-2 px-5 pb-3 pt-5 max-lg:pt-[max(1.25rem,env(safe-area-inset-top))]">
+          <div className="min-w-0 flex-1 pt-0.5">
+            <p className={cn("text-[11px] font-bold uppercase tracking-wide", isLive ? "text-sos" : "text-neutral-500")}>
+              {isLive ? "Live · Alert" : alert.status === "resolved" ? "Resolved" : "Closed"}
+            </p>
+            <h2 className="mt-0.5 truncate text-[22px] font-bold leading-[1.2] tracking-tight text-neutral-900">
+              {headline(alert)}
+            </h2>
           </div>
-          {isDesktop ? (
+          <div className="-mr-2 flex shrink-0 items-center gap-0.5">
             <button
               type="button"
-              onClick={() => setExpanded((v) => !v)}
-              className="flex size-10 shrink-0 items-center justify-center rounded-full text-white hover:bg-white/15"
-              aria-label={expanded ? "Collapse" : "Expand"}
+              onClick={() => onOpenChange(false)}
+              aria-label="Close"
+              className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
             >
-              {expanded ? <Minimize2Icon className="size-4" /> : <Maximize2Icon className="size-4" />}
+              <XIcon className="size-6" strokeWidth={2} />
             </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            className="flex size-10 shrink-0 items-center justify-center rounded-full text-white hover:bg-white/15"
-            aria-label="Close"
-          >
-            <XIcon className="size-5" />
-          </button>
-        </header>
-
-        <div className="flex min-h-0 flex-1 flex-col bg-brand-navy">
-          {isDesktop && expanded ? (
-            <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(0,5fr)_minmax(0,4fr)]">
-              <div className="relative min-h-[min(420px,60vh)] border-r border-white/10">
-                <EmergencyTrackingMap alert={alert} expanded={expanded} />
-                {mapOverlay}
-              </div>
-              <div className="scrollbar-hide min-h-0 overflow-y-auto overscroll-contain px-4">
-                <div className="ops-pane-fade flex min-h-full flex-col">{details}</div>
-              </div>
-            </div>
-          ) : (
-            <>
-              <div
-                className={cn(
-                  "relative shrink-0 border-b border-white/10",
-                  isDesktop ? "h-[250px]" : detailsExpanded ? "h-[min(35vh,200px)]" : "h-[65vh]",
-                )}
-              >
-                <EmergencyTrackingMap alert={alert} expanded={expanded} />
-                {mapOverlay}
-              </div>
-              {!isDesktop && !detailsExpanded ? (
-                <button
-                  type="button"
-                  onClick={toggleDetails}
-                  className="flex shrink-0 flex-col items-center gap-1 bg-nav-bg py-2"
-                >
-                  <span className="h-1 w-10 rounded-full bg-white/30" />
-                  <span className="text-[11px] font-semibold text-white/60">Show details</span>
-                </button>
-              ) : null}
-              {!isDesktop && detailsExpanded ? (
-                <button
-                  type="button"
-                  onClick={toggleDetails}
-                  className="flex shrink-0 flex-col items-center gap-1 bg-nav-bg py-2"
-                >
-                  <span className="h-1 w-10 rounded-full bg-white/30" />
-                  <span className="text-[11px] font-semibold text-white/60">Hide details</span>
-                </button>
-              ) : null}
-              <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-4">
-                <div className="ops-pane-fade flex min-h-full flex-col">{details}</div>
-              </div>
-            </>
-          )}
+          </div>
         </div>
 
-        <div className="shrink-0 border-t border-white/10 bg-nav-bg px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        {wide ? (
+          <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,5fr)_minmax(0,4fr)] px-5 pb-4">
+            <div className="relative mr-4 min-h-0 overflow-hidden rounded-[18px] border border-neutral-200">
+              <EmergencyTrackingMap alert={alert} wide={wide} />
+              {mapOverlay}
+            </div>
+            <div className="scrollbar-hide min-h-0 overflow-y-auto overscroll-contain pr-1">
+              <div className="ops-pane-fade flex min-h-full flex-col">{details}</div>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div
+              className={cn(
+                "relative mx-5 shrink-0 overflow-hidden rounded-[18px] border border-neutral-200",
+                detailsExpanded ? "h-[min(30vh,220px)]" : "h-[min(48vh,420px)]",
+              )}
+            >
+              <EmergencyTrackingMap alert={alert} wide={wide} />
+              {mapOverlay}
+            </div>
+            {!detailsExpanded ? (
+              <button
+                type="button"
+                onClick={toggleDetails}
+                className="flex shrink-0 flex-col items-center gap-1 py-2.5 lg:min-h-[44px] lg:flex-row lg:justify-center lg:gap-0"
+              >
+                <span className="h-1 w-10 rounded-full bg-neutral-300 lg:hidden" />
+                <span className="text-[11px] font-semibold text-neutral-500 lg:text-[13px]">Show details</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={toggleDetails}
+                className="flex shrink-0 items-center justify-center py-2.5"
+              >
+                <span className="text-[11px] font-semibold text-neutral-500 lg:text-[13px]">Hide details</span>
+              </button>
+            )}
+            <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-5">
+              <div className="ops-pane-fade flex min-h-full flex-col">{details}</div>
+            </div>
+          </>
+        )}
+
+        <div className="shrink-0 border-t border-neutral-200 bg-white px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           {cancelOpen && canCancel ? (
-            <div className="mb-3 rounded-xl border border-sos/30/25 bg-sos/10 p-3">
-              <label htmlFor="emergency-cancel-reason" className="text-[13px] font-semibold text-white">
+            <div className="mb-3 rounded-[18px] border border-sos/30 bg-sos/10 p-3">
+              <label htmlFor="emergency-cancel-reason" className="text-[13px] font-semibold text-neutral-900">
                 Why are you cancelling?
               </label>
-              <p className="mt-1 text-[11px] leading-4 text-white/55">
+              <p className="mt-1 text-[11px] leading-4 text-neutral-500">
                 Assigned responders will see this reason. Enter at least 10 characters.
               </p>
               <textarea
@@ -1140,7 +1142,7 @@ export function EmergencyTrackingSheet({
                 value={cancelReason}
                 onChange={(event) => setCancelReason(event.target.value.slice(0, 500))}
                 placeholder="Example: Sent by accident; everyone here is safe."
-                className="mt-2 min-h-20 w-full resize-none rounded-lg border border-white/15 bg-black/25 px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/35 focus:border-sos/30"
+                className="mt-2 min-h-20 w-full resize-none rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-3 py-2 text-[13px] text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-sos"
               />
               <div className="mt-2 flex gap-2">
                 <button
@@ -1149,7 +1151,7 @@ export function EmergencyTrackingSheet({
                     setCancelOpen(false)
                     setCancelReason("")
                   }}
-                  className="h-10 flex-1 rounded-lg border border-white/15 text-[13px] font-semibold text-white hover:bg-white/10"
+                  className="h-11 flex-1 rounded-full border border-neutral-200 text-[13px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-50"
                 >
                   Keep alert
                 </button>
@@ -1157,7 +1159,7 @@ export function EmergencyTrackingSheet({
                   type="button"
                   disabled={cancelBusy || cancelReason.trim().length < 10}
                   onClick={() => void submitCancellation()}
-                  className="h-10 flex-1 rounded-lg bg-sos text-[13px] font-semibold text-white hover:bg-sos disabled:cursor-not-allowed disabled:opacity-45"
+                  className="h-11 flex-1 rounded-full bg-sos text-[13px] font-semibold text-white transition-all hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   {cancelBusy ? "Cancelling…" : "Confirm cancel"}
                 </button>
@@ -1169,7 +1171,7 @@ export function EmergencyTrackingSheet({
               <button
                 type="button"
                 onClick={() => setCancelOpen(true)}
-                className="h-11 flex-1 rounded-full border border-sos/30/40 text-[14px] font-semibold text-sos hover:bg-sos/15"
+                className="h-12 flex-1 rounded-full border border-sos/40 text-[15px] font-semibold text-sos transition-colors hover:bg-sos/10"
               >
                 Cancel alert
               </button>
@@ -1177,13 +1179,13 @@ export function EmergencyTrackingSheet({
             <button
               type="button"
               onClick={() => onOpenChange(false)}
-              className="h-11 flex-1 rounded-full bg-brand-orange text-[14px] font-semibold text-white hover:bg-brand-orange-strong"
+              className="h-12 flex-1 rounded-full bg-brand-orange text-[15px] font-semibold text-white transition-all hover:bg-brand-orange-strong active:scale-[0.99]"
             >
               Close tracking
             </button>
           </div>
           {isLive && !canCancel ? (
-            <p className="mt-2 text-center text-[11px] text-white/50">
+            <p className="mt-2 text-center text-[11px] text-neutral-400">
               A responder is already handling this alert. Contact them in chat if circumstances change.
             </p>
           ) : null}

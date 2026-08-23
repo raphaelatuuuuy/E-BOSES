@@ -1,4 +1,5 @@
 import { apiRequest } from "@/lib/api"
+import type { ResidenceProofOption } from "@/features/ocr/api"
 
 export type UserStatus =
   | "pending_otp"
@@ -91,6 +92,28 @@ export function registerResident(formData: FormData) {
   return apiRequest<AuthResponse>("/auth/register/", {
     method: "POST",
     body: formData,
+  }, { auth: false })
+}
+
+export interface CommunityResolveResult {
+  token: string
+  community: { id: string; code: string; name: string; boundary: Record<string, unknown>; boundary_revision: number; center: { latitude: number; longitude: number } }
+  weather_coordinates: { latitude: number; longitude: number }
+  neighbors: number
+  proof_options: ResidenceProofOption[]
+}
+
+export function resolveRegistrationCommunity(payload: {
+  email: string
+  latitude: number
+  longitude: number
+  accuracy_meters?: number | null
+  address: Record<string, string>
+  source: "gps" | "search" | "manual"
+}) {
+  return apiRequest<CommunityResolveResult>("/auth/register/community/resolve/", {
+    method: "POST",
+    body: JSON.stringify(payload),
   }, { auth: false })
 }
 

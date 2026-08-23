@@ -19,6 +19,7 @@ is no separate AI-review decision.
 
 import logging
 import math
+import time
 from datetime import timedelta
 
 from django.db import transaction
@@ -38,8 +39,12 @@ from .classification import BASE_TEXT_MODEL
 from .duplicate_detector import find_duplicate_concern
 from .gemma_analyzer import (
     CORE_SENSITIVE_CLASSES,
+    INTEGRITY_FLAGGED_VERDICTS,
     GemmaAnalyzer,
     compare_photo_duplicates,
+    confirm_media_integrity,
+    flagged_integrity_findings,
+    integrity_overall,
     safe_needs_review,
     sensitive_classes_from,
     verify_street_context,
@@ -283,6 +288,96 @@ def _street_imagery_check(config, *, concern: Concern, prepared_images: list[Pre
     }
 
 
+def _media_integrity_check(
+    config,
+    *,
+    details: dict,
+    prepared_images: list[PreparedImage],
+    image_review_succeeded,
+) -> dict:
+    """Settle whether any submitted photo looks manipulated, AI-made, or impossible.
+
+    The main analysis already produced a per-photo opinion — the image was
+    attached to that call anyway, so asking cost nothing extra. What happens
+    here is the part that decides whether that opinion is allowed to act.
+
+    A flag has to survive a second, independent look before it counts. One
+    vision pass over a compressed night photo of a wet road will occasionally
+    call it edited, and the price of believing that is turning away a real
+    report from a real resident. The second pass is asked cold, with the first
+    verdict presented as a claim to check rather than a conclusion to endorse.
+
+    Every failure path here lands on "not flagged". A model outage, a photo
+    that would not decode, the check being switched off — none of them may
+    invent a finding, and none of them may state that a photo is genuine
+    either. Both directions are unsupported when nobody looked.
+    """
+    minimum = float(getattr(config, "media_integrity_min_confidence", None) or 0.70)
+    # The parser applies this floor too. It is applied again here because this
+    # is the last point before a verdict can reject someone's report, and the
+    # details dict does not always arrive through the parser — a replayed run,
+    # a fixture, or a future caller would otherwise act on a 0.3 hunch.
+    findings = [
+        {**finding, "verdict": "inconclusive", "signals": []}
+        if finding.get("verdict") in INTEGRITY_FLAGGED_VERDICTS
+        and float(finding.get("confidence") or 0.0) < minimum
+        else finding
+        for finding in (details.get("media_integrity") or [])
+    ]
+    overall = integrity_overall(findings)
+    result = {
+        "status": "checked",
+        "findings": findings,
+        "overall": overall,
+        "second_opinion": "not_required",
+    }
+
+    if not config.media_integrity_enabled:
+        return {"status": "disabled", "findings": [], "overall": "inconclusive", "second_opinion": "not_required"}
+    if not prepared_images or image_review_succeeded is not True:
+        return {"status": "skipped", "reason": "no_reviewable_photo", "findings": [], "overall": "inconclusive", "second_opinion": "not_required"}
+
+    flagged = flagged_integrity_findings(findings)
+    if not flagged:
+        return result
+    if not config.media_integrity_second_opinion_enabled:
+        result["second_opinion"] = "disabled"
+        return result
+
+    minimum = float(getattr(config, "media_integrity_min_confidence", None) or 0.70)
+    confirmations = []
+    survivors = []
+    for finding in flagged:
+        index = int(finding.get("index", -1))
+        if index < 0 or index >= len(prepared_images):
+            continue
+        second = confirm_media_integrity(
+            image=prepared_images[index],
+            verdict=str(finding.get("verdict") or ""),
+            signals=list(finding.get("signals") or []),
+            min_confidence=minimum,
+        )
+        confirmations.append({"index": index, "result": second})
+        if second and second["agrees"]:
+            survivors.append(index)
+
+    # Anything the second pass did not confirm is downgraded in place, so the
+    # findings list an official reads never carries a flag the system chose not
+    # to act on.
+    settled = []
+    for finding in findings:
+        if finding in flagged and int(finding.get("index", -1)) not in survivors:
+            settled.append({**finding, "verdict": "inconclusive", "signals": []})
+        else:
+            settled.append(finding)
+
+    result["findings"] = settled
+    result["overall"] = integrity_overall(settled)
+    result["second_opinion"] = "confirmed" if survivors else "not_confirmed"
+    result["confirmations"] = confirmations
+    return result
+
+
 def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -> ConcernAiAssessment:
     concern = Concern.objects.prefetch_related("media").get(pk=concern_id)
     assessment, _ = ConcernAiAssessment.objects.get_or_create(
@@ -303,6 +398,7 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
     # the screen for a report that has one.
     prepare_failed = image_uploaded and not prepared_images
 
+    started = time.monotonic()
     gemma_result, run_status, fallback_reason = _run_gemma(
         config,
         title=concern.title,
@@ -311,6 +407,7 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         images=prepared_images,
         image_uploaded=image_uploaded,
     )
+    gemma_duration_ms = int((time.monotonic() - started) * 1000)
     details = gemma_result.details or {}
 
     image_review_succeeded = details.get("image_review_succeeded")
@@ -348,6 +445,15 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
 
     street_check = _street_imagery_check(config, concern=concern, prepared_images=prepared_images)
 
+    integrity_check = _media_integrity_check(
+        config,
+        details=details,
+        prepared_images=prepared_images,
+        image_review_succeeded=image_review_succeeded,
+    )
+    details["media_integrity"] = integrity_check["findings"]
+    details["media_integrity_overall"] = integrity_check["overall"]
+
     category_match = details.get("selected_category_match")
     if category_match is None:
         category_match = bool(gemma_result.category) and gemma_result.category == concern.category
@@ -365,6 +471,7 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
             "provider": config.nlp_provider,
             "model_version": gemma_result.model_version,
         },
+        "media_integrity": integrity_check,
         "photo": {
             "image_uploaded": image_uploaded,
             "image_count": len(image_media_list),
@@ -390,6 +497,7 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         category_match=bool(category_match),
         possible_duplicate=duplicate_match.possible_duplicate,
         urgent_attention=bool(details.get("urgent_attention")),
+        integrity_check=integrity_check,
     )
     if street_check and street_check.get("status") == "checked" and street_check.get("verdict") == "area_mismatch":
         # Street imagery only ever checks whether the pin sits in the same
@@ -457,6 +565,15 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
             duplicate_match=duplicate_match,
             config=config,
             street_check=street_check,
+            integrity_check=integrity_check,
+        )
+
+        _record_decision_log(
+            concern,
+            details=details,
+            integrity_check=integrity_check,
+            model_version=gemma_result.model_version,
+            duration_ms=gemma_duration_ms,
         )
 
         if media_to_queue:
@@ -467,6 +584,52 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
                     lambda media_id=media_id: enqueue_concern_media_privacy(media_id)
                 )
     return current
+
+
+def _record_decision_log(concern, *, details, integrity_check, model_version, duration_ms) -> None:
+    """Append one audit row for this run.
+
+    The concern pipeline is the highest-volume model path in the system and
+    until now it wrote no audit row at all: `LlmDecisionLog.Domain.CONCERN`
+    existed as an enum value that nothing ever used. Without this there is
+    nothing behind the "photos checked" counters on the Configuration screen,
+    and no way to answer "what did the model actually say about that report
+    last Tuesday".
+
+    Never allowed to fail the run — an audit row is worth less than the
+    validation result it describes.
+    """
+    from apps.concerns.models import LlmDecisionLog
+
+    try:
+        LlmDecisionLog.objects.create(
+            run_kind=LlmDecisionLog.RunKind.PRODUCTION,
+            domain=LlmDecisionLog.Domain.CONCERN,
+            concern=concern,
+            model_version=model_version or "",
+            duration_ms=duration_ms,
+            input_snapshot={
+                "title": (concern.title or "")[:300],
+                "description": (concern.description or "")[:2000],
+                "selected_category": concern.category,
+            },
+            output_snapshot={
+                "relevance": details.get("relevance"),
+                "primary_category": details.get("primary_category"),
+                "severity": details.get("severity"),
+                "evidence_relationship": details.get("evidence_relationship"),
+                "media_integrity": (integrity_check or {}).get("findings") or [],
+                "media_integrity_overall": (integrity_check or {}).get("overall"),
+                "media_integrity_status": (integrity_check or {}).get("status"),
+                "second_opinion": (integrity_check or {}).get("second_opinion"),
+            },
+            resident_message=details.get("short_explanation") or "",
+            recommended_action=details.get("recommended_action") or "",
+            assigned_department=concern.assigned_department,
+            routing_reason=details.get("emergency_routing_reason") or "",
+        )
+    except Exception:
+        logger.warning("Could not write the LLM decision log for concern_id=%s", concern.pk, exc_info=True)
 
 
 def _reject_concern(concern: Concern, *, rejection_code: str, summary: str) -> None:
@@ -510,6 +673,7 @@ def _apply_automated_validation(
     duplicate_match,
     config,
     street_check: dict | None = None,
+    integrity_check: dict | None = None,
 ) -> None:
     """Finish validation without creating an AI-review task for an official."""
     uncertain = run_status != ConcernAiAssessment.Status.COMPLETED or bool(details.get("ai_result_uncertain"))
@@ -543,6 +707,53 @@ def _apply_automated_validation(
             )
             return
         _apply_suggested_category(concern, suggested_category)
+
+    # Placed after the category correction and before everything else: a photo
+    # that may be fabricated is a more serious finding than a wrong category,
+    # and auto-correcting the category of a fabricated report first would file
+    # it more neatly rather than stop it.
+    if (
+        not uncertain
+        and integrity_check
+        and integrity_check.get("status") == "checked"
+        and flagged_integrity_findings(integrity_check.get("findings") or [])
+    ):
+        integrity_action = config.media_integrity_action
+        Actions = ConcernClassificationConfiguration.MediaIntegrityAction
+        if integrity_action == Actions.AUTO_REJECT:
+            _reject_concern(
+                concern,
+                rejection_code="automated_media_integrity",
+                summary=(
+                    "The photo could not be confirmed as an original camera photo, so the "
+                    "report was turned down automatically. Please submit again with a photo "
+                    "taken directly from your camera."
+                ),
+            )
+            return
+        if integrity_action == Actions.RESUBMIT:
+            _reject_concern(
+                concern,
+                rejection_code="automated_media_integrity_resubmit",
+                summary=(
+                    "The photo could not be confirmed as an original camera photo. Please "
+                    "submit again with a photo taken directly from your camera."
+                ),
+            )
+            return
+        if integrity_action == Actions.HOLD:
+            concern.validation_status = Concern.ValidationStatus.PENDING
+            concern.validation_summary = (
+                "The photo needs a check by an official before this report is routed."
+            )
+            concern.update_text = "An official will review the photo."
+            concern.save(update_fields=[
+                "category", "category_ref", "assigned_department", "duplicate_of",
+                "validation_status", "validation_summary", "update_text", "updated_at",
+            ])
+            return
+        # FLAG_NOTIFY falls through: the finding is already on the assessment
+        # and in flag_reasons, and the report routes normally.
 
     reject_irrelevant = not uncertain and relevance == "IRRELEVANT" and action == "reject_as_irrelevant"
     request_resubmission = not uncertain and action == "request_more_information"
@@ -666,6 +877,7 @@ def _flag_reasons(
     category_match: bool,
     possible_duplicate: bool,
     urgent_attention: bool,
+    integrity_check: dict | None = None,
 ) -> list[dict]:
     # Driven by the analyzer-reported booleans, not by sniffing substrings out
     # of `label` — `label` is kept only for the human-readable payload.
@@ -680,6 +892,16 @@ def _flag_reasons(
         reasons.append({"reason": "possible_duplicate"})
     if urgent_attention:
         reasons.append({"reason": "urgent_attention"})
+    if integrity_check and integrity_check.get("status") == "checked":
+        for finding in flagged_integrity_findings(integrity_check.get("findings") or []):
+            reasons.append({
+                "reason": "media_integrity",
+                "verdict": finding.get("verdict"),
+                "photo_index": finding.get("index"),
+                "confidence": finding.get("confidence"),
+                "signals": finding.get("signals") or [],
+                "configured_action": config.media_integrity_action,
+            })
     return reasons
 
 

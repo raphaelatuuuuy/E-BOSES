@@ -119,6 +119,48 @@ export const FLAG_REASON: Record<string, PlainTerm> = {
     label: "May need urgent attention",
     help: "The report describes possible immediate danger. Open it before the rest of the queue.",
   },
+  media_integrity: {
+    label: "Photo may not be genuine",
+    help: "The photo shows signs of editing, of being made by a computer, or of being a picture of a screen. This is a suspicion, not proof — open the photo and judge for yourself.",
+  },
+}
+
+/**
+ * What the picture check thought of a photo.
+ *
+ * Every label is written as an observation, never a verdict. "Looks genuine"
+ * means only that nothing was found — it is not a guarantee, and the UI must
+ * never present it as one.
+ */
+export const MEDIA_INTEGRITY_VERDICT: Record<string, PlainTerm> = {
+  authentic: {
+    label: "Nothing unusual found",
+    help: "No sign of editing was seen. This is not proof the photo is genuine.",
+  },
+  suspected_edit: {
+    label: "May have been edited",
+    help: "Part of the photo does not match the rest — lighting, edges, or texture look inconsistent.",
+  },
+  suspected_ai: {
+    label: "May be computer-made",
+    help: "The photo has the smooth, grainless look of a generated image rather than a camera photo.",
+  },
+  impossible_content: {
+    label: "Shows something that cannot be real",
+    help: "The photo contains something that could not happen — a cartoon, a fictional creature, or an impossible object.",
+  },
+  photo_of_screen: {
+    label: "Looks like a photo of a screen",
+    help: "Glare, a pixel grid, or a device edge suggests this is a picture of a screen, not of the scene.",
+  },
+  inconclusive: {
+    label: "Could not tell",
+    help: "The photo is too dark, blurry, or plain to judge. This is normal and is not a concern.",
+  },
+}
+
+export function mediaIntegrityVerdict(value: string | null | undefined): PlainTerm {
+  return lookup(MEDIA_INTEGRITY_VERDICT, value)
 }
 
 export function flagReason(value: string | null | undefined): PlainTerm {

@@ -5,6 +5,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
+from apps.concerns.test_helpers import ensure_test_profile, grant_position
 
 from .models import (
     Concern,
@@ -50,6 +51,10 @@ class ConcernConversationContractTests(APITestCase):
             status=User.Status.VERIFIED,
             is_on_duty=True,
         )
+        designation = grant_position(self.official)
+        self.community = designation.department.community
+        ensure_test_profile(self.owner, community=self.community)
+        ensure_test_profile(self.other, community=self.community)
         self.concern = Concern.objects.create(
             reporter=self.owner,
             title="Blocked drainage near the covered court",
@@ -186,8 +191,7 @@ class ConcernConversationContractTests(APITestCase):
         assignment.status = ConcernAssignment.Status.CANCELLED
         assignment.save(update_fields=["status", "updated_at"])
         revoked_response = self.detail_as(self.responder)
-        self.assertEqual(revoked_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(revoked_response.data["conversation"], [])
+        self.assertEqual(revoked_response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_assignment_end_is_appended_to_owner_and_official_history(self):
         assignment = self.concern.assignments.get(assignee=self.responder)
@@ -207,7 +211,7 @@ class ConcernConversationContractTests(APITestCase):
         self.assertIn("was cancelled", owner_assignment_items[-1]["body"])
 
         revoked_response = self.detail_as(self.responder)
-        self.assertEqual(revoked_response.data["conversation"], [])
+        self.assertEqual(revoked_response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_public_status_history_keeps_progress_but_redacts_note_and_actor(self):
         response = self.detail_as(self.other)
@@ -241,8 +245,11 @@ class ConcernChatWebSocketTests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
+        designation = grant_position(self.official)
+        ensure_test_profile(self.owner, community=designation.department.community)
         self.concern = Concern.objects.create(
             reporter=self.owner,
+            assigned_department=designation.department,
             title="Fallen branch on the path",
             description="A large branch fell and is blocking the walking path.",
             category=Concern.Category.ENVIRONMENT,

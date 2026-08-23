@@ -15,6 +15,14 @@ export type ServiceStatus = {
   reason?: string
 }
 
+export type MediaIntegrityAction =
+  | "flag_notify"
+  | "hold"
+  | "request_resubmission"
+  | "auto_reject"
+
+export type EmergencyMediaIntegrityAction = "flag_notify" | "hold"
+
 export type ConcernClassificationConfig = {
   revision: number
   text_model: string
@@ -41,6 +49,11 @@ export type ConcernClassificationConfig = {
   street_imagery_action?: "warn" | "request_resubmission" | "reject"
   photo_duplicate_llm_enabled?: boolean
   photo_duplicate_candidate_limit?: number
+  media_integrity_enabled?: boolean
+  media_integrity_action?: MediaIntegrityAction
+  media_integrity_min_confidence?: number
+  media_integrity_second_opinion_enabled?: boolean
+  media_integrity_emergency_action?: EmergencyMediaIntegrityAction
   flag_irrelevant: boolean
   suspicious_terms: string[]
   category_keywords: Record<string, string[]>
@@ -118,6 +131,19 @@ export type ReportValidationResult = {
     action: "accept" | "warn" | "review" | "block"
     summary?: string
     message?: string
+  } | null
+  media_integrity?: {
+    status: "checked" | "skipped" | "disabled"
+    reason?: string
+    overall?: string
+    second_opinion?: "not_required" | "disabled" | "confirmed" | "not_confirmed"
+    findings?: {
+      index: number
+      verdict: string
+      confidence: number
+      signals?: string[]
+      note?: string
+    }[]
   } | null
   street_imagery?: {
     status: "checked" | "skipped" | "no_coverage"

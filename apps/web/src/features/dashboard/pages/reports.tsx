@@ -961,14 +961,6 @@ export default function ReportsPage() {
         {/* Header */}
         <div className="mb-5">
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => navigate(-1)}
-              className="flex size-8 items-center justify-center rounded-full text-neutral-500 hover:bg-neutral-100 md:hidden"
-              aria-label="Go back"
-            >
-              <ChevronLeftIcon className="size-5" />
-            </button>
             <h1 className="text-[20px] font-bold tracking-tight text-neutral-900 sm:text-2xl">
               My reports
             </h1>

@@ -67,7 +67,6 @@ export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerCl
           containerClassName ?? "z-[200]",
         )}
       >
-        <style>{`.dialog-resize-grip{resize:both}.dialog-resize-grip::-webkit-resizer{display:none}.dialog-resize-grip::after{display:none!important;content:none!important}`}</style>
         {/* Overlay */}
         <div
           ref={overlayRef}

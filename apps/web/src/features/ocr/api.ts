@@ -160,6 +160,12 @@ export interface OcrDocumentType {
   accept_rotated?: boolean
   sample_url?: string | null
   sample_original_filename?: string
+  /**
+   * Whether a reference sample exists for this type. Read from the same rows
+   * the pipeline reads, so a false here means the layout comparison really
+   * cannot run — only the picture check does.
+   */
+  has_reference_sample?: boolean
   /** Per-side canvas samples (front / back / single). */
   samples?: Array<{
     side: ProofSide
@@ -175,7 +181,17 @@ export interface OcrAdvancedSettings {
   document_recency_days: number
   reject_blurry_images: boolean
   outage_retry_enabled: boolean
-  failure_action: "reject" | "request_resubmission"
+  /**
+   * The backend also accepts "manual_review" and uses it as its default. The
+   * builder never offers it: a case sent there has no screen behind it today,
+   * so the resident would wait on nobody.
+   */
+  failure_action: "reject" | "request_resubmission" | "manual_review"
+  /**
+   * How sure the picture check has to be before its opinion counts against a
+   * resident. Whether it runs at all is not a setting: it always does.
+   */
+  id_integrity_min_confidence: number
 }
 
 export interface OcrConfiguration {
@@ -227,6 +243,60 @@ export interface OcrTemplateMatch {
   checks?: OcrTemplateMatchCheck[]
 }
 
+/**
+ * What the picture check made of a submitted ID.
+ *
+ * `format_verdict` answers "is this the same kind of document as our stored
+ * sample" and is `no_reference` when no sample has been uploaded yet.
+ * `integrity_verdict` answers "does this look like a genuine card photographed
+ * by a camera". `authentic` means only that nothing was found — never proof.
+ */
+export interface OcrIdIntegrity {
+  checked: boolean
+  compared_to_sample: boolean
+  format_verdict: "format_matches" | "format_mismatch" | "no_reference" | "inconclusive"
+  integrity_verdict:
+    | "authentic"
+    | "suspected_edit"
+    | "suspected_ai"
+    | "impossible_content"
+    | "photo_of_screen"
+    | "inconclusive"
+  confidence: number
+  flagged: boolean
+  signals: string[]
+  note?: string
+}
+
+/**
+ * Which of the three checks a submission reached, and which one stopped it.
+ *
+ * The layers run cheapest-and-most-certain first — file bytes, then the
+ * picture, then the text — and each only runs when the one before it passed.
+ * `reached` is therefore also the last stage that produced an answer: when it
+ * is not "ocr", no text was read at all and there are no extracted fields to
+ * show.
+ */
+export type OcrPipelineStage = "media_forensics" | "id_integrity" | "ocr"
+
+export interface OcrPipelineForensics {
+  checked: boolean
+  flagged: boolean
+  /** Which forensics layer objected: exif, png_metadata, c2pa, visual_tamper. */
+  layer?: string
+  message?: string
+}
+
+export interface OcrPipeline {
+  reached: OcrPipelineStage
+  blocked_by: OcrPipelineStage | null
+  forensics: OcrPipelineForensics
+  /** What the resident would be told. */
+  message?: string
+  /** The specific finding behind that message, for the official only. */
+  detail?: string
+}
+
 export interface OcrTestResult {
   id: number | string
   filename: string
@@ -237,6 +307,8 @@ export interface OcrTestResult {
   extracted_fields?: OcrTestField[] | Record<string, unknown>
   extraction_json?: Record<string, string>
   template_match?: OcrTemplateMatch | null
+  id_integrity?: OcrIdIntegrity | null
+  pipeline?: OcrPipeline | null
   rule_results?: VerificationRuleResult[]
   error?: string
   created_at?: string
@@ -493,6 +565,7 @@ function normalizeConfiguration(raw: RawJson): OcrConfiguration {
     accept_rotated: document.accept_rotated !== false,
     sample_url: document.sample_url ?? null,
     sample_original_filename: document.sample_original_filename || "",
+    has_reference_sample: Boolean(document.has_reference_sample),
     samples: Array.isArray(document.samples)
       ? document.samples.map((sample: RawJson) => ({
           side: (sample.side || "single") as ProofSide,
@@ -542,13 +615,22 @@ function normalizeConfiguration(raw: RawJson): OcrConfiguration {
       reject_blurry_images: settings.reject_blurry_images !== false,
       outage_retry_enabled: settings.outage_retry_enabled !== false,
       failure_action: normalizeFailureAction(settings.failure_action),
+      id_integrity_min_confidence: normalizeConfidence(settings.id_integrity_min_confidence),
     },
   }
 }
 
 function normalizeFailureAction(value: unknown): OcrAdvancedSettings["failure_action"] {
-  if (value === "reject" || value === "request_resubmission") return value
+  if (value === "reject" || value === "request_resubmission" || value === "manual_review") {
+    return value
+  }
   return "reject"
+}
+
+function normalizeConfidence(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) return 0.7
+  return parsed
 }
 
 function serializeConfiguration(configuration: OcrConfiguration) {
@@ -558,6 +640,7 @@ function serializeConfiguration(configuration: OcrConfiguration) {
     settings: {
       recency_days: configuration.settings.document_recency_days,
       failure_action: configuration.settings.failure_action,
+      id_integrity_min_confidence: configuration.settings.id_integrity_min_confidence,
     },
     document_types: configuration.document_types.map((document) => {
       const sides = normalizeRequiredSides(document)
@@ -654,8 +737,8 @@ function serializeConfiguration(configuration: OcrConfiguration) {
   }
 }
 
-function proofOptionsFrom(payload: ResidenceProofOption[] | ListEnvelope<ResidenceProofOption>) {
-  return listFrom(payload).map((option) => {
+export function normalizeResidenceProofOptions(payload: ResidenceProofOption[]) {
+  return payload.map((option) => {
     const backend = option as ResidenceProofOption & {
       code?: string
       label?: string
@@ -703,7 +786,7 @@ export async function listResidenceProofOptions() {
       (payload as ListEnvelope<ResidenceProofOption>).results ??
       (payload as ListEnvelope<ResidenceProofOption>).items ??
       []
-  return proofOptionsFrom(rows).filter((option) => option.enabled !== false)
+  return normalizeResidenceProofOptions(rows).filter((option) => option.enabled !== false)
 }
 
 export function getMyResidenceVerification() {

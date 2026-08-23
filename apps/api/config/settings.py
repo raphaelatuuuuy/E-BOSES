@@ -488,6 +488,12 @@ SPECTACULAR_SETTINGS.update({
         {"name": "system", "description": "Health, status banners and diagnostics"},
     ],
     "SORT_OPERATION_METHOD": True,
+    # Shared error contract + generic payload shapes for hand-rolled views,
+    # so Swagger UI never shows a bare "No response body".
+    "POSTPROCESSING_HOOKS": (
+        "drf_spectacular.hooks.postprocess_schema_enums",
+        "config.schema_hooks.add_standard_responses",
+    ),
     # Hand-rolled APIViews trigger these warnings by design; they do not make
     # the schema wrong, just less detailed until annotated.
     "DISABLE_ERRORS_AND_WARNINGS": False,
