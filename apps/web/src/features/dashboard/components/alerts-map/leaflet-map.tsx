@@ -1,26 +1,22 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import {
-  CrosshairIcon,
-  HomeIcon,
-  MinusIcon,
-  NavigationIcon,
-  PlusIcon,
-  XIcon,
-} from "lucide-react"
+import { HomeIcon, MinusIcon, NavigationIcon, PersonStandingIcon, PlusIcon } from "lucide-react"
 import { toast } from "sonner"
 
-import { Button } from "@workspace/ui/components/button"
 import {
-  updateMapDispatchPolicy,
   type LiveMapEmergency,
   type LiveMapSnapshot,
-  type MapDispatchPolicy,
 } from "@/features/dashboard/api"
-import {
-  MapWeatherDetails,
-  useMapWeather,
-} from "@/features/dashboard/components/map-weather"
 import { connectorLineStyle, drawRoute, routeRenderGeometry } from "@/features/dashboard/lib/route-line"
+import {
+  MapControlButton,
+  MapControlStack,
+} from "@/features/dashboard/components/map/map-chrome"
+import { MapLegend } from "@/features/dashboard/components/map/map-legend"
+import {
+  StreetViewModal,
+  startStreetViewPick,
+  type StreetViewCoord,
+} from "@/features/dashboard/components/map/street-view"
 import {
   geoJsonToRing,
   polygonCentroid,
@@ -28,33 +24,120 @@ import {
 import { advisoryMarkerHtml, advisoryMeta } from "@/features/dashboard/components/community-content/advisory-tags"
 import type { GeoJsonPolygon } from "@/features/dashboard/api"
 import {
-  MapChip,
-  MapControlButton,
-  MapControlStack,
-} from "@/features/dashboard/components/map/map-chrome"
-import { MapLegend, type MapLegendRow } from "@/features/dashboard/components/map/map-legend"
-import {
   concernGlyph,
-  dotPinHtml,
   glyphPinHtml,
   glyphPinSize,
   GLYPHS,
   personDotHtml,
 } from "@/features/dashboard/components/map/markers"
+import { escapeHtml } from "@/features/dashboard/components/map/concern-marker"
+import { lucideIconPaths } from "@/features/dashboard/components/map/lucide-glyphs"
+import { photoTooltipHtml, photoTooltipOptions } from "@/features/dashboard/components/map/photo-tooltip"
+import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import {
   type LayerKey,
   type Selection,
   type StreetLine,
+  alertLayerRows,
   geoJsonToLines,
   isActiveConcern,
   isResolvedRecord,
   isActiveEmergency,
-  MAP_COLORS,
-  policyNumber,
+  OFFICIAL_MAP_COLORS as MAP_COLORS,
   validCoord,
 } from "./lib"
 
 import type leaflet from "leaflet"
+
+const ICON_CACHE = new Map<string, leaflet.DivIcon>()
+
+function cachedIcon(L: typeof leaflet, key: string, box: number, build: () => string) {
+  const hit = ICON_CACHE.get(key)
+  if (hit) return hit
+  const icon = L.divIcon({
+    className: "",
+    html: build(),
+    iconSize: [box, box],
+    iconAnchor: [box / 2, box / 2],
+  })
+  ICON_CACHE.set(key, icon)
+  return icon
+}
+
+type MarkerSpec = {
+  key: string
+  coord: leaflet.LatLngTuple
+  iconKey: string
+  box: number
+  html: () => string
+  z: number
+  tooltip?: string | null
+  onClick?: () => void
+}
+
+type MarkerEntry = {
+  marker: leaflet.Marker
+  iconKey: string
+  lat: number
+  lng: number
+  z: number
+  tooltip: string | null
+}
+
+function bindTip(marker: leaflet.Marker, box: number, tooltip: string | null) {
+  marker.unbindTooltip()
+  if (tooltip) {
+    marker.bindTooltip(() => photoTooltipHtml(tooltip, "light"), photoTooltipOptions(box))
+  }
+}
+
+function syncMarkers(
+  L: typeof leaflet,
+  group: leaflet.LayerGroup,
+  entries: Map<string, MarkerEntry>,
+  next: MarkerSpec[],
+) {
+  const seen = new Set<string>()
+  for (const spec of next) {
+    seen.add(spec.key)
+    const [lat, lng] = spec.coord
+    const tooltip = spec.tooltip || null
+    const existing = entries.get(spec.key)
+    if (!existing) {
+      const marker = L.marker(spec.coord, {
+        icon: cachedIcon(L, spec.iconKey, spec.box, spec.html),
+        zIndexOffset: spec.z,
+      })
+      if (spec.onClick) marker.on("click", spec.onClick)
+      bindTip(marker, spec.box, tooltip)
+      marker.addTo(group)
+      entries.set(spec.key, { marker, iconKey: spec.iconKey, lat, lng, z: spec.z, tooltip })
+      continue
+    }
+    if (existing.lat !== lat || existing.lng !== lng) {
+      existing.marker.setLatLng(spec.coord)
+      existing.lat = lat
+      existing.lng = lng
+    }
+    if (existing.iconKey !== spec.iconKey) {
+      existing.marker.setIcon(cachedIcon(L, spec.iconKey, spec.box, spec.html))
+      existing.iconKey = spec.iconKey
+    }
+    if (existing.z !== spec.z) {
+      existing.marker.setZIndexOffset(spec.z)
+      existing.z = spec.z
+    }
+    if (existing.tooltip !== tooltip) {
+      bindTip(existing.marker, spec.box, tooltip)
+      existing.tooltip = tooltip
+    }
+  }
+  for (const [key, entry] of entries) {
+    if (seen.has(key)) continue
+    group.removeLayer(entry.marker)
+    entries.delete(key)
+  }
+}
 
 function AlertsLeafletMapInner({
   snapshot,
@@ -64,7 +147,7 @@ function AlertsLeafletMapInner({
   onSelect,
   onToggleLayer,
   onResetLayers,
-  onPolicyUpdated,
+  onMapInteract,
   counts,
 }: {
   snapshot: LiveMapSnapshot
@@ -74,8 +157,8 @@ function AlertsLeafletMapInner({
   onSelect: (selection: Selection) => void
   onToggleLayer: (key: LayerKey) => void
   onResetLayers: () => void
-  onPolicyUpdated: (policy: MapDispatchPolicy) => void
-  counts: { residents: number; responders: number; officials: number; emergencies: number; concerns: number; advisories: number; resolved?: number }
+  onMapInteract?: () => void
+  counts: { responders: number; emergencies: number; concerns: number; advisories: number }
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
@@ -95,6 +178,11 @@ function AlertsLeafletMapInner({
    */
   const alertLayersRef = useRef<leaflet.LayerGroup | null>(null)
   const peopleLayersRef = useRef<leaflet.LayerGroup | null>(null)
+  const connectorLayersRef = useRef<leaflet.LayerGroup | null>(null)
+  const alertMarkersRef = useRef<Map<string, MarkerEntry>>(new Map())
+  const peopleMarkersRef = useRef<Map<string, MarkerEntry>>(new Map())
+  const onSelectRef = useRef(onSelect)
+  const onMapInteractRef = useRef(onMapInteract)
   const streetLayersRef = useRef<leaflet.LayerGroup | null>(null)
   const routeLayersRef = useRef<leaflet.LayerGroup | null>(null)
   const advisoryLayersRef = useRef<leaflet.LayerGroup | null>(null)
@@ -141,6 +229,12 @@ function AlertsLeafletMapInner({
     },
     [snapshot.map.boundary.geometry],
   )
+  useEffect(() => {
+    onSelectRef.current = onSelect
+  }, [onSelect])
+  useEffect(() => {
+    onMapInteractRef.current = onMapInteract
+  }, [onMapInteract])
   // Whether the view has been framed against a container that actually had
   // a size. Guards the one-time re-fit in the ResizeObserver below.
   const framedRef = useRef(false)
@@ -149,65 +243,14 @@ function AlertsLeafletMapInner({
   // first paint, bail, and never re-run -- which is why the boundary,
   // acceptance zone and legend layers intermittently never appeared.
   const [mapReady, setMapReady] = useState(false)
-  const [weatherOpen, setWeatherOpen] = useState(false)
   const [locating, setLocating] = useState(false)
-  // Both overlay panels start collapsed to an icon. On a phone the expanded
-  // pair covered most of the map, which is the one thing this screen exists
-  // to show.
-  const [zoneOpen, setZoneOpen] = useState(false)
-  const [zoneDraft, setZoneDraft] = useState<MapDispatchPolicy>(snapshot.map.dispatch_policy)
-  const [zoneSaving, setZoneSaving] = useState(false)
-  const weather = useMapWeather(
-    snapshot.map.center.latitude,
-    snapshot.map.center.longitude,
-    snapshot.map.boundary.name,
-  )
+  const [svPick, setSvPick] = useState(false)
+  const [svCoord, setSvCoord] = useState<StreetViewCoord | null>(null)
   const streetLines = useMemo<StreetLine[]>(() => {
     return snapshot.map.streets.streets.flatMap((street) =>
       (street.geometries ?? []).flatMap((geometry) => geoJsonToLines(geometry).map((line) => ({ name: street.name, line }))),
     )
   }, [snapshot.map.streets.streets])
-  const zoneDraftKey = [
-    zoneDraft.acceptance_center_latitude,
-    zoneDraft.acceptance_center_longitude,
-    zoneDraft.acceptance_radius_meters,
-  ].join(":")
-  const savedZoneKey = [
-    snapshot.map.dispatch_policy.acceptance_center_latitude,
-    snapshot.map.dispatch_policy.acceptance_center_longitude,
-    snapshot.map.dispatch_policy.acceptance_radius_meters,
-  ].join(":")
-  const zoneDirty = zoneDraftKey !== savedZoneKey
-
-  function updateZoneDraft(center: leaflet.LatLng, radius: number) {
-    setZoneDraft((current) => ({
-      ...current,
-      acceptance_center_latitude: Number(center.lat.toFixed(7)),
-      acceptance_center_longitude: Number(center.lng.toFixed(7)),
-      acceptance_radius_meters: Math.max(100, Math.min(5000, Math.round(radius))),
-    }))
-  }
-
-  async function saveZoneDraft() {
-    setZoneSaving(true)
-    try {
-      const saved = await updateMapDispatchPolicy({
-        acceptance_center_latitude: zoneDraft.acceptance_center_latitude,
-        acceptance_center_longitude: zoneDraft.acceptance_center_longitude,
-        acceptance_radius_meters: zoneDraft.acceptance_radius_meters,
-        out_of_zone_action: zoneDraft.out_of_zone_action,
-        witness_radius_meters: zoneDraft.witness_radius_meters,
-        responder_nearby_radius_meters: zoneDraft.responder_nearby_radius_meters,
-      })
-      setZoneDraft(saved)
-      onPolicyUpdated(saved)
-      toast.success("Acceptance zone saved")
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not save acceptance zone.")
-    } finally {
-      setZoneSaving(false)
-    }
-  }
 
   function goHomeOnMap() {
     const map = mapRef.current
@@ -221,6 +264,20 @@ function AlertsLeafletMapInner({
       animate: true,
     })
   }
+
+  useEffect(() => {
+    if (!svPick) return
+    const map = mapRef.current
+    if (!map) return
+    const cleanup = startStreetViewPick(map, {
+      onPick: (coord) => {
+        setSvPick(false)
+        setSvCoord(coord)
+      },
+      onCancel: () => setSvPick(false),
+    })
+    return cleanup
+  }, [svPick, mapReady])
 
   function goToCurrentLocation() {
     const map = mapRef.current
@@ -243,13 +300,18 @@ function AlertsLeafletMapInner({
           myLocationRef.current = L.marker([coords.latitude, coords.longitude], {
             icon: L.divIcon({
               className: "",
-              html: dotPinHtml({ color: MAP_COLORS.you, size: 14, tone: "dark" }),
-              iconSize: [14, 14],
-              iconAnchor: [7, 7],
+              html: glyphPinHtml({
+                paths: GLYPHS.userOfficial,
+                color: MAP_COLORS.you,
+                size: 24,
+              }),
+              iconSize: [24, 24],
+              iconAnchor: [12, 12],
             }),
-            interactive: false,
             zIndexOffset: 1200,
-          }).addTo(map)
+          })
+            .addTo(map)
+            .bindTooltip("You", { direction: "top", offset: [0, -12], className: "eboses-you-tip" })
         }
         toast.success(`You are here, within ${Math.round(coords.accuracy)} m`)
         setLocating(false)
@@ -289,20 +351,85 @@ function AlertsLeafletMapInner({
       // and the map paints blank.
       styleEl = document.createElement("style")
       styleEl.textContent = `
-        .eboses-map-dark.leaflet-container {
+        .eboses-map-dark.leaflet-container,
+        .eboses-map-light.leaflet-container {
           width: 100%;
           height: 100%;
-          background: #0b1020;
           font-family: inherit;
         }
-        .eboses-map-dark .leaflet-tile-pane { isolation: isolate; }
+        .eboses-map-light.leaflet-container {
+          background: #eef1fa;
+        }
+        .eboses-map-dark .leaflet-tile-pane,
+        .eboses-map-light .leaflet-tile-pane { isolation: isolate; }
         .eboses-map-dark img.leaflet-tile,
-        .eboses-map-dark .leaflet-tile {
+        .eboses-map-dark .leaflet-tile,
+        .eboses-map-light img.leaflet-tile,
+        .eboses-map-light .leaflet-tile {
           max-width: none !important;
           max-height: none !important;
           width: 256px !important;
           height: 256px !important;
           mix-blend-mode: normal !important;
+        }
+        .eboses-map-light .leaflet-tooltip-pane {
+          z-index: 2000 !important;
+        }
+        .eboses-map-light .leaflet-control-attribution {
+          background: rgb(5 13 51 / 0.78);
+          color: rgb(255 255 255 / 0.5);
+        }
+        .eboses-map-light .leaflet-control-attribution a {
+          color: rgb(255 255 255 / 0.65);
+        }
+        .eboses-map-light .leaflet-tooltip {
+          background: rgba(5, 13, 51, 0.92);
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          color: #f2f5fa;
+          font-size: 12px;
+          font-weight: 600;
+          padding: 4px 8px;
+          border-radius: 6px;
+          box-shadow: 0 8px 20px rgba(2, 6, 23, 0.4);
+        }
+        .eboses-map-light .leaflet-tooltip::before {
+          border-top-color: rgba(5, 13, 51, 0.92);
+        }
+        .eboses-map-light .eboses-you-tip.leaflet-tooltip {
+          background: #ffffff;
+          border-color: #ffffff;
+          color: #14203c;
+          box-shadow: 0 4px 14px rgba(2, 6, 23, 0.28);
+        }
+        .eboses-map-light .eboses-you-tip.leaflet-tooltip::before {
+          border-top-color: #ffffff;
+        }
+        .eboses-map-light .eboses-pin--dot .eboses-pin__halo {
+          opacity: 0.2;
+          animation: eboses-pin-halo-quiet 2.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+        }
+        @keyframes eboses-pin-halo-quiet {
+          0% {
+            transform: scale(1);
+            opacity: 0.2;
+          }
+          70%,
+          100% {
+            transform: scale(1.45);
+            opacity: 0;
+          }
+        }
+        .eboses-map-light .eboses-pin--dot.is-live .eboses-pin__core {
+          animation: eboses-pin-blink-quiet 2.6s ease-in-out infinite;
+        }
+        @keyframes eboses-pin-blink-quiet {
+          0%,
+          100% {
+            box-shadow: 0 0 0 0 var(--pin);
+          }
+          50% {
+            box-shadow: 0 0 3px 1px var(--pin);
+          }
         }
       `
       document.head.appendChild(styleEl)
@@ -315,22 +442,22 @@ function AlertsLeafletMapInner({
         preferCanvas: true,
         markerZoomAnimation: false,
       })
-      containerRef.current.classList.add("eboses-map-dark")
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-        attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
-        maxZoom: 20,
-        subdomains: "abcd",
-        keepBuffer: 6,
-        updateWhenIdle: true,
-      }).addTo(map)
+      containerRef.current.classList.add("eboses-map-light")
+      addBaseTiles(L, map, "light")
       streetLayersRef.current = L.layerGroup().addTo(map)
       // Hover-only barangay fill: sits beneath every advisory road/marker.
       highlightGroupRef.current = L.layerGroup().addTo(map)
       advisoryLayersRef.current = L.layerGroup().addTo(map)
       routeLayersRef.current = L.layerGroup().addTo(map)
       alertLayersRef.current = L.layerGroup().addTo(map)
+      connectorLayersRef.current = L.layerGroup().addTo(map)
       peopleLayersRef.current = L.layerGroup().addTo(map)
       mapRef.current = map
+
+      const notifyInteract = () => onMapInteractRef.current?.()
+      map.on("dragstart", notifyInteract)
+      map.on("zoomstart", notifyInteract)
+      map.on("click", notifyInteract)
       // Leaflet measures the container exactly once, at construction. On
       // mobile this page mounts before the flex chain has resolved a height,
       // so the map was built against a 0px box and never painted a single
@@ -358,9 +485,14 @@ function AlertsLeafletMapInner({
       if (!cancelled) setMapReady(true)
     }
 
+    const alertMarkers = alertMarkersRef.current
+    const peopleMarkers = peopleMarkersRef.current
+
     void init()
     return () => {
       cancelled = true
+      alertMarkers.clear()
+      peopleMarkers.clear()
       resizeObserverRef.current?.disconnect()
       resizeObserverRef.current = null
       framedRef.current = false
@@ -417,145 +549,6 @@ function AlertsLeafletMapInner({
     if (!layers.boundary && map.hasLayer(boundary)) map.removeLayer(boundary)
   }, [layers.boundary, boundaryGeometry, mapReady])
 
-  // Acceptance zone circle — grey ring showing the pin-acceptance limit, draggable & resizable
-  const acceptanceZoneRef = useRef<leaflet.Circle | null>(null)
-  const zoneHandleRef = useRef<leaflet.Marker | null>(null)
-  const zoneCenterRef = useRef<leaflet.Marker | null>(null)
-  useEffect(() => {
-    const map = mapRef.current
-    const L = LRef.current
-    if (!map || !L) return undefined
-
-    // Cleanup previous
-    if (acceptanceZoneRef.current) { map.removeLayer(acceptanceZoneRef.current); acceptanceZoneRef.current = null }
-    if (zoneHandleRef.current) { map.removeLayer(zoneHandleRef.current); zoneHandleRef.current = null }
-    if (zoneCenterRef.current) { map.removeLayer(zoneCenterRef.current); zoneCenterRef.current = null }
-
-    if (!layers.acceptance_zone) return undefined
-
-    const centerLat = policyNumber(zoneDraft.acceptance_center_latitude, snapshot.map.center.latitude)
-    const centerLng = policyNumber(zoneDraft.acceptance_center_longitude, snapshot.map.center.longitude)
-    const centerLatLng = L.latLng(centerLat, centerLng)
-    const radius = Math.max(100, Math.min(5000, Number(zoneDraft.acceptance_radius_meters) || 800))
-
-    // Non-draggable circle — moved via center marker or direct drag on circle
-    const circle = L.circle(centerLatLng, {
-      radius,
-      color: MAP_COLORS.structure,
-      fillColor: MAP_COLORS.structure,
-      fillOpacity: 0.05,
-      weight: 1.25,
-      dashArray: "5 6",
-    }).addTo(map)
-    acceptanceZoneRef.current = circle
-
-    // Drag the circle by its body. The move/up listeners are attached on press
-    // and dropped on release: leaving a `mousemove` handler on the map made
-    // Leaflet resolve a container point into a LatLng on every single pointer
-    // move across the whole map, which is what made this screen feel heavy
-    // next to the coverage-area editor.
-    let dragging = false
-    let dragOffset = { lat: 0, lng: 0 }
-
-    const onMapMouseMove = (e: leaflet.LeafletMouseEvent) => {
-      if (!dragging) return
-      const newLat = e.latlng.lat - dragOffset.lat
-      const newLng = e.latlng.lng - dragOffset.lng
-      const newCenter = L.latLng(newLat, newLng)
-      circle.setLatLng(newCenter)
-      centerMarker.setLatLng(newCenter)
-      const currentRadius = circle.getRadius()
-      const eastLng = newCenter.lng + (currentRadius / 111320) * Math.cos(newCenter.lat * Math.PI / 180)
-      handle.setLatLng([newCenter.lat, eastLng])
-    }
-
-    const onMapMouseUp = () => {
-      if (!dragging) return
-      dragging = false
-      map.off("mousemove", onMapMouseMove)
-      map.off("mouseup", onMapMouseUp)
-      map.dragging.enable()
-      updateZoneDraft(circle.getLatLng(), circle.getRadius())
-    }
-
-    const onCircleMouseDown = (e: leaflet.LeafletMouseEvent) => {
-      dragging = true
-      const circleCenter = circle.getLatLng()
-      dragOffset = { lat: e.latlng.lat - circleCenter.lat, lng: e.latlng.lng - circleCenter.lng }
-      map.dragging.disable()
-      map.on("mousemove", onMapMouseMove)
-      map.on("mouseup", onMapMouseUp)
-    }
-    circle.on("mousedown", onCircleMouseDown)
-
-    // Center draggable marker (moves the circle)
-    const centerMarker = L.marker(centerLatLng, {
-      draggable: true,
-      icon: L.divIcon({
-        className: "",
-        html: `<div style="width:10px;height:10px;border-radius:999px;background:var(--color-subtle-foreground);border:2px solid var(--color-card);box-shadow:0 0 0 6px rgba(120,132,159,.22);cursor:grab"></div>`,
-        iconSize: [10, 10],
-        iconAnchor: [5, 5],
-      }),
-    }).addTo(map)
-    zoneCenterRef.current = centerMarker
-
-    // Resize handle on the east edge
-    const handleLat = centerLatLng.lat
-    const handleLng = centerLatLng.lng + (radius / 111320) * Math.cos(centerLatLng.lat * Math.PI / 180)
-    const handle = L.marker([handleLat, handleLng], {
-      draggable: true,
-      icon: L.divIcon({
-        className: "",
-        html: `<div style="width:14px;height:14px;border-radius:999px;background:var(--color-subtle-foreground);border:2px solid var(--color-card);box-shadow:0 2px 8px rgba(0,0,0,.45);cursor:grab"></div>`,
-        iconSize: [14, 14],
-        iconAnchor: [7, 7],
-      }),
-    }).addTo(map)
-    zoneHandleRef.current = handle
-
-    // Drag center marker → move circle + keep resize handle on east edge
-    const onCenterDrag = () => {
-      const newCenter = centerMarker.getLatLng()
-      circle.setLatLng(newCenter)
-      const currentRadius = circle.getRadius()
-      const eastLng = newCenter.lng + (currentRadius / 111320) * Math.cos(newCenter.lat * Math.PI / 180)
-      handle.setLatLng([newCenter.lat, eastLng])
-    }
-    centerMarker.on("drag", onCenterDrag)
-    const onCenterDragEnd = () => updateZoneDraft(circle.getLatLng(), circle.getRadius())
-    centerMarker.on("dragend", onCenterDragEnd)
-
-    // Drag resize handle → resize circle (center stays)
-    const onHandleDrag = () => {
-      const handlePos = handle.getLatLng()
-      const centerPos = circle.getLatLng()
-      const newRadius = centerPos.distanceTo(handlePos)
-      circle.setRadius(newRadius)
-    }
-    handle.on("drag", onHandleDrag)
-    const onHandleDragEnd = () => updateZoneDraft(circle.getLatLng(), circle.getRadius())
-    handle.on("dragend", onHandleDragEnd)
-
-    // Fixed leak: the inline version never removed these listeners on rerender/unmount.
-    return () => {
-      circle.off("mousedown", onCircleMouseDown)
-      map.off("mousemove", onMapMouseMove)
-      map.off("mouseup", onMapMouseUp)
-      centerMarker.off("drag", onCenterDrag)
-      centerMarker.off("dragend", onCenterDragEnd)
-      handle.off("drag", onHandleDrag)
-      handle.off("dragend", onHandleDragEnd)
-    }
-  }, [
-    layers.acceptance_zone,
-    snapshot.map.center.latitude,
-    snapshot.map.center.longitude,
-    zoneDraft.acceptance_center_latitude,
-    zoneDraft.acceptance_center_longitude,
-    zoneDraft.acceptance_radius_meters,
-    mapReady,
-  ])
 
   // Streets are reference geometry: hundreds of polylines that change only when
   // the OSM catalog does. They own their own group so a location ping or a
@@ -663,9 +656,7 @@ function AlertsLeafletMapInner({
       const ring = geoJsonToRing(advisory.area_geometry)
       if (ring.length >= 3) {
         L.polygon(ring, {
-          color: tagColor,
-          weight: 1.25,
-          opacity: 0.55,
+          stroke: false,
           fillColor: tagColor,
           fillOpacity: 0.16,
           interactive: false,
@@ -675,7 +666,7 @@ function AlertsLeafletMapInner({
           const marker = L.marker(centroid, {
             icon: L.divIcon({
               className: "",
-              html: advisoryMarkerHtml(advisory.tag, 26, "dark"),
+              html: advisoryMarkerHtml(advisory.tag, 26, "light"),
               iconSize: [26, 26],
               iconAnchor: [13, 13],
             }),
@@ -717,7 +708,7 @@ function AlertsLeafletMapInner({
         const marker = L.marker(centroid ?? [snapshot.map.center.latitude, snapshot.map.center.longitude], {
           icon: L.divIcon({
             className: "",
-            html: advisoryMarkerHtml(advisory.tag, 26, "dark"),
+            html: advisoryMarkerHtml(advisory.tag, 26, "light"),
             iconSize: [26, 26],
             iconAnchor: [13, 13],
           }),
@@ -729,7 +720,7 @@ function AlertsLeafletMapInner({
         const marker = L.marker(anchor, {
           icon: L.divIcon({
             className: "",
-            html: advisoryMarkerHtml(advisory.tag, 26, "dark"),
+            html: advisoryMarkerHtml(advisory.tag, 26, "light"),
             iconSize: [26, 26],
             iconAnchor: [13, 13],
           }),
@@ -748,75 +739,89 @@ function AlertsLeafletMapInner({
   useEffect(() => {
     const L = LRef.current
     const group = alertLayersRef.current
-    if (!L || !group) return undefined
-    const cleanups: Array<() => void> = []
-    group.clearLayers()
+    if (!L || !group) return
 
-    for (const concern of snapshot.concerns) {
-      if (!layers.concerns) continue
-      // The snapshot keeps closed records so an open detail panel does not
-      // blank out when its subject resolves; the map only ever draws open ones.
-      const concernResolved = isResolvedRecord(concern)
-      if (!isActiveConcern(concern) && !(layers.resolved && concernResolved)) continue
-      const coord = validCoord(concern.latitude, concern.longitude)
-      if (!coord) continue
-      const focused = selected?.kind === "concern" && selected.id === concern.id
-      const box = glyphPinSize(26, focused)
-      const marker = L.marker(coord, {
-        icon: L.divIcon({
-          className: "",
-          html: glyphPinHtml({
-            paths: concernResolved ? GLYPHS.resolved : concernGlyph(concern.category),
-            color: concernResolved ? MAP_COLORS.resolved : MAP_COLORS.concern,
-            selected: focused,
-            tone: "dark",
-          }),
-          iconSize: [box, box],
-          iconAnchor: [box / 2, box / 2],
-        }),
-        zIndexOffset: focused ? 700 : 200,
-      })
-      const handleClick = () => onSelect({ kind: "concern", id: concern.id })
-      marker.on("click", handleClick)
-      cleanups.push(() => marker.off("click", handleClick))
-      marker.addTo(group)
+    const specs: MarkerSpec[] = []
+
+    if (layers.concerns) {
+      for (const concern of snapshot.concerns) {
+        // The snapshot keeps closed records so an open detail panel does not
+        // blank out when its subject resolves; the map only ever draws open ones.
+        const concernResolved = isResolvedRecord(concern)
+        if (!isActiveConcern(concern) && !(layers.resolved && concernResolved)) continue
+        const coord = validCoord(concern.latitude, concern.longitude)
+        if (!coord) continue
+        const focused = selected?.kind === "concern" && selected.id === concern.id
+        const box = glyphPinSize(26, focused)
+        const color = concernResolved ? MAP_COLORS.resolved : MAP_COLORS.concern
+        // Resolved pins keep the report's own category icon, just recoloured
+        // neutral — everything falls back through the same priority the
+        // report's icon uses elsewhere: image > custom label > picked icon > glyph.
+        const categoryRef = concern.category_ref
+        const content = categoryRef?.icon_image_url
+          ? `<img src="${escapeHtml(categoryRef.icon_image_url)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:9999px" />`
+          : categoryRef?.custom_icon_label?.trim()
+            ? `<span style="font-size:${Math.round(box * 0.42)}px;font-weight:700;line-height:1">${escapeHtml(categoryRef.custom_icon_label.trim().slice(0, 2).toUpperCase())}</span>`
+            : undefined
+        const paths = (categoryRef?.icon_key ? lucideIconPaths(categoryRef.icon_key) : null) ?? concernGlyph(concern.category)
+        specs.push({
+          key: `concern-${concern.id}`,
+          coord,
+          iconKey: `concern:${concernResolved ? "resolved" : `${concern.category}:${categoryRef?.icon_key ?? ""}:${categoryRef?.icon_image_url ?? ""}:${categoryRef?.custom_icon_label ?? ""}`}:${color}:${box}`,
+          box,
+          html: () =>
+            glyphPinHtml({
+              paths,
+              content,
+              color,
+              selected: focused,
+              tone: "light",
+              tint: true,
+              hoverGrow: true,
+            }),
+          z: focused ? 700 : 200,
+          tooltip: concern.preview_url,
+          onClick: () => onSelectRef.current({ kind: "concern", id: concern.id }),
+        })
+      }
     }
 
-    for (const emergency of snapshot.emergencies) {
-      if (!layers.emergencies) continue
-      // Same rule as concerns: a resolved or cancelled emergency must not keep
-      // drawing a pulsing alarm pin. The pulse means "someone needs help now".
-      const emergencyResolved = isResolvedRecord(emergency)
-      if (!isActiveEmergency(emergency) && !(layers.resolved && emergencyResolved)) continue
-      const coord = validCoord(emergency.latitude, emergency.longitude)
-      if (!coord) continue
-      const focused = selected?.kind === "emergency" && selected.id === emergency.id
-      const box = glyphPinSize(28, focused)
-      const marker = L.marker(coord, {
-        icon: L.divIcon({
-          className: "",
-          html: glyphPinHtml({
-            paths: emergencyResolved ? GLYPHS.resolved : GLYPHS.emergency,
-            color: emergencyResolved ? MAP_COLORS.resolved : MAP_COLORS.emergency,
-            size: 28,
-            selected: focused,
-            live: !emergencyResolved,
-            tone: "dark",
-          }),
-          iconSize: [box, box],
-          iconAnchor: [box / 2, box / 2],
-        }),
-        zIndexOffset: focused ? 800 : 400,
-      })
-      const handleClick = () => onSelect({ kind: "emergency", id: emergency.id })
-      marker.on("click", handleClick)
-      cleanups.push(() => marker.off("click", handleClick))
-      marker.addTo(group)
+    if (layers.emergencies) {
+      for (const emergency of snapshot.emergencies) {
+        // Same rule as concerns: a settled emergency must not keep drawing a
+        // pulsing alarm pin. "Settled" is anything not active — resolved,
+        // closed, cancelled, false alarm, invalid — not just the literal
+        // "resolved" status, which used to leave those other end-states red.
+        const emergencySettled = !isActiveEmergency(emergency)
+        if (!isActiveEmergency(emergency) && !(layers.resolved && emergencySettled)) continue
+        const coord = validCoord(emergency.latitude, emergency.longitude)
+        if (!coord) continue
+        const focused = selected?.kind === "emergency" && selected.id === emergency.id
+        const box = glyphPinSize(28, focused)
+        const color = emergencySettled ? MAP_COLORS.resolved : MAP_COLORS.emergency
+        specs.push({
+          key: `emergency-${emergency.id}`,
+          coord,
+          iconKey: `emergency:${emergencySettled ? "resolved" : "live"}:${color}:${box}`,
+          box,
+          html: () =>
+            glyphPinHtml({
+              paths: GLYPHS.emergency,
+              color,
+              size: 28,
+              selected: focused,
+              tone: "light",
+              tint: true,
+              hoverGrow: true,
+            }),
+          z: focused ? 800 : 400,
+          tooltip: emergency.preview_url,
+          onClick: () => onSelectRef.current({ kind: "emergency", id: emergency.id }),
+        })
+      }
     }
 
-    return () => {
-      cleanups.forEach((cleanup) => cleanup())
-    }
+    syncMarkers(L, group, alertMarkersRef.current, specs)
   }, [
     snapshot.concerns,
     snapshot.emergencies,
@@ -825,7 +830,6 @@ function AlertsLeafletMapInner({
     layers.resolved,
     selected?.kind,
     selected?.id,
-    onSelect,
     mapReady,
   ])
 
@@ -851,9 +855,8 @@ function AlertsLeafletMapInner({
   useEffect(() => {
     const L = LRef.current
     const group = peopleLayersRef.current
-    if (!L || !group) return undefined
-    const cleanups: Array<() => void> = []
-    group.clearLayers()
+    const connectors = connectorLayersRef.current
+    if (!L || !group || !connectors) return
 
     // Every responder committed to an open incident, not only the one on the
     // selected incident. A dispatcher must be able to see who is going where
@@ -866,6 +869,9 @@ function AlertsLeafletMapInner({
       if (responderId != null) assignmentByResponder.set(responderId, emergency)
     }
     const focusId = selected?.kind === "emergency" ? selected.id : null
+
+    const specs: MarkerSpec[] = []
+    connectors.clearLayers()
 
     for (const person of snapshot.people) {
       const coord = validCoord(person.latitude, person.longitude)
@@ -893,22 +899,15 @@ function AlertsLeafletMapInner({
             : MAP_COLORS.responderOffDuty
 
       const box = isFocused ? 13 : 10
-      const marker = L.marker(coord, {
-        icon: L.divIcon({
-          className: "",
-          html: personDotHtml(color, isFocused, "dark"),
-          iconSize: [box, box],
-          iconAnchor: [box / 2, box / 2],
-        }),
-        title: isResponder
-          ? `${person.full_name}${person.is_on_duty ? "" : " (off duty)"}`
-          : person.full_name,
-        zIndexOffset: isFocused ? 500 : isAssigned ? 250 : 0,
+      specs.push({
+        key: `person-${person.id}`,
+        coord,
+        iconKey: `person:${color}:${box}:${isFocused}`,
+        box,
+        html: () => personDotHtml(color, false, "light"),
+        z: isFocused ? 500 : isAssigned ? 250 : 0,
+        onClick: () => onSelectRef.current({ kind: "person", id: person.id }),
       })
-      const handleClick = () => onSelect({ kind: "person", id: person.id })
-      marker.on("click", handleClick)
-      cleanups.push(() => marker.off("click", handleClick))
-      marker.addTo(group)
 
       // The leg from a committed responder to their incident, so "who is going
       // to this" is answered by looking at the map rather than reading a panel.
@@ -921,17 +920,15 @@ function AlertsLeafletMapInner({
           (item) => item.responder_id === person.id && item.alert_id === incident.id,
         )
         const target = validCoord(incident.latitude, incident.longitude)
-        const { connectors } = routeRenderGeometry(assignedRoute, { origin: coord })
-        const link = connectors[0] ?? (target ? [coord, target] : null)
+        const { connectors: legs } = routeRenderGeometry(assignedRoute, { origin: coord })
+        const link = legs[0] ?? (target ? [coord, target] : null)
         if (link) {
-          L.polyline(link, connectorLineStyle(focusId != null && !isFocused)).addTo(group)
+          L.polyline(link, connectorLineStyle(focusId != null && !isFocused)).addTo(connectors)
         }
       }
     }
 
-    return () => {
-      cleanups.forEach((cleanup) => cleanup())
-    }
+    syncMarkers(L, group, peopleMarkersRef.current, specs)
   }, [
     snapshot.people,
     snapshot.emergencies,
@@ -941,25 +938,11 @@ function AlertsLeafletMapInner({
     layers.responders,
     selected?.kind,
     selected?.id,
-    onSelect,
     mapReady,
   ])
 
 
-  const layerRows: MapLegendRow<LayerKey>[] = [
-    { key: "emergencies", label: "Emergencies", hint: "Live incidents and their routes", count: counts.emergencies, tone: MAP_COLORS.emergency },
-    { key: "concerns", label: "Concerns", hint: "Reports neighbours have filed", count: counts.concerns, tone: MAP_COLORS.concern },
-    { key: "responders", label: "Responders", hint: "Crews on and off duty", count: counts.responders, tone: MAP_COLORS.responder },
-    { key: "residents", label: "Residents", hint: "Devices reporting a location", count: counts.residents, tone: MAP_COLORS.structure },
-    { key: "officials", label: "Officials", count: counts.officials, tone: MAP_COLORS.structure },
-    { key: "advisories", label: "Advisory areas", hint: "Streets a barangay advisory covers", count: counts.advisories, tone: MAP_COLORS.advisory },
-    { key: "resolved", label: "Resolved", hint: "Closed records, kept off the map by default", count: counts.resolved ?? 0, tone: MAP_COLORS.resolved },
-  ]
-  const referenceRows: MapLegendRow<LayerKey>[] = [
-    { key: "boundary", label: "Boundary" },
-    { key: "streets", label: "Streets" },
-    { key: "acceptance_zone", label: "Acceptance zone" },
-  ]
+  const layerRows = alertLayerRows(counts)
 
   return (
     // `absolute inset-0`, not `size-full`. A percentage height only resolves
@@ -973,18 +956,18 @@ function AlertsLeafletMapInner({
 
       {/* One control column. Locate sits below the zoom controls. */}
       <div className="absolute right-3 top-3 z-[600] flex flex-col items-end gap-2">
-        <MapControlStack tone="dark">
-          <MapControlButton tone="dark" label="Frame the barangay" onClick={goHomeOnMap}>
+        <MapControlStack tone="light">
+          <MapControlButton tone="light" label="Frame the barangay" onClick={goHomeOnMap}>
             <HomeIcon className="size-5" strokeWidth={1.9} />
           </MapControlButton>
-          <MapControlButton tone="dark" divider label="Zoom in" onClick={() => mapRef.current?.zoomIn()}>
+          <MapControlButton tone="light" divider label="Zoom in" onClick={() => mapRef.current?.zoomIn()}>
             <PlusIcon className="size-5" strokeWidth={2.1} />
           </MapControlButton>
-          <MapControlButton tone="dark" divider label="Zoom out" onClick={() => mapRef.current?.zoomOut()}>
+          <MapControlButton tone="light" divider label="Zoom out" onClick={() => mapRef.current?.zoomOut()}>
             <MinusIcon className="size-5" strokeWidth={2.1} />
           </MapControlButton>
           <MapControlButton
-            tone="dark"
+            tone="light"
             divider
             label="Current location"
             onClick={goToCurrentLocation}
@@ -992,91 +975,43 @@ function AlertsLeafletMapInner({
           >
             <NavigationIcon className="size-5" strokeWidth={1.9} />
           </MapControlButton>
+          <MapControlButton
+            tone="light"
+            divider
+            label={svPick ? "Cancel Street View pick" : "Drag me onto the map or click, then pick a spot for Street View"}
+            active={svPick}
+            draggable
+            onDragStart={(event) => {
+              event.dataTransfer.setData("text/plain", "street-view")
+              event.dataTransfer.effectAllowed = "copy"
+              setSvPick(true)
+            }}
+            onClick={() => setSvPick((value) => !value)}
+          >
+            <PersonStandingIcon className="size-5" strokeWidth={1.9} />
+          </MapControlButton>
         </MapControlStack>
 
-        <MapChip
-          tone="dark"
-          label="Weather"
-          expanded={weatherOpen}
-          onClick={() => setWeatherOpen((value) => !value)}
-        >
-          <span>{weather.temperature != null ? `${Math.round(weather.temperature)}°C` : "—"}</span>
-        </MapChip>
-
-        {weatherOpen ? (
-          <div className="w-[min(19rem,calc(100vw-1.5rem))] rounded-xl border border-white/10 bg-nav-bg/95 p-4 text-white shadow-lg backdrop-blur-md">
-            <p className="text-[15px] font-semibold">{weather.placeName}</p>
-            <p className="mt-0.5 text-[13px] text-white/50">Live barangay weather</p>
-            <div className="mt-3 [&_*]:!text-white/70">
-              <MapWeatherDetails weather={weather} />
-            </div>
+        {svPick ? (
+          <div className="pointer-events-none absolute right-0 top-[calc(100%+8px)] w-max max-w-[min(15rem,calc(100vw-1.5rem))] rounded-lg bg-nav-bg/90 px-2.5 py-1.5 text-[11.5px] font-semibold text-white/85 shadow-md backdrop-blur">
+            Click the map to start Street View · Esc cancels
           </div>
-        ) : null}
-
-        {layers.acceptance_zone ? (
-          zoneOpen ? (
-            <div className="w-[min(16rem,calc(100vw-1.5rem))] overflow-hidden rounded-xl border border-white/10 bg-nav-bg/85 shadow-lg backdrop-blur-md">
-              <div className="flex items-start gap-2 border-b border-white/10 px-3.5 py-3">
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[13px] font-semibold text-white">Acceptance zone</span>
-                  <span className="mt-1 block text-[19px] font-semibold leading-none tabular-nums text-white">
-                    {Math.round(Number(zoneDraft.acceptance_radius_meters) || 0)}
-                    <span className="ml-1 text-[13px] font-medium text-white/50">m</span>
-                  </span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setZoneOpen(false)}
-                  aria-label="Collapse the acceptance zone panel"
-                  className="-mr-1 flex size-7 shrink-0 items-center justify-center rounded-lg text-white/50 transition-colors hover:bg-white/10 hover:text-white"
-                >
-                  <XIcon className="size-4" strokeWidth={2.2} />
-                </button>
-              </div>
-              <div className="px-3.5 py-3">
-                <p className="text-[13px] leading-relaxed text-white/50">
-                  Drag the centre or the edge handle on the map, then save.
-                </p>
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={!zoneDirty || zoneSaving}
-                  onClick={() => void saveZoneDraft()}
-                  className="mt-3 h-9 w-full rounded-lg bg-brand-orange text-[13px] font-semibold text-brand-orange-ink hover:bg-brand-orange-strong disabled:bg-white/10 disabled:text-white/35"
-                >
-                  {zoneSaving ? "Saving" : zoneDirty ? "Save zone" : "Saved"}
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setZoneOpen(true)}
-              aria-label="Open the acceptance zone panel"
-              title="Acceptance zone"
-              className="relative flex size-10 items-center justify-center rounded-xl border border-white/10 bg-nav-bg/85 text-white shadow-md backdrop-blur-md transition-colors hover:bg-white/10"
-            >
-              <CrosshairIcon className="size-5" strokeWidth={1.9} />
-              {zoneDirty ? (
-                <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-brand-orange" />
-              ) : null}
-            </button>
-          )
         ) : null}
       </div>
 
       {/* Below the map, clear of the control column. Collapsed it is one icon,
           so the legend never covers the barangay. */}
-      <div className="absolute bottom-3 right-3 z-[500] flex flex-col items-end">
+      <div className="absolute bottom-[calc(56px+0.75rem)] right-3 z-[500] flex flex-col items-end lg:bottom-3">
         <MapLegend
-          tone="dark"
+          tone="light"
           rows={layerRows}
-          reference={referenceRows}
           active={layers}
           onToggle={onToggleLayer}
           onReset={onResetLayers}
         />
       </div>
+
+      {svCoord ? <StreetViewModal coord={svCoord} onClose={() => setSvCoord(null)} /> : null}
     </div>
   )
 }

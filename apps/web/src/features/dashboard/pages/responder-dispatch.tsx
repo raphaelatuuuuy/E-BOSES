@@ -13,6 +13,7 @@ import { usePageTitle } from "@/hooks/use-page-title"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { distanceKm } from "@/features/dashboard/lib/responder-format"
 import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/record/status"
+import { MAP_COLORS } from "@/features/dashboard/components/map/markers"
 import {
   getEmergencyRoute,
   listAssignedEmergencies,
@@ -91,6 +92,39 @@ function locationFailureMessage(error: unknown) {
   if (code === 2) return "Your location is unavailable. Move to an open area or turn on device location, then try again."
   if (code === 3) return "Location request timed out. Check your GPS signal and try again."
   return "Your location could not be read. Check device location access and try again."
+}
+
+const LEGEND_ROWS = [
+  { label: "Incidents", color: MAP_COLORS.emergency },
+  { label: "Concerns", color: MAP_COLORS.concern },
+  { label: "Resolved", color: MAP_COLORS.resolved },
+  { label: "You are here", color: "#ffffff" },
+]
+
+function DispatchMiniLegend({ className }: { className?: string }) {
+  return (
+    <div
+      role="group"
+      aria-label="Map legend"
+      className={cn(
+        "flex flex-col gap-1 rounded-xl border border-white/10 bg-nav-bg/80 px-2.5 py-2 shadow-lg backdrop-blur-md",
+        className,
+      )}
+    >
+      {LEGEND_ROWS.map((row) => (
+        <span key={row.label} className="flex items-center gap-2">
+          <span
+            aria-hidden
+            className="size-2 shrink-0 rounded-full ring-1 ring-white/40"
+            style={{ backgroundColor: row.color }}
+          />
+          <span className="whitespace-nowrap text-[11px] font-semibold leading-tight text-white/85">
+            {row.label}
+          </span>
+        </span>
+      ))}
+    </div>
+  )
 }
 
 export default function ResponderDispatchPage() {
@@ -574,6 +608,7 @@ export default function ResponderDispatchPage() {
         className="relative isolate z-0 min-h-[260px] flex-1 overflow-hidden"
       >
         {mapSurface}
+        <DispatchMiniLegend className="absolute bottom-4 left-4 z-[600]" />
       </DispatchCard>
     </div>
   )
@@ -718,7 +753,10 @@ function DispatchBody({
       className="w-full"
     >
       {mapSurface}
-      <BackupFab actions={actions} className="absolute bottom-4 left-4 z-[601]" />
+      <div className="pointer-events-none absolute bottom-4 left-4 z-[601] flex flex-col items-start gap-2">
+        <BackupFab actions={actions} className="pointer-events-auto" />
+        <DispatchMiniLegend />
+      </div>
     </Pane>
   )
 
@@ -788,7 +826,10 @@ function DispatchBody({
           />
           <DispatchCard padded={false} className="relative isolate z-0 h-[360px] overflow-hidden sm:h-[420px]">
             {mapSurface}
-            <BackupFab actions={actions} className="absolute bottom-4 left-4 z-[601]" />
+            <div className="pointer-events-none absolute bottom-4 left-4 z-[601] flex flex-col items-start gap-2">
+              <BackupFab actions={actions} className="pointer-events-auto" />
+              <DispatchMiniLegend />
+            </div>
           </DispatchCard>
         </div>
       </div>

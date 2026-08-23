@@ -22,3 +22,20 @@ def deliver_notification_task(notification_id):
         "notification_id": notification_id,
         "push_status": (push_result or {}).get("status"),
     }
+
+
+@shared_task(time_limit=600, soft_time_limit=540)
+def deliver_notifications_batch_task(notification_ids):
+    """Deliver a fan-out (e.g. one announcement to every resident) as ONE task.
+
+    Enqueueing a separate task per recipient turned an announcement publish
+    into hundreds of broker messages and hundreds of request-thread inserts.
+    """
+    delivered = 0
+    for notification_id in notification_ids:
+        try:
+            deliver_notification_task.run(notification_id)
+            delivered += 1
+        except Exception:
+            continue
+    return {"requested": len(notification_ids), "delivered": delivered}

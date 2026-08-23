@@ -119,7 +119,7 @@ export function useWeather(
       timezone: "Asia/Manila",
       temperature_unit: "celsius",
       wind_speed_unit: "kmh",
-      forecast_days: "5",
+      forecast_days: "7",
     })
 
     void (async () => {

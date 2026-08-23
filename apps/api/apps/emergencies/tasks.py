@@ -54,6 +54,44 @@ def generate_emergency_media_preview_task(kind: str, media_id: int):
     return {"media_id": media_id, "preview": True}
 
 
+@shared_task(time_limit=300, soft_time_limit=240)
+def recover_missing_emergency_previews_task(batch_size=50):
+    """Re-enqueue previews whose worker died or whose enqueue hit a broker gap.
+
+    The preview endpoints serve a placeholder and re-enqueue on view; this
+    sweep is what guarantees the real preview eventually lands even when
+    nobody views the alert again.
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from .models import EmergencyChatAttachment, EmergencyMedia
+
+    cutoff = timezone.now() - timedelta(minutes=5)
+    limit = max(1, min(int(batch_size), 200))
+    queued = 0
+    for media in (
+        EmergencyMedia.objects.filter(preview_file="", created_at__lte=cutoff).order_by("pk")[:limit]
+    ):
+        try:
+            enqueue_emergency_media_preview("media", media.pk)
+            queued += 1
+        except Exception:
+            continue
+    for attachment in (
+        EmergencyChatAttachment.objects.filter(
+            media_type="image", preview_file="", created_at__lte=cutoff
+        ).order_by("pk")[:limit]
+    ):
+        try:
+            enqueue_emergency_media_preview("chat", attachment.pk)
+            queued += 1
+        except Exception:
+            continue
+    return {"queued": queued}
+
+
 @shared_task(time_limit=60, soft_time_limit=45)
 def broadcast_emergency_created_task(alert_id):
     """Broadcast emergency.created with its routing enrichment to the live map."""

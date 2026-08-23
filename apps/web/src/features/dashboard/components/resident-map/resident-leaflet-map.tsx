@@ -22,14 +22,23 @@ import {
   concernMarkerSize,
 } from "@/features/dashboard/components/map/concern-marker"
 import {
-  dotPinHtml,
   glyphPinHtml,
   glyphPinSize,
   GLYPHS,
   MAP_COLORS,
 } from "@/features/dashboard/components/map/markers"
+import {
+  photoTooltipHtml,
+  photoTooltipOptions,
+} from "@/features/dashboard/components/map/photo-tooltip"
 import { geoJsonToRing, polygonCentroid } from "@/features/dashboard/components/community-content/area-lib"
-import { geoJsonToLines } from "@/features/dashboard/components/alerts-map/lib"
+import { geoJsonToLines, isActiveEmergency } from "@/features/dashboard/components/alerts-map/lib"
+import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
+import {
+  StreetViewModal,
+  startStreetViewPick,
+  type StreetViewCoord,
+} from "@/features/dashboard/components/map/street-view"
 
 import type leaflet from "leaflet"
 
@@ -41,34 +50,31 @@ export type MapApi = {
   fitBoundary: (paddingBottom?: number) => void
   zoomIn: () => void
   zoomOut: () => void
+  toggleStreetViewPick: () => void
 }
 
 const EMERGENCY_PIN = 28
 
 /** Ongoing SOS — the same circle-and-glyph an official and a responder see. */
-function emergencyPinHtml(selected: boolean) {
+function emergencyPinHtml(selected: boolean, resolved: boolean) {
   return glyphPinHtml({
     paths: GLYPHS.emergency,
-    color: MAP_COLORS.emergency,
+    color: resolved ? MAP_COLORS.resolved : MAP_COLORS.emergency,
     size: EMERGENCY_PIN,
     selected,
     live: false,
+    tint: resolved,
   })
 }
 
-/** Speech-bubble tooltip above a pin showing a photo preview only. */
-function photoTooltipHtml(photoUrl: string) {
-  return `
-    <div style="position:relative;background:#fff;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.15);padding:5px;pointer-events:none;opacity:0;transition:opacity 150ms ease;">
-      <img src="${photoUrl}" alt="" style="display:block;width:160px;height:108px;object-fit:cover;border-radius:6px;" onload="this.parentElement.style.opacity='1'" onerror="this.parentElement.style.display='none'" />
-      <div style="position:absolute;bottom:0;left:50%;transform:translate(-50%,100%);width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:6px solid #fff;"></div>
-    </div>`
-}
-
-const USER_PIN = 10
+const USER_PIN = 24
 
 function userPinHtml() {
-  return dotPinHtml({ color: MAP_COLORS.you, size: USER_PIN })
+  return glyphPinHtml({
+    paths: GLYPHS.userResident,
+    color: MAP_COLORS.you,
+    size: USER_PIN,
+  })
 }
 
 /**
@@ -94,6 +100,7 @@ export function ResidentLeafletMap({
   onSelectAnnouncement,
   onReady,
   onMapInteract,
+  onStreetViewPickChange,
   policy,
 }: {
   center: { latitude: number; longitude: number; zoom: number }
@@ -116,6 +123,7 @@ export function ResidentLeafletMap({
   onSelectAnnouncement?: (id: number) => void
   onReady: (api: MapApi) => void
   onMapInteract?: () => void
+  onStreetViewPickChange?: (active: boolean) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
@@ -134,6 +142,38 @@ export function ResidentLeafletMap({
     onMapInteractRef.current = onMapInteract
   }, [onMapInteract])
   const [mapReady, setMapReady] = useState(false)
+  const [svPick, setSvPick] = useState(false)
+  const [svCoord, setSvCoord] = useState<StreetViewCoord | null>(null)
+  const onStreetViewPickChangeRef = useRef(onStreetViewPickChange)
+  useEffect(() => {
+    onStreetViewPickChangeRef.current = onStreetViewPickChange
+  }, [onStreetViewPickChange])
+
+  function toggleStreetViewPick() {
+    setSvPick((value) => {
+      const next = !value
+      onStreetViewPickChangeRef.current?.(next)
+      return next
+    })
+  }
+
+  useEffect(() => {
+    if (!svPick || !mapReady) return
+    const map = mapRef.current
+    if (!map) return
+    const cleanup = startStreetViewPick(map, {
+      onPick: (coord) => {
+        setSvPick(false)
+        onStreetViewPickChangeRef.current?.(false)
+        setSvCoord(coord)
+      },
+      onCancel: () => {
+        setSvPick(false)
+        onStreetViewPickChangeRef.current?.(false)
+      },
+    })
+    return cleanup
+  }, [svPick, mapReady])
 
   const boundaryGeomKey = boundary?.geometry ? JSON.stringify(boundary.geometry) : ""
   const fittedGeomKeyRef = useRef("")
@@ -211,18 +251,12 @@ export function ResidentLeafletMap({
        * Tailwind img max-width is overridden via .eboses-alerts-map CSS so
        * tiles stay visible.
        */
-      const carto = L.tileLayer(
-        "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-        {
-          attribution: "&copy; OpenStreetMap &copy; CARTO",
-          maxZoom: 19,
-          subdomains: "abcd",
-          keepBuffer: 6,
-          updateWhenIdle: true,
-          className: "eboses-map-tiles",
-        },
-      )
-      carto.addTo(map)
+      addBaseTiles(L, map, "light", {
+        attribution: "&copy; OpenStreetMap &copy; CARTO",
+        maxZoom: 19,
+        keepBuffer: 6,
+        className: "eboses-map-tiles",
+      })
 
       // Hover-only barangay fill: sits beneath every advisory road/marker.
       highlightGroupRef.current = L.layerGroup().addTo(map)
@@ -292,6 +326,7 @@ export function ResidentLeafletMap({
           fitBoundary,
           zoomIn: () => map?.zoomIn(),
           zoomOut: () => map?.zoomOut(),
+          toggleStreetViewPick: () => toggleStreetViewPick(),
         })
         // Multiple paints: container often still settling after route mount
         requestAnimationFrame(forcePaint)
@@ -403,6 +438,7 @@ export function ResidentLeafletMap({
         zIndexOffset: 1200,
         keyboard: false,
       })
+      userMarker.bindTooltip("You", { direction: "top", offset: [0, -USER_PIN / 2] })
       userMarker.addTo(group)
     }
 
@@ -416,6 +452,9 @@ export function ResidentLeafletMap({
           className: "",
           html: concernMarkerHtml({
             category: post.category,
+            iconKey: post.category_ref?.icon_key,
+            imageUrl: post.category_ref?.icon_image_url,
+            customLabel: post.category_ref?.custom_icon_label,
             status: post.status,
             selected,
           }),
@@ -427,16 +466,7 @@ export function ResidentLeafletMap({
       // Photo tooltip on hover
       const photoUrl = post.media?.[0]?.preview_url
       if (photoUrl) {
-        marker.bindTooltip(
-          () => photoTooltipHtml(photoUrl),
-          {
-            direction: "top",
-            offset: [0, -pinSize / 2 - 4],
-            opacity: 1,
-            className: "eboses-photo-tooltip",
-            permanent: false,
-          },
-        )
+        marker.bindTooltip(() => photoTooltipHtml(photoUrl), photoTooltipOptions(pinSize))
       }
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e)
@@ -475,19 +505,6 @@ export function ResidentLeafletMap({
         L.DomEvent.stopPropagation(e)
         onSelectAnnouncement?.(id)
       })
-      // Photo tooltip on hover
-      if (announcement.image_url) {
-        marker.bindTooltip(
-          () => photoTooltipHtml(announcement.image_url!),
-          {
-            direction: "top",
-            offset: [0, -pinSize / 2 - 4],
-            opacity: 1,
-            className: "eboses-photo-tooltip",
-            permanent: false,
-          },
-        )
-      }
       const icon = marker.getElement()
       if (icon) {
         icon.addEventListener("focus", () => {
@@ -554,9 +571,7 @@ export function ResidentLeafletMap({
       try {
         const areaLayer = L.geoJSON(geometry as Parameters<typeof L.geoJSON>[0], {
           style: {
-            color: tagColor,
-            weight: 1.5,
-            opacity: 0.55,
+            stroke: false,
             fillColor: tagColor,
             fillOpacity: 0.18,
             interactive: false,
@@ -572,16 +587,19 @@ export function ResidentLeafletMap({
       }
     }
 
-    // Ongoing emergencies — red dots + brief label
+    // Ongoing emergencies — red dots + brief label; settled ones (resolved,
+    // closed, cancelled, false alarm, invalid) go neutral, same rule the
+    // official map uses, so the two never disagree on what "done" means.
     for (const em of emergencies) {
       const pos = validCoord(em.latitude, em.longitude)
       if (!pos) continue
       const selected = selectedEmergencyId === em.id
+      const settled = !isActiveEmergency(em)
       const box = glyphPinSize(EMERGENCY_PIN, selected)
       const marker = L.marker(pos, {
         icon: L.divIcon({
           className: "",
-          html: emergencyPinHtml(selected),
+          html: emergencyPinHtml(selected, settled),
           iconSize: [box, box],
           iconAnchor: [box / 2, box / 2],
         }),
@@ -589,16 +607,7 @@ export function ResidentLeafletMap({
       })
       // Photo tooltip on hover
       if (em.preview_url) {
-        marker.bindTooltip(
-          () => photoTooltipHtml(em.preview_url!),
-          {
-            direction: "top",
-            offset: [0, -box / 2 - 4],
-            opacity: 1,
-            className: "eboses-photo-tooltip",
-            permanent: false,
-          },
-        )
+        marker.bindTooltip(() => photoTooltipHtml(em.preview_url!), photoTooltipOptions(box))
       }
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e)
@@ -737,36 +746,18 @@ export function ResidentLeafletMap({
             transform: scale(1.5);
             opacity: 0;
           }
-        }        .eboses-alerts-map .eboses-pin--dot.is-live .eboses-pin__core {
+        }
+        .eboses-alerts-map .eboses-pin--dot.is-live .eboses-pin__core {
           animation: eboses-pin-blink-minimal 2.4s ease-in-out infinite;
         }
         @keyframes eboses-pin-blink-minimal {
-          0%, 100% {
+          0%,
+          100% {
             box-shadow: 0 0 0 0 var(--pin);
           }
           50% {
             box-shadow: 0 0 3px 1px var(--pin);
           }
-        }
-        /* Elevate tooltip pane above marker pane so tooltips never sit behind pins */
-        .eboses-alerts-map .leaflet-tooltip-pane {
-          z-index: 2000 !important;
-        }
-        /* Photo preview tooltips above pins */
-        .eboses-photo-tooltip {
-          background: transparent !important;
-          border: none !important;
-          box-shadow: none !important;
-          padding: 0 !important;
-          margin: 0 !important;
-          z-index: 1500 !important;
-        }
-        .eboses-photo-tooltip::before {
-          display: none !important;
-        }
-        .eboses-photo-tooltip .leaflet-tooltip-content {
-          margin: 0 !important;
-          padding: 0 !important;
         }
       `}</style>
       <div
@@ -774,6 +765,12 @@ export function ResidentLeafletMap({
         className="eboses-alerts-map absolute inset-0 z-0 h-full w-full bg-tint"
         style={{ minHeight: "100%" }}
       />
+      {svPick ? (
+        <div className="pointer-events-none absolute right-3 top-3 z-[650] w-max max-w-[min(15rem,calc(100vw-1.5rem))] rounded-lg bg-nav-bg/90 px-2.5 py-1.5 text-[11.5px] font-semibold text-white/85 shadow-md backdrop-blur">
+          Click the map to start Street View · Esc cancels
+        </div>
+      ) : null}
+      {svCoord ? <StreetViewModal coord={svCoord} onClose={() => setSvCoord(null)} /> : null}
     </>
   )
 }

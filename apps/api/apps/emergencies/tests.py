@@ -238,7 +238,7 @@ class EmergencyAPITests(APITestCase):
         response = self.client.get("/api/emergencies/mine/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual([item["id"] for item in response.data], [alert.pk])
+        self.assertEqual([item["id"] for item in response.data["results"]], [alert.pk])
 
     def test_emergency_create_records_resident_notification(self):
         alert = self.create_alert()
@@ -356,7 +356,8 @@ class EmergencyAPITests(APITestCase):
         response = self.client.get("/api/emergencies/queue/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data[0]["id"], alert.pk)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["id"], alert.pk)
 
     def test_emergency_create_auto_routes_to_nearest_on_duty_matching_unit(self):
         User = get_user_model()
@@ -726,8 +727,8 @@ class EmergencyAPITests(APITestCase):
         response = self.client.get("/api/emergencies/assigned/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]["id"], alert.pk)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["id"], alert.pk)
 
     def test_official_can_assign_multiple_responders_additively(self):
         User = get_user_model()
@@ -1627,11 +1628,11 @@ class EmergencyAPITests(APITestCase):
         ineligible = self.client.get("/api/emergencies/claimable/")
 
         self.assertEqual(allowed.status_code, status.HTTP_200_OK)
-        self.assertEqual(allowed.data[0]["id"], alert.pk)
-        self.assertEqual(allowed.data[0]["address"], "Private home address")
+        self.assertEqual(allowed.data["results"][0]["id"], alert.pk)
+        self.assertEqual(allowed.data["results"][0]["address"], "Private home address")
         self.assertEqual(denied.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(ineligible.status_code, status.HTTP_200_OK)
-        self.assertEqual(ineligible.data, [])
+        self.assertEqual(ineligible.data["results"], [])
         self.assertNotIn("Private home address", str(ineligible.data))
 
     def test_claim_success_runs_routing_effects_and_repeat_conflicts(self):
@@ -1976,6 +1977,5 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(chat.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(raw.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(assigned.status_code, status.HTTP_200_OK)
-        self.assertEqual(assigned.data, [])
-        self.assertIsNone(assigned.data[0].get("current_assignment") if assigned.data else None)
+        self.assertEqual(assigned.data["results"], [])
         self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ESCALATED)

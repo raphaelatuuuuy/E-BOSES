@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } 
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import {
+  ArrowLeftIcon,
+  CameraIcon,
   GlobeIcon,
   ImageIcon,
   LayoutGridIcon,
@@ -29,11 +31,16 @@ import {
   type ConcernVisibility,
 } from "@/features/dashboard/api"
 import { Dialog, DialogBody } from "@/features/dashboard/components/dialog"
+import { CameraCaptureDialog } from "@/features/dashboard/components/camera-capture-dialog"
 import { ReportStatusDialog } from "@/features/dashboard/components/report-status-dialog"
 import { statusModeFromReport } from "@/features/dashboard/components/report-status-mode"
 import { ApiError } from "@/lib/api"
+import { formatNominatimParts, reverseGeocode } from "@/lib/geocode"
 import { useCategoryOptions } from "@/features/dashboard/lib/concern-categories"
 import { listEmergencyCategories, type EmergencyCategory } from "@/features/dashboard/emergency-api"
+import { useBottomSheetSnap } from "@/features/dashboard/lib/use-bottom-sheet-snap"
+import { useCoverageContext } from "@/features/dashboard/lib/use-coverage"
+import { insideCoverage } from "@/features/dashboard/components/map/coverage-layer"
 
 const LocationPickerModal = lazy(() => import("@/features/dashboard/components/location-picker"))
 
@@ -203,17 +210,38 @@ export function CreateReportDialog({
   const [privacyPreview, setPrivacyPreview] = useState<{ state: string; detected_classes: string[]; protected_image: string } | null>(null)
 
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false)
+  const [cameraOpen, setCameraOpen] = useState(false)
+
   const clientRequestIdRef = useRef(crypto.randomUUID())
   const recurrenceOfRef = useRef<number | null>(null)
   const duplicateOfRef = useRef<number | null>(null)
+
   const categoryOverrideRef = useRef<string | null>(null)
+  const [categoryOverride, setCategoryOverride] = useState<string | null>(null)
   const resolvedAddressRef = useRef<{ address: string; primary: string; secondary: string } | null>(null)
   const pendingPrecheckRef = useRef<ConcernPrecheckResult | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const cameraInputRef = useRef<HTMLInputElement>(null)
   const previewUrls = useMemo(
     () => mediaFiles.map((file) => URL.createObjectURL(file)),
     [mediaFiles],
   )
+  // Coverage rules for the camera's GPS check — loaded once per open.
+  const coverageContext = useCoverageContext(open)
+
+  // Bottom sheet for mobile category picker
+  const categorySheet = useBottomSheetSnap({
+    enabled: moreOpen,
+    initialMode: "expanded",
+    onSettle: () => {
+      if (categorySheet.mode === "hidden") setMoreOpen(false)
+    },
+  })
+
+  // Snap to expanded when category opens on mobile
+  useEffect(() => {
+    if (moreOpen) categorySheet.snapTo("expanded")
+  }, [moreOpen])
 
   const displayName = user
     ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "Resident"
@@ -258,9 +286,11 @@ export function CreateReportDialog({
   useEffect(() => {
     if (!open || draftRestored) return
     void readDraft()
+    void readDraft()
       .then((draft) => {
         if (!draft) return
-        setConcern(draft.concern)
+        // Category is deliberately NOT restored — the resident must pick it
+        // explicitly every time, never inherit it from an old draft.
         setDescription(draft.description)
         setAddress(draft.address)
 
@@ -301,6 +331,7 @@ export function CreateReportDialog({
     setFieldErrors({})
     setMoreOpen(false)
     setLocationOpen(false)
+    setCameraOpen(false)
     setVisibilityMenuOpen(false)
     setCloseConfirmOpen(false)
     setResolvedMatch(null)
@@ -313,6 +344,7 @@ export function CreateReportDialog({
     recurrenceOfRef.current = null
     duplicateOfRef.current = null
     categoryOverrideRef.current = null
+    setCategoryOverride(null)
     resolvedAddressRef.current = null
     clientRequestIdRef.current = crypto.randomUUID()
     setDraftRestored(false)
@@ -396,7 +428,7 @@ export function CreateReportDialog({
   function validate() {
     const errors: Record<string, string> = {}
     if (!concern) errors.concern = "Choose a category."
-    const requirements = categoryRequirements()
+    const requirements = categoryRequirements(selectedCategoryCode())
     if (requirements.description_required && !description.trim())
       errors.description = "Describe what happened."
     if (requirements.description_required && description.trim().length < 20)
@@ -444,7 +476,7 @@ export function CreateReportDialog({
     return "This photo could not be validated."
   }
 
-  async function addFiles(files: File[]) {
+  async function addFiles(files: File[]): Promise<File[]> {
     const errors: string[] = []
     const valid: File[] = []
     setIsCheckingMedia(true)
@@ -477,7 +509,9 @@ export function CreateReportDialog({
         errors.push(mediaErrorFromUnknown(error))
       }
     }
-    setMediaFiles((prev) => [...prev, ...valid].slice(0, MAX_FILES))
+    const room = Math.max(0, MAX_FILES - mediaFiles.length)
+    const added = valid.slice(0, room)
+    setMediaFiles((prev) => [...prev, ...added])
     const unique = [...new Set(errors.filter(Boolean))]
     setFieldErrors((current) => ({
       ...current,
@@ -485,14 +519,142 @@ export function CreateReportDialog({
       media: unique.length ? unique.join("\n") : "",
     }))
     setIsCheckingMedia(false)
+    return added
+  }
+
+  /** Probe GPS → pin + reverse-geocoded street name. True when coords resolved. */
+  async function resolveGpsLocation(): Promise<boolean> {
+    if (!("geolocation" in navigator)) return false
+    try {
+      const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 8000,
+        })
+      })
+      const lat = pos.coords.latitude
+      const lng = pos.coords.longitude
+      // Same rule the location picker enforces: a GPS fix outside the covered
+      // boundary (or dispatch radius) is refused, never shown as the pin.
+      if (
+        coverageContext &&
+        !insideCoverage(lat, lng, {
+          boundary: coverageContext.boundary.geometry,
+          policy: coverageContext.dispatch_policy,
+        })
+      ) {
+        toast.error("Your location is outside our covered area. Pin it manually on the map instead.")
+        return false
+      }
+      setLocationPin({
+        lat,
+        lng,
+        accuracy: pos.coords.accuracy ?? null,
+        source: "gps",
+      })
+
+      const data = await reverseGeocode(lat, lng)
+      const parts = data ? formatNominatimParts(data) : null
+      const primary = (parts?.primary ?? "").trim()
+      const usable =
+        primary &&
+        primary !== "Finding street…" &&
+        primary !== "Selected location" &&
+        !/^lat\b/i.test(primary) &&
+        !/^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(primary)
+      if (!usable) {
+        toast.error("Location saved, but no street name was found. Check the pin before posting.")
+        return true
+      }
+      const secondary = (parts?.secondary ?? "").trim() || "Marikina Heights"
+      setAddress(parts!.full?.trim() || `${primary}, ${secondary}`)
+      setAddressPrimary(primary)
+      setAddressSecondary(secondary)
+      setFieldErrors((prev) => ({ ...prev, address: "" }))
+      return true
+    } catch (err) {
+      const code = typeof err === "object" && err !== null ? (err as GeolocationPositionError).code : 0
+      toast.error(
+        code === 1
+          ? "Location is blocked. Allow it via the lock icon in your address bar, then take the photo again."
+          : "Couldn't read your location. Make sure location services are on.",
+      )
+      return false
+    }
+  }
+
+  /** Permission state without side effects: "granted" | "denied" | "prompt" | null. */
+  async function geoPermissionState(): Promise<"granted" | "denied" | "prompt" | null> {
+    try {
+      if (!("permissions" in navigator)) return null
+      const status = await navigator.permissions.query({ name: "geolocation" })
+      return status.state as "granted" | "denied" | "prompt"
+    } catch {
+      return null
+    }
+  }
+
+  /** Same as geoPermissionState, for the camera — checked before opening the
+   * live capture dialog so an already-denied permission never flashes the
+   * camera modal open just to immediately close it. */
+  async function cameraPermissionState(): Promise<"granted" | "denied" | "prompt" | null> {
+    try {
+      if (!("permissions" in navigator)) return null
+      const status = await navigator.permissions.query({ name: "camera" as PermissionName })
+      return status.state as "granted" | "denied" | "prompt"
+    } catch {
+      return null
+    }
+  }
+
+  function handleCameraCapture(files: File[]) {
+    void addFiles(files).then((added) => {
+      // Location is fetched once — and only when a photo actually landed.
+      if (!added.length) return
+      if (!locationPin || locationPin.source !== "gps") void resolveGpsLocation()
+    })
+  }
+
+  async function handleCameraButtonClick(liveCameraAvailable: boolean) {
+    if (!liveCameraAvailable) {
+      cameraInputRef.current?.click()
+      return
+    }
+    const camState = await cameraPermissionState()
+    if (camState === "denied") {
+      toast.error("Camera is blocked. Allow it via the lock icon in your address bar, then try again.")
+      return
+    }
+    const state = await geoPermissionState()
+    if (state === "denied") {
+      toast.error(
+        "Location is blocked. Allow it via the lock icon in your address bar, then take the photo again.",
+      )
+      return
+    }
+    if (state === "prompt") {
+      // Never asked before — this fires the browser's native allow dialog.
+      const ok = await resolveGpsLocation()
+      if (!ok) return
+    }
+    setCameraOpen(true)
+  }
+
+  function categoryOverrideFallback() {
+    return concernConfig.find((c) => c.label === concern)?.value ?? ""
   }
 
   function selectedCategoryCode() {
-    return categoryOverrideRef.current ?? (concernConfig.find((c) => c.label === concern)?.value ?? "others")
+    // Ref, not state: advance("duplicate") reaches finalizeSubmit in the same
+    // tick as the override write, before the next render commits.
+    return categoryOverrideRef.current ?? categoryOverrideFallback()
   }
 
-  function categoryRequirements() {
-    const code = selectedCategoryCode()
+  function selectedCategoryCodeRendered() {
+    return categoryOverride ?? categoryOverrideFallback()
+  }
+
+  function categoryRequirements(code: string) {
     return (
       categoryOptions.find((option) => option.code === code) ?? {
         photo_required: true,
@@ -511,7 +673,7 @@ export function CreateReportDialog({
     formData.append("description", description.trim())
     formData.append("category", selectedCategoryCode())
     formData.append("visibility", visibility)
-    if (!categoryRequirements().location_required && !locationPin) {
+    if (!categoryRequirements(selectedCategoryCode()).location_required && !locationPin) {
       formData.append("address", "")
       for (const file of mediaFiles) formData.append("media", file)
       return formData
@@ -684,9 +846,9 @@ export function CreateReportDialog({
 
   const selectedConcern = concernConfig.find((item) => item.label === concern)
   const hasMedia = mediaFiles.length > 0
-  const selectedCategory = categoryOptions.find((item) => item.code === selectedCategoryCode())
+  const selectedCategory = categoryOptions.find((item) => item.code === selectedCategoryCodeRendered())
   const publicFeedAllowed = selectedCategory?.public_feed_allowed !== false
-  const requirements = categoryRequirements()
+  const requirements = categoryRequirements(selectedCategoryCodeRendered())
   const formReady = Boolean(
     concern &&
       (!requirements.description_required || description.trim().length >= 20) &&
@@ -720,13 +882,69 @@ export function CreateReportDialog({
         open={open}
         onClose={requestClose}
         maxW={moreOpen ? "max-w-[820px]" : "max-w-[520px]"}
+        mobileSheet
       >
         <DialogBody className="!flex !h-full !min-h-0 !flex-1 !flex-col !space-y-0 !overflow-hidden !p-0 bg-white">
-          {/* h-full so mobile footer pins to dialog bottom, not under description */}
-          <div className="flex h-full min-h-0 flex-1 flex-col pt-[max(0.75rem,env(safe-area-inset-top))] md:min-h-[min(500px,88vh)] md:flex-row md:pt-5">
+          {/* h-full so mobile footer pins to dialog bottom, not under description.
+              Fixed md height so opening the category panel never resizes the
+              dialog (a resize re-centers it and shifts every row downward). */}
+          <div className="relative flex h-full min-h-0 flex-1 flex-col pt-[max(0.75rem,env(safe-area-inset-top))] md:h-[min(560px,88vh)] md:flex-row md:pt-5">
             {/* Main composer */}
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              {/* Sticky header: Close · Anyone · Report */}
+              {/* Mobile: Category is an independent screen — replaces the whole composer while open */}
+              {moreOpen ? (
+                <div className="flex min-h-0 flex-1 flex-col md:hidden">
+                  <div className="relative flex shrink-0 items-center justify-center px-2 py-3.5">
+                    <button
+                      type="button"
+                      onClick={() => setMoreOpen(false)}
+                      className="absolute left-2 flex size-10 items-center justify-center rounded-full text-neutral-700 transition-colors hover:bg-neutral-100"
+                      aria-label="Back"
+                    >
+                      <ArrowLeftIcon className="size-5" strokeWidth={2} />
+                    </button>
+                    <h2 className="text-[16px] font-semibold text-neutral-900">Category</h2>
+                  </div>
+                  <div className="scrollbar-hide min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain px-3 py-2">
+                    {concernConfig.map((item) => {
+                      const Icon = item.icon
+                      const selected = concern === item.label
+                      return (
+                        <button
+                          key={item.label}
+                          type="button"
+                          onClick={() => {
+                            setConcern(item.label)
+                            if (categoryOptions.find((option) => option.code === item.value)?.public_feed_allowed === false) setVisibility("private")
+                            setFieldErrors((prev) => ({ ...prev, concern: "" }))
+                            setMoreOpen(false)
+                          }}
+                          className={cn(
+                            "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-neutral-800 transition-colors",
+                            selected ? "bg-neutral-100" : "bg-transparent hover:bg-neutral-100",
+                          )}
+                        >
+                          {item.iconImageUrl ? (
+                            <img src={item.iconImageUrl} alt="" className="size-8 shrink-0 rounded-lg object-cover" />
+                          ) : item.customIconLabel ? (
+                            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-xs font-semibold text-neutral-700">{item.customIconLabel}</span>
+                          ) : (
+                            <Icon className="size-5 shrink-0 text-neutral-600" strokeWidth={1.75} />
+                          )}
+                          <span className="min-w-0">
+                            <span className="block text-[14px] font-semibold">{item.label}</span>
+                            <span className="mt-0.5 block text-[12px] text-neutral-500">
+                              {item.desc}
+                            </span>
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className={cn("flex min-h-0 flex-1 flex-col", moreOpen && "max-md:hidden")}>
               <div className="flex shrink-0 items-center gap-2.5 px-4 sm:px-5">
                 <button
                   type="button"
@@ -791,6 +1009,9 @@ export function CreateReportDialog({
                 </div>
               </div>
 
+              {/* Report form body */}
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+
               {/* Identity */}
               <div className="flex items-center gap-3 px-4 pt-4 sm:px-5">
                 <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[17px] font-semibold text-navy-muted sm:size-12 sm:text-[18px]">
@@ -840,79 +1061,42 @@ export function CreateReportDialog({
                    className="max-h-[220px] min-h-[72px] w-full resize-none overflow-y-auto border-0 bg-transparent text-[17px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400"
                   />
 
-                  <div>
-                    <div className="mt-3 flex flex-wrap gap-2.5 min-h-[168px]">
-                      {hasMedia
-                        ? mediaFiles.map((file, index) => {
-                            const url = previewUrls[index]
-                            const rejected = Boolean(
-                              photoVerdicts.find((verdict) => verdict.index === index)?.message,
-                            )
-                            return (
-                              <div
-                                key={`${file.name}-${index}`}
-                                className={cn(
-                                  "relative h-[148px] w-[148px] overflow-hidden rounded-2xl bg-neutral-100 shadow-sm sm:h-[168px] sm:w-[168px]",
-                                  rejected ? "ring-2 ring-destructive" : "ring-1 ring-black/5",
-                                )}
+                  <div className={cn("mt-3 flex flex-wrap gap-2.5", hasMedia ? "min-h-[168px]" : "min-h-0")}>
+                    {hasMedia
+                      ? mediaFiles.map((file, index) => {
+                          const url = previewUrls[index]
+                          const rejected = Boolean(
+                            photoVerdicts.find((verdict) => verdict.index === index)?.message,
+                          )
+                          return (
+                            <div
+                              key={`${file.name}-${index}`}
+                              className={cn(
+                                "relative h-[148px] w-[148px] overflow-hidden rounded-2xl bg-neutral-100 shadow-sm sm:h-[168px] sm:w-[168px]",
+                                rejected ? "ring-2 ring-destructive" : "ring-1 ring-black/5",
+                              )}
+                            >
+                              <button
+                                type="button"
+                                className="block h-full w-full"
+                                onClick={() => setPreviewUrl(url)}
                               >
-                                <button
-                                  type="button"
-                                  className="block h-full w-full"
-                                  onClick={() => setPreviewUrl(url)}
-                                >
-                                  <img src={url} alt="" className="h-full w-full object-cover" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setMediaFiles((prev) => prev.filter((_, i) => i !== index))
-                                  }
-                                  className="absolute right-2 top-2 flex size-8 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-[2px] transition-colors hover:bg-black/75"
-                                  aria-label="Remove photo"
-                                >
-                                  <XIcon className="size-4" strokeWidth={2.25} />
-                                </button>
-                              </div>
-                            )
-                          })
-                        : null}
-                    </div>
-
-                    {locationPin && address ? (
-                      <div className="mt-3 flex items-center gap-3 rounded-md border border-neutral-300 bg-white px-3.5 py-2.5">
-                        <button
-                          type="button"
-                          onClick={() => setLocationOpen(true)}
-                          className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                        >
-                          <MapPinIcon className="size-5 shrink-0 text-black" />
-                          <span className="min-w-0">
-                            <span className="block truncate text-[14px] font-semibold leading-tight text-neutral-900">
-                              {addressPrimary || address}
-                            </span>
-                            {addressSecondary ? (
-                              <span className="mt-0.5 block truncate text-[12px] leading-snug text-neutral-500">
-                                {addressSecondary}
-                              </span>
-                            ) : null}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setLocationPin(null)
-                            setAddress("")
-                            setAddressPrimary("")
-                            setAddressSecondary("")
-                          }}
-                          className="flex size-10 shrink-0 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800"
-                          aria-label="Remove location"
-                        >
-                          <XIcon className="size-6" strokeWidth={1.75} />
-                        </button>
-                      </div>
-                    ) : null}
+                                <img src={url} alt="" className="h-full w-full object-cover" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setMediaFiles((prev) => prev.filter((_, i) => i !== index))
+                                }
+                                className="absolute right-2 top-2 flex size-8 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-[2px] transition-colors hover:bg-black/75"
+                                aria-label="Remove photo"
+                              >
+                                <XIcon className="size-4" strokeWidth={2.25} />
+                              </button>
+                            </div>
+                          )
+                        })
+                      : null}
                   </div>
 
                   {(() => {
@@ -963,9 +1147,45 @@ export function CreateReportDialog({
                 ) : null}
               </div>
 
-              {/* Bottom chrome: toolbar always first; categories expand below it on mobile */}
+              {/* Bottom chrome: location row (only once a location is set) always visible, then toolbar; categories expand below it on mobile */}
               <div className="shrink-0 border-t border-neutral-100 bg-white">
-                <div className="flex items-center gap-0.5 px-3 pt-2 sm:px-4">
+                {locationPin && address ? (
+                  <div className="px-4 pb-2 pt-3 sm:px-5">
+                    <button
+                      type="button"
+                      onClick={() => setLocationOpen(true)}
+                      className="flex w-full items-center gap-3 rounded-md border border-neutral-300 bg-white px-3.5 py-2.5 text-left transition-colors hover:bg-neutral-50"
+                    >
+                      <MapPinIcon className="size-5 shrink-0 text-neutral-400" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[14px] font-semibold leading-tight text-neutral-900">
+                          {addressPrimary || address}
+                        </span>
+                        {addressSecondary ? (
+                          <span className="mt-0.5 block truncate text-[12px] leading-snug text-neutral-500">
+                            {addressSecondary}
+                          </span>
+                        ) : null}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setLocationPin(null)
+                          setAddress("")
+                          setAddressPrimary("")
+                          setAddressSecondary("")
+                        }}
+                        className="flex size-10 shrink-0 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800"
+                        aria-label="Remove location"
+                      >
+                        <XIcon className="size-6" strokeWidth={1.75} />
+                      </button>
+                    </button>
+                  </div>
+                ) : null}
+
+                <div className="flex items-center gap-1 px-3 pt-1.5 sm:px-4">
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -977,12 +1197,23 @@ export function CreateReportDialog({
                       e.target.value = ""
                     }}
                   />
+                  <input
+                    ref={cameraInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png"
+                    capture="environment"
+                    className="sr-only"
+                    onChange={(e) => {
+                      handleCameraCapture(Array.from(e.target.files ?? []))
+                      e.target.value = ""
+                    }}
+                  />
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isCheckingMedia || mediaFiles.length >= MAX_FILES}
                     className={cn(
-                      "flex size-11 items-center justify-center rounded-full transition-colors hover:bg-neutral-100 disabled:opacity-50",
+                      "flex size-10 items-center justify-center rounded-full transition-colors hover:bg-neutral-100 disabled:opacity-50",
                       hasMedia
                         ? "text-neutral-800"
                         : "text-neutral-500 hover:text-neutral-800",
@@ -995,7 +1226,7 @@ export function CreateReportDialog({
                     type="button"
                     onClick={() => setLocationOpen(true)}
                     className={cn(
-                      "flex size-11 items-center justify-center rounded-full transition-colors hover:bg-neutral-100",
+                      "flex size-10 items-center justify-center rounded-full transition-colors hover:bg-neutral-100",
                       locationPin
                         ? "text-neutral-800"
                         : "text-neutral-500 hover:text-neutral-800",
@@ -1004,12 +1235,32 @@ export function CreateReportDialog({
                   >
                     <MapPinIcon className="size-5" strokeWidth={1.75} />
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Live camera where getUserMedia exists; native capture
+                      // input (phones without it / insecure contexts) otherwise.
+                      const mediaDevices: MediaDevices | undefined = navigator.mediaDevices
+                      const live = Boolean(mediaDevices && typeof mediaDevices.getUserMedia === "function")
+                      void handleCameraButtonClick(live)
+                    }}
+                    disabled={isCheckingMedia || mediaFiles.length >= MAX_FILES}
+                    className={cn(
+                      "flex size-10 items-center justify-center rounded-full transition-colors hover:bg-neutral-100 disabled:opacity-50",
+                      hasMedia
+                        ? "text-neutral-800"
+                        : "text-neutral-500 hover:text-neutral-800",
+                    )}
+                    aria-label="Take photo"
+                  >
+                    <CameraIcon className="size-5" strokeWidth={1.75} />
+                  </button>
 
                   <button
                     type="button"
                     onClick={() => setMoreOpen((v) => !v)}
                     className={cn(
-                      "ml-auto inline-flex h-10 items-center gap-1.5 rounded-full px-4 text-[13px] font-semibold transition-colors hover:bg-neutral-100",
+                      "ml-auto inline-flex h-10 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-medium transition-colors hover:bg-neutral-100",
                       moreOpen || concern
                         ? "text-neutral-800"
                         : "text-neutral-500 hover:text-neutral-800",
@@ -1020,28 +1271,42 @@ export function CreateReportDialog({
                   </button>
                 </div>
 
-                {/* Mobile: expand categories below the toolbar */}
-                {moreOpen ? (
-                  <div className="md:hidden">
-                    <div className="flex items-center px-4 pb-1 pt-2">
-                      <h3 className="text-[15px] font-semibold text-neutral-900">Category</h3>
-                    </div>
-                    <div className="scrollbar-hide max-h-[40svh] space-y-1 overflow-y-auto overscroll-contain px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-                      {concernConfig.map((item) => {
-                        const Icon = item.icon
-                        const selected = concern === item.label
-                        return (
-                          <button
-                            key={item.label}
-                            type="button"
-                            onClick={() => {
-                              setConcern(item.label)
+                {/* Mobile safe-area padding under the icon row */}
+                <div className="pb-[max(0.75rem,env(safe-area-inset-bottom))] md:pb-[max(0.75rem,env(safe-area-inset-bottom))]" />
+              </div>
+            </div>
+            </div>
+          </div>
+
+            {/* Desktop: expandable category panel on the side */}
+            {moreOpen ? (
+              <aside className="hidden min-h-0 w-[260px] shrink-0 flex-col self-stretch bg-white md:flex">
+                <div className="relative flex min-h-0 flex-1 flex-col">
+                  <div
+                    className="pointer-events-none absolute bottom-5 left-0 top-5 w-px bg-neutral-200"
+                    aria-hidden
+                  />
+                  <div className="flex shrink-0 items-center px-4 pb-2 pt-1 pl-5">
+                    <h3 className="text-[15px] font-semibold text-neutral-900">Category</h3>
+                  </div>
+                  <div
+                    className="scrollbar-hide min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain px-2 pb-1 pl-3 pt-1"
+                  >
+                    {concernConfig.map((item) => {
+                      const Icon = item.icon
+                      const selected = concern === item.label
+                      return (
+                        <button
+                          key={item.label}
+                          type="button"
+                          onClick={() => {
+                            setConcern(item.label)
                               if (categoryOptions.find((option) => option.code === item.value)?.public_feed_allowed === false) setVisibility("private")
                               setFieldErrors((prev) => ({ ...prev, concern: "" }))
                               setMoreOpen(false)
                             }}
                             className={cn(
-                              "flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-neutral-800 transition-colors",
+                              "flex w-full shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-neutral-800 transition-colors",
                               selected ? "bg-neutral-100" : "bg-transparent hover:bg-neutral-100",
                             )}
                           >
@@ -1062,63 +1327,11 @@ export function CreateReportDialog({
                         )
                       })}
                     </div>
-                  </div>
-                ) : (
-                  <div className="pb-[max(0.75rem,env(safe-area-inset-bottom))] md:pb-[max(0.75rem,env(safe-area-inset-bottom))]" />
-                )}
-              </div>
-            </div>
 
-            {/* Desktop: expandable category panel on the side */}
-            {moreOpen ? (
-              <aside className="hidden min-h-0 w-[260px] shrink-0 flex-col self-stretch bg-white md:flex">
-                <div className="relative flex min-h-0 flex-1 flex-col">
-                  <div
-                    className="pointer-events-none absolute bottom-5 left-0 top-5 w-px bg-neutral-200"
-                    aria-hidden
-                  />
-                  <div className="flex shrink-0 items-center px-4 pb-2 pt-1 pl-5">
-                    <h3 className="text-[15px] font-semibold text-neutral-900">Category</h3>
-                  </div>
-                  <div className="flex min-h-0 flex-1 flex-col gap-1.5 px-2 pb-4 pt-1 pl-3 md:min-h-[280px]">
-                    {concernConfig.map((item) => {
-                      const Icon = item.icon
-                      const selected = concern === item.label
-                      return (
-                        <button
-                          key={item.label}
-                          type="button"
-                          onClick={() => {
-                            setConcern(item.label)
-                            if (categoryOptions.find((option) => option.code === item.value)?.public_feed_allowed === false) setVisibility("private")
-                            setFieldErrors((prev) => ({ ...prev, concern: "" }))
-                            setMoreOpen(false)
-                          }}
-                          className={cn(
-                            "flex min-h-0 flex-1 items-center gap-3 rounded-xl px-3 py-3 text-left text-neutral-800 transition-colors",
-                            selected ? "bg-neutral-100" : "bg-transparent hover:bg-neutral-100",
-                          )}
-                        >
-                          {item.iconImageUrl ? (
-                            <img src={item.iconImageUrl} alt="" className="size-8 shrink-0 rounded-lg object-cover" />
-                          ) : item.customIconLabel ? (
-                            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-xs font-semibold text-neutral-700">{item.customIconLabel}</span>
-                          ) : (
-                            <Icon className="size-5 shrink-0 text-neutral-600" strokeWidth={1.75} />
-                          )}
-                          <span className="min-w-0">
-                            <span className="block text-[14px] font-semibold">{item.label}</span>
-                            <span className="mt-0.5 block text-[12px] text-neutral-500">
-                              {item.desc}
-                            </span>
-                          </span>
-                        </button>
-                      )
-                    })}
-                  </div>
                 </div>
               </aside>
             ) : null}
+
           </div>
         </DialogBody>
       </Dialog>
@@ -1144,6 +1357,12 @@ export function CreateReportDialog({
           }}
         />
       </Suspense>
+
+      <CameraCaptureDialog
+        open={cameraOpen}
+        onClose={() => setCameraOpen(false)}
+        onCapture={(file) => handleCameraCapture([file])}
+      />
 
       {submittedReport ? (
         <ReportStatusDialog
@@ -1278,6 +1497,7 @@ export function CreateReportDialog({
               type="button"
               onClick={() => {
                 categoryOverrideRef.current = categoryConfirm.code
+                setCategoryOverride(categoryConfirm.code)
                 const match = concernConfig.find((item) => item.value === categoryConfirm.code)
                 if (match) {
                   setConcern(match.label)
@@ -1294,6 +1514,7 @@ export function CreateReportDialog({
               type="button"
               onClick={() => {
                 categoryOverrideRef.current = null
+                setCategoryOverride(null)
                 setCategoryConfirm(null)
                 void advance("duplicate")
               }}

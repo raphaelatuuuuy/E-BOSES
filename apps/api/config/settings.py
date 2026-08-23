@@ -74,6 +74,7 @@ THIRD_PARTY_APPS = [
     "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     "channels",
+    "drf_spectacular",
 ]
 
 LOCAL_APPS = [
@@ -88,8 +89,10 @@ LOCAL_APPS = [
 INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
+    "config.middleware.SlowRequestLoggingMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "config.middleware.SecurityHeadersMiddleware",
     "django.middleware.gzip.GZipMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -252,6 +255,21 @@ else:
         },
     }
 CELERY_TASK_DEFAULT_QUEUE = env("CELERY_TASK_DEFAULT_QUEUE", default="eboses")
+# Queue split: OTP texts, emergency notifications and dispatch broadcasts run
+# on the default "eboses" queue and must never sit behind minutes-long
+# vision/AI jobs. Everything slow or optional is pinned to "heavy";
+# scripts\start-celery.ps1 runs one dedicated solo worker per queue.
+CELERY_TASK_ROUTES = {
+    # Gemma review + SAM3 segmentation
+    "apps.concerns.tasks.process_concern_ai_task": {"queue": "heavy"},
+    "apps.concerns.tasks.process_concern_media_privacy_task": {"queue": "heavy"},
+    "apps.concerns.tasks.run_content_moderation_ai_task": {"queue": "heavy"},
+    "apps.emergencies.tasks.generate_emergency_media_preview_task": {"queue": "heavy"},
+    # OCR.space verification runs (up to a 60s API call each)
+    "apps.accounts.ocr_tasks.process_verification_case_task": {"queue": "heavy"},
+    "apps.accounts.ocr_tasks.process_test_run_task": {"queue": "heavy"},
+    "apps.accounts.ocr_tasks.ocr_health_canary_task": {"queue": "heavy"},
+}
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
@@ -313,6 +331,27 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 24 * 60 * 60.0,
         "options": {"queue": "eboses"},
     },
+    # OCR test uploads have no retention path of their own; without this sweep
+    # private_media/raw/ocr-tests/ grows forever.
+    "purge-ocr-test-runs": {
+        "task": "apps.accounts.ocr_tasks.purge_ocr_test_runs_task",
+        "schedule": 24 * 60 * 60.0,
+        "options": {"queue": "eboses"},
+    },
+    # Previews whose worker died (or whose enqueue hit a broker gap) would
+    # otherwise stay placeholders forever once nobody views the alert again.
+    "recover-missing-emergency-previews": {
+        "task": "apps.emergencies.tasks.recover_missing_emergency_previews_task",
+        "schedule": 15 * 60.0,
+        "options": {"queue": "eboses"},
+    },
+    # PH Data Privacy Act retention: notifications, closed-case chat and
+    # media, and old audit rows expire on the schedule in settings.
+    "enforce-retention-limits": {
+        "task": "apps.retention.enforce_retention_limits_task",
+        "schedule": 24 * 60 * 60.0,
+        "options": {"queue": "heavy"},
+    },
     # 15s tick so a 45-second critical acknowledgment timeout is actually
     # enforceable; the real deadline comes from each routing rule.
     "emergency-assignment-escalation": {
@@ -365,6 +404,95 @@ MEDIA_URL = env("MEDIA_URL", default="/media/")
 MEDIA_ROOT = env("MEDIA_ROOT", default=BASE_DIR / "public_media")
 PRIVATE_MEDIA_ROOT = env("PRIVATE_MEDIA_ROOT", default=BASE_DIR / "private_media")
 
+# Request-body guard. Per-file limits live in the upload validators
+# (apps/accounts/services.py); this caps the non-file form payload so a
+# crafted multipart body cannot exhaust memory.
+DATA_UPLOAD_MAX_MEMORY_SIZE = env.int("DATA_UPLOAD_MAX_MEMORY_SIZE", default=10 * 1024 * 1024)
+# Number of files accepted per request is capped per endpoint (getlist checks).
+FILE_UPLOAD_MAX_MEMORY_SIZE = env.int("FILE_UPLOAD_MAX_MEMORY_SIZE", default=10 * 1024 * 1024)
+# Optional recency bound on perceptual-duplicate candidate lookups
+# (apps/phash_index.py). 0 compares against the full history — the safe
+# default; a positive value only treats uploads from the last N days as
+# duplicate candidates, trading recall for smaller index scans.
+MEDIA_DEDUP_WINDOW_DAYS = env.int("MEDIA_DEDUP_WINDOW_DAYS", default=0)
+# Requests slower than this are logged as warnings (config/middleware.py).
+SLOW_REQUEST_LOG_MS = env.int("SLOW_REQUEST_LOG_MS", default=500)
+
+# Data retention (PH Data Privacy Act): how long personal content survives
+# after it stops being useful. The nightly beat task enforces these periods;
+# resident-initiated erasure requests remove everything sooner.
+RETENTION_NOTIFICATION_DAYS = env.int("RETENTION_NOTIFICATION_DAYS", default=180)
+# Chat history of a concern goes this long after the case closes.
+RETENTION_CHAT_MESSAGE_DAYS = env.int("RETENTION_CHAT_MESSAGE_DAYS", default=90)
+# Photos on resolved/rejected concerns.
+RETENTION_CONCERN_MEDIA_YEARS = env.int("RETENTION_CONCERN_MEDIA_YEARS", default=2)
+# Audit trail outlives content so officials can answer "who did what".
+RETENTION_AUDIT_LOG_YEARS = env.int("RETENTION_AUDIT_LOG_YEARS", default=5)
+
+# OpenAPI schema / Swagger UI. Hand-written APIViews are documented from the
+# URL patterns and their serializer references; extend_schema can refine any
+# endpoint later without changing behaviour.
+SUPPORT_EMAIL = env("SUPPORT_EMAIL", default="")
+EBoses_WEBSITE_URL = env("EBoses_WEBSITE_URL", default="")
+API_VERSION = "1.0.0"
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "E-Boses API",
+    "DESCRIPTION": """
+Barangay concern tracking, emergency dispatch and resident verification.
+
+## Getting started
+
+1. Sign up via the OTP flow under **auth**: request a code, verify it, then
+   submit the registration with a residence proof photo.
+2. Log in at `POST /api/auth/login/` with `identifier` (email **or** phone
+   number) and `password`. The response carries short-lived `access` and
+   long-lived `refresh` JWTs.
+3. Send `Authorization: Bearer <access>` on every call. Tokens refresh at
+   `POST /api/auth/refresh/`.
+
+## Conventions
+
+- **List endpoints** answer with an envelope: `{count, next, previous,
+  results}` and accept `page` plus `page_size` (max 100). Detail endpoints
+  answer with the bare object.
+- **Errors** use DRF's standard shapes: `{detail: "..."}` or
+  `{field: ["message"]}` with 4xx status codes.
+- **Photo uploads** are multipart/form-data; images are content-inspected
+  (signature + re-encode checks), so spoofed Content-Types are rejected.
+- Sensitive photos are stored privately and served only through authorized
+  preview URLs after redaction.
+""",
+    "VERSION": API_VERSION,
+    "SERVE_INCLUDE_SCHEMA": False,
+    "COMPONENT_SPLIT_REQUEST": True,
+    "SCHEMA_PATH_PREFIX": "/api",
+}
+if SUPPORT_EMAIL:
+    SPECTACULAR_SETTINGS["CONTACT"] = {"name": "E-Boses Support", "email": SUPPORT_EMAIL}
+if EBoses_WEBSITE_URL:
+    SPECTACULAR_SETTINGS["EXTERNAL_DOCS"] = {"description": "E-Boses website", "url": EBoses_WEBSITE_URL}
+SPECTACULAR_SETTINGS.update({
+    # Sidebar groups, in display order. Endpoints inherit their tag from the
+    # first URL path segment.
+    "TAGS": [
+        {"name": "auth", "description": "Sign-up, login, tokens, account settings"},
+        {"name": "concerns", "description": "Resident reports: filing, review workflow, chat, appeals"},
+        {"name": "announcements", "description": "Official announcements and community engagement"},
+        {"name": "barangay-events", "description": "Scheduled barangay activities"},
+        {"name": "emergencies", "description": "SOS alerts, dispatch, responder coordination"},
+        {"name": "notifications", "description": "In-app inbox and read state"},
+        {"name": "assistant", "description": "Public AI chat assistant"},
+        {"name": "map", "description": "Geocoding and live location services"},
+        {"name": "ocr", "description": "Official verification tooling and audit trail"},
+        {"name": "system", "description": "Health, status banners and diagnostics"},
+    ],
+    "SORT_OPERATION_METHOD": True,
+    # Hand-rolled APIViews trigger these warnings by design; they do not make
+    # the schema wrong, just less detailed until annotated.
+    "DISABLE_ERRORS_AND_WARNINGS": False,
+})
+
 # Default primary key field type
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -381,6 +509,8 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
+    # Schema generation for /api/schema/ and the Swagger UI at /api/docs/.
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 20,
     # Throttles keep their counters on CACHES["throttling"] (process-local):
@@ -397,6 +527,9 @@ REST_FRAMEWORK = {
         "otp": "5/minute",
         "geocode": "90/minute",
         "auth": "20/minute",
+        # Anonymous registration preflight runs heavy media forensics; it gets
+        # an isolated, tighter budget than the shared auth scope.
+        "proof_preflight": "20/minute",
         "login": "5/minute",
         "client_ip": "300/hour",
         "login_identifier": "5/minute",
@@ -477,13 +610,30 @@ SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=not IS_LOCAL_D
 REFRESH_COOKIE_SECURE = env.bool("REFRESH_COOKIE_SECURE", default=not IS_LOCAL_DEVELOPMENT)
 CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=not IS_LOCAL_DEVELOPMENT)
 SESSION_COOKIE_HTTPONLY = True
+# The SPA reads this cookie and echoes it as X-CSRFToken (apps/web/src/lib/api.ts) — keep JS-readable.
 CSRF_COOKIE_HTTPONLY = env.bool("CSRF_COOKIE_HTTPONLY", default=False)
 SESSION_COOKIE_SAMESITE = env("SESSION_COOKIE_SAMESITE", default="Lax")
 CSRF_COOKIE_SAMESITE = env("CSRF_COOKIE_SAMESITE", default="Lax")
 SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=not IS_LOCAL_DEVELOPMENT)
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https") if env.bool("TRUST_X_FORWARDED_PROTO", default=not IS_LOCAL_DEVELOPMENT) else None
 SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=0 if IS_LOCAL_DEVELOPMENT else 31536000)
 SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=not IS_LOCAL_DEVELOPMENT)
 SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=not IS_LOCAL_DEVELOPMENT)
+_DEFAULT_CSP = (
+    "default-src 'self'; "
+    "img-src 'self' data: blob: https:; "
+    "media-src 'self' blob:; "
+    "font-src 'self' data:; "
+    "style-src 'self' 'unsafe-inline'; "
+    "script-src 'self'; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "object-src 'none'"
+)
+CONTENT_SECURITY_POLICY = "" if IS_LOCAL_DEVELOPMENT else env("CONTENT_SECURITY_POLICY", default=_DEFAULT_CSP)
+PERMISSIONS_POLICY = "" if IS_LOCAL_DEVELOPMENT else env("PERMISSIONS_POLICY", default="geolocation=(self), camera=(), microphone=()")
 _default_csrf_trusted = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -639,6 +789,9 @@ OUTBOUND_SMS_SIM_SLOT = env.int(
 OUTBOUND_SMS_TIMEOUT_SECONDS = env.float(
     "OUTBOUND_SMS_TIMEOUT_SECONDS", default=SMS_GATE_TIMEOUT_SECONDS
 )
+# OTP texts get a tighter deadline than broadcasts: a stalled gateway must
+# not hang the registration request for the full 30 seconds.
+SMS_OTP_TIMEOUT_SECONDS = env.float("SMS_OTP_TIMEOUT_SECONDS", default=10.0)
 # Falls back to the legacy emergency token so an already-configured handset
 # keeps working through the rename.
 _derived_sms_webhook_token = hmac.new(
@@ -652,6 +805,28 @@ SMS_INBOUND_WEBHOOK_TOKEN = (
     or (_derived_sms_webhook_token if _sms_gate_ready else "")
 )
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@localhost")
+
+# SMTP fallback for django_email OTP / account mail. "console" prints to
+# stdout (local dev only); anything else must be a real Django backend path.
+# Set EMAIL_BACKEND=smtp and fill EMAIL_HOST_* in production.
+_email_backend_choice = env("EMAIL_BACKEND", default="console").strip()
+if _email_backend_choice == "smtp":
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_HOST = env("EMAIL_HOST")
+    EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+    EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+    EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+    EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+    EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=10)
+    EMAIL_BACKEND_IS_CONSOLE = False
+elif _email_backend_choice == "console":
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+    EMAIL_BACKEND_IS_CONSOLE = True
+else:
+    # Explicit full path — trust it, but it is not the documented fallback.
+    EMAIL_BACKEND = _email_backend_choice
+    EMAIL_BACKEND_IS_CONSOLE = False
+
 WEB_PUSH_PUBLIC_KEY = env("WEB_PUSH_PUBLIC_KEY", default="")
 WEB_PUSH_PRIVATE_KEY = env("WEB_PUSH_PRIVATE_KEY", default="")
 WEB_PUSH_SUBJECT = env("WEB_PUSH_SUBJECT", default=f"mailto:{DEFAULT_FROM_EMAIL}")
@@ -677,7 +852,6 @@ ID_IMAGE_RETENTION_DAYS = env.int("ID_IMAGE_RETENTION_DAYS", default=30)
 # IP reputation gate on login, concern creation and emergency creation.
 # Fail-open: an outage or an unreadable reply always allows the request, because
 # a blocked SOS is far worse than a VPN slipping through.
-IP_INTEL_COUNTRY = env("IP_INTEL_COUNTRY", default="PH")
 # PLDT, Globe, DITO, Starlink PH. An allowlisted network is trusted even when
 # the provider flags it, because these carry ordinary residents.
 IP_INTEL_ALLOWED_ASNS = env.list(
@@ -705,9 +879,6 @@ RESEND_FROM_NAME = env("RESEND_FROM_NAME", default="E-Boses")
 RESEND_REPLY_TO = env("RESEND_REPLY_TO", default="")
 RESEND_WEBHOOK_SECRET = env("RESEND_WEBHOOK_SECRET", default="")
 RESEND_DELIVERY_TIMEOUT_SECONDS = env.float("RESEND_DELIVERY_TIMEOUT_SECONDS", default=10.0)
-# SMTP sends have no per-call timeout of their own; without this a stalled
-# mail server hangs the sending thread indefinitely.
-EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=10)
 ACCOUNT_EMAIL_PROVIDER = env("ACCOUNT_EMAIL_PROVIDER", default="disabled")
 OTP_EMAIL_LOGO_URL = env("OTP_EMAIL_LOGO_URL", default="")
 OTP_EMAIL_EXPIRY_TEXT = env("OTP_EMAIL_EXPIRY_TEXT", default="This code expires in 5 minutes.")
@@ -806,3 +977,38 @@ OSM_ROUTE_TIMEOUT_SECONDS = env.int("OSM_ROUTE_TIMEOUT_SECONDS", default=4)
 
 if not IS_LOCAL_DEVELOPMENT and DEBUG:
     raise ImproperlyConfigured("DEBUG must be false outside local development.")
+
+# ---------------------------------------------------------------------------
+# Logging — console only. The Celery start script redirects worker output to
+# the logs/ directory; a web process logs to its own stdout.
+# ---------------------------------------------------------------------------
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {
+            "format": "[{asctime}] {levelname} {name}: {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "standard",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": env("LOG_LEVEL", default="INFO"),
+    },
+    "loggers": {
+        # Parameterised SQL at INFO is noise in normal operation; keep it for
+        # DEBUG sessions by setting LOG_LEVEL=DEBUG explicitly.
+        "django.db.backends": {
+            "level": "DEBUG" if env("LOG_LEVEL", default="INFO") == "DEBUG" else "WARNING",
+        },
+        "django.request": {
+            "level": "WARNING",
+        },
+    },
+}

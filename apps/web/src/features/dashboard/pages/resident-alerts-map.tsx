@@ -12,28 +12,22 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react"
-import { createPortal } from "react-dom"
 import {
   AlertTriangleIcon,
+  ChevronDownIcon,
   ChevronLeftIcon,
   CircleAlertIcon,
-  CircleCheck,
-  CloudRainIcon,
-  CloudSunIcon,
-  DropletsIcon,
   HomeIcon,
   LeafIcon,
   LoaderCircleIcon,
   MapPinIcon,
   MegaphoneIcon,
   MinusIcon,
+  PersonStandingIcon,
   PlusIcon,
   SearchIcon,
   ShieldCheckIcon,
-  SunIcon,
   TrafficConeIcon,
-  WindIcon,
-  XIcon,
 } from "lucide-react"
 import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 import { useNavigate } from "react-router-dom"
@@ -77,20 +71,23 @@ import {
 
   type MapApi,
 } from "@/features/dashboard/components/resident-map/resident-leaflet-map"
-import { useBarangayWeather, type WeatherState } from "@/features/dashboard/hooks/use-barangay-weather"
+import { useBarangayWeather } from "@/features/dashboard/hooks/use-barangay-weather"
 import { getConcernClassificationConfig } from "@/features/classification/api"
 import {
-  MapChip,
   MapControlButton,
   MapControlStack,
 } from "@/features/dashboard/components/map/map-chrome"
+import {
+  MapWeatherCard,
+  MapWeatherIcon,
+} from "@/features/dashboard/components/map-weather"
 import { MapLegend, type MapLegendRow } from "@/features/dashboard/components/map/map-legend"
+import { MapFilterChips } from "@/features/dashboard/components/map/filter-chips"
 import { MAP_COLORS } from "@/features/dashboard/components/alerts-map/lib"
 import {
   defaultResidentLayers,
   type ResidentMapLayers,
 } from "@/features/dashboard/lib/resident-map-layers"
-import { useWheelScroll } from "@/hooks/use-wheel-scroll"
 import { usePageTitle } from "@/hooks/use-page-title"
 import {
   BARANGAY_CENTER,
@@ -103,6 +100,7 @@ import {
 } from "@/features/dashboard/lib/resident-map-utils"
 import { timeAgo } from "@/features/dashboard/lib/format"
 import { useIsDesktop } from "@/features/dashboard/lib/shell"
+import { useBottomSheetSnap } from "@/features/dashboard/lib/use-bottom-sheet-snap"
 import {
   readLastKnownPosition,
   writeLastKnownPosition,
@@ -115,28 +113,14 @@ type CategoryChip = { key: string; label: string }
 
 const BARANGAY = "Marikina Heights"
 
-function weatherLabel(code: number | null) {
-  if (code == null) return "Local weather"
-  if (code === 0) return "Clear sky"
-  if ([1, 2, 3].includes(code)) return "Partly cloudy"
-  if ([45, 48].includes(code)) return "Foggy"
-  if ([51, 53, 55, 56, 57].includes(code)) return "Drizzle"
-  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return "Rainy"
-  if ([71, 73, 75, 77].includes(code)) return "Snow"
-  if ([95, 96, 99].includes(code)) return "Thunderstorms"
-  return "Cloudy"
-}
+const MODE_CHIPS: CategoryChip[] = [
+  { key: "all", label: "All" },
+  { key: "posts", label: "Concerns" },
+  { key: "announcements", label: "Announcements" },
+  { key: "emergencies", label: "Emergencies" },
+]
 
-function WeatherIcon({ code, className = "size-5" }: { code: number | null; className?: string }) {
-  if (code === 0) return <SunIcon className={className} />
-  if (
-    code != null &&
-    [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99].includes(code)
-  ) {
-    return <CloudRainIcon className={className} />
-  }
-  return <CloudSunIcon className={className} />
-}
+
 
 /**
  * Map badge labels — same groups as My reports filters
@@ -150,6 +134,7 @@ function statusLabel(status: string): { label: string; tone: "active" | "closed"
   return { label: "Active", tone: "active" }
 }
 
+/* eslint-disable react-hooks/static-components -- resolveIconByKey returns a stable module-level Lucide component, never a new one */
 function CategoryIcon({ category, iconKey, className }: { category: ConcernCategory; iconKey?: string; className?: string }) {
   const Resolved = resolveIconByKey(iconKey)
   if (Resolved) return <Resolved className={className} />
@@ -158,119 +143,74 @@ function CategoryIcon({ category, iconKey, className }: { category: ConcernCateg
   if (category === "public_safety") return <ShieldCheckIcon className={className} />
   return <SearchIcon className={className} />
 }
+/* eslint-enable react-hooks/static-components */
 
-/** A static filter chip (All / Emergencies) plus the categories configured by officials. */
-function CategoryFilterChips({
-  chips,
+function ResidentFilterRows({
   chip,
-  filterLoading,
+  categories,
+  categoriesOpen,
+  onToggleCategories,
+  loading,
   onSelect,
-  className,
 }: {
-  chips: CategoryChip[]
-  chip: ChipKey
-  filterLoading: boolean
-  onSelect: (key: ChipKey) => void
-  className?: string
+  chip: string
+  categories: CategoryChip[]
+  categoriesOpen: boolean
+  onToggleCategories: () => void
+  loading: boolean
+  onSelect: (key: string) => void
 }) {
-  const scrollerRef = useWheelScroll<HTMLDivElement>()
+  const categoryActive = categories.some((c) => c.key === chip)
   return (
-    <div
-      ref={scrollerRef}
-      className={cn(
-        "scrollbar-hide flex min-w-0 gap-1.5 overflow-x-auto overscroll-x-contain pb-0.5 [-webkit-overflow-scrolling:touch]",
-        className,
-      )}
-      style={{ touchAction: "pan-x" }}
-      role="tablist"
-      aria-label="Categories"
-    >
-      {chips.map((c) => (
-        <button
-          key={c.key}
-          type="button"
-          role="tab"
-          aria-selected={chip === c.key}
-          disabled={filterLoading}
-          onClick={() => onSelect(c.key)}
-          className={cn(
-            "shrink-0 whitespace-nowrap rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition-colors sm:text-[13px]",
-            chip === c.key
-              ? "border-brand-orange bg-brand-orange text-white shadow-sm"
-              : "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:bg-neutral-50",
-            filterLoading && "opacity-70",
-          )}
-        >
-          {c.label}
-        </button>
-      ))}
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <MapFilterChips
+          tone="light"
+          chips={MODE_CHIPS}
+          chip={chip}
+          loading={loading}
+          onSelect={onSelect}
+          className="min-w-0 flex-1"
+        />
+        {categories.length > 0 ? (
+          <button
+            type="button"
+            onClick={onToggleCategories}
+            disabled={loading}
+            aria-expanded={categoriesOpen}
+            className={cn(
+              "flex shrink-0 items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[12px] font-semibold transition-colors sm:text-[13px]",
+              categoriesOpen || categoryActive
+                ? "border-brand-orange bg-brand-orange text-white shadow-sm"
+                : "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:bg-neutral-50",
+              loading && "opacity-70",
+            )}
+          >
+            Categories
+            <ChevronDownIcon
+              className={cn(
+                "size-3.5 shrink-0 transition-transform",
+                categoriesOpen && "rotate-180",
+              )}
+              strokeWidth={2.25}
+            />
+          </button>
+        ) : null}
+      </div>
+      {categoriesOpen && categories.length > 0 ? (
+        <MapFilterChips
+          tone="light"
+          chips={categories}
+          chip={chip}
+          loading={loading}
+          onSelect={onSelect}
+          label="Category filters"
+        />
+      ) : null}
     </div>
   )
 }
 
-/** Shared weather body used by desktop popover + mobile full panel */
-function WeatherDetails({ weather }: { weather: WeatherState }) {
-  if (weather.error) {
-    return <p className="py-6 text-center text-sm text-neutral-500">{weather.error}</p>
-  }
-  if (weather.loading && weather.temperature == null) {
-    return (
-      <div className="flex items-center justify-center py-10">
-        <LoaderCircleIcon className="size-7 animate-spin text-neutral-400" />
-      </div>
-    )
-  }
-  return (
-    <>
-      <div className="grid grid-cols-3 gap-2 py-4 sm:gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-xs text-neutral-500">{weatherLabel(weather.code)}</p>
-          <p className="mt-1 text-2xl font-bold sm:text-3xl">
-            {weather.temperature != null ? `${Math.round(weather.temperature)}°` : "—"}
-          </p>
-        </div>
-        <div className="min-w-0">
-          <p className="text-xs text-neutral-500">Feels like</p>
-          <p className="mt-1 text-lg font-bold sm:text-xl">
-            {weather.feelsLike != null ? `${Math.round(weather.feelsLike)}°` : "—"}
-          </p>
-        </div>
-        <div className="min-w-0">
-          <p className="text-xs text-neutral-500">Wind</p>
-          <p className="mt-1 text-lg font-bold sm:text-xl">
-            {weather.wind != null ? `${Math.round(weather.wind)} km/h` : "—"}
-          </p>
-        </div>
-      </div>
-      {weather.humidity != null ? (
-        <p className="pb-2 text-xs text-neutral-500">
-          Humidity {Math.round(weather.humidity)}%
-          {weather.precipitation != null && weather.precipitation > 0
-            ? ` · Precip ${weather.precipitation} mm`
-            : ""}
-        </p>
-      ) : null}
-      {weather.daily.length > 0 ? (
-        <div className="space-y-2 border-t border-neutral-100 pt-3">
-          {weather.daily.map((day) => (
-            <div
-              key={day.day}
-              className="grid grid-cols-[40px_minmax(0,1fr)_auto_36px] items-center gap-2 text-sm"
-            >
-              <span className="font-bold text-neutral-800">{day.day}</span>
-              <WeatherIcon code={day.code} className="size-5 text-neutral-500" />
-              <span className="font-bold text-neutral-800">
-                {Math.round(day.high)}°{" "}
-                <span className="font-medium text-neutral-400">{Math.round(day.low)}°</span>
-              </span>
-              <span className="text-right text-neutral-600">{day.rain}%</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </>
-  )
-}
 
 /** Compact list preview (Nextdoor first part) — category icon, not media image */
 function FeedPreviewCard({
@@ -321,8 +261,7 @@ function FeedPreviewCard({
                 })()}
               </p>
               {st.tone === "closed" ? (
-                <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold text-status-closed sm:text-[12px]">
-                  <CircleCheck className="size-3.5 shrink-0" strokeWidth={2.4} />
+                <span className="inline-flex shrink-0 items-center text-[11px] font-semibold text-neutral-500 sm:text-[12px]">
                   {st.label}
                 </span>
               ) : st.tone === "appealed" ? (
@@ -534,31 +473,31 @@ export default function ResidentAlertsMapPage() {
     const seed = { lat: stored.latitude, lng: stored.longitude }
     return isLocalGps(seed) ? seed : null
   })
-  /** Mobile sheet: full list, peek preview bar, or fully tucked while using the map */
-  const [sheetMode, setSheetMode] = useState<"expanded" | "peek" | "hidden">("expanded")
-  const [sheetHeight, setSheetHeight] = useState(() =>
-    typeof window !== "undefined" ? Math.round(Math.min(window.innerHeight * 0.55, 520)) : 420,
-  )
-  const [sheetDragging, setSheetDragging] = useState(false)
-  const sheetDragRef = useRef<{
-    startY: number
-    startH: number
-    pointerId: number
-  } | null>(null)
   const mapApiRef = useRef<MapApi | null>(null)
   const isDesktop = useIsDesktop()
+  /** Mobile sheet: full list, peek preview bar, or fully tucked while using the map */
+  const {
+    snaps: sheetSnaps,
+    mode: sheetMode,
+    height: sheetHeight,
+    dragging: sheetDragging,
+    snapTo: snapSheetTo,
+    onHandlePointerDown: onSheetHandlePointerDown,
+    onHandlePointerMove: onSheetHandlePointerMove,
+    onHandlePointerUp: onSheetHandlePointerUp,
+  } = useBottomSheetSnap({
+    enabled: !isDesktop,
+    initialHeight:
+      typeof window !== "undefined" ? Math.round(Math.min(window.innerHeight * 0.55, 520)) : 420,
+    onSettle: () => mapApiRef.current?.invalidateSize(),
+  })
   const [weatherOpen, setWeatherOpen] = useState(false)
-  const weatherPanelRef = useRef<HTMLDivElement>(null)
-  const weatherChipWrapRef = useRef<HTMLDivElement>(null)
-  const weatherPopoverRef = useRef<HTMLDivElement>(null)
-  const [weatherPopoverRect, setWeatherPopoverRect] = useState<{
-    top: number
-    right: number
-    maxHeight: number
-  } | null>(null)
+  const [svPick, setSvPick] = useState(false)
   const [locating, setLocating] = useState(false)
   /** Officially-configured concern categories (filter chips), from the classification config. */
   const [filterCats, setFilterCats] = useState<CategoryChip[]>([])
+  /** Category filter chips stay collapsed behind the "Categories" toggle. */
+  const [categoriesOpen, setCategoriesOpen] = useState(false)
   /** Desktop left alerts panel collapsed vs open. */
   const [alertsOpen, setAlertsOpen] = useState(true)
   /** Desktop alerts panel size — null until the resident drags the corner. */
@@ -571,52 +510,6 @@ export default function ResidentAlertsMapPage() {
     const stored = readLastKnownPosition(user?.id ?? null)
     return stored ? stored.at : null
   })
-
-  // Desktop weather: close when clicking outside (loses focus)
-  useEffect(() => {
-    if (!weatherOpen || !isDesktop) return
-    function onPointerDown(e: PointerEvent) {
-      const root = weatherPanelRef.current
-      if (!root) return
-      const insideTrigger = e.target instanceof Node && root.contains(e.target)
-      const insidePopover =
-        e.target instanceof Node && !!weatherPopoverRef.current?.contains(e.target)
-      if (!insideTrigger && !insidePopover) {
-        setWeatherOpen(false)
-      }
-    }
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setWeatherOpen(false)
-    }
-    // Capture phase so map clicks still close the panel
-    document.addEventListener("pointerdown", onPointerDown, true)
-    document.addEventListener("keydown", onKeyDown)
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown, true)
-      document.removeEventListener("keydown", onKeyDown)
-    }
-  }, [weatherOpen, isDesktop])
-
-  // The map root clips overflow for its rounded corners, which used to crop
-  // the weather popover's bottom edge and let the legend chip (same z-index,
-  // later in paint order) sit on top of it. Portaling it to <body> with a
-  // measured, viewport-relative position escapes both problems.
-  useEffect(() => {
-    if (!weatherOpen || !isDesktop) return
-    function measure() {
-      const el = weatherChipWrapRef.current
-      if (!el) return
-      const rect = el.getBoundingClientRect()
-      setWeatherPopoverRect({
-        top: rect.bottom + 8,
-        right: Math.max(16, window.innerWidth - rect.right),
-        maxHeight: Math.max(200, window.innerHeight - rect.bottom - 24),
-      })
-    }
-    measure()
-    window.addEventListener("resize", measure)
-    return () => window.removeEventListener("resize", measure)
-  }, [weatherOpen, isDesktop])
 
   // Desktop alerts panel: drag the bottom-right corner to resize. No visible
   // grip — just a hit zone in the corner with a resize cursor.
@@ -653,90 +546,11 @@ export default function ResidentAlertsMapPage() {
     setAlertsPanelResizing(true)
   }
 
-  const sheetSnaps = useCallback(() => {
-    const vh = typeof window !== "undefined" ? window.innerHeight : 800
-    return {
-      hidden: 56,
-      peek: Math.round(Math.min(268, vh * 0.34)),
-      expanded: Math.round(Math.min(vh * 0.58, 560)),
-      max: Math.round(Math.min(vh * 0.88, 720)),
-    }
-  }, [])
-
-  const snapSheetTo = useCallback(
-    (mode: "expanded" | "peek" | "hidden") => {
-      const s = sheetSnaps()
-      setSheetMode(mode)
-      setSheetHeight(mode === "expanded" ? s.expanded : mode === "peek" ? s.peek : s.hidden)
-      window.requestAnimationFrame(() => mapApiRef.current?.invalidateSize())
-    },
-    [sheetSnaps],
-  )
-
   const collapseSheetForMap = useCallback(() => {
     if (isDesktop) return
     setWeatherOpen(false)
     snapSheetTo("hidden")
   }, [isDesktop, snapSheetTo])
-
-  function onSheetHandlePointerDown(e: ReactPointerEvent<HTMLDivElement>) {
-    if (isDesktop) return
-    e.preventDefault()
-    const target = e.currentTarget
-    target.setPointerCapture(e.pointerId)
-    sheetDragRef.current = {
-      startY: e.clientY,
-      startH: sheetHeight,
-      pointerId: e.pointerId,
-    }
-    setSheetDragging(true)
-  }
-
-  function onSheetHandlePointerMove(e: ReactPointerEvent<HTMLDivElement>) {
-    const drag = sheetDragRef.current
-    if (!drag || drag.pointerId !== e.pointerId) return
-    const s = sheetSnaps()
-    const delta = drag.startY - e.clientY
-    const next = Math.min(s.max, Math.max(s.hidden, drag.startH + delta))
-    setSheetHeight(next)
-  }
-
-  function onSheetHandlePointerUp(e: ReactPointerEvent<HTMLDivElement>) {
-    const drag = sheetDragRef.current
-    if (!drag || drag.pointerId !== e.pointerId) return
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId)
-    } catch {
-      /* already released */
-    }
-    sheetDragRef.current = null
-    setSheetDragging(false)
-
-    const s = sheetSnaps()
-    // Use live height from drag end position (state may lag one frame)
-    const h = Math.min(s.max, Math.max(s.hidden, drag.startH + (drag.startY - e.clientY)))
-    if (h > (s.expanded + s.max) / 2) {
-      setSheetMode("expanded")
-      setSheetHeight(s.max)
-    } else {
-      const targets: Array<{ mode: "expanded" | "peek" | "hidden"; h: number }> = [
-        { mode: "hidden", h: s.hidden },
-        { mode: "peek", h: s.peek },
-        { mode: "expanded", h: s.expanded },
-      ]
-      let best = targets[0]!
-      let bestDist = Math.abs(h - best.h)
-      for (const t of targets) {
-        const d = Math.abs(h - t.h)
-        if (d < bestDist) {
-          best = t
-          bestDist = d
-        }
-      }
-      snapSheetTo(best.mode)
-    }
-    window.requestAnimationFrame(() => mapApiRef.current?.invalidateSize())
-  }
 
   const weatherLat = mapMeta?.center.latitude ?? BARANGAY_CENTER.lat
   const weatherLng = mapMeta?.center.longitude ?? BARANGAY_CENTER.lng
@@ -768,17 +582,6 @@ export default function ResidentAlertsMapPage() {
       mounted = false
     }
   }, [])
-
-  const chips = useMemo<CategoryChip[]>(
-    () => [
-      { key: "all", label: "All" },
-      { key: "posts", label: "Concerns" },
-      { key: "announcements", label: "Announcements" },
-      { key: "emergencies", label: "Emergencies" },
-      ...filterCats,
-    ],
-    [filterCats],
-  )
 
   const load = useCallback(async (soft = false) => {
     if (!soft) setError("")
@@ -828,6 +631,32 @@ export default function ResidentAlertsMapPage() {
       setFilterLoading(false)
     }
   }
+
+  function toggleWeather() {
+    void applyChip("all")
+    setCategoriesOpen(false)
+    setWeatherOpen((value) => !value)
+  }
+
+  const weatherToggle = (
+    <button
+      type="button"
+      onClick={toggleWeather}
+      aria-label={weatherOpen ? "Show the alerts list" : "Show the weather details"}
+      aria-expanded={weatherOpen}
+      title="Weather"
+      className="flex shrink-0 items-center gap-1.5 text-[18px] font-bold leading-tight tracking-tight text-neutral-900 transition-opacity hover:opacity-70 sm:text-[20px]"
+    >
+      {weather.loading && weather.temperature == null ? (
+        <LoaderCircleIcon className="size-5 shrink-0 animate-spin text-neutral-400" />
+      ) : (
+        <MapWeatherIcon code={weather.code} className="size-5 shrink-0" />
+      )}
+      <span className="tabular-nums">
+        {weather.temperature != null ? `${Math.round(weather.temperature)}°C` : "—"}
+      </span>
+    </button>
+  )
 
   useEffect(() => {
     // load() sets loading synchronously, so defer the initial fetch a
@@ -1304,23 +1133,43 @@ export default function ResidentAlertsMapPage() {
         ) : null
       ) : (
         <>
-          <div className="shrink-0 bg-white px-4 pb-2 pt-3 sm:pt-4">
-            <h1 className="text-[18px] font-bold leading-tight tracking-tight text-neutral-900 sm:text-[20px]">
-              Alerts in {weatherPlace}
-            </h1>
+          <div className="flex shrink-0 items-center gap-2.5 bg-white px-4 pb-2 pt-3 sm:pt-4">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-[18px] font-bold leading-tight tracking-tight text-neutral-900 sm:text-[20px]">
+                {weatherOpen ? "Weather in" : "Alerts in"}{" "}
+                <span className="text-brand-orange" style={{ color: "var(--color-brand-orange)" }}>
+                  {weatherPlace}
+                </span>
+              </h1>
+              <p className="mt-0.5 text-[12px] text-neutral-500">
+                {weatherOpen
+                  ? `As of ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+                  : `${mapItemCount} on the map`}
+              </p>
+            </div>
+            {weatherToggle}
           </div>
 
           <div className="relative shrink-0 px-3 pb-2 sm:pb-3">
-            <CategoryFilterChips
-              chips={chips}
-              chip={chip}
-              filterLoading={filterLoading}
+            <ResidentFilterRows
+              chip={weatherOpen ? "" : chip}
+              categories={filterCats}
+              categoriesOpen={categoriesOpen}
+              onToggleCategories={() => setCategoriesOpen((value) => !value)}
+              loading={filterLoading}
               onSelect={(key) => void applyChip(key)}
             />
           </div>
 
-          <div className="scrollbar-hide relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4">
-            {filterLoading ? (
+          <div
+            className={cn(
+              "scrollbar-hide relative min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4",
+              weatherOpen ? "px-4" : "px-3",
+            )}
+          >
+            {weatherOpen ? (
+              <MapWeatherCard weather={weather} framed={false} />
+            ) : filterLoading ? (
               <div className="flex flex-col items-center justify-center gap-2 py-14 sm:py-16">
                 <LoaderCircleIcon className="size-8 animate-spin text-neutral-400" />
                 <p className="text-[13px] font-medium text-neutral-500">Loading…</p>
@@ -1445,6 +1294,7 @@ export default function ResidentAlertsMapPage() {
             toggleOrOpen(selectedAnnouncementId === id, () => openAnnouncement(id, false))
           }}
           onMapInteract={collapseSheetForMap}
+          onStreetViewPickChange={setSvPick}
           onReady={(api) => {
             mapApiRef.current = api
           }}
@@ -1481,7 +1331,6 @@ export default function ResidentAlertsMapPage() {
       {/* One control column, same order and geometry as the official map:
           Home, Locate, Zoom, then weather. */}
       <div
-        ref={isDesktop ? weatherPanelRef : undefined}
         className={cn(
           "absolute z-30 flex flex-col items-end gap-2",
           isDesktop ? "right-4 top-4" : "right-3 top-3",
@@ -1516,60 +1365,29 @@ export default function ResidentAlertsMapPage() {
           >
             <MinusIcon className="size-5" strokeWidth={2.1} />
           </MapControlButton>
+          <MapControlButton
+            tone="light"
+            divider
+            label={svPick ? "Cancel Street View pick" : "Drag me onto the map or click, then pick a spot for Street View"}
+            active={svPick}
+            draggable
+            onDragStart={(event) => {
+              event.dataTransfer.setData("text/plain", "street-view")
+              event.dataTransfer.effectAllowed = "copy"
+              if (!svPick) mapApiRef.current?.toggleStreetViewPick()
+            }}
+            onClick={() => mapApiRef.current?.toggleStreetViewPick()}
+          >
+            <PersonStandingIcon className="size-5" strokeWidth={1.9} />
+          </MapControlButton>
         </MapControlStack>
 
-        <div ref={weatherChipWrapRef} className="relative flex flex-col items-end">
-          <MapChip
-            tone="light"
-            label="Weather"
-            expanded={weatherOpen}
-            onClick={() => {
-              setWeatherOpen((value) => !value)
-              if (!isDesktop) snapSheetTo("hidden")
-            }}
-          >
-            {weather.loading ? (
-              <LoaderCircleIcon className="size-4 animate-spin text-neutral-400" />
-            ) : (
-              <WeatherIcon code={weather.code} className="size-5 text-neutral-500" />
-            )}
-            <span>
-              {weather.temperature != null ? `${Math.round(weather.temperature)}°C` : "—"}
-            </span>
-          </MapChip>
-        </div>
+        {svPick ? (
+          <div className="pointer-events-none absolute right-0 top-[calc(100%+8px)] w-max max-w-[min(15rem,calc(100vw-1.5rem))] rounded-lg bg-nav-bg/90 px-2.5 py-1.5 text-[11.5px] font-semibold text-white/85 shadow-md backdrop-blur">
+            Click the map to start Street View · Esc cancels
+          </div>
+        ) : null}
       </div>
-
-      {/* Desktop: popover under weather chip, portaled to <body> so the map's
-          overflow-hidden root can't clip it and it always paints above every
-          other map overlay (legend, controls, sheet). */}
-      {weatherOpen && isDesktop && weatherPopoverRect && typeof document !== "undefined"
-        ? createPortal(
-            <section
-              ref={weatherPopoverRef}
-              style={{
-                top: weatherPopoverRect.top,
-                right: weatherPopoverRect.right,
-                maxHeight: weatherPopoverRect.maxHeight,
-              }}
-              className="scrollbar-hide fixed z-[100] w-[min(calc(100vw-1.5rem),340px)] overflow-y-auto overscroll-contain rounded-xl border border-neutral-200 bg-white p-4 text-neutral-900 shadow-lg"
-            >
-              <div className="flex items-start justify-between gap-3 border-b border-neutral-200 pb-3">
-                <div className="min-w-0">
-                  <h2 className="truncate text-[15px] font-semibold">{weather.placeName}</h2>
-                  <p className="mt-0.5 text-[13px] text-neutral-500">Current weather</p>
-                </div>
-                {weather.loading ? (
-                  <LoaderCircleIcon className="size-7 shrink-0 animate-spin text-neutral-400" />
-                ) : (
-                  <WeatherIcon code={weather.code} className="size-8 shrink-0 text-neutral-500" />
-                )}
-              </div>
-              <WeatherDetails weather={weather} />
-            </section>,
-            document.body,
-          )
-        : null}
 
       {/* Below the map, clear of the control column, so the legend never covers
           the barangay. Collapsed it is one icon. */}
@@ -1587,159 +1405,6 @@ export default function ResidentAlertsMapPage() {
             onToggle={(key) => setLayers((current) => ({ ...current, [key]: !current[key] }))}
           />
         </div>
-      ) : null}
-
-      {/* Mobile weather sheet — E-Boses white style, close (X) on the right */}
-      {!isDesktop && weatherOpen ? (
-        <>
-          {/* Dim map only; keep right-side controls above (z-30) */}
-          <button
-            type="button"
-            className="absolute inset-0 z-[25] cursor-default bg-black/20"
-            aria-label="Dismiss weather"
-            onClick={() => setWeatherOpen(false)}
-          />
-          <section
-            className="scrollbar-hide absolute bottom-0 left-0 right-0 z-40 max-h-[min(78svh,640px)] overflow-y-auto overscroll-contain rounded-t-3xl border border-neutral-200 border-b-0 bg-white px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 text-neutral-900 shadow-[0_-12px_40px_rgba(15,23,42,.14)]"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Weather"
-          >
-            {/* Header: place + as of · close on right */}
-            <div className="mb-4 flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <h2 className="truncate text-[17px] font-bold leading-tight text-neutral-900">
-                  {weather.placeName}
-                </h2>
-                <p className="mt-0.5 text-[13px] text-neutral-500">
-                  As of{" "}
-                  {new Intl.DateTimeFormat("en", {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  }).format(new Date())}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setWeatherOpen(false)}
-                className="flex size-9 shrink-0 items-center justify-center rounded-full text-neutral-600 hover:bg-neutral-100"
-                aria-label="Close weather"
-              >
-                <XIcon className="size-5" strokeWidth={2.25} />
-              </button>
-            </div>
-
-            {weather.loading && weather.temperature == null ? (
-              <div className="flex justify-center py-12">
-                <LoaderCircleIcon className="size-8 animate-spin text-neutral-400" />
-              </div>
-            ) : weather.error ? (
-              <p className="py-10 text-center text-sm text-neutral-500">{weather.error}</p>
-            ) : (
-              <>
-                {/* Condition */}
-                <div className="mb-3 flex items-center gap-2 text-[15px] font-semibold text-neutral-900">
-                  <span>{weatherLabel(weather.code)}</span>
-                  <WeatherIcon code={weather.code} className="size-5 text-neutral-500" />
-                </div>
-
-                {/* Main grid — photo layout, E-Boses light chrome */}
-                <div className="grid grid-cols-2 gap-x-6 gap-y-4">
-                  <div>
-                    <p className="text-[40px] font-bold leading-none tracking-tight text-neutral-900">
-                      {weather.temperature != null
-                        ? `${Math.round(weather.temperature)}°C`
-                        : "—"}
-                    </p>
-                  </div>
-                  <div className="pt-1">
-                    <p className="text-[12px] text-neutral-500">Day</p>
-                    <p className="text-[22px] font-bold leading-tight text-neutral-900">
-                      {weather.daily[0]
-                        ? `${Math.round(weather.daily[0].high)}°`
-                        : weather.temperature != null
-                          ? `${Math.round(weather.temperature)}°`
-                          : "—"}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p className="text-[12px] text-neutral-500">Night</p>
-                    <p className="text-[22px] font-bold leading-tight text-neutral-900">
-                      {weather.daily[0]
-                        ? `${Math.round(weather.daily[0].low)}°`
-                        : "—"}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[12px] text-neutral-500">Feels like</p>
-                    <p className="text-[22px] font-bold leading-tight text-neutral-900">
-                      {weather.feelsLike != null
-                        ? `${Math.round(weather.feelsLike)}°`
-                        : "—"}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p className="text-[12px] text-neutral-500">Precipitation</p>
-                    <p className="text-[22px] font-bold leading-tight text-neutral-900">
-                      {weather.daily[0]
-                        ? `${Math.round(weather.daily[0].rain)}%`
-                        : weather.precipitation != null
-                          ? `${Math.round(weather.precipitation)} mm`
-                          : "—"}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[12px] text-neutral-500">Wind</p>
-                    <p className="text-[22px] font-bold leading-tight text-neutral-900">
-                      {weather.wind != null
-                        ? `${Math.round(weather.wind)} km/h`
-                        : "—"}
-                    </p>
-                  </div>
-                </div>
-
-                {/* 5-day rows */}
-                {weather.daily.length > 0 ? (
-                  <div className="mt-5 space-y-3 border-t border-neutral-100 pt-4">
-                    {weather.daily.map((day) => (
-                      <div
-                        key={day.day}
-                        className="grid grid-cols-[44px_28px_minmax(0,1fr)_minmax(0,1fr)_40px] items-center gap-1 text-[15px]"
-                      >
-                        <span className="font-bold text-neutral-900">{day.day}</span>
-                        <WeatherIcon
-                          code={day.code}
-                          className="size-5 text-neutral-500"
-                        />
-                        <span className="font-semibold text-neutral-900">
-                          {Math.round(day.high)}°
-                        </span>
-                        <span className="inline-flex items-center gap-1 font-semibold text-neutral-600">
-                          <WindIcon className="size-3.5 shrink-0 text-neutral-400" />
-                          {Math.round(day.low)}°
-                        </span>
-                        <span className="inline-flex items-center justify-end gap-0.5 font-semibold text-neutral-600">
-                          <DropletsIcon className="size-3.5 shrink-0" />
-                          {day.rain}%
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </>
-            )}
-
-            {/* Bottom fade — signals there's more below without a scrollbar.
-                Sticky (not absolute) so it stays pinned to the sheet's bottom
-                edge while the content scrolls under it. */}
-            <div
-              aria-hidden
-              className="pointer-events-none sticky bottom-0 -mt-12 h-12 shrink-0 bg-gradient-to-t from-white via-white/70 to-transparent"
-            />
-          </section>
-        </>
       ) : null}
 
       {isDesktop ? (
@@ -1784,7 +1449,7 @@ export default function ResidentAlertsMapPage() {
             <CircleAlertIcon className="size-5 shrink-0 text-neutral-800" strokeWidth={2.25} />
           </button>
         )
-      ) : weatherOpen ? null : (
+      ) : (
         /* Mobile draggable sheet — solid white so map content never shows through */
         <div
           className={cn(
@@ -1834,35 +1499,48 @@ export default function ResidentAlertsMapPage() {
               >
                 {/* Filters always visible in preview + list (not on expanded detail) */}
                 {!showDetail ? (
-                  <div className="shrink-0 border-b border-neutral-100 bg-white px-3 pb-2 pt-0.5">
-                    <button
-                      type="button"
-                      className="mb-2 w-full text-left"
-                      onClick={() => snapSheetTo("expanded")}
-                    >
-                      <p className="text-[15px] font-bold text-neutral-900">
-                        Alerts in {weatherPlace}
-                      </p>
-                      <p className="text-[12px] text-neutral-500">
-                        {mapItemCount} on the map
-                        {filteredEmergencies.length > 0
-                          ? ` · ${filteredEmergencies.length} SOS`
-                          : ""}
-                        {!showFull ? " · Drag up or tap for all" : ""}
-                      </p>
-                    </button>
-                    <CategoryFilterChips
-                      chips={chips}
-                      chip={chip}
-                      filterLoading={filterLoading}
+                  <div className="shrink-0 bg-white px-3 pb-2 pt-0.5">
+                    <div className="mb-2 flex items-center gap-2.5">
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 text-left"
+                        onClick={() => snapSheetTo("expanded")}
+                      >
+                        <p className="text-[15px] font-bold text-neutral-900">
+                          {weatherOpen ? "Weather in" : "Alerts in"}{" "}
+                          <span className="text-brand-orange" style={{ color: "var(--color-brand-orange)" }}>
+                            {weatherPlace}
+                          </span>
+                        </p>
+                        <p className="text-[12px] text-neutral-500">
+                          {weatherOpen
+                            ? `As of ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+                            : `${mapItemCount} on the map${filteredEmergencies.length > 0 ? ` · ${filteredEmergencies.length} SOS` : ""}${!showFull ? " · Drag up or tap for all" : ""}`}
+                        </p>
+                      </button>
+                      {!isDesktop ? weatherToggle : null}
+                    </div>
+                    <ResidentFilterRows
+                      chip={weatherOpen ? "" : chip}
+                      categories={filterCats}
+                      categoriesOpen={categoriesOpen}
+                      onToggleCategories={() => setCategoriesOpen((value) => !value)}
+                      loading={filterLoading}
                       onSelect={(key) => void applyChip(key)}
                     />
                   </div>
                 ) : null}
 
                 {!showFull ? (
-                  <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white px-3 pb-3 pt-2">
-                    {filterLoading ? (
+                  <div
+                    className={cn(
+                      "scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white pb-3 pt-2",
+                      weatherOpen ? "px-4" : "px-3",
+                    )}
+                  >
+                    {weatherOpen ? (
+                      <MapWeatherCard weather={weather} framed={false} />
+                    ) : filterLoading ? (
                       <div className="flex flex-col items-center justify-center gap-2 py-8">
                         <LoaderCircleIcon className="size-7 animate-spin text-neutral-400" />
                         <p className="text-[13px] font-medium text-neutral-500">Loading…</p>
@@ -1903,8 +1581,15 @@ export default function ResidentAlertsMapPage() {
                   <div className="h-full min-h-0 overflow-hidden bg-white">{panelBody}</div>
                 ) : (
                   /* Expanded list: filters already shown above — list only */
-                  <div className="scrollbar-hide relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4 pt-2">
-                    {filterLoading ? (
+                  <div
+                    className={cn(
+                      "scrollbar-hide relative min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4 pt-2",
+                      weatherOpen ? "px-4" : "px-3",
+                    )}
+                  >
+                    {weatherOpen ? (
+                      <MapWeatherCard weather={weather} framed={false} />
+                    ) : filterLoading ? (
                       <div className="flex flex-col items-center justify-center gap-2 py-14">
                         <LoaderCircleIcon className="size-8 animate-spin text-neutral-400" />
                         <p className="text-[13px] font-medium text-neutral-500">Loading…</p>

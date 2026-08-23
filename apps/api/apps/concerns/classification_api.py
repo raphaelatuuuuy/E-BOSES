@@ -227,10 +227,10 @@ class OfficialClassificationView(APIView):
     parser_classes = [JSONParser]
 
     def get(self, request):
-        return Response(ClassificationConfigurationSerializer(ConcernClassificationConfiguration.current()).data)
+        return Response(ClassificationConfigurationSerializer(ConcernClassificationConfiguration.current_fresh()).data)
 
     def patch(self, request):
-        config = ConcernClassificationConfiguration.current()
+        config = ConcernClassificationConfiguration.current_fresh()
         serializer = ClassificationConfigurationSerializer(config, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save(updated_by=request.user)
@@ -337,7 +337,9 @@ class OfficialClassificationResetView(APIView):
 
     def post(self, request):
         ConcernClassificationConfiguration.objects.filter(pk=1).delete()
-        config = ConcernClassificationConfiguration.current()
+        # Fresh fetch: current() may hand back the just-deleted cached row,
+        # whose update_fields save would affect zero rows.
+        config = ConcernClassificationConfiguration.current_fresh()
         config.updated_by = request.user
         config.save(update_fields=["updated_by", "updated_at"])
         return Response(ClassificationConfigurationSerializer(config).data)

@@ -13,7 +13,7 @@ from django.conf import settings
 from rest_framework import status
 from rest_framework.response import Response
 
-ALLOWLIST_ASNS = {"AS9299", "AS4775", "AS139831", "AS14593"}  # PLDT, Globe, DITO, Starlink PH
+DEFAULT_ALLOWLIST_ASNS = {"AS9299", "AS4775", "AS139831", "AS14593"}  # PLDT, Globe, DITO, Starlink PH
 KNOWN_TYPES = {"isp", "cellular"}
 BLOCKED_REASONS = (
     "outside_philippines",
@@ -22,6 +22,10 @@ BLOCKED_REASONS = (
     "suspicious_network",
     "unknown_isp",
 )
+
+
+def _allowed_asns():
+    return frozenset(getattr(settings, "IP_INTEL_ALLOWED_ASNS", None) or DEFAULT_ALLOWLIST_ASNS)
 
 
 def enabled() -> bool:
@@ -190,7 +194,7 @@ def evaluate(payload: dict):
     }
     ip_type = facts["conn_type"]
 
-    if asn in ALLOWLIST_ASNS:
+    if asn in _allowed_asns():
         return True, None, {**meta, "verdict": "allowlisted"}
     if country and country != "PH":
         return False, "outside_philippines", meta

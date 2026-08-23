@@ -307,6 +307,17 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, option
   return pending
 }
 
+export interface ListEnvelope<T> {
+  count: number
+  next: string | null
+  previous: string | null
+  results: T[]
+}
+
+export function unwrapList<T>(payload: T[] | ListEnvelope<T>): T[] {
+  return Array.isArray(payload) ? payload : payload.results
+}
+
 async function requestWithRefresh<T>(path: string, init: RequestInit, options: ApiRequestOptions) {
   try {
     return await request<T>(path, init, options)

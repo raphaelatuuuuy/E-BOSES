@@ -41,6 +41,8 @@ import {
 import {
   CommentThread,
   fromConcernComment,
+  type CommentThreadAnchor,
+  type UnifiedComment,
 } from "@/features/dashboard/components/comments"
 import {
   CommentComposer,
@@ -58,7 +60,7 @@ import {
  *
  * The resolution banner and the "neighbours also reported this" roll-up stay
  * local: they look like comments but are not, so they keep their own row and
- * are passed in as the thread's header.
+ * are passed in as thread anchors that pin their replies beneath them.
  */
 function resolutionOfficial(post: Concern) {
   const evidence = (post.resolution_evidence ?? []).filter((item) =>
@@ -72,6 +74,19 @@ function resolutionOfficial(post: Concern) {
 
 function relatedReports(post: Concern) {
   return post.community_incident?.reports?.filter((entry) => !entry.is_primary) ?? []
+}
+
+function officialReplyPrefix(post: Concern) {
+  const official = resolutionOfficial(post)
+  return official?.id
+    ? `${mentionToken(toMentionUser(official))} `
+    : `${firstNameOf(official?.full_name || "Barangay Hall")} `
+}
+
+function reportReplyPrefix(entry: CommunityIncidentReport) {
+  return entry.reporter_id
+    ? `${mentionToken(toMentionUser({ id: entry.reporter_id, full_name: entry.reporter_name }))} `
+    : `${firstNameOf(entry.reporter_name)} `
 }
 
 function PostCommentsBlock({
@@ -101,6 +116,8 @@ function PostCommentsBlock({
   onReport: (commentId: number) => void
   commentFieldId: string
 }) {
+  const [reportsOpen, setReportsOpen] = useState(true)
+
   if (!isExpanded) return null
 
   const mentionUsers = collectThreadMentionUsers(post, sessionUser)
@@ -117,12 +134,77 @@ function PostCommentsBlock({
     )
   }
 
-  const unified = post.comments.map((comment) => fromConcernComment(comment, sessionUser))
+  const linked = relatedReports(post)
+  const bannerPrefix = officialReplyPrefix(post)
+  const bannerReplies: UnifiedComment[] = []
+  const reportReplies = new Map<number, UnifiedComment[]>()
+  const rest: UnifiedComment[] = []
+  for (const comment of post.comments.map((row) => fromConcernComment(row, sessionUser))) {
+    const report = linked.find((entry) => comment.body.startsWith(reportReplyPrefix(entry)))
+    if (report) {
+      const list = reportReplies.get(report.id) ?? []
+      list.push(comment)
+      reportReplies.set(report.id, list)
+    } else if (comment.body.startsWith(bannerPrefix)) {
+      bannerReplies.push(comment)
+    } else {
+      rest.push(comment)
+    }
+  }
+
+  const anchors: CommentThreadAnchor[] = []
+  if (statusGroupOf(post.status) === "closed") {
+    anchors.push({
+      key: "resolution",
+      node: (
+        <ResolutionBanner
+          post={post}
+          sessionUser={sessionUser}
+          mentionUsers={mentionUsers}
+          replyPrefix={bannerPrefix}
+          trunk={bannerReplies.length > 0}
+          onSubmitReply={onSubmitInline}
+        />
+      ),
+      comments: bannerReplies,
+    })
+  }
+  if (linked.length > 0) {
+    anchors.push({
+      key: "neighbours",
+      node: (
+        <RelatedReportsToggle
+          count={linked.length}
+          open={reportsOpen}
+          onToggle={() => setReportsOpen((value) => !value)}
+        />
+      ),
+      comments: [],
+    })
+  }
+  if (reportsOpen) {
+    for (const entry of linked) {
+      anchors.push({
+        key: `report-${entry.id}`,
+        node: (
+          <NeighbourReportRow
+            entry={entry}
+            post={post}
+            sessionUser={sessionUser}
+            mentionUsers={mentionUsers}
+            trunk={(reportReplies.get(entry.id)?.length ?? 0) > 0}
+            onSubmitReply={onSubmitInline}
+          />
+        ),
+        comments: reportReplies.get(entry.id) ?? [],
+      })
+    }
+  }
 
   return (
     <CommentThread
       className="pt-1"
-      comments={unified}
+      comments={rest}
       sessionUser={sessionUser}
       mentionUsers={mentionUsers}
       composerId={commentFieldId}
@@ -137,22 +219,7 @@ function PostCommentsBlock({
       onEdit={onEdit}
       onDelete={onDelete}
       onReport={onReport}
-      header={
-        <>
-          <ResolutionBanner
-            post={post}
-            sessionUser={sessionUser}
-            mentionUsers={mentionUsers}
-            onSubmitReply={onSubmitInline}
-          />
-          <RelatedReports
-            post={post}
-            sessionUser={sessionUser}
-            mentionUsers={mentionUsers}
-            onSubmitReply={onSubmitInline}
-          />
-        </>
-      }
+      anchors={anchors}
     />
   )
 }
@@ -186,6 +253,7 @@ function CommentRow({
   meta,
   badge,
   actions,
+  trunk = false,
   children,
 }: {
   avatar: ReactNode
@@ -193,11 +261,16 @@ function CommentRow({
   meta: string
   badge?: ReactNode
   actions?: ReactNode
+  /** Runs the thread trunk down from this avatar — set when it has pinned replies. */
+  trunk?: boolean
   children: ReactNode
 }) {
   return (
-    <div className="flex items-start gap-2.5">
-      <div className="relative shrink-0">{avatar}</div>
+    <div className="flex items-stretch gap-2.5">
+      <div className="flex w-8 shrink-0 flex-col items-center">
+        <div className="relative shrink-0">{avatar}</div>
+        {trunk ? <span aria-hidden className="mt-1.5 w-px flex-1 bg-neutral-200" /> : null}
+      </div>
       <div className="min-w-0 flex-1">
         <p className="flex flex-wrap items-center gap-x-1.5 text-[13px] leading-snug">
           <span className="font-semibold text-neutral-900">{name}</span>
@@ -217,11 +290,15 @@ function ResolutionBanner({
   post,
   sessionUser,
   mentionUsers,
+  replyPrefix,
+  trunk = false,
   onSubmitReply,
 }: {
   post: Concern
   sessionUser: PublicUser | null
   mentionUsers: MentionUser[]
+  replyPrefix: string
+  trunk?: boolean
   onSubmitReply: (body: string) => Promise<void> | void
 }) {
   const [replyOpen, setReplyOpen] = useState(false)
@@ -249,9 +326,6 @@ function ResolutionBanner({
   const when = closingEvent?.created_at ?? post.updated_at
 
   const officialName = official?.full_name || "Barangay Hall"
-  const replyPrefix = official?.id
-    ? `${mentionToken(toMentionUser(official))} `
-    : `${firstNameOf(officialName)} `
   const positive = post.status === "resolved"
 
   async function submitReply() {
@@ -282,6 +356,7 @@ function ResolutionBanner({
       </p>
 
       <CommentRow
+        trunk={trunk}
         avatar={
           official ? (
             <>
@@ -358,34 +433,53 @@ function ResolutionBanner({
   )
 }
 
-function RelatedReports({
+function RelatedReportsToggle({
+  count,
+  open,
+  onToggle,
+}: {
+  count: number
+  open: boolean
+  onToggle: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      className="flex items-center gap-1.5 text-[12px] font-semibold text-neutral-600 transition-colors hover:text-neutral-900"
+    >
+      <UsersIcon className="size-3.5 shrink-0" strokeWidth={2.2} />
+      {count === 1
+        ? "1 neighbour also reported this"
+        : `${count} neighbours also reported this`}
+      <span className="text-neutral-400">{open ? "· Hide" : "· Show"}</span>
+    </button>
+  )
+}
+
+function NeighbourReportRow({
+  entry,
   post,
   sessionUser,
   mentionUsers,
+  trunk = false,
   onSubmitReply,
 }: {
+  entry: CommunityIncidentReport
   post: Concern
   sessionUser: PublicUser | null
   mentionUsers: MentionUser[]
+  trunk?: boolean
   onSubmitReply: (body: string) => Promise<void> | void
 }) {
-  const [open, setOpen] = useState(true)
-  const [replyOpenId, setReplyOpenId] = useState<number | null>(null)
+  const [replyOpen, setReplyOpen] = useState(false)
   const [replyDraft, setReplyDraft] = useState("")
   const [replyBusy, setReplyBusy] = useState(false)
 
-  const linked = relatedReports(post)
-  if (linked.length === 0) return null
-
-  const photosFor = (reportId: number) =>
-    (post.community_incident?.photos ?? []).filter(
-      (photo) => photo.report_id === reportId && photo.mime_type?.startsWith("image/"),
-    )
-
-  const replyPrefixFor = (entry: CommunityIncidentReport) =>
-    entry.reporter_id
-      ? `${mentionToken(toMentionUser({ id: entry.reporter_id, full_name: entry.reporter_name }))} `
-      : `${firstNameOf(entry.reporter_name)} `
+  const photos = (post.community_incident?.photos ?? []).filter(
+    (photo) => photo.report_id === entry.id && photo.mime_type?.startsWith("image/"),
+  )
 
   async function submitReply() {
     const body = replyDraft.trim()
@@ -394,95 +488,68 @@ function RelatedReports({
     try {
       await onSubmitReply(body)
       setReplyDraft("")
-      setReplyOpenId(null)
+      setReplyOpen(false)
     } finally {
       setReplyBusy(false)
     }
   }
 
   return (
-    <div>
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        className="flex items-center gap-1.5 text-[12px] font-semibold text-neutral-600 transition-colors hover:text-neutral-900"
-      >
-        <UsersIcon className="size-3.5 shrink-0" strokeWidth={2.2} />
-        {linked.length === 1
-          ? "1 neighbour also reported this"
-          : `${linked.length} neighbours also reported this`}
-        <span className="text-neutral-400">{open ? "· Hide" : "· Show"}</span>
-      </button>
-
-      {open ? (
-        <div className="mt-2.5 space-y-3.5">
-          {linked.map((entry) => {
-            const photos = photosFor(entry.id)
-            const isReplying = replyOpenId === entry.id
-            return (
-              <div key={entry.id}>
-                <CommentRow
-                  avatar={
-                    <span className="flex size-8 items-center justify-center rounded-full bg-slate-soft text-[13px] font-semibold text-navy-muted">
-                      {entry.reporter_name.slice(0, 1).toUpperCase()}
-                    </span>
-                  }
-                  name={entry.reporter_name}
-                  meta={`${timeAgo(entry.submitted_at)} · also reported this`}
-                  actions={
-                    <CommentAction
-                      onClick={() => {
-                        if (isReplying) {
-                          setReplyOpenId(null)
-                          return
-                        }
-                        setReplyDraft(replyPrefixFor(entry))
-                        setReplyOpenId(entry.id)
-                      }}
-                    >
-                      {isReplying ? "Cancel" : "Reply"}
-                    </CommentAction>
-                  }
-                >
-                  <p className="mt-0.5 text-[14px] leading-relaxed text-neutral-900">
-                    {entry.description}
-                  </p>
-                  {photos.length ? (
-                    <div className="mt-1.5 flex gap-1.5 overflow-x-auto">
-                      {photos.slice(0, 3).map((photo) => (
-                        <AuthenticatedMediaImage
-                          key={photo.id}
-                          src={mediaDisplaySource(photo)}
-                          alt=""
-                          className="h-24 w-32 shrink-0 rounded-xl object-cover"
-                        />
-                      ))}
-                    </div>
-                  ) : null}
-                </CommentRow>
-
-                {isReplying ? (
-                  <div className={cn("mt-2.5", REPLY_INDENT)}>
-                    <CommentComposer
-                      compact
-                      autoFocus
-                      value={replyDraft}
-                      onChange={setReplyDraft}
-                      onSubmit={() => void submitReply()}
-                      placeholder={`Reply to ${firstNameOf(entry.reporter_name)}…`}
-                      sessionUser={sessionUser}
-                      mentionUsers={mentionUsers}
-                      disabled={replyBusy}
-                    />
-                  </div>
-                ) : null}
-              </div>
-            )
-          })}
+    <CommentRow
+      trunk={trunk}
+      avatar={
+        <span className="flex size-8 items-center justify-center rounded-full bg-slate-soft text-[13px] font-semibold text-navy-muted">
+          {entry.reporter_name.slice(0, 1).toUpperCase()}
+        </span>
+      }
+      name={entry.reporter_name}
+      meta={`${timeAgo(entry.submitted_at)} · also reported this`}
+      actions={
+        <CommentAction
+          onClick={() => {
+            if (replyOpen) {
+              setReplyOpen(false)
+              return
+            }
+            setReplyDraft(reportReplyPrefix(entry))
+            setReplyOpen(true)
+          }}
+        >
+          {replyOpen ? "Cancel" : "Reply"}
+        </CommentAction>
+      }
+    >
+      <p className="mt-0.5 text-[14px] leading-relaxed text-neutral-900">
+        {entry.description}
+      </p>
+      {photos.length ? (
+        <div className="mt-1.5 flex gap-1.5 overflow-x-auto">
+          {photos.slice(0, 3).map((photo) => (
+            <AuthenticatedMediaImage
+              key={photo.id}
+              src={mediaDisplaySource(photo)}
+              alt=""
+              className="h-24 w-32 shrink-0 rounded-xl object-cover"
+            />
+          ))}
         </div>
       ) : null}
-    </div>
+      {replyOpen ? (
+        <div className={cn("mt-2.5", REPLY_INDENT)}>
+          <CommentComposer
+            compact
+            autoFocus
+            value={replyDraft}
+            onChange={setReplyDraft}
+            onSubmit={() => void submitReply()}
+            placeholder={`Reply to ${firstNameOf(entry.reporter_name)}…`}
+            sessionUser={sessionUser}
+            mentionUsers={mentionUsers}
+            disabled={replyBusy}
+          />
+        </div>
+      ) : null}
+    </CommentRow>
   )
 }
 

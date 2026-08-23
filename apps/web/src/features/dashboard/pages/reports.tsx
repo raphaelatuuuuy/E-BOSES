@@ -24,8 +24,9 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { useDebouncedCallback } from "@/hooks/use-debounced-callback"
 import {
-  listManagedConcerns,
-  listMyConcerns,
+  getConcern,
+  listManagedConcernsPage,
+  listMyConcernsPage,
   type Concern,
   type ConcernMedia,
 } from "@/features/dashboard/api"
@@ -583,7 +584,7 @@ function OfficialConcernDashboard({
           onValueChange={setRecordTab}
           tabs={[
             { id: "details", label: "Details", content: detailsTabContent },
-            { id: "evidence", label: "Photos", count: current.media.length, content: evidenceTabContent },
+            { id: "evidence", label: "Photos", count: current.media?.length ?? 0, content: evidenceTabContent },
             { id: "chat", label: "Chat", content: chatTabContent },
 
             { id: "appeals", label: "Appeals", count: openAppealCount, content: appealsTabContent },
@@ -735,6 +736,9 @@ export default function ReportsPage() {
   const [selectedReport, setSelectedReport] = useState<string | null>(null)
   const [reportPage, setReportPage] = useState(1)
   const [reports, setReports] = useState<Concern[]>([])
+  const [nextReportPage, setNextReportPage] = useState<number | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [detailCache, setDetailCache] = useState<Record<string, Concern>>({})
   const [error, setError] = useState("")
   const [statusDialogOpen, setStatusDialogOpen] = useState(false)
   const filterScrollRef = useWheelScroll<HTMLDivElement>()
@@ -755,7 +759,11 @@ export default function ReportsPage() {
     setError("")
     try {
 
-      setReports(isOfficial ? await listManagedConcerns() : await listMyConcerns())
+      const envelope = isOfficial
+        ? await listManagedConcernsPage()
+        : await listMyConcernsPage()
+      setReports(envelope.results)
+      setNextReportPage(envelope.next ? 2 : null)
     } catch {
       setError(isOfficial ? "Could not load report management queue." : "Could not load your reports.")
     } finally {
@@ -763,6 +771,36 @@ export default function ReportsPage() {
       setLoaded(true)
     }
   }, [isOfficial])
+
+  const loadMoreReports = useCallback(async () => {
+    if (!nextReportPage || loadingMore) return
+    setLoadingMore(true)
+    setError("")
+    try {
+      const envelope = isOfficial
+        ? await listManagedConcernsPage(undefined, undefined, undefined, nextReportPage)
+        : await listMyConcernsPage(undefined, undefined, undefined, nextReportPage)
+      setReports((current) => [...current, ...envelope.results])
+      setNextReportPage(envelope.next ? nextReportPage + 1 : null)
+    } catch {
+      setError("Could not load more reports.")
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [isOfficial, nextReportPage, loadingMore])
+
+  useEffect(() => {
+    if (!selectedReport || detailCache[selectedReport]) return
+    let cancelled = false
+    getConcern(selectedReport)
+      .then((full) => {
+        if (!cancelled) setDetailCache((prev) => ({ ...prev, [selectedReport]: full }))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [selectedReport, detailCache])
 
   const eventRefresh = useDebouncedCallback(() => void loadReports(), 3000)
 
@@ -863,9 +901,11 @@ export default function ReportsPage() {
   const lastShown = Math.min(filtered.length, currentPage * residentReportsPageSize)
 
   const selected = selectedReport
-    ? reports.find(
+    ? detailCache[selectedReport] ??
+      reports.find(
         (report) => report.public_id === selectedReport || String(report.id) === selectedReport,
-      ) ?? null
+      ) ??
+      null
     : null
 
   function selectReport(report: Concern) {
@@ -875,6 +915,7 @@ export default function ReportsPage() {
 
   function updateReport(next: Concern) {
     setReports((current) => current.map((report) => report.id === next.id ? next : report))
+    setDetailCache((prev) => ({ ...prev, [next.public_id]: next }))
     setSelectedReport(next.public_id)
   }
 
@@ -887,9 +928,13 @@ export default function ReportsPage() {
     return (
       <OfficialConcernDashboard
         reports={reports}
-        selected={reports.find(
-          (report) => report.public_id === selectedReport || String(report.id) === selectedReport,
-        )}
+        selected={
+          (selectedReport ? detailCache[selectedReport] : undefined) ??
+          reports.find(
+            (report) => report.public_id === selectedReport || String(report.id) === selectedReport,
+          ) ??
+          undefined
+        }
         activeFilter={activeFilter}
         setActiveFilter={setActiveFilter}
         search={search}
@@ -1100,7 +1145,18 @@ export default function ReportsPage() {
                 <p className="text-[12px] text-neutral-500">
                   {firstShown}–{lastShown} of {filtered.length}
                 </p>
-                <div className="flex items-center gap-0.5">
+                <div className="flex items-center gap-2">
+                  {nextReportPage && (
+                    <button
+                      type="button"
+                      onClick={() => void loadMoreReports()}
+                      disabled={loadingMore}
+                      className="rounded-md border border-neutral-200 px-3 py-1.5 text-[12px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-50 disabled:opacity-40"
+                    >
+                      {loadingMore ? "Loading…" : "Load more"}
+                    </button>
+                  )}
+                  <div className="flex items-center gap-0.5">
                   <button
                     type="button"
                     onClick={() => setReportPage((v) => Math.max(1, v - 1))}
@@ -1135,6 +1191,7 @@ export default function ReportsPage() {
                   >
                     <ChevronRightIcon className="size-3.5" />
                   </button>
+                  </div>
                 </div>
               </div>
             )}

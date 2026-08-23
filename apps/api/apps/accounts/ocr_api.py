@@ -19,7 +19,6 @@ from rest_framework.views import APIView
 
 from apps.capabilities import MANAGE_USERS, user_has_capability
 
-from .media_services import ensure_residence_proof_preview
 from .models import (
     OCRConfigurationVersion,
     OCRDocumentType,
@@ -59,6 +58,16 @@ SAFE_SETTINGS = {
     "failure_action": (str, {"manual_review", "reject", "request_resubmission"}, None),
 }
 SAFE_CODE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
+
+
+def _delete_replaced_file(storage, old_name, new_name):
+    """Remove the previous blob when an upload replaces another, best effort."""
+    if not old_name or old_name == new_name:
+        return
+    try:
+        storage.delete(old_name)
+    except Exception:
+        pass
 
 
 def _official(request):
@@ -1047,7 +1056,19 @@ class OCRTestRunView(APIView):
 
                 process_test_run_task.delay(run.pk, side=test_side or "")
             except Exception:
-                process_test_run(run.pk, side=test_side)
+                # Never run a 60s OCR.space call on the request thread. Mark
+                # the run failed so the official sees it and can re-submit;
+                # a silently-queued row would sit here with no sweeper.
+                import logging as _logging
+
+                run.status = run.Status.ERROR
+                metadata = dict(run.metadata or {})
+                metadata["failure_reason"] = "task_broker_unavailable"
+                run.metadata = metadata
+                run.save(update_fields=["status", "metadata", "updated_at"])
+                _logging.getLogger(__name__).warning(
+                    "OCR test run %s marked error: broker submission failed", run.pk
+                )
         run.refresh_from_db()
         create_audit_log("ocr.test_run_created", actor=request.user, metadata={"run_id": run.pk, "document_type": document_type.code})
         return Response(_test_payload(run), status=status.HTTP_202_ACCEPTED)
@@ -1195,6 +1216,8 @@ class OCRDocumentSampleView(APIView):
         sample = document.samples.filter(name=side).order_by("-id").first()
         if sample is None:
             sample = OCRSample(document_type=document, name=side)
+        old_sample_name = sample.file.name if (sample.pk and sample.file) else ""
+        legacy_name = document.sample_file.name if (document.sample_file and side in {"front", "single"}) else ""
         sample.file = file
         sample.original_filename = (getattr(file, "name", None) or "sample.jpg")[:255]
         sample.mime_type = getattr(file, "content_type", "") or "image/jpeg"
@@ -1203,12 +1226,14 @@ class OCRDocumentSampleView(APIView):
         sample.created_by = request.user if request.user.is_authenticated else None
         sample.metadata = {**(sample.metadata or {}), "side": side}
         sample.save()
+        _delete_replaced_file(sample.file.storage, old_sample_name, sample.file.name)
 
         # Keep legacy sample_file in sync with primary canvas side (front or single)
         if side in {"front", "single"}:
             document.sample_file = file
             document.sample_original_filename = sample.original_filename[:255]
             document.save(update_fields=["sample_file", "sample_original_filename", "updated_at"])
+            _delete_replaced_file(document.sample_file.storage, legacy_name, document.sample_file.name)
         else:
             document.save(update_fields=["updated_at"])
 

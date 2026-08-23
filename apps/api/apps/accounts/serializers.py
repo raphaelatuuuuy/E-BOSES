@@ -5,6 +5,7 @@ from rest_framework import serializers
 import re
 
 from .models import AccountRequest, AuditLog, OTPChallenge, ResidentSettings, User
+from .selectors import find_user_by_identifier
 from .services import (
     ALLOWED_PROOF_EXTENSIONS,
     ALLOWED_PROOF_MIME_TYPES,
@@ -125,9 +126,7 @@ class LoginSerializer(serializers.Serializer):
     def validate(self, attrs):
         identifier = attrs["identifier"]
         password = attrs["password"]
-        user = get_user_model().objects.filter(email=identifier).first()
-        if user is None:
-            user = get_user_model().objects.filter(phone_number=identifier).first()
+        user = find_user_by_identifier(identifier)
         if user is None or not user.check_password(password):
             raise LoginRejected("invalid_credentials", "Invalid email or password.")
         # Suspended (self-deactivated) users may sign in to reactivate.

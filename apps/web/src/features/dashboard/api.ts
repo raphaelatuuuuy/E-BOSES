@@ -1,4 +1,4 @@
-import { apiRequest } from "@/lib/api"
+import { apiRequest, unwrapList, type ListEnvelope } from "@/lib/api"
 import type { EmergencyAlert } from "./emergency-api"
 
 export type ConcernCategory = "infrastructure" | "environment" | "public_safety" | "others"
@@ -593,17 +593,42 @@ export function checkConcernMedia(formData: FormData) {
   })
 }
 
-export function listMyConcerns(status?: string, dateFrom?: string, dateTo?: string) {
+export function listMyConcernsPage(
+  status?: string,
+  dateFrom?: string,
+  dateTo?: string,
+  page = 1,
+): Promise<ListEnvelope<Concern>> {
   const params = new URLSearchParams()
   if (status && status !== "all") params.set("status", status)
   if (dateFrom) params.set("date_from", dateFrom)
   if (dateTo) params.set("date_to", dateTo)
+  if (page > 1) params.set("page", String(page))
   const query = params.toString() ? `?${params.toString()}` : ""
-  return apiRequest<Concern[]>(`/concerns/mine/${query}`)
+  return apiRequest<ListEnvelope<Concern>>(`/concerns/mine/${query}`)
+}
+
+export function listMyConcerns(status?: string, dateFrom?: string, dateTo?: string) {
+  return listMyConcernsPage(status, dateFrom, dateTo).then(unwrapList)
 }
 
 export function listAssignedConcerns() {
-  return apiRequest<Concern[]>("/concerns/assigned/")
+  return apiRequest<Concern[]>("/concerns/assigned/").then(unwrapList)
+}
+
+export function listManagedConcernsPage(
+  status?: string,
+  category?: string,
+  search?: string,
+  page = 1,
+): Promise<ListEnvelope<Concern>> {
+  const params = new URLSearchParams()
+  if (status && status !== "all") params.set("status", status)
+  if (category && category !== "all") params.set("category", category)
+  if (search?.trim()) params.set("search", search.trim())
+  if (page > 1) params.set("page", String(page))
+  const query = params.toString() ? `?${params.toString()}` : ""
+  return apiRequest<ListEnvelope<Concern>>(`/concerns/manage/${query}`)
 }
 
 export function listManagedConcerns(
@@ -611,12 +636,7 @@ export function listManagedConcerns(
   category?: string,
   search?: string,
 ) {
-  const params = new URLSearchParams()
-  if (status && status !== "all") params.set("status", status)
-  if (category && category !== "all") params.set("category", category)
-  if (search?.trim()) params.set("search", search.trim())
-  const query = params.toString() ? `?${params.toString()}` : ""
-  return apiRequest<Concern[]>(`/concerns/manage/${query}`)
+  return listManagedConcernsPage(status, category, search).then(unwrapList)
 }
 
 export function listFeedConcerns(
@@ -926,7 +946,7 @@ export function getResponderDashboardSummary() {
 }
 
 export function listAnnouncements() {
-  return apiRequest<Announcement[]>("/announcements/")
+  return apiRequest<ListEnvelope<Announcement> | Announcement[]>("/announcements/").then(unwrapList)
 }
 
 export function getAnnouncementAreaContext() {
@@ -934,7 +954,7 @@ export function getAnnouncementAreaContext() {
 }
 
 export function listManagedAnnouncements() {
-  return apiRequest<Announcement[]>("/announcements/manage/")
+  return apiRequest<Announcement[]>("/announcements/manage/").then(unwrapList)
 }
 
 export function createManagedAnnouncement(payload: Partial<Announcement> | FormData) {
@@ -1020,7 +1040,7 @@ export function listBarangayEventCalendar(days = 60) {
 }
 
 export function listManagedBarangayEvents() {
-  return apiRequest<BarangayEvent[]>("/barangay-events/manage/")
+  return apiRequest<BarangayEvent[]>("/barangay-events/manage/").then(unwrapList)
 }
 
 export function createManagedBarangayEvent(payload: Partial<BarangayEvent>) {
@@ -1042,7 +1062,7 @@ export function deleteManagedBarangayEvent(id: number) {
 }
 
 export function listActiveResponders() {
-  return apiRequest<ActiveResponder[]>("/responders/active/")
+  return apiRequest<ActiveResponder[]>("/responders/active/").then(unwrapList)
 }
 
 export interface LiveMapGeometry {
@@ -1077,6 +1097,13 @@ export interface LiveMapConcern {
   title: string
   description: string
   category: ConcernCategory
+  category_ref: {
+    code: string
+    name: string
+    icon_key: string
+    custom_icon_label: string
+    icon_image_url: string
+  } | null
   status: ConcernStatus
   address: string
   barangay: string
@@ -1109,6 +1136,7 @@ export interface LiveMapEmergency {
   created_at: string
   updated_at: string
   resolved_at: string | null
+  preview_url: string | null
 }
 
 export type TravelProfile = "car" | "bike" | "foot"
@@ -1174,6 +1202,7 @@ export interface LiveMapAdvisory {
   street_geometries: LiveMapGeometry[]
   starts_at: string | null
   expires_at: string | null
+  image_url: string | null
 }
 
 export interface LiveMapSnapshot {
@@ -1230,6 +1259,13 @@ export interface ResidentMapConcern {
   title: string
   description: string
   category: ConcernCategory
+  category_ref: {
+    code: string
+    name: string
+    icon_key: string
+    custom_icon_label: string
+    icon_image_url: string
+  } | null
   status: ConcernStatus
   address: string
   barangay: string

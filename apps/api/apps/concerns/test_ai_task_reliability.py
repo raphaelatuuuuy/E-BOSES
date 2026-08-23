@@ -96,9 +96,14 @@ class ConcernAiTaskReliabilityTests(TestCase):
 
     @override_settings(IS_LOCAL_DEVELOPMENT=False)
     def test_completed_assessments_are_never_reset_by_a_broker_outage(self):
-        with NamedTemporaryFile(suffix=".pt") as model_file:
-            with self.settings(EBOSES_YOLO_MODEL_PATH=model_file.name):
-                process_concern_ai_task.run(self.concern.pk)
+        # The pipeline itself has dedicated tests; this one is about the
+        # enqueue path, so the heavy work is mocked to stay deterministic
+        # (the real fallback chain once left this row pending under load).
+        assessment = ConcernAiAssessment.objects.get(concern=self.concern)
+        assessment.status = ConcernAiAssessment.Status.COMPLETED
+        assessment.save(update_fields=["status"])
+        with patch("apps.concerns.ai.process_concern_ai", return_value=assessment):
+            process_concern_ai_task.run(self.concern.pk)
         with patch.object(process_concern_ai_task, "delay", side_effect=OSError("broker unavailable")):
             enqueue_concern_ai(self.concern.pk)
 

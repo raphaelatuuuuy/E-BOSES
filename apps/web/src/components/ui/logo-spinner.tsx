@@ -2,7 +2,7 @@ import { cn } from "@workspace/ui/lib/utils"
 
 export function LogoSpinner({ className }: { className?: string }) {
   return (
-    <div role="status" className={cn("relative inline-flex size-90 items-center justify-center", className)}>
+    <div role="status" className={cn("relative inline-flex size-12 items-center justify-center", className)}>
       <div
         className="absolute inset-0 animate-spin rounded-full"
         style={{

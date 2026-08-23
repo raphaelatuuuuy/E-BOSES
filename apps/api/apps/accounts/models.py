@@ -785,7 +785,9 @@ class ResidenceProof(models.Model):
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        indexes = [models.Index(fields=["sha256_hash"])]
+        # sha256_hash already carries db_index=True; a second identical index
+        # would just double the write cost.
+        indexes = []
 
 
 class ConsentRecord(models.Model):
@@ -1043,3 +1045,84 @@ class VerificationOverride(models.Model):
 
     def __str__(self):
         return f"{self.decision} override on check {self.verification_check_id}"
+
+
+class MediaPhashBand(models.Model):
+    """Banding index over media perceptual hashes.
+
+    One row per positional band of a phash (kind="full") or crop-block hash
+    (kind="block"). Block rows reuse band_index as block_position * 5 + band
+    position, so every family probes positionally: a pair within the Hamming
+    threshold always shares at least one identically-valued positional band
+    (pigeonhole over disjoint bands), so no true duplicate is ever missed,
+    while random cross-position value collisions are never candidates.
+    scope/object_id point at the owning media row (residence-proof,
+    concern-media); source_created_at mirrors the owner's upload time so a
+    retention window can bound candidate scans.
+    """
+
+    KIND_FULL = "full"
+    KIND_BLOCK = "block"
+
+    scope = models.CharField(max_length=32)
+    object_id = models.BigIntegerField()
+    kind = models.CharField(max_length=5)
+    band_index = models.PositiveSmallIntegerField()
+    band_value = models.CharField(max_length=4)
+    source_created_at = models.DateTimeField()
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["scope", "kind", "band_index", "band_value"],
+                name="mediaphash_lookup",
+            ),
+            models.Index(fields=["scope", "object_id"], name="mediaphash_owner"),
+        ]
+
+
+class DataSubjectRequest(models.Model):
+    """A resident's formal privacy request (PH Data Privacy Act).
+
+    Erasure requests are approved (or declined with a note) by an official in
+    Django admin; approval queues the wipe in apps.retention. One active
+    request per resident at a time.
+    """
+
+    class Kind(models.TextChoices):
+        ERASURE = "erasure", "Erasure of my data"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        DECLINED = "declined", "Declined"
+        COMPLETED = "completed", "Completed"
+
+    user = models.ForeignKey(
+        django_settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="data_subject_requests",
+    )
+    kind = models.CharField(max_length=16, choices=Kind.choices, default=Kind.ERASURE)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    note = models.TextField(blank=True)
+    requested_at = models.DateTimeField(auto_now_add=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    processed_by = models.ForeignKey(
+        django_settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="data_subject_requests_processed",
+    )
+
+    class Meta:
+        ordering = ["-requested_at"]
+        indexes = [
+            models.Index(fields=["user", "status"], name="dsr_user_status"),
+        ]
+
+    def __str__(self):
+        return f"{self.kind} request by {self.user_id} ({self.status})"

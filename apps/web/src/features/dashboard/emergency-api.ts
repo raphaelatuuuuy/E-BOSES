@@ -1,4 +1,4 @@
-import { apiRequest } from "@/lib/api"
+import { apiRequest, unwrapList } from "@/lib/api"
 import type {
   PublicUser,
   RouteApproach,
@@ -338,7 +338,7 @@ export function getActiveEmergency() {
 }
 
 export function listMyEmergencies() {
-  return apiRequest<EmergencyAlert[]>("/emergencies/mine/")
+  return apiRequest<EmergencyAlert[]>("/emergencies/mine/").then(unwrapList)
 }
 
 /**
@@ -349,11 +349,11 @@ export function listMyEmergencies() {
 export function listEmergencyQueue(scope?: "active" | "all") {
   return apiRequest<EmergencyAlert[]>(
     scope === "all" ? "/emergencies/queue/?scope=all" : "/emergencies/queue/",
-  )
+  ).then(unwrapList)
 }
 
 export function listAssignedEmergencies() {
-  return apiRequest<EmergencyAlert[]>("/emergencies/assigned/")
+  return apiRequest<EmergencyAlert[]>("/emergencies/assigned/").then(unwrapList)
 }
 
 /** Availability toggle. The unit is server-side only, same as shift start. */
@@ -379,7 +379,7 @@ export function updateEmergencyDuty(payload: {
 }
 
 export function listResponderShifts() {
-  return apiRequest<ResponderShift[]>("/emergencies/shifts/")
+  return apiRequest<ResponderShift[]>("/emergencies/shifts/").then(unwrapList)
 }
 
 export function getActiveResponderShift() {

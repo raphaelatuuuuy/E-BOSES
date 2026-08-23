@@ -803,10 +803,10 @@ class ResidentDashboardAPITests(APITestCase):
 
         self.assertEqual(summary.data["reports_submitted"], 2)
         self.assertEqual(summary.data["reports_resolved"], 1)
-        self.assertEqual([item["title"] for item in announcements.data], ["Published"])
+        self.assertEqual([item["title"] for item in announcements.data["results"]], ["Published"])
         self.assertEqual([item["title"] for item in events.data], ["Clinic"])
-        self.assertEqual([item["id"] for item in responders.data], [responder.pk])
-        self.assertNotIn("current_latitude", responders.data[0])
+        self.assertEqual([item["id"] for item in responders.data["results"]], [responder.pk])
+        self.assertNotIn("current_latitude", responders.data["results"][0])
         official = User.objects.create_user(
             email="responder-location-official@example.com",
             phone_number="+639100000116",
@@ -817,8 +817,8 @@ class ResidentDashboardAPITests(APITestCase):
         grant_captain(official)
         self.client.force_authenticate(official)
         official_response = self.client.get("/api/responders/active/")
-        self.assertEqual(official_response.data[0]["current_latitude"], "14.6516000")
-        self.assertEqual(official_response.data[0]["current_longitude"], "121.1208000")
+        self.assertEqual(official_response.data["results"][0]["current_latitude"], "14.6516000")
+        self.assertEqual(official_response.data["results"][0]["current_longitude"], "121.1208000")
 
     def test_barangay_official_can_update_report_status_and_timeline(self):
         User = get_user_model()
@@ -991,7 +991,7 @@ class ResidentDashboardAPITests(APITestCase):
         response = self.client.get("/api/concerns/manage/?status=active&q=drainage")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual([item["id"] for item in response.data], [first.pk])
+        self.assertEqual([item["id"] for item in response.data["results"]], [first.pk])
 
     def test_resident_cannot_view_report_management_queue(self):
         response = self.client.get("/api/concerns/manage/")
@@ -1284,7 +1284,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.client.force_authenticate(self.official)
         response = self.client.get("/api/concerns/manage/?ai=flagged")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn(concern.pk, [item["id"] for item in response.data])
+        self.assertIn(concern.pk, [item["id"] for item in response.data["results"]])
 
     @override_settings(OLLAMA_API_KEY="test-key")
     def test_ai_assessment_is_read_only_for_officials(self):
@@ -1526,7 +1526,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(announcement_response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(event_response.status_code, status.HTTP_201_CREATED)
         self.assertIsNotNone(announcement_response.data["published_at"])
-        self.assertEqual(public_response.data[0]["title"], "Cleanup Drive")
+        self.assertEqual(public_response.data["results"][0]["title"], "Cleanup Drive")
         self.assertTrue(
             Notification.objects.filter(
                 recipient=self.resident,
@@ -1617,7 +1617,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         evidence = self.client.get(f"/api/concerns/media/{media.pk}/raw/")
 
         self.assertEqual(assigned.status_code, status.HTTP_200_OK)
-        self.assertEqual([item["id"] for item in assigned.data], [concern.pk])
+        self.assertEqual([item["id"] for item in assigned.data["results"]], [concern.pk])
         self.assertEqual(detail.status_code, status.HTTP_200_OK)
         self.assertEqual(chat.status_code, status.HTTP_201_CREATED)
         self.assertEqual(evidence.status_code, status.HTTP_200_OK)
@@ -1644,7 +1644,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.client.force_authenticate(self.responder)
         removed = self.client.get("/api/concerns/assigned/")
         self.assertEqual(removed.status_code, status.HTTP_200_OK)
-        self.assertEqual(removed.data, [])
+        self.assertEqual(removed.data["results"], [])
 
     def test_official_reassignment_revokes_old_responder_and_activates_new_responder(self):
         User = get_user_model()
@@ -1706,7 +1706,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         new_access = self.client.get(f"/api/concerns/{concern.pk}/")
         assigned_list = self.client.get("/api/concerns/assigned/")
         self.assertEqual(new_access.status_code, status.HTTP_200_OK)
-        self.assertEqual([item["id"] for item in assigned_list.data], [concern.pk])
+        self.assertEqual([item["id"] for item in assigned_list.data["results"]], [concern.pk])
         self.assertTrue(
             Notification.objects.filter(
                 recipient=self.responder,

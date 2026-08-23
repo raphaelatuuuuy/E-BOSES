@@ -7,7 +7,6 @@ import {
   PlayIcon,
   ShieldCheckIcon,
   UserIcon,
-  XIcon,
 } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
@@ -63,12 +62,10 @@ function locationLabel(address: string | null | undefined, barangay: string | nu
 export function DetailPanel({
   selected,
   snapshot,
-  onClose,
   onEmergencyUpdated,
 }: {
   selected: Selection
   snapshot: LiveMapSnapshot
-  onClose: () => void
   onEmergencyUpdated: (emergency: LiveMapEmergency) => void
 }) {
   const navigate = useNavigate()
@@ -144,7 +141,7 @@ export function DetailPanel({
     const dutyValue =
       person.role === "first_responder" ? (person.is_on_duty ? "On duty" : "Off duty") : "Verified"
     return (
-      <PanelShell title={person.full_name} onClose={onClose}>
+      <PanelShell title={person.full_name}>
         <InfoRow icon={<UserIcon className="size-4" />} label="Role" value={roleLabel(person.role)} />
         {unit ? <InfoRow icon={<ShieldCheckIcon className="size-4" />} label="Unit" value={unit} /> : null}
         <InfoRow icon={<MapPinIcon className="size-4" />} label="Location" value={locationLabel(person.address, person.barangay)} />
@@ -160,7 +157,7 @@ export function DetailPanel({
     // name, so this panel says the same thing as the Concerns console for the
     // same report rather than showing "public_safety" / "in_progress".
     return (
-      <PanelShell title={concern.title} onClose={onClose}>
+      <PanelShell title={concern.title}>
         <InfoRow icon={<UserIcon className="size-4" />} label="Reported by" value={concern.reporter.full_name} />
         <InfoRow icon={<AlertTriangleIcon className="size-4" />} label="Category" value={concernCategoryLabel(concern)} />
         <InfoRow
@@ -450,21 +447,7 @@ export function DetailPanel({
   })
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-[11px] font-bold text-muted-foreground">
-          Alert details
-        </p>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close details"
-          className="rounded-control p-1 text-muted-foreground transition hover:bg-tint"
-        >
-          <XIcon className="size-4" />
-        </button>
-      </div>
-
+    <div className="space-y-3 px-3 pb-3 pt-2">
       {detailError ? (
         <div className="rounded-panel border border-severity-critical bg-severity-critical-surface p-3">
           <p className="text-xs font-bold text-severity-critical-ink">{detailError}</p>
@@ -487,7 +470,7 @@ export function DetailPanel({
         </div>
       ) : null}
 
-      <RecordDetail record={record} />
+      <RecordDetail record={record} embedded />
 
       {evidencePreview ? (
         <MediaLightbox

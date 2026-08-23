@@ -230,11 +230,11 @@ class DynamicConcernArchitectureTests(APITestCase):
         self.client.force_authenticate(self.responder)
         mine = self.client.get("/api/concerns/assigned/")
         self.assertEqual(mine.status_code, status.HTTP_200_OK)
-        self.assertEqual([item["id"] for item in mine.data], [concern.pk])
+        self.assertEqual([item["id"] for item in mine.data["results"]], [concern.pk])
         self.client.force_authenticate(self.other_responder)
         other = self.client.get("/api/concerns/assigned/")
         self.assertEqual(other.status_code, status.HTTP_200_OK)
-        self.assertEqual(other.data, [])
+        self.assertEqual(other.data["results"], [])
 
         self.client.force_authenticate(self.responder)
         timeline = self.client.post(

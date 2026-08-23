@@ -163,7 +163,9 @@ export function advisoryMarkerHtml(
     selected,
     tone,
     strokeWidth: meta.svgStrokeWidth,
+    tint: true,
     hoverGrow: true,
+    flat: true,
   })
 }
 

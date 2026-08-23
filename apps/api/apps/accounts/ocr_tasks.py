@@ -160,3 +160,51 @@ def purge_approved_id_images_task():
     out = StringIO()
     call_command("purge_approved_id_images", "--apply", stdout=out)
     return {"output": out.getvalue().strip().splitlines()[-1:]}
+
+
+@shared_task(time_limit=600, soft_time_limit=540)
+def purge_ocr_test_runs_task():
+    """Daily retention sweep for OCR diagnostic uploads (raw/ocr-tests/)."""
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    out = StringIO()
+    call_command("purge_ocr_test_runs", stdout=out)
+    return {"output": out.getvalue().strip().splitlines()[-1:]}
+
+
+@shared_task(
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+    time_limit=120,
+    soft_time_limit=90,
+)
+def generate_residence_proof_preview_task(self, proof_id):
+    """Render a proof's blurred preview off the request thread.
+
+    The proof preview route serves a placeholder and enqueues this when the
+    preview is missing; registration also enqueues it right after upload so
+    officials rarely wait.
+    """
+    from .media_services import ensure_residence_proof_preview
+    from .models import ResidenceProof
+
+    proof = ResidenceProof.objects.filter(pk=proof_id).first()
+    if not proof:
+        return {"proof_id": proof_id, "skipped": True}
+    ensure_residence_proof_preview(proof)
+    return {"proof_id": proof_id, "preview": True}
+
+
+def enqueue_residence_proof_preview(proof_id):
+    """Queue the preview render; local dev still renders inline without a broker."""
+    from django.conf import settings as django_settings
+
+    try:
+        generate_residence_proof_preview_task.delay(proof_id)
+    except Exception:
+        if getattr(django_settings, "IS_LOCAL_DEVELOPMENT", False):
+            generate_residence_proof_preview_task.run(proof_id)

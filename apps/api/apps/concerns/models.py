@@ -99,6 +99,8 @@ class Concern(models.Model):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["barangay", "latitude", "longitude"], name="concern_location_lookup"),
+            # Managed queue: filter status (+validation_status), sort newest activity.
+            models.Index(fields=["status", "updated_at"], name="concern_status_queue"),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -728,9 +730,11 @@ class ConcernClassificationConfiguration(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+    CLASSIFICATION_CONFIG_CACHE_KEY = "concerns:classification-config:v1"
+
     @classmethod
-    def current(cls):
-        defaults = {
+    def _config_defaults(cls):
+        return {
             "enabled_categories": list(Concern.Category.values),
             "suspicious_terms": ["asdf", "qwerty", "test", "testing", "12345"],
             "category_keywords": {
@@ -743,8 +747,50 @@ class ConcernClassificationConfiguration(models.Model):
             "nlp_provider": "ollama_cloud",
             "nlp_model": "gemma4:31b",
         }
-        obj, _ = cls.objects.get_or_create(pk=1, defaults=defaults)
+
+    @classmethod
+    def current(cls):
+        """The singleton configuration, cached briefly.
+
+        Serializers call this several times per concern row; uncached it was
+        ~30 DB queries per feed request (27 seconds over a WAN database at
+        ~100 ms/query). Officials' edits still apply within a minute because
+        save()/delete() invalidate the key.
+        """
+        from django.core.cache import cache
+
+        cached = cache.get(cls.CLASSIFICATION_CONFIG_CACHE_KEY)
+        if isinstance(cached, cls):
+            return cached
+        obj, _ = cls.objects.get_or_create(pk=1, defaults=cls._config_defaults())
+        cache.set(cls.CLASSIFICATION_CONFIG_CACHE_KEY, obj, 60)
         return obj
+
+    @classmethod
+    def current_fresh(cls):
+        """Uncached twin of current() for read/modify/write flows.
+
+        Mutating a cached instance breaks when the row was recreated elsewhere
+        (save(update_fields) hits zero rows); officials' config endpoints are
+        low-traffic, so they take the extra query.
+        """
+        obj, _ = cls.objects.get_or_create(pk=1, defaults=cls._config_defaults())
+        return obj
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        self._bust_cache()
+
+    def delete(self, *args, **kwargs):
+        result = super().delete(*args, **kwargs)
+        self._bust_cache()
+        return result
+
+    @staticmethod
+    def _bust_cache():
+        from django.core.cache import cache
+
+        cache.delete(ConcernClassificationConfiguration.CLASSIFICATION_CONFIG_CACHE_KEY)
 
 class ConcernAssignment(models.Model):
     class Status(models.TextChoices):

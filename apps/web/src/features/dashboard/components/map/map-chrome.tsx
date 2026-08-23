@@ -35,6 +35,8 @@ export function MapControlButton({
   divider = false,
   children,
   className,
+  draggable = false,
+  onDragStart,
 }: {
   tone: MapTone
   label: string
@@ -45,12 +47,16 @@ export function MapControlButton({
   divider?: boolean
   children: ReactNode
   className?: string
+  draggable?: boolean
+  onDragStart?: (event: React.DragEvent<HTMLButtonElement>) => void
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={loading}
+      draggable={draggable}
+      onDragStart={onDragStart}
       aria-label={label}
       aria-pressed={active}
       title={label}

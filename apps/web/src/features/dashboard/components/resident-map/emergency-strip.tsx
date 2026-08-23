@@ -1,4 +1,4 @@
-import { AlertTriangleIcon, ChevronLeftIcon, CircleCheck } from "lucide-react"
+import { AlertTriangleIcon, ChevronLeftIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -62,8 +62,7 @@ export function EmergencyPreviewCard({
                 {live ? `Ongoing ${brief.title.toLowerCase()} around ${brief.street}` : brief.title}
               </p>
               {!live && (
-                <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold text-status-closed sm:text-[12px]">
-                  <CircleCheck className="size-3.5 shrink-0" strokeWidth={2.4} />
+                <span className="inline-flex shrink-0 items-center text-[11px] font-semibold text-neutral-500 sm:text-[12px]">
                   Resolved
                 </span>
               )}
@@ -142,8 +141,7 @@ export function EmergencyDetailPanel({
                 {st.live ? `Ongoing ${brief.title.toLowerCase()} around ${brief.street}` : brief.title}
               </p>
               {!st.live && (
-                <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold text-status-closed sm:text-[12px]">
-                  <CircleCheck className="size-3.5 shrink-0" strokeWidth={2.4} />
+                <span className="inline-flex shrink-0 items-center text-[11px] font-semibold text-neutral-500 sm:text-[12px]">
                   Resolved
                 </span>
               )}

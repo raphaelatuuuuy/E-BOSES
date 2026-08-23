@@ -93,3 +93,35 @@ def has_similar_phash_block(phash: str, blocks: list[str]) -> bool:
         is_similar_phash(phash, block, threshold=PHASH_BLOCK_DUPLICATE_THRESHOLD)
         for block in blocks
     )
+
+
+# Multi-index banding (Norouzi et al.): a 64-bit hash split into m disjoint
+# bands guarantees that any pair within Hamming distance t shares at least one
+# identically-valued band, as long as t < m — pigeonhole, since every band
+# would need at least one differing bit otherwise.
+PHASH_FULL_BAND_BITS = [6] * 9 + [5] * 2  # threshold 10 -> 11 bands
+PHASH_BLOCK_BAND_BITS = [13] * 4 + [12]  # threshold 4 -> 5 bands
+
+
+def split_phash_bands(hash_hex: str, band_bits: list[int]) -> list[str]:
+    """Positional band values of one pHash hex string.
+
+    Returns [] for malformed hashes so callers can skip indexing instead of
+    poisoning the lookup table with junk bands.
+    """
+    if not hash_hex or len(hash_hex) != 16:
+        return []
+    try:
+        value = int(hash_hex, 16)
+    except ValueError:
+        return []
+    bands = []
+    offset = 0
+    for bits in band_bits:
+        mask = (1 << bits) - 1
+        width = max(1, (bits + 3) // 4)
+        bands.append(format((value >> offset) & mask, f"0{width}x"))
+        offset += bits
+    if offset != 64:
+        return []
+    return bands

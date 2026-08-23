@@ -62,7 +62,7 @@ function ProtectedDashboard() {
   if (loading && !user) {
     return (
       <div className="flex min-h-svh items-center justify-center">
-        <LogoSpinner className="size-90" />
+        <LogoSpinner className="size-20" />
       </div>
     )
   }
@@ -89,7 +89,7 @@ function ProtectedOnboarding() {
   if (loading && !user) {
     return (
       <div className="flex min-h-svh items-center justify-center">
-        <LogoSpinner className="size-90" />
+        <LogoSpinner className="size-20" />
       </div>
     )
   }
@@ -159,7 +159,7 @@ function AlertsMapRoute() {
   if (loading && !user) {
     return (
       <div className="flex min-h-[50vh] items-center justify-center">
-        <LogoSpinner className="size-90" />
+        <LogoSpinner className="size-20" />
       </div>
     )
   }
@@ -184,7 +184,7 @@ function AccountInactiveGate() {
   if (loading && !user) {
     return (
       <div className="flex min-h-svh items-center justify-center">
-        <LogoSpinner className="size-90" />
+        <LogoSpinner className="size-20" />
       </div>
     )
   }
@@ -211,7 +211,7 @@ function AccountPendingGate() {
   if (loading && !user) {
     return (
       <div className="flex min-h-svh items-center justify-center">
-        <LogoSpinner className="size-90" />
+        <LogoSpinner className="size-20" />
       </div>
     )
   }

@@ -13,8 +13,8 @@ export const MAP_COLORS = {
   responderOffDuty: "#5d6785",
   resident: "#64748b",
   official: "#7c3aed",
-  resolved: "#16a34a",
-  you: "#2b7fff",
+  resolved: "#6b7280",
+  you: "#0a0a0a",
 } as const
 
 export type MarkerTone = "light" | "dark"
@@ -44,6 +44,23 @@ export const GLYPHS = {
   person: [
     "M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2",
     "M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
+  ],
+  // The three "you are here" glyphs — lucide's shield-user, user-round and
+  // user-star, hand-traced to path-only data since Leaflet divIcon HTML is
+  // built from raw <path> strings (their source icons use <circle> nodes).
+  userResponder: [
+    "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+    "M6.376 18.91a6 6 0 0 1 11.249.003",
+    "M12 7A4 4 0 1 1 12 15A4 4 0 1 1 12 7Z",
+  ],
+  userResident: [
+    "M20 21a8 8 0 0 0-16 0",
+    "M12 3A5 5 0 1 1 12 13A5 5 0 1 1 12 3Z",
+  ],
+  userOfficial: [
+    "M16.051 12.616a1 1 0 0 1 1.909.024l.737 1.452a1 1 0 0 0 .737.535l1.634.256a1 1 0 0 1 .588 1.806l-1.172 1.168a1 1 0 0 0-.282.866l.259 1.613a1 1 0 0 1-1.541 1.134l-1.465-.75a1 1 0 0 0-.912 0l-1.465.75a1 1 0 0 1-1.539-1.133l.258-1.613a1 1 0 0 0-.282-.866l-1.156-1.153a1 1 0 0 1 .572-1.822l1.633-.256a1 1 0 0 0 .737-.535z",
+    "M8 15H7a4 4 0 0 0-4 4v2",
+    "M10 3A4 4 0 1 1 10 11A4 4 0 1 1 10 3Z",
   ],
 } as const
 
@@ -94,12 +111,15 @@ function svg(paths: readonly string[], strokeWidth = 2.2, box = 26) {
 
 export interface GlyphPinOptions {
   paths: readonly string[]
+  /** Pre-rendered disc content (an <img> or short text) that replaces `paths` when given — for a category's custom uploaded icon or label. */
+  content?: string
   color: string
   size?: number
   selected?: boolean
   live?: boolean
   tone?: MarkerTone
   strokeWidth?: number
+  tint?: boolean
   /**
    * Renders muted grey until hovered, focused or selected — an opt-in used by
    * community-report pins so the map reads calm until something is actually
@@ -111,6 +131,10 @@ export interface GlyphPinOptions {
    * advisory pins. Maps that don't style `.is-hover-grow` are unaffected.
    */
   hoverGrow?: boolean
+  /** Drops the disc's drop-shadow — an opt-in used by advisory pins. */
+  flat?: boolean
+  /** Extra class(es) appended to the pin, for a one-off scoped CSS override. */
+  className?: string
 }
 
 /**
@@ -119,24 +143,31 @@ export interface GlyphPinOptions {
  */
 export function glyphPinHtml({
   paths,
+  content,
   color,
   size = 26,
   selected = false,
   live = false,
   tone = "light",
   strokeWidth = 2.2,
+  tint = false,
   idleNeutral = false,
   hoverGrow = false,
+  flat = false,
+  className = "",
 }: GlyphPinOptions) {
   const box = selected ? Math.round(size * 1.3) : size
   const ring = selected ? 3 : 2
   const neutralClass = idleNeutral && !selected ? " is-idle-neutral" : ""
   const hoverGrowClass = hoverGrow ? " is-hover-grow" : ""
+  const tintClass = tint ? " is-tint" : ""
+  const flatClass = flat ? " is-flat" : ""
+  const extraClass = className ? ` ${className}` : ""
   return `<span class="eboses-pin eboses-pin--glyph${live ? " is-live" : ""}${
-    tone === "dark" ? " is-dark" : ""
-  }${neutralClass}${hoverGrowClass}" style="--pin:${color};--size:${box}px;--ring:${ring}px">${
+    selected ? " is-selected" : ""
+  }${tone === "dark" ? " is-dark" : ""}${tintClass}${neutralClass}${hoverGrowClass}${flatClass}${extraClass}" style="--pin:${color};--size:${box}px;--ring:${ring}px">${
     live ? '<span class="eboses-pin__halo"></span>' : ""
-  }<span class="eboses-pin__disc">${svg(paths, strokeWidth, box)}</span></span>`
+  }<span class="eboses-pin__disc">${content ?? svg(paths, strokeWidth, box)}</span></span>`
 }
 
 export function glyphPinSize(size = 26, selected = false) {

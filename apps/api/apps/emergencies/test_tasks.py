@@ -121,13 +121,15 @@ class PeriodicHousekeepingTaskTests(TestCase):
 
 
 class BeatScheduleTests(TestCase):
-    """CELERY_BEAT_SCHEDULE registers every expected entry on the eboses queue."""
+    """CELERY_BEAT_SCHEDULE registers every expected entry on its proper queue."""
 
     EXPECTED_ENTRIES = {
         "ocr-health-canary",
         "ocr-recovery",
         "ocr-stuck-case-rescue",
         "purge-approved-id-images",
+        "purge-ocr-test-runs",
+        "recover-missing-emergency-previews",
         "emergency-assignment-escalation",
         "refresh-map-service-pois",
         "periodic-housekeeping",
@@ -135,17 +137,23 @@ class BeatScheduleTests(TestCase):
         "service-health-worker-heartbeat",
         "complete-unblocked-deletions",
         "retry-pending-concern-jobs",
+        "enforce-retention-limits",
     }
+
+    # Retention deletes files in bulk; it belongs on the heavy worker so a
+    # long sweep never delays SOS-path deliveries.
+    HEAVY_QUEUE_ENTRIES = {"enforce-retention-limits"}
 
     def test_every_expected_entry_is_present(self):
         self.assertSetEqual(set(settings.CELERY_BEAT_SCHEDULE), self.EXPECTED_ENTRIES)
 
-    def test_every_entry_runs_on_the_eboses_queue(self):
+    def test_every_entry_runs_on_its_designated_queue(self):
         for name, entry in settings.CELERY_BEAT_SCHEDULE.items():
+            expected_queue = "heavy" if name in self.HEAVY_QUEUE_ENTRIES else "eboses"
             self.assertEqual(
                 entry["options"]["queue"],
-                "eboses",
-                f"{name} must run on the eboses queue",
+                expected_queue,
+                f"{name} must run on the {expected_queue} queue",
             )
 
     def test_ocr_canary_and_recovery_run_every_five_minutes(self):

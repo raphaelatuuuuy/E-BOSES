@@ -1,4 +1,9 @@
-export { CommentThread, CommentToggleButton, type CommentThreadProps } from "./comment-thread"
+export {
+  CommentThread,
+  CommentToggleButton,
+  type CommentThreadAnchor,
+  type CommentThreadProps,
+} from "./comment-thread"
 export { CommentComposer, COMMENT_MIN_LENGTH } from "./comment-composer"
 export {
   CommentAction,

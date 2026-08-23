@@ -1,4 +1,5 @@
 from datetime import timedelta
+from io import BytesIO
 import logging
 from math import asin, cos, radians, sin, sqrt
 import re
@@ -10,6 +11,7 @@ from django.db import IntegrityError, models, transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import status
 from rest_framework.exceptions import ValidationError as ApiValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -18,7 +20,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated, user_has_role_permission
-from apps.accounts.media_services import log_raw_media_access
+from apps.accounts.media_services import log_raw_media_access, placeholder_preview_jpeg
 from apps.accounts.services import (
     create_audit_log,
     validate_emergency_media_file,
@@ -26,6 +28,8 @@ from apps.accounts.services import (
 )
 from apps.media_utils import phash_file, sha256_file
 from apps.accounts.views import request_meta, touch_last_seen
+from apps.docs_schema import PAGE_PARAMETERS, list_envelope_response
+from apps.pagination import paginate_response
 from apps.notifications.services import (
     broadcast_emergency_chat_message,
     broadcast_emergency_update,
@@ -95,8 +99,6 @@ from . import responder_actions, vocabulary
 from .location_services import classify_location_confidence, schedule_location_resolution
 from .tasks import enqueue_emergency_media_preview
 from .media_services import (
-    ensure_chat_attachment_preview,
-    ensure_emergency_media_preview,
     user_can_access_emergency_media,
     validate_chat_attachment,
 )
@@ -923,28 +925,44 @@ def active_alert_for_reporter(reporter):
     )
 
 
-def serialize_alert(alert, request):
-    alert = (
+ALERT_SERIALIZATION_PREFETCH = (
+    "media",
+    "status_events__actor",
+    "status_events__actor__resident_profile",
+    "appeals__appellant",
+    "appeals__appellant__resident_profile",
+    "appeals__reviewed_by",
+    "appeals__reviewed_by__resident_profile",
+    "escalations__escalated_to",
+    "escalations__escalated_to__resident_profile",
+    "escalations__triggered_by",
+    "escalations__triggered_by__resident_profile",
+    "assignments__responder",
+    "assignments__responder__resident_profile",
+    "assignments__location_pings",
+    "witness_notifications",
+    "assignment_logs",
+)
+
+
+def alert_serialization_queryset():
+    """Base queryset whose rows serialize without per-row refetch queries.
+
+    serialize_alert used to re-fetch each alert with this select_related +
+    prefetch stack, costing ~15 queries per row on every list endpoint.
+    Lists must build from here so the prefetch runs once for the page.
+    """
+    return (
         EmergencyAlert.objects
         .select_related("reporter", "reporter__resident_profile")
-        .prefetch_related(
-            "media",
-            "status_events__actor",
-            "status_events__actor__resident_profile",
-            "appeals__appellant",
-            "appeals__appellant__resident_profile",
-            "appeals__reviewed_by",
-            "appeals__reviewed_by__resident_profile",
-            "escalations__escalated_to",
-            "escalations__escalated_to__resident_profile",
-            "escalations__triggered_by",
-            "escalations__triggered_by__resident_profile",
-            "assignments__responder",
-            "assignments__responder__resident_profile",
-            "assignments__location_pings",
-        )
-        .get(pk=alert.pk)
+        .prefetch_related(*ALERT_SERIALIZATION_PREFETCH)
     )
+
+
+def serialize_alert(alert, request):
+    if not hasattr(alert, "_prefetched_objects_cache"):
+        # Single-alert path (detail views, idempotency lookups): fetch once.
+        alert = alert_serialization_queryset().get(pk=alert.pk)
     return EmergencyAlertSerializer(alert, context={"request": request}).data
 
 
@@ -991,6 +1009,11 @@ def finish_responder_shift(shift, *, ended_at=None, latitude=None, longitude=Non
     return shift
 
 
+def _preview_is_ready(preview_file):
+    name = (preview_file.name or "").lower() if preview_file else ""
+    return bool(name and "/redacted-v4-sam3-" in name and name.endswith(".jpg"))
+
+
 class EmergencyMediaPreviewView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1004,8 +1027,12 @@ class EmergencyMediaPreviewView(APIView):
                 {"detail": "You do not have permission to access this emergency media."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        preview = ensure_emergency_media_preview(media)
-        return FileResponse(preview.open("rb"), content_type="image/jpeg")
+        if _preview_is_ready(media.preview_file):
+            return FileResponse(media.preview_file.open("rb"), content_type="image/jpeg")
+        # Never run the SAM3 segmentation (up to a 60s HTTP call) on the
+        # request thread. Re-enqueue and serve a placeholder until done.
+        transaction.on_commit(lambda media_id=media.pk: enqueue_emergency_media_preview("media", media_id))
+        return FileResponse(BytesIO(placeholder_preview_jpeg()), content_type="image/jpeg")
 
 
 class EmergencyMediaRawView(APIView):
@@ -1042,10 +1069,14 @@ class EmergencyChatAttachmentView(APIView):
         if not user_can_access_emergency_media(request.user, attachment.message):
             return Response({"detail": "You do not have permission to access this attachment."}, status=status.HTTP_403_FORBIDDEN)
         if preview:
-            file_obj = ensure_chat_attachment_preview(attachment)
-            if not file_obj:
+            if attachment.media_type != "image":
                 return Response({"detail": "Video previews are unavailable."}, status=status.HTTP_404_NOT_FOUND)
-            return FileResponse(file_obj.open("rb"), content_type="image/jpeg")
+            if _preview_is_ready(attachment.preview_file):
+                return FileResponse(attachment.preview_file.open("rb"), content_type="image/jpeg")
+            transaction.on_commit(
+                lambda attachment_id=attachment.pk: enqueue_emergency_media_preview("chat", attachment_id)
+            )
+            return FileResponse(BytesIO(placeholder_preview_jpeg()), content_type="image/jpeg")
         log_raw_media_access(
             actor=request.user,
             target_user=attachment.message.alert.reporter,
@@ -1101,12 +1132,22 @@ class EmergencyCreateView(APIView):
         media_files = []
         media_hashes = set()
         media_warnings = []
-        for uploaded_file in request.FILES.getlist("media"):
+        uploaded_media = request.FILES.getlist("media")
+        if len(uploaded_media) > 5:
+            return Response(
+                {"media": ["Attach at most 5 photos per alert."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        for uploaded_file in uploaded_media:
             try:
                 validated_file = validate_emergency_media_file(uploaded_file)
             except ValidationError as exc:
-                media_warnings.append(f"{uploaded_file.name}: attachment was skipped ({exc}).")
-                continue
+                # An SOS must not silently lose evidence: reject the whole
+                # request so the resident can retake or drop the bad file.
+                return Response(
+                    {"media": [f"{uploaded_file.name}: {exc}"]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             media_hash = sha256_file(validated_file)
             raw_content = validated_file.read(); validated_file.seek(0)
             media_phash = phash_file(raw_content)
@@ -1455,21 +1496,60 @@ class MyActiveEmergencyView(APIView):
 class MyEmergencyHistoryView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        summary="My SOS history",
+        description=(
+            "Every alert the authenticated resident filed, newest first, with "
+            "status trail, assignments and media previews."
+        ),
+        request=None,
+        responses={200: list_envelope_response(EmergencyAlertSerializer, name="EmergencyListEnvelope")},
+        parameters=PAGE_PARAMETERS,
+        tags=["emergencies"],
+    )
     def get(self, request):
         touch_last_seen(request.user)
-        alerts = EmergencyAlert.objects.filter(reporter=request.user).order_by("-created_at")
-        return Response([serialize_alert(alert, request) for alert in alerts])
+        alerts = (
+            alert_serialization_queryset()
+            .filter(reporter=request.user)
+            .order_by("-created_at", "-id")
+        )
+        return paginate_response(request, alerts, lambda page: [serialize_alert(a, request) for a in page])
 
 
 class EmergencyQueueView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        summary="Dispatch queue",
+        description=(
+            "Officials' live queue. Default returns active alerts only; "
+            "`?scope=all` adds incidents closed within the last 30 days."
+        ),
+        request=None,
+        responses={200: list_envelope_response(EmergencyAlertSerializer, name="EmergencyListEnvelope")},
+        parameters=[*PAGE_PARAMETERS, OpenApiParameter(
+            name="scope", type=str, location=OpenApiParameter.QUERY,
+            enum=["active", "all"], description="`active` (default) or `all` with 30-day tail.",
+        )],
+        tags=["emergencies"],
+    )
     def get(self, request):
         touch_last_seen(request.user)
         if not can_manage_emergencies(request.user):
             return capability_denied(DISPATCH_EMERGENCIES)
-        alerts = EmergencyAlert.objects.filter(status__in=ACTIVE_STATUSES).order_by("-created_at")
-        return Response([serialize_alert(alert, request) for alert in alerts])
+        alerts = alert_serialization_queryset().all()
+        if request.query_params.get("scope") == "all":
+            # Closed incidents stay queryable for 30 days so the console's
+            # finished filters have content without scanning history.
+            cutoff = timezone.now() - timedelta(days=30)
+            alerts = alerts.filter(
+                models.Q(status__in=ACTIVE_STATUSES) | models.Q(updated_at__gte=cutoff)
+            )
+        else:
+            alerts = alerts.filter(status__in=ACTIVE_STATUSES)
+        alerts = alerts.order_by("-created_at", "-id")
+        return paginate_response(request, alerts, lambda page: [serialize_alert(a, request) for a in page])
 
 
 class ClaimableEmergencyView(APIView):
@@ -1479,13 +1559,24 @@ class ClaimableEmergencyView(APIView):
         profile = getattr(request.user, "resident_profile", None)
         if not can_manage_responder_shift(request.user) or not request.user.is_on_duty or not profile:
             return Response({"detail": "An eligible on-duty responder account is required."}, status=status.HTTP_403_FORBIDDEN)
-        candidates = EmergencyAlert.objects.filter(
-            status=EmergencyAlert.Status.SUBMITTED,
-            barangay__iexact=normalize_barangay(profile.barangay),
-            assignments__isnull=True,
-        ).order_by("-created_at")
-        alerts = [alert for alert in candidates if responder_is_eligible(request.user, alert)]
-        return Response([serialize_alert(alert, request) for alert in alerts])
+        candidates = (
+            alert_serialization_queryset()
+            .filter(
+                status=EmergencyAlert.Status.SUBMITTED,
+                barangay__iexact=normalize_barangay(profile.barangay),
+                assignments__isnull=True,
+            )
+            .order_by("-created_at", "-id")
+        )
+        return paginate_response(
+            request,
+            candidates,
+            lambda page: [
+                serialize_alert(alert, request)
+                for alert in page
+                if responder_is_eligible(request.user, alert)
+            ],
+        )
 
 
 class MyAssignedEmergencyView(APIView):
@@ -1496,16 +1587,16 @@ class MyAssignedEmergencyView(APIView):
         if not can_respond_to_emergencies(request.user):
             return Response({"detail": "You do not have permission to view assigned emergencies."}, status=status.HTTP_403_FORBIDDEN)
         alerts = (
-            EmergencyAlert.objects
+            alert_serialization_queryset()
             .filter(
                 assignments__responder=request.user,
                 assignments__status__in=["assigned", "acknowledged", "en_route", "arrived"],
                 status__in=ACTIVE_STATUSES,
             )
             .distinct()
-            .order_by("-created_at")
+            .order_by("-created_at", "-id")
         )
-        return Response([serialize_alert(alert, request) for alert in alerts])
+        return paginate_response(request, alerts, lambda page: [serialize_alert(a, request) for a in page])
 
 
 class EmergencyDutyView(APIView):
@@ -1815,7 +1906,11 @@ class EmergencyTypeRoleMapListCreateView(APIView):
         if not can_configure_emergencies(request.user, CONFIGURE_DISPATCH):
             return capability_denied(CONFIGURE_DISPATCH)
         maps = EmergencyTypeRoleMap.objects.all().order_by("emergency_type", "-priority", "id")
-        return Response(EmergencyTypeRoleMapSerializer(maps, many=True, context={"request": request}).data)
+        return paginate_response(
+            request,
+            maps,
+            lambda page: EmergencyTypeRoleMapSerializer(page, many=True, context={"request": request}).data,
+        )
 
     def post(self, request):
         touch_last_seen(request.user)

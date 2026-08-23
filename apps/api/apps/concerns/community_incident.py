@@ -21,19 +21,33 @@ def reporter_name(user):
 
 
 def group_members(concern):
-    """The primary plus every report merged into it, oldest first."""
-    primary = concern
-    seen = set()
-    while primary.duplicate_of_id and primary.duplicate_of_id not in seen:
-        seen.add(primary.pk)
-        primary = primary.duplicate_of
+    # Memoised per instance: the feed serializer calls this twice per concern
+    # (community_incident + also_reported_count) and each miss costs a query.
+    cached = getattr(concern, "_group_members_cache", None)
+    if cached is not None:
+        return cached
 
-    duplicates = list(
-        Concern.objects.filter(duplicate_of=primary)
-        .select_related("reporter", "reporter__resident_profile")
-        .order_by("created_at", "id")
-    )
-    return primary, duplicates
+    primary = concern
+    while primary.duplicate_of_id and primary.pk != primary.duplicate_of_id:
+        parent = primary.duplicate_of
+        if parent is None:
+            break
+        primary = parent
+
+    if primary.pk == concern.pk and "duplicates" in getattr(concern, "_prefetched_objects_cache", {}):
+        # Sibling rows came back with the feed's prefetch — no extra query.
+        duplicates = [item for item in concern.duplicates.all() if item.pk != concern.pk]
+        duplicates.sort(key=lambda item: (item.created_at, item.id))
+    else:
+        duplicates = list(
+            Concern.objects.filter(duplicate_of=primary)
+            .select_related("reporter", "reporter__resident_profile")
+            .prefetch_related("media")
+            .order_by("created_at", "id")
+        )
+    result = (primary, duplicates)
+    concern._group_members_cache = result
+    return result
 
 
 def viewable_media(concern):
@@ -67,7 +81,9 @@ def serialize_report(concern, *, is_primary):
         # "Show 1 photo" button on a report whose photo is not published, and
         # clicking it did nothing.
         "photo_count": len(viewable),
-        "withheld_photo_count": concern.media.count() - len(viewable),
+        # len() on the prefetched relation — .count() would bypass the
+        # prefetch cache and issue one COUNT query per report.
+        "withheld_photo_count": len(concern.media.all()) - len(viewable),
         "submitted_at": concern.created_at,
     }
 
@@ -83,7 +99,7 @@ def build(concern, *, media_serializer, context=None):
     withheld = 0
     for item, _ in members:
         viewable = viewable_media(item)
-        withheld += item.media.count() - len(viewable)
+        withheld += len(item.media.all()) - len(viewable)
         for media in viewable:
             payload = media_serializer(media, context=context or {}).data
             payload.update(

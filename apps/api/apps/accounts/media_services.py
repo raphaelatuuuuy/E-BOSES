@@ -123,6 +123,26 @@ def build_redacted_preview_bytes(file_obj, mime_type=""):
     return build_sanitized_preview_bytes(file_obj, mime_type, blur=True, sensitive_regions=True)
 
 
+_PLACEHOLDER_PREVIEW_BYTES = None
+
+
+def placeholder_preview_jpeg(message="Preview is being prepared."):
+    """Tiny neutral JPEG served while a preview has not been generated yet.
+
+    Never leaks the original: it is a generated image, not derived from any
+    upload. Cached at module level so hot endpoints do not re-encode it.
+    """
+    global _PLACEHOLDER_PREVIEW_BYTES
+    if _PLACEHOLDER_PREVIEW_BYTES is None:
+        image = Image.new("RGB", (960, 540), "#eef0f4")
+        draw = ImageDraw.Draw(image)
+        draw.text((48, 48), message, fill="#5b6475")
+        buffer = BytesIO()
+        image.save(buffer, format="JPEG", quality=70)
+        _PLACEHOLDER_PREVIEW_BYTES = buffer.getvalue()
+    return _PLACEHOLDER_PREVIEW_BYTES
+
+
 def detect_redaction_regions(file_obj, *, faces=True, profile_faces=True, license_plates=False, padding=0.15):
     position = file_obj.tell() if hasattr(file_obj, "tell") else None
     try:

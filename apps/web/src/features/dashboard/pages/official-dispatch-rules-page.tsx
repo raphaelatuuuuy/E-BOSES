@@ -11,7 +11,7 @@ import {
 import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 import { toast } from "sonner"
 
-import { apiRequest } from "@/lib/api"
+import { apiRequest, unwrapList, type ListEnvelope } from "@/lib/api"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
 import {
@@ -163,7 +163,7 @@ export default function OfficialDispatchRulesPage() {
     Promise.all([
       apiRequest<Unit[]>("/concerns/admin/departments/"),
       apiRequest<EmergencyCategory[]>("/emergencies/categories/"),
-      apiRequest<RoleMap[]>("/emergencies/role-maps/"),
+      apiRequest<RoleMap[] | ListEnvelope<RoleMap>>("/emergencies/role-maps/").then(unwrapList),
     ])
       .then(([nextUnits, nextCategories, nextMaps]) => {
         setUnits(nextUnits)

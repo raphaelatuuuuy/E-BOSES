@@ -1,11 +1,14 @@
 # Core
-django>=5.2,<5.3
+# 5.2.17 is the first patch release without known CVEs (PYSEC-2026-3717 et al).
+django>=5.2.17,<5.3
 django-environ>=0.11
 
 # REST API
 djangorestframework>=3.16
 djangorestframework-simplejwt>=5.5
 django-cors-headers>=4.7
+# OpenAPI 3 schema + Swagger UI at /api/docs/, generated from the views.
+drf-spectacular>=0.30
 
 # WebSocket
 channels>=4.2
@@ -20,9 +23,15 @@ psycopg2-binary>=2.9
 # GDAL may need system-level install: https://docs.djangoproject.com/en/5.2/ref/contrib/gis/install/
 
 # Utilities
-Pillow>=11
-python-dateutil>=2.9
+# 12.x is the first line without the 2026 Pillow CVE batch (PYSEC-2026-2249+).
+Pillow>=12.3
 argon2-cffi>=23.1
+# Web-push VAPID (notifications/services.py) and dev certs depend on this;
+# pin it explicitly instead of riding a transitive install.
+cryptography>=50
+# Security floors for transitive dependencies flagged by pip-audit.
+sqlparse>=0.6
+python-multipart>=0.0.31
 
 # Async
 httpx>=0.28

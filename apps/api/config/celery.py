@@ -20,6 +20,7 @@ app.autodiscover_tasks()
 app.conf.imports = (
     "apps.accounts.ocr_tasks",
     "apps.accounts.privacy_tasks",
+    "apps.retention",
     "apps.service_status",
 )
 

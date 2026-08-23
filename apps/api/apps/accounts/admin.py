@@ -5,6 +5,7 @@ from .models import (
     AccountRequest,
     AuditLog,
     ConsentRecord,
+    DataSubjectRequest,
     OCRConfigurationVersion,
     OCRDocumentType,
     OCRFieldDefinition,
@@ -20,6 +21,34 @@ from .models import (
     User,
     VerificationCheck,
 )
+
+
+@admin.register(DataSubjectRequest)
+class DataSubjectRequestAdmin(admin.ModelAdmin):
+    list_display = ("user", "kind", "status", "requested_at", "processed_at")
+    list_filter = ("kind", "status")
+    search_fields = ("user__email",)
+    readonly_fields = ("user", "kind", "requested_at", "processed_at", "processed_by")
+    actions = ("approve_and_erase", "decline_request")
+
+    @admin.action(description="Approve and erase resident data")
+    def approve_and_erase(self, request, queryset):
+        from apps.retention import process_data_subject_request_task
+        from django.db import transaction
+
+        for dsr in queryset.filter(status=DataSubjectRequest.Status.PENDING).select_related("user"):
+            dsr.status = DataSubjectRequest.Status.APPROVED
+            dsr.processed_by = request.user
+            dsr.save(update_fields=["status", "processed_by"])
+            transaction.on_commit(lambda dsr_id=dsr.pk: process_data_subject_request_task.delay(dsr_id))
+        self.message_user(request, "Approved requests queued for erasure.")
+
+    @admin.action(description="Decline request")
+    def decline_request(self, request, queryset):
+        updated = queryset.filter(status=DataSubjectRequest.Status.PENDING).update(
+            status=DataSubjectRequest.Status.DECLINED
+        )
+        self.message_user(request, f"{updated} request(s) declined.")
 
 
 @admin.register(User)

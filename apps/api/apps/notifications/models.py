@@ -65,6 +65,14 @@ class Notification(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            # Every list/unread-count query filters recipient + archive/read
+            # flags and sorts newest-first; one composite index serves all.
+            models.Index(
+                fields=["recipient", "is_archived", "is_read", "created_at"],
+                name="notif_recipient_inbox",
+            ),
+        ]
 
     def __str__(self):
         return f"[{self.type}] {self.title} — {self.recipient}"

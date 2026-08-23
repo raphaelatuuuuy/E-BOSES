@@ -40,6 +40,7 @@ from apps.media_utils import (
     has_similar_phash_block,
     PHASH_DUPLICATE_THRESHOLD,
 )  # noqa: F401  (re-exported for existing `from apps.accounts.services import ...` call sites)
+from apps.phash_index import SCOPE_RESIDENCE_PROOF, phash_candidate_ids
 from .models import (
     AuditLog,
     ConsentRecord,
@@ -97,6 +98,14 @@ class DevelopmentOTPProvider(BaseOTPProvider):
 
 class DjangoEmailOTPProvider(BaseOTPProvider):
     def deliver(self, destination, code, purpose):
+        # Without SMTP wiring the console backend would "send" the code to
+        # stdout and the resident would wait forever. Fail loudly instead.
+        if getattr(settings, "EMAIL_BACKEND_IS_CONSOLE", True) and not (
+            settings.DEBUG or getattr(settings, "IS_LOCAL_DEVELOPMENT", False)
+        ):
+            raise ImproperlyConfigured(
+                "django_email OTP needs SMTP configured (EMAIL_BACKEND=smtp plus EMAIL_HOST_*)."
+            )
         sent = send_mail(
             subject="Your E-Boses verification code",
             message=f"Your {purpose.replace('_', ' ')} verification code is {code}. It expires in 10 minutes.",
@@ -251,6 +260,14 @@ EMERGENCY_MEDIA_UPLOAD_PROFILE = UploadValidationProfile(
     allowed_mime_types=frozenset(ALLOWED_PROOF_MIME_TYPES),
     allowed_extensions=frozenset(ALLOWED_PROOF_EXTENSIONS),
     max_size=MAX_PROOF_FILE_SIZE,
+)
+# Public, staff-published imagery: signature-verified but not re-encoded,
+# deskewed or forensically scored — announcements are graphics as often as photos.
+ANNOUNCEMENT_IMAGE_PROFILE = UploadValidationProfile(
+    label="Announcement image",
+    allowed_mime_types=frozenset({"image/jpeg", "image/png", "image/webp"}),
+    allowed_extensions=frozenset({".jpg", ".jpeg", ".png", ".webp"}),
+    max_size=8 * 1024 * 1024,
 )
 CHAT_VIDEO_MIME_TYPES = {
     "video/mp4": ".mp4",
@@ -469,6 +486,48 @@ def validate_uploaded_media_file(
         detected_mime_type="image/jpeg",
     )
     return normalized_file
+
+
+def validate_public_image_file(uploaded_file):
+    """Content-verified image for public staff-published media (announcements).
+
+    Signature + extension/MIME cross-check + pixel budget. No forensics, no
+    re-encode: the file is stored exactly as uploaded.
+    """
+    return validate_uploaded_media_file(
+        uploaded_file,
+        profile=ANNOUNCEMENT_IMAGE_PROFILE,
+        strict=False,
+        authenticity=False,
+        quality="none",
+        deskew=False,
+        normalize=False,
+    )
+
+
+ICON_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".ico"})
+ICON_MAX_SIZE = 512 * 1024
+
+
+def validate_icon_image_file(uploaded_file):
+    """Extension/size plus byte-signature check for category icon uploads."""
+    if not uploaded_file:
+        return uploaded_file
+    extension = _extension(uploaded_file)
+    if extension not in ICON_EXTENSIONS:
+        raise ValidationError("Use PNG, JPG, WEBP, or ICO.")
+    if uploaded_file.size > ICON_MAX_SIZE:
+        raise ValidationError("Use an icon image up to 512 KB.")
+    content = _read_upload(uploaded_file)
+    if extension == ".ico":
+        if not content.startswith(b"\x00\x00\x01\x00"):
+            raise ValidationError("Icon file content does not match its format.")
+        return uploaded_file
+    detected_mime_type = detect_file_signature(content)
+    expected_mime_type = _EXTENSION_MIME_TYPES.get(extension)
+    if not detected_mime_type or detected_mime_type != expected_mime_type:
+        raise ValidationError("Icon file content does not match its extension.")
+    return uploaded_file
 
 
 def validate_residence_proof_file(uploaded_file, *, strict=True, deskew=True, authenticity=None, quality=None, normalize=True):
@@ -810,9 +869,15 @@ def deliver_registration_otp(phone_number, code):
 
     # queue_sms hands off on transaction commit. Registration is synchronous, so
     # send now and surface a gateway outage immediately instead of telling the
-    # user a code is coming that never arrives.
+    # user a code is coming that never arrives. OTP gets a tighter deadline than
+    # the broadcast default: a stalled gateway must not hang signup for 30s.
     try:
-        result = deliver(message.pk, phone_number, body)
+        result = deliver(
+            message.pk,
+            phone_number,
+            body,
+            timeout=getattr(settings, "SMS_OTP_TIMEOUT_SECONDS", 10),
+        )
     except Exception as exc:
         raise OTPDeliveryError("The SMS gateway did not accept the code.") from exc
 
@@ -925,18 +990,26 @@ def verify_phone_otp_challenge(phone_number, code, allow_verified=False):
 def duplicate_phash_exists(phash: str) -> bool:
     if not phash:
         return False
+    candidates = phash_candidate_ids(SCOPE_RESIDENCE_PROOF, phashes=[phash])
+    if not candidates:
+        return False
     return any(
         is_similar_phash(phash, existing)
-        for existing in ResidenceProof.objects.exclude(phash="").values_list("phash", flat=True)
+        for existing in ResidenceProof.objects.filter(pk__in=candidates).exclude(phash="").values_list("phash", flat=True)
     )
 
 
 def duplicate_phash_blocks_exists(phash: str) -> bool:
     if not phash:
         return False
+    # Stored side is crop blocks; the block-band probes included in the
+    # candidate set cover the new-full-hash vs stored-block comparison.
+    candidates = phash_candidate_ids(SCOPE_RESIDENCE_PROOF, phashes=[phash])
+    if not candidates:
+        return False
     return any(
         has_similar_phash_block(phash, existing_blocks)
-        for existing_blocks in ResidenceProof.objects.exclude(phash_blocks=[]).values_list("phash_blocks", flat=True)
+        for existing_blocks in ResidenceProof.objects.filter(pk__in=candidates).exclude(phash_blocks=[]).values_list("phash_blocks", flat=True)
     )
 
 
@@ -1037,6 +1110,15 @@ def create_registration_profile(user, validated_data):
             document_type=document_type,
             sides=proof_sides,
         )
+    # Previews render in a worker so no preview GET ever has to. on_commit:
+    # the files must exist in storage before a worker tries to read them.
+    from .ocr_tasks import enqueue_residence_proof_preview
+
+    for proof in proofs:
+        try:
+            transaction.on_commit(lambda proof_id=proof.pk: enqueue_residence_proof_preview(proof_id))
+        except Exception:
+            continue
     ConsentRecord.objects.create(
         user=user,
         terms_version=validated_data["terms_version"],

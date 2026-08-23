@@ -3,13 +3,16 @@ import { type FormEvent, useState } from "react"
 import { ApiError } from "@/lib/api"
 import { login, type AuthUser } from "@/features/auth/api"
 import {
+  normalizePhoneNumber,
   type SignInErrors,
+  type SignInMode,
   type SignInValues,
   signInSchema,
 } from "@/features/auth/schemas/sign-in-schema"
 
 const initialValues: SignInValues = {
-  email: "",
+  mode: "email",
+  identifier: "",
   password: "",
 }
 
@@ -50,8 +53,14 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
     }))
     setSubmitError("")
 
+    if (field === "mode") {
+      // The old error described the old field, so it cannot survive the switch.
+      setErrors((currentErrors) => ({ ...currentErrors, identifier: undefined }))
+      return
+    }
+
     setErrors((currentErrors) => {
-      if (!currentErrors[field]) {
+      if (!currentErrors[field as "identifier" | "password"]) {
         return currentErrors
       }
 
@@ -62,36 +71,54 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
     })
   }
 
+  function setMode(mode: SignInMode) {
+    // An email is never a valid phone number, so carrying the text across the
+    // switch only ever leaves a field that cannot pass validation.
+    setValues((currentValues) => ({ ...currentValues, mode, identifier: "" }))
+    setSubmitError("")
+    setErrors((currentErrors) => ({ ...currentErrors, identifier: undefined }))
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
     const fieldErrors = flattenErrors(values)
     const nextErrors: SignInErrors = {
-      email: fieldErrors.email?.[0],
+      identifier: fieldErrors.identifier?.[0],
       password: fieldErrors.password?.[0],
     }
 
     setErrors(nextErrors)
 
-    if (nextErrors.email || nextErrors.password) {
+    if (nextErrors.identifier || nextErrors.password) {
       setSubmitError("")
       return
     }
 
+    // The account stores a phone number as +63XXXXXXXXXX, so send that rather
+    // than whatever local shape was typed.
+    const typed = values.identifier.trim()
+    const identifier =
+      values.mode === "phone" ? normalizePhoneNumber(typed) ?? typed : typed
+
     setIsSubmitting(true)
     setSubmitError("")
     try {
-      const response = await login({ identifier: values.email, password: values.password })
+      const response = await login({ identifier, password: values.password })
       onSuccess?.(response.user, response.access)
     } catch (error) {
-      const message = apiMessage(error, "Invalid email or password.")
+      const fallback =
+        values.mode === "phone"
+          ? "Invalid phone number or password."
+          : "Invalid email or password."
+      const message = apiMessage(error, fallback)
       if (error instanceof ApiError && error.data) {
         const code = typeof error.data === "object" && error.data !== null
           ? (error.data as Record<string, unknown>).code
           : null
         if (code === "account_rejected") {
           setErrors({
-            email: SILENT_SIGN_IN_ERROR,
+            identifier: SILENT_SIGN_IN_ERROR,
             password: "Account not approved. Contact your barangay administrator for details.",
           })
           setSubmitError("")
@@ -99,7 +126,7 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
         }
       }
       setErrors({
-        email: SILENT_SIGN_IN_ERROR,
+        identifier: SILENT_SIGN_IN_ERROR,
         password: message,
       })
       setSubmitError("")
@@ -113,6 +140,7 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
     handleChange,
     handleSubmit,
     isSubmitting,
+    setMode,
     submitError,
     values,
   }

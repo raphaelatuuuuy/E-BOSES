@@ -216,6 +216,8 @@ export function emergencyStatusLabel(status: string): { label: string; live: boo
   if (s === "resolved") return { label: "Resolved", live: false }
   if (s === "cancelled") return { label: "Cancelled", live: false }
   if (s === "closed") return { label: "Closed", live: false }
+  if (s === "false_alarm") return { label: "False alarm", live: false }
+  if (s === "invalid") return { label: "Invalid", live: false }
   return { label: "Active", live: true }
 }
 

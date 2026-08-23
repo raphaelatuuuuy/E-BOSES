@@ -4,7 +4,11 @@ from rest_framework import serializers
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 
-from apps.accounts.services import validate_emergency_media_file, validate_location_pair
+from apps.accounts.services import (
+    validate_emergency_media_file,
+    validate_icon_image_file,
+    validate_location_pair,
+)
 from apps.concerns.models import Department
 from apps.concerns.serializers import PublicUserSerializer
 from apps.concerns.units import RESPONDER_UNIT_TO_DEPARTMENT, department_for_responder_unit
@@ -100,14 +104,7 @@ class EmergencyCategorySerializer(serializers.ModelSerializer):
         return value
 
     def validate_icon_image(self, value):
-        if not value:
-            return value
-        name = value.name.lower()
-        if not name.endswith((".png", ".jpg", ".jpeg", ".webp", ".ico")):
-            raise serializers.ValidationError("Use PNG, JPG, WEBP, or ICO.")
-        if value.size > 512 * 1024:
-            raise serializers.ValidationError("Use an icon image up to 512 KB.")
-        return value
+        return validate_icon_image_file(value)
 
 
 class MapDispatchPolicySerializer(serializers.ModelSerializer):
@@ -212,7 +209,9 @@ class EmergencyMediaSerializer(serializers.ModelSerializer):
         )
 
     def get_preview_url(self, obj):
-        return f"/api/emergencies/media/{obj.pk}/preview/"
+        from apps.media_urls import emergency_media_preview_url
+
+        return emergency_media_preview_url(obj.pk)
 
     def get_raw_url(self, obj):
         return f"/api/emergencies/media/{obj.pk}/raw/"
@@ -365,17 +364,21 @@ class EmergencyResponderAssignmentSerializer(serializers.ModelSerializer):
         )
 
     def get_last_location(self, obj):
-        ping = obj.location_pings.order_by("-created_at", "-id").first()
+        pings = list(obj.location_pings.all())
+        if not pings:
+            return None
+        ping = max(pings, key=lambda item: (item.created_at, item.pk))
         return EmergencyLocationPingSerializer(ping).data if ping else None
 
     def get_location_history(self, obj):
-        pings = obj.location_pings.order_by("created_at", "id")
+        pings = sorted(obj.location_pings.all(), key=lambda item: (item.created_at, item.pk))
         return EmergencyLocationPingSerializer(pings, many=True).data
 
     def get_route(self, obj):
         from apps.live_map import route_for_responder_assignment
 
-        return route_for_responder_assignment(obj.alert, obj)
+        alert = getattr(obj, "_parent_alert", None) or obj.alert
+        return route_for_responder_assignment(alert, obj)
 
 class EmergencyAppealSerializer(serializers.ModelSerializer):
     appellant = PublicUserSerializer(read_only=True)
@@ -476,31 +479,51 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
         return display_location(obj)
 
     def _active_assignments(self, obj):
-        return obj.assignments.filter(
-            status__in=[
+        # Python-filter over the prefetched relation: chaining .filter() on
+        # the manager bypasses the prefetch cache and re-queries per alert.
+        active = [
+            assignment
+            for assignment in obj.assignments.all()
+            if assignment.status
+            in {
                 EmergencyResponderAssignment.Status.ASSIGNED,
                 EmergencyResponderAssignment.Status.ACKNOWLEDGED,
                 EmergencyResponderAssignment.Status.EN_ROUTE,
                 EmergencyResponderAssignment.Status.ARRIVED,
                 EmergencyResponderAssignment.Status.ASSISTING,
-            ]
-        ).select_related("responder", "responder__resident_profile").order_by("assigned_at", "id")
+            }
+        ]
+        active.sort(key=lambda item: (item.assigned_at, item.pk))
+        return active
 
     def get_active_assignments(self, obj):
-        return EmergencyResponderAssignmentSerializer(
-            self._active_assignments(obj), many=True, context=self.context
-        ).data
+        assignments = self._active_assignments(obj)
+        # Stash the parent so the nested route getter does not re-fetch the
+        # alert once per assignment row.
+        for assignment in assignments:
+            assignment._parent_alert = obj
+        serializer = EmergencyResponderAssignmentSerializer(
+            assignments, many=True, context=self.context
+        )
+        return serializer.data
 
     def get_current_assignment(self, obj):
-        assignment = self._active_assignments(obj).first()
+        assignments = self._active_assignments(obj)
+        assignment = assignments[0] if assignments else None
+        if assignment:
+            assignment._parent_alert = obj
         return EmergencyResponderAssignmentSerializer(assignment, context=self.context).data if assignment else None
 
     def get_route(self, obj):
         if obj.route is not None:
             return obj.route
-        from apps.live_map import route_for_assignment
+        # Same candidate rule as live_map.route_for_assignment, but over the
+        # prefetched assignment cache: its internal .filter() would re-query
+        # the assignment table once per alert row.
+        from apps.live_map import route_for_responder_assignment
 
-        return route_for_assignment(obj)
+        candidates = self._active_assignments(obj)
+        return route_for_responder_assignment(obj, candidates[0] if candidates else None)
 
     def get_response_duration_seconds(self, obj):
         if not obj.resolved_at:
@@ -514,7 +537,10 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
             EmergencyAlert.Status.INVALID,
         }:
             return ""
-        event = obj.status_events.filter(status=obj.status).order_by("-created_at", "-id").first()
+        matching = [event for event in obj.status_events.all() if event.status == obj.status]
+        if not matching:
+            return obj.resolution_report
+        event = max(matching, key=lambda item: (item.created_at, item.pk))
         return event.note if event else obj.resolution_report
 
     def get_witness_notification_summary(self, obj):
@@ -524,18 +550,20 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
             return None
         if not (user.is_staff or user.is_superuser or user.role == user.Role.BARANGAY_OFFICIAL):
             return None
-        records = list(
-            obj.witness_notifications.order_by("sent_at").values(
-                "distance_meters",
-                "sent_at",
-                "in_app_delivered_at",
-                "push_status",
-                "push_attempted_at",
-                "push_delivered_at",
-                "push_failure_count",
-                "read_at",
-            )
-        )
+        rows = sorted(obj.witness_notifications.all(), key=lambda item: item.sent_at)
+        records = [
+            {
+                "distance_meters": record.distance_meters,
+                "sent_at": record.sent_at,
+                "in_app_delivered_at": record.in_app_delivered_at,
+                "push_status": record.push_status,
+                "push_attempted_at": record.push_attempted_at,
+                "push_delivered_at": record.push_delivered_at,
+                "push_failure_count": record.push_failure_count,
+                "read_at": record.read_at,
+            }
+            for record in rows
+        ]
         if not records:
             return {
                 "triggered": False,

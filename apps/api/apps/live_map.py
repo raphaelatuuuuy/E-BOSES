@@ -15,12 +15,15 @@ from rest_framework.views import APIView
 
 from apps.accounts.services import validate_location_pair
 from apps.accounts.views import touch_last_seen
-from apps.concerns.models import Concern
+from apps.concerns.models import Announcement, Concern
 from apps.emergencies.models import EmergencyAlert, EmergencyCategory, MapGeometry
+from apps.media_urls import concern_media_preview_url, emergency_media_preview_url
 from apps.notifications.services import broadcast_live_map_event
 
 MARIKINA_HEIGHTS_OSM_RELATION_ID = 371327
 MARIKINA_HEIGHTS_CENTER = {"latitude": 14.6507, "longitude": 121.1133, "zoom": 15}
+
+MAP_CONCERN_LIMIT = 300
 
 CONCERN_ACTIVE = {
     Concern.Status.SUBMITTED,
@@ -181,13 +184,41 @@ def person_payload(user):
     }
 
 
-def concern_payload(concern):
+def category_ref_payload(concern, request=None):
+    """
+    The map pin needs the same icon a resident's category picker and report
+    list already show — this is that data, trimmed to just what a pin needs.
+    `None` when the concern predates dynamic categories (falls back to the
+    fixed `category` glyph on the client).
+    """
+    category = concern.category_ref
+    if not category:
+        return None
+    icon_image_url = ""
+    if category.icon_image:
+        icon_image_url = (
+            request.build_absolute_uri(category.icon_image.url) if request else category.icon_image.url
+        )
+    return {
+        "code": category.code,
+        "name": category.name,
+        "icon_key": category.icon_key,
+        "custom_icon_label": category.custom_icon_label,
+        "icon_image_url": icon_image_url,
+    }
+
+
+def concern_payload(concern, request=None):
+    media = list(concern.media.all()) if hasattr(concern, "media") else []
     return {
         "id": concern.pk,
+        "preview_url": concern_media_preview_url(media[0].pk) if media else None,
+        "media_count": len(media),
         "tracking_id": f"RPT-{concern.created_at.year}-{concern.pk:06d}" if concern.created_at else f"RPT-0-{concern.pk:06d}",
         "title": concern.title,
         "description": concern.description,
         "category": concern.category,
+        "category_ref": category_ref_payload(concern, request=request),
         "status": concern.status,
         "address": concern.address,
         "barangay": concern.barangay,
@@ -233,8 +264,10 @@ def emergency_payload(alert):
         }
         for assignment in assignments
     ]
+    media = list(alert.media.all()) if hasattr(alert, "media") else []
     return {
         "id": alert.pk,
+        "preview_url": emergency_media_preview_url(media[0].pk) if media else None,
         "type": alert.type,
         "note": alert.note,
         "status": alert.status,
@@ -367,7 +400,40 @@ def routes_for_alert(alert):
     return [route for route in (route_for_responder_assignment(alert, item) for item in assignments) if route]
 
 
-def live_map_snapshot():
+def advisory_payload(announcement, street_index):
+    affected = announcement.affected_streets if isinstance(announcement.affected_streets, list) else []
+    names = []
+    geometries = []
+    for entry in affected:
+        name = entry.get("name") if isinstance(entry, dict) else str(entry)
+        if not name:
+            continue
+        names.append(str(name))
+        street = street_index.get(str(name).casefold())
+        if street:
+            geometries.extend(street["geometries"])
+    image_url = ""
+    try:
+        image_url = announcement.image.url if announcement.image else ""
+    except ValueError:
+        image_url = ""
+    return {
+        "id": announcement.pk,
+        "title": announcement.title,
+        "body": announcement.body,
+        "tag": announcement.tag,
+        "urgency": announcement.urgency,
+        "is_pinned": announcement.is_pinned,
+        "affected_streets": names,
+        "area_geometry": announcement.area_geometry,
+        "street_geometries": [] if announcement.area_geometry else geometries,
+        "starts_at": announcement.starts_at,
+        "expires_at": announcement.expires_at,
+        "image_url": image_url or None,
+    }
+
+
+def live_map_snapshot(request=None):
     from apps.geo_services import dispatch_policy_payload
 
     User = get_user_model()
@@ -380,20 +446,80 @@ def live_map_snapshot():
             current_longitude__isnull=False,
         ).filter(models.Q(role=User.Role.RESIDENT) | models.Q(is_on_duty=True)).select_related("resident_profile")
     ]
-    concerns = [
-        concern_payload(concern)
-        for concern in Concern.objects.filter(
-            latitude__isnull=False,
-            longitude__isnull=False,
-        ).select_related("reporter", "reporter__resident_profile")
-    ]
+    # Only what the map can actually draw, newest first and capped. This used to
+    # serialise every concern ever filed that has coordinates -- reporter payload
+    # and full description included -- so the snapshot grew without bound and the
+    # map spent its first seconds parsing records it would never pin.
+    #
+    # The drawable set mirrors the client: active pins for under_review /
+    # assigned / in_progress (status-vocabulary ACTIVE_CONCERN_STATUSES) and
+    # resolved pins behind the resolved layer toggle. Active rows get the full
+    # budget first so closed reports can never evict open incidents from the
+    # map while summary.concerns still counts them.
+    map_active_statuses = {
+        Concern.Status.UNDER_REVIEW,
+        Concern.Status.ASSIGNED,
+        Concern.Status.IN_PROGRESS,
+    }
+
+    def concern_rows(statuses, limit):
+        return list(
+            Concern.objects.filter(
+                latitude__isnull=False,
+                longitude__isnull=False,
+                status__in=statuses,
+            )
+            .select_related("reporter", "reporter__resident_profile", "category_ref")
+            .prefetch_related("media")
+            .order_by("-created_at")[:limit]
+        )
+
+    active_rows = concern_rows(map_active_statuses, MAP_CONCERN_LIMIT)
+    resolved_rows = concern_rows({Concern.Status.RESOLVED}, max(0, MAP_CONCERN_LIMIT - len(active_rows)))
+    concerns = [concern_payload(concern, request=request) for concern in active_rows + resolved_rows]
+    active_concern_count = Concern.objects.filter(
+        latitude__isnull=False,
+        longitude__isnull=False,
+        status__in=map_active_statuses,
+    ).count()
+    # Active alerts plus recently settled ones (resolved, closed, cancelled,
+    # false alarm, invalid) — the same "last 7 days" window the resident map
+    # uses, so an official can still see how a just-closed incident wrapped up
+    # instead of it vanishing from the map the instant it's marked done.
+    from datetime import timedelta
+
+    recently_settled_cutoff = timezone.now() - timedelta(days=7)
     alerts = list(
-        EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE)
+        EmergencyAlert.objects.filter(
+            models.Q(status__in=EMERGENCY_ACTIVE)
+            | models.Q(
+                status__in={"resolved", "closed", "cancelled", "false_alarm", "invalid"},
+                updated_at__gte=recently_settled_cutoff,
+            )
+        )
         .select_related("reporter", "reporter__resident_profile")
-        .prefetch_related("assignments__responder", "assignments__responder__resident_profile", "assignments__location_pings")
+        .prefetch_related("assignments__responder", "assignments__responder__resident_profile", "assignments__location_pings", "media")
     )
     emergencies = [emergency_payload(alert) for alert in alerts]
     routes = [route for alert in alerts for route in routes_for_alert(alert)]
+    active_emergency_count = EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE).count()
+
+    from apps.concerns.announcement_services import announcement_is_active
+
+    street_index = {
+        street["name"].casefold(): street
+        for street in static_map["streets"]["streets"]
+        if street.get("geometries")
+    }
+    announcement_rows = list(
+        Announcement.objects.filter(is_published=True)
+        .order_by("-is_pinned", "-published_at", "-created_at")[:50]
+    )
+    advisories = [
+        advisory_payload(item, street_index)
+        for item in announcement_rows
+        if announcement_is_active(item)
+    ]
     return {
         "map": {
             "provider": "OpenStreetMap",
@@ -406,10 +532,11 @@ def live_map_snapshot():
         "concerns": concerns,
         "emergencies": emergencies,
         "routes": routes,
+        "advisories": advisories,
         "summary": {
-            "active_alerts": len([item for item in concerns if item["status"] in CONCERN_ACTIVE]) + len(emergencies),
-            "concerns": len([item for item in concerns if item["status"] in CONCERN_ACTIVE]),
-            "emergencies": len(emergencies),
+            "active_alerts": active_concern_count + active_emergency_count,
+            "concerns": active_concern_count,
+            "emergencies": active_emergency_count,
             "residents": User.objects.filter(role=User.Role.RESIDENT, status=User.Status.VERIFIED).count(),
             # On duty only. This used to count every verified responder, so the
             # overview reported a full roster as "on duty" even at 3am with
@@ -446,7 +573,7 @@ class OfficialLiveMapView(APIView):
         touch_last_seen(request.user)
         if not is_official(request.user):
             return Response({"detail": "You do not have permission to view the official live map."}, status=status.HTTP_403_FORBIDDEN)
-        return Response(live_map_snapshot())
+        return Response(live_map_snapshot(request=request))
 
 
 def public_reporter_payload(user):
@@ -469,9 +596,9 @@ def public_reporter_payload(user):
 def resident_concern_payload(concern, request=None):
     """Public community concern for resident alerts map (no private coords of people)."""
     preview_url = None
-    media = list(concern.media.all()[:1]) if hasattr(concern, "media") else []
+    media = list(concern.media.all()) if hasattr(concern, "media") else []
     if media:
-        path = f"/api/concerns/media/{media[0].pk}/preview/"
+        path = concern_media_preview_url(media[0].pk)
         preview_url = request.build_absolute_uri(path) if request else path
     return {
         "id": concern.pk,
@@ -479,6 +606,7 @@ def resident_concern_payload(concern, request=None):
         "title": concern.title,
         "description": concern.description,
         "category": concern.category,
+        "category_ref": category_ref_payload(concern, request=request),
         "status": concern.status,
         "address": concern.address,
         "barangay": concern.barangay,
@@ -562,7 +690,7 @@ def resident_alerts_map_snapshot(request=None):
             longitude__isnull=False,
         )
         .exclude(status=Concern.Status.REJECTED)
-        .select_related("reporter", "reporter__resident_profile")
+        .select_related("reporter", "reporter__resident_profile", "category_ref")
         .prefetch_related("media")
         .order_by("-created_at")[:200]
     )

@@ -4,6 +4,7 @@ import { type ReactNode } from "react"
 import {
   CloudRainIcon,
   CloudSunIcon,
+  DropletsIcon,
   LoaderCircleIcon,
   SunIcon,
 } from "lucide-react"
@@ -103,6 +104,113 @@ export function MapControlButton({
       {loading ? <LoaderCircleIcon className="size-4 animate-spin text-neutral-400" /> : icon}
       {showLabel ? <span className="hidden sm:inline">{label}</span> : null}
     </button>
+  )
+}
+
+export function MapWeatherCard({
+  weather,
+  framed = true,
+}: {
+  weather: MapWeatherState
+  framed?: boolean
+}) {
+  const today = weather.daily[0]
+  return (
+    <div
+      className={cn(
+        "w-full text-neutral-900",
+        framed && "rounded-xl bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,.16)]",
+      )}
+    >
+
+      {weather.error ? (
+        <p className="py-6 text-center text-[13px] text-neutral-500">{weather.error}</p>
+      ) : weather.loading && weather.temperature == null ? (
+        <div className="flex items-center justify-center py-10">
+          <LoaderCircleIcon className="size-7 animate-spin text-neutral-400" />
+        </div>
+      ) : (
+        <>
+          <div className="mt-3 flex items-center gap-2">
+            <p className="text-[14px] font-semibold">{weatherLabel(weather.code)}</p>
+            <MapWeatherIcon code={weather.code} className="size-5 shrink-0" />
+          </div>
+
+          <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-3">
+            <div>
+              <p className="text-[32px] font-bold leading-none tracking-tight tabular-nums">
+                {weather.temperature != null ? `${Math.round(weather.temperature)}°C` : "—"}
+              </p>
+              {weather.feelsLike != null ? (
+                <>
+                  <p className="mt-3 text-[12px] text-neutral-500">Feels like</p>
+                  <p className="text-[20px] font-semibold leading-tight tabular-nums">
+                    {Math.round(weather.feelsLike)}°
+                  </p>
+                </>
+              ) : null}
+              {weather.precipitation != null ? (
+                <>
+                  <p className="mt-3 text-[12px] text-neutral-500">Precipitation</p>
+                  <p className="text-[20px] font-semibold leading-tight tabular-nums">
+                    {weather.precipitation} mm
+                  </p>
+                </>
+              ) : null}
+            </div>
+            <div className="pt-1">
+              {today ? (
+                <>
+                  <p className="text-[12px] text-neutral-500">Day</p>
+                  <p className="text-[20px] font-semibold leading-tight tabular-nums">
+                    {Math.round(today.high)}°
+                  </p>
+                  <p className="mt-3 text-[12px] text-neutral-500">Night</p>
+                  <p className="text-[20px] font-semibold leading-tight tabular-nums">
+                    {Math.round(today.low)}°
+                  </p>
+                </>
+              ) : null}
+              {weather.wind != null ? (
+                <>
+                  <p className="mt-3 text-[12px] text-neutral-500">Wind</p>
+                  <p className="text-[20px] font-semibold leading-tight tabular-nums">
+                    {Math.round(weather.wind)} km/h
+                  </p>
+                </>
+              ) : null}
+            </div>
+          </div>
+
+          {weather.humidity != null ? (
+            <p className="mt-3 text-[12.5px] text-neutral-500">
+              Humidity {Math.round(weather.humidity)}%
+            </p>
+          ) : null}
+
+          {weather.daily.length > 0 ? (
+            <ul className={cn("mt-3", framed && "border-t border-neutral-100 pt-2")}>
+              {weather.daily.slice(0, 7).map((day) => (
+                <li key={day.day} className="flex items-center gap-2 py-1.5">
+                  <span className="w-9 shrink-0 truncate text-[13px] font-bold">{day.day}</span>
+                  <MapWeatherIcon code={day.code} className="size-4 shrink-0 text-neutral-500" />
+                  <span className="text-[13px] font-semibold tabular-nums">
+                    {Math.round(day.high)}°
+                  </span>
+                  <span className="text-[13px] font-medium text-neutral-400 tabular-nums">
+                    {Math.round(day.low)}°
+                  </span>
+                  <span className="ml-auto flex items-center gap-1 text-[12px] text-neutral-500 tabular-nums">
+                    <DropletsIcon className="size-3.5" />
+                    {day.rain}%
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </>
+      )}
+    </div>
   )
 }
 
