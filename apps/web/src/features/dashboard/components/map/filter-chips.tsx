@@ -22,6 +22,7 @@ export function MapFilterChips({
   onSelect,
   className,
   label = "Categories",
+  scrollbar = "hidden",
 }: {
   tone: MapTone
   chips: MapFilterChip[]
@@ -30,13 +31,16 @@ export function MapFilterChips({
   onSelect: (key: string) => void
   className?: string
   label?: string
+  /** "visible" shows a slim horizontal scrollbar instead of hiding it. */
+  scrollbar?: "hidden" | "visible"
 }) {
   const scrollerRef = useWheelScroll<HTMLDivElement>()
   return (
     <div
       ref={scrollerRef}
       className={cn(
-        "scrollbar-hide flex min-w-0 gap-1.5 overflow-x-auto overscroll-x-contain pb-0.5 [-webkit-overflow-scrolling:touch]",
+        "flex min-w-0 gap-1.5 overflow-x-auto overscroll-x-contain pb-0.5 [-webkit-overflow-scrolling:touch]",
+        scrollbar === "visible" ? "scrollbar-thin-x" : "scrollbar-hide",
         className,
       )}
       style={{ touchAction: "pan-x" }}

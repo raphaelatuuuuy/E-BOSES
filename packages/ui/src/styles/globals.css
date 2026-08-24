@@ -1030,6 +1030,24 @@ body.eboses-sv-open .eboses-pin__core {
   display: none;
 }
 
+.scrollbar-thin-x {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(0 0 0 / 0.2) transparent;
+}
+.scrollbar-thin-x::-webkit-scrollbar {
+  height: 6px;
+}
+.scrollbar-thin-x::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin-x::-webkit-scrollbar-thumb {
+  background-color: rgb(0 0 0 / 0.2);
+  border-radius: 999px;
+}
+.scrollbar-thin-x::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(0 0 0 / 0.32);
+}
+
 .ops-pane {
   min-height: 0;
   overflow-y: auto;

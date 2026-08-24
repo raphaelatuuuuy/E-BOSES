@@ -551,6 +551,7 @@ export default function AlertsMapPage() {
         <MapFilterChips
           className="min-w-0"
           tone="light"
+          scrollbar="visible"
           chips={FEED_CHIPS}
           chip={weatherOpen ? "" : feedChip}
           onSelect={(key) => {
@@ -624,21 +625,30 @@ export default function AlertsMapPage() {
         counts={mapCounts}
       />
 
-      {/* Desktop: the feed floats over the map instead of cutting a rail. */}
-      {panelCollapsed ? (
-        <button
-          type="button"
-          onClick={() => setPanelCollapsed(false)}
-          aria-label="Open alerts"
-          title="Open alerts"
-          className="absolute left-4 top-4 z-[600] hidden size-10 items-center justify-center rounded-lg border border-neutral-200 bg-white shadow-md lg:flex"
-        >
-          <CircleAlertIcon className="size-5 shrink-0 text-neutral-800" strokeWidth={2.25} />
-        </button>
-      ) : (
-        <aside className="absolute left-4 top-4 z-[600] hidden max-h-[min(72vh,620px)] w-[min(100%,380px)] flex-col overflow-hidden rounded-2xl bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)] lg:flex">
-          <div className="flex h-10 shrink-0 items-center gap-2 px-3">
-            <CircleAlertIcon className="size-5 shrink-0 text-neutral-800" strokeWidth={2.25} />
+      {/* Desktop: the feed floats over the map instead of cutting a rail.
+          One persistent aside that animates width/opacity, rather than
+          swapping a button and a panel in and out of the DOM, so collapsing
+          and expanding reads as a motion instead of a jump cut. */}
+      <aside
+        className={cn(
+          "absolute left-4 top-4 z-[600] hidden max-h-[min(72vh,620px)] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)] transition-[width] duration-300 ease-out lg:flex",
+          panelCollapsed ? "w-10" : "w-[min(100%,380px)]",
+        )}
+      >
+        <div className="flex h-10 shrink-0 items-center gap-2 px-3">
+          <button
+            type="button"
+            onClick={() => setPanelCollapsed((value) => !value)}
+            aria-label={panelCollapsed ? "Open alerts" : "Collapse alerts"}
+            title={panelCollapsed ? "Open alerts" : "Collapse alerts"}
+            className={cn(
+              "flex size-7 shrink-0 items-center justify-center rounded-md text-neutral-800 hover:bg-neutral-100",
+              panelCollapsed && "mx-auto",
+            )}
+          >
+            <CircleAlertIcon className="size-5 shrink-0" strokeWidth={2.25} />
+          </button>
+          {!panelCollapsed ? (
             <button
               type="button"
               onClick={() => setPanelCollapsed(true)}
@@ -648,10 +658,17 @@ export default function AlertsMapPage() {
             >
               <ChevronLeftIcon className="size-4" strokeWidth={2.25} />
             </button>
-          </div>
-          {isDesktop ? panelBody : null}
-        </aside>
-      )}
+          ) : null}
+        </div>
+        <div
+          className={cn(
+            "min-h-0 flex-1 transition-opacity",
+            panelCollapsed ? "pointer-events-none opacity-0 duration-100" : "opacity-100 duration-200 delay-100",
+          )}
+        >
+          {isDesktop && !panelCollapsed ? panelBody : null}
+        </div>
+      </aside>
 
       {/* Mobile: back out of the map without hunting for the bottom nav, which
           this route hides so the map can run full-bleed. */}
