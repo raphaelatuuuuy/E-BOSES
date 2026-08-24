@@ -13,6 +13,7 @@ import { usePageTitle } from "@/hooks/use-page-title"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { distanceKm } from "@/features/dashboard/lib/responder-format"
 import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/record/status"
+import { MAP_COLORS } from "@/features/dashboard/components/map/markers"
 import {
   getEmergencyRoute,
   listAssignedEmergencies,
@@ -25,6 +26,7 @@ import {
 import {
   listAssignedConcerns,
   listFeedConcerns,
+  sendLocationPing,
   type Concern,
 } from "@/features/dashboard/api"
 import { ResponderLeafletMap } from "@/features/dashboard/components/responder/responder-leaflet-map"
@@ -93,6 +95,39 @@ function locationFailureMessage(error: unknown) {
   return "Your location could not be read. Check device location access and try again."
 }
 
+const LEGEND_ROWS = [
+  { label: "Incidents", color: MAP_COLORS.emergency },
+  { label: "Concerns", color: MAP_COLORS.concern },
+  { label: "Resolved", color: MAP_COLORS.resolved },
+  { label: "You are here", color: "#ffffff" },
+]
+
+function DispatchMiniLegend({ className }: { className?: string }) {
+  return (
+    <div
+      role="group"
+      aria-label="Map legend"
+      className={cn(
+        "flex flex-col gap-1 rounded-xl border border-white/10 bg-nav-bg/80 px-2.5 py-2 shadow-lg backdrop-blur-md",
+        className,
+      )}
+    >
+      {LEGEND_ROWS.map((row) => (
+        <span key={row.label} className="flex items-center gap-2">
+          <span
+            aria-hidden
+            className="size-2 shrink-0 rounded-full ring-1 ring-white/40"
+            style={{ backgroundColor: row.color }}
+          />
+          <span className="whitespace-nowrap text-[11px] font-semibold leading-tight text-white/85">
+            {row.label}
+          </span>
+        </span>
+      ))}
+    </div>
+  )
+}
+
 export default function ResponderDispatchPage() {
   usePageTitle("Dispatch")
   const location = useLocation()
@@ -145,7 +180,7 @@ export default function ResponderDispatchPage() {
 
   const selectedActiveTeam = useMemo(
     () =>
-      selected?.assignments.filter(
+      selected?.assignments?.filter(
         (assignment) => !["cancelled", "declined", "resolved"].includes(assignment.status),
       ) ?? [],
     [selected],
@@ -273,16 +308,26 @@ export default function ResponderDispatchPage() {
 
   useEffect(() => {
     function handleNotification(event: Event) {
-      const notification = (event as CustomEvent<{ concern_id?: number | null }>).detail
-      if (!notification?.concern_id) return
+      const notification = (event as CustomEvent<{ concern_id?: number | null; emergency_id?: number | null }>).detail
+      if (!notification?.concern_id && !notification?.emergency_id) return
       void refresh().catch(() =>
-        toast.error("A concern assignment arrived, but the dispatch could not refresh.", {
-          id: "concern-arrive",
+        toast.error("A new assignment arrived, but the dispatch could not refresh.", {
+          id: "assignment-arrive",
         }),
       )
     }
     window.addEventListener("eboses:notification-created", handleNotification)
     return () => window.removeEventListener("eboses:notification-created", handleNotification)
+  }, [refresh])
+
+  useEffect(() => {
+    const refreshAssigned = () => void refresh().catch(() => {})
+    const timer = window.setInterval(refreshAssigned, 30_000)
+    window.addEventListener("focus", refreshAssigned)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener("focus", refreshAssigned)
+    }
   }, [refresh])
 
   useEffect(() => {
@@ -507,6 +552,14 @@ export default function ResponderDispatchPage() {
         })
       })
       setUserPos(writeLastKnownPosition(pos, viewerId))
+      const result = await sendLocationPing({
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+        source: "manual",
+      })
+      if (!result.accepted) throw new Error("This location is outside the active service area.")
+      await refresh()
       toast.success("Location updated", { id: "locate" })
     } catch (positionError) {
       toast.error(locationFailureMessage(positionError), { id: "locate" })
@@ -554,10 +607,10 @@ export default function ResponderDispatchPage() {
           </span>
           <div className="min-w-0">
             <h2 className="text-[22px] font-bold leading-tight tracking-tight text-foreground">
-              All clear
+              Waiting for dispatch
             </h2>
             <p className="mt-1 text-body leading-6 text-muted-foreground">
-              No emergency is assigned to you. You will be alerted here the moment one is.
+              No emergency is assigned to you. Keep this page open for new assignments.
             </p>
             {assignedConcerns.length > 0 ? (
               <p className="mt-2 text-body text-subtle-foreground">
@@ -574,6 +627,7 @@ export default function ResponderDispatchPage() {
         className="relative isolate z-0 min-h-[260px] flex-1 overflow-hidden"
       >
         {mapSurface}
+        <DispatchMiniLegend className="absolute bottom-4 left-4 z-[600]" />
       </DispatchCard>
     </div>
   )
@@ -718,7 +772,10 @@ function DispatchBody({
       className="w-full"
     >
       {mapSurface}
-      <BackupFab actions={actions} className="absolute bottom-4 left-4 z-[601]" />
+      <div className="pointer-events-none absolute bottom-4 left-4 z-[601] flex flex-col items-start gap-2">
+        <BackupFab actions={actions} className="pointer-events-auto" />
+        <DispatchMiniLegend />
+      </div>
     </Pane>
   )
 
@@ -788,7 +845,10 @@ function DispatchBody({
           />
           <DispatchCard padded={false} className="relative isolate z-0 h-[360px] overflow-hidden sm:h-[420px]">
             {mapSurface}
-            <BackupFab actions={actions} className="absolute bottom-4 left-4 z-[601]" />
+            <div className="pointer-events-none absolute bottom-4 left-4 z-[601] flex flex-col items-start gap-2">
+              <BackupFab actions={actions} className="pointer-events-auto" />
+              <DispatchMiniLegend />
+            </div>
           </DispatchCard>
         </div>
       </div>

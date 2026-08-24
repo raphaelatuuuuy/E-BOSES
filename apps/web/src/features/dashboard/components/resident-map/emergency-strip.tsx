@@ -5,17 +5,14 @@ import { cn } from "@workspace/ui/lib/utils"
 import type { ResidentMapEmergency } from "@/features/dashboard/api"
 import { emergencyBrief, formatDistance } from "@/features/dashboard/lib/resident-map-utils"
 import { timeAgo } from "@/features/dashboard/lib/format"
-import { Fact, FactRow } from "@/components/ui/fact"
-import { StateGlyph, StateMarker } from "@/components/ui/state-marker"
 import { EmergencyCommunityComments } from "@/features/dashboard/components/emergencies/community-comments"
 
 /**
  * Ongoing-SOS UI for the resident alerts map: the compact list-preview card
- * and the expanded detail panel. Grouped into one file since both are
- * "emergency / ongoing-SOS strip" surfaces per the D1.2 brief.
+ * and the expanded detail panel.
  */
 
-/** Emergency list card — type, LIVE badge, pipeline status, place, note */
+/** Emergency list card */
 export function EmergencyPreviewCard({
   emergency,
   distance,
@@ -32,12 +29,19 @@ export function EmergencyPreviewCard({
   const brief = emergencyBrief(emergency)
   const dist = formatDistance(distance)
   const ago = timeAgo(emergency.created_at)
+  const live = brief.status.live
 
   return (
     <div
       className={cn(
-        "rounded-2xl border bg-white transition-colors",
-        expanded ? "border-neutral-300 bg-neutral-50 shadow-sm" : "border-neutral-200",
+        "rounded-2xl border-l-4 border bg-white transition-colors",
+        expanded
+          ? live
+            ? "border-l-sos border-neutral-300 bg-neutral-50 shadow-sm"
+            : "border-l-neutral-300 border-neutral-300 bg-neutral-50 shadow-sm"
+          : live
+            ? "border-l-sos border-neutral-200"
+            : "border-l-neutral-300 border-neutral-200",
       )}
     >
       <button
@@ -46,29 +50,34 @@ export function EmergencyPreviewCard({
         className="w-full px-3 py-3 text-left sm:px-3.5"
       >
         <div className="flex items-start gap-2.5 sm:gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-severity-critical-surface text-sos sm:size-10">
+          <span className={cn(
+            "flex size-9 shrink-0 items-center justify-center rounded-full sm:size-10",
+            live ? "bg-severity-critical-surface text-sos" : "bg-neutral-100 text-neutral-400",
+          )}>
             <AlertTriangleIcon className="size-5" strokeWidth={1.9} />
           </span>
           <div className="min-w-0 flex-1 overflow-hidden">
-            <p className="truncate text-[13px] font-bold text-neutral-900 sm:text-[14px]">{brief.title}</p>
-            <p className="mt-0.5 flex items-center gap-x-1.5 text-[11px] text-neutral-500 sm:text-[12px]">
-              <span
-                className={cn(
-                  "inline-flex shrink-0 items-center gap-1.5 font-semibold",
-                  brief.status.live ? "text-sos" : "text-neutral-400",
-                )}
-              >
-                <StateGlyph tone={brief.status.live ? "alarm" : "closed"} />
-                {brief.status.label}
-              </span>
-              <span aria-hidden>·</span>
-              <span>{[dist, ago].filter(Boolean).join(" · ")}</span>
+            <div className="flex items-start justify-between gap-2">
+              <p className="min-w-0 flex-1 break-words text-[13px] font-bold leading-snug text-neutral-900 sm:text-[14px]">
+                {live ? `Ongoing ${brief.title.toLowerCase()} around ${brief.street}` : brief.title}
+              </p>
+              {!live && (
+                <span className="inline-flex shrink-0 items-center text-[11px] font-semibold text-neutral-500 sm:text-[12px]">
+                  Resolved
+                </span>
+              )}
+            </div>
+            <p className="mt-1 text-[11px] text-neutral-500 sm:text-[12px]">
+              {[brief.street, dist, ago].filter(Boolean).join(" · ")}
+            </p>
+            <p className="mt-1 line-clamp-2 text-[12px] leading-snug text-neutral-600 sm:text-[13px]">
+              {brief.safetyNote}
             </p>
           </div>
         </div>
       </button>
 
-      {onWrite && brief.status.live ? (
+      {onWrite ? (
         <div className="border-t border-neutral-100 px-3 py-2 sm:px-3.5 sm:py-2.5">
           <button
             type="button"
@@ -113,40 +122,45 @@ export function EmergencyDetailPanel({
         >
           <ChevronLeftIcon className="size-5" strokeWidth={2.25} />
         </button>
-        <p className="min-w-0 flex-1 truncate text-left text-[15px] font-semibold text-neutral-600">
+        <p className="min-w-0 flex-1 truncate text-left text-[15px] font-bold text-neutral-900">
           Emergency
         </p>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6">
         <div className="flex items-start gap-3">
-          <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-severity-critical-surface text-sos">
+          <span className={cn(
+            "flex size-11 shrink-0 items-center justify-center rounded-full",
+            st.live ? "bg-severity-critical-surface text-sos" : "bg-neutral-100 text-neutral-400",
+          )}>
             <AlertTriangleIcon className="size-6" strokeWidth={1.9} />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-section text-neutral-900">{brief.title}</p>
-            <p className="mt-1 text-meta text-neutral-500">
-              {[dist, timeAgo(emergency.created_at)].filter(Boolean).join(" · ")}
+            <div className="flex items-start justify-between gap-2">
+              <p className="min-w-0 flex-1 text-[15px] font-bold leading-snug text-neutral-900">
+                {st.live ? `Ongoing ${brief.title.toLowerCase()} around ${brief.street}` : brief.title}
+              </p>
+              {!st.live && (
+                <span className="inline-flex shrink-0 items-center text-[11px] font-semibold text-neutral-500 sm:text-[12px]">
+                  Resolved
+                </span>
+              )}
+            </div>
+            <p className="mt-1 text-[12px] text-neutral-500">
+              {[brief.street, dist, timeAgo(emergency.created_at)]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+            <p className="mt-2 text-[13px] leading-relaxed text-neutral-600">
+              {brief.safetyNote}
             </p>
           </div>
         </div>
 
-        <FactRow className="mt-6">
-          <Fact label="Status" value={<StateMarker tone={st.live ? "alarm" : "closed"} label={st.label} />} />
-          <Fact
-            label="Type"
-            value={
-              <span className="capitalize">
-                {(emergency.type_label || emergency.type || "—").replace(/_/g, " ")}
-              </span>
-            }
-          />
-        </FactRow>
-
-        {/* Residents can say what they can see here, the same way they comment
-            on a concern or an announcement. */}
-        <section className="mt-8 border-t border-neutral-200 pt-5">
-          <h3 className="text-section text-neutral-900">Community updates</h3>
+        <section className="mt-6 border-t border-neutral-200 pt-5">
+          <h3 className="text-[15px] font-bold text-neutral-900">
+            Community updates
+          </h3>
           <div className="mt-4">
             <EmergencyCommunityComments
               alertId={emergency.id}

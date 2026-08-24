@@ -15,6 +15,7 @@ from apps.accounts.services import create_audit_log
 from apps.notifications.services import create_emergency_notification, notify_emergency_status
 
 from .models import EmergencyAlert, EmergencyEscalation, EmergencyResponderAssignment
+from .recipients import dispatch_officials
 
 logger = logging.getLogger(__name__)
 
@@ -342,10 +343,7 @@ def set_duty(responder, *, on_duty, source="api"):
 
 
 def _notify_officials(alert, body):
-    from django.contrib.auth import get_user_model
-
-    User = get_user_model()
-    officials = User.objects.filter(role=User.Role.BARANGAY_OFFICIAL, status=User.Status.VERIFIED)[:20]
+    officials = dispatch_officials(alert, limit=20)
     for official in officials:
         try:
             create_emergency_notification(

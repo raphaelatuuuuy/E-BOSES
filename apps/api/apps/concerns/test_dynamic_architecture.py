@@ -8,6 +8,7 @@ from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentProfile
 from apps.notifications.models import Notification
+from apps.concerns.test_helpers import active_test_community
 
 from .models import (
     ChatMessageRead,
@@ -36,6 +37,7 @@ def png_upload(name="evidence.png"):
 
 class DynamicConcernArchitectureTests(APITestCase):
     def setUp(self):
+        self.community = active_test_community()
         User = get_user_model()
         self.admin = User.objects.create_user(
             email="dynamic-admin@example.com",
@@ -102,6 +104,7 @@ class DynamicConcernArchitectureTests(APITestCase):
             date_of_birth="1995-01-01",
             address="Blk 5 Lot 2",
             barangay="Marikina Heights",
+            community=self.community,
         )
 
     def configure_illegal_dumping(self):
@@ -122,6 +125,11 @@ class DynamicConcernArchitectureTests(APITestCase):
             format="json",
         )
         self.assertEqual(responder_position.status_code, status.HTTP_201_CREATED)
+        Designation.objects.create(
+            user=self.kagawad,
+            department=Department.objects.get(pk=department.data["id"]),
+            position=Position.objects.get(pk=responder_position.data["id"]),
+        )
         designation = self.client.post(
             "/api/concerns/admin/designations/",
             {
@@ -197,7 +205,7 @@ class DynamicConcernArchitectureTests(APITestCase):
             format="multipart",
         )
 
-        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED, created.data)
         concern = Concern.objects.get(pk=created.data["id"])
         self.assertEqual(concern.category_ref_id, category_id)
         self.assertEqual(concern.assigned_department_id, department_id)
@@ -230,19 +238,24 @@ class DynamicConcernArchitectureTests(APITestCase):
         self.client.force_authenticate(self.responder)
         mine = self.client.get("/api/concerns/assigned/")
         self.assertEqual(mine.status_code, status.HTTP_200_OK)
-        self.assertEqual([item["id"] for item in mine.data], [concern.pk])
+        self.assertEqual([item["id"] for item in mine.data["results"]], [concern.pk])
         self.client.force_authenticate(self.other_responder)
         other = self.client.get("/api/concerns/assigned/")
         self.assertEqual(other.status_code, status.HTTP_200_OK)
-        self.assertEqual(other.data, [])
+        self.assertEqual(other.data["results"], [])
 
         self.client.force_authenticate(self.responder)
+        progressed = self.client.post(
+            f"/api/concerns/{concern.pk}/status/",
+            {"status": Concern.Status.IN_PROGRESS, "note": "Field inspection started."},
+            format="json",
+        )
+        self.assertEqual(progressed.status_code, status.HTTP_200_OK)
         timeline = self.client.post(
             f"/api/concerns/{concern.pk}/timeline/",
             {
                 "event_type": "custom",
                 "message": "Schedule of ocular inspection on July 29, 2026 at 8:00 AM",
-                "status": Concern.Status.IN_PROGRESS,
                 "is_custom": True,
             },
             format="json",

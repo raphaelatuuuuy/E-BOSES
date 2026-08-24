@@ -1,20 +1,42 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { Loader2Icon, LocateFixedIcon, MinusIcon, PlusIcon } from "lucide-react"
+import { Loader2Icon, LocateFixedIcon } from "lucide-react"
 import type leaflet from "leaflet"
 import { cn } from "@workspace/ui/lib/utils"
 import { apiRequest } from "@/lib/api"
 import {
-  drawCoverage,
   insideCoverage,
   OUT_OF_SCOPE_MESSAGE,
   type CoverageInput,
 } from "@/features/dashboard/components/map/coverage-layer"
 import { loadCoverageContext } from "@/features/dashboard/lib/use-coverage"
 import { dotPinHtml, MAP_COLORS } from "@/features/dashboard/components/map/markers"
+import {
+  formatNominatimParts,
+  reverseGeocode,
+} from "@/lib/geocode"
 
 const DEFAULT_CENTER: [number, number] = [14.6507, 121.1133]
+
+async function describePin(lat: number, lng: number) {
+  if (!navigator.onLine) {
+    return { address: "Pinned location on map", addressPrimary: "Pinned location" }
+  }
+  try {
+    const data = await reverseGeocode(lat, lng)
+    if (!data) {
+      return { address: "Pinned location on map", addressPrimary: "Pinned location" }
+    }
+    const parts = formatNominatimParts(data)
+    return {
+      address: parts.full || parts.primary,
+      addressPrimary: parts.primary,
+    }
+  } catch {
+    return { address: "Pinned location on map", addressPrimary: "Pinned location" }
+  }
+}
 
 export type SosLocationValue = {
   lat: number
@@ -61,11 +83,7 @@ export function SosLocationStep({
   const mapRef = useRef<leaflet.Map | null>(null)
   const ignoreMove = useRef(false)
   const [gpsBusy, setGpsBusy] = useState(false)
-  const [error, setError] = useState("")
-  const [isOnline, setIsOnline] = useState(() =>
-    typeof navigator === "undefined" ? true : navigator.onLine
-  )
-  const isOnlineRef = useRef(isOnline)
+  const isOnlineRef = useRef(true)
   const validationRequestRef = useRef(0)
   const onChangeRef = useRef(onChange)
   const resizeRef = useRef<ResizeObserver | null>(null)
@@ -86,32 +104,30 @@ export function SosLocationStep({
   }
 
   async function locateCurrentUser() {
-    if (!navigator.geolocation) {
-      setError("Your device does not provide location access. Drag the map to set the pin.")
-      return
-    }
+    if (!navigator.geolocation) return
     setGpsBusy(true)
-    setError("")
     navigator.geolocation.getCurrentPosition(
       async ({ coords }) => {
         const lat = coords.latitude
         const lng = coords.longitude
-        const locationCheck = isOnlineRef.current ? await validatePin(lat, lng) : null
+        const [locationCheck, described] = await Promise.all([
+          isOnlineRef.current ? validatePin(lat, lng) : null,
+          describePin(lat, lng),
+        ])
         setGpsBusy(false)
         onChangeRef.current({
           lat,
           lng,
           accuracy: coords.accuracy,
           source: "gps",
-          address: "Pinned location on map",
-          addressPrimary: "Pinned location",
+          address: described.address,
+          addressPrimary: described.addressPrimary,
           locationCheck,
         })
         mapRef.current?.setView([lat, lng], Math.max(mapRef.current.getZoom(), 17), { animate: true })
       },
       () => {
         setGpsBusy(false)
-        setError("Location access was not available. Drag the map to set the pin.")
       },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 },
     )
@@ -124,12 +140,11 @@ export function SosLocationStep({
   useEffect(() => {
     const handleOnline = () => {
       isOnlineRef.current = true
-      setIsOnline(true)
     }
     const handleOffline = () => {
       isOnlineRef.current = false
-      setIsOnline(false)
     }
+    if (typeof navigator !== "undefined") isOnlineRef.current = navigator.onLine
     window.addEventListener("online", handleOnline)
     window.addEventListener("offline", handleOffline)
     return () => {
@@ -145,7 +160,15 @@ export function SosLocationStep({
     const startTimer = window.setTimeout(() => {
       if (cancelled) return
       if (!navigator.geolocation) {
-        setError("Location not supported — move the pin on the map.")
+        onChangeRef.current({
+          lat: DEFAULT_CENTER[0],
+          lng: DEFAULT_CENTER[1],
+          accuracy: null,
+          source: "manual",
+          address: "",
+          addressPrimary: "",
+          locationCheck: null,
+        })
         return
       }
       setGpsBusy(true)
@@ -154,17 +177,19 @@ export function SosLocationStep({
           if (cancelled) return
           const lat = pos.coords.latitude
           const lng = pos.coords.longitude
-          const locationCheck = isOnlineRef.current ? await validatePin(lat, lng) : null
+          const [locationCheck, described] = await Promise.all([
+            isOnlineRef.current ? validatePin(lat, lng) : null,
+            describePin(lat, lng),
+          ])
           if (cancelled) return
           setGpsBusy(false)
-          setError("")
           onChangeRef.current({
             lat,
             lng,
             accuracy: pos.coords.accuracy,
             source: "gps",
-            address: "Pinned location on map",
-            addressPrimary: "Pinned location",
+            address: described.address,
+            addressPrimary: described.addressPrimary,
             locationCheck,
           })
           const map = mapRef.current
@@ -179,7 +204,6 @@ export function SosLocationStep({
         () => {
           if (cancelled) return
           setGpsBusy(false)
-          setError("GPS unavailable — drag the map to set your pin.")
           onChangeRef.current({
             lat: DEFAULT_CENTER[0],
             lng: DEFAULT_CENTER[1],
@@ -206,12 +230,12 @@ export function SosLocationStep({
     let map: leaflet.Map | null = null
     let geocodeTimer: number | undefined
     let styleEl: HTMLStyleElement | null = null
+    let settleTimers: number[] = []
 
     async function init() {
       const L = await import("leaflet")
       await import("leaflet/dist/leaflet.css")
       if (cancelled || !containerRef.current) return
-
       const el = containerRef.current as HTMLDivElement & {
         _leaflet_id?: number
       }
@@ -257,7 +281,7 @@ export function SosLocationStep({
         zoom: 16,
         zoomControl: false,
         attributionControl: false,
-        scrollWheelZoom: false,
+        scrollWheelZoom: true,
       })
       L.tileLayer(
         "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
@@ -267,7 +291,6 @@ export function SosLocationStep({
         }
       ).addTo(map)
 
-      const coverageGroup = L.layerGroup().addTo(map)
       try {
         const context = await loadCoverageContext()
         if (!cancelled) {
@@ -275,7 +298,6 @@ export function SosLocationStep({
             boundary: context.boundary?.geometry ?? null,
             policy: context.dispatch_policy,
           }
-          drawCoverage(L, coverageGroup, coverageRef.current)
           const c = map.getCenter()
           setOutOfScope(!insideCoverage(c.lat, c.lng, coverageRef.current))
         }
@@ -283,8 +305,6 @@ export function SosLocationStep({
         // The backend still validates the pin when the SOS is submitted.
       }
 
-      // Fires while the map is still moving, so the pin can say no before the
-      // resident lets go rather than a third of a second afterwards.
       map.on("move", () => {
         if (!map) return
         const c = map.getCenter()
@@ -297,15 +317,17 @@ export function SosLocationStep({
         if (geocodeTimer) window.clearTimeout(geocodeTimer)
         geocodeTimer = window.setTimeout(() => {
           void (async () => {
-            const locationCheck = isOnlineRef.current ? await validatePin(c.lat, c.lng) : null
-            setError("")
+            const [locationCheck, described] = await Promise.all([
+              isOnlineRef.current ? validatePin(c.lat, c.lng) : null,
+              describePin(c.lat, c.lng),
+            ])
             onChangeRef.current({
               lat: c.lat,
               lng: c.lng,
               accuracy: null,
               source: "manual",
-              address: "Pinned location on map",
-              addressPrimary: "Pinned location",
+              address: described.address,
+              addressPrimary: described.addressPrimary,
               locationCheck,
             })
           })()
@@ -313,8 +335,10 @@ export function SosLocationStep({
       })
 
       mapRef.current = map
-      // This step mounts inside a wizard panel that is still transitioning, so
-      // a single frame measured a collapsed box and no tiles ever painted.
+      // This step mounts while the dialog is still animating in (zoom/fade),
+      // so Leaflet can measure a transformed box and paint blank tiles. The
+      // ResizeObserver catches layout changes; the delayed calls re-run after
+      // the entry animation has fully settled.
       const observer = new ResizeObserver(() => {
         const box = containerRef.current?.getBoundingClientRect()
         if (!box?.width || !box.height) return
@@ -323,6 +347,9 @@ export function SosLocationStep({
       if (containerRef.current) observer.observe(containerRef.current)
       resizeRef.current = observer
       requestAnimationFrame(() => map?.invalidateSize({ animate: false }))
+      settleTimers = [300, 700].map((delay) =>
+        window.setTimeout(() => map?.invalidateSize({ animate: false }), delay)
+      )
     }
 
     void init()
@@ -330,6 +357,7 @@ export function SosLocationStep({
       cancelled = true
       resizeRef.current?.disconnect()
       resizeRef.current = null
+      settleTimers.forEach((t) => window.clearTimeout(t))
       if (geocodeTimer) window.clearTimeout(geocodeTimer)
       styleEl?.remove()
       try {
@@ -344,19 +372,8 @@ export function SosLocationStep({
   }, [])
 
   return (
-    <div className={cn("flex min-h-0 flex-1 flex-col gap-3", className)}>
-      {!isOnline ? (
-        <div
-          className="rounded-xl border border-white/20 bg-white/10 px-3.5 py-3 text-[13px] leading-5 text-white/85"
-          role="status"
-          aria-live="polite"
-        >
-          You’re offline. Map tiles may not load, but you can still move the pin
-          and send its coordinates. An SMS backup appears on Review when configured.
-        </div>
-      ) : null}
-
-      <div className="relative min-h-[220px] flex-1 overflow-hidden rounded-xl border border-neutral-200 bg-tint">
+    <div className={cn("flex min-h-0 flex-col gap-3", className)}>
+      <div className="relative h-full min-h-[260px] overflow-hidden rounded-2xl border border-white/10 bg-tint">
         <div
           ref={containerRef}
           className={cn(
@@ -365,75 +382,48 @@ export function SosLocationStep({
           )}
           aria-label="Emergency location map. Drag the map to move the centered pin."
         />
-        <div className="absolute right-2 top-2 z-[600] flex flex-col overflow-hidden rounded-md border border-neutral-200 bg-white shadow-sm">
-          <button
-            type="button"
-            onClick={() => mapRef.current?.zoomIn()}
-            aria-label="Zoom in"
-            title="Zoom in"
-            className="flex size-[30px] items-center justify-center border-b border-neutral-200 text-neutral-700 transition-colors hover:bg-neutral-50"
-          >
-            <PlusIcon className="size-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => mapRef.current?.zoomOut()}
-            aria-label="Zoom out"
-            title="Zoom out"
-            className="flex size-[30px] items-center justify-center border-b border-neutral-200 text-neutral-700 transition-colors hover:bg-neutral-50"
-          >
-            <MinusIcon className="size-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => void locateCurrentUser()}
-            disabled={gpsBusy}
-            aria-label="Use my current location"
-            title="Use my current location"
-            className="flex size-[30px] items-center justify-center text-neutral-700 transition-colors hover:bg-neutral-50 disabled:opacity-60"
-          >
-            {gpsBusy ? <Loader2Icon className="size-4 animate-spin" /> : <LocateFixedIcon className="size-4" />}
-          </button>
-        </div>
-        {(() => {
-          // Out of scope wins: the server check runs on a debounce, so during a
-          // drag it still reports the previous pin as fine.
-          const message = outOfScope
-            ? `${OUT_OF_SCOPE_MESSAGE}. You may call 911.`
-            : friendlyLocationMessage(value?.locationCheck)
-          if (!message) return null
-          return (
-            <div
-              className={cn(
-                "absolute bottom-2 left-2 right-2 z-[600] rounded-lg border px-3 py-2 text-[12px] font-semibold shadow-sm backdrop-blur-sm",
-                outOfScope
-                  ? "border-sos/40 bg-sos text-white"
-                  : "border-white/70 bg-white/95 text-neutral-700",
-              )}
-              role="status"
-              aria-live="polite"
-            >
-              {message}
-            </div>
-          )
-        })()}
-        {/* Center pin overlay */}
-        <div
-          className="pointer-events-none absolute top-1/2 left-1/2 z-[500] h-0 w-0"
-          aria-hidden
+        <button
+          type="button"
+          onClick={() => void locateCurrentUser()}
+          disabled={gpsBusy}
+          aria-label="Use my current location"
+          title="Use my current location"
+          className="absolute right-2 top-2 z-[600] flex size-[38px] items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-700 shadow-sm transition-colors hover:bg-neutral-50 disabled:opacity-60"
         >
-          <span
-            className="absolute block"
-            style={{ marginLeft: -7, marginTop: -7 }}
-            dangerouslySetInnerHTML={{
-              __html: dotPinHtml({
-                color: outOfScope ? MAP_COLORS.emergency : MAP_COLORS.you,
-                size: 14,
-                live: !outOfScope,
-              }),
-            }}
-          />
-        </div>
+          {gpsBusy ? <Loader2Icon className="size-4 animate-spin" /> : <LocateFixedIcon className="size-4" />}
+        </button>
+        {outOfScope ? (
+          <div
+            className="absolute left-1/2 top-1/2 z-[600] w-[min(320px,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[28px] bg-white px-6 py-4 text-center shadow-[0_18px_50px_rgba(15,23,42,0.25)]"
+            role="status"
+            aria-live="polite"
+          >
+            <p className="text-[15px] font-bold text-neutral-900">
+              {OUT_OF_SCOPE_MESSAGE}
+            </p>
+            <p className="mt-0.5 text-[13px] text-neutral-500">
+              Move the map back to a covered area.
+            </p>
+          </div>
+        ) : null}
+        {!outOfScope ? (
+          <div
+            className="pointer-events-none absolute top-1/2 left-1/2 z-[500] h-0 w-0"
+            aria-hidden
+          >
+            <span
+              className="absolute block"
+              style={{ marginLeft: -7, marginTop: -7 }}
+              dangerouslySetInnerHTML={{
+                __html: dotPinHtml({
+                  color: MAP_COLORS.you,
+                  size: 14,
+                  live: true,
+                }),
+              }}
+            />
+          </div>
+        ) : null}
         <style>{`
           .sos-loc-map.is-blocked.leaflet-container,
           .sos-loc-map.is-blocked .leaflet-grab { cursor: not-allowed !important; }
@@ -445,14 +435,8 @@ export function SosLocationStep({
             pointer-events: none;
             background: rgba(220, 38, 38, 0.08);
           }
-        `}</style>
+        `}        </style>
       </div>
-
-      {error ? (
-        <p className="text-[13px] font-medium text-neutral-600" role="alert">
-          {error}
-        </p>
-      ) : null}
     </div>
   )
 }

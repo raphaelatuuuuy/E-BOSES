@@ -8,9 +8,10 @@ import { cn } from "@workspace/ui/lib/utils"
 import { matchMarikinaHeightsStreet } from "@/features/auth/lib/marikina-heights-streets"
 import { reverseGeocodeToMarikinaStreet } from "@/features/auth/lib/reverse-geocode"
 import { reverseGeocode } from "@/lib/geocode"
-import { dotPinHtml } from "@/features/dashboard/components/map/markers"
-import { drawCoverage } from "@/features/dashboard/components/map/coverage-layer"
-import { loadCoverageContext } from "@/features/dashboard/lib/use-coverage"
+import {
+  concernMarkerHtml,
+  concernMarkerSize,
+} from "@/features/dashboard/components/map/concern-marker"
 
 function escapeHtml(value: string) {
   return value
@@ -24,6 +25,9 @@ type ReportLocationMapProps = {
   latitude: number | string | null | undefined
   longitude: number | string | null | undefined
   streetAddress?: string | null
+  category?: string
+  iconKey?: string
+  status?: string
   className?: string
   heightClassName?: string
 }
@@ -215,6 +219,9 @@ export function ReportLocationMap({
   latitude,
   longitude,
   streetAddress,
+  category,
+  iconKey,
+  status,
   className,
   heightClassName = "h-52 sm:h-56",
 }: ReportLocationMapProps) {
@@ -256,12 +263,11 @@ export function ReportLocationMap({
         zoomControl: false,
         attributionControl: false,
         dragging: true,
-        scrollWheelZoom: false,
+        scrollWheelZoom: true,
         doubleClickZoom: true,
         boxZoom: false,
-        keyboard: false,
+        keyboard: true,
       })
-      L.control.zoom({ position: "topright" }).addTo(map)
 
       L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
         attribution: "&copy; OSM &copy; CARTO",
@@ -271,41 +277,55 @@ export function ReportLocationMap({
       }).addTo(map)
 
       const labelHtml = streetLabel
-        ? `<span style="
-            position:absolute;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%);
-            white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;
-            background:rgba(255,255,255,.95);color:#171717;
-            font-size:11px;font-weight:600;line-height:1.3;
+        ? `<span class="eboses-report-label" style="
+            position:absolute;left:50%;bottom:calc(100% + 6px);transform:translateX(-50%);
+            display:inline-block;
+            white-space:nowrap;max-width:220px;
+            background:#ffffff;color:#525252;
+            font-size:11px;font-weight:500;line-height:1.35;
             padding:3px 8px;border-radius:6px;
-            box-shadow:0 2px 8px rgba(0,0,0,.12);
+            border:1px solid #e5e7eb;
+            box-shadow:0 1px 3px rgba(15,23,42,.08);
             pointer-events:none;
-          ">${escapeHtml(streetLabel)}</span>`
+          ">${escapeHtml(streetLabel)}<span style="
+            position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);
+            width:0;height:0;
+            border-left:6px solid transparent;border-right:6px solid transparent;border-top:6px solid #e5e7eb;
+          "></span><span style="
+            position:absolute;left:50%;bottom:-4px;transform:translateX(-50%);
+            width:0;height:0;
+            border-left:5px solid transparent;border-right:5px solid transparent;border-top:5px solid #ffffff;
+          "></span></span>`
         : ""
+
+      const pinSelected = true
+      const pinSize = concernMarkerSize(pinSelected)
 
       L.marker([lat, lng], {
         icon: L.divIcon({
           className: "eboses-report-pin",
-          html: `<div style="position:relative;width:14px;height:14px">${labelHtml}${dotPinHtml({ size: 14 })}</div>`,
-          iconSize: [14, 14],
-          iconAnchor: [7, 7],
+          html: `<div style="position:relative;width:${pinSize}px;height:${pinSize}px">${labelHtml}${concernMarkerHtml(
+            {
+              category: category ?? "other",
+              iconKey,
+              status: status ?? "",
+              selected: pinSelected,
+            },
+          )}</div>`,
+          iconSize: [pinSize, pinSize],
+          iconAnchor: [pinSize / 2, pinSize / 2],
         }),
-        interactive: false,
+        interactive: true,
         zIndexOffset: 900,
       }).addTo(map)
 
-      coverageRef.current = L.layerGroup().addTo(map)
-      void loadCoverageContext()
-        .then((context) => {
-          const group = coverageRef.current
-          if (cancelled || !group) return
-          drawCoverage(L, group, {
-            boundary: context.boundary?.geometry ?? null,
-            policy: context.dispatch_policy,
-          })
-        })
-        .catch(() => {
-          // The pin is still correct without the outline around it.
-        })
+      // Centre the pin in the card. The taller map gives the label above the
+      // pin enough headroom, so no vertical offset is needed.
+      const centerView = () => {
+        map?.setView([lat, lng], 18, { animate: false })
+      }
+
+      // Boundary overlay hidden for cleaner report detail view
 
       mapRef.current = map
       resizeObserverRef.current?.disconnect()
@@ -314,18 +334,18 @@ export function ReportLocationMap({
         requestAnimationFrame(() => {
           if (!mapRef.current) return
           mapRef.current.invalidateSize()
-          mapRef.current.setView([lat, lng], 18, { animate: false })
+          centerView()
         })
       })
       resizeObserverRef.current.observe(containerRef.current)
       requestAnimationFrame(() => {
         map?.invalidateSize()
-        map?.setView([lat, lng], 18, { animate: false })
+        centerView()
       })
       window.setTimeout(() => {
         if (!mapRef.current) return
         mapRef.current.invalidateSize()
-        mapRef.current.setView([lat, lng], 18, { animate: false })
+        centerView()
       }, 150)
     }
 
@@ -344,7 +364,7 @@ export function ReportLocationMap({
       }
       mapRef.current = null
     }
-  }, [lat, lng, valid, streetLabel])
+  }, [lat, lng, valid, streetLabel, category, status])
 
   if (!valid) {
     return (
@@ -363,7 +383,7 @@ export function ReportLocationMap({
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-xl border border-neutral-200 bg-tint",
+        "relative overflow-hidden rounded-xl bg-tint",
         heightClassName,
         className,
       )}
@@ -393,8 +413,30 @@ export function ReportLocationMap({
         .eboses-report-map .leaflet-tile {
           max-width: none !important;
         }
+        /* Soften the faint seam every tile leaves behind and blend tile edges
+           into the card so the map reads as one continuous surface. */
+        .eboses-report-map .leaflet-tile-pane {
+          filter: saturate(0.85);
+        }
+        .eboses-report-map .leaflet-tile {
+          outline: none;
+          transition: filter 150ms ease;
+        }
         .eboses-report-pin {
           background: transparent !important;
+          border: none !important;
+        }
+        /* Soft tint disc + solid glyph colour — matches the alerts map */
+        .eboses-report-map .eboses-pin__disc {
+          background: color-mix(in srgb, var(--pin) 16%, white) !important;
+          color: var(--pin) !important;
+          border: 2px solid #fff !important;
+          box-shadow: 0 2px 8px rgba(15, 23, 42, 0.15) !important;
+        }
+        .eboses-report-map .eboses-pin__disc svg {
+          display: block;
+        }
+        .eboses-report-map .eboses-pin__core {
           border: none !important;
         }
       `}</style>

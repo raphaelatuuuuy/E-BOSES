@@ -1,9 +1,5 @@
 import { z } from "zod"
 
-import {
-  formatStreetAddress,
-  isKnownMarikinaHeightsStreet,
-} from "@/features/auth/lib/marikina-heights-streets"
 
 export const MAX_PROOF_OF_RESIDENCY_FILE_SIZE_BYTES = 10 * 1024 * 1024
 const ALLOWED_PROOF_OF_RESIDENCY_EXTENSIONS = new Set([
@@ -144,20 +140,10 @@ export const dobStepSchema = z.object({
     }),
 })
 
-export const addressStepSchema = z
-  .object({
-    street: z.string().min(1, "Select your street."),
+export const addressStepSchema = z.object({
+    street: z.string().min(1, "Enter your street."),
     houseNumber: z.string().max(40, "House number is too long.").optional().default(""),
     address: z.string().optional().default(""),
-  })
-  .superRefine((data, ctx) => {
-    if (!isKnownMarikinaHeightsStreet(data.street)) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["street"],
-        message: "Select a street in Barangay Marikina Heights.",
-      })
-    }
   })
 
 export const proofStepSchema = z.object({
@@ -204,6 +190,19 @@ export const signUpSchema = z.object({
   street: z.string().min(1, "Select your street."),
   houseNumber: z.string().max(40).optional().default(""),
   address: z.string().min(5, "Enter a valid address.").max(200, "Address must be 200 characters or fewer."),
+  homeLatitude: z.number().nullable().default(null),
+  homeLongitude: z.number().nullable().default(null),
+  homeAccuracyMeters: z.number().nullable().default(null),
+  homeLocationSource: z.enum(["gps", "search", "manual"]).nullable().default(null),
+  communityResolutionToken: z.string().default(""),
+  communityMatch: z.object({
+    id: z.string(),
+    name: z.string(),
+    code: z.string(),
+    boundary: z.record(z.string(), z.unknown()),
+    center: z.object({ latitude: z.number(), longitude: z.number() }),
+    neighbors: z.number(),
+  }).nullable().default(null),
   proofOfResidency: z
     .array(proofOfResidencyFileSchema)
     .min(1, "Upload at least one valid government-issued ID or bill.")
@@ -238,7 +237,8 @@ export type SignUpValues = z.infer<typeof signUpSchema>
 export type SignUpErrors = Partial<Record<keyof SignUpValues | "street" | "houseNumber", string>>
 
 export function buildAddressFromParts(street: string, houseNumber?: string) {
-  return formatStreetAddress(street, houseNumber)
+  const house = houseNumber?.trim()
+  return house ? `${house} ${street}` : street
 }
 
 export function validateSignUpStep(
@@ -285,13 +285,14 @@ export function validateSignUpStep(
         address: values.address,
       })
     case 7:
+      return values.communityResolutionToken && values.communityMatch
+        ? {}
+        : { address: "Confirm your home pin and community." }
+    case 8:
       return pick(proofStepSchema, {
         proofOfResidency: values.proofOfResidency,
         proofType: values.proofType,
       })
-    case 8:
-      // Verified neighborhood peek — no form fields
-      return {}
     case 9:
       return pick(phoneStepSchema, {
         phoneNumber: values.phoneNumber,

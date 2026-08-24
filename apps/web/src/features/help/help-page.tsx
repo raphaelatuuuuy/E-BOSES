@@ -38,7 +38,7 @@ function HelpGrid() {
         })}
       </div>
 
-      <footer className="mt-28 border-t border-neutral-200 pt-10">
+      <footer className="mt-12 border-t border-neutral-200 pt-10">
         <div className="flex flex-wrap items-center justify-center gap-x-10 gap-y-3 text-base text-neutral-500">
           <Link to="/" className="no-underline transition-colors hover:text-accent">
             {t.home}

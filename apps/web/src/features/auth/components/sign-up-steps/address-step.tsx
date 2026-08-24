@@ -1,5 +1,4 @@
 import * as React from "react"
-import { flushSync } from "react-dom"
 import {
   LoaderCircleIcon,
   MapPinIcon,
@@ -23,7 +22,6 @@ import {
 } from "@/features/auth/components/sign-up-shell"
 import {
   filterMarikinaHeightsStreets,
-  matchMarikinaHeightsStreet,
 } from "@/features/auth/lib/marikina-heights-streets"
 import {
   getCurrentPosition,
@@ -54,7 +52,7 @@ function locationErrorMessage(error: unknown) {
   return "Could not get your location. Please select your street from the list."
 }
 
-const STREET_SUBTEXT = "Marikina Heights, Marikina City"
+const STREET_SUBTEXT = "Community address"
 
 interface AddressStepProps {
   values: SignUpValues
@@ -145,6 +143,10 @@ export function AddressStep({ values, errors, onChange, onContinue }: AddressSte
         )
         setOpenList(true)
       }
+      onChange("homeLatitude", position.coords.latitude)
+      onChange("homeLongitude", position.coords.longitude)
+      onChange("homeAccuracyMeters", position.coords.accuracy)
+      onChange("homeLocationSource", "gps")
     } catch (error) {
       showLocationToast(locationErrorMessage(error))
       setOpenList(true)
@@ -223,12 +225,12 @@ export function AddressStep({ values, errors, onChange, onContinue }: AddressSte
                 ) : streets.length === 0 ? (
                   <>
                     <p className="px-4 py-3 text-sm text-muted-foreground">
-                      No matching streets in Marikina Heights.
+                      No saved street match.
                     </p>
                     <DropdownAction
                       icon={<PencilIcon className="size-5" strokeWidth={1.75} />}
-                      label="Enter your address manually"
-                      onClick={() => focusStreetInput()}
+                      label={`Use "${query.trim()}"`}
+                      onClick={() => selectStreet(query.trim())}
                     />
                   </>
                 ) : (
@@ -299,15 +301,9 @@ export function AddressStep({ values, errors, onChange, onContinue }: AddressSte
 
       <StepContinueButton
         onClick={() => {
-          // Accept a typed street if it fuzzy-matches the curated list.
           if (!values.street?.trim() && query.trim()) {
-            const matched = matchMarikinaHeightsStreet(query)
-            if (matched) {
-              flushSync(() => {
-                onChange("street", matched)
-                setQuery(matched)
-              })
-            }
+            onChange("street", query.trim())
+            setQuery(query.trim())
           }
           onContinue()
         }}

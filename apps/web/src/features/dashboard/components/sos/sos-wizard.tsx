@@ -4,8 +4,6 @@ import { toast } from "sonner"
 import {
   ArrowLeftIcon,
   CheckIcon,
-  Maximize2Icon,
-  Minimize2Icon,
   PhoneIcon,
   XIcon,
 } from "lucide-react"
@@ -13,7 +11,6 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 import { apiRequest } from "@/lib/api"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { useIsDesktop } from "@/features/dashboard/lib/shell"
 import {
   createEmergency,
   sendEmergencyChat,
@@ -45,7 +42,10 @@ import {
   emergencyOptionsFromCategories,
 } from "@/features/dashboard/components/sos/emergency-catalog"
 import { SosDetailsStep } from "@/features/dashboard/components/sos/details-step"
-import { SosTriageStep } from "@/features/dashboard/components/sos/triage-step"
+import {
+  SosTriageStep,
+  hasDetailQuestion,
+} from "@/features/dashboard/components/sos/triage-step"
 import { SosConfirmStep } from "@/features/dashboard/components/sos/confirm-step"
 import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
 
@@ -57,25 +57,23 @@ const emergencySmsNumberFallback =
 const OFFLINE_SUBMIT_ERROR =
   "You’re offline. Reconnect to send online, or use the SMS backup below."
 
-type WizardStep = "category" | "triage" | "location" | "details" | "review" | "countdown"
+type WizardStep = "category" | "triage" | "location" | "review" | "countdown"
 
 const WIZARD_STEPS: WizardStep[] = [
   "category",
   "triage",
   "location",
-  "details",
   "review",
   "countdown",
 ]
 
-const WIZARD_LABELS = ["Type", "Details", "Location", "Note", "Review"] as const
+const WIZARD_LABELS = ["Type", "Details", "Location", "Review"] as const
 const WIZARD_STEP_COUNT = WIZARD_LABELS.length
 
 function stepTitle(step: WizardStep) {
   if (step === "category") return "What’s the emergency?"
   if (step === "triage") return "Quick questions"
   if (step === "location") return "Confirm your location"
-  if (step === "details") return "Anything else? (optional)"
   if (step === "review") return "Review & send"
   return "Sending alert"
 }
@@ -90,31 +88,34 @@ function isActiveAlert(alert: EmergencyAlert | null) {
 
 function SosShell({
   open,
-  expanded,
-  onExpandChange,
   onClose,
   title,
   subtitle,
   showBack,
   onBack,
   footer,
+  resetKey,
   children,
 }: {
   open: boolean
-  expanded: boolean
-  onExpandChange: (v: boolean) => void
   onClose: () => void
   title: string
   subtitle?: string
   showBack?: boolean
   onBack?: () => void
   footer?: ReactNode
+  /** Step identity — scrolls the body back to the top whenever it changes. */
+  resetKey?: unknown
   children: ReactNode
 }) {
-  const isDesktop = useIsDesktop()
   const titleId = useId()
   const subtitleId = useId()
   const panelRef = useRef<HTMLDivElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    bodyRef.current?.scrollTo({ top: 0 })
+  }, [resetKey])
 
   useEffect(() => {
     if (!open) return
@@ -156,16 +157,12 @@ function SosShell({
   if (typeof document === "undefined" || !open) return null
 
   return createPortal(
-    <div className="fixed inset-0 z-[220]">
-      {/* Plain dark scrim only — no blur/blue (avoids lag) */}
+    <div className="fixed inset-0 z-[400] flex items-end justify-center sm:items-center sm:p-4">
       <button
         type="button"
-        className={cn(
-          "absolute inset-0 bg-black/60",
-          isDesktop && !expanded && "bg-black/45"
-        )}
         aria-label="Close"
         onClick={onClose}
+        className="absolute inset-0 bg-black/50 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200"
       />
 
       <div
@@ -175,85 +172,72 @@ function SosShell({
         aria-labelledby={titleId}
         aria-describedby={subtitle ? subtitleId : undefined}
         className={cn(
-          "z-10 flex flex-col overflow-hidden bg-brand-navy text-white",
-          // Mobile: full screen
-          !isDesktop && "fixed inset-0 h-full w-full",
-          // Desktop dock (chat widget)
-          isDesktop &&
-            !expanded &&
-            "fixed right-6 bottom-6 h-[min(640px,calc(100dvh-3rem))] w-[min(400px,calc(100vw-2.5rem))] rounded-2xl border border-white/10 shadow-[0_16px_48px_rgba(0,0,0,0.45)]",
-          // Desktop expanded = right sidebar (full height)
-          isDesktop &&
-            expanded &&
-            "fixed inset-y-0 right-0 h-full w-[min(480px,100vw)] max-w-[100vw] border-l border-white/10 shadow-[-12px_0_40px_rgba(0,0,0,0.4)]"
+          "relative z-10 flex w-full flex-col overflow-hidden border border-white/10 bg-brand-navy text-white shadow-[0_16px_48px_rgba(0,0,0,0.45)]",
+          "max-h-[min(92dvh,760px)] rounded-t-[28px] sm:max-w-[440px] sm:rounded-[28px]",
+          "md:max-h-[min(92dvh,820px)] md:min-h-[420px]",
+          "md:w-[min(480px,92vw)] md:min-w-[420px] md:max-w-[min(720px,94vw)]",
+          // CSS `resize` only works on a box that is not overflow:visible, so
+          // the drag-to-resize grip forces overflow:auto on the panel itself.
+          // That paints a second scrollbar down the dialog even though the body
+          // below has its own scroller. Hide the panel's — the body keeps the
+          // scrolling, the grip keeps working.
+          "md:resize md:overflow-auto dialog-resize-grip scrollbar-hide",
+          "motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-200"
         )}
       >
-        {/* Red urgency header — full-screen mobile gets top safe-area padding (notch/status bar) */}
-        <header
-          className={cn(
-            "flex shrink-0 items-center gap-1 bg-sos px-3 sm:px-4",
-            !isDesktop
-              ? "pt-[max(0.625rem,env(safe-area-inset-top))] pb-2.5"
-              : "py-2.5"
-          )}
-        >
+        <div className="flex shrink-0 items-start gap-2 px-5 pb-4 pt-5 max-sm:pt-[max(1.25rem,env(safe-area-inset-top))]">
           {showBack ? (
             <button
               type="button"
               onClick={onBack}
-              className="flex size-10 shrink-0 items-center justify-center rounded-full text-white hover:bg-white/15"
               aria-label="Back"
+              className="-ml-2 flex size-10 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
             >
-              <ArrowLeftIcon className="size-5" strokeWidth={2.25} />
+              <ArrowLeftIcon className="size-6" strokeWidth={2} />
             </button>
-          ) : (
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex size-10 shrink-0 items-center justify-center rounded-full text-white hover:bg-white/15"
-              aria-label="Close"
-            >
-              <XIcon className="size-5" />
-            </button>
-          )}
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[11px] font-bold tracking-wide text-white/80">
+          ) : null}
+
+          <div className="min-w-0 flex-1 pt-0.5">
+            <p className="text-[11px] font-bold uppercase tracking-wide text-brand-orange">
               Emergency SOS
             </p>
-            <p
+            <h2
               id={titleId}
-              className="truncate text-[15px] font-semibold text-white"
+              className="mt-0.5 truncate text-[22px] font-bold leading-[1.2] tracking-tight text-white"
             >
               {title}
-            </p>
+            </h2>
             {subtitle ? (
-              <p id={subtitleId} className="truncate text-[12px] text-white/75">
+              <p
+                id={subtitleId}
+                className="mt-1 text-[14px] leading-snug text-white/60"
+              >
                 {subtitle}
               </p>
             ) : null}
           </div>
-          {isDesktop ? (
+
+          <div className="-mr-2 flex shrink-0 items-center gap-0.5">
             <button
               type="button"
-              onClick={() => onExpandChange(!expanded)}
-              className="flex size-10 shrink-0 items-center justify-center rounded-full text-white hover:bg-white/15"
-              aria-label={expanded ? "Collapse panel" : "Expand panel"}
+              onClick={onClose}
+              aria-label="Close"
+              className="flex size-10 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
             >
-              {expanded ? (
-                <Minimize2Icon className="size-4" />
-              ) : (
-                <Maximize2Icon className="size-4" />
-              )}
+              <XIcon className="size-6" strokeWidth={2} />
             </button>
-          ) : null}
-        </header>
+          </div>
+        </div>
 
-        <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain bg-brand-navy px-4 py-4 sm:px-5">
+        <div
+          ref={bodyRef}
+          className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-6"
+        >
           {children}
         </div>
 
         {footer ? (
-          <div className="shrink-0 border-t border-white/10 bg-nav-bg px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
+          <div className="shrink-0 px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2">
             {footer}
           </div>
         ) : null}
@@ -264,7 +248,7 @@ function SosShell({
 }
 
 /**
- * SOS wizard: the step state machine (category → location → details →
+  * SOS wizard: the step state machine (category → triage → location with
  * review → countdown) + shell UI. FAB and open/close orchestration between
  * wizard/tracking modes lives one level up in sos-button.tsx; this component
  * owns everything about the wizard itself and resets its own state whenever
@@ -280,7 +264,6 @@ export function SosWizard({
   onSubmitted: (alert: EmergencyAlert) => void
 }) {
   const { user } = useAuthSession()
-  const [expanded, setExpanded] = useState(false)
   const [step, setStep] = useState<WizardStep>("category")
   // Fetched once when the wizard opens. Failure is silent on purpose: the
   // SMS fallback is a nicety, and an unreachable API must never block the
@@ -445,7 +428,6 @@ export function SosWizard({
       toast.info("Alert cancelled before sending.")
       return
     }
-    setExpanded(false)
     resetWizard()
     onClose()
   }
@@ -476,7 +458,12 @@ export function SosWizard({
       return
     }
     if (step === "triage") {
-      // Every triage question is optional; nothing blocks here.
+      const needDetail = hasDetailQuestion(emergency || "")
+      if (!triage.peopleAffected || !triage.injuries || (needDetail && !triage.detail)) {
+        setFieldErrors({ triage: "Answer all the questions to continue." })
+        return
+      }
+      setFieldErrors({})
       setStep("location")
       return
     }
@@ -497,10 +484,6 @@ export function SosWizard({
         return
       }
       setFieldErrors({})
-      setStep("details")
-      return
-    }
-    if (step === "details") {
       setStep("review")
       return
     }
@@ -675,7 +658,7 @@ export function SosWizard({
           <button
             type="button"
             onClick={goBack}
-            className="h-11 flex-1 rounded-full border border-white/20 bg-white/10 text-[14px] font-semibold text-white hover:bg-white/15"
+            className="h-[52px] flex-1 rounded-full border border-white/20 bg-white/10 text-[16px] font-semibold text-white transition-colors hover:bg-white/15"
           >
             Back
           </button>
@@ -684,7 +667,7 @@ export function SosWizard({
           <a
             href={emergencySmsHref}
             onClick={announceSmsFallback}
-            className="flex h-11 flex-[1.4] items-center justify-center gap-2 rounded-full bg-brand-orange px-4 text-[14px] font-semibold text-white hover:bg-brand-orange-strong"
+            className="flex h-[52px] flex-[1.4] items-center justify-center gap-2 rounded-full bg-brand-orange px-4 text-[16px] font-semibold text-white transition-colors hover:bg-brand-orange-strong"
           >
             <PhoneIcon className="size-4" aria-hidden="true" />
             SMS backup
@@ -694,13 +677,17 @@ export function SosWizard({
             type="button"
             onClick={goNext}
             disabled={step === "location" && !locationCanContinue}
-            className="h-11 flex-[1.4] rounded-full bg-brand-orange text-[14px] font-semibold text-white hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:bg-white/15 disabled:text-white/45"
+            className={cn(
+              "h-[52px] flex-[1.4] rounded-full text-[16px] font-semibold text-white transition-all active:scale-[0.99]",
+              step === "review"
+                ? "bg-sos hover:opacity-90"
+                : "bg-brand-orange hover:bg-brand-orange-strong",
+              "disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/40 disabled:active:scale-100"
+            )}
           >
-            {step === "details"
-              ? "Skip / Next"
-              : step === "review"
-                ? "Send SOS in 5 seconds"
-                : "Next"}
+            {step === "review"
+              ? "Send SOS in 5 seconds"
+              : "Next"}
           </button>
         )}
       </div>
@@ -716,7 +703,7 @@ export function SosWizard({
           toast.info("Alert cancelled before sending.")
         }}
         disabled={submitting}
-        className="h-11 w-full rounded-full border border-white/25 bg-white text-[14px] font-semibold text-sos hover:bg-sos/10 disabled:opacity-60"
+        className="h-[52px] w-full rounded-full border border-sos/50 bg-sos/15 text-[16px] font-semibold text-sos-bright transition-colors hover:bg-sos/25 disabled:opacity-60"
       >
         {submitting ? "Sending…" : "Cancel before send"}
       </button>
@@ -743,8 +730,6 @@ export function SosWizard({
 
       <SosShell
         open={open}
-        expanded={expanded}
-        onExpandChange={setExpanded}
         onClose={closeShell}
         title={stepTitle(step)}
         subtitle={
@@ -755,9 +740,10 @@ export function SosWizard({
         showBack={step !== "category" && step !== "countdown"}
         onBack={goBack}
         footer={wizardFooter}
+        resetKey={step}
       >
         {step !== "countdown" ? (
-          <div className="mb-5">
+          <div className="mb-5 mt-1">
             <div className="mb-3 flex items-center justify-between gap-1">
               {WIZARD_LABELS.map((label, i) => {
                 const n = i + 1
@@ -772,9 +758,8 @@ export function SosWizard({
                     <span
                       className={cn(
                         "flex size-7 items-center justify-center rounded-full text-[11px] font-bold",
-                        done && "bg-brand-navy text-white",
-                        active &&
-                          "bg-brand-orange text-white shadow-[0_0_0_3px_rgba(255,106,26,0.28)]",
+                        done && "bg-brand-orange text-white",
+                        active && "bg-white text-brand-navy",
                         !done &&
                           !active &&
                           "border border-white/25 bg-transparent text-white/45"
@@ -826,18 +811,12 @@ export function SosWizard({
         ) : null}
 
         {step === "location" ? (
-          <div className="flex min-h-[360px] flex-col">
-            <p className="mb-3 text-[14px] leading-6 text-white/75">
-               Drag the map so help goes to the right pin.
-            </p>
-            <SosLocationStep
-              value={location}
-              onChange={setLocation}
-              className="min-h-[280px]"
-            />
+          <div className="flex flex-col gap-4">
+            <SosLocationStep value={location} onChange={setLocation} className="h-[min(52vh,420px)]" />
+            <SosDetailsStep note={note} onNoteChange={setNote} photo={photo} onPhotoChange={setPhoto} online={isOnline} />
             {fieldErrors.location ? (
               <p
-                className="mt-2 text-[13px] font-medium text-sos"
+                className="text-[13px] font-medium text-sos-bright"
                 role="alert"
               >
                 {fieldErrors.location}
@@ -850,12 +829,12 @@ export function SosWizard({
           <SosTriageStep
             categoryCode={emergency || ""}
             value={triage}
-            onChange={setTriage}
+            onChange={(next) => {
+              setTriage(next)
+              setFieldErrors((c) => ({ ...c, triage: "" }))
+            }}
+            error={fieldErrors.triage}
           />
-        ) : null}
-
-        {step === "details" ? (
-          <SosDetailsStep note={note} onNoteChange={setNote} photo={photo} onPhotoChange={setPhoto} online={isOnline} />
         ) : null}
 
         {step === "review" || step === "countdown" ? (
@@ -869,6 +848,7 @@ export function SosWizard({
             locationLabel={locationLabel}
             triageSummary={describeTriage(triage)}
             note={note}
+            photo={photo}
             submitting={submitting}
             dispatchCountdown={dispatchCountdown}
           />

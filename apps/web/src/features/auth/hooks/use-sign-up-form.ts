@@ -5,13 +5,14 @@ import {
   registerResident,
   requestRegistrationEmailOtp,
   requestRegistrationPhoneOtp,
+  resolveRegistrationCommunity,
   type AuthUser,
   verifyRegistrationEmailOtp,
   verifyRegistrationPhoneOtp,
 } from "@/features/auth/api"
 import { getPasswordStrength } from "@/features/auth/lib/password-requirements"
 import { humanizeProofError } from "@/features/auth/lib/process-proof-file"
-import { listResidenceProofOptions, type ResidenceProofOption } from "@/features/ocr/api"
+import { normalizeResidenceProofOptions, type ResidenceProofOption } from "@/features/ocr/api"
 import {
   type SignUpErrors,
   type SignUpStepIndex,
@@ -42,6 +43,12 @@ const initialValues: SignUpValues = {
   gender: "",
   avatar: "",
   agreeToTerms: false,
+  homeLatitude: null,
+  homeLongitude: null,
+  homeAccuracyMeters: null,
+  homeLocationSource: null,
+  communityResolutionToken: "",
+  communityMatch: null,
 }
 
 /** Wait this long before the user can resend an email OTP. */
@@ -109,6 +116,7 @@ const backendFieldMap: Record<string, keyof SignUpValues> = {
   proofType: "proofType",
   terms_version: "agreeToTerms",
   email_otp_code: "emailOtpCode",
+  community_resolution_token: "communityResolutionToken",
 }
 
 function computeAvatar(gender: string, dateOfBirth: string) {
@@ -158,50 +166,48 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
   const [phoneOtpCooldownSeconds, setPhoneOtpCooldownSeconds] = useState(0)
   const [ocrFields, setOcrFields] = useState<string[]>([])
   const [proofOptions, setProofOptions] = useState<ResidenceProofOption[]>([])
-  const [proofOptionsLoading, setProofOptionsLoading] = useState(true)
-  const proofOptionsMounted = useRef(true)
+  const [proofOptionsLoading, setProofOptionsLoading] = useState(false)
 
-  async function refreshProofOptions() {
+  async function resolveCommunity(input: { latitude: number; longitude: number; accuracy?: number | null; source: "gps" | "search" | "manual" }) {
     setProofOptionsLoading(true)
-    let options: ResidenceProofOption[] = []
-    let failed = false
     try {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        try {
-          options = await listResidenceProofOptions()
-          break
-        } catch {
-          failed = true
-          if (attempt >= 2 || !proofOptionsMounted.current) break
-          await new Promise((resolve) => window.setTimeout(resolve, 1500 * (attempt + 1)))
-        }
-      }
-      if (failed && import.meta.env.DEV) {
-        console.warn("[sign-up] Failed to load residence proof options")
-      }
-      if (!proofOptionsMounted.current) return options
+      const result = await resolveRegistrationCommunity({
+        email: valuesRef.current.email.trim().toLowerCase(),
+        latitude: input.latitude,
+        longitude: input.longitude,
+        accuracy_meters: input.accuracy,
+        address: { full: valuesRef.current.address },
+        source: input.source,
+      })
+      const options = normalizeResidenceProofOptions(result.proof_options).filter((item) => item.enabled !== false)
       setProofOptions(options)
       setValues((current) => {
-        const stillValid = options.some((item) => item.key === current.proofType)
-        return {
+        const next = {
           ...current,
-          proofType: stillValid ? current.proofType : options[0]?.key || "",
+          homeLatitude: input.latitude,
+          homeLongitude: input.longitude,
+          homeAccuracyMeters: input.accuracy ?? null,
+          homeLocationSource: input.source,
+          communityResolutionToken: result.token,
+          communityMatch: { ...result.community, neighbors: result.neighbors },
+          proofType: options[0]?.key ?? "",
+          proofOfResidency: [],
         }
+        valuesRef.current = next
+        return next
       })
-      return options
+      return result
     } finally {
-      if (proofOptionsMounted.current) setProofOptionsLoading(false)
+      setProofOptionsLoading(false)
     }
   }
 
-  useEffect(() => {
-    proofOptionsMounted.current = true
-    const id = window.setTimeout(() => void refreshProofOptions(), 0)
-    return () => {
-      proofOptionsMounted.current = false
-      window.clearTimeout(id)
-    }
-  }, [])
+  async function refreshProofOptions() {
+    const current = valuesRef.current
+    if (current.homeLatitude == null || current.homeLongitude == null) return []
+    await resolveCommunity({ latitude: current.homeLatitude, longitude: current.homeLongitude, accuracy: current.homeAccuracyMeters, source: current.homeLocationSource ?? "manual" })
+    return proofOptions
+  }
 
   // Reset the phone cooldown display whenever the resend window closes —
   // render-adjust instead of a sync setState at the top of the ticking effect.
@@ -267,6 +273,14 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
         const street = field === "street" ? (value as string) : next.street
         const houseNumber = field === "houseNumber" ? (value as string) : next.houseNumber
         next.address = street ? buildAddressFromParts(street, houseNumber) : ""
+        next.homeLatitude = null
+        next.homeLongitude = null
+        next.homeAccuracyMeters = null
+        next.homeLocationSource = null
+        next.communityResolutionToken = ""
+        next.communityMatch = null
+        next.proofType = ""
+        next.proofOfResidency = []
       }
 
       if (field === "gender" || field === "dateOfBirth") {
@@ -277,6 +291,10 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
 
       if (field === "email") {
         next.emailOtpCode = ""
+        next.communityResolutionToken = ""
+        next.communityMatch = null
+        next.proofType = ""
+        next.proofOfResidency = []
       }
 
       valuesRef.current = next
@@ -739,7 +757,8 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
       else if (nextErrors.gender) setStep(4)
       else if (nextErrors.dateOfBirth) setStep(5)
       else if (nextErrors.address || nextErrors.street) setStep(6)
-      else if (nextErrors.proofOfResidency || nextErrors.proofType) setStep(7)
+      else if (!payloadValues.communityResolutionToken || !payloadValues.communityMatch) setStep(7)
+      else if (nextErrors.proofOfResidency || nextErrors.proofType) setStep(8)
       else if (nextErrors.phoneNumber || nextErrors.phoneOtpCode) setStep(9)
       return
     }
@@ -755,7 +774,7 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     formData.append("last_name", payloadValues.lastName)
     formData.append("date_of_birth", payloadValues.dateOfBirth)
     formData.append("address", address)
-    formData.append("barangay", "Marikina Heights")
+    formData.append("community_resolution_token", payloadValues.communityResolutionToken)
     if (payloadValues.gender) formData.append("gender", payloadValues.gender)
     if (payloadValues.avatar) formData.append("avatar", payloadValues.avatar)
     if (payloadValues.proofType) formData.append("proof_type", payloadValues.proofType)
@@ -841,7 +860,8 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
           if (mapped.email || mapped.password) setStep(0)
           else if (mapped.emailOtpCode) setStep(1)
           else if (mapped.firstName || mapped.lastName) setStep(2)
-          else if (mapped.proofOfResidency || mapped.proofType || mapped.address) setStep(7)
+          else if (mapped.address) setStep(7)
+          else if (mapped.proofOfResidency || mapped.proofType) setStep(8)
           else if (mapped.phoneNumber || mapped.phoneOtpCode) setStep(9)
           setSubmitError(detailMessage || leftover || "")
           return
@@ -873,6 +893,7 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
 
   const canCaptureProof = useMemo(() => {
     if (proofOptionsLoading) return false
+    if (!values.communityResolutionToken) return false
     if (!values.firstName?.trim()) return false
     if (!values.lastName?.trim()) return false
     if (!values.dateOfBirth?.trim()) return false
@@ -881,6 +902,7 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     return true
   }, [
     proofOptionsLoading,
+    values.communityResolutionToken,
     values.firstName,
     values.lastName,
     values.dateOfBirth,
@@ -957,6 +979,7 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     proofOptions,
     proofOptionsLoading,
     refreshProofOptions,
+    resolveCommunity,
     canCaptureProof,
     proofCaptureBlockedReason,
   }

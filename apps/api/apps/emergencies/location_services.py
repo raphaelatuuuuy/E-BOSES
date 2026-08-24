@@ -33,6 +33,18 @@ def classify_location_confidence(alert) -> str:
             if (alert.reported_area or "").strip()
             else EmergencyAlert.LocationConfidence.UNKNOWN
         )
+    community = getattr(alert, "community", None)
+    boundary = getattr(community, "boundary", None)
+    if community is None:
+        return EmergencyAlert.LocationConfidence.UNKNOWN
+    if boundary and boundary.geometry:
+        from apps.geo_services import point_in_geojson_inclusive
+
+        return (
+            EmergencyAlert.LocationConfidence.CONFIRMED
+            if point_in_geojson_inclusive(alert.longitude, alert.latitude, boundary.geometry)
+            else EmergencyAlert.LocationConfidence.OUTSIDE_AREA
+        )
     try:
         if not is_inside_barangay_boundary(alert.latitude, alert.longitude):
             return EmergencyAlert.LocationConfidence.OUTSIDE_AREA
@@ -89,9 +101,10 @@ def resolve_alert_location(alert_id: int) -> dict:
     )
     if result["location"]:
         alert.resolved_location = result["location"]
-        # Fill `address` only when nothing better is there, so an address the
-        # resident confirmed on the map is never silently replaced.
-        if not (alert.address or "").strip() or alert.address == "SMS fallback coordinates":
+        # Fill `address` when empty or generic — never silently replace a real
+        # street the resident typed or confirmed on the map.
+        _GENERIC = {"", "sms fallback coordinates", "pinned location on map", "marikina heights"}
+        if (alert.address or "").strip().lower() in _GENERIC or "pinned location" in (alert.address or "").lower():
             alert.address = result["location"]
     alert.location_confidence = classify_location_confidence(alert)
     alert.save(

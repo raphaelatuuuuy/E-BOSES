@@ -26,6 +26,7 @@ from apps.concerns.ai.privacy import privacy_cache_key, process_media_privacy
 from apps.concerns.ai.privacy.sam3_client import Sam3NotConfigured, Sam3Unavailable
 from apps.concerns.ai_fixtures import gemma_result, privacy_scan_result
 from apps.concerns.models import Concern, ConcernAiAssessment, ConcernMedia, ConcernMediaRedaction, Department, Designation, Position
+from apps.concerns.test_helpers import ensure_test_profile
 
 User = get_user_model()
 
@@ -560,14 +561,16 @@ class ManualBlurTests(APITestCase):
             email="manual-blur-official@example.com", phone_number="+639181110004",
             password="pass", role=User.Role.BARANGAY_OFFICIAL, status=User.Status.VERIFIED,
         )
-        Designation.objects.create(
+        designation = Designation.objects.create(
             user=self.official,
             department=Department.objects.get(code="sangguniang-barangay"),
             position=Position.objects.get(code="barangay-captain"),
         )
+        ensure_test_profile(self.resident, community=designation.department.community)
         self.concern = Concern.objects.create(
             reporter=self.resident, title="Photo", description="A photo was submitted.",
             category=Concern.Category.VEHICLE,
+            assigned_department=designation.department,
         )
         upload = SimpleUploadedFile("evidence.jpg", photo_bytes(), content_type="image/jpeg")
         self.media = ConcernMedia.objects.create(

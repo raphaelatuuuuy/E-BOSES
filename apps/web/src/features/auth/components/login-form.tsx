@@ -12,6 +12,18 @@ import { FloatingLabelInput } from "@/features/auth/components/floating-label-in
 import { SILENT_SIGN_IN_ERROR, useSignInForm } from "@/features/auth/hooks/use-sign-in-form"
 import type { AuthUser } from "@/features/auth/api"
 
+/**
+ * The field already shows a fixed `+63`, so it holds the ten digits that follow
+ * it. Pasting a full `+639…`, `639…` or `09…` number drops the part the prefix
+ * already covers instead of being truncated into nonsense.
+ */
+function toLocalMobileDigits(value: string) {
+  let digits = value.replace(/\D/g, "")
+  if (digits.startsWith("63")) digits = digits.slice(2)
+  if (digits.startsWith("0")) digits = digits.slice(1)
+  return digits.slice(0, 10)
+}
+
 interface LoginFormProps extends React.ComponentProps<"div"> {
   onForgotPassword?: () => void
   onSignUp?: () => void
@@ -25,26 +37,48 @@ export function LoginForm({
   onSuccess,
   ...props
 }: LoginFormProps) {
-  const { errors, handleChange, handleSubmit, isSubmitting, submitError, values } =
+  const { errors, handleChange, handleSubmit, isSubmitting, setMode, submitError, values } =
     useSignInForm({ onSuccess })
   const [showPassword, setShowPassword] = React.useState(false)
+  const isPhone = values.mode === "phone"
 
   return (
     <div className={cn("w-full", className)} {...props}>
       <form className="flex w-full flex-col gap-2" noValidate onSubmit={handleSubmit}>
         <Field>
-          <FloatingLabelInput
-            id="email"
-            type="email"
-            autoComplete="email"
-            label="Email or phone number"
-            value={values.email}
-            onChange={(event) => handleChange("email", event.target.value)}
-            aria-invalid={Boolean(errors.email)}
-            required
-          />
-          {errors.email && errors.email !== SILENT_SIGN_IN_ERROR ? (
-            <FieldError>{errors.email}</FieldError>
+          <div className="relative">
+            <FloatingLabelInput
+              id="identifier"
+              name="identifier"
+              type={isPhone ? "tel" : "email"}
+              inputMode={isPhone ? "tel" : "email"}
+              autoComplete={isPhone ? "tel" : "email"}
+              label={isPhone ? "Phone number" : "Email address"}
+              prefix={isPhone ? "+63" : undefined}
+              value={values.identifier}
+              maxLength={isPhone ? 10 : undefined}
+              onChange={(event) => {
+                handleChange(
+                  "identifier",
+                  isPhone ? toLocalMobileDigits(event.target.value) : event.target.value,
+                )
+              }}
+              aria-invalid={Boolean(errors.identifier)}
+              required
+              className="pr-12"
+            />
+            <button
+              type="button"
+              onClick={() => setMode(isPhone ? "email" : "phone")}
+              className="absolute right-3 top-1/2 z-10 -translate-y-1/2 px-2 py-1 text-xs font-medium text-foreground"
+              aria-label={isPhone ? "Sign in with email" : "Sign in with phone number"}
+              tabIndex={-1}
+            >
+              {isPhone ? "Email" : "Phone"}
+            </button>
+          </div>
+          {errors.identifier && errors.identifier !== SILENT_SIGN_IN_ERROR ? (
+            <FieldError>{errors.identifier}</FieldError>
           ) : null}
         </Field>
 

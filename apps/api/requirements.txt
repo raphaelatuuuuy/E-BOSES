@@ -1,11 +1,14 @@
 # Core
-django>=5.2,<5.3
+# 5.2.17 is the first patch release without known CVEs (PYSEC-2026-3717 et al).
+django>=5.2.17,<5.3
 django-environ>=0.11
 
 # REST API
 djangorestframework>=3.16
 djangorestframework-simplejwt>=5.5
 django-cors-headers>=4.7
+# OpenAPI 3 schema + Swagger UI at /api/docs/, generated from the views.
+drf-spectacular>=0.30
 
 # WebSocket
 channels>=4.2
@@ -20,9 +23,15 @@ psycopg2-binary>=2.9
 # GDAL may need system-level install: https://docs.djangoproject.com/en/5.2/ref/contrib/gis/install/
 
 # Utilities
-Pillow>=11
-python-dateutil>=2.9
+# 12.x is the first line without the 2026 Pillow CVE batch (PYSEC-2026-2249+).
+Pillow>=12.3
 argon2-cffi>=23.1
+# Web-push VAPID (notifications/services.py) and dev certs depend on this;
+# pin it explicitly instead of riding a transitive install.
+cryptography>=50
+# Security floors for transitive dependencies flagged by pip-audit.
+sqlparse>=0.6
+python-multipart>=0.0.31
 
 # Async
 httpx>=0.28
@@ -39,6 +48,10 @@ opencv-python-headless>=4.8,<5
 # roboflow's `inference-sdk`: every published version of that package requires
 # Python <3.13, and this project runs 3.13.
 ollama>=0.5,<1
+
+# Street-level imagery search (Google panorama lookup near a concern pin).
+# Tile downloads are handled by apps.concerns.ai.street_imagery itself.
+streetview>=0.1
 
 # Official OCR template testing
 easyocr>=1.7,<2

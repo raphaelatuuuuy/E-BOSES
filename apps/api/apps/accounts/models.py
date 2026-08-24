@@ -1,3 +1,5 @@
+import uuid
+
 from django.conf import settings as django_settings
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -117,12 +119,23 @@ class ResidentProfile(models.Model):
         PREFER_NOT_TO_SAY = "prefer_not_to_say", "Prefer not to say"
 
     user = models.OneToOneField(django_settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="resident_profile")
+    community = models.ForeignKey(
+        "emergencies.Community",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="residents",
+    )
     first_name = models.CharField(max_length=50)
     middle_name = models.CharField(max_length=50, blank=True)
     last_name = models.CharField(max_length=50)
     date_of_birth = models.DateField()
     address = models.CharField(max_length=200)
     barangay = models.CharField(max_length=120, default="Marikina Heights")
+    home_latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    home_longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    home_accuracy_meters = models.FloatField(null=True, blank=True)
+    home_location_source = models.CharField(max_length=16, blank=True)
     gender = models.CharField(max_length=20, choices=Gender.choices, blank=True)
     avatar = models.CharField(max_length=30, blank=True)
     profile_completed_at = models.DateTimeField(null=True, blank=True)
@@ -143,6 +156,7 @@ class ResidentSettings(models.Model):
     push_alerts = models.BooleanField(default=True)
     report_updates = models.BooleanField(default=True)
     community_sharing = models.BooleanField(default=False)
+    location_sharing_enabled = models.BooleanField(default=False)
     location_confirmation = models.BooleanField(default=True)
     sos_placement = models.CharField(max_length=16, choices=SosPlacement.choices, default=SosPlacement.SIDEBAR)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -248,6 +262,41 @@ class EmailOTPChallenge(models.Model):
         return timezone.now() >= self.expires_at
 
 
+class CommunityResolution(models.Model):
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    email_hash = models.CharField(max_length=64, db_index=True)
+    email_challenge = models.ForeignKey(
+        "EmailOTPChallenge",
+        null=True,
+        on_delete=models.PROTECT,
+        related_name="community_resolutions",
+    )
+    community = models.ForeignKey(
+        "emergencies.Community",
+        on_delete=models.CASCADE,
+        related_name="signup_resolutions",
+    )
+    configuration = models.ForeignKey(
+        "OCRConfigurationVersion",
+        on_delete=models.PROTECT,
+        related_name="signup_resolutions",
+    )
+    latitude = models.DecimalField(max_digits=10, decimal_places=7)
+    longitude = models.DecimalField(max_digits=10, decimal_places=7)
+    accuracy_meters = models.FloatField(null=True, blank=True)
+    address = models.JSONField(default=dict, blank=True)
+    source = models.CharField(max_length=16)
+    boundary_revision = models.PositiveIntegerField()
+    expires_at = models.DateTimeField(db_index=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["community", "expires_at"], name="accounts_comm_res_expiry"),
+        ]
+
+
 class OCRConfigurationVersion(models.Model):
     """Immutable-after-publish OCR policy snapshot for residence verification."""
 
@@ -256,6 +305,13 @@ class OCRConfigurationVersion(models.Model):
         PUBLISHED = "published", "Published"
         ARCHIVED = "archived", "Archived"
 
+    community = models.ForeignKey(
+        "emergencies.Community",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="ocr_configurations",
+    )
     scope = models.CharField(max_length=64, default="residence_proof")
     version = models.PositiveIntegerField()
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
@@ -290,21 +346,21 @@ class OCRConfigurationVersion(models.Model):
     class Meta:
         ordering = ["-version"]
         constraints = [
-            models.UniqueConstraint(fields=["scope", "version"], name="accounts_ocr_cfg_scope_version_uniq"),
+            models.UniqueConstraint(fields=["community", "scope", "version"], name="accounts_ocr_cfg_comm_scope_ver_uniq"),
             models.UniqueConstraint(
-                fields=["scope"],
+                fields=["community", "scope"],
                 condition=models.Q(status="draft"),
-                name="accounts_ocr_cfg_one_draft_per_scope",
+                name="accounts_ocr_cfg_one_draft_per_comm",
             ),
             models.UniqueConstraint(
-                fields=["scope"],
+                fields=["community", "scope"],
                 condition=models.Q(status="published"),
-                name="accounts_ocr_cfg_one_published_per_scope",
+                name="accounts_ocr_cfg_one_pub_per_comm",
             ),
             models.CheckConstraint(condition=models.Q(version__gte=1), name="accounts_ocr_cfg_version_gte_1"),
             models.CheckConstraint(condition=models.Q(revision__gte=1), name="accounts_ocr_cfg_revision_gte_1"),
         ]
-        indexes = [models.Index(fields=["scope", "status"], name="acct_ocr_cfg_scope_status")]
+        indexes = [models.Index(fields=["community", "scope", "status"], name="acct_ocr_cfg_comm_status")]
 
     def __str__(self):
         return f"{self.scope} v{self.version} ({self.status})"
@@ -682,6 +738,9 @@ class ResidenceVerificationCase(models.Model):
         DOCUMENT_TYPE_MISMATCH = "document_type_mismatch", "Document type mismatch"
         RULE_MISMATCH = "rule_mismatch", "Validation rule mismatch"
         DUPLICATE_IDENTITY = "duplicate_identity", "Possible duplicate identity"
+        # A rejection code, never a review destination. The picture check tells
+        # the resident to submit a real document; nothing is queued for staff.
+        MEDIA_INTEGRITY = "media_integrity", "Document did not look genuine"
         RESUBMISSION_REQUIRED = "resubmission_required", "Request a new submission"
         OFFICIAL_REQUESTED = "official_requested", "Official requested review"
         LEGACY_PENDING = "legacy_pending", "Legacy pending verification"
@@ -694,6 +753,13 @@ class ResidenceVerificationCase(models.Model):
     user = models.ForeignKey(
         django_settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
+        related_name="residence_verification_cases",
+    )
+    community = models.ForeignKey(
+        "emergencies.Community",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
         related_name="residence_verification_cases",
     )
     configuration = models.ForeignKey(
@@ -785,7 +851,9 @@ class ResidenceProof(models.Model):
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        indexes = [models.Index(fields=["sha256_hash"])]
+        # sha256_hash already carries db_index=True; a second identical index
+        # would just double the write cost.
+        indexes = []
 
 
 class ConsentRecord(models.Model):
@@ -1043,3 +1111,84 @@ class VerificationOverride(models.Model):
 
     def __str__(self):
         return f"{self.decision} override on check {self.verification_check_id}"
+
+
+class MediaPhashBand(models.Model):
+    """Banding index over media perceptual hashes.
+
+    One row per positional band of a phash (kind="full") or crop-block hash
+    (kind="block"). Block rows reuse band_index as block_position * 5 + band
+    position, so every family probes positionally: a pair within the Hamming
+    threshold always shares at least one identically-valued positional band
+    (pigeonhole over disjoint bands), so no true duplicate is ever missed,
+    while random cross-position value collisions are never candidates.
+    scope/object_id point at the owning media row (residence-proof,
+    concern-media); source_created_at mirrors the owner's upload time so a
+    retention window can bound candidate scans.
+    """
+
+    KIND_FULL = "full"
+    KIND_BLOCK = "block"
+
+    scope = models.CharField(max_length=32)
+    object_id = models.BigIntegerField()
+    kind = models.CharField(max_length=5)
+    band_index = models.PositiveSmallIntegerField()
+    band_value = models.CharField(max_length=4)
+    source_created_at = models.DateTimeField()
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["scope", "kind", "band_index", "band_value"],
+                name="mediaphash_lookup",
+            ),
+            models.Index(fields=["scope", "object_id"], name="mediaphash_owner"),
+        ]
+
+
+class DataSubjectRequest(models.Model):
+    """A resident's formal privacy request (PH Data Privacy Act).
+
+    Erasure requests are approved (or declined with a note) by an official in
+    Django admin; approval queues the wipe in apps.retention. One active
+    request per resident at a time.
+    """
+
+    class Kind(models.TextChoices):
+        ERASURE = "erasure", "Erasure of my data"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        DECLINED = "declined", "Declined"
+        COMPLETED = "completed", "Completed"
+
+    user = models.ForeignKey(
+        django_settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="data_subject_requests",
+    )
+    kind = models.CharField(max_length=16, choices=Kind.choices, default=Kind.ERASURE)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    note = models.TextField(blank=True)
+    requested_at = models.DateTimeField(auto_now_add=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    processed_by = models.ForeignKey(
+        django_settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="data_subject_requests_processed",
+    )
+
+    class Meta:
+        ordering = ["-requested_at"]
+        indexes = [
+            models.Index(fields=["user", "status"], name="dsr_user_status"),
+        ]
+
+    def __str__(self):
+        return f"{self.kind} request by {self.user_id} ({self.status})"

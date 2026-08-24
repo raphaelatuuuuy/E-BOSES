@@ -84,11 +84,36 @@ class ConcernAiTaskReliabilityTests(TestCase):
         self.assertEqual(second["skip_reason"], "already_completed")
         self.assertEqual(execution["attempt_count"], 1)
 
-    def test_broker_fallback_uses_the_same_audited_execution_path(self):
-        with NamedTemporaryFile(suffix=".pt") as model_file:
-            with self.settings(EBOSES_YOLO_MODEL_PATH=model_file.name):
-                with patch.object(process_concern_ai_task, "delay", side_effect=OSError("broker unavailable")):
-                    result = enqueue_concern_ai(self.concern.pk)
+    @override_settings(IS_LOCAL_DEVELOPMENT=False)
+    def test_broker_outage_leaves_the_assessment_pending_for_the_recovery_sweep(self):
+        with patch.object(process_concern_ai_task, "delay", side_effect=OSError("broker unavailable")):
+            result = enqueue_concern_ai(self.concern.pk)
+
+        self.assertIsNone(result)
+        assessment = ConcernAiAssessment.objects.get(concern=self.concern)
+        self.assertEqual(assessment.status, ConcernAiAssessment.Status.PENDING)
+        self.assertNotIn("execution", assessment.raw_result)
+
+    @override_settings(IS_LOCAL_DEVELOPMENT=False)
+    def test_completed_assessments_are_never_reset_by_a_broker_outage(self):
+        # The pipeline itself has dedicated tests; this one is about the
+        # enqueue path, so the heavy work is mocked to stay deterministic
+        # (the real fallback chain once left this row pending under load).
+        assessment = ConcernAiAssessment.objects.get(concern=self.concern)
+        assessment.status = ConcernAiAssessment.Status.COMPLETED
+        assessment.save(update_fields=["status"])
+        with patch("apps.concerns.ai.process_concern_ai", return_value=assessment):
+            process_concern_ai_task.run(self.concern.pk)
+        with patch.object(process_concern_ai_task, "delay", side_effect=OSError("broker unavailable")):
+            enqueue_concern_ai(self.concern.pk)
+
+        assessment = ConcernAiAssessment.objects.get(concern=self.concern)
+        self.assertEqual(assessment.status, ConcernAiAssessment.Status.COMPLETED)
+
+    @override_settings(IS_LOCAL_DEVELOPMENT=True, EBOSES_YOLO_MODEL_PATH="")
+    def test_dev_broker_fallback_still_uses_the_audited_execution_path(self):
+        with patch.object(process_concern_ai_task, "delay", side_effect=OSError("broker unavailable")):
+            result = enqueue_concern_ai(self.concern.pk)
 
         assessment = ConcernAiAssessment.objects.get(concern=self.concern)
         execution = assessment.raw_result["execution"]

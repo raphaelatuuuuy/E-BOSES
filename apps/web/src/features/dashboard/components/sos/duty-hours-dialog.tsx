@@ -41,64 +41,76 @@ export function DutyHoursDialog({
       : "Barangay responders are off duty right now."
 
   return createPortal(
-    <div className="fixed inset-0 z-[240] flex items-end justify-center sm:items-center">
+    <div className="fixed inset-0 z-[400] flex items-end justify-center sm:items-center sm:p-4">
       <button
         type="button"
         aria-label="Close"
         onClick={onClose}
-        className="absolute inset-0 bg-black/60"
+        className="absolute inset-0 bg-black/50 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200"
       />
       <div
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="duty-hours-title"
-        className="z-10 w-full max-w-md rounded-t-3xl border border-neutral-400/30 bg-brand-navy p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] text-white shadow-2xl sm:rounded-3xl"
+        className="relative z-10 w-full overflow-hidden rounded-t-[28px] border border-white/10 bg-brand-navy text-white shadow-[0_16px_48px_rgba(0,0,0,0.45)] sm:max-w-[420px] sm:rounded-[28px] motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-200"
       >
-        <div className="flex items-start justify-between gap-3">
-          <h2 id="duty-hours-title" className="text-[17px] font-bold text-white">
-            Outside barangay duty hours
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="flex size-8 shrink-0 items-center justify-center rounded-full text-white/70 hover:bg-white/10"
-          >
-            <XIcon className="size-4" />
-          </button>
+        <div className="flex items-start gap-2 px-5 pb-1 pt-5 max-sm:pt-[max(1.25rem,env(safe-area-inset-top))]">
+          <div className="min-w-0 flex-1 pt-0.5">
+            <p className="text-[11px] font-bold uppercase tracking-wide text-brand-orange">
+              Emergency SOS
+            </p>
+            <h2
+              id="duty-hours-title"
+              className="mt-0.5 text-[22px] font-bold leading-[1.2] tracking-tight text-white"
+            >
+              Outside barangay duty hours
+            </h2>
+          </div>
+          <div className="-mr-2 flex shrink-0 items-center gap-0.5">
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="flex size-10 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
+            >
+              <XIcon className="size-6" strokeWidth={2} />
+            </button>
+          </div>
         </div>
 
-        <p className="mt-2 text-[14px] leading-6 text-white/80">
+        <p className="mt-1 px-5 pb-4 text-[15px] leading-snug text-white/65">
           {window_} For the fastest help right now, please call one of these
           directly.
         </p>
 
-        <div className="mt-4 grid gap-2">
+        <div className="mx-5 mb-5 overflow-hidden rounded-[18px] border border-white/15">
           {hotlines.map((hotline) => (
             <a
               key={`${hotline.label}-${hotline.number}`}
               href={`tel:${hotline.number.replace(/[^\d+]/g, "")}`}
-              className="flex min-h-[3.25rem] items-center justify-between gap-3 rounded-2xl border border-white/20 bg-white/10 px-4 text-white hover:bg-white/15"
+              className="flex min-h-[3.25rem] items-center justify-between gap-3 border-b border-white/10 px-5 py-3 transition-colors last:border-b-0 hover:bg-white/10"
             >
-              <span className="text-[14px] font-semibold">{hotline.label}</span>
+              <span className="text-[15px] font-medium text-white">{hotline.label}</span>
               <span className="flex items-center gap-2 text-[16px] font-bold tabular-nums text-white">
-                <PhoneCallIcon className="size-4" aria-hidden="true" />
+                <PhoneCallIcon className="size-4 text-brand-orange" aria-hidden="true" />
                 {hotline.number}
               </span>
             </a>
           ))}
         </div>
 
-        <button
-          type="button"
-          onClick={onSendAnyway}
-          className="mt-4 h-12 w-full rounded-full bg-brand-orange text-[15px] font-semibold text-white hover:bg-brand-orange-strong"
-        >
-          Send SOS anyway
-        </button>
-        <p className="mt-2 text-center text-[12px] leading-5 text-white/55">
-          Your report is still recorded and sent to the officer on call.
-        </p>
+        <div className="px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+          <button
+            type="button"
+            onClick={onSendAnyway}
+            className="flex h-[52px] w-full items-center justify-center rounded-full bg-brand-orange text-[17px] font-semibold text-white transition-all hover:bg-brand-orange-strong active:scale-[0.99]"
+          >
+            Send SOS anyway
+          </button>
+          <p className="mt-2 text-center text-[13px] leading-5 text-white/55">
+            Your report is still recorded and sent to the officer on call.
+          </p>
+        </div>
       </div>
     </div>,
     document.body

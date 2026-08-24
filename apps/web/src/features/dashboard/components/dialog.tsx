@@ -1,8 +1,9 @@
-import { useEffect, useRef, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { XIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
+import { useBottomSheetSnap } from "@/features/dashboard/lib/use-bottom-sheet-snap"
 
 interface DialogProps {
   open: boolean
@@ -10,19 +11,41 @@ interface DialogProps {
   maxW?: string
   children: ReactNode
   containerClassName?: string
+  mobileSheet?: boolean
 }
 
-export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerClassName }: DialogProps) {
+export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerClassName, mobileSheet }: DialogProps) {
   const overlayRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches,
+  )
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 1023px)")
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches)
+    mq.addEventListener("change", handler)
+    return () => mq.removeEventListener("change", handler)
+  }, [])
+
+  const useSheet = mobileSheet && isMobile
+
+  const sheet = useBottomSheetSnap({
+    enabled: open && useSheet,
+    initialMode: "expanded",
+    onSettle: () => {
+      if (sheet.mode === "hidden") onClose()
+    },
+  })
+
+  useEffect(() => {
+    if (useSheet && open) sheet.snapTo("expanded")
+  }, [open, useSheet])
 
   useEffect(() => {
     if (!open) return
     const prev = document.body.style.overflow
     document.body.style.overflow = "hidden"
-    return () => {
-      document.body.style.overflow = prev
-    }
+    return () => { document.body.style.overflow = prev }
   }, [open])
 
   useEffect(() => {
@@ -34,8 +57,6 @@ export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerCl
     return () => document.removeEventListener("keydown", onKey)
   }, [open, onClose])
 
-  // Always portal a stable host so open/close doesn't thrash body children
-  // (avoids NotFoundError: removeChild when unmount races with Leaflet/portals).
   if (typeof document === "undefined") return null
 
   return createPortal(
@@ -53,18 +74,47 @@ export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerCl
           onClick={onClose}
         />
 
-        {/* Content */}
-        <div
-          ref={contentRef}
-          className={cn(
-            "z-10 flex w-full flex-col overflow-hidden bg-background",
-            "fixed inset-0 md:relative md:max-h-[90vh] md:rounded-2xl md:border md:border-border md:shadow-2xl",
-            "motion-safe:md:animate-in motion-safe:md:fade-in motion-safe:md:zoom-in-95 motion-safe:md:duration-200 motion-safe:md:ease-out",
-            maxW,
-          )}
-        >
-          {children}
-        </div>
+        {useSheet ? (
+          /* Mobile bottom sheet */
+          <div
+            ref={contentRef}
+            className={cn(
+              "absolute inset-x-0 bottom-0 z-10 flex flex-col overflow-hidden rounded-t-2xl border border-neutral-200 border-b-0 bg-background shadow-[0_-10px_36px_rgba(15,23,42,.18)]",
+              !sheet.dragging && "transition-[height] duration-200 ease-out",
+            )}
+            style={{ height: sheet.height }}
+          >
+            {/* Drag handle */}
+            <div
+              onPointerDown={sheet.onHandlePointerDown}
+              onPointerMove={sheet.onHandlePointerMove}
+              onPointerUp={sheet.onHandlePointerUp}
+              onPointerCancel={sheet.onHandlePointerUp}
+              className="flex shrink-0 touch-none cursor-grab flex-col items-center bg-white px-3 pb-1 pt-2 active:cursor-grabbing"
+            >
+              <span className="mb-1 h-1.5 w-11 rounded-full bg-neutral-300" />
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              {children}
+            </div>
+          </div>
+        ) : (
+          /* Normal centered dialog (desktop + non-mobileSheet) */
+          <div
+            ref={contentRef}
+            className={cn(
+              "z-10 flex w-full flex-col overflow-hidden bg-background",
+              "fixed inset-0 md:relative md:max-h-[90vh] md:rounded-2xl md:border md:border-border md:shadow-2xl",
+              "md:resize md:overflow-auto dialog-resize-grip md:min-w-[420px] md:min-h-[380px]",
+              "motion-safe:transition-[max-width] motion-safe:duration-200 motion-safe:ease-out",
+              "motion-safe:md:animate-in motion-safe:md:fade-in motion-safe:md:zoom-in-95 motion-safe:md:duration-200 motion-safe:md:ease-out",
+              maxW,
+            )}
+            style={{ scrollbarWidth: "none" }}
+          >
+            {children}
+          </div>
+        )}
       </div>
     ) : null,
     document.body,

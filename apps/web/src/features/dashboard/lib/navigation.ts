@@ -103,7 +103,7 @@ const residentAlerts: NavItemConfig = {
   key: "alerts",
   label: "Alerts",
   to: "/dashboard/alerts-map",
-  icon: TriangleAlert,
+  icon: MapPinnedIcon,
   isActive: (pathname) => matches(pathname, "/dashboard/alerts-map"),
 }
 

@@ -71,13 +71,9 @@ def notify_responder_assigned(alert, responder) -> None:
 
 
 def notify_officials_no_responder(alert, unit_name="") -> None:
-    from django.contrib.auth import get_user_model
+    from apps.emergencies.recipients import dispatch_officials
 
-    User = get_user_model()
-    officials = User.objects.filter(
-        role=User.Role.BARANGAY_OFFICIAL,
-        status=User.Status.VERIFIED,
-    ).exclude(phone_number="")[:10]
+    officials = [official for official in dispatch_officials(alert, limit=10) if official.phone_number]
     body = templates.official_no_responder(alert, unit_name=unit_name)
     for official in officials:
         try:
@@ -174,13 +170,9 @@ def notify_responder_backup_assigned(alert, responder, *, backup_type="", urgenc
 
 
 def notify_officials_new_emergency(alert, *, unit_name="", responder_name="") -> None:
-    from django.contrib.auth import get_user_model
+    from apps.emergencies.recipients import dispatch_officials
 
-    User = get_user_model()
-    officials = User.objects.filter(
-        role=User.Role.BARANGAY_OFFICIAL,
-        status=User.Status.VERIFIED,
-    ).exclude(phone_number="")[:10]
+    officials = [official for official in dispatch_officials(alert, limit=10) if official.phone_number]
     body = templates.official_new_emergency(
         alert, unit_name=unit_name, responder_name=responder_name
     )

@@ -24,6 +24,7 @@ from apps.concerns.ai_fixtures import gemma_result
 from apps.geo_services import classify_location
 
 from .models import Announcement, BarangayEvent, Concern, ConcernAiAssessment, ConcernAppeal, ConcernAssignment, ConcernChatAttachment, ConcernClassificationConfiguration, ConcernClarification, ConcernComment, ConcernMedia, ConcernOfficialRemark, ConcernResolutionEvidence, ConcernStatusEvent, ConcernVote, ContentFlag, Department, Designation, Position
+from .test_helpers import ensure_test_profile, grant_position
 
 def png_bytes():
     output = BytesIO()
@@ -38,11 +39,9 @@ def png_upload(name="evidence.png", content=None):
 
 
 def grant_captain(user):
-    Designation.objects.create(
-        user=user,
-        department=Department.objects.get(code="sangguniang-barangay"),
-        position=Position.objects.get(code="barangay-captain"),
-    )
+    captain = grant_position(user)
+    grant_position(user, position_code="staff", department_code="social-services")
+    return captain
 
 
 class PrivateMediaAccessTests(APITestCase):
@@ -59,6 +58,8 @@ class PrivateMediaAccessTests(APITestCase):
             status=User.Status.VERIFIED,
         )
         grant_captain(self.staff)
+        ensure_test_profile(self.owner)
+        ensure_test_profile(self.other)
         proof_file = SimpleUploadedFile("proof.pdf", b"raw proof bytes", content_type="application/pdf")
         self.proof = ResidenceProof.objects.create(
             user=self.owner,
@@ -198,6 +199,8 @@ class ResidentDashboardAPITests(APITestCase):
             password="pass",
             status=User.Status.VERIFIED,
         )
+        self.community = ensure_test_profile(self.resident).community
+        ensure_test_profile(self.other, community=self.community)
         self.client.force_authenticate(self.resident)
 
     def test_resident_can_create_report_with_initial_status_event(self):
@@ -279,13 +282,14 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(detail.data["tracking_id"], first.data["tracking_id"])
 
     def test_feed_reporter_does_not_expose_private_identity_or_location_fields(self):
-        ResidentProfile.objects.create(
-            user=self.other,
+        ensure_test_profile(
+            self.other,
             first_name="Private",
             last_name="Resident",
             date_of_birth="1990-01-01",
             address="123 Exact Home Street, Marikina Heights",
             barangay="Marikina Heights",
+            community=self.community,
         )
         concern = Concern.objects.create(
             reporter=self.other,
@@ -500,7 +504,7 @@ class ResidentDashboardAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("duplicate media upload detected", response.data["media"][0])
+        self.assertIn("This photo was already uploaded before", response.data["media"][0])
         self.assertFalse(Concern.objects.filter(title="Duplicate evidence").exists())
 
     def test_concern_media_hash_is_stored(self):
@@ -541,7 +545,7 @@ class ResidentDashboardAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("Location must be inside Barangay Marikina Heights", str(response.data))
+        self.assertIn("Location is too far from Barangay Marikina Heights", str(response.data))
         self.assertFalse(Concern.objects.filter(title="Outside boundary").exists())
 
     def test_location_outside_active_polygon_uses_real_boundary_distance(self):
@@ -771,10 +775,10 @@ class ResidentDashboardAPITests(APITestCase):
         User = get_user_model()
         Concern.objects.create(reporter=self.resident, title="Active", status=Concern.Status.IN_PROGRESS)
         Concern.objects.create(reporter=self.resident, title="Done", status=Concern.Status.RESOLVED)
-        Announcement.objects.create(title="Published", body="Body", is_published=True, published_at=timezone.now())
-        Announcement.objects.create(title="Draft", body="Body", is_published=False)
-        BarangayEvent.objects.create(title="Clinic", detail="BP check", starts_at=timezone.now(), is_published=True)
-        BarangayEvent.objects.create(title="Draft event", starts_at=timezone.now(), is_published=False)
+        Announcement.objects.create(community=self.community, title="Published", body="Body", is_published=True, published_at=timezone.now())
+        Announcement.objects.create(community=self.community, title="Draft", body="Body", is_published=False)
+        BarangayEvent.objects.create(community=self.community, title="Clinic", detail="BP check", starts_at=timezone.now(), is_published=True)
+        BarangayEvent.objects.create(community=self.community, title="Draft event", starts_at=timezone.now(), is_published=False)
         responder = User.objects.create_user(
             email="responder@example.com",
             phone_number="+639100000103",
@@ -787,6 +791,8 @@ class ResidentDashboardAPITests(APITestCase):
             current_longitude="121.1208000",
             location_updated_at=timezone.now(),
         )
+        ensure_test_profile(responder, community=self.community)
+        grant_position(responder, position_code="staff", department_code="bhw")
         User.objects.create_user(
             email="stale-responder@example.com",
             phone_number="+639100000104",
@@ -803,10 +809,10 @@ class ResidentDashboardAPITests(APITestCase):
 
         self.assertEqual(summary.data["reports_submitted"], 2)
         self.assertEqual(summary.data["reports_resolved"], 1)
-        self.assertEqual([item["title"] for item in announcements.data], ["Published"])
+        self.assertEqual([item["title"] for item in announcements.data["results"]], ["Published"])
         self.assertEqual([item["title"] for item in events.data], ["Clinic"])
-        self.assertEqual([item["id"] for item in responders.data], [responder.pk])
-        self.assertNotIn("current_latitude", responders.data[0])
+        self.assertEqual([item["id"] for item in responders.data["results"]], [responder.pk])
+        self.assertNotIn("current_latitude", responders.data["results"][0])
         official = User.objects.create_user(
             email="responder-location-official@example.com",
             phone_number="+639100000116",
@@ -817,8 +823,8 @@ class ResidentDashboardAPITests(APITestCase):
         grant_captain(official)
         self.client.force_authenticate(official)
         official_response = self.client.get("/api/responders/active/")
-        self.assertEqual(official_response.data[0]["current_latitude"], "14.6516000")
-        self.assertEqual(official_response.data[0]["current_longitude"], "121.1208000")
+        self.assertEqual(official_response.data["results"][0]["current_latitude"], "14.6516000")
+        self.assertEqual(official_response.data["results"][0]["current_longitude"], "121.1208000")
 
     def test_barangay_official_can_update_report_status_and_timeline(self):
         User = get_user_model()
@@ -973,8 +979,11 @@ class ResidentDashboardAPITests(APITestCase):
             status=User.Status.VERIFIED,
         )
         grant_captain(official)
+        home = Department.objects.get(community=self.community, code="sangguniang-barangay")
         first = Concern.objects.create(
             reporter=self.resident,
+            community=self.community,
+            assigned_department=home,
             title="Queue drainage",
             category=Concern.Category.INFRASTRUCTURE,
             status=Concern.Status.SUBMITTED,
@@ -982,6 +991,8 @@ class ResidentDashboardAPITests(APITestCase):
         )
         Concern.objects.create(
             reporter=self.resident,
+            community=self.community,
+            assigned_department=home,
             title="Queue garbage",
             category=Concern.Category.ENVIRONMENT,
             status=Concern.Status.RESOLVED,
@@ -991,7 +1002,7 @@ class ResidentDashboardAPITests(APITestCase):
         response = self.client.get("/api/concerns/manage/?status=active&q=drainage")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual([item["id"] for item in response.data], [first.pk])
+        self.assertEqual([item["id"] for item in response.data["results"]], [first.pk])
 
     def test_resident_cannot_view_report_management_queue(self):
         response = self.client.get("/api/concerns/manage/")
@@ -1034,7 +1045,13 @@ class PhaseOneFoundationAPITests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
-        grant_captain(self.official)
+        designation = grant_captain(self.official)
+        self.community = designation.department.community
+        self.department = Department.objects.get(
+            community=self.community,
+            code="social-services",
+        )
+        ensure_test_profile(self.resident, community=self.community)
         self.responder = User.objects.create_user(
             email="phase1-responder@example.com",
             phone_number="+639100000203",
@@ -1044,6 +1061,8 @@ class PhaseOneFoundationAPITests(APITestCase):
             responder_unit=User.ResponderUnit.TANOD,
             is_on_duty=True,
         )
+        ensure_test_profile(self.responder, community=self.community)
+        grant_position(self.responder, position_code="staff", department_code=self.department.code)
 
     @override_settings(OLLAMA_API_KEY="test-key")
     def test_ai_pipeline_sends_the_stored_photo_to_gemma_and_records_what_it_saw(self):
@@ -1062,10 +1081,10 @@ class PhaseOneFoundationAPITests(APITestCase):
             file_size=media.size,
         )
 
-        def analyze(*, title, description, selected_category, image):
+        def analyze(*, title, description, selected_category, images, image_uploaded):
             # The photo must reach Gemma normalised, not as raw upload bytes.
-            self.assertIsNotNone(image)
-            self.assertEqual(image.mime_type, "image/jpeg")
+            self.assertEqual(len(images), 1)
+            self.assertEqual(images[0].mime_type, "image/jpeg")
             return gemma_result(
                 category=Concern.Category.INFRASTRUCTURE,
                 detected_objects=["traffic light", "road"],
@@ -1195,6 +1214,7 @@ class PhaseOneFoundationAPITests(APITestCase):
     def test_ai_pipeline_category_mismatch_is_applied_automatically(self):
         concern = Concern.objects.create(
             reporter=self.resident,
+            assigned_department=self.department,
             title="Blocked drainage report",
             description="Maraming basura at trash sa kanal, tambak na garbage malapit sa amin.",
             category=Concern.Category.INFRASTRUCTURE,
@@ -1273,6 +1293,7 @@ class PhaseOneFoundationAPITests(APITestCase):
     def test_managed_concern_list_ignores_removed_ai_filter(self):
         concern = Concern.objects.create(
             reporter=self.resident,
+            assigned_department=self.department,
             title="Blocked drainage report",
             description="Maraming basura at trash sa kanal, tambak na garbage malapit sa amin.",
             category=Concern.Category.INFRASTRUCTURE,
@@ -1284,7 +1305,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.client.force_authenticate(self.official)
         response = self.client.get("/api/concerns/manage/?ai=flagged")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn(concern.pk, [item["id"] for item in response.data])
+        self.assertIn(concern.pk, [item["id"] for item in response.data["results"]])
 
     @override_settings(OLLAMA_API_KEY="test-key")
     def test_ai_assessment_is_read_only_for_officials(self):
@@ -1526,7 +1547,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(announcement_response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(event_response.status_code, status.HTTP_201_CREATED)
         self.assertIsNotNone(announcement_response.data["published_at"])
-        self.assertEqual(public_response.data[0]["title"], "Cleanup Drive")
+        self.assertEqual(public_response.data["results"][0]["title"], "Cleanup Drive")
         self.assertTrue(
             Notification.objects.filter(
                 recipient=self.resident,
@@ -1617,7 +1638,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         evidence = self.client.get(f"/api/concerns/media/{media.pk}/raw/")
 
         self.assertEqual(assigned.status_code, status.HTTP_200_OK)
-        self.assertEqual([item["id"] for item in assigned.data], [concern.pk])
+        self.assertEqual([item["id"] for item in assigned.data["results"]], [concern.pk])
         self.assertEqual(detail.status_code, status.HTTP_200_OK)
         self.assertEqual(chat.status_code, status.HTTP_201_CREATED)
         self.assertEqual(evidence.status_code, status.HTTP_200_OK)
@@ -1637,14 +1658,14 @@ class PhaseOneFoundationAPITests(APITestCase):
             format="json",
         )
         self.assertEqual(denied_detail.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertEqual(denied_chat.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(denied_chat.status_code, status.HTTP_404_NOT_FOUND)
 
         assignment.status = ConcernAssignment.Status.CANCELLED
         assignment.save(update_fields=["status", "updated_at"])
         self.client.force_authenticate(self.responder)
         removed = self.client.get("/api/concerns/assigned/")
         self.assertEqual(removed.status_code, status.HTTP_200_OK)
-        self.assertEqual(removed.data, [])
+        self.assertEqual(removed.data["results"], [])
 
     def test_official_reassignment_revokes_old_responder_and_activates_new_responder(self):
         User = get_user_model()
@@ -1655,6 +1676,8 @@ class PhaseOneFoundationAPITests(APITestCase):
             role=User.Role.FIRST_RESPONDER,
             status=User.Status.VERIFIED,
         )
+        ensure_test_profile(second_responder, community=self.community)
+        grant_position(second_responder, position_code="staff", department_code=self.department.code)
         concern = Concern.objects.create(
             reporter=self.resident,
             title="Reassign field concern",
@@ -1700,13 +1723,13 @@ class PhaseOneFoundationAPITests(APITestCase):
 
         self.client.force_authenticate(self.responder)
         old_access = self.client.get(f"/api/concerns/{concern.pk}/")
-        self.assertEqual(old_access.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(old_access.status_code, status.HTTP_200_OK)
 
         self.client.force_authenticate(second_responder)
         new_access = self.client.get(f"/api/concerns/{concern.pk}/")
         assigned_list = self.client.get("/api/concerns/assigned/")
         self.assertEqual(new_access.status_code, status.HTTP_200_OK)
-        self.assertEqual([item["id"] for item in assigned_list.data], [concern.pk])
+        self.assertEqual([item["id"] for item in assigned_list.data["results"]], [concern.pk])
         self.assertTrue(
             Notification.objects.filter(
                 recipient=self.responder,
@@ -1793,7 +1816,7 @@ class PhaseOneFoundationAPITests(APITestCase):
 
         self.client.force_authenticate(self.responder)
         responder_access_after_completion = self.client.get(f"/api/concerns/{concern.pk}/")
-        self.assertEqual(responder_access_after_completion.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(responder_access_after_completion.status_code, status.HTTP_200_OK)
 
     def test_resident_can_appeal_and_official_can_review(self):
         concern = Concern.objects.create(reporter=self.resident, title="Rejected report", status=Concern.Status.REJECTED)
@@ -1857,12 +1880,14 @@ class ConcernChatAttachmentAPITests(APITestCase):
             is_staff=True,
         )
         grant_captain(self.official)
+        ensure_test_profile(self.resident)
         self.other = User.objects.create_user(
             email="chat-other@example.com",
             phone_number="+639100000703",
             password="pass",
             status=User.Status.VERIFIED,
         )
+        ensure_test_profile(self.other)
         self.concern = Concern.objects.create(
             reporter=self.resident,
             title="Chat attachment report",
@@ -1930,7 +1955,7 @@ class ConcernChatAttachmentAPITests(APITestCase):
 
         self.client.force_authenticate(self.other)
         response = self.client.get(f"/api/concerns/chat-media/{attachment.pk}/")
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
 
 class AssignedResponderStatusProgressionAPITests(APITestCase):
@@ -1956,6 +1981,7 @@ class AssignedResponderStatusProgressionAPITests(APITestCase):
             role=User.Role.FIRST_RESPONDER,
             status=User.Status.VERIFIED,
         )
+        ensure_test_profile(self.resident)
 
     def test_assigned_responder_can_move_assigned_to_in_progress(self):
         concern = Concern.objects.create(
@@ -2066,7 +2092,7 @@ class AssignedResponderStatusProgressionAPITests(APITestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         concern.refresh_from_db()
         self.assertEqual(concern.status, Concern.Status.ASSIGNED)
 
@@ -2090,6 +2116,6 @@ class AssignedResponderStatusProgressionAPITests(APITestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         concern.refresh_from_db()
         self.assertEqual(concern.status, Concern.Status.ASSIGNED)

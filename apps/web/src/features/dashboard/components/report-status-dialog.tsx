@@ -79,8 +79,12 @@ function formatDateTime(value: string) {
   return `${formatDate(value)} · ${formatClock(value)}`
 }
 
+function statusEvents(report: Concern): ConcernStatusEvent[] {
+  return Array.isArray(report.status_events) ? report.status_events : []
+}
+
 function findEvent(report: Concern, status: ConcernStatus): ConcernStatusEvent | undefined {
-  return report.status_events.find((event) => event.status === status)
+  return statusEvents(report).find((event) => event.status === status)
 }
 
 function latestEvent(report: Concern, mode: StatusDialogMode): ConcernStatusEvent | undefined {
@@ -93,8 +97,8 @@ function latestEvent(report: Concern, mode: StatusDialogMode): ConcernStatusEven
         ? report.status
         : mode
   return (
-    [...report.status_events].reverse().find((event) => event.status === status) ??
-    report.status_events.at(-1)
+    [...statusEvents(report)].reverse().find((event) => event.status === status) ??
+    statusEvents(report).at(-1)
   )
 }
 
@@ -132,7 +136,7 @@ function stepEvent(report: Concern, key: ConcernStatus) {
 }
 
 function extractActions(report: Concern): string[] {
-  const actions = report.status_events
+  const actions = statusEvents(report)
     .map((event) => event.note)
     .filter((note) => note && note !== "Report submitted." && note !== "Your report was received.")
   if (report.update_text && !actions.includes(report.update_text)) actions.push(report.update_text)

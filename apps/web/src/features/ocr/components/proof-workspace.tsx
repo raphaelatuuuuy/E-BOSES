@@ -29,7 +29,6 @@ import type {
 import {
   SheetDialog,
   SheetPrimaryButton,
-  SheetToggleRow,
 } from "@/features/dashboard/components/sheet-dialog"
 
 const MATCH_OPTIONS: ReadonlyArray<readonly [ProfileMatchKey, string]> = [
@@ -240,10 +239,6 @@ export function ProofWorkspace({
   resultsPanel,
   testAction,
   tested,
-  availableOnSignup,
-  onAvailabilityChange,
-  availabilityHint,
-  signupDisabled,
   saving,
   fieldMatchProfiles,
   onChangeFieldMatches,
@@ -277,11 +272,7 @@ export function ProofWorkspace({
   resultsPanel?: ReactNode
   testAction?: ReactNode
   tested: boolean
-  availableOnSignup: boolean
-  onAvailabilityChange: (next: boolean) => void
-  availabilityHint: string
   /** Locks the toggle until required sample photos exist. */
-  signupDisabled: boolean
   saving: boolean
   fieldMatchProfiles: (key: string) => ProfileMatchKey[]
   onChangeFieldMatches: (key: string, next: ProfileMatchKey[]) => void
@@ -293,6 +284,7 @@ export function ProofWorkspace({
   sampleMatchForSide: (
     side: ProofSide
   ) => { url: string; filename: string } | null
+  /** Whether this proof has a stored sample the layout can be compared against. */
 }) {
   const uploadRef = useRef<HTMLInputElement>(null)
   const testUploadRef = useRef<HTMLInputElement>(null)
@@ -566,18 +558,24 @@ export function ProofWorkspace({
           muted={!testReady}
           unclipped
           action={
-            <button
-              type="button"
-              onClick={() => {
-                setTestSideIndex(0)
-                setPhotosOpen(true)
-              }}
-              disabled={!testReady || saving}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[14px] font-medium text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 disabled:text-neutral-300"
-            >
-              <ImageUp className="size-4" strokeWidth={1.8} aria-hidden />
-              {allTestPhotosFilled ? "Change photo" : "Upload photo"}
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setTestSideIndex(0)
+                  setPhotosOpen(true)
+                }}
+                disabled={!testReady || saving}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[14px] font-medium text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 disabled:text-neutral-300"
+              >
+                <ImageUp className="size-4" strokeWidth={1.8} aria-hidden />
+                {allTestPhotosFilled ? "Change photo" : "Upload photo"}
+              </button>
+              {/* Until there is a result to head, the run action sits with the
+                  photos it acts on. Afterwards it moves to Results, next to the
+                  thing it refreshes. */}
+              {tested ? null : testAction}
+            </div>
           }
         >
           <div className="px-5 py-4">{testPanel}</div>
@@ -587,12 +585,11 @@ export function ProofWorkspace({
           <SetupSection
             title="Results"
             subtitle="Compared against the simulated resident"
+            action={testAction}
           >
             <div className="px-5 py-4">{resultsPanel}</div>
           </SetupSection>
         ) : null}
-
-        {testAction}
       </div>
 
       {/* A detail's settings live in a focused sheet: name, what the value
@@ -812,17 +809,6 @@ export function ProofWorkspace({
         </div>
       </SheetDialog>
 
-      {/* Going live is the last decision. Full width, same as Save changes. */}
-      <div className="overflow-hidden rounded-[18px] border border-neutral-200">
-        <SheetToggleRow
-          id="offer-proof-on-signup"
-          label="Residents can choose this when they register"
-          description={availabilityHint}
-          checked={availableOnSignup}
-          disabled={signupDisabled}
-          onChange={onAvailabilityChange}
-        />
-      </div>
     </div>
   )
 }

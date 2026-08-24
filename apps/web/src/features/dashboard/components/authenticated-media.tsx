@@ -17,24 +17,53 @@ import {
   type MediaPreviewItem,
 } from "@/features/dashboard/lib/authenticated-media"
 
+const blobCache = new Map<string, string>()
+const BLOB_CACHE_MAX = 120
+
+function cacheGet(src: string) {
+  const hit = blobCache.get(src)
+  if (hit) {
+    blobCache.delete(src)
+    blobCache.set(src, hit)
+  }
+  return hit
+}
+
+function cachePut(src: string, url: string) {
+  const existing = blobCache.get(src)
+  if (existing) URL.revokeObjectURL(existing)
+  blobCache.set(src, url)
+  while (blobCache.size > BLOB_CACHE_MAX) {
+    const oldestKey = blobCache.keys().next().value as string
+    const oldest = blobCache.get(oldestKey)
+    blobCache.delete(oldestKey)
+    if (oldest) URL.revokeObjectURL(oldest)
+  }
+}
+
 function useAuthenticatedBlob(src: string) {
   const [objectUrl, setObjectUrl] = useState("")
   const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
-    let nextObjectUrl = ""
     const token = getAccessToken()
 
     async function load() {
+      const cached = cacheGet(src)
+      if (cached) {
+        setObjectUrl(cached)
+        return
+      }
       setFailed(false)
       try {
         const response = await fetch(src, {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         })
         if (!response.ok) throw new Error("Media request failed")
-        nextObjectUrl = URL.createObjectURL(await response.blob())
-        if (!cancelled) setObjectUrl(nextObjectUrl)
+        const url = URL.createObjectURL(await response.blob())
+        cachePut(src, url)
+        if (!cancelled) setObjectUrl(url)
       } catch {
         if (!cancelled) setFailed(true)
       }
@@ -43,7 +72,6 @@ function useAuthenticatedBlob(src: string) {
     void load()
     return () => {
       cancelled = true
-      if (nextObjectUrl) URL.revokeObjectURL(nextObjectUrl)
     }
   }, [src])
 

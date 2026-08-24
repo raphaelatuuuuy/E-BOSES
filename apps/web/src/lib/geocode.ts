@@ -52,6 +52,48 @@ export async function reverseGeocode(
   }
 }
 
+export interface AddressParts {
+  primary: string
+  secondary: string
+  full: string
+}
+
+/** Format a raw reverse-geocode payload into display-ready address parts. */
+export function formatNominatimParts(data: {
+  address?: Record<string, string>
+  display_name?: string
+}): AddressParts {
+  const a = data.address ?? {}
+  const house = a.house_number
+  const road = a.road || a.pedestrian || a.path || a.residential
+  const primary =
+    house && road
+      ? `${house} ${road}`
+      : road ||
+        a.neighbourhood ||
+        a.suburb ||
+        a.village ||
+        a.town ||
+        a.city ||
+        (data.display_name ?? "").split(",")[0]?.trim() ||
+        "Selected location"
+
+  const secondaryBits = [
+    a.suburb || a.neighbourhood || a.village,
+    a.city || a.town || a.municipality || a.city_district,
+  ].filter(Boolean) as string[]
+  const secondary = secondaryBits
+    .filter((part, i, arr) => part !== primary && arr.indexOf(part) === i)
+    .slice(0, 2)
+    .join(", ")
+
+  return {
+    primary,
+    secondary,
+    full: secondary ? `${primary}, ${secondary}` : primary,
+  }
+}
+
 /** Forward-geocode a place name. Empty array when unavailable. */
 export async function searchGeocode(
   query: string,

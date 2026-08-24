@@ -3,6 +3,8 @@
 import { humanError } from "@/lib/error-messages"
 const DEFAULT_API_BASE_URL = "/api"
 const CSRF_COOKIE_NAME = "csrftoken"
+const DEFAULT_TIMEOUT_MS = 20000
+const UPLOAD_TIMEOUT_MS = 60000
 
 let accessToken: string | null = null
 let refreshPromise: Promise<SessionResponse | null> | null = null
@@ -219,11 +221,11 @@ async function request<T>(path: string, init: RequestInit, options: ApiRequestOp
     }
   }
 
-  const timeoutMs = options.timeoutMs
-  const controller = timeoutMs ? new AbortController() : null
+  const timeoutMs = options.timeoutMs ?? (isFormData ? UPLOAD_TIMEOUT_MS : DEFAULT_TIMEOUT_MS)
+  const controller = timeoutMs > 0 ? new AbortController() : null
   const signal = mergeSignals(controller?.signal, init.signal ?? undefined)
   const timeoutId =
-    controller && timeoutMs
+    controller && timeoutMs > 0
       ? window.setTimeout(() => controller.abort(), timeoutMs)
       : null
 
@@ -238,7 +240,7 @@ async function request<T>(path: string, init: RequestInit, options: ApiRequestOp
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new ApiError(
-        "The server took too long to respond (OCR can be slow). Keep the API running and try again with a clearer, smaller photo.",
+        "The server took too long to respond. Keep the API running and try again.",
         0,
         { message: "Request timed out." },
       )
@@ -303,6 +305,17 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, option
     pending.finally(() => inflightGets.delete(dedupeKey)).catch(() => undefined)
   }
   return pending
+}
+
+export interface ListEnvelope<T> {
+  count: number
+  next: string | null
+  previous: string | null
+  results: T[]
+}
+
+export function unwrapList<T>(payload: T[] | ListEnvelope<T>): T[] {
+  return Array.isArray(payload) ? payload : payload.results
 }
 
 async function requestWithRefresh<T>(path: string, init: RequestInit, options: ApiRequestOptions) {

@@ -34,6 +34,69 @@ class MapGeometry(models.Model):
         return f"{self.name} ({self.osm_type}{self.osm_id})"
 
 
+class Community(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        ACTIVE = "active", "Active"
+        DISABLED = "disabled", "Disabled"
+        ARCHIVED = "archived", "Archived"
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    code = models.SlugField(max_length=80, unique=True)
+    name = models.CharField(max_length=120, unique=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT, db_index=True)
+    boundary = models.OneToOneField(
+        MapGeometry,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="community",
+        limit_choices_to={"kind": MapGeometry.Kind.BOUNDARY},
+    )
+    center_latitude = models.DecimalField(max_digits=10, decimal_places=7)
+    center_longitude = models.DecimalField(max_digits=10, decimal_places=7)
+    bbox_min_latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    bbox_max_latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    bbox_min_longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    bbox_max_longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    boundary_revision = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        indexes = [
+            models.Index(
+                fields=["status", "bbox_min_latitude", "bbox_max_latitude"],
+                name="emerg_comm_lat_bounds",
+            ),
+            models.Index(
+                fields=["status", "bbox_min_longitude", "bbox_max_longitude"],
+                name="emerg_comm_lng_bounds",
+            ),
+        ]
+        constraints = [
+            models.CheckConstraint(condition=models.Q(boundary_revision__gte=1), name="emerg_comm_revision_gte_1"),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class CommunityMigrationIssue(models.Model):
+    model_label = models.CharField(max_length=120)
+    object_id = models.CharField(max_length=64)
+    raw_value = models.CharField(max_length=255, blank=True)
+    reason = models.CharField(max_length=120)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["model_label", "object_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["model_label", "object_id", "reason"], name="emerg_comm_migration_issue_uniq"),
+        ]
+
+
 DEFAULT_HOTLINES = [
     {"label": "Marikina Rescue", "number": "161"},
     {"label": "Emergency", "number": "911"},
@@ -80,6 +143,13 @@ class MapDispatchPolicy(models.Model):
         WARN = "warn", "Warn and allow"
         REVIEW = "review", "Flag for official review"
 
+    community = models.OneToOneField(
+        Community,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="dispatch_policy",
+    )
     barangay = models.CharField(max_length=120, default="Marikina Heights", unique=True)
     acceptance_center_latitude = models.DecimalField(max_digits=10, decimal_places=7, default=14.6507000)
     acceptance_center_longitude = models.DecimalField(max_digits=10, decimal_places=7, default=121.1133000)
@@ -136,6 +206,7 @@ class MapDispatchPolicy(models.Model):
     def as_payload(self):
         return {
             "id": self.pk,
+            "community_id": self.community_id,
             "barangay": self.barangay,
             "acceptance_center_latitude": float(self.acceptance_center_latitude),
             "acceptance_center_longitude": float(self.acceptance_center_longitude),
@@ -208,6 +279,13 @@ class MapServicePoi(models.Model):
         COMMUNITY = "community", "Community"
         OTHER = "other", "Other"
 
+    community = models.ForeignKey(
+        Community,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="service_pois",
+    )
     name = models.CharField(max_length=200)
     poi_type = models.CharField(max_length=40, choices=PoiType.choices, default=PoiType.OTHER)
     label = models.CharField(
@@ -246,6 +324,7 @@ class MapServicePoi(models.Model):
         verbose_name = "Map service POI"
         verbose_name_plural = "Map service POIs"
         indexes = [
+            models.Index(fields=["community", "is_active", "poi_type"], name="emerg_svcpoi_comm_type"),
             models.Index(fields=["is_active", "poi_type"], name="emerg_svcpoi_active_type"),
             models.Index(fields=["osm_type", "osm_id"], name="emerg_svcpoi_osm"),
         ]
@@ -260,7 +339,14 @@ class MapServicePoi(models.Model):
 
 
 class EmergencyCategory(models.Model):
-    code = models.SlugField(max_length=80, unique=True)
+    community = models.ForeignKey(
+        Community,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="emergency_categories",
+    )
+    code = models.SlugField(max_length=80)
     label = models.CharField(max_length=80)
     subtext = models.CharField(max_length=160, blank=True)
     icon_key = models.CharField(max_length=48, default="siren")
@@ -277,7 +363,12 @@ class EmergencyCategory(models.Model):
 
     class Meta:
         ordering = ["sort_order", "label"]
-        indexes = [models.Index(fields=["is_active", "sort_order"], name="emerg_cat_active_order")]
+        indexes = [
+            models.Index(fields=["community", "is_active", "sort_order"], name="emerg_cat_comm_active"),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=["community", "code"], name="emerg_cat_community_code_uniq"),
+        ]
 
     def __str__(self):
         return self.label
@@ -337,6 +428,13 @@ class EmergencyAlert(models.Model):
     type = models.CharField(max_length=32, choices=Type.choices)
     note = models.TextField(blank=True)
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.SUBMITTED)
+    community = models.ForeignKey(
+        Community,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="emergency_alerts",
+    )
     barangay = models.CharField(max_length=120, default="Marikina Heights")
     # Nullable since the SMS fallback: a resident can text "This is a Fire
     # emergency near Champaca Street" from a phone with no GPS fix. That is a
@@ -346,6 +444,10 @@ class EmergencyAlert(models.Model):
     latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
     longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
     location_source = models.CharField(max_length=32, default="gps")
+    location_freshness = models.CharField(max_length=20, default="not_available")
+    location_age_seconds = models.PositiveIntegerField(null=True, blank=True)
+    canonical_street = models.CharField(max_length=255, blank=True)
+    location_evidence = models.JSONField(default=dict, blank=True)
     location_accuracy = models.FloatField(null=True, blank=True)
     address = models.CharField(max_length=255, blank=True)
     # The area exactly as the resident described it. Never overwritten by
@@ -393,6 +495,10 @@ class EmergencyAlert(models.Model):
     reopen_reason = models.CharField(max_length=255, blank=True)
     reopened_at = models.DateTimeField(null=True, blank=True)
     ai_assist = models.JSONField(default=dict, blank=True)
+    # Advisory only, and always written after dispatch. A photo that looks
+    # manipulated is still possibly attached to a real emergency, so this
+    # never gates the alert — it only tells the responder what to expect.
+    media_integrity = models.JSONField(default=dict, blank=True)
     ip_country = models.CharField(max_length=2, blank=True)
     ip_asn = models.CharField(max_length=16, blank=True)
     ip_org = models.CharField(max_length=120, blank=True)
@@ -414,6 +520,7 @@ class EmergencyAlert(models.Model):
             ),
         ]
         indexes = [
+            models.Index(fields=["community", "status", "created_at"], name="emerg_alert_comm_status"),
             models.Index(fields=["status", "barangay", "created_at"], name="emerg_alert_status_brgy"),
             models.Index(fields=["latitude", "longitude"], name="emerg_alert_coords"),
         ]
@@ -444,6 +551,13 @@ class EmergencyTypeRoleMap(models.Model):
     It is dropped once the transition release ships.
     """
 
+    community = models.ForeignKey(
+        Community,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="emergency_role_maps",
+    )
     emergency_type = models.CharField(max_length=80)
     department = models.ForeignKey(
         "concerns.Department",
@@ -486,13 +600,13 @@ class EmergencyTypeRoleMap(models.Model):
         ordering = ["-priority", "id"]
         constraints = [
             models.UniqueConstraint(
-                fields=["emergency_type", "department"],
+                fields=["community", "emergency_type", "department"],
                 condition=models.Q(department__isnull=False),
-                name="emerg_role_map_type_dept_uniq",
+                name="emerg_role_map_comm_type_dept_uniq",
             ),
         ]
         indexes = [
-            models.Index(fields=["emergency_type", "is_active", "-priority"], name="emerg_role_map_lookup"),
+            models.Index(fields=["community", "emergency_type", "is_active", "-priority"], name="emerg_role_map_lookup"),
             models.Index(fields=["department", "is_active"], name="emerg_role_map_dept"),
         ]
 
@@ -535,6 +649,14 @@ class EmergencyResponderAssignment(models.Model):
     alert = models.ForeignKey(EmergencyAlert, on_delete=models.CASCADE, related_name="assignments")
     responder = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="emergency_assignments")
     role_map = models.ForeignKey("EmergencyTypeRoleMap", null=True, blank=True, on_delete=models.SET_NULL, related_name="assignments")
+    responding_community = models.ForeignKey(
+        Community,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="responder_assignments",
+    )
+    is_cross_community = models.BooleanField(default=False)
     source = models.CharField(max_length=16, choices=Source.choices, default=Source.MANUAL)
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.ASSIGNED)
     travel_profile = models.CharField(max_length=8, blank=True)
@@ -548,6 +670,88 @@ class EmergencyResponderAssignment(models.Model):
             models.UniqueConstraint(fields=["alert", "responder"], name="unique_responder_per_emergency_alert"),
         ]
         ordering = ["assigned_at", "id"]
+
+
+class EmergencyAssignmentRoute(models.Model):
+    class Status(models.TextChoices):
+        CALCULATING = "calculating", "Calculating"
+        OK = "ok", "Ready"
+        STALE = "stale", "Stale"
+        UNAVAILABLE = "unavailable", "Unavailable"
+
+    assignment = models.OneToOneField(
+        EmergencyResponderAssignment,
+        on_delete=models.CASCADE,
+        related_name="stored_route",
+    )
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.CALCULATING)
+    profile = models.CharField(max_length=8, default="car")
+    distance_meters = models.FloatField(null=True, blank=True)
+    eta_seconds = models.FloatField(null=True, blank=True)
+    geometry = models.JSONField(null=True, blank=True)
+    summary = models.CharField(max_length=255, blank=True)
+    origin_snap = models.JSONField(null=True, blank=True)
+    destination_snap = models.JSONField(null=True, blank=True)
+    approach = models.JSONField(null=True, blank=True)
+    steps = models.JSONField(default=list, blank=True)
+    error_code = models.CharField(max_length=48, blank=True)
+    route_revision = models.PositiveIntegerField(default=1)
+    destination_revision = models.PositiveIntegerField(default=1)
+    generated_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["status", "updated_at"], name="emerg_route_status_time")]
+
+
+class BackupRequest(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ASSIGNED = "assigned", "Assigned"
+        PENDING_MANUAL = "pending_manual", "Pending manual assignment"
+        CANCELLED = "cancelled", "Cancelled"
+        COMPLETED = "completed", "Completed"
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    alert = models.ForeignKey(EmergencyAlert, on_delete=models.CASCADE, related_name="backup_requests")
+    target_department = models.ForeignKey(
+        "concerns.Department",
+        on_delete=models.PROTECT,
+        related_name="backup_requests",
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="requested_emergency_backups",
+    )
+    assignment = models.ForeignKey(
+        EmergencyResponderAssignment,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="backup_requests",
+    )
+    reason = models.CharField(max_length=255)
+    urgency = models.CharField(max_length=16, default="normal")
+    idempotency_key = models.UUIDField()
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["alert", "requested_by", "idempotency_key"], name="emerg_backup_idempotent"),
+            models.UniqueConstraint(
+                fields=["alert", "target_department"],
+                condition=models.Q(status__in=["pending", "assigned", "pending_manual"]),
+                name="emerg_backup_one_active_unit",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["alert", "status", "created_at"], name="emerg_backup_alert_status"),
+            models.Index(fields=["target_department", "status"], name="emerg_backup_dept_status"),
+        ]
 
 
 class EmergencyLocationPing(models.Model):

@@ -78,6 +78,7 @@ export function EmergencyChatPanel({
   const [sending, setSending] = useState(false)
   const [attachment, setAttachment] = useState<File | null>(null)
   const [previewMedia, setPreviewMedia] = useState<MediaPreviewItem | null>(null)
+  const [socketLive, setSocketLive] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const isDark = theme === "dark"
   const userId = user?.id
@@ -155,6 +156,7 @@ export function EmergencyChatPanel({
       }
       socket.onopen = () => {
         attempts = 0
+        setSocketLive(true)
       }
       socket.onmessage = (event) => {
         try {
@@ -168,6 +170,7 @@ export function EmergencyChatPanel({
         }
       }
       socket.onclose = () => {
+        setSocketLive(false)
         if (closed) return
         attempts += 1
         reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** attempts))
@@ -197,9 +200,9 @@ export function EmergencyChatPanel({
         .catch(() => {
           /* ignore poll errors */
         })
-    }, 8000)
+    }, socketLive ? 30000 : 8000)
     return () => window.clearInterval(id)
-  }, [open, alertId])
+  }, [open, alertId, socketLive])
 
   useEffect(() => {
     if (!incomingMessage || incomingMessage.alert !== alertId) return

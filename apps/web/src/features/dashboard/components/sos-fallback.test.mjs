@@ -102,7 +102,7 @@ test("buildPinnedCoordinateAddress keeps a usable, honest location when geocodin
   })
 })
 
-test("isSosLocationReady accepts coordinate fallback but rejects an unconfirmed default pin", () => {
+test("isSosLocationReady accepts any finite pin and rejects missing or non-finite coordinates", () => {
   assert.equal(
     isSosLocationReady({
       lat: 14.6507,
@@ -112,13 +112,7 @@ test("isSosLocationReady accepts coordinate fallback but rejects an unconfirmed 
     }),
     true
   )
-  assert.equal(
-    isSosLocationReady({
-      lat: 14.6507,
-      lng: 121.1133,
-      address: "",
-      addressPrimary: "",
-    }),
-    false
-  )
+  assert.equal(isSosLocationReady({ lat: 14.6507, lng: 121.1133 }), true)
+  assert.equal(isSosLocationReady({ lat: Number.NaN, lng: 121.1133 }), false)
+  assert.equal(isSosLocationReady(null), false)
 })

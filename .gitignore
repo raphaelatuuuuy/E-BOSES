@@ -52,6 +52,9 @@ apps/web/certs/
 # Debug artifacts
 vite_error.txt
 vite_output.txt
+apps/web/eslint-*.txt
+apps/web/tsc-*.txt
+apps/web/vite.config.js
 
 # Demo seeding artifacts
 apps/api/_demo_photo_cache/
@@ -79,3 +82,5 @@ tmp/
 .kilo
 tests/
 AGENTS.md
+# Nightly backup artifacts
+backups/

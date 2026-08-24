@@ -1,31 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import {
-  ActivityIcon,
-  AmbulanceIcon,
-  BabyIcon,
-  BadgeAlertIcon,
-  BellIcon,
   CircleCheck,
   ChevronDownIcon,
   ChevronUpIcon,
-  CloudRainWindIcon,
-  FlameIcon,
-  HeartCrackIcon,
-  HomeIcon,
-  MapPinIcon,
-  PillIcon,
   PlusIcon,
-  ShieldAlertIcon,
   SirenIcon,
-  StethoscopeIcon,
-  WavesIcon,
   CircleX,
-  ZapIcon,
 } from "lucide-react"
+import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 import { toast } from "sonner"
 
-import { apiRequest } from "@/lib/api"
+import { apiRequest, unwrapList, type ListEnvelope } from "@/lib/api"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
 import {
@@ -39,24 +25,7 @@ import {
 } from "@/features/dashboard/components/config/config-shell"
 import type { EmergencyCategory } from "@/features/dashboard/emergency-api"
 
-const ICONS = [
-  ["siren", "Siren", SirenIcon],
-  ["activity", "Activity", ActivityIcon],
-  ["ambulance", "Ambulance", AmbulanceIcon],
-  ["baby", "Baby", BabyIcon],
-  ["badge-alert", "Badge alert", BadgeAlertIcon],
-  ["bell", "Bell", BellIcon],
-  ["cloud-rain-wind", "Rain", CloudRainWindIcon],
-  ["flame", "Flame", FlameIcon],
-  ["heart-crack", "Heart crack", HeartCrackIcon],
-  ["home", "Home", HomeIcon],
-  ["map-pin", "Map pin", MapPinIcon],
-  ["pill", "Pill", PillIcon],
-  ["shield-alert", "Shield alert", ShieldAlertIcon],
-  ["stethoscope", "Stethoscope", StethoscopeIcon],
-  ["waves", "Waves", WavesIcon],
-  ["zap", "Zap", ZapIcon],
-] as const
+
 
 interface Unit {
   id: number
@@ -88,7 +57,7 @@ function slugify(value: string) {
 }
 
 function iconFor(key: string) {
-  return ICONS.find(([value]) => value === key)?.[2] ?? SirenIcon
+  return resolveIconByKey(key) ?? SirenIcon
 }
 
 const inputCls =
@@ -106,6 +75,7 @@ function IconDropdown({
   onPickCustom?: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const [customInput, setCustomInput] = useState("")
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -115,16 +85,8 @@ function IconDropdown({
     return () => document.removeEventListener("mousedown", handler)
   }, [])
 
-  const current =
-    value === "custom"
-      ? { key: "custom", name: "Custom image", Icon: null }
-      : ICONS.find(([k]) => k === value)
-        ? {
-            key: value,
-            name: ICONS.find(([k]) => k === value)![1],
-            Icon: ICONS.find(([k]) => k === value)![2],
-          }
-        : { key: "siren", name: "Siren", Icon: SirenIcon }
+  const CurrentIcon = resolveIconByKey(value) ?? SirenIcon
+  const isCustomImage = value === "custom"
 
   return (
     <div ref={ref} className="relative">
@@ -134,13 +96,9 @@ function IconDropdown({
         className="flex w-full items-center gap-3 rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-left text-[16px] text-neutral-900 transition-colors outline-none hover:border-neutral-400"
       >
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-navy text-white">
-          {current.Icon ? (
-            <current.Icon className="size-4" strokeWidth={1.7} />
-          ) : (
-            <span className="text-[10px] font-bold">IMG</span>
-          )}
+          <CurrentIcon className="size-4" strokeWidth={1.7} />
         </span>
-        <span className="flex-1 truncate font-medium">{current.name}</span>
+        <span className="flex-1 truncate font-medium">{isCustomImage ? "Custom image" : value || "Siren"}</span>
         {open ? (
           <ChevronUpIcon className="size-4 shrink-0 text-neutral-400" />
         ) : (
@@ -149,26 +107,24 @@ function IconDropdown({
       </button>
       {open && (
         <div
-          className="absolute z-50 mt-1 w-full [scrollbar-width:none] overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white shadow-lg [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
-          style={{ maxHeight: "110px", overflowY: "auto" }}
+          className="absolute z-50 mt-1 w-full overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white shadow-lg [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          style={{ maxHeight: "280px", overflowY: "auto" }}
         >
-          <div className="py-1">
-            {ICONS.map(([key, name, Icon]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => {
-                  onChange(key)
+          <div className="px-4 py-3">
+            <input
+              type="text"
+              value={customInput}
+              onChange={(e) => setCustomInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && customInput.trim()) {
+                  onChange(customInput.trim())
+                  setCustomInput("")
                   setOpen(false)
-                }}
-                className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-neutral-700 transition hover:bg-neutral-50"
-              >
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-brand-navy text-white">
-                  <Icon className="size-3.5" strokeWidth={1.7} />
-                </span>
-                {name}
-              </button>
-            ))}
+                }
+              }}
+              placeholder="Type any Lucide icon name…"
+              className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[13px] text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-400"
+            />
           </div>
           <div className="border-t border-neutral-100 py-1">
             <button
@@ -207,7 +163,7 @@ export default function OfficialDispatchRulesPage() {
     Promise.all([
       apiRequest<Unit[]>("/concerns/admin/departments/"),
       apiRequest<EmergencyCategory[]>("/emergencies/categories/"),
-      apiRequest<RoleMap[]>("/emergencies/role-maps/"),
+      apiRequest<RoleMap[] | ListEnvelope<RoleMap>>("/emergencies/role-maps/").then(unwrapList),
     ])
       .then(([nextUnits, nextCategories, nextMaps]) => {
         setUnits(nextUnits)

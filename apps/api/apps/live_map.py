@@ -5,7 +5,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -15,12 +15,15 @@ from rest_framework.views import APIView
 
 from apps.accounts.services import validate_location_pair
 from apps.accounts.views import touch_last_seen
-from apps.concerns.models import Concern
+from apps.concerns.models import Announcement, Concern
 from apps.emergencies.models import EmergencyAlert, EmergencyCategory, MapGeometry
+from apps.media_urls import concern_media_preview_url, emergency_media_preview_url
 from apps.notifications.services import broadcast_live_map_event
 
 MARIKINA_HEIGHTS_OSM_RELATION_ID = 371327
 MARIKINA_HEIGHTS_CENTER = {"latitude": 14.6507, "longitude": 121.1133, "zoom": 15}
+
+MAP_CONCERN_LIMIT = 300
 
 CONCERN_ACTIVE = {
     Concern.Status.SUBMITTED,
@@ -114,29 +117,55 @@ def street_catalog_payload():
     return _group_streets(streets)
 
 
-STATIC_MAP_CACHE_KEY = "live-map-static-geometry:v2"
+STATIC_MAP_CACHE_KEY = "live-map-static-geometry:v3"
 
 
-def static_map_payload():
-    cached = cache.get(STATIC_MAP_CACHE_KEY)
+def static_map_payload(community=None):
+    from apps.emergencies.models import Community
+
+    if community is not None and not isinstance(community, Community):
+        community = Community.objects.filter(pk=community, status=Community.Status.ACTIVE).select_related("boundary").first()
+    if community is None:
+        community = Community.objects.filter(status=Community.Status.ACTIVE).select_related("boundary").order_by("name").first()
+    cache_key = f"{STATIC_MAP_CACHE_KEY}:{community.pk}:{community.boundary_revision}" if community else f"{STATIC_MAP_CACHE_KEY}:none"
+    cached = cache.get(cache_key)
     if cached:
         return cached
-    boundary = MapGeometry.objects.filter(kind=MapGeometry.Kind.BOUNDARY, is_active=True).order_by("-is_home", "name", "id").first()
+    boundary = community.boundary if community and community.boundary and community.boundary.is_active else None
     street_rows = list(
         MapGeometry.objects.filter(kind=MapGeometry.Kind.STREET, is_active=True)
         .order_by("name", "osm_id")
-        .values("name", "osm_type", "osm_id", "street_type", "geometry")
+        .values("name", "osm_type", "osm_id", "street_type", "geometry", "locality")
     )
-    boundary_payload = {"osm_relation_id": MARIKINA_HEIGHTS_OSM_RELATION_ID, "name": "Marikina Heights", "geometry": None}
+    if community and boundary:
+        from apps.geo_services import point_in_geojson_inclusive
+
+        def belongs_to_community(row):
+            if (row.get("locality") or "").casefold() == community.name.casefold():
+                return True
+            coordinates = (row.get("geometry") or {}).get("coordinates") or []
+            stack = [coordinates]
+            while stack:
+                item = stack.pop()
+                if isinstance(item, (list, tuple)) and len(item) >= 2 and all(isinstance(value, (int, float)) for value in item[:2]):
+                    if point_in_geojson_inclusive(item[0], item[1], boundary.geometry):
+                        return True
+                elif isinstance(item, (list, tuple)):
+                    stack.extend(item)
+            return False
+
+        street_rows = [row for row in street_rows if belongs_to_community(row)]
+    boundary_payload = {"osm_relation_id": None, "name": community.name if community else "Community", "geometry": None}
     if boundary:
         boundary_payload = {
-            "osm_relation_id": boundary.osm_id if boundary.osm_type == "R" else MARIKINA_HEIGHTS_OSM_RELATION_ID,
+            "osm_relation_id": boundary.osm_id if boundary.osm_type == "R" else None,
             "name": boundary.name,
             "geometry": boundary.geometry,
         }
     if not street_rows:
-        payload = {"boundary": boundary_payload, "streets": street_catalog_payload()}
-        cache.set(STATIC_MAP_CACHE_KEY, payload, 300)
+        streets = street_catalog_payload() if community and community.code == "marikina-heights" else _group_streets([])
+        payload = {"boundary": boundary_payload, "streets": streets}
+        cache.set(cache_key, payload, 300)
         return payload
     by_name = {}
     for row in street_rows:
@@ -154,7 +183,7 @@ def static_map_payload():
             street["geometries"].append(row["geometry"])
     streets = sorted(by_name.values(), key=lambda item: item["name"].casefold())
     payload = {"boundary": boundary_payload, "streets": _group_streets(streets)}
-    cache.set(STATIC_MAP_CACHE_KEY, payload, 300)
+    cache.set(cache_key, payload, 300)
     return payload
 
 
@@ -171,7 +200,7 @@ def person_payload(user):
         "id": user.pk,
         "full_name": full_name,
         "role": user.role,
-        "barangay": getattr(profile, "barangay", "") or "Marikina Heights",
+        "barangay": getattr(profile, "barangay", "") or getattr(getattr(profile, "community", None), "name", ""),
         "address": getattr(profile, "address", ""),
         "responder_unit": user.responder_unit,
         "is_on_duty": user.is_on_duty,
@@ -181,13 +210,41 @@ def person_payload(user):
     }
 
 
-def concern_payload(concern):
+def category_ref_payload(concern, request=None):
+    """
+    The map pin needs the same icon a resident's category picker and report
+    list already show — this is that data, trimmed to just what a pin needs.
+    `None` when the concern predates dynamic categories (falls back to the
+    fixed `category` glyph on the client).
+    """
+    category = concern.category_ref
+    if not category:
+        return None
+    icon_image_url = ""
+    if category.icon_image:
+        icon_image_url = (
+            request.build_absolute_uri(category.icon_image.url) if request else category.icon_image.url
+        )
+    return {
+        "code": category.code,
+        "name": category.name,
+        "icon_key": category.icon_key,
+        "custom_icon_label": category.custom_icon_label,
+        "icon_image_url": icon_image_url,
+    }
+
+
+def concern_payload(concern, request=None):
+    media = list(concern.media.all()) if hasattr(concern, "media") else []
     return {
         "id": concern.pk,
+        "preview_url": concern_media_preview_url(media[0].pk) if media else None,
+        "media_count": len(media),
         "tracking_id": f"RPT-{concern.created_at.year}-{concern.pk:06d}" if concern.created_at else f"RPT-0-{concern.pk:06d}",
         "title": concern.title,
         "description": concern.description,
         "category": concern.category,
+        "category_ref": category_ref_payload(concern, request=request),
         "status": concern.status,
         "address": concern.address,
         "barangay": concern.barangay,
@@ -233,12 +290,14 @@ def emergency_payload(alert):
         }
         for assignment in assignments
     ]
+    media = list(alert.media.all()) if hasattr(alert, "media") else []
     return {
         "id": alert.pk,
+        "preview_url": emergency_media_preview_url(media[0].pk) if media else None,
         "type": alert.type,
         "note": alert.note,
         "status": alert.status,
-        "address": alert.address,
+        "address": alert.resolved_location or alert.address or "",
         "barangay": alert.barangay,
         "latitude": decimal_string(alert.latitude),
         "longitude": decimal_string(alert.longitude),
@@ -251,7 +310,88 @@ def emergency_payload(alert):
     }
 
 
-def route_for_responder_assignment(alert, assignment):
+def _osrm_route(*, origin_lat, origin_lng, dest_lat, dest_lng, profile="car", cache_key, refresh=False):
+    """The actual OSRM request plus its 60s cache and status/geometry parsing.
+
+    Shared by `route_for_responder_assignment` (a real assignment's live route)
+    and `route_preview_for_responder` (a hypothetical preview with no alert or
+    assignment at all), so both go through the exact same OSRM call, timeout
+    and caching behavior instead of two copies drifting apart.
+    """
+    cached = None if refresh else cache.get(cache_key)
+    if cached:
+        return dict(cached)
+    route = {
+        "status": "unavailable",
+        "profile": profile,
+        "distance_meters": None,
+        "eta_seconds": None,
+        "geometry": None,
+        "summary": "",
+        "origin_snap": None,
+        "destination_snap": None,
+        "approach": None,
+        "steps": [],
+    }
+    try:
+        profile_name = {"car": "driving", "bike": "cycling", "foot": "walking"}.get(profile, "driving")
+        configured_url = getattr(settings, "OSM_ROUTE_URL", "https://router.project-osrm.org/route/v1/driving")
+        base_url = configured_url.rsplit("/", 1)[0] + f"/{profile_name}"
+        url = f"{base_url}/{origin_lng},{origin_lat};{dest_lng},{dest_lat}"
+        response = httpx.get(
+            url,
+            params={"overview": "full", "geometries": "geojson", "steps": "true"},
+            timeout=getattr(settings, "OSM_ROUTE_TIMEOUT_SECONDS", 4),
+        )
+        response.raise_for_status()
+        data = response.json()
+        best = (data.get("routes") or [None])[0]
+        waypoints = data.get("waypoints") or []
+        if best:
+            raw_steps = [step for leg in best.get("legs") or [] for step in leg.get("steps") or []]
+            steps = []
+            for step in raw_steps:
+                maneuver = step.get("maneuver") or {}
+                location = maneuver.get("location") or []
+                steps.append({
+                    "type": maneuver.get("type") or "",
+                    "modifier": maneuver.get("modifier") or "",
+                    "bearing_after": maneuver.get("bearing_after"),
+                    "exit": maneuver.get("exit"),
+                    "name": step.get("name") or "",
+                    "ref": step.get("ref") or "",
+                    "distance": step.get("distance"),
+                    "duration": step.get("duration"),
+                    "latitude": location[1] if len(location) > 1 else None,
+                    "longitude": location[0] if len(location) > 1 else None,
+                })
+            destination_snap = ({"latitude": waypoints[1]["location"][1], "longitude": waypoints[1]["location"][0], "meters": waypoints[1].get("distance")} if len(waypoints) > 1 and waypoints[1].get("location") else None)
+            approach = None
+            if destination_snap and destination_snap.get("meters"):
+                approach = {
+                    "geometry": {"type": "LineString", "coordinates": [[destination_snap["longitude"], destination_snap["latitude"]], [dest_lng, dest_lat]]},
+                    "distance_meters": destination_snap["meters"],
+                    "residual_meters": destination_snap["meters"],
+                }
+            route.update({
+                "status": "ok",
+                "profile": profile,
+                "distance_meters": best.get("distance"),
+                "eta_seconds": best.get("duration"),
+                "geometry": best.get("geometry"),
+                "summary": ", ".join(filter(None, [leg.get("summary") for leg in best.get("legs") or []])),
+                "origin_snap": ({"latitude": waypoints[0]["location"][1], "longitude": waypoints[0]["location"][0], "meters": waypoints[0].get("distance")} if len(waypoints) > 0 and waypoints[0].get("location") else None),
+                "destination_snap": destination_snap,
+                "approach": approach,
+                "steps": steps,
+            })
+    except Exception:
+        pass
+    cache.set(cache_key, route, 60)
+    return route
+
+
+def route_for_responder_assignment(alert, assignment, *, refresh=False, include_steps=True):
     if not assignment:
         return None
     # An SMS emergency may carry a readable area but no pin. There is nothing to
@@ -261,46 +401,105 @@ def route_for_responder_assignment(alert, assignment):
     origin = assignment_last_location(assignment)
     if not origin:
         return None
-    cache_key = "live-map-route:%s:%s:%s:%s" % (
+    profile = assignment.travel_profile or "car"
+    cache_key = "live-map-route:%s:%s:%s:%s:%s" % (
+        profile,
         round(float(origin["latitude"]), 5),
         round(float(origin["longitude"]), 5),
         round(float(alert.latitude), 5),
         round(float(alert.longitude), 5),
     )
-    cached = cache.get(cache_key)
-    if cached:
-        return {**cached, "assignment_id": assignment.pk, "responder_id": assignment.responder_id}
-    route = {
+    route = _osrm_route(
+        origin_lat=float(origin["latitude"]),
+        origin_lng=float(origin["longitude"]),
+        dest_lat=float(alert.latitude),
+        dest_lng=float(alert.longitude),
+        profile=profile,
+        cache_key=cache_key,
+        refresh=refresh,
+    )
+    from apps.emergencies.models import EmergencyAssignmentRoute
+
+    stored, created = EmergencyAssignmentRoute.objects.get_or_create(assignment=assignment)
+    use_stale = (
+        route["status"] != "ok"
+        and not created
+        and stored.profile == profile
+        and stored.status in {"ok", "stale"}
+        and stored.geometry
+    )
+    if use_stale:
+        route = {
+            "status": "stale",
+            "profile": profile,
+            "distance_meters": stored.distance_meters,
+            "eta_seconds": stored.eta_seconds,
+            "geometry": stored.geometry,
+            "summary": stored.summary,
+            "origin_snap": stored.origin_snap,
+            "destination_snap": stored.destination_snap,
+            "approach": stored.approach,
+            "steps": stored.steps,
+        }
+    stored.status = route["status"]
+    stored.profile = assignment.travel_profile or "car"
+    stored.distance_meters = route.get("distance_meters")
+    stored.eta_seconds = route.get("eta_seconds")
+    stored.geometry = route.get("geometry")
+    stored.summary = route.get("summary") or ""
+    stored.origin_snap = route.get("origin_snap")
+    stored.destination_snap = route.get("destination_snap")
+    stored.approach = route.get("approach")
+    stored.steps = route.get("steps") or []
+    stored.error_code = "" if route["status"] == "ok" else "provider_unavailable"
+    if not use_stale:
+        stored.generated_at = timezone.now()
+    if not created:
+        stored.route_revision += 1
+    stored.save()
+    payload = {
+        **route,
+        "profile": profile,
         "alert_id": alert.pk,
         "assignment_id": assignment.pk,
         "responder_id": assignment.responder_id,
-        "status": "unavailable",
-        "distance_meters": None,
-        "eta_seconds": None,
-        "geometry": None,
+        "assignment_status": assignment.status,
+        "route_revision": stored.route_revision,
+        "updated_at": stored.updated_at,
     }
-    try:
-        base_url = getattr(settings, "OSM_ROUTE_URL", "https://router.project-osrm.org/route/v1/driving")
-        url = f"{base_url}/{origin['longitude']},{origin['latitude']};{alert.longitude},{alert.latitude}"
-        response = httpx.get(
-            url,
-            params={"overview": "full", "geometries": "geojson", "steps": "false"},
-            timeout=getattr(settings, "OSM_ROUTE_TIMEOUT_SECONDS", 4),
-        )
-        response.raise_for_status()
-        data = response.json()
-        best = (data.get("routes") or [None])[0]
-        if best:
-            route.update({
-                "status": "ok",
-                "distance_meters": best.get("distance"),
-                "eta_seconds": best.get("duration"),
-                "geometry": best.get("geometry"),
-            })
-    except Exception:
-        pass
-    cache.set(cache_key, route, 60)
-    return route
+    if not include_steps:
+        payload["steps"] = []
+    return payload
+
+
+def route_preview_for_responder(responder, *, latitude, longitude):
+    """Hypothetical route/ETA preview from a responder's current live position
+    to an arbitrary (lat, lng) — no real EmergencyAlert or assignment involved.
+
+    Used by the emergency-domain simulation endpoint to preview what routing a
+    candidate responder would look like, without ever creating a real
+    EmergencyResponderAssignment row.
+    """
+    if responder.current_latitude is None or responder.current_longitude is None:
+        return {"status": "unavailable"}
+    origin_lat = float(responder.current_latitude)
+    origin_lng = float(responder.current_longitude)
+    dest_lat = float(latitude)
+    dest_lng = float(longitude)
+    cache_key = "live-map-route-preview:%s:%s:%s:%s:%s" % (
+        responder.pk,
+        round(origin_lat, 5),
+        round(origin_lng, 5),
+        round(dest_lat, 5),
+        round(dest_lng, 5),
+    )
+    return _osrm_route(
+        origin_lat=origin_lat,
+        origin_lng=origin_lng,
+        dest_lat=dest_lat,
+        dest_lng=dest_lng,
+        cache_key=cache_key,
+    )
 
 
 def route_for_assignment(alert):
@@ -312,55 +511,177 @@ def route_for_assignment(alert):
 
 def routes_for_alert(alert):
     assignments = alert.assignments.filter(
-        status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting", "resolved"]
+        status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting"]
     ).select_related("responder").prefetch_related("location_pings").order_by("assigned_at", "id")
     return [route for route in (route_for_responder_assignment(alert, item) for item in assignments) if route]
 
 
-def live_map_snapshot():
+def advisory_payload(announcement, street_index):
+    affected = announcement.affected_streets if isinstance(announcement.affected_streets, list) else []
+    names = []
+    geometries = []
+    for entry in affected:
+        name = entry.get("name") if isinstance(entry, dict) else str(entry)
+        if not name:
+            continue
+        names.append(str(name))
+        street = street_index.get(str(name).casefold())
+        if street:
+            geometries.extend(street["geometries"])
+    image_url = ""
+    try:
+        image_url = announcement.image.url if announcement.image else ""
+    except ValueError:
+        image_url = ""
+    return {
+        "id": announcement.pk,
+        "title": announcement.title,
+        "body": announcement.body,
+        "tag": announcement.tag,
+        "urgency": announcement.urgency,
+        "is_pinned": announcement.is_pinned,
+        "affected_streets": names,
+        "area_geometry": announcement.area_geometry,
+        "street_geometries": [] if announcement.area_geometry else geometries,
+        "starts_at": announcement.starts_at,
+        "expires_at": announcement.expires_at,
+        "image_url": image_url or None,
+    }
+
+
+def live_map_snapshot(request=None):
     from apps.geo_services import dispatch_policy_payload
 
+    from apps.community_scope import community_ids_for_user, department_ids_for_user, scope_emergency_queryset, selected_community
+    from apps.emergencies.models import Community
+
     User = get_user_model()
-    static_map = static_map_payload()
+    user = getattr(request, "user", None)
+    community_ids = community_ids_for_user(user)
+    department_ids = department_ids_for_user(user)
+    requested_community = request.query_params.get("community_id") if request else None
+    community = selected_community(user, requested_community)
+    if not community and community_ids:
+        community = Community.objects.filter(pk__in=community_ids, status=Community.Status.ACTIVE).order_by("name").first()
+    if community:
+        community_ids = {community.pk}
+        from apps.concerns.models import Department
+
+        department_ids &= set(Department.objects.filter(community=community).values_list("id", flat=True))
+    static_map = static_map_payload(community)
     people = [
         person_payload(user)
         for user in User.objects.filter(
             status=User.Status.VERIFIED,
             current_latitude__isnull=False,
             current_longitude__isnull=False,
-        ).filter(models.Q(role=User.Role.RESIDENT) | models.Q(is_on_duty=True)).select_related("resident_profile")
+        ).filter(
+            models.Q(role=User.Role.RESIDENT, resident_profile__community_id__in=community_ids)
+            | models.Q(is_on_duty=True, designations__is_active=True, designations__department__community_id__in=community_ids)
+        ).select_related("resident_profile").distinct()
     ]
-    concerns = [
-        concern_payload(concern)
-        for concern in Concern.objects.filter(
-            latitude__isnull=False,
-            longitude__isnull=False,
-        ).select_related("reporter", "reporter__resident_profile")
-    ]
+    # Only what the map can actually draw, newest first and capped. This used to
+    # serialise every concern ever filed that has coordinates -- reporter payload
+    # and full description included -- so the snapshot grew without bound and the
+    # map spent its first seconds parsing records it would never pin.
+    #
+    # The drawable set mirrors the client: active pins for under_review /
+    # assigned / in_progress (status-vocabulary ACTIVE_CONCERN_STATUSES) and
+    # resolved pins behind the resolved layer toggle. Active rows get the full
+    # budget first so closed reports can never evict open incidents from the
+    # map while summary.concerns still counts them.
+    map_active_statuses = {
+        Concern.Status.UNDER_REVIEW,
+        Concern.Status.ASSIGNED,
+        Concern.Status.IN_PROGRESS,
+    }
+
+    def concern_rows(statuses, limit):
+        return list(
+            Concern.objects.filter(
+                community_id__in=community_ids,
+                latitude__isnull=False,
+                longitude__isnull=False,
+                status__in=statuses,
+            ).filter(models.Q(reporter=user) | models.Q(category_ref__department_id__in=department_ids))
+            .select_related("reporter", "reporter__resident_profile", "category_ref")
+            .prefetch_related("media")
+            .order_by("-created_at")[:limit]
+        )
+
+    active_rows = concern_rows(map_active_statuses, MAP_CONCERN_LIMIT)
+    resolved_rows = concern_rows({Concern.Status.RESOLVED}, max(0, MAP_CONCERN_LIMIT - len(active_rows)))
+    concerns = [concern_payload(concern, request=request) for concern in active_rows + resolved_rows]
+    active_concern_count = Concern.objects.filter(
+        community_id__in=community_ids,
+        latitude__isnull=False,
+        longitude__isnull=False,
+        status__in=map_active_statuses,
+    ).filter(models.Q(reporter=user) | models.Q(category_ref__department_id__in=department_ids)).count()
+    # Active alerts plus recently settled ones (resolved, closed, cancelled,
+    # false alarm, invalid) — the same "last 7 days" window the resident map
+    # uses, so an official can still see how a just-closed incident wrapped up
+    # instead of it vanishing from the map the instant it's marked done.
+    from datetime import timedelta
+
+    recently_settled_cutoff = timezone.now() - timedelta(days=7)
     alerts = list(
-        EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE)
+        scope_emergency_queryset(EmergencyAlert.objects.all(), user).filter(community=community).filter(
+            models.Q(status__in=EMERGENCY_ACTIVE)
+            | models.Q(
+                status__in={"resolved", "closed", "cancelled", "false_alarm", "invalid"},
+                updated_at__gte=recently_settled_cutoff,
+            )
+        )
         .select_related("reporter", "reporter__resident_profile")
-        .prefetch_related("assignments__responder", "assignments__responder__resident_profile", "assignments__location_pings")
+        .prefetch_related("assignments__responder", "assignments__responder__resident_profile", "assignments__location_pings", "media")
     )
     emergencies = [emergency_payload(alert) for alert in alerts]
     routes = [route for alert in alerts for route in routes_for_alert(alert)]
+    active_emergency_count = scope_emergency_queryset(
+        EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE, community=community), user
+    ).count()
+
+    from apps.concerns.announcement_services import announcement_is_active
+
+    street_index = {
+        street["name"].casefold(): street
+        for street in static_map["streets"]["streets"]
+        if street.get("geometries")
+    }
+    announcement_rows = list(
+        Announcement.objects.filter(is_published=True, community_id__in=community_ids)
+        .filter(models.Q(target_departments__isnull=True) | models.Q(target_departments__id__in=department_ids))
+        .distinct()
+        .order_by("-is_pinned", "-published_at", "-created_at")[:50]
+    )
+    advisories = [
+        advisory_payload(item, street_index)
+        for item in announcement_rows
+        if announcement_is_active(item)
+    ]
     return {
         "map": {
             "provider": "OpenStreetMap",
-            "center": MARIKINA_HEIGHTS_CENTER,
+            "center": {
+                "latitude": float(community.center_latitude),
+                "longitude": float(community.center_longitude),
+                "zoom": 15,
+            } if community else MARIKINA_HEIGHTS_CENTER,
             "boundary": static_map["boundary"],
             "streets": static_map["streets"],
-            "dispatch_policy": dispatch_policy_payload(),
+            "dispatch_policy": dispatch_policy_payload(community),
         },
         "people": people,
         "concerns": concerns,
         "emergencies": emergencies,
         "routes": routes,
+        "advisories": advisories,
         "summary": {
-            "active_alerts": len([item for item in concerns if item["status"] in CONCERN_ACTIVE]) + len(emergencies),
-            "concerns": len([item for item in concerns if item["status"] in CONCERN_ACTIVE]),
-            "emergencies": len(emergencies),
-            "residents": User.objects.filter(role=User.Role.RESIDENT, status=User.Status.VERIFIED).count(),
+            "active_alerts": active_concern_count + active_emergency_count,
+            "concerns": active_concern_count,
+            "emergencies": active_emergency_count,
+            "residents": User.objects.filter(role=User.Role.RESIDENT, status=User.Status.VERIFIED, resident_profile__community_id__in=community_ids).count(),
             # On duty only. This used to count every verified responder, so the
             # overview reported a full roster as "on duty" even at 3am with
             # nobody on shift. Matches dashboard_views.responders_on_duty.
@@ -382,8 +703,21 @@ class LocationPingSerializer(serializers.Serializer):
     source = serializers.ChoiceField(choices=["active_session", "pwa_background", "manual", "incident"], default="active_session")
 
     def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        allow_outside = bool(
+            user
+            and user.is_authenticated
+            and user.role == user.Role.FIRST_RESPONDER
+            and user.is_on_duty
+        )
         try:
-            validate_location_pair(attrs.get("latitude"), attrs.get("longitude"), required=True)
+            validate_location_pair(
+                attrs.get("latitude"),
+                attrs.get("longitude"),
+                required=True,
+                allow_outside_service_area=allow_outside,
+            )
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc) from exc
         return attrs
@@ -396,7 +730,7 @@ class OfficialLiveMapView(APIView):
         touch_last_seen(request.user)
         if not is_official(request.user):
             return Response({"detail": "You do not have permission to view the official live map."}, status=status.HTTP_403_FORBIDDEN)
-        return Response(live_map_snapshot())
+        return Response(live_map_snapshot(request=request))
 
 
 def public_reporter_payload(user):
@@ -412,16 +746,16 @@ def public_reporter_payload(user):
         "id": user.pk,
         "full_name": full_name or "Neighbor",
         "role": user.role,
-        "barangay": getattr(profile, "barangay", "") or "Marikina Heights",
+        "barangay": getattr(profile, "barangay", "") or getattr(getattr(profile, "community", None), "name", ""),
     }
 
 
 def resident_concern_payload(concern, request=None):
     """Public community concern for resident alerts map (no private coords of people)."""
     preview_url = None
-    media = list(concern.media.all()[:1]) if hasattr(concern, "media") else []
+    media = list(concern.media.all()) if hasattr(concern, "media") else []
     if media:
-        path = f"/api/concerns/media/{media[0].pk}/preview/"
+        path = concern_media_preview_url(media[0].pk)
         preview_url = request.build_absolute_uri(path) if request else path
     return {
         "id": concern.pk,
@@ -429,6 +763,7 @@ def resident_concern_payload(concern, request=None):
         "title": concern.title,
         "description": concern.description,
         "category": concern.category,
+        "category_ref": category_ref_payload(concern, request=request),
         "status": concern.status,
         "address": concern.address,
         "barangay": concern.barangay,
@@ -476,7 +811,7 @@ def resident_emergency_payload(alert, request=None):
         "barangay": alert.barangay,
         "latitude": decimal_string(alert.latitude),
         "longitude": decimal_string(alert.longitude),
-        "address": alert.address or "",
+        "address": alert.resolved_location or alert.address or "",
         "preview_url": None,
         "created_at": alert.created_at,
         "updated_at": alert.updated_at,
@@ -500,19 +835,29 @@ def resident_alerts_map_snapshot(request=None):
     - boundary / center for map framing
     Does NOT include people tracking, responder routes, or private reports.
     """
-    from apps.geo_services import collect_service_pois, map_context_payload
+    from apps.community_scope import selected_community
+    from apps.emergencies.models import Community
+    from apps.geo_services import active_community_for_point, collect_service_pois, dispatch_policy_payload
 
-    static_map = static_map_payload()
-    context = map_context_payload()
+    user = getattr(request, "user", None)
+    requested_community = request.query_params.get("community_id") if request else None
+    community = selected_community(user, requested_community)
+    if not community:
+        profile = getattr(user, "resident_profile", None)
+        community = getattr(profile, "community", None)
+    if not community:
+        community = Community.objects.filter(status=Community.Status.ACTIVE).order_by("name").first()
+    static_map = static_map_payload(community)
 
     concerns_qs = (
         Concern.objects.filter(
+            community=community,
             visibility=Concern.Visibility.COMMUNITY,
             latitude__isnull=False,
             longitude__isnull=False,
         )
         .exclude(status=Concern.Status.REJECTED)
-        .select_related("reporter", "reporter__resident_profile")
+        .select_related("reporter", "reporter__resident_profile", "category_ref")
         .prefetch_related("media")
         .order_by("-created_at")[:200]
     )
@@ -523,15 +868,24 @@ def resident_alerts_map_snapshot(request=None):
     hidden_types = set(
         EmergencyCategory.objects.filter(visible_to_residents=False).values_list("code", flat=True)
     )
+    # Include active emergencies plus recently resolved/closed (last 7 days)
+    from datetime import timedelta
+    recently_resolved_cutoff = timezone.now() - timedelta(days=7)
     alerts_qs = (
-        EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE)
+        EmergencyAlert.objects.filter(
+            models.Q(status__in=EMERGENCY_ACTIVE)
+            | models.Q(status__in={"resolved", "closed", "cancelled"}, updated_at__gte=recently_resolved_cutoff)
+        ).filter(community=community)
         .exclude(type__in=hidden_types)
         .prefetch_related("media")
         .order_by("-created_at")[:100]
     )
     emergencies = [resident_emergency_payload(a, request=request) for a in alerts_qs]
 
-    pois = collect_service_pois()
+    pois = [
+        poi for poi in collect_service_pois()
+        if community and active_community_for_point(poi.get("latitude"), poi.get("longitude")) == community
+    ]
     services = [
         {
             "id": p.get("id"),
@@ -553,18 +907,22 @@ def resident_alerts_map_snapshot(request=None):
     return {
         "map": {
             "provider": "OpenStreetMap",
-            "center": MARIKINA_HEIGHTS_CENTER,
+            "center": {
+                "latitude": float(community.center_latitude),
+                "longitude": float(community.center_longitude),
+                "zoom": 15,
+            } if community else MARIKINA_HEIGHTS_CENTER,
             "boundary": {
                 "osm_relation_id": static_map["boundary"].get("osm_relation_id", MARIKINA_HEIGHTS_OSM_RELATION_ID),
-                "name": static_map["boundary"].get("name") or "Marikina Heights",
-                "geometry": static_map["boundary"].get("geometry") or context.get("boundary", {}).get("geometry"),
+                "name": static_map["boundary"].get("name") or "Community",
+                "geometry": static_map["boundary"].get("geometry"),
             },
-            "dispatch_policy": context.get("dispatch_policy"),
+            "dispatch_policy": dispatch_policy_payload(community),
         },
         "concerns": concerns,
         "emergencies": emergencies,
         "services": services,
-        "poi_types": context.get("poi_types") or [],
+        "poi_types": sorted({service["type"] for service in services if service.get("type")}),
         "summary": {
             "public_concerns": len(concerns),
             "active_concerns": len(active_concerns),
@@ -593,7 +951,7 @@ class LocationPingView(APIView):
 
     def post(self, request):
         touch_last_seen(request.user)
-        serializer = LocationPingSerializer(data=request.data)
+        serializer = LocationPingSerializer(data=request.data, context={"request": request})
         if not serializer.is_valid():
             # Background GPS often reports outside Marikina Heights (VPN, travel,
             # or GPS drift). Treat as soft reject so browsers don't log 400 spam.
@@ -605,8 +963,14 @@ class LocationPingView(APIView):
         request.user.current_longitude = serializer.validated_data["longitude"]
         request.user.location_updated_at = timezone.now()
         request.user.save(update_fields=["current_latitude", "current_longitude", "location_updated_at", "updated_at"])
+        if request.user.role == request.user.Role.FIRST_RESPONDER and request.user.is_on_duty:
+            from apps.emergencies.views import retry_waiting_alerts_for_responder
+
+            retry_waiting_alerts_for_responder(request.user)
         payload = person_payload(request.user)
-        broadcast_live_map_event("location.updated", {"person": payload})
+        # group_send is a synchronous round trip to the remote Redis; keep it
+        # off this hot 60/min endpoint's critical path.
+        transaction.on_commit(lambda: broadcast_live_map_event("location.updated", {"person": payload}))
         return Response(
             {
                 "accepted": True,
@@ -753,50 +1117,58 @@ class GeocodeSearchView(APIView):
 
 
 class LocationSearchView(APIView):
-    """Place search biased to Marikina Heights; drops far results."""
+    """Place search restricted to the user's selected community boundary."""
 
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         import urllib.parse
 
-        from apps.geo_services import (
-            MARIKINA_HEIGHTS_CENTER as CENTER,
-            filter_and_rank_search_results,
-            map_context_payload,
-            search_viewbox_with_buffer,
-        )
+        from apps.community_scope import community_ids_for_user, selected_community
+        from apps.emergencies.models import Community
+        from apps.geo_services import active_community_for_point
 
         q = (request.query_params.get("q") or "").strip()
         if len(q) < 2:
             return Response({"results": []})
 
-        context = map_context_payload()
+        community = selected_community(request.user, request.query_params.get("community_id"))
+        if not community:
+            community = Community.objects.filter(
+                pk__in=community_ids_for_user(request.user), status=Community.Status.ACTIVE
+            ).order_by("name").first()
+        if not community:
+            return Response({"results": []})
+        context = static_map_payload(community)
+        area_name = community.name
+        center = {"latitude": float(community.center_latitude), "longitude": float(community.center_longitude)}
         q_lower = q.casefold()
         local_hits = []
         for street in context.get("streets") or []:
             name = street.get("name") or ""
             if q_lower not in name.casefold():
                 continue
-            # Street catalog is Heights-local; pin to center (map still lets user adjust)
+            # Street catalog is barangay-local; pin to center (map still lets user adjust)
             local_hits.append(
                 {
-                    "lat": CENTER["latitude"],
-                    "lng": CENTER["longitude"],
-                    "label": f"{name}, Marikina Heights",
+                    "lat": center["latitude"],
+                    "lng": center["longitude"],
+                    "label": f"{name}, {area_name}",
                     "primary": name,
-                    "secondary": "Marikina Heights, Marikina City",
+                    "secondary": area_name,
                     "source": "street_catalog",
                 }
             )
 
         remote = []
         try:
-            # Tight viewbox around Heights + query biased to Marikina (blocks QC Katipunan, etc.)
-            viewbox = search_viewbox_with_buffer()
+            min_lng = float(community.bbox_min_longitude or center["longitude"] - 0.02)
+            max_lng = float(community.bbox_max_longitude or center["longitude"] + 0.02)
+            min_lat = float(community.bbox_min_latitude or center["latitude"] - 0.02)
+            max_lat = float(community.bbox_max_latitude or center["latitude"] + 0.02)
+            viewbox = f"{min_lng},{max_lat},{max_lng},{min_lat}"
             queries = [
-                f"{q}, Marikina Heights, Marikina, Philippines",
-                f"{q}, Marikina City, Philippines",
+                f"{q}, {area_name}, Philippines",
                 q,
             ]
             seen_remote: set[tuple[float, float, str]] = set()
@@ -831,27 +1203,6 @@ class LocationSearchView(APIView):
                             or addr.get("city_district")
                             or ""
                         )
-                        city_l = str(city).casefold()
-                        # Hard drop other Metro Manila cities at parse time
-                        if city_l and "marikina" not in city_l:
-                            # allow empty city; reject known non-Marikina cities
-                            if any(
-                                bad in city_l
-                                for bad in (
-                                    "quezon",
-                                    "pasig",
-                                    "san juan",
-                                    "manila",
-                                    "makati",
-                                    "cainta",
-                                    "antipolo",
-                                    "mandaluyong",
-                                    "san mateo",
-                                    "taguig",
-                                    "caloocan",
-                                )
-                            ):
-                                continue
                         house = addr.get("house_number")
                         road = addr.get("road") or addr.get("pedestrian") or addr.get("residential")
                         primary = (
@@ -864,7 +1215,7 @@ class LocationSearchView(APIView):
                         )
                         secondary_bits = [
                             addr.get("suburb") or addr.get("neighbourhood") or addr.get("village"),
-                            city or "Marikina",
+                            city or area_name,
                         ]
                         secondary = ", ".join([b for b in secondary_bits if b])
                         lat = float(item["lat"])
@@ -879,7 +1230,7 @@ class LocationSearchView(APIView):
                                 "lng": lng,
                                 "label": item.get("display_name") or primary,
                                 "primary": primary,
-                                "secondary": secondary or "Marikina Heights",
+                                "secondary": secondary or area_name,
                                 "source": "nominatim",
                             }
                         )
@@ -889,9 +1240,15 @@ class LocationSearchView(APIView):
         except Exception:
             remote = []
 
-        # Prefer remote coords; fill with local street names; both re-filtered near Heights
-        pool = remote + local_hits
-        ranked = filter_and_rank_search_results(pool, limit=8)
+        pool = [
+            row for row in remote + local_hits
+            if row.get("source") == "street_catalog"
+            or active_community_for_point(row["lat"], row["lng"]) == community
+        ]
+        ranked = sorted(
+            pool,
+            key=lambda row: (row["lat"] - center["latitude"]) ** 2 + (row["lng"] - center["longitude"]) ** 2,
+        )[:8]
         results = [
             {
                 "lat": row["lat"],

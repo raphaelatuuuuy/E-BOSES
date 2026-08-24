@@ -4,6 +4,7 @@ from datetime import timedelta
 from uuid import uuid4
 
 from celery import shared_task
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -12,6 +13,21 @@ from django.utils.dateparse import parse_datetime
 logger = logging.getLogger(__name__)
 
 RUN_LEASE = timedelta(minutes=4)
+
+# How long a row must sit unworked before the recovery sweep requeues it. Must
+# exceed RUN_LEASE so a live worker is never racing the sweeper for the same job.
+RECOVERY_STALE_AFTER = timedelta(minutes=6)
+
+
+def _inline_fallback_allowed() -> bool:
+    """Inline execution only where no Celery worker exists (local dev/tests).
+
+    In production a broker outage used to fall back to running whole Gemma +
+    SAM3 pipelines inside the request thread — minutes-long hangs under Daphne's
+    shared executor. Production rows stay in their queue state instead and the
+    recovery beat task picks them up once the broker is back.
+    """
+    return bool(getattr(settings, "IS_LOCAL_DEVELOPMENT", False))
 
 
 @dataclass(frozen=True)
@@ -240,18 +256,33 @@ def _current_classification_configuration():
 
 
 def enqueue_concern_ai(concern_id):
-    """Queue assessment, with a local fallback when no broker is reachable."""
+    """Queue the assessment without ever blocking the request thread.
+
+    The old fallback ran the whole Gemma + SAM3 pipeline inline whenever the
+    broker was unreachable, turning a broker blip into a minutes-long request
+    hang. The row stays in its queue state; `retry_pending_concern_jobs_task`
+    requeues it once the broker is back.
+    """
+    from .models import ConcernAiAssessment
+
     try:
         return process_concern_ai_task.delay(concern_id)
     except Exception as exc:
-        logger.warning(
-            "Concern AI queue unavailable for concern_id=%s (%s); processing inline.",
+        if _inline_fallback_allowed():
+            logger.warning(
+                "Concern AI queue unavailable for concern_id=%s (%s); processing inline (dev).",
+                concern_id,
+                exc.__class__.__name__,
+            )
+            return process_concern_ai_task.run(concern_id)
+        logger.error(
+            "Concern AI queue unavailable for concern_id=%s (%s); left PENDING for recovery sweep.",
             concern_id,
             exc.__class__.__name__,
         )
-        # Use the same claimed/idempotent execution path as a worker so local
-        # fallback runs retain attempt, failure, and recovery evidence too.
-        return process_concern_ai_task.run(concern_id)
+        ConcernAiAssessment.objects.filter(concern_id=concern_id).exclude(
+            status=ConcernAiAssessment.Status.COMPLETED
+        ).update(status=ConcernAiAssessment.Status.PENDING)
 
 
 @shared_task(
@@ -330,16 +361,213 @@ def _claim_media_privacy(media_id: int, *, force: bool):
 
 
 def enqueue_concern_media_privacy(media_id, *, force=False):
-    """Queue privacy processing, with the same inline fallback as the assessment."""
+    """Queue privacy processing; never run SAM3 inline in production."""
     try:
         return process_concern_media_privacy_task.delay(media_id, force=force)
     except Exception as exc:
-        logger.warning(
-            "Concern media privacy queue unavailable for media_id=%s (%s); processing inline.",
+        if _inline_fallback_allowed():
+            logger.warning(
+                "Concern media privacy queue unavailable for media_id=%s (%s); processing inline (dev).",
+                media_id,
+                exc.__class__.__name__,
+            )
+            return process_concern_media_privacy_task.run(media_id, force=force)
+        logger.error(
+            "Concern media privacy queue unavailable for media_id=%s (%s); left QUEUED for recovery sweep.",
             media_id,
             exc.__class__.__name__,
         )
-        return process_concern_media_privacy_task.run(media_id, force=force)
+        return None
+
+
+@shared_task(
+    bind=True,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    autoretry_for=(OSError, TimeoutError),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 2},
+    time_limit=120,
+    soft_time_limit=90,
+)
+def run_content_moderation_ai_task(self, flag_id):
+    """Independent AI second-look at a submitted ContentFlag.
+
+    Only ever takes an action when the model itself identifies a specific
+    `matched_reason` — the reporter's chosen reason is never trusted on its
+    own. Any failure here (network, parsing, anything) leaves the flag exactly
+    as SUBMITTED: this task must never be the reason real content disappears.
+    """
+    from .ai.community_moderation_analyzer import analyze_flagged_content, model_version_in_use
+    from .models import ContentFlag, LlmDecisionLog
+    from .moderation import execute_takedown
+
+    try:
+        flag = ContentFlag.objects.select_related(
+            "concern",
+            "comment",
+            "comment__author",
+            "announcement_comment",
+            "announcement_comment__author",
+            "emergency_comment",
+            "emergency_comment__author",
+        ).get(pk=flag_id)
+    except ContentFlag.DoesNotExist:
+        logger.warning("Content moderation AI task: flag_id=%s no longer exists.", flag_id)
+        return {"flag_id": flag_id, "skipped": True, "skip_reason": "not_found"}
+
+    target_kind = flag.target_kind
+    if target_kind == "concern":
+        content_text = f"{flag.concern.title}\n{flag.concern.description}"
+    elif target_kind == "concern_comment":
+        content_text = flag.comment.body
+    elif target_kind == "announcement_comment":
+        content_text = flag.announcement_comment.body
+    else:
+        content_text = flag.emergency_comment.body
+
+    try:
+        result = analyze_flagged_content(
+            content_text=content_text,
+            reason=flag.reason,
+            reporter_note=flag.note,
+        )
+        model_version = model_version_in_use()
+
+        with transaction.atomic():
+            if result.get("matched_reason"):
+                execute_takedown(flag, result["short_explanation"], actor=None)
+                flag.status = ContentFlag.Status.TAKEN_DOWN
+                flag.auto_moderated = True
+                flag.staff_note = result["short_explanation"]
+                flag.reviewed_by = None
+                flag.save(update_fields=["status", "auto_moderated", "staff_note", "reviewed_by", "updated_at"])
+
+            LlmDecisionLog.objects.create(
+                run_kind=LlmDecisionLog.RunKind.PRODUCTION,
+                domain=LlmDecisionLog.Domain.COMMUNITY,
+                concern=flag.concern,
+                content_flag=flag,
+                model_version=model_version,
+                input_snapshot={
+                    "content_text": content_text[:2000],
+                    "reason": flag.reason,
+                    "note": flag.note,
+                },
+                output_snapshot=result,
+                resident_message=result.get("short_explanation", ""),
+                recommended_action=result.get("recommended_disposition", ""),
+            )
+    except Exception:
+        logger.warning(
+            "Content moderation AI task failed for flag_id=%s; flag left untouched.",
+            flag_id,
+            exc_info=True,
+        )
+        return {"flag_id": flag_id, "skipped": True, "skip_reason": "error"}
+
+    return {"flag_id": flag_id, "auto_moderated": flag.auto_moderated}
+
+
+def enqueue_content_moderation_ai(flag_id):
+    """Queue automatic moderation review; never run the model inline in production."""
+    try:
+        return run_content_moderation_ai_task.delay(flag_id)
+    except Exception as exc:
+        if _inline_fallback_allowed():
+            logger.warning(
+                "Content moderation AI queue unavailable for flag_id=%s (%s); processing inline (dev).",
+                flag_id,
+                exc.__class__.__name__,
+            )
+            return run_content_moderation_ai_task.run(flag_id)
+        logger.error(
+            "Content moderation AI queue unavailable for flag_id=%s (%s); left SUBMITTED for recovery sweep.",
+            flag_id,
+            exc.__class__.__name__,
+        )
+        return None
+
+
+@shared_task(time_limit=120, soft_time_limit=90)
+def reverse_geocode_concern_task(concern_id):
+    """Resolve a generic concern address to a readable place, off the request path.
+
+    Mirrors `reverse_geocode_alert_task` on the emergency side: Nominatim paces
+    itself and can take seconds, so it must never run inside the submit request.
+    """
+    from apps.geo_services import reverse_geocode
+
+    from .models import Concern
+
+    concern = Concern.objects.filter(pk=concern_id).first()
+    if not concern or concern.latitude is None or concern.longitude is None:
+        return {"concern_id": concern_id, "skipped": True, "skip_reason": "no_coordinates"}
+    result = reverse_geocode(concern.latitude, concern.longitude)
+    if result.get("status") == "success" and result.get("location"):
+        concern.address = result["location"]
+        concern.save(update_fields=["address", "updated_at"])
+        return {"concern_id": concern_id, "address": concern.address}
+    return {"concern_id": concern_id, "skipped": True, "skip_reason": "geocode_unavailable"}
+
+
+@shared_task(time_limit=120, soft_time_limit=90)
+def retry_pending_concern_jobs_task():
+    """Requeue concern jobs orphaned by a broker outage.
+
+    Runs on beat. Every branch is idempotent — the underlying tasks either
+    claim rows through their own lease/state machine or skip completed work —
+    so a requeue that races a live worker collapses into a no-op.
+    """
+    from .models import ConcernAiAssessment, ConcernMedia, ContentFlag, LlmDecisionLog
+
+    stale_before = timezone.now() - RECOVERY_STALE_AFTER
+    requeued = {"assessments": 0, "media_privacy": 0, "moderation": 0}
+
+    pending_assessments = list(
+        ConcernAiAssessment.objects.filter(
+            status=ConcernAiAssessment.Status.PENDING,
+            updated_at__lt=stale_before,
+        ).values_list("concern_id", flat=True)[:50]
+    )
+    for concern_id in pending_assessments:
+        try:
+            process_concern_ai_task.delay(concern_id)
+            requeued["assessments"] += 1
+        except Exception:
+            break
+
+    queued_media = list(
+        ConcernMedia.objects.filter(
+            privacy_state=ConcernMedia.PrivacyState.QUEUED,
+            uploaded_at__lt=stale_before,
+        ).values_list("pk", flat=True)[:50]
+    )
+    for media_id in queued_media:
+        try:
+            process_concern_media_privacy_task.delay(media_id)
+            requeued["media_privacy"] += 1
+        except Exception:
+            break
+
+    # A moderation run always leaves an LlmDecisionLog behind, even when it
+    # takes no action — so "SUBMITTED with no log" means it never ran.
+    moderated_flag_ids = LlmDecisionLog.objects.filter(content_flag__isnull=False).values("content_flag_id")
+    unmoderated_flags = list(
+        ContentFlag.objects.filter(status=ContentFlag.Status.SUBMITTED, created_at__lt=stale_before)
+        .exclude(pk__in=moderated_flag_ids)
+        .values_list("pk", flat=True)[:50]
+    )
+    for flag_id in unmoderated_flags:
+        try:
+            run_content_moderation_ai_task.delay(flag_id)
+            requeued["moderation"] += 1
+        except Exception:
+            break
+
+    if any(requeued.values()):
+        logger.info("Recovery sweep requeued concern jobs: %s", requeued)
+    return requeued
 
 
 def broadcast_media_privacy_update(media_id: int) -> None:

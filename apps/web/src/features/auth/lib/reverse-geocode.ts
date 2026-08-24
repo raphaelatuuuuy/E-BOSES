@@ -29,25 +29,6 @@ interface NominatimResponse {
   address?: NominatimAddress
 }
 
-function isInMarikinaArea(address: NominatimAddress | undefined, displayName: string) {
-  const blob = [
-    address?.suburb,
-    address?.neighbourhood,
-    address?.village,
-    address?.city,
-    address?.municipality,
-    address?.town,
-    address?.county,
-    address?.state,
-    displayName,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase()
-
-  return blob.includes("marikina")
-}
-
 /**
  * Reverse-geocode lat/lng via OpenStreetMap Nominatim and match to
  * curated Marikina Heights streets.
@@ -105,16 +86,6 @@ export async function reverseGeocodeToMarikinaStreet(
   const displayName = data.display_name ?? ""
   const address = data.address
 
-  if (!isInMarikinaArea(address, displayName)) {
-    return {
-      ok: false,
-      street: null,
-      displayName,
-      message:
-        "Your current location is outside Marikina Heights. Please select your street from the list.",
-    }
-  }
-
   const roadCandidates = [
     address?.road,
     address?.pedestrian,
@@ -124,10 +95,10 @@ export async function reverseGeocodeToMarikinaStreet(
 
   for (const candidate of roadCandidates) {
     const matched = matchMarikinaHeightsStreet(candidate)
-    if (matched) {
+    if (matched || candidate.trim()) {
       return {
         ok: true,
-        street: matched,
+        street: matched || candidate.trim(),
         displayName,
         houseNumber: address?.house_number,
         message: "",
@@ -159,7 +130,7 @@ export async function reverseGeocodeToMarikinaStreet(
     street: null,
     displayName,
     message:
-      "We couldn't match your location to a Marikina Heights street. Please pick your street from the list.",
+      "We couldn't find a street name. Please enter your address manually.",
   }
 }
 

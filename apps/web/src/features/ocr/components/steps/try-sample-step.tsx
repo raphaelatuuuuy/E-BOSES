@@ -1,12 +1,15 @@
 import { useMemo, useState } from "react"
-import { CircleAlert, CircleCheck, CircleX } from "lucide-react"
+import { CircleAlert, CircleCheck, CircleSlash, CircleX } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
   normalizeExtractedFields,
   type OcrDocumentType,
+  type OcrIdIntegrity,
+  type OcrPipeline,
   type OcrTestField,
+  type OcrTestResult,
   type ProofSide,
   type SimulatedProfile,
   type VerificationRuleResult,
@@ -190,6 +193,218 @@ type FieldCheck = {
   checkNames: string[]
 }
 
+const FORMAT_WORDING: Record<OcrIdIntegrity["format_verdict"], string> = {
+  format_matches: "Same layout as your stored sample",
+  format_mismatch: "A different document from your stored sample",
+  no_reference: "No stored sample to compare against",
+  inconclusive: "Could not compare the layout",
+}
+
+const INTEGRITY_WORDING: Record<OcrIdIntegrity["integrity_verdict"], string> = {
+  authentic: "Nothing unusual found in the picture",
+  suspected_edit: "Part of the picture may have been edited",
+  suspected_ai: "The picture may have been made by a computer",
+  impossible_content: "The picture shows something that cannot be real",
+  photo_of_screen: "This looks like a photo of a screen",
+  inconclusive: "Too unclear to judge the picture",
+}
+
+const FORENSICS_LAYER_WORDING: Record<string, string> = {
+  exif: "The file names photo-editing or AI software in its camera tags",
+  png_metadata: "The file carries editing or AI software tags",
+  c2pa: "The file carries a signed record of being edited or generated",
+  visual_tamper:
+    "Parts of the picture compress and grain differently, the way a paste-in does",
+}
+
+type StageState = "passed" | "blocked" | "skipped" | "not_run"
+
+type Stage = {
+  key: "media_forensics" | "id_integrity" | "ocr"
+  /** One word, to sit where a field row puts its label. */
+  title: string
+  state: StageState
+  /** The verdict, where a field row puts its value. */
+  headline: string
+  lines: string[]
+}
+
+function stageIcon(state: StageState) {
+  if (state === "passed")
+    return <CircleCheck className="size-4 text-status-closed" aria-hidden />
+  if (state === "blocked")
+    return <CircleX className="size-4 text-sos" aria-hidden />
+  if (state === "skipped")
+    return <CircleSlash className="size-4 text-neutral-400" aria-hidden />
+  return <span className="mt-1.5 block size-2 rounded-full bg-neutral-300" />
+}
+
+/**
+ * The three checks, in the order they run, as rows of the results list.
+ *
+ * They share the field rows' shape on purpose. A blocked submission has no
+ * fields at all, so if authenticity sat in its own bordered card the results
+ * panel would go empty and read as "the template boxes are wrong" rather than
+ * "no text was read". One list, one column of icons: whatever stopped the photo
+ * is the row with the cross, and every stage behind it is visibly skipped.
+ */
+function AuthenticityRows({
+  results,
+}: {
+  results: (OcrTestResult | undefined)[]
+}) {
+  const present = results.filter((item): item is OcrTestResult => Boolean(item))
+  if (present.length === 0) return null
+
+  const pipelines = present
+    .map((item) => item.pipeline)
+    .filter((item): item is OcrPipeline => Boolean(item))
+  const integrities = present
+    .map((item) => item.id_integrity)
+    .filter((item): item is OcrIdIntegrity => Boolean(item?.checked))
+  if (pipelines.length === 0 && integrities.length === 0) return null
+
+  const blocking = pipelines.find((item) => item.blocked_by)
+  const blockedBy = blocking?.blocked_by ?? null
+  const forensics = pipelines
+    .map((item) => item.forensics)
+    .find((item) => item?.flagged)
+  const forensicsChecked = pipelines.some((item) => item.forensics?.checked)
+  const worstIntegrity =
+    integrities.find((item) => item.flagged) ?? integrities[0] ?? null
+  const signals = [...new Set(integrities.flatMap((item) => item.signals ?? []))]
+
+  const fileStage: Stage = {
+    key: "media_forensics",
+    title: "File",
+    state:
+      blockedBy === "media_forensics"
+        ? "blocked"
+        : forensicsChecked
+          ? "passed"
+          : "not_run",
+    headline:
+      blockedBy === "media_forensics"
+        ? "Edited before it was sent"
+        : forensicsChecked
+          ? "No sign of editing"
+          : "Not checked",
+    lines:
+      blockedBy === "media_forensics"
+        ? [
+            FORENSICS_LAYER_WORDING[forensics?.layer ?? ""] ??
+              forensics?.message ??
+              "The file looks edited.",
+          ]
+        : [],
+  }
+
+  const pictureStage: Stage = {
+    key: "id_integrity",
+    title: "Picture",
+    state:
+      blockedBy === "media_forensics"
+        ? "skipped"
+        : blockedBy === "id_integrity"
+          ? "blocked"
+          : worstIntegrity
+            ? "passed"
+            : "not_run",
+    headline: worstIntegrity
+      ? INTEGRITY_WORDING[worstIntegrity.integrity_verdict]
+      : blockedBy === "media_forensics"
+        ? "Not reached"
+        : "Not checked",
+    lines: worstIntegrity
+      ? [FORMAT_WORDING[worstIntegrity.format_verdict], ...signals]
+      : blockedBy === "media_forensics"
+        ? ["The file check stopped this photo."]
+        : ["The model could not be reached."],
+  }
+
+  const textStage: Stage = {
+    key: "ocr",
+    title: "Text",
+    state: blockedBy ? "skipped" : "passed",
+    headline: blockedBy
+      ? "Not reached"
+      : "Extracted and validated against the field rules",
+    lines: blockedBy
+      ? [
+          blockedBy === "media_forensics"
+            ? "The file check stopped this photo."
+            : "The picture check stopped this photo.",
+        ]
+      : [],
+  }
+
+  const stages = [fileStage, pictureStage, textStage]
+
+  return (
+    <section>
+      <p className="mb-1 text-[13px] font-semibold text-neutral-500 uppercase">
+        Authenticity
+      </p>
+      {/* No rules between the stages: they are one verdict read top to bottom,
+          not three independent findings. The single line closes the block off
+          from the field rows below, which do divide. */}
+      <div className="-mx-5 border-b border-neutral-200 pb-1">
+        {stages.map((stage) => (
+          <div key={stage.key} className="flex items-start gap-3 px-5 py-2">
+            <div className="flex w-5 shrink-0 justify-center pt-[3px]">
+              {stageIcon(stage.state)}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] font-medium text-neutral-500">
+                {stage.title}
+              </p>
+              <p
+                className={cn(
+                  "mt-0.5 text-[15px] leading-snug font-semibold break-words",
+                  stage.state === "blocked"
+                    ? "text-sos"
+                    : stage.state === "passed"
+                      ? "text-neutral-900"
+                      : "text-neutral-400"
+                )}
+              >
+                {stage.headline}
+              </p>
+              {stage.lines.filter(Boolean).map((line) => (
+                <p
+                  key={line}
+                  className={cn(
+                    "mt-0.5 text-[13px] leading-snug",
+                    stage.state === "blocked"
+                      ? "font-medium text-sos"
+                      : "text-neutral-400"
+                  )}
+                >
+                  {line}
+                </p>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      {blockedBy ? (
+        <p className="mt-3 text-[13px] leading-snug font-medium text-destructive">
+          A resident sending this would be told:{" "}
+          <span className="font-normal text-neutral-700">
+            {blocking?.message}
+          </span>
+        </p>
+      ) : null}
+      {!blockedBy && worstIntegrity && !worstIntegrity.compared_to_sample ? (
+        <p className="mt-3 text-[13px] text-neutral-500">
+          Only the picture was checked. Upload a sample in Mark Areas to compare
+          the layout too.
+        </p>
+      ) : null}
+    </section>
+  )
+}
+
 export function TrySampleResults(props: {
   mergedTestResult: MergedTestResult
   documentFields?: OcrDocumentType["fields"]
@@ -350,15 +565,14 @@ export function TrySampleResults(props: {
 
   return (
     <div className="space-y-4">
+      <AuthenticityRows results={requiredSides.map((side) => bySide[side])} />
       {requiredSides.map((side) => {
         const fields = sideExtracted(side)
         return (
           <section key={side}>
-            {multiSide ? (
-              <p className="mb-1 text-[13px] font-semibold text-neutral-500 uppercase">
-                {sideLabel(side)}
-              </p>
-            ) : null}
+            <p className="mb-1 text-[13px] font-semibold text-neutral-500 uppercase">
+              {multiSide ? sideLabel(side) : "Details"}
+            </p>
             {bySide[side] ? (
               fields.length === 0 ? (
                 <p className="py-6 text-center text-[13px] font-medium text-neutral-500 italic">

@@ -104,7 +104,7 @@ def non_gsm7_characters(body: str) -> list[str]:
 class BaseSmsDriver:
     name = "base"
 
-    def send(self, destination: str, body: str) -> None:
+    def send(self, destination: str, body: str, timeout: float | None = None) -> None:
         raise NotImplementedError
 
 
@@ -113,7 +113,7 @@ class ConsoleSmsDriver(BaseSmsDriver):
 
     name = "console"
 
-    def send(self, destination: str, body: str) -> None:
+    def send(self, destination: str, body: str, timeout: float | None = None) -> None:
         is_test = getattr(settings, "IS_TEST_RUN", False)
         if not (settings.DEBUG or getattr(settings, "IS_LOCAL_DEVELOPMENT", False) or is_test):
             raise SmsConfigurationError("The console SMS driver is only allowed in local development.")
@@ -124,7 +124,7 @@ class ConsoleSmsDriver(BaseSmsDriver):
 class DisabledSmsDriver(BaseSmsDriver):
     name = "disabled"
 
-    def send(self, destination: str, body: str) -> None:
+    def send(self, destination: str, body: str, timeout: float | None = None) -> None:
         raise SmsConfigurationError("No outbound SMS gateway is configured.")
 
 
@@ -229,11 +229,11 @@ class HttpJsonSmsDriver(BaseSmsDriver):
                 url = url.replace(token, quote(str(value), safe=""))
         return url
 
-    def send(self, destination: str, body: str) -> None:
+    def send(self, destination: str, body: str, timeout: float | None = None) -> None:
         base_url = getattr(settings, "OUTBOUND_SMS_URL", "") or ""
         if not base_url:
             raise SmsConfigurationError("OUTBOUND_SMS_URL is required to send SMS.")
-        timeout = float(getattr(settings, "OUTBOUND_SMS_TIMEOUT_SECONDS", 15))
+        timeout = float(timeout or getattr(settings, "OUTBOUND_SMS_TIMEOUT_SECONDS", 15))
         try:
             if self._method() == "GET":
                 response = httpx.get(
@@ -319,8 +319,8 @@ class AndroidSmsGatewayDriver(HttpJsonSmsDriver):
         path = self.local_path if "sms-gate.app" not in base else self.cloud_path
         return f"{base}{path}"
 
-    def send(self, destination: str, body: str):
-        timeout = float(getattr(settings, "OUTBOUND_SMS_TIMEOUT_SECONDS", 15))
+    def send(self, destination: str, body: str, timeout: float | None = None):
+        timeout = float(timeout or getattr(settings, "OUTBOUND_SMS_TIMEOUT_SECONDS", 15))
         try:
             response = httpx.post(
                 self.endpoint(),
@@ -430,19 +430,31 @@ def queue_sms(
 
 
 def _dispatch(message_id: int, destination: str, body: str) -> None:
-    """Send through Celery when a broker is reachable, otherwise inline."""
+    """Send through Celery when a broker is reachable.
+
+    A broker outage must not hang the request thread: delivery args cannot be
+    reconstructed later (destinations are stored hashed, OTP bodies are never
+    persisted), so in production the row simply stays QUEUED for operator
+    visibility while local development — where no worker runs — still delivers
+    inline.
+    """
     from .tasks import send_outbound_sms_task
 
     try:
         send_outbound_sms_task.delay(message_id, destination, body)
-    except Exception:
-        # No broker (local dev, tests, a Redis blip). Delivering inline is
-        # slower but an emergency reply must not be lost to infrastructure.
-        logger.warning("Celery unavailable for SMS #%s; sending inline.", message_id)
-        deliver(message_id, destination, body)
+    except Exception as exc:
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+            logger.warning("Celery unavailable for SMS #%s; sending inline (dev).", message_id)
+            deliver(message_id, destination, body)
+            return
+        logger.error(
+            "Celery broker unavailable; SMS #%s stays QUEUED (%s).",
+            message_id,
+            exc.__class__.__name__,
+        )
 
 
-def deliver(message_id: int, destination: str, body: str) -> str:
+def deliver(message_id: int, destination: str, body: str, timeout: float | None = None) -> str:
     """Perform one delivery attempt and record the outcome."""
     message = OutboundSmsMessage.objects.filter(pk=message_id).first()
     if not message:
@@ -457,7 +469,7 @@ def deliver(message_id: int, destination: str, body: str) -> str:
     message.save(update_fields=["status", "attempts", "driver"])
 
     try:
-        receipt = driver.send(destination, body)
+        receipt = driver.send(destination, body, timeout=timeout)
     except SmsConfigurationError as exc:
         message.status = OutboundSmsMessage.Status.SKIPPED
         message.last_error = str(exc)[:255]

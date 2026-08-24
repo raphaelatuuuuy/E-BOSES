@@ -5,6 +5,7 @@ import {
   acknowledgeEmergency,
   markEmergencyArrived,
   requestEmergencyBackup,
+  getEmergencyBackupUnits,
   resolveEmergency,
   type EmergencyAlert,
 } from "@/features/dashboard/emergency-api"
@@ -56,7 +57,7 @@ export function useIncidentActions({
   }
 
   const ownAssignment =
-    alert.assignments.find((assignment) => assignment.responder.id === viewerId) ??
+    (alert.assignments ?? []).find((assignment) => assignment.responder.id === viewerId) ??
     alert.current_assignment ??
     null
 
@@ -98,7 +99,7 @@ export function useIncidentActions({
     const optimistic: EmergencyAlert = {
       ...alert,
       status: "acknowledged",
-      assignments: alert.assignments.map((assignment) =>
+      assignments: (alert.assignments ?? []).map((assignment) =>
         assignment.id === ownAssignment?.id
           ? { ...assignment, status: "acknowledged", acknowledged_at: new Date().toISOString() }
           : assignment,
@@ -168,10 +169,14 @@ export function useIncidentActions({
     if (!canRequestBackup) return
     setBusy("backup")
     try {
+      const units = await getEmergencyBackupUnits(alert.id)
+      const unit = units[0]
+      if (!unit) throw new Error("No backup unit is configured for this emergency type.")
       const next = await requestEmergencyBackup(alert.id, {
-        backup_type: "other",
+        target_department_id: unit.id,
         reason: "Backup requested by responder.",
         urgency: "high",
+        idempotency_key: crypto.randomUUID(),
       })
       onChanged(next)
       // Backup is presented as a broadcast to other responders; the responder

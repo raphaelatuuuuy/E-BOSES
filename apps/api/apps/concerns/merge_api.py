@@ -43,12 +43,21 @@ class MergeManagementView(APIView):
     def conflict(self, exc):
         return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
+    def concerns(self, request):
+        from .views import operational_concerns
+
+        return operational_concerns(request.user)
+
 
 class MergeSuggestionListView(MergeManagementView):
     def get(self, request):
         if not can_manage_merges(request.user):
             return self.deny()
-        suggestions = merge_services.pending_suggestions()
+        allowed = self.concerns(request)
+        suggestions = merge_services.pending_suggestions().filter(
+            concern__in=allowed,
+            primary__in=allowed,
+        )
         return Response(MergeSuggestionSerializer(suggestions, many=True).data)
 
 
@@ -56,7 +65,11 @@ class MergeSuggestionDecideView(MergeManagementView):
     def post(self, request, pk):
         if not can_manage_merges(request.user):
             return self.deny()
-        suggestion = get_object_or_404(ConcernMergeSuggestion, pk=pk)
+        allowed = self.concerns(request)
+        suggestion = get_object_or_404(
+            ConcernMergeSuggestion.objects.filter(concern__in=allowed, primary__in=allowed),
+            pk=pk,
+        )
         serializer = MergeDecisionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
@@ -75,10 +88,11 @@ class ConcernMergeView(MergeManagementView):
     def post(self, request, pk):
         if not can_manage_merges(request.user):
             return self.deny()
-        concern = get_object_or_404(Concern, pk=pk)
+        allowed = self.concerns(request)
+        concern = get_object_or_404(allowed, pk=pk)
         serializer = MergeRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        primary = get_object_or_404(Concern, pk=serializer.validated_data["primary_id"])
+        primary = get_object_or_404(allowed, pk=serializer.validated_data["primary_id"])
         try:
             merge_services.merge_concern(
                 concern,
@@ -96,7 +110,7 @@ class ConcernUnmergeView(MergeManagementView):
     def post(self, request, pk):
         if not can_manage_merges(request.user):
             return self.deny()
-        concern = get_object_or_404(Concern, pk=pk)
+        concern = get_object_or_404(self.concerns(request), pk=pk)
         serializer = UnmergeRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
@@ -114,7 +128,7 @@ class ConcernSetPrimaryView(MergeManagementView):
     def post(self, request, pk):
         if not can_manage_merges(request.user):
             return self.deny()
-        concern = get_object_or_404(Concern, pk=pk)
+        concern = get_object_or_404(self.concerns(request), pk=pk)
         try:
             merge_services.set_primary(concern, actor=request.user)
         except merge_services.MergeConflict as exc:
@@ -126,6 +140,6 @@ class ConcernMergeHistoryView(MergeManagementView):
     def get(self, request, pk):
         if not can_manage_merges(request.user):
             return self.deny()
-        concern = get_object_or_404(Concern, pk=pk)
+        concern = get_object_or_404(self.concerns(request), pk=pk)
         events = concern.merge_events.select_related("actor", "primary", "concern")
         return Response(MergeEventSerializer(events, many=True).data)

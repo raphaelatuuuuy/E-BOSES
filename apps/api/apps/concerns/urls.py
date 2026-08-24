@@ -60,6 +60,8 @@ from .views import (
     RoutingRuleListCreateView,
 )
 from .classification_api import (
+    CommunityModerationSimulationView,
+    LlmDecisionLogListView,
     OfficialClassificationActivityView,
     OfficialClassificationResetView,
     OfficialClassificationSampleGeneratorView,
@@ -69,6 +71,8 @@ from .classification_api import (
     OfficialClassificationView,
     ResidentConcernPrecheckView,
 )
+from apps.emergencies.simulation_api import EmergencySimulationView
+from apps.sms.simulation_api import SmsSimulationView
 
 urlpatterns = [
 
@@ -94,6 +98,10 @@ urlpatterns = [
     path("classification/test-submission/", OfficialClassificationSubmissionTestView.as_view(), name="classification-test-submission"),
     path("classification/generate-sample/", OfficialClassificationSampleGeneratorView.as_view(), name="classification-generate-sample"),
     path("classification/precheck/", ResidentConcernPrecheckView.as_view(), name="classification-precheck"),
+    path("classification/test-emergency/", EmergencySimulationView.as_view(), name="classification-test-emergency"),
+    path("classification/test-sms/", SmsSimulationView.as_view(), name="classification-test-sms"),
+    path("classification/test-community/", CommunityModerationSimulationView.as_view(), name="classification-test-community"),
+    path("classification/log/", LlmDecisionLogListView.as_view(), name="classification-log"),
     path("", ConcernListCreateView.as_view(), name="concern-create"),
     path("media/check/", ConcernMediaCheckView.as_view(), name="concern-media-check"),
     path("mine/", MyConcernListView.as_view(), name="concern-mine"),

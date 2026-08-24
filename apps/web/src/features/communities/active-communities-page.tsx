@@ -1,11 +1,4 @@
 import { useEffect, useMemo, useState } from "react"
-import {
-  Building2Icon,
-  FileTextIcon,
-  LayoutGridIcon,
-  SirenIcon,
-  UsersIcon,
-} from "lucide-react"
 
 import { Footer } from "@/features/landing/components/footer"
 import { Navbar } from "@/features/landing/components/navbar"
@@ -31,16 +24,39 @@ function yearOf(since: string | null) {
   return since ? since.slice(0, 4) : ""
 }
 
+function StatIcon({ name }: { name: string }) {
+  return (
+    <span
+      aria-hidden
+      className="material-symbols-outlined shrink-0 select-none transition-all duration-300"
+      style={{
+        color: "var(--color-brand-orange)",
+        fontSize: "46px",
+        lineHeight: 1,
+        textShadow: "0 0 12px rgba(255,106,26,0.4), 0 0 28px rgba(255,106,26,0.12)",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.textShadow = "0 0 16px rgba(255,106,26,0.8), 0 0 40px rgba(255,106,26,0.4), 0 0 60px rgba(255,106,26,0.15)"
+        e.currentTarget.style.transform = "scale(1.08)"
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.textShadow = "0 0 12px rgba(255,106,26,0.4), 0 0 28px rgba(255,106,26,0.12)"
+        e.currentTarget.style.transform = "scale(1)"
+      }}
+    >
+      {name}
+    </span>
+  )
+}
+
 function Stat({
-  icon: Icon,
-  color,
+  icon,
   value,
   label,
   caption,
   loading,
 }: {
-  icon: typeof UsersIcon
-  color: string
+  icon: string
   value: number
   label: string
   caption: string
@@ -48,14 +64,7 @@ function Stat({
 }) {
   return (
     <div className="group flex items-center gap-5 border-b border-white/8 py-6 last:border-b-0">
-      <Icon
-        aria-hidden
-        className="size-10 shrink-0 transition-[filter] duration-300"
-        strokeWidth={1}
-        style={{ color, filter: `drop-shadow(0 0 3px ${color})` }}
-        onMouseEnter={(e) => { (e.currentTarget as SVGElement).style.filter = `drop-shadow(0 0 14px ${color})` }}
-        onMouseLeave={(e) => { (e.currentTarget as SVGElement).style.filter = `drop-shadow(0 0 3px ${color})` }}
-      />
+      <StatIcon name={icon} />
       <div className="min-w-0">
         {loading ? (
           <div className="h-12 w-32 animate-pulse rounded-lg bg-white/8" />
@@ -65,7 +74,7 @@ function Stat({
           </p>
         )}
         <p className="mt-2 text-base font-medium text-landing-cream/85">{label}</p>
-        <p className="mt-1 text-sm text-landing-cream/50">{loading ? " " : caption}</p>
+        <p className="mt-1 text-sm text-landing-cream/50">{loading ? " " : caption}</p>
       </div>
     </div>
   )
@@ -158,7 +167,7 @@ export default function ActiveCommunitiesPage() {
             Active communities
           </p>
           <h1 className="font-heading mt-3 text-4xl leading-[1.05] tracking-tight sm:text-6xl">
-            Status of operation
+            Status of Operation
           </h1>
           <p className="mt-4 max-w-2xl text-base text-landing-cream/55">
             Live counts, see the total communities using E-Boses.
@@ -179,11 +188,7 @@ export default function ActiveCommunitiesPage() {
                     type="button"
                     aria-pressed={period === year}
                     onClick={() => setPeriod(year)}
-                    className={`py-2 font-heading text-2xl font-bold tracking-tight transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-orange sm:text-3xl ${
-                      period === year
-                        ? "text-brand-orange"
-                        : "text-landing-cream/40 hover:text-brand-orange"
-                    }`}
+                    className="py-2 font-heading text-2xl font-bold tracking-tight text-brand-orange transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-orange sm:text-3xl"
                   >
                     Live by {year}
                   </button>
@@ -192,32 +197,28 @@ export default function ActiveCommunitiesPage() {
 
               <div className="mt-6">
                 <Stat
-                  icon={Building2Icon}
-                  color="var(--color-brand-orange)"
+                  icon="apartment"
                   value={totals.communities}
                   label="Barangays covered"
                   caption={`${numbers.format(totals.cities)} ${totals.cities === 1 ? "city" : "cities"} and municipalities`}
                   loading={loading}
                 />
                 <Stat
-                  icon={UsersIcon}
-                  color="var(--color-chart-3)"
+                  icon="emoji_language"
                   value={totals.residents}
                   label="Verified residents"
                   caption={`${numbers.format(totals.responders)} responders and ${numbers.format(totals.officials)} officials on duty`}
                   loading={loading}
                 />
                 <Stat
-                  icon={FileTextIcon}
-                  color="var(--color-chart-4)"
+                  icon="home_storage"
                   value={totals.reports}
                   label="Reports filed"
                   caption={`${numbers.format(totals.resolvedReports)} resolved`}
                   loading={loading}
                 />
                 <Stat
-                  icon={SirenIcon}
-                  color="var(--color-sos)"
+                  icon="siren_check"
                   value={totals.emergencies}
                   label="Emergency alerts handled"
                   caption={`${numbers.format(totals.closedEmergencies)} closed`}
@@ -232,7 +233,7 @@ export default function ActiveCommunitiesPage() {
                   <h2 className="text-base font-semibold text-landing-cream">Coverage map</h2>
                   <p className={CAPTION}>Regions fill in as barangays go live.</p>
                 </div>
-                <LayoutGridIcon aria-hidden className="size-5 shrink-0 text-landing-cream/35" />
+                <span aria-hidden className="material-symbols-outlined size-5 shrink-0 text-landing-cream/35" style={{ fontSize: '20px' }}>grid_view</span>
               </div>
               <div className="mt-5">
                 <PhilippinesMap figures={regions} loading={loading} />
@@ -261,8 +262,6 @@ export default function ActiveCommunitiesPage() {
                   name={selected.name}
                   geometry={boundaryLoading ? null : (boundary?.geometry ?? null)}
                   loading={boundaryLoading}
-                  reports={selected.reports}
-                  emergencies={selected.emergencies}
                 />
               </div>
 

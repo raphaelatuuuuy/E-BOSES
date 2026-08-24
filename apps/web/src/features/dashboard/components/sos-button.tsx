@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
-import { Loader2Icon, PhoneIcon } from "lucide-react"
 
-import { cn } from "@workspace/ui/lib/utils"
 import {
   getActiveEmergency,
   getEmergency,
@@ -18,44 +16,21 @@ import {
 import { apiRequest } from "@/lib/api"
 import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
 
-type SosPlacement = "inline" | "sidebar" | "compact"
-
-function normalizeSosPlacement(value: string | null): SosPlacement {
-  if (value === "bottom_bar") return "sidebar"
-  if (value === "floating") return "inline"
-  if (value === "sidebar" || value === "compact" || value === "inline")
-    return value
-  return "inline"
-}
-
 function isActiveAlert(alert: EmergencyAlert | null) {
-  // Shared list: an inline copy here went stale when statuses were added, so
-  // the button stopped recognising a live emergency and let the resident file
-  // a second one.
   return Boolean(alert && isEmergencyActive(alert.status))
 }
 
-/**
- * FAB + open/close orchestration between the SOS wizard (new alert) and the
- * emergency tracking sheet (existing/active alert). Wizard step machine and
- * shell UI live in components/sos/sos-wizard.tsx.
- */
 export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
-  const [placement, setPlacement] = useState<SosPlacement>(() =>
-    normalizeSosPlacement(localStorage.getItem("eboses:sos-placement"))
-  )
   const [shellOpen, setShellOpen] = useState(false)
   const [shellMode, setShellMode] = useState<"wizard" | "tracking">("wizard")
   const [checkingActive, setCheckingActive] = useState(false)
-  const [trackingAlert, setTrackingAlert] = useState<EmergencyAlert | null>(
-    null
-  )
+  const [trackingAlert, setTrackingAlert] = useState<EmergencyAlert | null>(null)
   const [dutyHours, setDutyHours] = useState<DutyHours | null>(null)
   const [hotlines, setHotlines] = useState<Hotline[]>([])
   const [dutyDialogOpen, setDutyDialogOpen] = useState(false)
+  const [veilArmed, setVeilArmed] = useState(false)
+  const veilTimer = useRef<number | undefined>(undefined)
 
-  // Advisory only. A failed fetch must never stop a resident sending SOS,
-  // so the button stays fully enabled when this never resolves.
   useEffect(() => {
     let cancelled = false
     void apiRequest<{ duty_hours?: DutyHours; hotlines?: Hotline[] }>(
@@ -100,19 +75,10 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
   }, [trackingAlert])
 
   useEffect(() => {
-    function handlePlacement(event: Event) {
-      const nextPlacement = (event as CustomEvent<{ placement?: SosPlacement }>)
-        .detail?.placement
-      setPlacement(
-        normalizeSosPlacement(
-          nextPlacement || localStorage.getItem("eboses:sos-placement")
-        )
-      )
-    }
-    window.addEventListener("eboses:sos-placement-change", handlePlacement)
-    return () =>
-      window.removeEventListener("eboses:sos-placement-change", handlePlacement)
-  }, [])
+    window.dispatchEvent(
+      new CustomEvent("eboses:sos-open-change", { detail: { open: shellOpen } })
+    )
+  }, [shellOpen])
 
   const handleSosRef = useRef(() => {})
   const suppressedRef = useRef(suppressed)
@@ -138,7 +104,6 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
         setShellOpen(true)
         return
       }
-      // Off-hours: advise the hotlines first, but never block the report.
       if (offDuty && hotlines.length) {
         setDutyDialogOpen(true)
         return
@@ -188,53 +153,88 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
 
   const hasActiveEmergency = isActiveAlert(trackingAlert)
 
+  function armVeil() {
+    if (suppressed || checkingActive || shellOpen || dutyDialogOpen) return
+    window.clearTimeout(veilTimer.current)
+    const reduce =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    veilTimer.current = window.setTimeout(
+      () => setVeilArmed(true),
+      reduce ? 0 : 200
+    )
+  }
+
+  function disarmVeil() {
+    window.clearTimeout(veilTimer.current)
+    setVeilArmed(false)
+  }
+
+  useEffect(() => {
+    if (!veilArmed) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") disarmVeil()
+    }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [veilArmed])
+
+  useEffect(() => {
+    function arm() {
+      if (suppressedRef.current) return
+      armVeil()
+    }
+    window.addEventListener("eboses:sos-veil-arm", arm)
+    window.addEventListener("eboses:sos-veil-disarm", disarmVeil)
+    return () => {
+      window.removeEventListener("eboses:sos-veil-arm", arm)
+      window.removeEventListener("eboses:sos-veil-disarm", disarmVeil)
+    }
+  })
+
+  useEffect(() => () => window.clearTimeout(veilTimer.current), [])
+
+  function openFromVeil() {
+    disarmVeil()
+    void handleSosRef.current()
+  }
   return (
     <>
-      <style>{`
-        @keyframes sos-pulse {
-          0%, 100% { box-shadow: 0 10px 24px rgba(248, 69, 63, 0.32); }
-          50% { box-shadow: 0 10px 24px rgba(248, 69, 63, 0.32), 0 0 0 14px rgba(248, 69, 63, 0.12); }
-        }
-        .sos-glow { animation: sos-pulse 1.6s ease-in-out infinite; }
-        @media (prefers-reduced-motion: reduce) {
-          .sos-glow { animation: none; }
-        }
-      `}</style>
-
-      <div
-        className={cn(
-          "fixed z-40",
-          suppressed || placement === "sidebar" ? "hidden" : "hidden lg:block",
-          (placement === "inline" || placement === "compact") &&
-            "lg:right-8 lg:bottom-8"
-        )}
-      >
-        <button
-          type="button"
-          onClick={() => void handleSosButtonClick()}
-          disabled={checkingActive}
-          className={cn(
-            "group flex items-center gap-2 rounded-full bg-gradient-to-b from-sos-bright to-sos py-2 pr-4 pl-2 text-white shadow-[0_10px_24px_rgba(248,69,63,0.28)] transition-all hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98] disabled:cursor-wait disabled:opacity-80",
-            // Amber, never disabled: the button always sends.
-            offDuty && "from-neutral-400 to-neutral-500",
-            hasActiveEmergency && "sos-glow"
-          )}
-          aria-label={offDuty ? "SOS (outside barangay duty hours)" : "SOS"}
+      {veilArmed && !shellOpen && !dutyDialogOpen ? (
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label={
+            hasActiveEmergency
+              ? "Open emergency tracking"
+              : "Send an SOS alert"
+          }
+          onClick={openFromVeil}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault()
+              openFromVeil()
+            }
+          }}
+          onMouseLeave={disarmVeil}
+          className="fixed inset-0 z-[300] flex cursor-pointer flex-col items-center justify-center overflow-hidden bg-black/45 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
         >
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-full">
-            {checkingActive ? (
-              <Loader2Icon className="size-5 animate-spin" />
-            ) : (
-              <PhoneIcon className="size-5" fill="currentColor" />
-            )}
-          </span>
-          <span className="text-left leading-none">
-            <span className="block text-lg font-extrabold tracking-wide">
-              SOS
-            </span>
-          </span>
-        </button>
-      </div>
+          <div className="absolute inset-0 bg-sos/15 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150" />
+          <p className="relative px-6 pb-4 text-center text-6xl font-extrabold tracking-tight text-white lg:text-8xl">
+            {hasActiveEmergency ? "Track my emergency" : "Need help?"}
+          </p>
+          <p className="relative px-6 text-center text-base font-medium text-white/70">
+            {hasActiveEmergency
+              ? "Click anywhere to open live tracking."
+              : offDuty
+                ? "Click anywhere to see hotlines and send anyway."
+                : "Click anywhere to send an SOS alert."}
+          </p>
+          <p className="absolute bottom-8 left-1/2 -translate-x-1/2 px-6 text-center text-xs text-white/50">
+            Press Esc or move away to dismiss
+          </p>
+        </div>
+      ) : null}
 
       <DutyHoursDialog
         open={dutyDialogOpen}
@@ -253,7 +253,6 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
         }}
       />
 
-      {/* Tracking reuses existing sheet for full lifecycle (cancel, appeal, live map) */}
       <EmergencyTrackingSheet
         open={!suppressed && shellOpen && shellMode === "tracking"}
         onOpenChange={(open) => {

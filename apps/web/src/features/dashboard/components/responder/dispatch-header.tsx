@@ -83,7 +83,7 @@ const SUPPORT_STATUS_WORDS: Record<string, string> = {
 }
 
 /** How often the Chat tab watches for a resident message while it is closed. */
-const CHAT_UNREAD_POLL_MS = 20_000
+const CHAT_UNREAD_POLL_MS = 45_000
 
 export function DispatchOverviewCard({
   alert,
@@ -162,7 +162,7 @@ export function DispatchOverviewCard({
     entry.id === "chat" ? { ...entry, badge: chatUnread } : entry,
   )
 
-  const support = alert.assignments.filter(
+  const support = (alert.assignments ?? []).filter(
     (assignment) =>
       assignment.responder.id !== viewerId && SUPPORTED_ACTIVE.has(assignment.status),
   )

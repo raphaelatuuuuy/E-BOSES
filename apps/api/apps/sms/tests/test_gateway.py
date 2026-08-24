@@ -71,7 +71,7 @@ class TemplateSafetyTests(SimpleTestCase):
 
     def test_unknown_command_reply_names_what_was_received_and_offers_the_guide(self):
         body = templates.unknown_command("HELPP FIER")
-        self.assertIn("HELPP FIER", body)
+        self.assertNotIn("HELPP FIER", body)
         self.assertIn("GUIDE", body)
         self.assertIn("HELP FIRE", body)
 

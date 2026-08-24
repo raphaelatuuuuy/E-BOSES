@@ -9,21 +9,27 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 # Celery and Channels share the local Redis. Make sure it is up first.
 & (Join-Path $PSScriptRoot 'start-redis.ps1')
 
-$WorkerPid = Join-Path $LogDir 'celery-worker.pid'
+$FastWorkerPid  = Join-Path $LogDir 'celery-worker.pid'
+$HeavyWorkerPid = Join-Path $LogDir 'celery-worker-heavy.pid'
 $BeatPid   = Join-Path $LogDir 'celery-beat.pid'
-$WorkerLog = Join-Path $LogDir 'celery-worker.log'
+$FastWorkerLog  = Join-Path $LogDir 'celery-worker.log'
+$HeavyWorkerLog = Join-Path $LogDir 'celery-worker-heavy.log'
 $BeatLog   = Join-Path $LogDir 'celery-beat.log'
 
 function Test-CeleryRunning {
-  param([string]$Role)
+  # Match on the -Q flag so "worker" does not also hit "worker-heavy".
+  param([string]$Role, [string]$Match)
   $procs = Get-CimInstance Win32_Process -Filter "Name like 'python%'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -match '-m celery' -and $_.CommandLine -match $Role }
+  if ($Match) {
+    $procs = $procs | Where-Object { $_.CommandLine -match $Match }
+  }
   return $procs
 }
 
 function Start-CeleryProc {
-  param([string]$Name, [string]$Role, [string]$PidFile, [string]$LogFile)
-  $already = Test-CeleryRunning -Role $Role
+  param([string]$Name, [string]$Role, [string]$PidFile, [string]$LogFile, [string]$Queue = "")
+  $already = Test-CeleryRunning -Role $Role -Match $(if ($Queue) { "-Q $Queue" } else { "" })
   if ($already) {
     $ids = ($already | ForEach-Object { $_.ProcessId }) -join ', '
     Write-Host "$Name already running (PID $ids) - nothing to do."
@@ -31,7 +37,9 @@ function Start-CeleryProc {
   }
   Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
   $cmd = '-m celery -A config {0} -l INFO --logfile "{1}" --pidfile "{2}"' -f $Role, $LogFile, $PidFile
-  if ($Role -eq 'worker') { $cmd = '-m celery -A config worker -l INFO -Q eboses --pool=solo --logfile "{0}" --pidfile "{1}"' -f $LogFile, $PidFile }
+  if ($Role -like 'worker*') {
+    $cmd = '-m celery -A config worker -l INFO -Q {0} --pool=solo --logfile "{1}" --pidfile "{2}"' -f $Queue, $LogFile, $PidFile
+  }
   $p = Start-Process -FilePath 'python' -ArgumentList $cmd -WorkingDirectory $ApiDir -WindowStyle Hidden -PassThru
   Start-Sleep -Seconds 6
   if (Get-Process -Id $p.Id -ErrorAction SilentlyContinue) {
@@ -41,8 +49,11 @@ function Start-CeleryProc {
   }
 }
 
-Start-CeleryProc -Name 'Celery worker' -Role 'worker' -PidFile $WorkerPid -LogFile $WorkerLog
-Start-CeleryProc -Name 'Celery beat'    -Role 'beat'    -PidFile $BeatPid    -LogFile $BeatLog
+# Two solo workers: the fast queue (OTP/SMS, emergency notifications,
+# dispatch broadcasts) must never queue behind minutes-long vision/AI jobs.
+Start-CeleryProc -Name 'Celery worker (fast)'  -Role 'worker'        -Queue 'eboses' -PidFile $FastWorkerPid  -LogFile $FastWorkerLog
+Start-CeleryProc -Name 'Celery worker (heavy)' -Role 'worker-heavy'  -Queue 'heavy'  -PidFile $HeavyWorkerPid -LogFile $HeavyWorkerLog
+Start-CeleryProc -Name 'Celery beat'           -Role 'beat'          -PidFile $BeatPid        -LogFile $BeatLog
 
 Write-Host ''
 Write-Host 'Current celery processes:'

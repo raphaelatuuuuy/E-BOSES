@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { Link, useLocation } from "react-router-dom"
-import { PhoneIcon, type LucideIcon } from "lucide-react"
+import { type LucideIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@workspace/ui/components/sheet"
@@ -15,6 +15,7 @@ import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/recor
 
 function SosTab() {
   const [activeEmergency, setActiveEmergency] = useState(false)
+  const [shellOpen, setShellOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -34,25 +35,46 @@ function SosTab() {
       const active = (event as CustomEvent<{ active?: boolean }>).detail?.active
       setActiveEmergency(Boolean(active))
     }
+    function onOpenChange(event: Event) {
+      setShellOpen(Boolean((event as CustomEvent<{ open?: boolean }>).detail?.open))
+    }
     window.addEventListener("eboses:sos-active-change", onChange as EventListener)
+    window.addEventListener("eboses:sos-open-change", onOpenChange as EventListener)
     return () => {
       cancelled = true
       window.removeEventListener("eboses:sos-active-change", onChange as EventListener)
+      window.removeEventListener("eboses:sos-open-change", onOpenChange as EventListener)
     }
   }, [])
+
+  const hot = activeEmergency || shellOpen
 
   return (
     <button
       type="button"
       onClick={() => window.dispatchEvent(new CustomEvent("eboses:open-sos"))}
       aria-label="SOS"
+      aria-haspopup="dialog"
+      aria-expanded={shellOpen}
       className={cn(
-        "flex size-12 shrink-0 items-center justify-center rounded-full transition-all duration-200",
-        "bg-gradient-to-b from-sos-bright to-sos text-white shadow-[0_6px_20px_rgba(242,59,53,0.38)]",
-        activeEmergency && "animate-sos-fab-blink",
+        "flex h-12 w-12 shrink-0 items-center justify-center rounded-full transition-all duration-200",
+        hot
+          ? cn(
+              "bg-gradient-to-b from-sos-bright to-sos text-white shadow-[0_6px_20px_rgba(242,59,53,0.38)]",
+              activeEmergency && "animate-sos-fab-blink",
+            )
+          : "text-sos hover:bg-neutral-100 hover:text-sos-bright active:bg-neutral-200",
       )}
     >
-      <PhoneIcon className="size-5 shrink-0" fill="currentColor" />
+      <span
+        aria-hidden
+        className={cn(
+          "material-symbols-outlined select-none text-2xl leading-none",
+          hot && "animate-sos-icon-blink",
+        )}
+      >
+        sos
+      </span>
     </button>
   )
 }

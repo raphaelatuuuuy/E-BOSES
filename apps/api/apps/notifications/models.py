@@ -20,6 +20,7 @@ class Notification(models.Model):
         CONCERN_MENTION = "concern_mention", "Concern Mention"
         FLAG_DISMISSED = "flag_dismissed", "Flag Dismissed"
         POST_TAKEN_DOWN = "post_taken_down", "Post Taken Down"
+        COMMENT_TAKEN_DOWN = "comment_taken_down", "Comment Taken Down"
         CHAT_MESSAGE = "chat_message", "Chat Message"
         EMERGENCY_SUBMITTED = "emergency_submitted", "Emergency Submitted"
         EMERGENCY_ROUTED = "emergency_routed", "Emergency Routed"
@@ -40,6 +41,20 @@ class Notification(models.Model):
         on_delete=models.CASCADE,
         related_name="notifications",
     )
+    community = models.ForeignKey(
+        "emergencies.Community",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="notifications",
+    )
+    department = models.ForeignKey(
+        "concerns.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="notifications",
+    )
     concern = models.ForeignKey(
         "concerns.Concern",
         on_delete=models.CASCADE,
@@ -58,12 +73,29 @@ class Notification(models.Model):
     title = models.CharField(max_length=255)
     body = models.TextField(blank=True)
     metadata = models.JSONField(default=dict, blank=True)
+    event_key = models.CharField(max_length=96, blank=True)
     is_read = models.BooleanField(default=False)
     is_archived = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            # Every list/unread-count query filters recipient + archive/read
+            # flags and sorts newest-first; one composite index serves all.
+            models.Index(
+                fields=["recipient", "is_archived", "is_read", "created_at"],
+                name="notif_recipient_inbox",
+            ),
+            models.Index(fields=["community", "department", "created_at"], name="notif_comm_dept_time"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["recipient", "event_key"],
+                condition=models.Q(event_key__gt=""),
+                name="notif_recipient_event_uniq",
+            ),
+        ]
 
     def __str__(self):
         return f"[{self.type}] {self.title} — {self.recipient}"

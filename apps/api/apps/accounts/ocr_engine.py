@@ -126,8 +126,13 @@ def _easyocr_bbox(box) -> list[float]:
 class OCRSpaceProvider:
     provider_name = "ocrspace"
 
+    def __init__(self, *, max_retries=None):
+        # Interactive callers pass 1 so a stalled OCR.space request cannot
+        # burn the full retry budget while the resident waits.
+        self.max_retries = max_retries
+
     def recognize(self, content: bytes, *, suffix: str, deskew: bool = True) -> OCRResponse:
-        return ocr_bytes_with_metadata(content, suffix=suffix, deskew=deskew)
+        return ocr_bytes_with_metadata(content, suffix=suffix, deskew=deskew, max_retries=self.max_retries)
 
 
 class FallbackOCRProvider:

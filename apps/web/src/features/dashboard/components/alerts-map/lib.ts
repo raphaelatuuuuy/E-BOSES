@@ -11,7 +11,8 @@ import {
   isEmergencyActive,
 } from "@/features/dashboard/components/record/status"
 import { formatTime as formatDateTime } from "@/features/dashboard/components/emergencies/lib"
-import { personDotHtml } from "@/features/dashboard/components/map/markers"
+import { MAP_COLORS as BASE_MAP_COLORS, personDotHtml } from "@/features/dashboard/components/map/markers"
+import type { MapLegendRow } from "@/features/dashboard/components/map/map-legend"
 import { roleLabelOf } from "@/features/dashboard/lib/people"
 
 export type LayerKey =
@@ -31,7 +32,7 @@ export type Selection = { kind: "person" | "concern" | "emergency"; id: number }
 export type StreetLine = { name: string; line: leaflet.LatLngTuple[] }
 
 export const defaultLayers: Record<LayerKey, boolean> = {
-  boundary: true,
+  boundary: false,
   streets: false,
   residents: true,
   officials: true,
@@ -39,8 +40,48 @@ export const defaultLayers: Record<LayerKey, boolean> = {
   concerns: true,
   emergencies: true,
   advisories: true,
-  resolved: false,
+  resolved: true,
   acceptance_zone: false,
+}
+
+export type AlertLayerCounts = {
+  responders: number
+  emergencies: number
+  concerns: number
+  advisories: number
+}
+
+export function alertLayerRows(counts: AlertLayerCounts): MapLegendRow<LayerKey>[] {
+  return [
+    {
+      key: "emergencies",
+      label: "Emergencies",
+      hint: "Live incidents and their routes",
+      count: counts.emergencies,
+      tone: OFFICIAL_MAP_COLORS.emergency,
+    },
+    {
+      key: "concerns",
+      label: "Concerns",
+      hint: "Reports neighbours have filed",
+      count: counts.concerns,
+      tone: OFFICIAL_MAP_COLORS.concern,
+    },
+    {
+      key: "responders",
+      label: "Responders",
+      hint: "Crews on and off duty",
+      count: counts.responders,
+      tone: OFFICIAL_MAP_COLORS.responder,
+    },
+    {
+      key: "advisories",
+      label: "Advisory areas",
+      hint: "Streets a barangay advisory covers",
+      count: counts.advisories,
+      tone: OFFICIAL_MAP_COLORS.advisory,
+    },
+  ]
 }
 
 /**
@@ -160,8 +201,18 @@ export function geoJsonToLines(geometry?: LiveMapGeometry | null): leaflet.LatLn
 
 export { MAP_COLORS } from "@/features/dashboard/components/map/markers"
 
+export const OFFICIAL_MAP_COLORS = {
+  ...BASE_MAP_COLORS,
+  you: "#0a0a0a",
+  emergency: "#f23b35",
+  responder: "#2563eb",
+  responderAssigned: "#ff6a1a",
+  official: "#334155",
+  resolved: "#6b7280",
+} as const
+
 export function markerDotHtml(color: string, pulse = false) {
-  return personDotHtml(color, pulse, "dark")
+  return personDotHtml(color, pulse, "light")
 }
 
 export function mergeUpdate(snapshot: LiveMapSnapshot, message: LiveMapUpdate): LiveMapSnapshot {
@@ -184,12 +235,11 @@ export function mergeUpdate(snapshot: LiveMapSnapshot, message: LiveMapUpdate): 
     const emergencies = snapshot.emergencies.some((item) => item.id === emergency.id)
       ? snapshot.emergencies.map((item) => item.id === emergency.id ? emergency : item)
       : [emergency, ...snapshot.emergencies]
-    const route = message.payload.route
-    const routes = route
-      ? snapshot.routes.some((item) => item.assignment_id === route.assignment_id)
-        ? snapshot.routes.map((item) => item.assignment_id === route.assignment_id ? route : item)
-        : [...snapshot.routes, route]
-      : snapshot.routes
+    const incoming = message.payload.routes ?? (message.payload.route ? [message.payload.route] : [])
+    const routes = [
+      ...snapshot.routes.filter((item) => item.alert_id !== emergency.id),
+      ...incoming,
+    ]
     return { ...snapshot, emergencies, routes }
   }
   if (message.type === "route.updated") {
@@ -198,6 +248,13 @@ export function mergeUpdate(snapshot: LiveMapSnapshot, message: LiveMapUpdate): 
       ? snapshot.routes.map((item) => item.assignment_id === route.assignment_id ? route : item)
       : [...snapshot.routes, route]
     return { ...snapshot, routes }
+  }
+  if (message.type === "route.removed") {
+    const { alert_id, assignment_id } = message.payload
+    return {
+      ...snapshot,
+      routes: snapshot.routes.filter((route) => assignment_id ? route.assignment_id !== assignment_id : route.alert_id !== alert_id),
+    }
   }
   return snapshot
 }

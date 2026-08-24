@@ -3,7 +3,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from apps.notifications.services import create_user_notification
+from apps.notifications.models import Notification
 
 from .models import Announcement
 
@@ -27,11 +27,27 @@ def notify_announcement_published(announcement: Announcement) -> int:
         Announcement.Audience.OFFICIALS: [User.Role.BARANGAY_OFFICIAL],
         Announcement.Audience.ALL: [User.Role.RESIDENT, User.Role.FIRST_RESPONDER, User.Role.BARANGAY_OFFICIAL],
     }
-    recipients = User.objects.filter(
-        status=User.Status.VERIFIED,
-        role__in=role_by_audience.get(announcement.audience, role_by_audience[Announcement.Audience.ALL]),
+    roles = role_by_audience.get(announcement.audience, role_by_audience[Announcement.Audience.ALL])
+    target_department_ids = list(announcement.target_departments.values_list("id", flat=True))
+    community_filter = Q()
+    if User.Role.RESIDENT in roles:
+        community_filter |= Q(role=User.Role.RESIDENT, resident_profile__community_id=announcement.community_id)
+    staff_roles = [role for role in roles if role != User.Role.RESIDENT]
+    if staff_roles:
+        staff_filter = Q(
+            role__in=staff_roles,
+            designations__is_active=True,
+            designations__department__community_id=announcement.community_id,
+        )
+        if target_department_ids:
+            staff_filter &= Q(designations__department_id__in=target_department_ids)
+        community_filter |= staff_filter
+    recipient_ids = list(
+        User.objects.filter(status=User.Status.VERIFIED, is_active=True)
+        .filter(community_filter)
+        .distinct()
+        .values_list("id", flat=True)
     )
-    count = 0
     metadata = {
         "announcement_id": announcement.pk,
         "tag": announcement.tag,
@@ -48,16 +64,46 @@ def notify_announcement_published(announcement: Announcement) -> int:
             }
         ],
     }
-    for recipient in recipients.iterator():
-        create_user_notification(
-            recipient=recipient,
-            type="announcement",
+    # One bulk INSERT for the whole audience instead of one INSERT plus one
+    # broker message per resident — a barangay-wide publish used to cost
+    # thousands of queries inside the request thread.
+    rows = [
+        Notification(
+            recipient_id=recipient_id,
+            community=announcement.community,
+            type=Notification.Type.ANNOUNCEMENT,
             title=announcement.title,
             body=announcement.body[:240],
             metadata=metadata,
         )
-        count += 1
-    return count
+        for recipient_id in recipient_ids
+    ]
+    Notification.objects.bulk_create(rows, batch_size=500)
+    _deliver_after_commit([row.pk for row in rows])
+    return len(rows)
+
+
+def _deliver_after_commit(notification_ids) -> None:
+    from apps.notifications.tasks import deliver_notifications_batch_task
+
+    def _deliver():
+        from django.conf import settings
+
+        try:
+            deliver_notifications_batch_task.delay(notification_ids)
+        except Exception as exc:
+            if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+                deliver_notifications_batch_task.run(notification_ids)
+            else:
+                import logging
+
+                logging.getLogger(__name__).error(
+                    "Broker unavailable; %s announcement notifications deferred (%s).",
+                    len(notification_ids),
+                    exc.__class__.__name__,
+                )
+
+    transaction.on_commit(_deliver)
 
 
 def mark_announcement_published(announcement: Announcement) -> Announcement:

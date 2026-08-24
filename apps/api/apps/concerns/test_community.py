@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from datetime import timedelta
@@ -6,7 +8,19 @@ from rest_framework.test import APITestCase
 
 from apps.emergencies.models import EmergencyAlert, EmergencyCommunityComment
 
-from .models import Announcement, AnnouncementComment, BarangayEvent, Concern, Department, Designation, Position
+from .models import (
+    Announcement,
+    AnnouncementComment,
+    BarangayEvent,
+    Concern,
+    ConcernComment,
+    ContentFlag,
+    Department,
+    Designation,
+    Position,
+)
+from .moderation import execute_takedown
+from .tasks import run_content_moderation_ai_task
 
 
 class CommunityTestBase(APITestCase):
@@ -167,6 +181,94 @@ class EmergencyCommunityCommentTests(CommunityTestBase):
         self.client.delete(f"{self.url()}{created.data['id']}/", {}, format="json")
 
         self.assertEqual(len(self.client.get(self.url()).data), 0)
+
+
+class ContentFlagModerationTests(CommunityTestBase):
+    def make_concern(self):
+        return Concern.objects.create(
+            reporter=self.resident,
+            title="Overflowing trash bin",
+            description="Uncollected for a week near the corner store.",
+            visibility=Concern.Visibility.COMMUNITY,
+            status=Concern.Status.UNDER_REVIEW,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+
+    def test_execute_takedown_on_a_comment_flag_hides_only_the_comment(self):
+        concern = self.make_concern()
+        comment = ConcernComment.objects.create(
+            concern=concern, author=self.neighbour, body="Completely unrelated rant"
+        )
+        flag = ContentFlag.objects.create(
+            concern=concern,
+            comment=comment,
+            reporter=self.resident,
+            reason=ContentFlag.Reason.IRRELEVANT,
+        )
+
+        execute_takedown(flag, "Not related to this report.", actor=self.official)
+
+        comment.refresh_from_db()
+        concern.refresh_from_db()
+        self.assertEqual(comment.status, ConcernComment.Status.REMOVED)
+        self.assertEqual(comment.moderation_note, "Not related to this report.")
+        # The whole post must stay untouched — only the comment was flagged.
+        self.assertEqual(concern.status, Concern.Status.UNDER_REVIEW)
+
+    @patch("apps.concerns.ai.community_moderation_analyzer.analyze_flagged_content")
+    def test_task_auto_takes_down_when_a_reason_is_matched(self, mock_analyze):
+        mock_analyze.return_value = {
+            "assessment": "clearly_violates",
+            "matched_reason": "abusive",
+            "recommended_disposition": "take_down",
+            "short_explanation": "Contains harassment toward another resident.",
+        }
+        concern = self.make_concern()
+        comment = ConcernComment.objects.create(
+            concern=concern, author=self.neighbour, body="You are trash and everyone knows it"
+        )
+        flag = ContentFlag.objects.create(
+            concern=concern,
+            comment=comment,
+            reporter=self.resident,
+            reason=ContentFlag.Reason.ABUSIVE,
+        )
+
+        run_content_moderation_ai_task.run(flag.pk)
+
+        flag.refresh_from_db()
+        comment.refresh_from_db()
+        self.assertEqual(flag.status, ContentFlag.Status.TAKEN_DOWN)
+        self.assertTrue(flag.auto_moderated)
+        self.assertIsNone(flag.reviewed_by)
+        self.assertEqual(comment.status, ConcernComment.Status.REMOVED)
+
+    @patch("apps.concerns.ai.community_moderation_analyzer.analyze_flagged_content")
+    def test_task_leaves_flag_untouched_when_nothing_is_matched(self, mock_analyze):
+        mock_analyze.return_value = {
+            "assessment": "likely_acceptable",
+            "matched_reason": "",
+            "recommended_disposition": "dismiss",
+            "short_explanation": "Looks like a normal comment.",
+        }
+        concern = self.make_concern()
+        comment = ConcernComment.objects.create(
+            concern=concern, author=self.neighbour, body="Thanks for the update"
+        )
+        flag = ContentFlag.objects.create(
+            concern=concern,
+            comment=comment,
+            reporter=self.resident,
+            reason=ContentFlag.Reason.OTHER,
+        )
+
+        run_content_moderation_ai_task.run(flag.pk)
+
+        flag.refresh_from_db()
+        comment.refresh_from_db()
+        self.assertEqual(flag.status, ContentFlag.Status.SUBMITTED)
+        self.assertFalse(flag.auto_moderated)
+        self.assertEqual(comment.status, ConcernComment.Status.VISIBLE)
 
 
 class BarangayEventCalendarTests(CommunityTestBase):

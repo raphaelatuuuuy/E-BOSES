@@ -78,10 +78,12 @@ function flagNoteParts(flag: ContentFlag) {
   }
 }
 
-const DECISION_OPTIONS = [
-  { key: "dismissed", label: "Dismiss", hint: "Keep the post, close this report" },
-  { key: "taken_down", label: "Take down", hint: "Remove the post from the feed" },
-] as const
+function decisionOptions(noun: string) {
+  return [
+    { key: "dismissed", label: "Dismiss", hint: `Keep the ${noun}, close this report` },
+    { key: "taken_down", label: "Take down", hint: `Remove the ${noun}` },
+  ] as const
+}
 
 type CombinedRow =
   | { kind: "announcement"; key: string; item: Announcement }
@@ -148,10 +150,12 @@ export function ContentList({
     setConfirmTakeDown(false)
   }, [reviewTarget])
 
-  // Fetch the original report when the review dialog opens, so the official
-  // can see what was flagged without leaving the dialog.
+  // Fetch the original report when the review dialog opens on a post-level
+  // flag, so the official can see the full report without leaving the
+  // dialog. Comment-level flags (of any kind) already carry everything the
+  // dialog needs in `target` — no fetch required.
   useEffect(() => {
-    if (!reviewTarget) {
+    if (!reviewTarget || reviewTarget.target.kind !== "concern" || reviewTarget.concern == null) {
       setConcern(null)
       setConcernError("")
       return
@@ -260,10 +264,8 @@ export function ContentList({
     }
   }
 
-  const flaggedComment = useMemo(() => {
-    if (!reviewTarget?.comment || !concern) return null
-    return concern.comments.find((comment) => comment.id === reviewTarget.comment) ?? null
-  }, [reviewTarget, concern])
+  const isCommentFlag = reviewTarget != null && reviewTarget.target.kind !== "concern"
+  const takeDownNoun = isCommentFlag ? "comment" : "post"
 
   const emptyMessage =
     typeFilter === "flag-reports"
@@ -331,7 +333,11 @@ export function ContentList({
                     key={row.key}
                     flag={row.flag}
                     onReview={() => setReviewTarget(row.flag)}
-                    onOpen={() => navigate(`/dashboard/reports/${row.flag.concern}`)}
+                    onOpen={
+                      row.flag.concern != null
+                        ? () => navigate(`/dashboard/reports/${row.flag.concern}`)
+                        : null
+                    }
                   />
                 ),
               )}
@@ -423,17 +429,22 @@ export function ContentList({
                     </div>
                   ) : null}
                 </div>
-                {flaggedComment ? (
-                  <div className="px-4 py-3">
-                    <p className="text-meta font-medium text-neutral-500">Flagged comment</p>
-                    <p className="mt-1 text-meta leading-relaxed text-neutral-700">
-                      “{flaggedComment.body}”
-                    </p>
-                    <p className="mt-1 text-meta text-neutral-400">
-                      — {flaggedComment.author.full_name}
-                    </p>
-                  </div>
-                ) : null}
+              </div>
+            ) : isCommentFlag ? (
+              <div className="overflow-hidden rounded-[18px] bg-neutral-50">
+                <div className="px-4 py-4">
+                  <p className="text-meta text-neutral-500">
+                    {reviewTarget.target.post_title
+                      ? `Comment on “${reviewTarget.target.post_title}”`
+                      : "Flagged comment"}
+                  </p>
+                  <p className="mt-3 text-read leading-relaxed text-neutral-700">
+                    “{reviewTarget.target.excerpt}”
+                  </p>
+                  <p className="mt-2 text-meta text-neutral-400">
+                    — {reviewTarget.target.author_name}
+                  </p>
+                </div>
               </div>
             ) : null}
 
@@ -528,8 +539,8 @@ export function ContentList({
                   className="absolute z-50 mt-1 w-full overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white shadow-lg"
                 >
                   <div className="py-1">
-                    {DECISION_OPTIONS.map((option, index) => {
-                      const disabled = option.key === "taken_down" && concernClosed
+                    {decisionOptions(takeDownNoun).map((option, index) => {
+                      const disabled = option.key === "taken_down" && !isCommentFlag && concernClosed
                       return (
                         <button
                           key={option.key}
@@ -551,13 +562,11 @@ export function ContentList({
                             }
                             if (event.key === "ArrowDown") {
                               event.preventDefault()
-                              decisionOptionRefs.current[(index + 1) % DECISION_OPTIONS.length]?.focus()
+                              decisionOptionRefs.current[(index + 1) % 2]?.focus()
                             }
                             if (event.key === "ArrowUp") {
                               event.preventDefault()
-                              decisionOptionRefs.current[
-                                (index - 1 + DECISION_OPTIONS.length) % DECISION_OPTIONS.length
-                              ]?.focus()
+                              decisionOptionRefs.current[(index - 1 + 2) % 2]?.focus()
                             }
                           }}
                           className={cn(
@@ -599,7 +608,7 @@ export function ContentList({
                     : "bg-brand-navy hover:bg-brand-navy/85",
                 )}
               >
-                {decision === "taken_down" ? "Take down post" : "Submit decision"}
+                {decision === "taken_down" ? `Take down ${takeDownNoun}` : "Submit decision"}
               </button>
             </div>
           </div>
@@ -609,12 +618,12 @@ export function ContentList({
       <SheetDialog
         open={confirmTakeDown && Boolean(reviewTarget)}
         onClose={() => setConfirmTakeDown(false)}
-        title="Take down this post?"
-        description="The post will be removed from the feed and its reporter will be notified. You can't undo this."
+        title={`Take down this ${takeDownNoun}?`}
+        description={`The ${takeDownNoun} will be removed and its author notified. You can't undo this.`}
         footer={
           <div className="flex gap-2">
             <SheetPrimaryButton onClick={() => setConfirmTakeDown(false)} className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]">
-              Keep the post
+              Keep the {takeDownNoun}
             </SheetPrimaryButton>
             <SheetPrimaryButton
               tone="danger"
@@ -755,6 +764,13 @@ function AnnouncementRow({
   )
 }
 
+const TARGET_KIND_LABELS: Record<ContentFlag["target"]["kind"], string> = {
+  concern: "Post",
+  concern_comment: "Comment on a concern",
+  announcement_comment: "Comment on an announcement",
+  emergency_comment: "Comment on an emergency update",
+}
+
 function FlagRow({
   flag,
   onReview,
@@ -762,25 +778,30 @@ function FlagRow({
 }: {
   flag: ContentFlag
   onReview: () => void
-  onOpen: () => void
+  onOpen: (() => void) | null
 }) {
-  // Show the original post's title in the row so the official can tell what
-  // was flagged without opening the report.
-  const [title, setTitle] = useState<string | null>(null)
+  // The post-level case still resolves the live title via a fetch (matches
+  // today's behavior); every comment kind already carries its parent's title
+  // on `target.post_title`, so no fetch is needed there.
+  const [fetchedTitle, setFetchedTitle] = useState<string | null>(null)
+  const isPostFlag = flag.target.kind === "concern"
 
   useEffect(() => {
+    if (!isPostFlag || flag.concern == null) return
     let cancelled = false
     getConcern(flag.concern)
       .then((data) => {
-        if (!cancelled) setTitle(data.title)
+        if (!cancelled) setFetchedTitle(data.title)
       })
       .catch(() => {
-        if (!cancelled) setTitle("Report")
+        if (!cancelled) setFetchedTitle("Report")
       })
     return () => {
       cancelled = true
     }
-  }, [flag.concern])
+  }, [isPostFlag, flag.concern])
+
+  const title = isPostFlag ? (fetchedTitle ?? "Loading report…") : flag.target.post_title || "Comment"
 
   return (
     <div className="py-6">
@@ -790,25 +811,26 @@ function FlagRow({
             <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-navy text-white">
               <FileX className="size-4" strokeWidth={1.7} aria-hidden />
             </span>
-            <button
-              type="button"
-              onClick={onOpen}
-              className="min-w-0 text-left"
-            >
-              <span className="block truncate text-row text-brand-navy">
-                {title ?? "Loading report…"}
-              </span>
-            </button>
+            {onOpen ? (
+              <button type="button" onClick={onOpen} className="min-w-0 text-left">
+                <span className="block truncate text-row text-brand-navy">{title}</span>
+              </button>
+            ) : (
+              <span className="block min-w-0 truncate text-row text-brand-navy">{title}</span>
+            )}
             <span className="shrink-0 text-meta text-neutral-500">
               {flag.status === "submitted" ? "Pending" : "Decided"}
             </span>
+            {flag.auto_moderated ? (
+              <span className="shrink-0 text-meta text-neutral-400">Automated</span>
+            ) : null}
           </div>
 
           <dl className="mt-3 flex flex-wrap gap-x-8 gap-y-2">
-            {flag.comment ? (
+            {!isPostFlag ? (
               <div>
-                <dt className={factClass.dt}>Comment</dt>
-                <dd className={factClass.dd}>#{flag.comment}</dd>
+                <dt className={factClass.dt}>Flagged</dt>
+                <dd className={factClass.dd}>{TARGET_KIND_LABELS[flag.target.kind]}</dd>
               </div>
             ) : null}
             <div>
@@ -836,13 +858,15 @@ function FlagRow({
               Review
             </button>
           ) : null}
-          <button
-            type="button"
-            onClick={onOpen}
-            className="text-meta text-neutral-500 transition-colors hover:text-accent"
-          >
-            Open report
-          </button>
+          {onOpen ? (
+            <button
+              type="button"
+              onClick={onOpen}
+              className="text-meta text-neutral-500 transition-colors hover:text-accent"
+            >
+              Open report
+            </button>
+          ) : null}
         </div>
       </div>
 

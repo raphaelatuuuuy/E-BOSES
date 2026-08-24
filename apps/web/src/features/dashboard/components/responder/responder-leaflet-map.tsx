@@ -8,10 +8,7 @@ import {
   routeRenderGeometry,
   type RouteLayers,
 } from "@/features/dashboard/lib/route-line"
-import {
-  lastFoundLabel,
-  type KnownPosition,
-} from "@/features/dashboard/lib/last-known-position"
+import { type KnownPosition } from "@/features/dashboard/lib/last-known-position"
 import {
   MapControlStack,
   MapStackButton,
@@ -22,13 +19,13 @@ import {
   concernMarkerSize,
 } from "@/features/dashboard/components/map/concern-marker"
 import {
-  dotPinHtml,
   glyphPinHtml,
   glyphPinSize,
   GLYPHS,
   MAP_COLORS,
 } from "@/features/dashboard/components/map/markers"
 import { drawCoverage } from "@/features/dashboard/components/map/coverage-layer"
+import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import { useCoverageContext } from "@/features/dashboard/lib/use-coverage"
 import type { Concern } from "@/features/dashboard/api"
 import type { EmergencyAlert, EmergencyRoute } from "@/features/dashboard/emergency-api"
@@ -59,19 +56,24 @@ function incidentPinHtml(active = false) {
     size: INCIDENT_PIN,
     selected: active,
     live: true,
+    tone: "dark",
   })
 }
 
+const RESPONDER_PIN = 24
+
 /**
  * The responder's own GPS marker. It must read "you" and never compete with
- * the incident pins. A remembered fix drops the colour and the ping, so a
- * stale position can never be mistaken for a live one.
+ * the incident pins. A remembered fix drops the colour, so a stale position
+ * can never be mistaken for a live one.
  */
 function responderDotHtml(stale: boolean) {
-  return dotPinHtml({
-    color: stale ? MAP_COLORS.responderOffDuty : MAP_COLORS.you,
-    size: 13,
-    live: !stale,
+  return glyphPinHtml({
+    paths: GLYPHS.userResponder,
+    color: stale ? "#9aa4bf" : "#0a0a0a",
+    size: RESPONDER_PIN,
+    tone: "dark",
+    className: "is-you",
   })
 }
 
@@ -172,13 +174,7 @@ export function ResponderLeafletMap({
       })
       mapRef.current = map
 
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-        attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
-        maxZoom: 20,
-        subdomains: "abcd",
-        keepBuffer: 6,
-        updateWhenIdle: true,
-      }).addTo(map)
+      addBaseTiles(L, map, "dark", { keepBuffer: 6 })
 
       // Leaflet measures its container once, at construction. This map mounts
       // inside a panel that is still resolving its height, so without a
@@ -272,6 +268,9 @@ export function ResponderLeafletMap({
           className: "",
           html: concernMarkerHtml({
             category: concern.category,
+            iconKey: concern.category_ref?.icon_key,
+            imageUrl: concern.category_ref?.icon_image_url,
+            customLabel: concern.category_ref?.custom_icon_label,
             status: concern.status,
             selected: picked,
           }),
@@ -293,18 +292,17 @@ export function ResponderLeafletMap({
         icon: L.divIcon({
           html: responderDotHtml(positionStale),
           className: "",
-          iconSize: [13, 13],
-          iconAnchor: [6.5, 6.5],
+          iconSize: [RESPONDER_PIN, RESPONDER_PIN],
+          iconAnchor: [RESPONDER_PIN / 2, RESPONDER_PIN / 2],
         }),
         zIndexOffset: 1200,
       })
         .addTo(layer)
-        .bindTooltip(
-          positionStale
-            ? `Your location<br><span class="eboses-tip-sub">${lastFoundLabel(position.at)}</span>`
-            : "Your location",
-          { direction: "top", permanent: positionStale, className: "eboses-responder-tip" },
-        )
+        .bindTooltip("You", {
+          direction: "top",
+          offset: [0, -RESPONDER_PIN / 2],
+          className: "eboses-responder-tip",
+        })
     }
 
     // Outside the position block on purpose: losing GPS must not take the
@@ -370,29 +368,54 @@ export function ResponderLeafletMap({
 
   return (
     <div className={cn("responder-map-scope relative isolate z-0 h-full min-h-0 overflow-hidden bg-ink", className)}>
-      <div ref={containerRef} className="absolute inset-0" aria-label="Responder assignment map" />
+      <div ref={containerRef} className="eboses-map-dark absolute inset-0" aria-label="Responder assignment map" />
+      {selectedId && route?.status === "ok" && (route.distance_meters ?? Infinity) <= 5 ? (
+        <div className="pointer-events-none absolute left-3 top-3 z-[600] rounded-lg bg-nav-bg/90 px-3 py-2 text-xs font-semibold text-white shadow-lg backdrop-blur-md">
+          You are at the incident location
+        </div>
+      ) : null}
 
       {/* Scoped to this map's classes only, so the marker stays self-contained
           and can never colour anything on other Leaflet maps. */}
       <style>{`
         .responder-map-scope .eboses-responder-tip {
-          padding: 4px 8px;
+          padding: 4px 10px;
           border-radius: 8px;
           border: none;
-          background: rgba(15, 23, 42, 0.92);
-          color: #e2e8f0;
+          background: #ffffff;
+          color: #14203c;
           font-size: 11px;
           font-weight: 600;
           line-height: 1.35;
           text-align: center;
-          box-shadow: 0 4px 14px rgba(2, 6, 23, 0.45);
+          box-shadow: 0 4px 14px rgba(2, 6, 23, 0.32);
         }
         .responder-map-scope .eboses-responder-tip::before {
-          border-top-color: rgba(15, 23, 42, 0.92);
+          border-top-color: #ffffff;
         }
-        .responder-map-scope .eboses-tip-sub {
-          color: #94a3b8;
-          font-weight: 500;
+        .responder-map-scope .eboses-map-dark .eboses-pin--glyph .eboses-pin__disc {
+          background: #ffffff;
+          border-color: rgb(255 255 255 / 0.28);
+          color: #14203c;
+        }
+        .responder-map-scope .eboses-map-dark .eboses-pin--glyph.is-you .eboses-pin__disc {
+          background: #0a0a0a;
+          border-color: rgb(255 255 255 / 0.28);
+          color: #ffffff;
+        }
+        .responder-map-scope .eboses-map-dark .eboses-pin--glyph.is-selected .eboses-pin__disc {
+          border-color: #ff6a1a;
+          box-shadow: 0 0 0 4px rgb(255 106 26 / 0.35);
+        }
+        .responder-map-scope .eboses-map-dark .eboses-pin__halo {
+          display: block;
+        }
+        .responder-map-scope .eboses-map-dark .eboses-pin--dot .eboses-pin__core {
+          background: var(--pin);
+          border-color: rgb(255 255 255 / 0.85);
+        }
+        .responder-map-scope .eboses-map-dark .eboses-pin--dot.is-live .eboses-pin__core {
+          animation: eboses-pin-blink 1.8s ease-in-out infinite;
         }
       `}</style>
 

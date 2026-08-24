@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers, status
@@ -8,11 +9,14 @@ from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated
 from apps.accounts.permissions import user_has_role_permission
+from apps.accounts.services import create_audit_log
+from apps.accounts.views import request_meta, touch_last_seen
 from apps.capabilities import PUBLISH_ANNOUNCEMENTS, RESOLVE_CONCERNS, user_has_capability
 from apps.live_map import static_map_payload
 
-from .models import Announcement, AnnouncementComment, BarangayEvent
-from .serializers import BarangayEventSerializer
+from .models import Announcement, AnnouncementComment, BarangayEvent, ContentFlag
+from .serializers import BarangayEventSerializer, ContentFlagSerializer
+from .tasks import enqueue_content_moderation_ai
 
 
 MAX_COMMENT_LENGTH = 1000
@@ -148,11 +152,58 @@ class AnnouncementCommentDetailView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class AnnouncementCommentFlagCreateView(APIView):
+    """A resident flagging one announcement comment for moderation.
+
+    Mirrors `ContentFlagCreateView` (concerns/views.py) but targets
+    `ContentFlag.announcement_comment` instead of `ContentFlag.concern` —
+    see `ContentFlag.target_kind` for how the two are told apart downstream.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, comment_id):
+        touch_last_seen(request.user)
+        comment = get_object_or_404(AnnouncementComment, pk=comment_id)
+        serializer = ContentFlagSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        flag = ContentFlag.objects.create(
+            announcement_comment=comment,
+            reporter=request.user,
+            reason=serializer.validated_data["reason"],
+            note=serializer.validated_data.get("note", ""),
+        )
+        create_audit_log(
+            "content.flag_submitted",
+            actor=request.user,
+            target_user=comment.author,
+            metadata={
+                "announcement_comment_id": comment.pk,
+                "flag_id": flag.pk,
+                "reason": flag.reason,
+            },
+            request_meta=request_meta(request),
+        )
+        transaction.on_commit(lambda: enqueue_content_moderation_ai(flag.pk))
+        return Response(
+            ContentFlagSerializer(flag, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class AnnouncementAreaContextView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        return Response(static_map_payload())
+        from apps.community_scope import community_ids_for_user, selected_community
+        from apps.emergencies.models import Community
+
+        community = selected_community(request.user, request.query_params.get("community_id"))
+        if not community:
+            community = Community.objects.filter(
+                pk__in=community_ids_for_user(request.user), status=Community.Status.ACTIVE
+            ).order_by("name").first()
+        return Response(static_map_payload(community))
 
 
 class BarangayEventCalendarView(APIView):
@@ -190,7 +241,7 @@ class ConcernReopenRequestView(APIView):
     def post(self, request, pk):
         from .models import Concern, ConcernTimelineEntry
         from .serializers import ConcernSerializer
-        from .views import decorate_concerns
+        from .views import decorate_concerns, operational_concern_or_404
 
         concern = get_object_or_404(Concern, pk=pk)
         if concern.reporter_id != request.user.pk and not can_resolve_concerns(request.user):
@@ -198,6 +249,8 @@ class ConcernReopenRequestView(APIView):
                 {"detail": "Only the reporter can ask to reopen this report."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if concern.reporter_id != request.user.pk:
+            concern = operational_concern_or_404(request.user, pk)
         if concern.status not in {Concern.Status.RESOLVED, Concern.Status.REJECTED}:
             return Response(
                 {"detail": "Only a resolved or rejected report can be reopened."},

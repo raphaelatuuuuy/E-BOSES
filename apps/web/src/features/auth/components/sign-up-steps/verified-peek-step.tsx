@@ -1,236 +1,139 @@
 import * as React from "react"
-import { CloudSunIcon, LoaderCircleIcon } from "lucide-react"
+import { LoaderCircleIcon, MapPinIcon, UsersIcon } from "lucide-react"
 import type leaflet from "leaflet"
 
+import { FieldError } from "@workspace/ui/components/field"
 import { StepContinueButton, StepTitle } from "@/features/auth/components/sign-up-shell"
-import {
-  geocodeMarikinaStreet,
-  MARIKINA_HEIGHTS_CENTER,
-} from "@/features/auth/lib/forward-geocode"
-import { apiRequest } from "@/lib/api"
+import type { CommunityResolveResult } from "@/features/auth/api"
+import type { SignUpValues } from "@/features/auth/schemas/sign-up-schema"
+import { searchGeocode } from "@/lib/geocode"
 import { useWeather, weatherLabel } from "@/lib/weather"
 
 interface VerifiedPeekStepProps {
-  street: string
-  houseNumber?: string
+  values: SignUpValues
+  resolving: boolean
+  onResolve: (input: { latitude: number; longitude: number; accuracy?: number | null; source: "gps" | "search" | "manual" }) => Promise<CommunityResolveResult>
   onContinue: () => void
 }
 
-function pinLabel(street: string, houseNumber?: string) {
-  const house = houseNumber?.trim()
-  if (house && street) return `${house} ${street}`
-  if (street) return street
-  return "Marikina Heights"
+function formatNeighbors(value: number) {
+  if (!Number.isFinite(value) || value < 10) return "A growing community"
+  if (value < 1000) return `${Math.floor(value / 10) * 10}+ residents`
+  return `${Math.round(value / 100) / 10}k+ residents`
 }
 
-function formatNeighborCount(n: number) {
-  if (!Number.isFinite(n) || n < 0) return "—"
-  if (n >= 1000) {
-    const k = n / 1000
-    const rounded = k >= 10 ? Math.round(k) : Math.round(k * 10) / 10
-    return `${rounded}k+`
-  }
-  return String(n)
-}
-
-export function NeighborhoodPeekCards({
-  street,
-  houseNumber,
-}: {
-  street: string
-  houseNumber?: string
-}) {
-  const label = pinLabel(street, houseNumber)
-  const mapRef = React.useRef<HTMLDivElement>(null)
-  const leafletMapRef = React.useRef<leaflet.Map | null>(null)
-  const markerRef = React.useRef<leaflet.Marker | null>(null)
-
-  const [coords, setCoords] = React.useState<{ lat: number; lng: number } | null>(null)
-  const [mapReady, setMapReady] = React.useState(false)
-  const [neighbors, setNeighbors] = React.useState<number>(0)
-
-  // Geocode street → pin on the actual road. The pin is cleared (loading) the
-  // moment the street key changes — render-adjust instead of a sync setState
-  // at the top of the effect; the geocode result is an async continuation.
-  const geocodeKey = `${street}|${houseNumber ?? ""}`
-  const [prevGeocodeKey, setPrevGeocodeKey] = React.useState(geocodeKey)
-  if (prevGeocodeKey !== geocodeKey) {
-    setPrevGeocodeKey(geocodeKey)
-    setCoords(null)
-  }
-
-  React.useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      const hit = await geocodeMarikinaStreet(street, houseNumber)
-      if (cancelled) return
-      if (hit) {
-        setCoords({ lat: hit.lat, lng: hit.lng })
-      } else {
-        setCoords({
-          lat: MARIKINA_HEIGHTS_CENTER.lat,
-          lng: MARIKINA_HEIGHTS_CENTER.lng,
-        })
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [street, houseNumber])
-
-  // Leaflet map — no OSM embed chrome / green default marker
-  React.useEffect(() => {
-    if (!coords || !mapRef.current) return
-    let cancelled = false
-    let map: leaflet.Map | null = null
-
-    void (async () => {
-      const L = await import("leaflet")
-      await import("leaflet/dist/leaflet.css")
-      if (cancelled || !mapRef.current) return
-
-      if (leafletMapRef.current) {
-        leafletMapRef.current.remove()
-        leafletMapRef.current = null
-        markerRef.current = null
-      }
-
-      map = L.map(mapRef.current, {
-        center: [coords.lat, coords.lng],
-        zoom: 17,
-        zoomControl: false,
-        attributionControl: false,
-        dragging: true,
-        scrollWheelZoom: false,
-      })
-
-      // Light grey basemap (no OSM iframe “Report a problem / Donate” chrome)
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-        maxZoom: 19,
-        subdomains: "abcd",
-      }).addTo(map)
-
-      const pinHtml = `
-        <div style="display:flex;flex-direction:column;align-items:center;transform:translateY(-8px)">
-          <div style="display:inline-flex;max-width:220px;align-items:center;gap:6px;border-radius:9999px;background:#171717;padding:8px 14px;box-shadow:0 8px 20px rgba(0,0,0,.22)">
-            <span style="display:flex;width:16px;height:16px;flex-shrink:0;align-items:center;justify-content:center;border-radius:9999px;background:#fff">
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#171717" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-            </span>
-            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600;color:#fff;font-family:system-ui,sans-serif">${label.replace(/[<>&"]/g, "")}</span>
-          </div>
-          <div style="width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-top:8px solid #171717;margin-top:-1px"></div>
-        </div>
-      `
-
-      const icon = L.divIcon({
-        className: "verified-peek-pin",
-        html: pinHtml,
-        iconSize: [220, 48],
-        iconAnchor: [110, 48],
-      })
-
-      markerRef.current = L.marker([coords.lat, coords.lng], {
-        icon,
-        interactive: false,
-        keyboard: false,
-      }).addTo(map)
-
-      leafletMapRef.current = map
-      setMapReady(true)
-      // Ensure tiles render after container is laid out
-      window.setTimeout(() => map?.invalidateSize(), 80)
-    })()
-
-    return () => {
-      cancelled = true
-      setMapReady(false)
-      if (leafletMapRef.current) {
-        leafletMapRef.current.remove()
-        leafletMapRef.current = null
-        markerRef.current = null
-      }
-    }
-  }, [coords, label])
-
-  // Neighbor count = registered users with role=resident
-  React.useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      try {
-        const data = await apiRequest<{ neighbors?: number }>(
-          "/auth/register/community-preview/",
-          {},
-          { auth: false },
-        )
-        if (!cancelled) {
-          setNeighbors(typeof data.neighbors === "number" ? data.neighbors : 0)
-        }
-      } catch {
-        if (!cancelled) setNeighbors(0)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  // Same forecast hook the alerts maps use, so all three report health.
-  const weather = useWeather(
-    coords?.lat ?? MARIKINA_HEIGHTS_CENTER.lat,
-    coords?.lng ?? MARIKINA_HEIGHTS_CENTER.lng,
-    "Marikina Heights",
-  )
-
-  const cardClass =
-    "flex min-h-[120px] flex-col items-center justify-center rounded-2xl bg-neutral-100/90 px-2 py-4 text-center sm:min-h-[160px]"
-
+export function NeighborhoodPeekCards({ street, houseNumber }: { street: string; houseNumber?: string }) {
   return (
-    <div className="w-full space-y-3">
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-[minmax(0,1.55fr)_minmax(0,0.72fr)_minmax(0,0.72fr)] sm:gap-3">
-        <div className="relative col-span-2 min-h-[148px] overflow-hidden rounded-2xl bg-neutral-100 sm:col-span-1 sm:min-h-[160px]">
-          <div ref={mapRef} className="absolute inset-0 h-full w-full" />
-          {!mapReady ? (
-            <div className="absolute inset-0 flex items-center justify-center bg-neutral-100">
-              <LoaderCircleIcon className="size-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : null}
-        </div>
-
-        <div className={cardClass}>
-          <p className="text-[1.65rem] font-semibold leading-none tracking-tight text-foreground sm:text-[1.85rem]">
-            {weather.temperature != null ? `${Math.round(weather.temperature)}°C` : "—"}
-          </p>
-          <div className="mt-1.5 flex items-center gap-1 text-sm text-muted-foreground">
-            <CloudSunIcon className="size-4 text-accent" />
-            <span>{weather.error ?? (weather.loading ? "…" : weatherLabel(weather.code))}</span>
-          </div>
-        </div>
-
-        <div className={cardClass}>
-          <p className="text-[1.65rem] font-semibold leading-none tracking-tight text-foreground sm:text-[1.85rem]">
-            {formatNeighborCount(neighbors)}
-          </p>
-          <p className="mt-1.5 text-sm text-muted-foreground">Neighbors</p>
-        </div>
-      </div>
+    <div className="border-y border-border py-5">
+      <p className="text-sm text-muted-foreground">Saved home address</p>
+      <p className="mt-1 font-semibold">{[houseNumber, street].filter(Boolean).join(" ")}</p>
     </div>
   )
 }
 
-export function VerifiedPeekStep({ street, houseNumber, onContinue }: VerifiedPeekStepProps) {
+export function VerifiedPeekStep({ values, resolving, onResolve, onContinue }: VerifiedPeekStepProps) {
+  const mapElement = React.useRef<HTMLDivElement>(null)
+  const map = React.useRef<leaflet.Map | null>(null)
+  const marker = React.useRef<leaflet.Marker | null>(null)
+  const [error, setError] = React.useState("")
+  const autoAttempted = React.useRef(false)
+  const match = values.communityMatch
+  const weather = useWeather(
+    match?.center.latitude ?? values.homeLatitude,
+    match?.center.longitude ?? values.homeLongitude,
+    match?.name ?? "Your community",
+  )
+
+  const confirm = React.useCallback(async (latitude?: number, longitude?: number, source?: "gps" | "search" | "manual") => {
+    setError("")
+    let lat = latitude ?? values.homeLatitude
+    let lng = longitude ?? values.homeLongitude
+    let resolvedSource = source ?? values.homeLocationSource ?? "manual"
+    if (lat == null || lng == null) {
+      const hits = await searchGeocode(values.address, 1)
+      lat = Number(hits[0]?.lat)
+      lng = Number(hits[0]?.lon)
+      resolvedSource = "search"
+    }
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      setError("We could not find this address. Use your current location or enter a more complete address.")
+      return
+    }
+    try {
+      await onResolve({ latitude: lat!, longitude: lng!, accuracy: values.homeAccuracyMeters, source: resolvedSource })
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "This point is not inside an active community.")
+    }
+  }, [onResolve, values.address, values.homeAccuracyMeters, values.homeLatitude, values.homeLocationSource, values.homeLongitude])
+
+  React.useEffect(() => {
+    if (match || resolving || autoAttempted.current) return
+    autoAttempted.current = true
+    void confirm()
+  }, [confirm, match, resolving])
+
+  React.useEffect(() => {
+    if (!mapElement.current || values.homeLatitude == null || values.homeLongitude == null) return
+    let cancelled = false
+    void import("leaflet").then((module) => {
+      if (cancelled || !mapElement.current) return
+      const L = module.default
+      map.current?.remove()
+      const nextMap = L.map(mapElement.current, { zoomControl: true, attributionControl: true })
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+        attribution: "&copy; OpenStreetMap &copy; CARTO",
+        maxZoom: 20,
+      }).addTo(nextMap)
+      const point = L.latLng(values.homeLatitude!, values.homeLongitude!)
+      marker.current = L.marker(point, { draggable: true }).addTo(nextMap)
+      marker.current.on("dragend", () => {
+        const moved = marker.current?.getLatLng()
+        if (moved) void confirm(moved.lat, moved.lng, "manual")
+      })
+      if (match?.boundary) {
+        const boundary = L.geoJSON(match.boundary as never, {
+          style: { color: "#334155", weight: 2, fillColor: "#f97316", fillOpacity: 0.08 },
+        }).addTo(nextMap)
+        nextMap.fitBounds(boundary.getBounds().extend(point), { padding: [24, 24], maxZoom: 17 })
+      } else {
+        nextMap.setView(point, 17)
+      }
+      map.current = nextMap
+    })
+    return () => {
+      cancelled = true
+      map.current?.remove()
+      map.current = null
+    }
+  }, [confirm, match?.boundary, values.homeLatitude, values.homeLongitude])
+
   return (
-    <div className="flex w-full flex-1 flex-col">
-      <div className="mx-auto flex w-full max-w-[600px] flex-1 flex-col px-5 pb-10 pt-4 md:px-0 md:pt-6">
-        <StepTitle className="text-[1.4rem] md:text-[1.6rem]">
-          You&apos;re verified! Here&apos;s a peek at Marikina Heights.
-        </StepTitle>
+    <div className="flex flex-1 flex-col pt-2">
+      <StepTitle>{match ? `Your community is ${match.name}.` : "Confirm your community."}</StepTitle>
+      <p className="mt-2 text-sm leading-6 text-muted-foreground">
+        We use the boundary line, not a radius. Drag the pin if it is not on your home.
+      </p>
 
-        <div className="mt-7">
-          <NeighborhoodPeekCards street={street} houseNumber={houseNumber} />
-        </div>
-
-        <StepContinueButton onClick={onContinue}>Continue</StepContinueButton>
+      <div className="relative mt-6 h-64 overflow-hidden rounded-2xl border border-border bg-muted">
+        <div ref={mapElement} className="h-full w-full" aria-label="Community boundary and home pin" />
+        {resolving ? (
+          <div className="absolute inset-0 z-[500] grid place-items-center bg-background/75">
+            <LoaderCircleIcon className="size-6 animate-spin" />
+          </div>
+        ) : null}
       </div>
+
+      {match ? (
+        <div className="mt-5 grid grid-cols-2 gap-x-6 gap-y-3 border-y border-border py-4 text-sm">
+          <div className="flex items-center gap-2"><MapPinIcon className="size-4" />Inside the boundary</div>
+          <div className="flex items-center gap-2"><UsersIcon className="size-4" />{formatNeighbors(match.neighbors)}</div>
+          <div className="col-span-2 text-muted-foreground">
+            Weather: {weather.temperature != null ? `${Math.round(weather.temperature)}°C, ${weatherLabel(weather.code)}` : "—"}
+          </div>
+        </div>
+      ) : null}
+      {error ? <FieldError className="mt-3">{error}</FieldError> : null}
+      <StepContinueButton disabled={!match || resolving} onClick={onContinue}>Continue</StepContinueButton>
     </div>
   )
 }

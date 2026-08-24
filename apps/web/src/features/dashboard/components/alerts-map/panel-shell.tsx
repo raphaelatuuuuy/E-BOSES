@@ -1,5 +1,4 @@
 import { type ReactNode } from "react"
-import { XIcon } from "lucide-react"
 
 /**
  * Shell for the alert-map detail panel.
@@ -15,25 +14,15 @@ import { XIcon } from "lucide-react"
 
 export function PanelShell({
   title,
-  onClose,
   children,
 }: {
   title: string
-  onClose: () => void
   children: ReactNode
 }) {
   return (
     <section className="px-4 py-5">
       <div className="mb-5 flex items-start justify-between gap-3">
         <h2 className="min-w-0 text-section capitalize text-foreground">{title}</h2>
-        <button
-          type="button"
-          onClick={onClose}
-          className="-mr-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-card-raised hover:text-foreground"
-          aria-label="Close details"
-        >
-          <XIcon className="size-4.5" />
-        </button>
       </div>
       <div className="grid gap-5">{children}</div>
     </section>

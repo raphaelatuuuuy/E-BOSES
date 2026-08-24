@@ -41,10 +41,10 @@ export function DispatchDetails({ alert }: { alert: EmergencyAlert }) {
         {alert.location_accuracy != null ? (
           <Row label="Accuracy" value={`±${Math.round(alert.location_accuracy)} m`} />
         ) : null}
-        {alert.media.length > 0 ? (
+        {(alert.media ?? []).length > 0 ? (
           <Row
             label="Evidence"
-            value={`${alert.media.length} file${alert.media.length === 1 ? "" : "s"}`}
+            value={`${(alert.media ?? []).length} file${(alert.media ?? []).length === 1 ? "" : "s"}`}
           />
         ) : null}
         {triage.map(([key, value]) => {
@@ -62,11 +62,11 @@ export function DispatchDetails({ alert }: { alert: EmergencyAlert }) {
         </p>
       ) : null}
 
-      {alert.unresolved_fields.length > 0 ? (
+      {(alert.unresolved_fields ?? []).length > 0 ? (
         <div className="mt-4">
           <p className="text-micro text-subtle-foreground">Missing information</p>
           <p className="mt-1 text-body leading-6 text-muted-foreground">
-            {alert.unresolved_fields.map((field) => field.replace(/_/g, " ")).join(", ")}
+            {(alert.unresolved_fields ?? []).map((field) => field.replace(/_/g, " ")).join(", ")}
           </p>
         </div>
       ) : null}

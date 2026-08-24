@@ -58,7 +58,7 @@ The system helps digitize and structure how residents report community concerns,
 
 This repository is in **active development**. React and Vite provide the frontend. Django provides the API and business rules. PostgreSQL, Redis, Celery, and Channels support data, queued work, caching, and live updates.
 
-The main workflows and the development Supabase cutover are verified. See [PROJECT-DOCUMENTATION.md](PROJECT-DOCUMENTATION.md) for current architecture and complete feature coverage. See [FINDINGS.md](FINDINGS.md) for confirmed failures and test results.
+The main workflows are verified. See [PROJECT-DOCUMENTATION.md](PROJECT-DOCUMENTATION.md) for current architecture and complete feature coverage. See [FINDINGS.md](FINDINGS.md) for confirmed failures and test results.
 
 ## Architecture
 
@@ -152,7 +152,6 @@ A centralized component library consumed by `apps/web` (and any future apps):
 | PostgreSQL | Application database |
 | PostGIS | Optional database extension; disabled by default |
 | SimpleJWT | JWT authentication |
-| Supabase | Active development PostgreSQL, Auth, and private Storage; local rollback tested |
 | Cloudinary | Legacy rollback-only media adapter |
 | Resend | Email delivery (OTP, notifications) |
 | SMS Gateway (Android) | SMS delivery (OTP, emergency alerts) |

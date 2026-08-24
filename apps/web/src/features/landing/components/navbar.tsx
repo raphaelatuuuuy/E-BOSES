@@ -103,7 +103,7 @@ export function Navbar() {
   }
 
   return (
-    <header className={`sticky top-0 z-50 w-full transition-transform duration-200 motion-reduce:transition-none ${hidden && !menuOpen ? "-translate-y-full" : "translate-y-0"}`}>
+    <header className={`sticky top-0 z-[999] w-full transition-transform duration-200 motion-reduce:transition-none ${hidden && !menuOpen ? "-translate-y-full" : "translate-y-0"}`}>
       <div className={`px-5 transition-colors duration-200 md:px-10 lg:px-16 ${menuOpen || scrolled ? "bg-landing-bg border-b border-white/8" : "bg-transparent"}`}>
         <div className="mx-auto flex h-20 max-w-7xl items-center gap-3 min-[1600px]:max-w-[92rem] min-[1600px]:gap-8">
           <Link to="/" onClick={closeMenu} className="flex shrink-0 items-center rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground">

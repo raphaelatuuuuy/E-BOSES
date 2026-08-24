@@ -207,7 +207,7 @@ export function dispatchState(
   viewerId: number | null,
 ): { label: string; tone: StateTone } {
   if (alert.status === "routed") {
-    const own = alert.assignments.find((assignment) => assignment.responder.id === viewerId)
+    const own = (alert.assignments ?? []).find((assignment) => assignment.responder.id === viewerId)
     if (own && own.acknowledged_at === null) {
       return { label: "Awaiting you", tone: "alarm" }
     }

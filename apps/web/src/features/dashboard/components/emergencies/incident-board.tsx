@@ -357,7 +357,7 @@ function IncidentChronology({ alert }: { alert: EmergencyAlert }) {
 
   return (
     <Band label="Status and Timeline">
-      <EmergencyTimeline entries={alert.timeline} showControls showNotes />
+      <EmergencyTimeline entries={alert.timeline ?? []} showControls showNotes />
 
       {logs.length ? (
         <div className="mt-4 border-t border-card-line pt-3">
@@ -394,8 +394,9 @@ function internalActionLabel(action: string) {
   return words.charAt(0).toUpperCase() + words.slice(1)
 }
 
-function EmergencyMediaGrid({ media }: { media: EmergencyAlert["media"] }) {
+function EmergencyMediaGrid({ media: alertMedia }: { media: EmergencyAlert["media"] }) {
   const [lightbox, setLightbox] = useState<{ items: MediaPreviewItem[]; index: number } | null>(null)
+  const media = alertMedia ?? []
   const items: MediaPreviewItem[] = media.map((item) =>
     toMediaPreviewItem(mediaDisplaySource(item), item.original_filename, item.mime_type),
   )
@@ -557,7 +558,7 @@ export function IncidentBoard({ alert }: { alert: EmergencyAlert | null }) {
         tabs={[
           { id: "details", label: "Details", content: detailsContent },
           { id: "chat", label: "Chat", content: chatContent },
-          { id: "photos", label: "Photos", count: alert.media.length, content: <EmergencyMediaGrid media={alert.media} /> },
+          { id: "photos", label: "Photos", count: (alert.media ?? []).length, content: <EmergencyMediaGrid media={alert.media} /> },
         ]}
       />
     </section>

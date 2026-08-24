@@ -299,7 +299,7 @@ def check_image_quality_soft(content: bytes) -> None:
             width, height = image.size
             if width < 120 or height < 80:
                 raise ValidationError(
-                    "Proof image is too small. Use a clearer, larger photo of your ID."
+                    "Proof image is too small. Use a clearer, larger photo."
                 )
             grayscale = image.convert("L")
             stats = ImageStat.Stat(grayscale)
@@ -312,7 +312,7 @@ def check_image_quality_soft(content: bytes) -> None:
 
     # Only reject pure blank / solid-color frames
     if contrast < 5.0:
-        raise ValidationError("Proof image has no visible detail. Upload a photo of your document.")
+        raise ValidationError("Proof image has no visible detail. Upload a clearer photo.")
 
 
 def ela_metrics(content: bytes) -> dict[str, float] | None:
@@ -395,6 +395,29 @@ def visual_tamper_forensics(content: bytes) -> str | None:
     ):
         return VISUAL_TAMPER_MESSAGE
     return None
+
+
+def forensics_findings(content: bytes) -> dict:
+    """Layers 1–4 as a verdict instead of an exception.
+
+    `check_media_authenticity` raises, which suits an upload endpoint that only
+    has to say yes or no. The ID pipeline needs the same answer as data — which
+    layer objected, and to what — so it can record the stage that stopped a
+    submission and skip the layers behind it.
+    """
+    for layer, probe in (
+        ("exif", exif_forensics),
+        ("png_metadata", png_metadata_forensics),
+        ("c2pa", c2pa_forensics),
+        ("visual_tamper", visual_tamper_forensics),
+    ):
+        try:
+            message = probe(content)
+        except Exception:
+            continue
+        if message:
+            return {"checked": True, "flagged": True, "layer": layer, "message": message}
+    return {"checked": True, "flagged": False, "layer": "", "message": ""}
 
 
 def check_media_authenticity(content: bytes) -> None:

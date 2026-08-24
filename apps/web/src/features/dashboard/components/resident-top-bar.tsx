@@ -84,7 +84,7 @@ export function ResidentMobileHeader({ homeTo = "/dashboard/home" }: { homeTo?: 
       <Link to={homeTo} className="flex min-w-0 items-center gap-2 no-underline">
         <img
           src="/contents/logo.webp"
-          alt="Boses Marikina Heights"
+          alt="Boses community portal"
           className="size-8 shrink-0 object-contain"
         />
         <div className="flex flex-col">
@@ -92,7 +92,7 @@ export function ResidentMobileHeader({ homeTo = "/dashboard/home" }: { homeTo?: 
             Boses
           </span>
           <span className="text-[9px] font-bold leading-tight tracking-wide text-brand-navy">
-            Marikina Heights
+            {(user?.barangay || "Community").replace(/^Barangay\s+/i, "")}
           </span>
         </div>
       </Link>
@@ -137,6 +137,8 @@ export function ResidentLogoBar({
   tone?: "light" | "dark"
   compact?: boolean
 }) {
+  const { user } = useAuthSession()
+  const communityName = (user?.barangay || "Community").replace(/^Barangay\s+/i, "")
   // Navy staff panel — same lockup as the light shell, recoloured for the dark
   // surface (ref 8 "AeuxGlobal": mark + wordmark, white on near-black).
   if (tone === "dark") {
@@ -148,7 +150,7 @@ export function ResidentLogoBar({
         >
           <img
             src="/contents/logo.webp"
-            alt="Boses Marikina Heights"
+            alt="Boses community portal"
             className="size-8 shrink-0 object-contain"
           />
           <span className={cn("flex min-w-0 flex-col", compact && "hidden")}>
@@ -156,7 +158,7 @@ export function ResidentLogoBar({
               Boses
             </span>
             <span className="mt-0.5 truncate text-[10px] font-semibold leading-tight tracking-wide text-nav-muted">
-              Marikina Heights
+              {communityName}
             </span>
           </span>
         </Link>
@@ -170,13 +172,13 @@ export function ResidentLogoBar({
         to={homeTo}
         className={cn("flex min-w-0 items-center gap-2 rounded-lg px-2.5 no-underline", compact && "justify-center gap-0")}
       >
-        <img src="/contents/logo.webp" alt="Boses Marikina Heights" className="size-9 shrink-0 object-contain" />
+        <img src="/contents/logo.webp" alt="Boses community portal" className="size-9 shrink-0 object-contain" />
         <div className={cn("flex min-w-0 flex-col", compact && "hidden")}>
           <span className="truncate text-[26px] font-bold leading-none tracking-tight text-brand-orange">
             Boses
           </span>
           <span className="truncate text-[11px] font-bold leading-tight tracking-wide text-brand-navy">
-            Marikina Heights
+            {communityName}
           </span>
         </div>
       </Link>

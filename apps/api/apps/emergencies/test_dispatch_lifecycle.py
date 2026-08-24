@@ -1,5 +1,6 @@
 """Acknowledgment timeout, backup, transfer and the unable-to-respond path."""
 
+import uuid
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
@@ -10,10 +11,12 @@ from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentProfile
 from apps.concerns.models import Department
-from apps.concerns.test_helpers import grant_position
+from apps.concerns.test_helpers import active_test_community, grant_position
+from apps.concerns.units import sync_responder_designation
 
 from .models import (
     EmergencyAlert,
+    BackupRequest,
     EmergencyResponderAssignment,
     EmergencyTypeRoleMap,
     ResponderShift,
@@ -32,6 +35,7 @@ TEST_CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLa
 class DispatchLifecycleTests(APITestCase):
     def setUp(self):
         User = get_user_model()
+        self.community = active_test_community()
         self.resident = self._user("lc-resident@example.com", "+639471000001", "Maria", "Santos")
         self.first = self._responder("lc-first@example.com", "+639471000002", "Juan")
         self.second = self._responder("lc-second@example.com", "+639471000003", "Pedro")
@@ -43,7 +47,7 @@ class DispatchLifecycleTests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             is_staff=True,
         )
-        grant_position(self.official)
+        grant_position(self.official, department_code="bdrrmo")
 
     def _user(self, email, phone, first, last, **extra):
         User = get_user_model()
@@ -57,6 +61,7 @@ class DispatchLifecycleTests(APITestCase):
             date_of_birth="1990-01-01",
             address="Somewhere",
             barangay="Marikina Heights",
+            community=self.community,
         )
         return user
 
@@ -80,6 +85,7 @@ class DispatchLifecycleTests(APITestCase):
             status=ResponderShift.Status.ACTIVE,
             started_at=timezone.now() - timedelta(minutes=5),
         )
+        sync_responder_designation(user)
         return user
 
     def alert_with_assignment(self, responder=None, assigned_ago_seconds=0):
@@ -92,6 +98,7 @@ class DispatchLifecycleTests(APITestCase):
             address="Champaca Street",
             reported_area="Champaca Street",
             barangay="Marikina Heights",
+            community=self.community,
             status=EmergencyAlert.Status.ROUTED,
         )
         assignment = EmergencyResponderAssignment.objects.create(
@@ -241,14 +248,14 @@ class DispatchLifecycleTests(APITestCase):
 
         bad_type = self.client.post(
             f"/api/emergencies/{alert.pk}/request-backup/",
-            {"backup_type": "spaceship", "reason": "need help", "urgency": "high"},
+            {"target_department_id": 999999, "reason": "need help", "urgency": "high", "idempotency_key": str(uuid.uuid4())},
             format="json",
         )
         self.assertEqual(bad_type.status_code, status.HTTP_400_BAD_REQUEST)
 
         no_reason = self.client.post(
             f"/api/emergencies/{alert.pk}/request-backup/",
-            {"backup_type": "medical", "reason": "", "urgency": "high"},
+            {"target_department_id": Department.objects.get(code="bdrrmo", community=self.community).pk, "reason": "", "urgency": "high", "idempotency_key": str(uuid.uuid4())},
             format="json",
         )
         self.assertEqual(no_reason.status_code, status.HTTP_400_BAD_REQUEST)
@@ -259,13 +266,14 @@ class DispatchLifecycleTests(APITestCase):
 
         response = self.client.post(
             f"/api/emergencies/{alert.pk}/request-backup/",
-            {"backup_type": "medical", "reason": "Two casualties inside", "urgency": "immediate"},
+            {"target_department_id": Department.objects.get(code="bdrrmo", community=self.community).pk, "reason": "Two casualties inside", "urgency": "immediate", "idempotency_key": str(uuid.uuid4())},
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         alert.refresh_from_db()
-        self.assertEqual(alert.status, EmergencyAlert.Status.BACKUP_ASSIGNED)
+        self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
+        self.assertEqual(alert.backup_requests.get().status, BackupRequest.Status.ASSIGNED)
         self.assertTrue(alert.assignments.filter(responder=self.second).exists())
         assignment.refresh_from_db()
         self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ASSIGNED)
@@ -278,14 +286,14 @@ class DispatchLifecycleTests(APITestCase):
 
         response = self.client.post(
             f"/api/emergencies/{alert.pk}/request-backup/",
-            {"backup_type": "fire", "reason": "Fire is spreading", "urgency": "immediate"},
+            {"target_department_id": Department.objects.get(code="bdrrmo", community=self.community).pk, "reason": "Fire is spreading", "urgency": "immediate", "idempotency_key": str(uuid.uuid4())},
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         alert.refresh_from_db()
-        self.assertEqual(alert.status, EmergencyAlert.Status.BACKUP_REQUESTED)
-        self.assertTrue(alert.escalations.exists())
+        self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
+        self.assertEqual(alert.backup_requests.get().status, BackupRequest.Status.PENDING_MANUAL)
 
     # -- transfer --------------------------------------------------------
 

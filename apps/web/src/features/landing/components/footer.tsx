@@ -18,9 +18,14 @@ export function Footer() {
   const scrollTo = (href: string) => {
     const id = href.slice(1)
     if (location.pathname === "/") {
-      document.getElementById(id)?.scrollIntoView({ behavior: "smooth" })
+      window.scrollTo({ top: 0, behavior: "smooth" })
+      const el = document.getElementById(id)
+      if (el) {
+        setTimeout(() => el.scrollIntoView({ behavior: "smooth" }), 80)
+      }
     } else {
       navigate("/" + href)
+      window.scrollTo({ top: 0, behavior: "instant" })
     }
   }
   return (

@@ -8,9 +8,11 @@ import { Band, Surface } from "@/features/dashboard/components/workspace/band"
 import type { ActiveResponder } from "@/features/dashboard/api"
 import {
   getEmergency,
+  getEmergencyBackupUnits,
   requestEmergencyBackup,
   setEmergencyDisposition,
   type EmergencyAlert,
+  type EmergencyBackupUnit,
 } from "@/features/dashboard/emergency-api"
 import { useReporterPhone } from "@/features/dashboard/lib/use-reporter-phone"
 import {
@@ -96,6 +98,8 @@ export function DispatchPanel({
   const [busyAction, setBusyAction] = useState("")
   const [quickAction, setQuickAction] = useState<QuickAction>(null)
   const [quickReason, setQuickReason] = useState("")
+  const [backupUnits, setBackupUnits] = useState<EmergencyBackupUnit[]>([])
+  const [backupUnitId, setBackupUnitId] = useState<number | null>(null)
   // Reveal-on-demand only: officials keep the number masked until they dial,
   // so the privacy audit records one reveal per call, not one per view.
   const { busy: dialBusy, call: callResident } = useReporterPhone(alert)
@@ -114,12 +118,17 @@ export function DispatchPanel({
       toast.error("Say briefly why this incident needs escalation.")
       return
     }
+    if (!backupUnitId) {
+      toast.error("Choose the backup unit.")
+      return
+    }
     setBusyAction("escalate")
     try {
       const next = await requestEmergencyBackup(alert.id, {
-        backup_type: "other",
+        target_department_id: backupUnitId,
         reason,
         urgency: "high",
+        idempotency_key: crypto.randomUUID(),
       })
       onChanged(next)
       toast.success("Backup support escalated for this incident")

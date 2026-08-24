@@ -3,6 +3,7 @@ import time
 from django.conf import settings
 from django.core.cache import cache
 from rest_framework import status
+from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -26,6 +27,20 @@ class RealtimeTicketView(APIView):
 class NotificationListView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        summary="Inbox",
+        description=(
+            "The authenticated account's notifications, newest first, capped at "
+            "50 per page. Includes announcement posts, report status changes and "
+            "emergency updates."
+        ),
+        request=None,
+        responses={200: OpenApiResponse(
+            response=NotificationSerializer(many=True),
+            description="Newest-first page of at most 50 rows (manual pagination).",
+        )},
+        tags=["notifications"],
+    )
     def get(self, request):
         unread_only = request.query_params.get("unread_only", "").lower() in ("true", "1")
         include_archived = request.query_params.get("include_archived", "").lower() in ("true", "1")

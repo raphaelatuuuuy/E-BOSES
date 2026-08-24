@@ -35,6 +35,7 @@ export type ConcernTimelineEntry = {
   content: ReactNode
   state?: ConcernTimelineState
   accent?: ConcernTimelineAccent
+  actor?: string | null
 }
 
 /**
@@ -111,22 +112,17 @@ const AUTO_UNDER_REVIEW_NOTES = new Set([
   "Report submitted and accepted for routing.",
 ])
 
-function actorLine(actor: PublicUser | null) {
+function actorLabel(actor: PublicUser | null): string | null {
   if (!actor?.full_name) return null
-  return (
-    <p className="text-[13px] font-semibold text-subtle-foreground">
-      {actor.full_name} <span className="text-subtle-foreground">·</span> {roleLabel(actor) || "System"}
-    </p>
-  )
+  return `${actor.full_name} · ${roleLabel(actor) || "System"}`
 }
 
-function timelineContentForEvent(status: string, note: string, actor: PublicUser | null, departmentName: string) {
+function timelineContentForEvent(status: string, note: string, _actor: PublicUser | null, departmentName: string) {
   const text = note.trim()
   if (status === "submitted" && SUBMITTED_WELCOME_NOTES.has(text)) {
     return (
       <div className="space-y-1">
-        <p className="font-medium text-muted-foreground">Thank you for your patience.</p>
-        {actorLine(actor)}
+        <p className="text-[13px] text-neutral-700">Thank you for your patience.</p>
       </div>
     )
   }
@@ -134,16 +130,14 @@ function timelineContentForEvent(status: string, note: string, actor: PublicUser
     const autoAssigned = /^(Assigned to |Reassigned to another unit)/.test(text)
     return (
       <div className="space-y-1">
-        {text && !autoAssigned ? <p className="font-medium text-muted-foreground">{text}</p> : null}
-        {departmentName ? <p className="font-medium text-muted-foreground">{departmentName}</p> : null}
-        {actorLine(actor)}
+        {text && !autoAssigned ? <p className="text-[13px] text-neutral-700">{text}</p> : null}
+        {departmentName ? <p className="text-[13px] text-neutral-700">{departmentName}</p> : null}
       </div>
     )
   }
   return (
     <div className="space-y-1">
-      <p className="font-medium text-muted-foreground">{text || "Status updated."}</p>
-      {actorLine(actor)}
+      <p className="text-[13px] text-neutral-700">{text || "Status updated."}</p>
     </div>
   )
 }
@@ -174,6 +168,7 @@ export function buildConcernTimelineEntries(
     time: event.created_at,
     state: index === list.length - 1 ? "current" : "done",
     accent: concernTimelineStatusAccent(event.status),
+    actor: actorLabel(event.actor),
     content: (
       <div className="space-y-2">
         {timelineContentForEvent(event.status, event.note, event.actor, departmentName)}

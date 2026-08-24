@@ -24,6 +24,15 @@ const DEFAULT_CENTER: [number, number] = [14.6507, 121.1133]
 
 export type LocationPin = { lat: number; lng: number }
 
+export type MapPhotoMarker = {
+  id: string
+  lat: number
+  lng: number
+  imageUrl: string
+  label: string
+  sublabel?: string
+}
+
 function streetLabel(data: NominatimReverseResult | null) {
   if (!data) return ""
   const a = data.address ?? {}
@@ -45,14 +54,17 @@ function streetLabel(data: NominatimReverseResult | null) {
 export function LocationPinMap({
   pin,
   onPinChange,
+  markers = [],
 }: {
   pin: LocationPin | null
   onPinChange: (pin: LocationPin | null) => void
+  markers?: MapPhotoMarker[]
 }) {
   const context = useCoverageContext(true)
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
   const coverageLayerRef = useRef<leaflet.LayerGroup | null>(null)
+  const markerLayerRef = useRef<leaflet.LayerGroup | null>(null)
   const coverageRef = useRef<CoverageInput>({})
   const fittedRef = useRef(false)
   const observerRef = useRef<ResizeObserver | null>(null)
@@ -144,6 +156,47 @@ export function LocationPinMap({
           pointer-events: none;
           background: rgba(220, 38, 38, 0.08);
         }
+        .eboses-map-bubble {
+          width: 176px;
+          pointer-events: none;
+        }
+        .eboses-map-bubble-card {
+          overflow: hidden;
+          border-radius: 14px;
+          background: #ffffff;
+          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+        }
+        .eboses-map-bubble-card img {
+          display: block;
+          width: 176px;
+          height: 92px;
+          object-fit: cover;
+        }
+        .eboses-map-bubble-caption {
+          padding: 6px 10px 7px;
+        }
+        .eboses-map-bubble-title {
+          font-size: 11px;
+          font-weight: 700;
+          line-height: 1.2;
+          color: #171717;
+        }
+        .eboses-map-bubble-sub {
+          margin-top: 1px;
+          font-size: 10px;
+          font-weight: 500;
+          line-height: 1.3;
+          color: #737373;
+        }
+        .eboses-map-bubble-tail {
+          width: 12px;
+          height: 12px;
+          margin: -6px auto 0;
+          background: #ffffff;
+          transform: rotate(45deg);
+          border-radius: 2px;
+          box-shadow: 4px 4px 10px rgba(0, 0, 0, 0.18);
+        }
       `
       document.head.appendChild(styleEl)
 
@@ -165,6 +218,7 @@ export function LocationPinMap({
       }).addTo(map)
 
       coverageLayerRef.current = L.layerGroup().addTo(map)
+      markerLayerRef.current = L.layerGroup().addTo(map)
 
       map.on("moveend", () => {
         const c = map.getCenter()
@@ -205,8 +259,42 @@ export function LocationPinMap({
       }
       mapRef.current = null
       coverageLayerRef.current = null
+      markerLayerRef.current = null
     }
   }, [onPinChange])
+
+  useEffect(() => {
+    const group = markerLayerRef.current
+    if (!mapReady || !group) return
+    void import("leaflet").then((L) => {
+      if (!markerLayerRef.current) return
+      group.clearLayers()
+      for (const marker of markers) {
+        const sublabel = marker.sublabel
+          ? `<div class="eboses-map-bubble-sub">${marker.sublabel}</div>`
+          : ""
+        const html = `
+          <div class="eboses-map-bubble">
+            <div class="eboses-map-bubble-card">
+              <img src="${marker.imageUrl}" alt="" />
+              <div class="eboses-map-bubble-caption">
+                <div class="eboses-map-bubble-title">${marker.label}</div>
+                ${sublabel}
+              </div>
+            </div>
+            <div class="eboses-map-bubble-tail"></div>
+          </div>
+        `
+        const icon = L.divIcon({
+          className: "",
+          html,
+          iconSize: [176, 150],
+          iconAnchor: [88, 146],
+        })
+        L.marker([marker.lat, marker.lng], { icon, interactive: false, keyboard: false }).addTo(group)
+      }
+    })
+  }, [mapReady, markers])
 
   useEffect(() => {
     const map = mapRef.current
@@ -269,7 +357,7 @@ export function LocationPinMap({
     <div>
       <div
         className={cn(
-          "relative overflow-hidden rounded-[14px] border-[1.5px] border-neutral-800 bg-ink",
+          "relative overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-ink",
           outOfScope && "eboses-map-blocked",
         )}
         style={{ height }}
@@ -307,21 +395,21 @@ export function LocationPinMap({
           {outOfScope ? (
             <p
               role="status"
-              className="flex max-w-[min(100%,340px)] flex-col items-center rounded-full bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
+              className="flex max-w-[min(100%,320px)] flex-col items-center rounded-full bg-white px-5 py-2.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
             >
-              <span className="text-[15px] font-semibold leading-none text-neutral-900">
+              <span className="text-[13px] font-semibold leading-none text-neutral-900">
                 {OUT_OF_SCOPE_MESSAGE}
               </span>
-              <span className="mt-1.5 text-[13px] font-medium leading-snug text-neutral-500">
+              <span className="mt-1 text-[12px] font-medium leading-snug text-neutral-500">
                 Move the map back to a covered area.
               </span>
             </p>
           ) : (
-            <div className="flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
-              <span className="text-[16px] font-semibold leading-none text-neutral-900">
+            <div className="flex max-w-[min(100%,320px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-5 py-2.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
+              <span className="text-[14px] font-semibold leading-none text-neutral-900">
                 Use this location
               </span>
-              <span className="mt-1.5 line-clamp-2 text-[14px] font-medium leading-snug text-neutral-500">
+              <span className="mt-1 line-clamp-1 text-[12.5px] font-medium leading-snug text-neutral-500">
                 {geocoding ? "Finding street…" : street || "Move the map to adjust"}
               </span>
             </div>

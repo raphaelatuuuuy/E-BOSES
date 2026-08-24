@@ -1,4 +1,8 @@
-import type { ConcernClassificationConfig } from "./api"
+import type {
+  ConcernClassificationConfig,
+  EmergencyMediaIntegrityAction,
+  MediaIntegrityAction,
+} from "./api"
 
 /**
  * Plain-language presets over the AI thresholds.
@@ -113,5 +117,70 @@ export const MISMATCH_OPTIONS: {
     value: "reject",
     label: "Turn it down automatically",
     hint: "No official sees it first. Use with care.",
+  },
+]
+
+/**
+ * What happens when a photo looks edited, AI-made, or impossible.
+ *
+ * The check reads the picture, not the file. Editor tags and AI metadata are
+ * already caught at upload; this is for a screenshot of an AI image, an object
+ * pasted into a real scene, or a photo of a screen — cases where nothing in
+ * the file is wrong and only the scene gives it away.
+ *
+ * Default is "Hold for review". A wrong flag on a real resident's report is
+ * worse than a fake report reaching an official, so nothing is turned down
+ * automatically unless a barangay chooses it.
+ */
+export const MEDIA_INTEGRITY_OPTIONS: {
+  value: MediaIntegrityAction
+  label: string
+  hint: string
+}[] = [
+  {
+    value: "flag_notify",
+    label: "Accept and note it",
+    hint: "The report continues. The finding is shown to the official.",
+  },
+  {
+    value: "hold",
+    label: "Hold for review",
+    hint: "An official checks the photo before routing. Recommended.",
+  },
+  {
+    value: "request_resubmission",
+    label: "Ask the resident to resubmit",
+    hint: "They are asked for a photo taken directly from their camera.",
+  },
+  {
+    value: "auto_reject",
+    label: "Turn it down automatically",
+    hint: "No official sees it first. Use with care.",
+  },
+]
+
+/**
+ * The same check on emergency photos. Only two choices, on purpose.
+ *
+ * A photo that looks fabricated is still possibly attached to someone in real
+ * trouble. The check runs after responders are already notified, so it can
+ * only add a note to what they have — it can never hold, reject, or delay an
+ * alert. The backend enum has no other values either; this is not a UI-only
+ * restriction.
+ */
+export const EMERGENCY_MEDIA_INTEGRITY_OPTIONS: {
+  value: EmergencyMediaIntegrityAction
+  label: string
+  hint: string
+}[] = [
+  {
+    value: "flag_notify",
+    label: "Note it for the responder",
+    hint: "The alert is dispatched first. The responder sees the finding.",
+  },
+  {
+    value: "hold",
+    label: "Also flag for an official",
+    hint: "The alert still dispatches. An official reviews the photo after.",
   },
 ]

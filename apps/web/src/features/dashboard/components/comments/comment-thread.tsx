@@ -49,6 +49,16 @@ export function CommentToggleButton({
   )
 }
 
+/**
+ * A pseudo-comment row (resolution banner, neighbour report) that pins root
+ * comments beneath it so replies to it render nested instead of at the end.
+ */
+export interface CommentThreadAnchor {
+  key: string | number
+  node: ReactNode
+  comments: UnifiedComment[]
+}
+
 export interface CommentThreadProps {
   comments: UnifiedComment[]
   sessionUser?: AvatarUser | null
@@ -61,6 +71,8 @@ export interface CommentThreadProps {
   emptyState?: ReactNode
   closedNotice?: ReactNode
   header?: ReactNode
+  /** Pseudo-comment rows whose replies render nested beneath them. */
+  anchors?: CommentThreadAnchor[]
   /** Controlled composer text. Omit to let the thread own its own draft. */
   value?: string
   onValueChange?: (next: string) => void
@@ -69,6 +81,8 @@ export interface CommentThreadProps {
   onDelete?: (commentId: number) => Promise<void> | void
   /** Moderation removal, distinct from an author deleting their own comment. */
   onRemove?: (commentId: number) => Promise<void> | void
+  /** A resident flagging someone else's comment for staff review. */
+  onReport?: (commentId: number) => void
   allowReplies?: boolean
   renderTrailing?: (comment: UnifiedComment) => ReactNode
   className?: string
@@ -85,12 +99,14 @@ export function CommentThread({
   emptyState,
   closedNotice,
   header,
+  anchors,
   value,
   onValueChange,
   onSubmit,
   onEdit,
   onDelete,
   onRemove,
+  onReport,
   allowReplies = false,
   renderTrailing,
   className,
@@ -192,6 +208,9 @@ export function CommentThread({
         {!comment.isMine && onRemove ? (
           <CommentAction onClick={() => void onRemove(comment.id)}>Hide</CommentAction>
         ) : null}
+        {!comment.isMine && onReport ? (
+          <CommentAction onClick={() => onReport(comment.id)}>Report</CommentAction>
+        ) : null}
       </>
     )
 
@@ -277,6 +296,25 @@ export function CommentThread({
   return (
     <div className={cn("space-y-3", className)}>
       {header}
+
+      {anchors?.map((group) => (
+        <div key={group.key} className="space-y-3">
+          {group.node}
+          {group.comments.length > 0 ? (
+            <div className={cn("space-y-3", REPLY_INDENT)}>
+              {group.comments.map((member, index) => (
+                <div key={member.id} className="relative">
+                  <span aria-hidden className={REPLY_CURVE} />
+                  {index < group.comments.length - 1 ? (
+                    <span aria-hidden className={REPLY_TRUNK} />
+                  ) : null}
+                  {renderComment(member, member.id, false)}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ))}
 
       {comments.length === 0 && emptyState ? (
         <p className="text-[13px] leading-relaxed text-neutral-500">{emptyState}</p>

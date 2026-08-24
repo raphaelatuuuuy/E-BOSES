@@ -56,7 +56,7 @@ export interface SosEmergencyOption {
  * opened as an eight-colour chart in which no colour meant anything. The icon
  * says what the emergency is; the surface says only "pick one".
  */
-export const SOS_ICON_WELL = "bg-white/10 text-white"
+export const SOS_ICON_WELL = "bg-brand-orange/15 text-brand-orange"
 
 /**
  * Emergency type catalogue — shared by the type-select step and the

@@ -4,10 +4,13 @@ URL configuration for the E-Boses API backend.
 
 from django.contrib import admin
 from django.urls import include, path
+from config.docs_portal import SwaggerFallbackView, docs_portal
 from config.health import health_check
+from drf_spectacular.views import SpectacularAPIView
 from apps.concerns.community_api import (
     AnnouncementAreaContextView,
     AnnouncementCommentDetailView,
+    AnnouncementCommentFlagCreateView,
     AnnouncementCommentListCreateView,
     BarangayEventCalendarView,
 )
@@ -53,6 +56,9 @@ from apps.live_map import (
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/health/", health_check, name="health-check"),
+    path("api/schema/", SpectacularAPIView.as_view(), name="api-schema"),
+    path("api/docs/", docs_portal, name="api-docs"),
+    path("api/swagger/", SwaggerFallbackView.as_view(), name="api-swagger"),
     path("api/auth/", include("apps.accounts.urls")),
     path("api/assistant/", include("apps.assistant.urls")),
     path("api/concerns/", include("apps.concerns.urls")),
@@ -67,6 +73,11 @@ urlpatterns = [
         "api/announcements/<int:announcement_id>/comments/<int:comment_id>/",
         AnnouncementCommentDetailView.as_view(),
         name="announcement-comment-detail",
+    ),
+    path(
+        "api/announcements/comments/<int:comment_id>/flags/",
+        AnnouncementCommentFlagCreateView.as_view(),
+        name="announcement-comment-flag-create",
     ),
     path("api/barangay-events/calendar/", BarangayEventCalendarView.as_view(), name="barangay-event-calendar"),
     path("api/announcements/manage/", AnnouncementManageListCreateView.as_view(), name="announcement-manage"),

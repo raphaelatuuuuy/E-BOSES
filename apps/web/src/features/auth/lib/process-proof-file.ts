@@ -72,6 +72,13 @@ export function humanizeProofError(message: string, _side?: ProofSide | null): s
     .replace(/^(Front|Back):\s*/i, "")
     .trim()
 
+  // The picture check found something. Already short and already says what to
+  // do, so it is returned untouched rather than run through the rewrites
+  // below, which are written for OCR field wording.
+  if (/does not look like an original photo of a real document/i.test(text)) {
+    return text
+  }
+
   // Expiry — short and direct
   text = text
     .replace(
@@ -200,6 +207,8 @@ export async function checkProofSide(args: {
   option: ResidenceProofOption
   alreadyCaptured: File[]
   onStatus?: (message: string) => void
+  email?: string
+  communityResolutionToken?: string
 }): Promise<ProcessProofResult> {
   const { file: rawFile, sideIndex: idx, option, alreadyCaptured, onStatus } = args
   const sides = sidesForOption(option)
@@ -239,6 +248,8 @@ export async function checkProofSide(args: {
   const checkData = new FormData()
   checkData.append("proof_type", option.key)
   checkData.append("proof", rawFile)
+  if (args.email) checkData.append("email", args.email)
+  if (args.communityResolutionToken) checkData.append("community_resolution_token", args.communityResolutionToken)
   try {
     await withNetworkRetry("Quality check", () => checkRegistrationProof(checkData))
   } catch (error) {
@@ -280,6 +291,8 @@ export async function detectProofOcr(args: {
     address?: string
   }
   onStatus?: (message: string) => void
+  email?: string
+  communityResolutionToken?: string
 }): Promise<
   | { ok: true; detect: ResidenceProofDetectResult }
   | { ok: false; message: string; detect: ResidenceProofDetectResult | null }
@@ -291,6 +304,8 @@ export async function detectProofOcr(args: {
   const detectData = new FormData()
   detectData.append("proof", file)
   detectData.append("proof_type", option.key)
+  if (args.email) detectData.append("email", args.email)
+  if (args.communityResolutionToken) detectData.append("community_resolution_token", args.communityResolutionToken)
   if (side) {
     detectData.append("proof_side", side)
   }

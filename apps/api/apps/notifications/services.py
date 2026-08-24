@@ -26,6 +26,33 @@ def _notification_body(concern: Concern, status: str) -> str:
     return f"Your report status has been updated to {status}."
 
 
+def _deliver_notification_after_commit(notification) -> None:
+    """Queue WebSocket + push delivery in a worker, never on the request thread.
+
+    Browser-push fan-out blocks up to 15 s per subscription. When the broker is
+    unreachable, local development (no worker running) still delivers inline;
+    production leaves the row for the recipient's poll fallback and logs it.
+    """
+    from .tasks import deliver_notification_task
+
+    def _deliver():
+        try:
+            deliver_notification_task.delay(notification.pk)
+        except Exception as exc:
+            if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+                deliver_notification_task.run(notification.pk)
+            else:
+                import logging
+
+                logging.getLogger(__name__).error(
+                    "Broker unavailable; notification #%s delivery deferred (%s).",
+                    notification.pk,
+                    exc.__class__.__name__,
+                )
+
+    transaction.on_commit(_deliver)
+
+
 def _report_updates_enabled(concern: Concern) -> bool:
     settings_obj = getattr(concern.reporter, "resident_settings", None)
     return settings_obj is None or settings_obj.report_updates
@@ -607,7 +634,31 @@ def send_browser_push(notification, payload: dict | None = None) -> dict:
 
 
 def broadcast_live_map_event(message_type: str, payload: dict) -> None:
-    _broadcast("official_live_map", "live_map.update", {"type": message_type, "payload": payload})
+    resource = payload.get("concern") or payload.get("emergency") or {}
+    community_id = resource.get("community_id")
+    if not community_id and resource.get("id"):
+        if message_type.startswith("concern."):
+            from apps.concerns.models import Concern
+            community_id = Concern.objects.filter(pk=resource["id"]).values_list("community_id", flat=True).first()
+        elif message_type.startswith("emergency."):
+            from apps.emergencies.models import EmergencyAlert
+            community_id = EmergencyAlert.objects.filter(pk=resource["id"]).values_list("community_id", flat=True).first()
+    department_ids = set()
+    if resource.get("id") and message_type.startswith("concern."):
+        from apps.concerns.models import Concern
+        concern = Concern.objects.filter(pk=resource["id"]).select_related("category_ref").first()
+        if concern:
+            department_ids.update(filter(None, [concern.assigned_department_id, getattr(concern.category_ref, "department_id", None)]))
+    elif resource.get("id") and message_type.startswith("emergency."):
+        from apps.emergencies.models import EmergencyAlert, EmergencyTypeRoleMap
+        alert = EmergencyAlert.objects.filter(pk=resource["id"]).first()
+        if alert:
+            department_ids.update(EmergencyTypeRoleMap.objects.filter(community=alert.community, emergency_type=alert.type, is_active=True).values_list("department_id", flat=True))
+    event = {"type": message_type, "payload": payload}
+    for department_id in filter(None, department_ids):
+        _broadcast(f"official_live_map_department_{department_id}", "live_map.update", event)
+    if community_id:
+        _broadcast(f"official_live_map_community_{community_id}", "live_map.update", event)
     if message_type in {"concern.created", "concern.updated", "emergency.created", "emergency.updated"}:
         _broadcast_resident_map_event(message_type, payload)
     elif message_type == "location.updated":
@@ -643,13 +694,13 @@ def _broadcast_resident_map_event(message_type: str, payload: dict) -> None:
         if not concern:
             return
         event_payload = {"concern": resident_concern_payload(concern)} if concern.visibility == Concern.Visibility.COMMUNITY and concern.validation_status == Concern.ValidationStatus.ACCEPTED else {"concern": {"id": concern.pk, "status": Concern.Status.REJECTED}, "removed": True}
-        barangay = concern.barangay
+        barangay = str(concern.community_id or concern.barangay)
     else:
         alert = EmergencyAlert.objects.filter(pk=resource_id).select_related("reporter", "reporter__resident_profile").first()
         if not alert:
             return
         event_payload = {"emergency": resident_emergency_payload(alert)}
-        barangay = alert.barangay
+        barangay = str(alert.community_id or alert.barangay)
     group = _resident_group_for_barangay(barangay)
     _broadcast(group, "resident_live_map.update", {"type": message_type, "payload": event_payload})
 
@@ -670,11 +721,16 @@ def _broadcast_reporter_emergency_map_event(alert_id: int) -> None:
 
 def broadcast_emergency_update(alert) -> None:
     from apps.emergencies.serializers import EmergencyAlertSerializer
-    from apps.live_map import emergency_payload, route_for_assignment
+    from apps.live_map import emergency_payload, routes_for_alert
 
     payload = EmergencyAlertSerializer(alert).data
     _broadcast(f"emergency_{alert.pk}", "emergency.update", payload)
-    broadcast_live_map_event("emergency.updated", {"emergency": emergency_payload(alert), "route": route_for_assignment(alert)})
+    routes = routes_for_alert(alert)
+    broadcast_live_map_event("emergency.updated", {
+        "emergency": emergency_payload(alert),
+        "route": routes[0] if routes else None,
+        "routes": routes,
+    })
 
 
 def broadcast_emergency_chat_message(message) -> None:
@@ -694,6 +750,7 @@ def create_user_notification(
     body: str = "",
     concern: Concern | None = None,
     metadata: dict | None = None,
+    event_key: str = "",
 ) -> object | None:
     """Create a notification for a specific user.
 
@@ -709,8 +766,10 @@ def create_user_notification(
         title=title,
         body=body,
         metadata=metadata or {},
+        community=getattr(concern, "community", None),
+        event_key=event_key,
     )
-    transaction.on_commit(lambda: broadcast_notification(notification))
+    _deliver_notification_after_commit(notification)
     return notification
 
 
@@ -735,6 +794,7 @@ def create_emergency_notification(
     title: str = "",
     body: str = "",
     metadata: dict | None = None,
+    event_key: str = "",
 ) -> object | None:
     """Create a notification for an emergency participant."""
     from .models import Notification
@@ -747,8 +807,11 @@ def create_emergency_notification(
         title=title or f"Emergency alert #{alert.pk}",
         body=body or f"Emergency status updated to {alert.status.replace('_', ' ')}.",
         metadata=metadata or {},
+        community=alert.community,
+        department=getattr(getattr(alert, "category_ref", None), "department", None),
+        event_key=event_key,
     )
-    transaction.on_commit(lambda: broadcast_notification(notification))
+    _deliver_notification_after_commit(notification)
     return notification
 
 
@@ -769,6 +832,21 @@ def notify_emergency_status(alert, *, type: str, body: str = "") -> None:
     if notification_type:
         create_emergency_notification(alert=alert, type=notification_type, body=body)
     broadcast_emergency_update(alert)
+
+
+def notify_flag_review_dismissed(*, flag_reporter, concern: Concern, staff_note: str) -> None:
+    from .models import Notification
+
+    create_user_notification(
+        recipient=flag_reporter,
+        concern=concern,
+        type=Notification.Type.FLAG_DISMISSED,
+        title="Flag report reviewed",
+        body=(
+            f"Your report was reviewed, however the content stays up. "
+            f"Official note: {staff_note}"
+        ),
+    )
 
 
 def notify_status_change(concern: Concern) -> None:

@@ -19,13 +19,16 @@ import type { RecordView } from "./types"
 export function RecordDetail({
   record,
   showAssignee = true,
+  embedded = false,
 }: {
   record: RecordView
   /** Forwarded to RecordWorkflow — see the note on its `showAssignee` prop. */
   showAssignee?: boolean
+  /** Drops the surface border when the pane the dossier sits on already draws one. */
+  embedded?: boolean
 }) {
   return (
-    <Surface>
+    <Surface className={embedded ? "rounded-none border-0 bg-transparent" : undefined}>
       <RecordHeader record={record} embedded />
       <RecordWorkflow record={record} showAssignee={showAssignee} embedded />
       {record.sections.map((section) => (

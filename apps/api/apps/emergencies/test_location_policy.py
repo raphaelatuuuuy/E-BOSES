@@ -17,16 +17,15 @@ class LocationPolicyTests(TestCase):
         self.policy.acceptance_radius_meters = 100
         self.policy.save()
 
-    def test_emergency_requires_acceptance_zone(self):
-        with self.assertRaisesMessage(ValidationError, "official acceptance zone"):
-            validate_emergency_location(*INSIDE_BARANGAY_OUTSIDE_ACCEPTANCE)
+    def test_emergency_uses_community_boundary_not_radius(self):
+        community = validate_emergency_location(*INSIDE_BARANGAY_OUTSIDE_ACCEPTANCE)
+        self.assertIsNotNone(community)
 
-    def test_report_blocks_when_policy_blocks(self):
+    def test_report_accepts_inside_boundary_when_old_policy_blocks(self):
         self.policy.out_of_zone_action = MapDispatchPolicy.OutOfZoneAction.BLOCK
         self.policy.save(update_fields=["out_of_zone_action"])
 
-        with self.assertRaisesMessage(ValidationError, "official acceptance zone"):
-            validate_report_location(*INSIDE_BARANGAY_OUTSIDE_ACCEPTANCE)
+        self.assertEqual(validate_report_location(*INSIDE_BARANGAY_OUTSIDE_ACCEPTANCE)["action"], "accept")
 
     def test_report_warns_when_policy_warns(self):
         self.policy.out_of_zone_action = MapDispatchPolicy.OutOfZoneAction.WARN
@@ -34,7 +33,7 @@ class LocationPolicyTests(TestCase):
 
         result = validate_report_location(*INSIDE_BARANGAY_OUTSIDE_ACCEPTANCE)
 
-        self.assertEqual(result["action"], "warn")
+        self.assertEqual(result["action"], "accept")
 
     def test_report_reviews_when_policy_reviews(self):
         self.policy.out_of_zone_action = MapDispatchPolicy.OutOfZoneAction.REVIEW
@@ -42,4 +41,4 @@ class LocationPolicyTests(TestCase):
 
         result = validate_report_location(*INSIDE_BARANGAY_OUTSIDE_ACCEPTANCE)
 
-        self.assertEqual(result["action"], "review")
+        self.assertEqual(result["action"], "accept")

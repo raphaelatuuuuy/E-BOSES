@@ -5,7 +5,7 @@ from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from apps.accounts.models import User
-from apps.accounts.services import validate_concern_media_file
+from apps.accounts.services import validate_concern_media_file, validate_icon_image_file, validate_public_image_file
 from apps.capabilities import ALL_CAPABILITIES
 
 from .models import (
@@ -185,7 +185,12 @@ class DepartmentSerializer(serializers.ModelSerializer):
     member_count = serializers.SerializerMethodField()
 
     def get_member_count(self, obj):
-        return obj.designations.filter(is_active=True).count()
+        # Count over the prefetched relation when available; a chained
+        # .filter().count() would bypass the cache with one query per row.
+        designations = obj.designations.all()
+        if hasattr(obj, "_prefetched_objects_cache") and "designations" in obj._prefetched_objects_cache:
+            return sum(1 for item in designations if item.is_active)
+        return designations.filter(is_active=True).count()
 
     class Meta:
         model = Department
@@ -323,24 +328,13 @@ class ConcernCategorySerializer(serializers.ModelSerializer):
         return request.build_absolute_uri(obj.icon_image.url) if request else obj.icon_image.url
 
     def validate_icon_key(self, value):
-        value = (value or "tag").strip().lower()
-        allowed = {
-            "tag", "wrench", "leaf", "shield-alert", "trash", "lightbulb",
-            "road", "droplets", "home", "map-pin", "paw-print", "megaphone",
-        }
-        if value not in allowed:
-            raise serializers.ValidationError("Choose one of the supported concern icons.")
-        return value
+        value = (value or "tag").strip()
+        if not value:
+            return "tag"
+        return value[:48]
 
     def validate_icon_image(self, value):
-        if not value:
-            return value
-        name = value.name.lower()
-        if not name.endswith((".png", ".jpg", ".jpeg", ".webp", ".ico")):
-            raise serializers.ValidationError("Use PNG, JPG, WEBP, or ICO.")
-        if value.size > 512 * 1024:
-            raise serializers.ValidationError("Use an icon image up to 512 KB.")
-        return value
+        return validate_icon_image_file(value)
 
 
 class RoutingRuleSerializer(serializers.ModelSerializer):
@@ -464,8 +458,9 @@ class ConcernMediaSerializer(serializers.ModelSerializer):
         return list(obj.privacy_detected_classes or [])
 
     def get_preview_url(self, obj):
-        path = f"/api/concerns/media/{obj.pk}/preview/"
-        return path
+        from apps.media_urls import concern_media_preview_url
+
+        return concern_media_preview_url(obj.pk)
 
     def get_raw_url(self, obj):
         if self.context.get("privacy_safe"):
@@ -562,8 +557,9 @@ class ConcernCommentSerializer(serializers.ModelSerializer):
         # One-level stack only: never nest replies under replies
         if obj.parent_id is not None:
             return []
-        replies = obj.replies.select_related("author", "author__resident_profile").all()
-        return ConcernCommentSerializer(replies, many=True, context=self.context).data
+        # .all() over the prefetched relation; chaining select_related here
+        # would bypass the cache with one query per comment.
+        return ConcernCommentSerializer(obj.replies.all(), many=True, context=self.context).data
 
 class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
     possible_duplicate = serializers.SerializerMethodField()
@@ -664,6 +660,8 @@ class ContentFlagSerializer(serializers.ModelSerializer):
     reporter = PublicUserSerializer(read_only=True)
     reporter_full_name = serializers.SerializerMethodField()
     comment = serializers.IntegerField(required=False, allow_null=True)
+    target = serializers.SerializerMethodField()
+    reviewed_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = ContentFlag
@@ -677,16 +675,86 @@ class ContentFlagSerializer(serializers.ModelSerializer):
             "note",
             "status",
             "staff_note",
+            "auto_moderated",
+            "reviewed_by_name",
+            "target",
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("id", "concern", "reporter", "status", "staff_note", "created_at", "updated_at")
+        read_only_fields = (
+            "id",
+            "concern",
+            "reporter",
+            "status",
+            "staff_note",
+            "auto_moderated",
+            "created_at",
+            "updated_at",
+        )
+
+    def get_reviewed_by_name(self, obj):
+        return self._content_author_name(obj.reviewed_by) if obj.reviewed_by_id else None
 
     def get_reporter_full_name(self, obj):
         profile = getattr(obj.reporter, "resident_profile", None)
         if profile:
             return f"{profile.first_name.strip()} {profile.last_name.strip()}".strip()
         return obj.reporter.email.split("@", 1)[0].replace(".", " ")
+
+    @staticmethod
+    def _content_author_name(user):
+        if not user:
+            return ""
+        profile = getattr(user, "resident_profile", None)
+        if profile:
+            name = f"{profile.first_name.strip()} {profile.last_name.strip()}".strip()
+            if name:
+                return name
+        return user.email.split("@", 1)[0].replace(".", " ")
+
+    @staticmethod
+    def _excerpt(text):
+        return (text or "").strip()[:160]
+
+    def get_target(self, obj):
+        """One shape for every `target_kind`, so the frontend never needs a
+        per-row follow-up fetch to render a flag regardless of what it targets.
+        """
+        kind = obj.target_kind
+        if kind == "announcement_comment":
+            comment = obj.announcement_comment
+            return {
+                "kind": kind,
+                "excerpt": self._excerpt(comment.body),
+                "author_name": self._content_author_name(comment.author),
+                "post_title": comment.announcement.title if comment.announcement_id else None,
+            }
+        if kind == "emergency_comment":
+            comment = obj.emergency_comment
+            alert = comment.alert
+            return {
+                "kind": kind,
+                "excerpt": self._excerpt(comment.body),
+                "author_name": self._content_author_name(comment.author),
+                "post_title": f"{alert.get_type_display()} emergency" if alert else None,
+            }
+        if kind == "concern_comment":
+            comment = obj.comment
+            return {
+                "kind": kind,
+                "excerpt": self._excerpt(comment.body),
+                "author_name": self._content_author_name(comment.author),
+                "post_title": obj.concern.title if obj.concern_id else None,
+            }
+        concern = obj.concern
+        if not concern:
+            return {"kind": kind, "excerpt": "", "author_name": "", "post_title": None}
+        return {
+            "kind": kind,
+            "excerpt": self._excerpt(f"{concern.title}\n{concern.description}"),
+            "author_name": self._content_author_name(concern.reporter),
+            "post_title": None,
+        }
 
 
 class ContentFlagReviewSerializer(serializers.Serializer):
@@ -937,10 +1005,13 @@ class ConcernSerializer(serializers.ModelSerializer):
             or user.role == User.Role.BARANGAY_OFFICIAL
         )
         is_owner = user.pk == obj.reporter_id
-        is_assignee = obj.assignments.filter(
-            assignee=user,
-            status=ConcernAssignment.Status.ACTIVE,
-        ).exists()
+        # Iterate the prefetched relation — .filter().exists() would bypass
+        # the prefetch cache and issue one query per concern row.
+        is_assignee = any(
+            assignment.assignee_id == user.pk
+            and assignment.status == ConcernAssignment.Status.ACTIVE
+            for assignment in obj.assignments.all()
+        )
         return is_official, is_owner, is_assignee
 
     def _can_view_case(self, obj):
@@ -991,7 +1062,7 @@ class ConcernSerializer(serializers.ModelSerializer):
         return obj.location_accuracy
 
     def get_status_events(self, obj):
-        queryset = obj.status_events.select_related("actor", "actor__resident_profile")
+        queryset = obj.status_events.all()
         if self._can_view_case(obj):
             return ConcernStatusEventSerializer(queryset, many=True, context=self.context).data
         return [
@@ -1014,48 +1085,55 @@ class ConcernSerializer(serializers.ModelSerializer):
         ]
 
     def get_comments(self, obj):
-        comments = obj.comments.filter(parent__isnull=True).select_related("author", "author__resident_profile")
+        # Python-filter over the prefetched relation; .filter() here would
+        # bypass the prefetch cache with one query per concern.
+        comments = [comment for comment in obj.comments.all() if comment.parent_id is None]
         return ConcernCommentSerializer(comments, many=True, context=self.context).data
 
     def get_form_values(self, obj):
         if not self._can_view_case(obj):
             return []
-        return ConcernFormValueSerializer(obj.form_values.select_related("field"), many=True, context=self.context).data
+        return ConcernFormValueSerializer(obj.form_values.all(), many=True, context=self.context).data
 
     def get_timeline(self, obj):
-        queryset = obj.timeline_entries.select_related("actor", "actor__resident_profile")
+        # Work over the prefetched list; chaining .filter()/.select_related()
+        # on the manager would re-query per concern row.
+        entries = sorted(obj.timeline_entries.all(), key=lambda entry: (entry.created_at, entry.pk))
         is_official, is_owner, is_assignee = self._viewer_roles(obj)
         if not (is_official or is_owner or is_assignee):
-            queryset = queryset.filter(visible_to_resident=True)
-        return ConcernTimelineEntrySerializer(queryset, many=True, context=self.context).data
+            entries = [entry for entry in entries if entry.visible_to_resident]
+        return ConcernTimelineEntrySerializer(entries, many=True, context=self.context).data
 
     def get_assignments(self, obj):
         if not self._can_view_case(obj):
             return []
-        queryset = obj.assignments.select_related("assignee", "assignee__resident_profile", "assigned_by", "assigned_by__resident_profile")
-        return ConcernAssignmentSerializer(queryset, many=True, context=self.context).data
+        assignments = sorted(obj.assignments.all(), key=lambda item: (-item.created_at.timestamp(), -item.pk))
+        return ConcernAssignmentSerializer(assignments, many=True, context=self.context).data
 
     def get_clarifications(self, obj):
         if not self._can_view_case(obj):
             return []
-        queryset = obj.clarifications.select_related("requested_by", "requested_by__resident_profile", "responded_by", "responded_by__resident_profile")
-        return ConcernClarificationSerializer(queryset, many=True, context=self.context).data
+        # Iterate the prefetched relation — chaining .select_related() here
+        # bypasses the cache and re-queries per concern row.
+        rows = sorted(obj.clarifications.all(), key=lambda item: (item.created_at, item.pk))
+        return ConcernClarificationSerializer(rows, many=True, context=self.context).data
 
     def get_appeals(self, obj):
         is_official, is_owner, _ = self._viewer_roles(obj)
         if self.is_privacy_safe() or not (is_official or is_owner):
             return []
-        queryset = obj.appeals.select_related("appellant", "appellant__resident_profile", "reviewed_by", "reviewed_by__resident_profile")
-        return ConcernAppealSerializer(queryset, many=True, context=self.context).data
+        rows = sorted(obj.appeals.all(), key=lambda item: (item.created_at, item.pk))
+        return ConcernAppealSerializer(rows, many=True, context=self.context).data
 
     def get_official_remarks(self, obj):
-        queryset = obj.official_remarks.select_related("author", "author__resident_profile")
         is_official, is_owner, is_assignee = self._viewer_roles(obj)
         if self.is_privacy_safe() or not (is_official or is_owner or is_assignee):
             return []
+        rows = list(obj.official_remarks.all())
         if not is_official:
-            queryset = queryset.filter(visible_to_resident=True)
-        return ConcernOfficialRemarkSerializer(queryset, many=True, context=self.context).data
+            rows = [remark for remark in rows if remark.visible_to_resident]
+        rows.sort(key=lambda item: (item.created_at, item.pk))
+        return ConcernOfficialRemarkSerializer(rows, many=True, context=self.context).data
 
     def get_resolution_evidence(self, obj):
         if self.is_privacy_safe():
@@ -1065,22 +1143,14 @@ class ConcernSerializer(serializers.ModelSerializer):
                 and obj.status in {Concern.Status.RESOLVED, Concern.Status.REJECTED}
             ):
                 return []
-            queryset = obj.resolution_evidence.select_related(
-                "uploaded_by",
-                "uploaded_by__resident_profile",
-            )
             return ConcernResolutionEvidenceSerializer(
-                queryset,
+                obj.resolution_evidence.all(),
                 many=True,
                 context={**self.context, "public_resolution": True},
             ).data
         if not self._can_view_case(obj):
             return []
-        queryset = obj.resolution_evidence.select_related(
-            "uploaded_by",
-            "uploaded_by__resident_profile",
-        )
-        return ConcernResolutionEvidenceSerializer(queryset, many=True, context=self.context).data
+        return ConcernResolutionEvidenceSerializer(obj.resolution_evidence.all(), many=True, context=self.context).data
 
     def get_conversation(self, obj):
         is_official, is_owner, is_assignee = self._viewer_roles(obj)
@@ -1105,7 +1175,7 @@ class ConcernSerializer(serializers.ModelSerializer):
                 "_sort_at": created_at,
             })
 
-        for event in obj.status_events.select_related("actor", "actor__resident_profile"):
+        for event in obj.status_events.all():
             add(
                 item_id=f"status-{event.pk}",
                 kind="status",
@@ -1116,12 +1186,7 @@ class ConcernSerializer(serializers.ModelSerializer):
                 metadata={"phase": "status_change"},
             )
 
-        assignments = obj.assignments.select_related(
-            "assignee",
-            "assignee__resident_profile",
-            "assigned_by",
-            "assigned_by__resident_profile",
-        )
+        assignments = obj.assignments.all()
         for assignment in assignments:
             assignee_name = (
                 self._public_user(assignment.assignee).get("full_name")
@@ -1169,9 +1234,7 @@ class ConcernSerializer(serializers.ModelSerializer):
                     },
                 )
 
-        messages = obj.chat_messages.select_related(
-            "sender", "sender__resident_profile", "attachment"
-        )
+        messages = obj.chat_messages.all()
         for message in messages:
             serialized = ConcernChatMessageSerializer(message, context=self.context).data
             attachment = serialized.get("attachment")
@@ -1185,10 +1248,7 @@ class ConcernSerializer(serializers.ModelSerializer):
                 metadata={"phase": "message"},
             )
 
-        clarifications = obj.clarifications.select_related(
-            "requested_by", "requested_by__resident_profile",
-            "responded_by", "responded_by__resident_profile",
-        )
+        clarifications = obj.clarifications.all()
         for clarification in clarifications:
             add(
                 item_id=f"clarification-{clarification.pk}-request",
@@ -1210,9 +1270,9 @@ class ConcernSerializer(serializers.ModelSerializer):
                     metadata={"phase": "reply", "clarification_id": clarification.pk},
                 )
 
-        remarks = obj.official_remarks.select_related("author", "author__resident_profile")
+        remarks = [remark for remark in obj.official_remarks.all()]
         if not is_official:
-            remarks = remarks.filter(visible_to_resident=True)
+            remarks = [remark for remark in remarks if remark.visible_to_resident]
         for remark in remarks:
             add(
                 item_id=f"official-remark-{remark.pk}",
@@ -1225,10 +1285,7 @@ class ConcernSerializer(serializers.ModelSerializer):
             )
 
         if is_official or is_owner:
-            appeals = obj.appeals.select_related(
-                "appellant", "appellant__resident_profile",
-                "reviewed_by", "reviewed_by__resident_profile",
-            )
+            appeals = obj.appeals.all()
             for appeal in appeals:
                 add(
                     item_id=f"appeal-{appeal.pk}-submitted",
@@ -1271,6 +1328,18 @@ class ConcernCreateSerializer(serializers.Serializer):
     longitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
     location_source = serializers.ChoiceField(choices=("gps", "manual_pin"), required=False, allow_blank=True)
     location_accuracy = serializers.FloatField(required=False, allow_null=True)
+    duplicate_of = serializers.IntegerField(required=False, allow_null=True)
+    recurrence_of = serializers.IntegerField(required=False, allow_null=True)
+
+    def validate_duplicate_of(self, value):
+        if value and not Concern.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("The linked report does not exist.")
+        return value
+
+    def validate_recurrence_of(self, value):
+        if value and not Concern.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("The linked report does not exist.")
+        return value
 
     def validate_address(self, value: str) -> str:
         """Persist a human street line with the report — reject Lat/Lng placeholders."""
@@ -1352,6 +1421,49 @@ class ConcernStatusUpdateSerializer(serializers.Serializer):
         return value
 
 
+class ConcernCategoryMiniSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ConcernCategory
+        fields = ("id", "name", "icon_key")
+
+
+class ConcernListReporterSerializer(serializers.Serializer):
+    full_name = serializers.CharField(read_only=True)
+
+
+class ConcernListSerializer(serializers.ModelSerializer):
+    """Slim row payload for list endpoints.
+
+    The full ConcernSerializer (timeline, chat, community incident, appeals,
+    ...) is reserved for the detail view; list cards only render the summary
+    fields below. The web app fetches /api/concerns/{id}/ when a row is opened.
+    """
+
+    reporter = ConcernListReporterSerializer(read_only=True)
+    category_ref = ConcernCategoryMiniSerializer(read_only=True)
+    tracking_id = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Concern
+        fields = (
+            "id",
+            "public_id",
+            "tracking_id",
+            "title",
+            "description",
+            "category",
+            "status",
+            "validation_status",
+            "visibility",
+            "barangay",
+            "address",
+            "created_at",
+            "updated_at",
+            "reporter",
+            "category_ref",
+        )
+
+
 class AnnouncementSerializer(serializers.ModelSerializer):
     date_label = serializers.SerializerMethodField()
     status_label = serializers.SerializerMethodField()
@@ -1410,12 +1522,13 @@ class AnnouncementSerializer(serializers.ModelSerializer):
     def validate_image(self, value):
         if not value:
             return value
-        mime_type = (getattr(value, "content_type", "") or "").lower()
-        if not mime_type.startswith("image/"):
-            raise serializers.ValidationError("Announcement media must be an image.")
-        if getattr(value, "size", 0) > 8 * 1024 * 1024:
-            raise serializers.ValidationError("Announcement image must be 8MB or smaller.")
-        return value
+        # Byte-signature + extension cross-check: the client-supplied
+        # Content-Type alone is spoofable, and this file lands on public media.
+        try:
+            return validate_public_image_file(value)
+        except DjangoValidationError as exc:
+            detail = getattr(exc, "message_dict", None) or list(getattr(exc, "messages", None) or [str(exc)])
+            raise serializers.ValidationError(detail[0] if len(detail) == 1 else detail)
 
     def validate(self, attrs):
         starts_at = attrs.get("starts_at", getattr(self.instance, "starts_at", None))

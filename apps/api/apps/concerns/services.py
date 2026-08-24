@@ -60,9 +60,10 @@ def user_can_access_concern_media_raw(user, media):
         return True
     if user.status != user.Status.VERIFIED:
         return False
-    if user.is_staff or user.role == user.Role.BARANGAY_OFFICIAL:
-        return True
-    return user.pk == media.concern.reporter_id or media.concern.assignments.filter(
-        assignee=user,
-        status=ConcernAssignment.Status.ACTIVE,
+    from apps.community_scope import scope_concern_queryset
+
+    return scope_concern_queryset(
+        media.concern.__class__.objects.filter(pk=media.concern_id),
+        user,
+        include_public=False,
     ).exists()

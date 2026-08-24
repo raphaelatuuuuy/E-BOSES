@@ -33,8 +33,11 @@ export function MapControlButton({
   loading = false,
   active = false,
   divider = false,
+  disabled = false,
   children,
   className,
+  draggable = false,
+  onDragStart,
 }: {
   tone: MapTone
   label: string
@@ -43,14 +46,19 @@ export function MapControlButton({
   active?: boolean
   /** Hairline above this segment. Omit on the first item in a stack. */
   divider?: boolean
+  disabled?: boolean
   children: ReactNode
   className?: string
+  draggable?: boolean
+  onDragStart?: (event: React.DragEvent<HTMLButtonElement>) => void
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      disabled={loading}
+      disabled={loading || disabled}
+      draggable={draggable}
+      onDragStart={onDragStart}
       aria-label={label}
       aria-pressed={active}
       title={label}

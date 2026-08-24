@@ -27,6 +27,7 @@ from django.conf import settings
 
 from apps.concerns.models import Concern, ConcernCategory
 from apps.emergencies.models import EmergencyCategory
+from apps.emergencies.temporal import NON_CURRENT, infer_incident_timing, normalise_incident_timing
 
 from .image_prep import PreparedImage
 from .text_classifier import TextClassificationResult, TextClassifierNotConfigured
@@ -54,6 +55,26 @@ RECOMMENDED_ACTIONS = {
     "escalate_as_emergency",
     "reject_as_irrelevant",
 }
+
+# Content-level authenticity. The byte-level layer (accounts/media_forensics.py)
+# reads EXIF, PNG chunks, C2PA and ELA, so it catches a Photoshop save or a
+# tagged AI export. It cannot catch a screenshot of an AI image, a UFO pasted
+# into a clean re-save, or a cartoon portrait on an otherwise ordinary JPEG —
+# nothing in the file is wrong, only the scene is. That is what these verdicts
+# are for, and neither layer replaces the other.
+INTEGRITY_VERDICTS = {
+    "authentic",
+    "suspected_edit",
+    "suspected_ai",
+    "impossible_content",
+    "photo_of_screen",
+    "inconclusive",
+}
+
+# "authentic" is the absence of a finding, never proof. Only these act.
+INTEGRITY_FLAGGED_VERDICTS = INTEGRITY_VERDICTS - {"authentic", "inconclusive"}
+
+MAX_INTEGRITY_SIGNALS = 4
 
 # SAM3 is an open-vocabulary segmenter, so Gemma names what to blur rather than
 # picking from a fixed list. The constraint is what SAM3 can actually *see*:
@@ -179,6 +200,15 @@ def empty_details() -> dict:
         "recommended_action": "accept",
         "short_explanation": "",
         "image_review_succeeded": None,
+        "photo_verdicts": [],
+        "media_integrity": [],
+        "media_integrity_overall": "inconclusive",
+        "matched_emergency_type": "",
+        "emergency_routing_reason": "",
+        "ongoing_emergency_confirmation_required": False,
+        "incident_timing": "unclear",
+        "incident_timing_reason": "",
+        "current_danger": False,
     }
 
 
@@ -218,12 +248,14 @@ def safe_needs_review(
 class GemmaAnalyzer:
     """One call to Gemma per report, with the image attached when we have one."""
 
-    def __init__(self, *, configuration=None):
+    def __init__(self, *, configuration=None, text_timeout=None):
         self.configuration = configuration
         self.host = getattr(settings, "OLLAMA_HOST", "https://ollama.com")
         self.api_key = getattr(settings, "OLLAMA_API_KEY", "")
         self.model = getattr(settings, "OLLAMA_TEXT_MODEL", OLLAMA_TEXT_MODEL) or OLLAMA_TEXT_MODEL
-        self.text_timeout = getattr(settings, "OLLAMA_TIMEOUT_SECONDS", 120)
+        # Interactive callers (resident precheck) pass a tighter budget than
+        # the pipeline default so a stalled model cannot hold their request.
+        self.text_timeout = int(text_timeout or getattr(settings, "OLLAMA_TIMEOUT_SECONDS", 120))
         self.image_timeout = getattr(settings, "OLLAMA_IMAGE_TIMEOUT_SECONDS", 90)
         self.retry_delay = getattr(settings, "OLLAMA_IMAGE_RETRY_DELAY_SECONDS", 2.0)
         self.image_attempts = max(1, int(getattr(settings, "OLLAMA_IMAGE_MAX_ATTEMPTS", 3)))
@@ -235,13 +267,22 @@ class GemmaAnalyzer:
         description: str,
         selected_category: str,
         image: PreparedImage | None = None,
+        images: list[PreparedImage] | None = None,
+        image_uploaded: bool | None = None,
     ) -> TextClassificationResult:
+        prepared_images = images if images is not None else ([image] if image is not None else [])
+        image_attached = bool(prepared_images)
+        # A photo can fail preparation (bad format, too large, corrupt) before
+        # it ever reaches this method — the caller still knows the resident
+        # attached one. image_uploaded carries that fact so the prompt below
+        # never claims none was provided.
+        image_submitted = image_attached or bool(image_uploaded)
         low_information = low_information_reason(description)
         if low_information:
             return low_information_result(
                 model_version=self.model,
                 reason=low_information,
-                image_attached=bool(image),
+                image_attached=image_attached,
             )
         if not self.api_key:
             raise TextClassifierNotConfigured("OLLAMA_API_KEY is not configured.")
@@ -256,22 +297,26 @@ class GemmaAnalyzer:
             selected_category=selected_category,
             title=title,
             description=description,
-            image_attached=bool(image),
+            image_attached=image_attached,
+            image_count=len(prepared_images),
+            image_unreadable=image_submitted and not image_attached,
         )
 
         image_review_succeeded: bool | None = None
         content = ""
 
-        if image is not None:
-            content, image_review_succeeded = self._attempt_with_image(Client, prompt, image)
+        if prepared_images:
+            content, image_review_succeeded = self._attempt_with_image(Client, prompt, prepared_images)
 
         if not content:
-            # Either no image was submitted, or both image attempts failed and
-            # we are falling back to the description alone. Either way the
-            # report is still analysed — it is never dropped.
+            # Either no image was submitted, or an image was submitted (or
+            # attempted) and never made it to the model — either because
+            # preparation rejected it before this call, or every attempt
+            # here failed. Either way the report is still analysed, it is
+            # never dropped.
             text_prompt = (
                 prompt
-                if image is None
+                if not image_submitted
                 else build_prompt(
                     configuration=self.configuration,
                     selected_category=selected_category,
@@ -285,19 +330,21 @@ class GemmaAnalyzer:
                     image_unreadable=True,
                 )
             )
-            content = self._request(Client, text_prompt, image=None, timeout=self.text_timeout)
+            content = self._request(Client, text_prompt, images=None, timeout=self.text_timeout)
 
         result = parse_gemma_result(
             content,
             model_version=self.model,
             selected_category=selected_category,
             configuration=self.configuration,
-            image_attached=bool(image),
+            image_attached=image_attached,
             image_review_succeeded=image_review_succeeded,
+            photo_count=len(prepared_images),
+            report_text=f"{title} {description}".strip(),
         )
         return result
 
-    def _attempt_with_image(self, Client, prompt: str, image: PreparedImage) -> tuple[str, bool]:
+    def _attempt_with_image(self, Client, prompt: str, images: list[PreparedImage]) -> tuple[str, bool]:
         """Try the image request a few times, backing off, then give up.
 
         Returns (content, succeeded). An empty content string means every
@@ -312,10 +359,10 @@ class GemmaAnalyzer:
         for attempt in range(1, attempts + 1):
             started = time.monotonic()
             try:
-                content = self._request(Client, prompt, image=image, timeout=self.image_timeout)
+                content = self._request(Client, prompt, images=images, timeout=self.image_timeout)
             except Exception as exc:
                 _log_image_attempt(
-                    image,
+                    images,
                     model=self.model,
                     duration_ms=int((time.monotonic() - started) * 1000),
                     attempt=attempt,
@@ -329,7 +376,7 @@ class GemmaAnalyzer:
                     time.sleep(self.retry_delay * (2 ** (attempt - 1)))
                 continue
             _log_image_attempt(
-                image,
+                images,
                 model=self.model,
                 duration_ms=int((time.monotonic() - started) * 1000),
                 attempt=attempt,
@@ -340,15 +387,15 @@ class GemmaAnalyzer:
             return content, True
         return "", False
 
-    def _request(self, Client, prompt: str, *, image: PreparedImage | None, timeout) -> str:
+    def _request(self, Client, prompt: str, *, images: list[PreparedImage] | None, timeout) -> str:
         client = Client(
             host=self.host,
             headers={"Authorization": f"Bearer {self.api_key}"},
             timeout=timeout,
         )
         message = {"role": "user", "content": prompt}
-        if image is not None:
-            message["images"] = [image.data]
+        if images:
+            message["images"] = [image.data for image in images]
         response = client.chat(
             self.model,
             messages=[
@@ -380,7 +427,7 @@ def _failure_category(exc: Exception | None) -> str:
     return "other"
 
 
-def _log_image_attempt(image: PreparedImage, *, model, duration_ms, attempt, attempts, succeeded, exc) -> None:
+def _log_image_attempt(images: list[PreparedImage], *, model, duration_ms, attempt, attempts, succeeded, exc) -> None:
     """Developer-only record of one image request. Never reaches the UI.
 
     Severity reflects the *outcome*, not the attempt. Ollama Cloud fails around
@@ -391,15 +438,16 @@ def _log_image_attempt(image: PreparedImage, *, model, duration_ms, attempt, att
 
     Only exhausting every attempt is a warning now; recovered attempts are INFO.
     """
-    telemetry = image.telemetry or {}
+    telemetry = (images[0].telemetry if images else {}) or {}
     exhausted = not succeeded and attempt >= attempts
     record = {
+        "image_count": len(images),
         "filename": telemetry.get("filename"),
         "original_bytes": telemetry.get("original_bytes"),
         "normalized_bytes": telemetry.get("normalized_bytes"),
         "original_resolution": telemetry.get("original_resolution"),
         "normalized_resolution": telemetry.get("normalized_resolution"),
-        "mime_type": image.mime_type,
+        "mime_type": images[0].mime_type if images else "",
         "source_mime_type": telemetry.get("source_mime_type"),
         "model": model,
         "duration_ms": duration_ms,
@@ -424,6 +472,7 @@ def build_prompt(
     title: str,
     description: str,
     image_attached: bool,
+    image_count: int = 1,
     image_unreadable: bool = False,
 ) -> str:
     payload = {
@@ -433,6 +482,7 @@ def build_prompt(
         "resident_title": title,
         "resident_description": description,
         "attached_image_available": image_attached,
+        "attached_image_count": image_count,
         "photo_submitted_but_unreadable": image_unreadable,
     }
     unreadable_rule = (
@@ -461,15 +511,28 @@ def build_prompt(
         "5. If the description is gibberish, keyboard spam, repeated words, mostly symbols, or unrelated "
         "chatter, mark it UNCLEAR or IRRELEVANT and ask for clearer details.\n"
         "6. Strong language inside a real civic report does not make it invalid. Keep it meaningful.\n"
-        "7. If the text describes immediate danger, fire, medical distress, violent crime, or serious harm, "
-        "set urgent_attention true and consider escalate_as_emergency.\n"
-        "8. evidence_relationship must be supports_report, partially_supports_report, contradicts_report, "
+        "7. First decide incident_timing from the grammar and time words: ongoing, ended, historical, planned, "
+        "hypothetical, or unclear. Category words such as fire, crime, accident, or medical do not prove that "
+        "danger exists now. Read tense, negation, completion, drills, examples, quoted news, and future plans. "
+        "Set current_danger true only when harm is happening now or a danger remains. A past start can still be "
+        "ongoing, for example a fire that started yesterday but is still burning or a person who is still trapped.\n"
+        "8. Only ongoing danger can set urgent_attention true and use escalate_as_emergency. Ended, historical, "
+        "planned, and hypothetical events stay normal concerns. When timing is unclear but current danger is "
+        "possible, set ongoing_emergency_confirmation_required true instead of assuming. Examples: 'May sunog "
+        "ngayon' is ongoing; 'Nasunog kahapon, naapula na' is ended; 'The fire was last night but a person is "
+        "still trapped' is ongoing; 'Fire drill bukas' is planned.\n"
+        "9. When the report describes a possible active emergency, set matched_emergency_type to the single "
+        "best-matching key from configured_emergency_types (empty string if none fits), and write one "
+        "sentence in emergency_routing_reason naming which configured emergency type and why. Do this "
+        "independently of primary_category — a report can match both a concern category and an emergency "
+        "type.\n"
+        "10. evidence_relationship must be supports_report, partially_supports_report, contradicts_report, "
         "no_useful_image_evidence, or image_unavailable when no image is attached.\n"
-        "9. A category mismatch is corrected automatically. Never use reject_as_irrelevant for a "
+        "10. A category mismatch is corrected automatically. Never use reject_as_irrelevant for a "
         "category mismatch on its own.\n"
-        "10. severity is low, medium, or high. Low is minor and non-urgent; medium blocks access or needs "
+        "11. severity is low, medium, or high. Low is minor and non-urgent; medium blocks access or needs "
         "official action; high is immediate danger or serious harm.\n"
-        "11. Privacy: set privacy_scan_required true when the image may show something that should not "
+        "12. Privacy: set privacy_scan_required true when the image may show something that should not "
         "be public. In suspected_sensitive_classes, name each one as a SHORT CONCRETE OBJECT of one or "
         "two words — the words a person would use to point at it in the photo. These are passed to an "
         "image segmenter that can only find things it can see.\n"
@@ -481,23 +544,58 @@ def build_prompt(
         "    Only name something you can actually see in this image. Give short reasons in "
         "privacy_scan_reasons. You are flagging a suspicion for a second system to check — never state "
         "that sensitive content is confirmed, and never state that an image is safe.\n"
-        "12. missing_information lists what the resident must add in a new submission, in short phrases "
+        "13. missing_information lists what the resident must add in a new submission, in short phrases "
         '(for example: "a more specific location", "a clearer photo").\n'
-        "13. recommended_action must be accept, accept_with_privacy_review, "
+        "14. recommended_action must be accept, accept_with_privacy_review, "
         "request_more_information, escalate_as_emergency, or reject_as_irrelevant.\n"
-        "14. short_explanation is read by barangay staff. Write one or two complete sentences, at most "
-        "about 45 words, that say: what the resident reported, what the image appears to show, whether "
-        "the text and image support each other, and why you recommended that next step. Never write "
-        'fragments such as "Category yes", "Evidence no", "No photo relevance", or "No supported object". '
-        "Do not name any person, do not assign blame, and do not issue the barangay's decision.\n"
-        "15. Return valid JSON only. No Markdown.\n"
+        "15. short_explanation is read by barangay staff, shown next to a separate recommended_action "
+        "field they already see. Write one or two complete sentences, at most about 45 words, that "
+        "describe FINDINGS only: what the resident reported, what the image appears to show, and "
+        "whether the text and image support each other. This is a findings summary, never a "
+        "recommendation — do not write \"I recommend\", \"acceptance is recommended\", \"should be "
+        "accepted\", or any other phrasing that states or restates a decision; recommended_action "
+        "already carries that. Never write fragments such as \"Category yes\", \"Evidence no\", \"No "
+        "photo relevance\", or \"No supported object\". Do not name any person, do not assign blame, "
+        "and do not issue the barangay's decision.\n"
+        "16. Return valid JSON only. No Markdown.\n"
+        "17. photo_verdicts: when images are attached, judge each photo on its own. "
+        "Each item has index (the 0-based position of that photo, in the order they were attached), "
+        "relevance (supports_report, contradicts_report, neutral, or unclear), and a one-sentence "
+        "note saying what the photo appears to show and whether it matches the described issue. "
+        "Never skip a photo that was attached. Return [] when no image is attached.\n"
+        "18. media_integrity: judge each attached photo on whether it looks like a straight, "
+        "unedited camera photo of a real scene. Report only what you can SEE. You cannot read "
+        "file metadata, so never refer to it.\n"
+        "    Signs to look for: an object whose lighting, shadow direction, or scale disagrees "
+        "with the rest of the scene; edges that are unnaturally clean, smeared, or repeated "
+        "(clone stamping); text or logos that are warped, misspelled, or dissolve into scribble; "
+        "hands, faces, or repeated structures with the wrong count or geometry; a scene that "
+        "could not physically occur (a UFO, a cartoon character, a fictional creature, an "
+        "impossible vehicle); a smooth rendered surface unlike camera sensor grain; screen "
+        "glare, moire, pixel grid, or a device bezel, meaning this is a photo of a screen "
+        "rather than of the scene itself.\n"
+        "    verdict is authentic, suspected_edit, suspected_ai, impossible_content, "
+        "photo_of_screen, or inconclusive. Use inconclusive when the photo is too small, dark, "
+        "plain, or blurred to judge — that is a normal, common outcome and is not an accusation.\n"
+        "    confidence is 0.0 to 1.0 and states how sure you are of that verdict.\n"
+        "    signals lists the short concrete things you actually saw, in ordinary words (for "
+        'example: "the shadow of the object falls opposite to every other shadow", "the sign '
+        'text is unreadable scribble"). Leave it empty for authentic and inconclusive.\n'
+        "    Never state that a photo is genuine or proven real. authentic means only that you "
+        "saw no sign of a problem. Return [] when no image is attached.\n"
+        "19. Ordinary phone-photo defects are NOT manipulation. Never flag: compression blocks "
+        "or artefacts, low light, grain, motion blur, a date or time stamp burned in by the "
+        "camera, portrait-mode background blur, a watermark, a rotated or cropped frame, or a "
+        "photo taken at an angle. A real resident's photo usually has several of these.\n"
+        "    media_integrity_overall is the most serious verdict among the photos, using this "
+        "order: impossible_content, suspected_ai, suspected_edit, photo_of_screen, inconclusive, "
+        "authentic.\n"
         f"{unreadable_rule}\n"
         "Example of a good short_explanation: \"The description reports accumulated garbage near the "
         "roadside, and the photo appears to show waste materials in the same area, which supports the "
         "selected Environment category.\"\n\n"
         "Another: \"The description reports a drainage problem, but the photo mainly shows a parked "
-        "vehicle and a residential gate, so the image does not confirm the reported issue and manual "
-        "review is recommended.\"\n\n"
+        "vehicle and a residential gate, so the image does not confirm the reported issue.\"\n\n"
         f"Payload:\n{json.dumps(payload, ensure_ascii=False)}\n\n"
         "Return exactly this JSON shape:\n"
         "{\n"
@@ -517,7 +615,16 @@ def build_prompt(
         '  "suspected_sensitive_classes": [],\n'
         '  "ai_result_uncertain": false,\n'
         '  "recommended_action": null,\n'
-        '  "short_explanation": null\n'
+        '  "short_explanation": null,\n'
+        '  "photo_verdicts": [{"index": 0, "relevance": "supports_report", "note": "The photo shows the reported issue."}],\n'
+        '  "media_integrity": [{"index": 0, "verdict": "authentic", "confidence": 0.0, "signals": [], "note": ""}],\n'
+        '  "media_integrity_overall": null,\n'
+        '  "matched_emergency_type": null,\n'
+        '  "emergency_routing_reason": null,\n'
+        '  "ongoing_emergency_confirmation_required": false,\n'
+        '  "incident_timing": "unclear",\n'
+        '  "incident_timing_reason": "The report does not clearly say if danger remains.",\n'
+        '  "current_danger": false\n'
         "}"
     )
 
@@ -530,6 +637,8 @@ def parse_gemma_result(
     configuration=None,
     image_attached: bool = False,
     image_review_succeeded: bool | None = None,
+    photo_count: int = 0,
+    report_text: str = "",
 ) -> TextClassificationResult:
     """Coerce Gemma's JSON into the schema, discarding anything out of contract."""
     try:
@@ -596,6 +705,25 @@ def parse_gemma_result(
         # prompt forbids.
         detected_objects = []
 
+    photo_verdicts = _coerce_photo_verdicts(data.get("photo_verdicts"), count=photo_count)
+    if not image_attached or image_review_succeeded is False:
+        photo_verdicts = []
+
+    min_integrity_confidence = float(
+        getattr(configuration, "media_integrity_min_confidence", None) or 0.70
+    )
+    media_integrity = _coerce_integrity(
+        data.get("media_integrity"),
+        count=photo_count,
+        min_confidence=min_integrity_confidence,
+    )
+    if not image_attached or image_review_succeeded is False:
+        # Same reasoning as detected_objects above: an authenticity claim about
+        # an image nobody managed to look at is invention, and "authentic" would
+        # be the more dangerous of the two possible inventions.
+        media_integrity = []
+    media_integrity_overall = integrity_overall(media_integrity)
+
     suspected = sensitive_classes_from(_as_list(data.get("suspected_sensitive_classes")))
     privacy_required = bool(data.get("privacy_scan_required")) and bool(suspected)
     if image_review_succeeded is False or not image_attached:
@@ -611,6 +739,39 @@ def parse_gemma_result(
         selected_match = (primary == selected_category) if primary else None
 
     uncertain = bool(data.get("ai_result_uncertain")) or image_review_succeeded is False
+
+    allowed_emergency_types = {item["key"] for item in configured_emergency_types()}
+    matched_emergency_type = str(data.get("matched_emergency_type") or "")
+    if matched_emergency_type not in allowed_emergency_types:
+        matched_emergency_type = ""
+
+    emergency_routing_reason = _clean_text(data.get("emergency_routing_reason"))
+    inferred_timing, inferred_reason = infer_incident_timing(report_text)
+    model_timing = normalise_incident_timing(data.get("incident_timing"))
+    incident_timing = inferred_timing if inferred_timing != "unclear" else model_timing
+    incident_timing_reason = (
+        inferred_reason
+        if inferred_timing != "unclear"
+        else _clean_text(data.get("incident_timing_reason")) or inferred_reason
+    )
+    current_danger = incident_timing == "ongoing" or (
+        incident_timing == "unclear" and bool(data.get("current_danger"))
+    )
+
+    if incident_timing in NON_CURRENT:
+        matched_emergency_type = ""
+        urgent = False
+        current_danger = False
+        ongoing_emergency_confirmation_required = False
+        if action == "escalate_as_emergency":
+            action = "accept"
+        emergency_routing_reason = incident_timing_reason
+    elif incident_timing == "ongoing" and matched_emergency_type:
+        urgent = True
+        action = "escalate_as_emergency"
+        ongoing_emergency_confirmation_required = False
+    else:
+        ongoing_emergency_confirmation_required = bool(matched_emergency_type and urgent)
 
     details = {
         **empty_details(),
@@ -632,6 +793,15 @@ def parse_gemma_result(
         "recommended_action": action,
         "short_explanation": _clean_text(data.get("short_explanation")),
         "image_review_succeeded": image_review_succeeded,
+        "photo_verdicts": photo_verdicts,
+        "media_integrity": media_integrity,
+        "media_integrity_overall": media_integrity_overall,
+        "matched_emergency_type": matched_emergency_type,
+        "emergency_routing_reason": emergency_routing_reason,
+        "ongoing_emergency_confirmation_required": ongoing_emergency_confirmation_required,
+        "incident_timing": incident_timing,
+        "incident_timing_reason": incident_timing_reason,
+        "current_danger": current_danger,
     }
 
     label = f"related_{primary}" if relevance == "VALID" and primary else "needs_review"
@@ -707,6 +877,114 @@ def _clean_text(value) -> str:
     return str(value or "").strip()
 
 
+_PHOTO_VERDICT_RELEVANCES = {"supports_report", "contradicts_report", "neutral", "unclear"}
+
+
+def _coerce_photo_verdicts(value, *, count: int) -> list[dict]:
+    """Normalise per-photo verdicts: one entry per index, in model order."""
+    verdicts: list[dict] = []
+    seen = set()
+    for item in _as_list(value):
+        if not isinstance(item, dict):
+            continue
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        if index < 0 or index >= count or index in seen:
+            continue
+        seen.add(index)
+        relevance = str(item.get("relevance") or "unclear").lower()
+        if relevance not in _PHOTO_VERDICT_RELEVANCES:
+            relevance = "unclear"
+        verdicts.append(
+            {
+                "index": index,
+                "relevance": relevance,
+                "note": str(item.get("note") or "").strip()[:200],
+            }
+        )
+    return verdicts
+
+
+# Most serious first. Used to pick the overall verdict and to keep the model
+# from downgrading a flagged photo by reporting a calmer overall value.
+_INTEGRITY_SEVERITY = [
+    "impossible_content",
+    "suspected_ai",
+    "suspected_edit",
+    "photo_of_screen",
+    "inconclusive",
+    "authentic",
+]
+
+
+def _coerce_integrity(value, *, count: int, min_confidence: float) -> list[dict]:
+    """Normalise per-photo integrity findings, dropping anything out of contract.
+
+    A verdict below `min_confidence` becomes "inconclusive". A low-confidence
+    guess must never reject a real resident's report, and the alternative —
+    letting the caller compare the number itself — has been forgotten at one
+    call site or another in every version of this file.
+    """
+    findings: list[dict] = []
+    seen = set()
+    for item in _as_list(value):
+        if not isinstance(item, dict):
+            continue
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        if index < 0 or index >= count or index in seen:
+            continue
+        seen.add(index)
+        verdict = str(item.get("verdict") or "").lower().strip()
+        if verdict not in INTEGRITY_VERDICTS:
+            verdict = "inconclusive"
+        try:
+            confidence = round(min(max(float(item.get("confidence") or 0.0), 0.0), 1.0), 3)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if verdict in INTEGRITY_FLAGGED_VERDICTS and confidence < min_confidence:
+            verdict = "inconclusive"
+        signals = (
+            _clean_strings(item.get("signals"))[:MAX_INTEGRITY_SIGNALS]
+            if verdict in INTEGRITY_FLAGGED_VERDICTS
+            else []
+        )
+        findings.append(
+            {
+                "index": index,
+                "verdict": verdict,
+                "confidence": confidence,
+                "signals": signals,
+                "note": _clean_text(item.get("note"))[:200],
+            }
+        )
+    return findings
+
+
+def integrity_overall(findings: list[dict]) -> str:
+    """The most serious verdict across the photos.
+
+    Derived rather than read from the model: asked for both, Gemma will
+    sometimes flag one photo and then report a calm overall value, and the
+    quieter of the two must not be the one that decides.
+    """
+    if not findings:
+        return "inconclusive"
+    verdicts = {str(item.get("verdict") or "inconclusive") for item in findings}
+    for verdict in _INTEGRITY_SEVERITY:
+        if verdict in verdicts:
+            return verdict
+    return "inconclusive"
+
+
+def flagged_integrity_findings(findings: list[dict]) -> list[dict]:
+    return [item for item in findings if item.get("verdict") in INTEGRITY_FLAGGED_VERDICTS]
+
+
 def _json_body(content: str) -> str:
     text = str(content or "").strip()
     if text.startswith("```"):
@@ -776,3 +1054,269 @@ def low_information_result(*, model_version: str, reason: str, image_attached: b
         is_irrelevant=True,
         details=details,
     )
+
+
+STREET_VERDICTS = {"area_matches", "area_mismatch", "inconclusive"}
+PHOTO_DUP_VERDICTS = {"same_issue", "different", "uncertain"}
+
+
+def _vision_json_call(*, prompt: str, images: list[PreparedImage], configuration=None) -> dict | None:
+    """One JSON-mode Gemma call with images attached. None on any failure.
+
+    Used by the auxiliary checks (street-imagery verification, visual photo
+    dedup). These are advisory signals, so unlike the main analysis a failure
+    here degrades to "check skipped" rather than failing the report.
+    """
+    api_key = getattr(settings, "OLLAMA_API_KEY", "")
+    if not api_key:
+        return None
+    try:
+        from ollama import Client
+    except Exception:
+        return None
+    client = Client(
+        host=getattr(settings, "OLLAMA_HOST", "https://ollama.com"),
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=float(getattr(settings, "OLLAMA_IMAGE_TIMEOUT_SECONDS", 90)),
+    )
+    message = {"role": "user", "content": prompt, "images": [image.data for image in images]}
+    try:
+        response = client.chat(
+            getattr(settings, "OLLAMA_TEXT_MODEL", OLLAMA_TEXT_MODEL) or OLLAMA_TEXT_MODEL,
+            messages=[
+                {"role": "system", "content": "Return valid JSON only. No Markdown. No prose."},
+                message,
+            ],
+            format="json",
+            options={"temperature": 0},
+            stream=False,
+        )
+        parsed = json.loads(_json_body(_response_content(response)))
+        return parsed if isinstance(parsed, dict) else None
+    except Exception as exc:
+        logger.warning("Auxiliary vision check failed: %s", exc.__class__.__name__)
+        return None
+
+
+def verify_street_context(*, submitted: list[PreparedImage], street: PreparedImage) -> dict | None:
+    """Check whether the submitted concern photo(s) and current street imagery show the same place.
+
+    This is a location sanity check, nothing more: does the pin sit where the
+    resident's photo says it does? It is never a search for the reported issue
+    itself. A passing street-view car will almost never happen to have caught
+    a specific pothole, crack, or pile of garbage at the moment it drove by —
+    that is expected on nearly every real report and must never read as a
+    problem with the report.
+
+    A report is not limited to one photo. Every submitted photo is sent so any
+    one of them — a wide shot with more surroundings, say, even if another is a
+    tight close-up of just the issue — can match. `street` is always singular:
+    one panorama near the pin, never one per submitted photo.
+
+    Returns {"verdict": area_matches|area_mismatch|inconclusive, "explanation":
+    str} or None when the call failed (treated as skipped).
+    """
+    if not submitted:
+        return None
+    submitted_count = len(submitted)
+    photo_ref = "IMAGE 1" if submitted_count == 1 else f"IMAGES 1-{submitted_count}"
+    pano_number = submitted_count + 1
+    prompt = (
+        "You verify the LOCATION of civic concern reports for a barangay system "
+        "in the Philippines. This is a place check only.\n\n"
+        f"{photo_ref}: the photo(s) the resident submitted with their report — "
+        "different angles or distances of the same reported location, not "
+        "different places.\n"
+        f"IMAGE {pano_number} is a full 360-degree street-level panorama "
+        "captured at (or very near) the reported pin location recently, "
+        f"unrolled into one wide strip. The surroundings shown in {photo_ref} "
+        "could line up with any part of that strip, including the far left or "
+        f"right edge, not just the center. Scan the ENTIRE width of IMAGE "
+        f"{pano_number} from edge to edge before deciding. The panorama was "
+        "taken by a moving camera, so it may show the street from a different "
+        f"angle and at a different moment than {photo_ref}.\n\n"
+        f"Your ONLY job is to judge whether IMAGE {pano_number} shows the SAME "
+        f"general place as {photo_ref} — the same street, the same block, the "
+        "same kind of surroundings (similar buildings, fences, road markings, "
+        "vegetation, etc.). Do NOT look for the reported issue itself (the "
+        "pothole, the garbage, the damage — whatever the report describes). "
+        f"Whether that specific issue is visible in IMAGE {pano_number} is "
+        "irrelevant and must never affect your verdict — a real, correctly "
+        "located report will very often not have its exact issue visible in a "
+        "drive-by panorama, and that is completely normal.\n\n"
+        "Before deciding, actually synthesize the two — do not skim. Compare "
+        "small, specific details, not just the general impression of "
+        "\"a residential street\": fence material and color, gate style and "
+        "color, house facade colors and shapes, roofline and roof color, "
+        "utility pole positions and wiring, tree placement, road markings, "
+        "curb and sidewalk material, parked vehicles, visible signage or "
+        "shop names, and the relative geometry of these things to each other. "
+        "Two ordinary residential streets can look similar at a glance but "
+        "differ in these specifics; matching on vague similarity alone "
+        "produces false positives, and dismissing a real match because the "
+        "single most obvious feature is not lined up produces false "
+        "negatives. Weigh the whole set of details together.\n\n"
+        "Decide only this:\n"
+        f"- \"area_matches\": IMAGE {pano_number}'s surroundings are "
+        f"recognizably the same street/block as {photo_ref} (any one submitted "
+        "photo matching is enough), even if the specific reported issue is not "
+        f"visible in IMAGE {pano_number}.\n"
+        f"- \"area_mismatch\": IMAGE {pano_number} clearly shows a different, "
+        f"unrelated place — nothing about the street or surroundings matches "
+        f"any of {photo_ref}.\n"
+        "- \"inconclusive\": you genuinely cannot tell either way (poor image "
+        f"quality, heavy occlusion, or {photo_ref} has no distinguishing "
+        "surroundings to compare against).\n\n"
+        "The imagery may be newer or older than the report; never judge based on "
+        "timing.\n\n"
+        'Respond as JSON: {"verdict": "...", "explanation": "one short sentence '
+        'about whether the SURROUNDINGS match — never mention whether the '
+        'reported issue itself is visible"}'
+    )
+    parsed = _vision_json_call(prompt=prompt, images=[*submitted, street])
+    if not parsed:
+        return None
+    verdict = str(parsed.get("verdict") or "").lower().strip()
+    if verdict not in STREET_VERDICTS:
+        return None
+    return {
+        "verdict": verdict,
+        "explanation": str(parsed.get("explanation") or "").strip()[:300],
+    }
+
+
+def confirm_media_integrity(
+    *,
+    image: PreparedImage,
+    verdict: str,
+    signals: list[str],
+    min_confidence: float = 0.70,
+) -> dict | None:
+    """Second look at one photo the main analysis flagged.
+
+    A single vision judgement about authenticity is the kind of call that goes
+    wrong on ordinary photos — heavy compression, a burned-in date stamp, an
+    odd shadow on a wet road. Acting on one pass would mean turning real
+    residents away, so a flag has to survive being asked again, cold, with the
+    first answer supplied as a claim to check rather than a conclusion to
+    agree with.
+
+    Returns {"agrees": bool, "verdict": str, "confidence": float,
+    "signals": [...]}, or None when the call failed — the caller treats that
+    as "not confirmed" and the flag is dropped.
+    """
+    listed = "; ".join(signals[:MAX_INTEGRITY_SIGNALS]) or "none given"
+    prompt = (
+        "You are double-checking one photo submitted with a civic concern report "
+        "in a barangay system in the Philippines.\n\n"
+        "An earlier automated check claimed this photo is not a straight, unedited "
+        f"camera photo of a real scene. Its claim was \"{verdict}\", based on: {listed}.\n\n"
+        "That earlier check is often wrong. Do NOT assume it is right and do not try "
+        "to agree with it. Look at the photo yourself and decide independently.\n\n"
+        "Confirm the claim ONLY if you can see the problem yourself and say what it "
+        "is. If the photo looks like an ordinary camera photo, or you cannot tell, "
+        "say so — that is the correct and common answer.\n\n"
+        "These are normal in a real resident's photo and must NEVER confirm a claim: "
+        "compression blocks or artefacts, low light, grain, motion blur, a date or "
+        "time stamp burned in by the camera, portrait-mode background blur, a "
+        "watermark, a rotated or cropped frame, a photo taken at an angle, glare, or "
+        "a dirty lens.\n\n"
+        "Real problems look like: an object whose lighting, shadow direction, or "
+        "scale disagrees with the rest of the scene; edges that are unnaturally "
+        "clean, smeared, or repeated; text or logos that are warped or dissolve into "
+        "scribble; hands, faces, or repeated structures with the wrong count or "
+        "geometry; a scene that could not physically occur; a smooth rendered "
+        "surface unlike camera sensor grain; screen glare, moire, pixel grid, or a "
+        "device bezel showing this is a photo of a screen.\n\n"
+        "verdict must be authentic, suspected_edit, suspected_ai, impossible_content, "
+        "photo_of_screen, or inconclusive.\n"
+        "confidence is 0.0 to 1.0.\n"
+        "signals lists only what you can actually see, in short plain phrases.\n\n"
+        'Respond as JSON: {"verdict": "...", "confidence": 0.0, "signals": []}'
+    )
+    parsed = _vision_json_call(prompt=prompt, images=[image])
+    if not parsed:
+        return None
+    second = str(parsed.get("verdict") or "").lower().strip()
+    if second not in INTEGRITY_VERDICTS:
+        second = "inconclusive"
+    try:
+        confidence = round(min(max(float(parsed.get("confidence") or 0.0), 0.0), 1.0), 3)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    # Both passes must land on a flagged verdict, at confidence. They need not
+    # name the same one: "this portrait is a cartoon" arriving once as
+    # impossible_content and once as suspected_ai is still two independent
+    # findings that something is wrong with the picture.
+    agrees = second in INTEGRITY_FLAGGED_VERDICTS and confidence >= min_confidence
+    return {
+        "agrees": agrees,
+        "verdict": second,
+        "confidence": confidence,
+        "signals": _clean_strings(parsed.get("signals"))[:MAX_INTEGRITY_SIGNALS] if agrees else [],
+    }
+
+
+def compare_photo_duplicates(
+    *,
+    submitted_images: list[PreparedImage],
+    candidates: list[dict],
+) -> list[dict] | None:
+    """Visually compare submitted photos against earlier same-category photos.
+
+    `candidates` items carry {"concern_id", "tracking_id", "captured_at",
+    "image": PreparedImage}. Returns one verdict per candidate, or None when
+    the call failed.
+    """
+    if not submitted_images or not candidates:
+        return None
+    submitted_count = len(submitted_images)
+    lines = [
+        "You detect duplicate civic concern reports by comparing photos.\n",
+        f"IMAGE 1..{submitted_count}: photos attached to the NEW report being checked.",
+    ]
+    for offset, candidate in enumerate(candidates):
+        position = submitted_count + 1 + offset
+        lines.append(
+            f"IMAGE {position}: photo from an EARLIER report "
+            f"(ref {candidate.get('tracking_id') or candidate.get('concern_id')}, "
+            f"filed {candidate.get('captured_at') or 'date unknown'})."
+        )
+    lines += [
+        "\nFor each earlier-report image decide whether it shows the same physical "
+        "issue at the same place as the new report's photos:\n"
+        "- \"same_issue\": clearly the same problem and location.\n"
+        "- \"different\": a different issue or a different place.\n"
+        "- \"uncertain\": cannot tell.\n\n"
+        "Answer for every earlier image, in order.\n"
+        'Respond as JSON: {"comparisons": [{"image": <image number>, '
+        '"verdict": "same_issue|different|uncertain", "reason": "short sentence"}]}'
+    ]
+    parsed = _vision_json_call(prompt="\n".join(lines), images=[*submitted_images, *(c["image"] for c in candidates)])
+    if not parsed:
+        return None
+    results: list[dict] = []
+    seen = set()
+    for item in parsed.get("comparisons") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            position = int(item.get("image"))
+        except (TypeError, ValueError):
+            continue
+        offset = position - submitted_count - 1
+        if offset < 0 or offset >= len(candidates) or offset in seen:
+            continue
+        seen.add(offset)
+        verdict = str(item.get("verdict") or "").lower().strip()
+        if verdict not in PHOTO_DUP_VERDICTS:
+            continue
+        candidate = candidates[offset]
+        results.append({
+            "concern_id": candidate.get("concern_id"),
+            "tracking_id": candidate.get("tracking_id"),
+            "captured_at": candidate.get("captured_at"),
+            "verdict": verdict,
+            "reason": str(item.get("reason") or "").strip()[:200],
+        })
+    return results or None

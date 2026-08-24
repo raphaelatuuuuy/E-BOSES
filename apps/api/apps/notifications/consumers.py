@@ -123,13 +123,22 @@ class OfficialLiveMapConsumer(AuthenticatedJsonConsumer):
         if not await user_can_view_live_map(self.user):
             await self.close(code=4403)
             return
-        self.group_name = "official_live_map"
-        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        from apps.community_scope import community_ids_for_user, department_ids_for_user
+        department_ids = await database_sync_to_async(department_ids_for_user)(self.user)
+        self.group_names = [f"official_live_map_department_{item}" for item in department_ids]
+        if self.user.is_superuser:
+            community_ids = await database_sync_to_async(community_ids_for_user)(self.user)
+            self.group_names.extend(f"official_live_map_community_{item}" for item in community_ids)
+        if not self.group_names:
+            await self.close(code=4403)
+            return
+        for group_name in self.group_names:
+            await self.channel_layer.group_add(group_name, self.channel_name)
         await self.accept()
 
     async def disconnect(self, code):
-        if getattr(self, "group_name", None):
-            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        for group_name in getattr(self, "group_names", []):
+            await self.channel_layer.group_discard(group_name, self.channel_name)
 
     async def live_map_update(self, event):
         await self.send_json(event["payload"])
@@ -140,7 +149,8 @@ def resident_live_map_groups(user):
     from apps.notifications.services import _resident_group_for_barangay
 
     profile = getattr(user, "resident_profile", None)
-    barangay = getattr(profile, "barangay", "") if profile else ""
+    community = getattr(profile, "community_id", None) if profile else None
+    barangay = str(community or (getattr(profile, "barangay", "") if profile else ""))
     return [_resident_group_for_barangay(barangay), f"resident_emergency_{user.pk}"]
 
 

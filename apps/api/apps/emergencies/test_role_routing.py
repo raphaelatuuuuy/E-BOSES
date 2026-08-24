@@ -8,6 +8,7 @@ from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentProfile
 from apps.concerns.test_helpers import grant_position
+from apps.concerns.units import sync_responder_designation
 
 from .models import (
     EmergencyAlert,
@@ -50,7 +51,9 @@ class RoleBasedResponderRoutingTests(APITestCase):
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
         )
-        grant_position(self.official)
+        designation = grant_position(self.official, department_code="bhw")
+        self.community = designation.department.community
+        ResidentProfile.objects.filter(user=self.resident).update(community=self.community)
         self.bhw = self.responder("feat6-bhw@example.com", "+639610000003", User.ResponderUnit.BHW)
         self.tanod = self.responder("feat6-tanod@example.com", "+639610000004", User.ResponderUnit.TANOD)
         self.backup_bhw = self.responder("feat6-backup@example.com", "+639610000005", User.ResponderUnit.BHW)
@@ -76,7 +79,9 @@ class RoleBasedResponderRoutingTests(APITestCase):
             date_of_birth="1990-01-01",
             address="Responder Base",
             barangay="Marikina Heights",
+            community=self.community,
         )
+        sync_responder_designation(user)
         ResponderShift.objects.create(
             responder=user,
             responder_unit=unit,
@@ -93,6 +98,7 @@ class RoleBasedResponderRoutingTests(APITestCase):
             type=type,
             note="Emergency near the covered court.",
             status=status,
+            community=self.community,
             barangay="Marikina Heights",
             latitude="14.6515000",
             longitude="121.1207000",
@@ -154,7 +160,7 @@ class RoleBasedResponderRoutingTests(APITestCase):
             {"status": EmergencyResponderAssignment.Status.ASSISTING, "note": "Trying to act on another responder dispatch."},
             format="json",
         )
-        self.assertEqual(forbidden.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(forbidden.status_code, status.HTTP_404_NOT_FOUND)
 
         self.client.force_authenticate(self.bhw)
         assisting = self.client.post(
@@ -226,7 +232,7 @@ class RoleBasedResponderRoutingTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         alert = EmergencyAlert.objects.get(pk=response.data["emergency_id"])
         self.assertEqual(alert.type, EmergencyAlert.Type.MEDICAL)
-        self.assertEqual(alert.location_source, "sms")
+        self.assertEqual(alert.location_source, "sms_gps")
         self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
         self.assertTrue(alert.assignments.filter(responder=self.bhw).exists())
         self.assertIn("covered court", alert.reported_area)

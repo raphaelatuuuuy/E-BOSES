@@ -44,6 +44,12 @@ function emptyProofValues(): SignUpValues {
     phoneOtpCode: "",
     gender: "prefer_not_to_say",
     avatar: "",
+    homeLatitude: null,
+    homeLongitude: null,
+    homeAccuracyMeters: null,
+    homeLocationSource: null,
+    communityResolutionToken: "",
+    communityMatch: null,
   } as SignUpValues
 }
 

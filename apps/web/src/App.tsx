@@ -1,11 +1,12 @@
 import { lazy, Suspense, type ReactNode, useState } from "react"
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom"
-import { LoaderCircle } from "lucide-react"
 import { toast } from "sonner"
 
 import { confirmPasswordReset, requestPasswordReset, verifyPasswordReset } from "@/features/auth/api"
 import { AuthSessionProvider, getStatusPath, useAuthSession } from "@/features/auth/auth-session"
 import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
+import { LogoSpinner } from "@/components/ui/logo-spinner"
+import { RouteScrollTop } from "@/components/ui/route-scroll-top"
 import DashboardLayout from "@/features/dashboard/dashboard"
 import { getAccessToken } from "@/lib/api"
 import { SystemStatusProvider, SystemTicker, useSystemStatus } from "@/features/dashboard/components/system-banner"
@@ -61,7 +62,7 @@ function ProtectedDashboard() {
   if (loading && !user) {
     return (
       <div className="flex min-h-svh items-center justify-center">
-        <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
+        <LogoSpinner className="size-20" />
       </div>
     )
   }
@@ -88,7 +89,7 @@ function ProtectedOnboarding() {
   if (loading && !user) {
     return (
       <div className="flex min-h-svh items-center justify-center">
-        <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
+        <LogoSpinner className="size-20" />
       </div>
     )
   }
@@ -158,7 +159,7 @@ function AlertsMapRoute() {
   if (loading && !user) {
     return (
       <div className="flex min-h-[50vh] items-center justify-center">
-        <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
+        <LogoSpinner className="size-20" />
       </div>
     )
   }
@@ -183,7 +184,7 @@ function AccountInactiveGate() {
   if (loading && !user) {
     return (
       <div className="flex min-h-svh items-center justify-center">
-        <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
+        <LogoSpinner className="size-20" />
       </div>
     )
   }
@@ -210,7 +211,7 @@ function AccountPendingGate() {
   if (loading && !user) {
     return (
       <div className="flex min-h-svh items-center justify-center">
-        <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
+        <LogoSpinner className="size-20" />
       </div>
     )
   }
@@ -422,7 +423,7 @@ function AssistantMount() {
 function PageLoader() {
   return (
     <div className="flex min-h-svh items-center justify-center">
-      <LoaderCircle className="size-8 animate-spin text-muted-foreground" />
+      <LogoSpinner className="size-20" />
     </div>
   )
 }
@@ -457,10 +458,11 @@ export default function App() {
         <SystemTicker />
         <MaintenanceGate>
           <Suspense fallback={<PageLoader />}>
+            <RouteScrollTop />
             <AppRoutes />
+            <AssistantMount />
           </Suspense>
         </MaintenanceGate>
-        <AssistantMount />
       </SystemStatusProvider>
     </AuthSessionProvider>
   )

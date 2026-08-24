@@ -67,7 +67,7 @@ class SmsAiAssistTests(APITestCase):
             reporter=self.resident,
             type="other",
             note="tulong may sunog malapit sa chapmaca",
-            location_source="sms",
+            location_source="none",
             category_needs_confirmation=True,
             unresolved_fields=["category", "location"],
             reporter_verification=EmergencyAlert.ReporterVerification.UNVERIFIED_NUMBER,
@@ -97,7 +97,8 @@ class SmsAiAssistTests(APITestCase):
         payload = run_rescue(self.alert)
         self.alert.refresh_from_db()
         self.assertEqual(self.alert.type, "fire")
-        self.assertEqual(self.alert.reported_area, "Champaca Street")
+        self.assertEqual(self.alert.reported_area, "")
+        self.assertEqual(self.alert.canonical_street, "Champaca Street")
         self.assertFalse(self.alert.category_needs_confirmation)
         self.assertEqual(self.alert.unresolved_fields, [])
         self.assertEqual(payload["status"], "ok")
@@ -177,6 +178,7 @@ class SmsAiAssistTests(APITestCase):
         }
         run_rescue(self.alert)
         self.alert.refresh_from_db()
-        self.assertEqual(self.alert.reported_area, "sa likod ng simbahan")
+        self.assertEqual(self.alert.reported_area, "")
+        self.assertEqual(self.alert.resolved_location, "sa likod ng simbahan")
         self.assertNotIn("location", self.alert.unresolved_fields)
         self.assertEqual(self.alert.ai_assist["applied"]["area"], "sa likod ng simbahan")

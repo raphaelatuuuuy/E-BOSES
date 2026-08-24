@@ -17,6 +17,8 @@ Reference codes are ``E-<alert id>``. Residents may reply with or without the
 
 from __future__ import annotations
 
+import re
+
 from django.utils import timezone
 
 from .normalize import mask_ph_mobile_sms
@@ -24,7 +26,8 @@ from .normalize import mask_ph_mobile_sms
 BRAND = "E-BOSES"
 
 # Category words the resident can text, with the everyday phrasing that helps
-# someone pick the right one under stress.
+# someone pick the right one under stress. Used as fallback when the barangay
+# has no active emergency types configured yet.
 CATEGORY_MENU = (
     ("FIRE", "fire, smoke"),
     ("MEDICAL", "injury, collapse"),
@@ -36,6 +39,56 @@ CATEGORY_MENU = (
     ("DISASTER", "quake, storm"),
     ("OTHER", "anything else"),
 )
+
+# The word residents type for each configured category code.
+PREFERRED_KEYWORDS = {
+    "fire": "FIRE",
+    "medical": "MEDICAL",
+    "flood": "FLOOD",
+    "crime": "CRIME",
+    "domestic_violence": "VIOLENCE",
+    "child_protection": "CHILD",
+    "dangerous_animal": "ANIMAL",
+    "disaster": "DISASTER",
+    "drug_related": "DRUG",
+    "other": "OTHER",
+}
+
+_FALLBACK_HINTS = {word.lower(): hint for word, hint in CATEGORY_MENU}
+
+
+def _gsm(text: str) -> str:
+    return (text or "").replace("—", "-").replace("–", "-").replace("’", "'").strip()
+
+
+def configured_category_menu() -> list[tuple[str, str]]:
+    """(keyword, hint) pairs from the barangay's active emergency types.
+
+    Read at send time so officials who add or retire a category change what
+    residents are told on the very next GUIDE reply. Falls back to the static
+    menu when nothing is configured or the database is unreachable.
+    """
+    try:
+        from apps.emergencies.models import EmergencyCategory
+
+        rows = EmergencyCategory.objects.filter(is_active=True).order_by("sort_order", "label")
+        menu = []
+        for row in rows:
+            keyword = PREFERRED_KEYWORDS.get(row.code)
+            if not keyword:
+                keyword = re.sub(r"[^A-Z]", "", row.code.upper()) or row.code.upper()
+            hint = _gsm(row.subtext) or _gsm(row.label) or _FALLBACK_HINTS.get(keyword.lower(), "")
+            menu.append((keyword, hint or "emergency help"))
+        if menu:
+            return menu
+    except Exception:
+        pass
+    return [tuple(pair) for pair in CATEGORY_MENU]
+
+
+def _category_examples() -> str:
+    keywords = [word for word, _ in configured_category_menu()]
+    return ", ".join(keywords)
 
 
 def reference(alert) -> str:
@@ -136,14 +189,11 @@ def guide_resident() -> str:
         "",
         "TYPES:",
     ]
-    lines += [f"{word} - {hint}" for word, hint in CATEGORY_MENU]
+    lines += [f"{word} - {hint}" for word, hint in configured_category_menu()]
     lines += [
         "",
         "EXAMPLE:",
         "HELP FIRE Champaca Street",
-        "",
-        "Write the place after the type.",
-        "Exact spelling is not needed.",
     ]
     return "\n".join(lines)
 
@@ -151,24 +201,22 @@ def guide_resident() -> str:
 def unknown_command(raw_text: str = "") -> str:
     """Reply when nothing in the message could be understood.
 
-    Always names what was received so the sender can see the typo, and always
-    offers the emergency path first in case this really is an emergency.
+    Never echoes the received text back — a mistyped banking OTP or a private
+    note must not be repeated over SMS. Always offers the emergency path first
+    in case this really is an emergency.
     """
-    snippet = (raw_text or "").strip().replace("\n", " ")[:40]
-    opening = (
-        f'{BRAND}: Sorry, we did not understand "{snippet}".'
-        if snippet
-        else f"{BRAND}: Sorry, we did not understand that message."
-    )
+    keywords = [word for word, _ in configured_category_menu()]
+    example = keywords[0] if keywords else "FIRE"
+    others = ", ".join(keywords[1:]) or "MEDICAL, CRIME"
     return "\n".join([
-        opening,
+        f"{BRAND}: Sorry, we did not understand your message.",
         "",
         "It looks like the command or the spelling is not correct.",
         "Send GUIDE and we will text you the full list of",
         "commands and categories.",
         "",
         "If this is an emergency right now, send:",
-        "HELP FIRE   (or MEDICAL, FLOOD, CRIME, OTHER)",
+        f"HELP {example}   (or {others})",
     ])
 
 
@@ -179,8 +227,7 @@ def help_needs_category() -> str:
         "Please send HELP and the category, for example:",
         "HELP FIRE Champaca Street",
         "",
-        "Categories: FIRE, MEDICAL, FLOOD, CRIME, VIOLENCE,",
-        "CHILD, ANIMAL, DISASTER, OTHER",
+        _category_examples(),
         "",
         "Send GUIDE for the full list.",
     ])
@@ -206,11 +253,14 @@ def status_reply(alert, *, status_text: str, responder_text: str = "") -> str:
 
 
 def no_active_report() -> str:
+    keywords = [word for word, _ in configured_category_menu()]
+    example = keywords[0] if keywords else "FIRE"
+    others = ", ".join(keywords[1:]) or "MEDICAL, CRIME"
     return "\n".join([
         f"{BRAND}: You have no active emergency report with us right now.",
         "",
         "If you need help, send:",
-        "HELP FIRE   (or MEDICAL, FLOOD, CRIME, OTHER)",
+        f"HELP {example}   (or {others})",
         "",
         "Send GUIDE to see all commands.",
     ])
@@ -347,6 +397,13 @@ def responder_decline_ack(alert, *, reassigned: bool) -> str:
         "",
         "Thank you for telling us quickly.",
     ])
+
+
+def past_incident() -> str:
+    return (
+        f"{BRAND}: This sounds like a past incident, so emergency dispatch was not started. "
+        "If danger is still present, reply HELP and the emergency type. Otherwise, submit it as a concern in E-Boses."
+    )
 
 
 def responder_onscene_ack(alert) -> str:
@@ -622,6 +679,7 @@ def all_static_templates() -> dict[str, str]:
         "guide_official": guide_official(),
         "unknown_command": unknown_command("HELPP FIER"),
         "help_needs_category": help_needs_category(),
+        "past_incident": past_incident(),
         "no_active_report": no_active_report(),
         "responder_no_assignment": responder_no_assignment(),
         "duty_ack_on": duty_ack(on_duty=True, unit_name="Barangay Tanod"),

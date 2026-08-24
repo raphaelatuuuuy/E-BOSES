@@ -1,40 +1,71 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react"
 import { useNavigate } from "react-router-dom"
-import { ChevronLeftIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, XIcon } from "lucide-react"
+import {
+  AlertTriangleIcon,
+  ChevronLeftIcon,
+  CircleAlertIcon,
+  CloudSunIcon,
+  LeafIcon,
+  MegaphoneIcon,
+  SearchIcon,
+  ShieldCheckIcon,
+  TrafficConeIcon,
+} from "lucide-react"
 
-import { Sheet, SheetContent } from "@workspace/ui/components/sheet"
 import { cn } from "@workspace/ui/lib/utils"
 import { useAuthSession } from "@/features/auth/auth-session"
 import {
   getOfficialLiveMap,
+  type ConcernCategory,
   type LiveMapEmergency,
   type LiveMapSnapshot,
   type LiveMapUpdate,
-  type MapDispatchPolicy,
 } from "@/features/dashboard/api"
 import { useIsDesktop } from "@/features/dashboard/lib/shell"
+import { useBottomSheetSnap } from "@/features/dashboard/lib/use-bottom-sheet-snap"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { websocketTicket, websocketUrl } from "@/lib/api"
 
 import { streetOnly } from "@/features/dashboard/lib/location-text"
+import { timeAgo } from "@/features/dashboard/lib/format"
+import { responderUnitLabel } from "@/features/dashboard/lib/people"
+import { concernCategoryLabel } from "@/features/dashboard/components/concerns/concern-display"
+import { advisoryLabel } from "@/features/dashboard/components/community-content/advisory-tags"
+import {
+  MapWeatherCard,
+  MapWeatherIcon,
+  useMapWeather,
+  type MapWeatherState,
+} from "@/features/dashboard/components/map-weather"
+import {
+  MapFilterChips,
+  type MapFilterChip,
+} from "@/features/dashboard/components/map/filter-chips"
 
 import { AlertsLeafletMap } from "@/features/dashboard/components/alerts-map/leaflet-map"
 import { DetailPanel } from "@/features/dashboard/components/alerts-map/detail-panel"
+import {
+  AlertCard,
+  type AlertCardModel,
+} from "@/features/dashboard/components/alerts-map/alert-card"
 import {
   isActiveConcern,
   isResolvedRecord,
   isActiveEmergency,
   defaultLayers,
   emptyLiveMapSnapshot,
-  formatTime,
-  MAP_COLORS,
   mergeUpdate,
   validCoord,
   type LayerKey,
   type Selection,
 } from "@/features/dashboard/components/alerts-map/lib"
-
-const SHEET_COLLAPSED = 56
 
 /**
  * Stable identity, created once. The map is memoised on its props, so handing
@@ -42,121 +73,112 @@ const SHEET_COLLAPSED = 56
  */
 const PENDING_SNAPSHOT = emptyLiveMapSnapshot()
 
-/**
- * The alert feed, as a panel that floats over the map.
- *
- * Dark and translucent rather than a solid white rail: on a full-bleed map the
- * rail cut a hard vertical edge through the barangay and stole a fifth of the
- * only view that matters. Floating keeps the map continuous underneath.
- */
-function AlertsList({
-  feedChips,
-  feedChip,
-  onFeedChipChange,
-  feedItems,
-  onSelect,
-  isCollapsed,
+const FEED_CHIPS: MapFilterChip[] = [
+  { key: "all", label: "All" },
+  { key: "emergencies", label: "Emergencies" },
+  { key: "concerns", label: "Concerns" },
+  { key: "announcements", label: "Announcements" },
+  { key: "resolved", label: "Resolved" },
+]
+
+const SELECTION_LABEL: Record<"emergency" | "concern" | "person", string> = {
+  emergency: "Emergency",
+  concern: "Concern",
+  person: "Person",
+}
+
+function ConcernIcon({ category, className }: { category: ConcernCategory; className?: string }) {
+  if (category === "infrastructure") return <TrafficConeIcon className={className} strokeWidth={1.9} />
+  if (category === "environment") return <LeafIcon className={className} strokeWidth={1.9} />
+  if (category === "public_safety") return <ShieldCheckIcon className={className} strokeWidth={1.9} />
+  return <SearchIcon className={className} strokeWidth={1.9} />
+}
+
+function titleCase(value: string) {
+  return value.replace(/_/g, " ").trim()
+}
+
+type FeedRow = {
+  key: string
+  selection?: Selection
+  model: AlertCardModel
+  icon: ReactNode
+  onAction?: () => void
+}
+
+const AlertsFeed = memo(function AlertsFeed({
   areaName,
+  total,
+  rows,
+  onSelect,
+  weatherMode = false,
+  weatherToggle,
+  weather,
 }: {
-  feedChips: readonly string[]
-  feedChip: string
-  onFeedChipChange: (chip: string) => void
-  feedItems: Array<{ kind: "emergency" | "concern"; id: number; title: string; sub: string; time: string; priority?: string }>
+  areaName: string
+  total: number
+  rows: FeedRow[]
   onSelect: (selection: Selection) => void
-  isCollapsed?: boolean
-  areaName?: string
+  weatherMode?: boolean
+  weatherToggle?: ReactNode
+  weather?: MapWeatherState
 }) {
-  const heading = areaName ? `Alerts in ${areaName}` : "Alerts in your coverage area"
-
-  if (isCollapsed) {
-    return (
-      <div className="flex min-h-0 flex-col text-white">
-        <div className="shrink-0 px-4 pb-2 pt-0.5 text-center">
-          <p className="text-[10px] font-semibold text-white/50">{heading}</p>
-        </div>
-      </div>
-    )
-  }
-
+  const asOf = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
   return (
-    <div className="flex min-h-0 flex-col text-white">
-      <div className="shrink-0 px-4 pt-3.5 text-center">
-        <p className="text-[10px] font-semibold text-white/40">{heading}</p>
-      </div>
-
-      <div className="shrink-0 px-4 pb-3 pt-3">
-        <div className="flex min-w-0 gap-1.5">
-          {feedChips.map((chip) => (
-            <button
-              key={chip}
-              type="button"
-              onClick={() => onFeedChipChange(chip)}
-              aria-pressed={feedChip === chip}
-              className={cn(
-                "flex h-8 min-w-0 flex-1 items-center justify-center rounded-lg px-2 text-[11.5px] font-bold transition-colors",
-                feedChip === chip
-                  ? "bg-brand-orange text-white"
-                  : "bg-white/8 text-white/55 hover:bg-white/14 hover:text-white",
-              )}
-            >
-              {chip === "all" ? "All" : chip.charAt(0).toUpperCase() + chip.slice(1)}
-            </button>
-          ))}
+    <>
+      <div className="shrink-0 bg-white px-4 pb-2 pt-3 sm:pt-4">
+        <div className="flex items-center gap-2.5">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-[18px] font-bold leading-tight tracking-tight text-neutral-900 sm:text-[20px]">
+              {weatherMode ? "Weather in" : "Alerts in"}{" "}
+              <span className="text-brand-orange" style={{ color: "var(--color-brand-orange)" }}>
+                {areaName}
+              </span>
+            </h1>
+            <p className="mt-0.5 text-[12px] text-neutral-500">
+              {weatherMode ? `As of ${asOf}` : `${total} on the map`}
+            </p>
+          </div>
+          {!weatherMode && weatherToggle}
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-3 [scrollbar-width:thin]">
-        {feedItems.length === 0 ? (
+      <div
+        className={cn(
+          "scrollbar-hide relative min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4",
+          weatherMode ? "px-4" : "px-3",
+        )}
+      >
+        {weatherMode && weather ? (
+          <MapWeatherCard weather={weather} framed={false} />
+        ) : rows.length === 0 ? (
           <div className="px-3 py-10 text-center">
-            <p className="text-[13px] font-bold text-white/70">Nothing active right now</p>
-            <p className="mt-1 text-[11.5px] font-medium leading-snug text-white/40">
+            <p className="text-[14px] font-semibold text-neutral-800 sm:text-[15px]">
+              Nothing active right now
+            </p>
+            <p className="mt-1 text-[12px] text-neutral-500 sm:text-[13px]">
               New concerns and emergencies appear here the moment they are filed.
             </p>
           </div>
         ) : (
-          <ul className="flex flex-col gap-1">
-            {feedItems.map((item) => {
-              const live = item.kind === "emergency"
-              return (
-                <li key={`${item.kind}-${item.id}`}>
-                  <button
-                    type="button"
-                    onClick={() => onSelect({ kind: item.kind, id: item.id })}
-                    className="flex w-full min-w-0 items-start gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-white/8"
-                  >
-                    {/* A lit dot, matching the pin it corresponds to on the map. */}
-                    <span className="relative mt-1 flex size-2 shrink-0 items-center justify-center">
-                      {live ? (
-                        <span className="absolute size-2 animate-ping rounded-full bg-sos opacity-70" />
-                      ) : null}
-                      <span
-                        className="relative size-2 rounded-full"
-                        style={{ backgroundColor: live ? MAP_COLORS.emergency : MAP_COLORS.concern }}
-                      />
-                    </span>
-
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="truncate text-[12.5px] font-bold text-white">
-                        {item.title}
-                      </span>
-                      <span className="truncate text-[11px] font-medium text-white/40">
-                        {item.sub}
-                      </span>
-                    </span>
-
-                    <span className="shrink-0 whitespace-nowrap text-[10.5px] font-bold text-white/35">
-                      {formatTime(item.time).split(",").at(-1)?.trim()}
-                    </span>
-                  </button>
-                </li>
-              )
-            })}
+          <ul className="flex flex-col gap-2">
+            {rows.map((row) => (
+              <li key={row.key}>
+                <AlertCard
+                  model={row.model}
+                  icon={row.icon}
+                  expanded={false}
+                  onOpen={() => (row.selection ? onSelect(row.selection) : row.onAction?.())}
+                  onAction={row.onAction}
+                />
+              </li>
+            ))}
           </ul>
         )}
       </div>
-    </div>
+    </>
   )
-}
+})
 
 export default function AlertsMapPage() {
   usePageTitle("Alerts Map")
@@ -164,8 +186,6 @@ export default function AlertsMapPage() {
   const isDesktop = useIsDesktop()
   const navigate = useNavigate()
   const [snapshot, setSnapshot] = useState<LiveMapSnapshot | null>(null)
-  const [loaded, setLoaded] = useState(false)
-  const [error, setError] = useState("")
   const [layers, setLayers] = useState(defaultLayers)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [selected, setSelected] = useState<Selection>(() => {
@@ -173,66 +193,50 @@ export default function AlertsMapPage() {
     return Number.isInteger(alertId) && alertId > 0 ? { kind: "emergency", id: alertId } : null
   })
   const [feedChip, setFeedChip] = useState<string>("all")
-  // Height of the mobile sheet in px. Two snap points, plus anything the
-  // official drags it to in between.
-  const [sheetHeight, setSheetHeight] = useState(SHEET_COLLAPSED)
-  const [dragging, setDragging] = useState(false)
-  const dragRef = useRef<{ startY: number; startHeight: number; moved: boolean } | null>(null)
+  const [weatherOpen, setWeatherOpen] = useState(false)
 
-  function sheetBounds() {
-    return { min: SHEET_COLLAPSED, max: Math.round(window.innerHeight * 0.82) }
-  }
+  const sheet = useBottomSheetSnap({ enabled: !isDesktop })
 
-  function onSheetPointerDown(event: React.PointerEvent<HTMLButtonElement>) {
-    event.currentTarget.setPointerCapture(event.pointerId)
-    dragRef.current = { startY: event.clientY, startHeight: sheetHeight, moved: false }
-    setDragging(true)
-  }
+  const weatherBase = snapshot ?? PENDING_SNAPSHOT
+  const weather = useMapWeather(
+    weatherBase.map.center.latitude,
+    weatherBase.map.center.longitude,
+    weatherBase.map.boundary.name,
+  )
 
-  function onSheetPointerMove(event: React.PointerEvent<HTMLButtonElement>) {
-    const drag = dragRef.current
-    if (!drag) return
-    // Guard against a stale drag: if no button is held, the pointer is only
-    // hovering, and the sheet must not follow the cursor. This is the bug where
-    // the sheet "moved on its own" — the drag ref outlived the press.
-    if (event.buttons === 0) {
-      dragRef.current = null
-      setDragging(false)
-      return
-    }
-    // Dragging up grows the sheet, so the delta is inverted.
-    const delta = drag.startY - event.clientY
-    if (Math.abs(delta) > 4) drag.moved = true
-    const { min, max } = sheetBounds()
-    setSheetHeight(Math.min(max, Math.max(min, drag.startHeight + delta)))
-  }
+  const weatherButton = (
+    <button
+      type="button"
+      onClick={() => {
+        setFeedChip("all")
+        setWeatherOpen((value) => !value)
+      }}
+      aria-label={weatherOpen ? "Show the alerts list" : "Show the weather details"}
+      aria-expanded={weatherOpen}
+      title="Weather"
+      className="flex shrink-0 items-center gap-1.5 text-[18px] font-bold leading-tight tracking-tight text-neutral-900 transition-opacity hover:opacity-70 sm:text-[20px]"
+    >
+      {weather.loading && weather.temperature == null ? (
+        <CloudSunIcon className="size-5 shrink-0" />
+      ) : (
+        <MapWeatherIcon code={weather.code} className="size-5 shrink-0" />
+      )}
+      <span className="tabular-nums">
+        {weather.temperature != null ? `${Math.round(weather.temperature)}°C` : "—"}
+      </span>
+    </button>
+  )
 
-  function onSheetPointerUp(event: React.PointerEvent<HTMLButtonElement>) {
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-    const drag = dragRef.current
-    // A tap (no real movement) toggles between the two useful snap points
-    // instead of leaving the sheet wherever a stray pixel of drag left it.
-    if (drag && !drag.moved) {
-      const { min, max } = sheetBounds()
-      const expanded = Math.round(max * 0.6)
-      setSheetHeight((current) => (current > min + 24 ? min : expanded))
-    }
-    // Always clear the drag ref, so a later hover over the grab bar cannot move
-    // the sheet.
-    dragRef.current = null
-    setDragging(false)
-  }
+  const collapseSheetForMap = useCallback(() => {
+    if (isDesktop) return
+    sheet.snapTo("hidden")
+  }, [isDesktop, sheet])
 
   async function load() {
-    setError("")
     try {
       setSnapshot(await getOfficialLiveMap())
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load official live map.")
-    } finally {
-      setLoaded(true)
+    } catch {
+      setSnapshot((current) => current ?? PENDING_SNAPSHOT)
     }
   }
 
@@ -247,6 +251,23 @@ export default function AlertsMapPage() {
     let socket: WebSocket | null = null
     let reconnectTimer: number | undefined
     let closed = false
+    let attempts = 0
+    let pending: LiveMapUpdate[] = []
+    let flushTimer: number | undefined
+
+    const flushPending = () => {
+      flushTimer = undefined
+      if (!pending.length) return
+      const batch = pending
+      pending = []
+      setSnapshot((current) => (current ? batch.reduce(mergeUpdate, current) : current))
+    }
+
+    const reconnectDelay = () => {
+      attempts += 1
+      const backoff = Math.min(30_000, 1500 * 2 ** attempts)
+      return backoff / 2 + Math.random() * (backoff / 2)
+    }
 
     async function connect() {
       try {
@@ -257,7 +278,7 @@ export default function AlertsMapPage() {
         )
       } catch {
         if (!closed) {
-          reconnectTimer = window.setTimeout(() => void connect(), 5000)
+          reconnectTimer = window.setTimeout(() => void connect(), reconnectDelay())
         }
         return
       }
@@ -271,14 +292,20 @@ export default function AlertsMapPage() {
               }),
             )
           }
-          setSnapshot((current) => current ? mergeUpdate(current, message) : current)
+          pending.push(message)
+          if (flushTimer == null) {
+            flushTimer = window.setTimeout(flushPending, 150)
+          }
         } catch {
           // Polling keeps the page correct if a live patch is malformed.
         }
       }
+      socket.onopen = () => {
+        attempts = 0
+      }
       socket.onclose = () => {
         if (!closed) {
-          reconnectTimer = window.setTimeout(() => void connect(), 5000)
+          reconnectTimer = window.setTimeout(() => void connect(), reconnectDelay())
         }
       }
       socket.onerror = () => socket?.close()
@@ -288,6 +315,7 @@ export default function AlertsMapPage() {
     return () => {
       closed = true
       if (reconnectTimer) window.clearTimeout(reconnectTimer)
+      if (flushTimer != null) window.clearTimeout(flushTimer)
       socket?.close()
     }
   }, [user?.id])
@@ -297,7 +325,7 @@ export default function AlertsMapPage() {
   const resolvedRecords = useMemo(
     () => ({
       concerns: snapshot?.concerns.filter(isResolvedRecord) ?? [],
-      emergencies: snapshot?.emergencies.filter(isResolvedRecord) ?? [],
+      emergencies: snapshot?.emergencies.filter((emergency) => !isActiveEmergency(emergency)) ?? [],
     }),
     [snapshot],
   )
@@ -328,38 +356,169 @@ export default function AlertsMapPage() {
     setSnapshot((current) => current ? { ...current, emergencies: current.emergencies.map((item) => item.id === next.id ? next : item) } : current)
   }, [])
 
-  const updatePolicy = useCallback((next: MapDispatchPolicy) => {
-    setSnapshot((current) => current ? { ...current, map: { ...current.map, dispatch_policy: next } } : current)
-  }, [])
-
-  const filteredConcerns = useMemo(() => {
+  const feedRows = useMemo<FeedRow[]>(() => {
     if (!snapshot) return []
-    let items = visibleConcerns
-    if (feedChip === "emergencies") return []
-    if (feedChip !== "all") items = items.filter((c) => c.category === feedChip)
-    return items
-  }, [snapshot, visibleConcerns, feedChip])
+    const rows: Array<FeedRow & { rank: number; time: number }> = []
+    const streetOf = (record: { address?: string | null; barangay?: string | null }) =>
+      streetOnly(record.address?.trim()) || (record.barangay ? `In ${record.barangay}` : "")
 
-  const feedItems = useMemo(() => {
-    if (!snapshot) return []
-    const items: Array<{ kind: "emergency" | "concern"; id: number; title: string; sub: string; time: string; priority?: string }> = []
     if (feedChip === "all" || feedChip === "emergencies") {
-      // Was iterating snapshot.emergencies raw, so resolved and cancelled
-      // incidents stayed in the live feed alongside active ones.
-      for (const em of visibleEmergencies) {
-        items.push({ kind: "emergency", id: em.id, title: `${em.type} emergency`, sub: streetOnly(em.address?.trim()) || (em.barangay ? `In ${em.barangay}` : ""), time: em.created_at })
+      for (const emergency of visibleEmergencies) {
+        const live = isActiveEmergency(emergency)
+        const street = streetOf(emergency)
+        const assignment = emergency.current_assignment
+        const unit = responderUnitLabel(assignment?.responder.responder_unit)
+        rows.push({
+          key: `emergency-${emergency.id}`,
+          selection: { kind: "emergency", id: emergency.id },
+          icon: <AlertTriangleIcon className="size-5" strokeWidth={1.9} />,
+          rank: live ? (assignment ? 1 : 0) : 2,
+          time: new Date(emergency.created_at).getTime(),
+          model: {
+            kind: "emergency",
+            id: emergency.id,
+            live,
+            closed: !live,
+            title: live
+              ? `Ongoing ${titleCase(emergency.type)}${street ? ` around ${street}` : ""}`
+              : `${titleCase(emergency.type)} emergency`,
+            meta: [street, timeAgo(emergency.created_at)].filter(Boolean).join(" · "),
+            status: assignment
+              ? [assignment.responder.full_name, unit, titleCase(assignment.status)]
+                  .filter(Boolean)
+                  .join(" · ")
+              : "Unassigned",
+            snippet: emergency.note || "",
+            actionLabel: assignment ? "Open in Emergency Ops" : "Assign a responder",
+          },
+          onAction: assignment
+            ? () => navigate(`/dashboard/emergencies?alert=${emergency.id}`)
+            : () => selectOnMap({ kind: "emergency", id: emergency.id }),
+        })
       }
     }
-    if (feedChip !== "emergencies") {
-      for (const c of filteredConcerns) {
-        items.push({ kind: "concern", id: c.id, title: c.title, sub: streetOnly(c.address?.trim()) || (c.barangay ? `In ${c.barangay}` : ""), time: c.created_at, priority: c.priority })
-      }
-    }
-    items.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
-    return items.slice(0, 20)
-  }, [snapshot, visibleEmergencies, filteredConcerns, feedChip])
 
-  const feedChips = ["all", "concerns", "emergencies"] as const
+    if (feedChip === "all" || feedChip === "concerns") {
+      for (const concern of visibleConcerns) {
+        const closed = isResolvedRecord(concern)
+        const street = streetOf(concern)
+        rows.push({
+          key: `concern-${concern.id}`,
+          selection: { kind: "concern", id: concern.id },
+          icon: <ConcernIcon category={concern.category} className="size-5" />,
+          rank: 3,
+          time: new Date(concern.created_at).getTime(),
+          model: {
+            kind: "concern",
+            id: concern.id,
+            live: false,
+            closed,
+            title: concern.title,
+            meta: [concernCategoryLabel(concern), street, timeAgo(concern.created_at)]
+              .filter(Boolean)
+              .join(" · "),
+            status: [
+              concern.priority === "high" ? "High priority" : null,
+              concern.reporter.full_name,
+            ]
+              .filter(Boolean)
+              .join(" · "),
+            snippet: concern.description || "",
+            actionLabel: "Open full report",
+          },
+          onAction: () => navigate(`/dashboard/reports/${concern.id}`),
+        })
+      }
+    }
+
+    if (feedChip === "announcements") {
+      for (const advisory of snapshot.advisories ?? []) {
+        const startsAt = advisory.starts_at ?? advisory.expires_at
+        rows.push({
+          key: `advisory-${advisory.id}`,
+          icon: <MegaphoneIcon className="size-5" strokeWidth={1.9} />,
+          rank: 4,
+          time: startsAt ? new Date(startsAt).getTime() : 0,
+          model: {
+            kind: "advisory",
+            id: advisory.id,
+            live: false,
+            closed: false,
+            title: advisory.title,
+            meta: [
+              advisoryLabel(advisory.tag),
+              advisory.affected_streets.length
+                ? `${advisory.affected_streets.length} street${advisory.affected_streets.length > 1 ? "s" : ""}`
+                : "",
+              startsAt ? timeAgo(startsAt) : "",
+            ]
+              .filter(Boolean)
+              .join(" · "),
+            status: null,
+            snippet: advisory.body || "",
+            actionLabel: "Open in Community",
+          },
+          onAction: () => navigate("/dashboard/community-content"),
+        })
+      }
+    }
+
+    if (feedChip === "resolved") {
+      for (const emergency of snapshot.emergencies) {
+        if (isActiveEmergency(emergency)) continue
+        const street = streetOf(emergency)
+        rows.push({
+          key: `emergency-${emergency.id}`,
+          selection: { kind: "emergency", id: emergency.id },
+          icon: <AlertTriangleIcon className="size-5" strokeWidth={1.9} />,
+          rank: 2,
+          time: new Date(emergency.updated_at || emergency.created_at).getTime(),
+          model: {
+            kind: "emergency",
+            id: emergency.id,
+            live: false,
+            closed: true,
+            title: `${titleCase(emergency.type)} emergency`,
+            meta: [street, timeAgo(emergency.updated_at || emergency.created_at)]
+              .filter(Boolean)
+              .join(" · "),
+            status: null,
+            snippet: emergency.note || "",
+            actionLabel: "Open in Emergency Ops",
+          },
+          onAction: () => navigate(`/dashboard/emergencies?alert=${emergency.id}`),
+        })
+      }
+      for (const concern of snapshot.concerns) {
+        if (!isResolvedRecord(concern)) continue
+        const street = streetOf(concern)
+        rows.push({
+          key: `concern-${concern.id}`,
+          selection: { kind: "concern", id: concern.id },
+          icon: <ConcernIcon category={concern.category} className="size-5" />,
+          rank: 3,
+          time: new Date(concern.updated_at || concern.created_at).getTime(),
+          model: {
+            kind: "concern",
+            id: concern.id,
+            live: false,
+            closed: true,
+            title: concern.title,
+            meta: [concernCategoryLabel(concern), street, timeAgo(concern.updated_at || concern.created_at)]
+              .filter(Boolean)
+              .join(" · "),
+            status: null,
+            snippet: concern.description || "",
+            actionLabel: "Open full report",
+          },
+          onAction: () => navigate(`/dashboard/reports/${concern.id}`),
+        })
+      }
+    }
+
+    rows.sort((a, b) => a.rank - b.rank || b.time - a.time)
+    return rows.slice(0, 50)
+  }, [snapshot, visibleEmergencies, visibleConcerns, feedChip, navigate, selectOnMap])
 
   /**
    * Counts describe what is actually drawn, not the size of the roster.
@@ -375,41 +534,70 @@ export default function AlertsMapPage() {
     )
     const byRole = (role: string) => withLocation.filter((person) => person.role === role).length
     return {
-      residents: byRole("resident"),
       responders: byRole("first_responder"),
-      officials: byRole("barangay_official"),
       emergencies: visibleEmergencies.length,
       concerns: visibleConcerns.length,
       advisories: (snapshot?.advisories ?? []).length,
-      resolved: resolvedRecords.concerns.length + resolvedRecords.emergencies.length,
     }
-  }, [snapshot, visibleConcerns, visibleEmergencies, resolvedRecords])
+  }, [snapshot, visibleConcerns, visibleEmergencies])
 
-  // Desktop left panel: list, or the detail panel with its own back/close chrome.
-  // Gated on the JS `isDesktop` flag (not just the `lg:block` CSS class) so the
-  // DetailPanel — which fetches incident details and mounts the chat panel — isn't
-  // double-mounted alongside the mobile Sheet's DetailPanel below.
-  const desktopPanelBody = !isDesktop || panelCollapsed ? null : selected ? (
-    selected.kind === "emergency" || selected.kind === "concern" ? (
-      <div className="flex min-h-0 flex-col">
-        <div className="flex shrink-0 items-center gap-1 border-b border-white/10 px-2 py-2">
-          <button type="button" onClick={clearSelection} className="flex size-8 shrink-0 items-center justify-center rounded-lg text-white/60 transition-colors hover:bg-white/10 hover:text-white" aria-label="Back to the alert list"><ChevronLeftIcon className="size-4.5" strokeWidth={2.25} /></button>
-          <p className="min-w-0 flex-1 truncate text-left text-[13px] font-semibold text-white/60">{selected.kind === "emergency" ? "Emergency" : "Concern"}</p>
-          <button type="button" onClick={clearSelection} className="flex size-8 shrink-0 items-center justify-center rounded-lg text-white/60 transition-colors hover:bg-white/10 hover:text-white" aria-label="Close"><XIcon className="size-4" /></button>
-        </div>
-        {/* The panel sits directly on the glass. It used to draw a white card
-            inside the navy rail, which is what made it read as cramped. */}
-        <div className="staff-dark min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-width:thin]">
-          {snapshot ? <DetailPanel selected={selected} snapshot={snapshot} onClose={clearSelection} onEmergencyUpdated={updateEmergency} /> : null}
-        </div>
+  const areaName = snapshot?.map.boundary.name || "your coverage area"
+
+  // The resident alerts panel, exactly: one white pane, one 40px header row,
+  // and the list swapped for the record in place.
+  const panelBody = (
+    <div className="flex h-full min-h-0 flex-col bg-white text-neutral-900">
+      <div className="shrink-0 bg-white px-3 pb-2 pt-2">
+        <MapFilterChips
+          className="min-w-0"
+          tone="light"
+          chips={FEED_CHIPS}
+          chip={weatherOpen ? "" : feedChip}
+          onSelect={(key) => {
+            setFeedChip(key)
+            setWeatherOpen(false)
+          }}
+          label="Alert types"
+        />
       </div>
-    ) : (
-      snapshot ? <div className="staff-dark min-h-0 overflow-y-auto">{<DetailPanel selected={selected} snapshot={snapshot} onClose={clearSelection} onEmergencyUpdated={updateEmergency} />}</div> : null
-    )
-  ) : (
-    <AlertsList feedChips={feedChips} feedChip={feedChip} onFeedChipChange={setFeedChip} feedItems={feedItems} onSelect={setSelected} areaName={snapshot?.map.boundary.name} />
+      {selected ? (
+        <>
+          <div className="flex shrink-0 items-center gap-1 px-2 pb-1 pt-3">
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="flex size-9 shrink-0 items-center justify-center rounded-full text-neutral-700 hover:bg-neutral-100"
+              aria-label="Back to list"
+            >
+              <ChevronLeftIcon className="size-5" strokeWidth={2.25} />
+            </button>
+            <p className="min-w-0 flex-1 truncate text-left text-[15px] font-semibold text-neutral-600">
+              {SELECTION_LABEL[selected.kind]}
+            </p>
+          </div>
+          <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3">
+            {snapshot ? (
+              <DetailPanel
+                selected={selected}
+                snapshot={snapshot}
+                onEmergencyUpdated={updateEmergency}
+              />
+            ) : null}
+          </div>
+        </>
+      ) : (
+        <AlertsFeed
+          areaName={areaName}
+          total={feedRows.length}
+          rows={feedRows}
+          onSelect={selectOnMap}
+          weatherMode={weatherOpen}
+          weatherToggle={weatherButton}
+          weather={weather}
+        />
+      )}
+    </div>
   )
-
 
   return (
     // Both `h-full` and `flex-1` are required, because the shell wraps this
@@ -420,19 +608,7 @@ export default function AlertsMapPage() {
     //             nothing to resolve against and `flex-1` wins instead.
     // Shipping only one of them collapses the map to zero height on the other
     // breakpoint, which is what rendered the map area as blank.
-    <div
-      className="relative h-full min-h-0 w-full flex-1 overflow-hidden bg-nav-bg"
-      onPointerDown={(e) => {
-        if (!isDesktop && sheetHeight > SHEET_COLLAPSED + 24) {
-          let el = e.target as HTMLElement | null
-          while (el && el !== e.currentTarget) {
-            if (el.getAttribute?.("data-sheet") === "true") return
-            el = el.parentElement
-          }
-          setSheetHeight(SHEET_COLLAPSED)
-        }
-      }}
-    >
+    <div className="relative h-full min-h-0 w-full flex-1 overflow-hidden bg-nav-bg">
       {/* Mounted before the fetch resolves: tiles, controls and the legend are
           the map's own chrome and do not need a single record to be useful.
           The snapshot only fills them in. */}
@@ -444,54 +620,38 @@ export default function AlertsMapPage() {
         onSelect={selectOnMap}
         onToggleLayer={toggleLayer}
         onResetLayers={resetLayers}
-        onPolicyUpdated={updatePolicy}
+        onMapInteract={collapseSheetForMap}
         counts={mapCounts}
       />
 
-      {!loaded ? (
-        <div className="pointer-events-none absolute left-1/2 top-3 z-[650] -translate-x-1/2 rounded-full border border-white/10 bg-nav-bg/85 px-3 py-1.5 text-[11.5px] font-semibold text-white/70 backdrop-blur-md">
-          Loading alerts…
-        </div>
-      ) : null}
-
-      {error ? (
-        <div
-          role="alert"
-          className="absolute inset-x-3 top-3 z-[700] rounded-xl border border-sos/40 bg-nav-bg/90 px-3 py-2 text-[12px] font-bold text-sos backdrop-blur-md"
-        >
-          {error}
-        </div>
-      ) : null}
-
       {/* Desktop: the feed floats over the map instead of cutting a rail. */}
-      <div className="pointer-events-none absolute inset-y-3 left-3 z-[600] hidden lg:block">
-        {panelCollapsed ? (
-          <button
-            type="button"
-            onClick={() => setPanelCollapsed(false)}
-            aria-label="Show the alert list"
-            aria-expanded={false}
-            className="pointer-events-auto flex size-10 items-center justify-center rounded-xl border border-white/10 bg-nav-bg/85 text-white/75 backdrop-blur-md transition-colors hover:bg-nav-raised/80 hover:text-white"
-          >
-            <PanelLeftOpenIcon className="size-5" strokeWidth={2.1} />
-          </button>
-        ) : (
-          <div className="pointer-events-auto flex max-h-full min-h-0 w-[19rem] flex-col overflow-hidden rounded-2xl border border-white/10 bg-nav-bg/85 backdrop-blur-md">
-            <div className="flex shrink-0 items-center justify-end border-b border-white/10 px-2 py-1.5">
-              <button
-                type="button"
-                onClick={() => setPanelCollapsed(true)}
-                aria-label="Hide the alert list"
-                aria-expanded
-                className="flex size-7 items-center justify-center rounded-lg text-white/55 transition-colors hover:bg-white/10 hover:text-white"
-              >
-                <PanelLeftCloseIcon className="size-4.5" strokeWidth={2.1} />
-              </button>
-            </div>
-            {desktopPanelBody}
+      {panelCollapsed ? (
+        <button
+          type="button"
+          onClick={() => setPanelCollapsed(false)}
+          aria-label="Open alerts"
+          title="Open alerts"
+          className="absolute left-4 top-4 z-[600] hidden size-10 items-center justify-center rounded-lg border border-neutral-200 bg-white shadow-md lg:flex"
+        >
+          <CircleAlertIcon className="size-5 shrink-0 text-neutral-800" strokeWidth={2.25} />
+        </button>
+      ) : (
+        <aside className="absolute left-4 top-4 z-[600] hidden max-h-[min(72vh,620px)] w-[min(100%,380px)] flex-col overflow-hidden rounded-2xl bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)] lg:flex">
+          <div className="flex h-10 shrink-0 items-center gap-2 px-3">
+            <CircleAlertIcon className="size-5 shrink-0 text-neutral-800" strokeWidth={2.25} />
+            <button
+              type="button"
+              onClick={() => setPanelCollapsed(true)}
+              className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100"
+              aria-label="Collapse alerts"
+              title="Collapse alerts"
+            >
+              <ChevronLeftIcon className="size-4" strokeWidth={2.25} />
+            </button>
           </div>
-        )}
-      </div>
+          {isDesktop ? panelBody : null}
+        </aside>
+      )}
 
       {/* Mobile: back out of the map without hunting for the bottom nav, which
           this route hides so the map can run full-bleed. */}
@@ -499,65 +659,52 @@ export default function AlertsMapPage() {
         type="button"
         onClick={() => navigate("/dashboard/overview")}
         aria-label="Back to the overview"
-        className="absolute left-3 top-3 z-[600] flex size-10 items-center justify-center rounded-xl border border-white/10 bg-nav-bg/80 text-white/75 backdrop-blur-md transition-colors hover:bg-nav-raised/80 hover:text-white lg:hidden"
+        className="absolute left-3 top-3 z-[600] flex size-10 items-center justify-center rounded-xl border border-neutral-200 bg-white/95 text-neutral-900 shadow-md backdrop-blur transition-colors hover:bg-neutral-100 lg:hidden"
       >
         <ChevronLeftIcon className="size-5" strokeWidth={2.2} />
       </button>
 
-      {/* Mobile: a real draggable sheet. Drag the grab bar to any height, or
-          tap it to snap between the two useful ones. Free dragging matters here
-          because how much map an official wants to keep visible depends on
-          where the incident is, which no fixed pair of stops can guess. */}
-      <div className="absolute inset-x-0 bottom-0 z-[600] lg:hidden">
+      {/* Mobile: one sheet for both the list and the detail, on the same three
+          snap points the resident alerts map uses. Free dragging in between
+          matters because how much map an official wants to keep visible depends
+          on where the incident is. */}
+      <div
+        className={cn(
+          "absolute bottom-0 left-0 right-0 z-[600] flex flex-col overflow-hidden rounded-t-3xl border border-neutral-200 border-b-0 bg-white shadow-[0_-10px_36px_rgba(15,23,42,.18)] lg:hidden",
+          // Only animate on a snap; during a drag the height must track the
+          // finger exactly or it feels like it is lagging behind.
+          !sheet.dragging && "transition-[height] duration-200 ease-out",
+        )}
+        style={{ height: sheet.height, maxHeight: "92svh" }}
+        role="dialog"
+        aria-label="Alerts sheet"
+      >
+        <div
+          onPointerDown={sheet.onHandlePointerDown}
+          onPointerMove={sheet.onHandlePointerMove}
+          onPointerUp={sheet.onHandlePointerUp}
+          onPointerCancel={sheet.onHandlePointerUp}
+          aria-label="Drag sheet"
+          className="flex shrink-0 touch-none cursor-grab flex-col items-center bg-white px-3 pb-1 pt-2 active:cursor-grabbing"
+        >
+          <span className="mb-1 h-1.5 w-11 rounded-full bg-neutral-300" />
+          {sheet.height <= sheet.snaps().hidden + 8 ? (
+            <p className="pb-1 text-[13px] font-semibold text-neutral-700">
+              Alerts in {areaName}
+              {feedRows.length > 0 ? ` · ${feedRows.length}` : ""}
+            </p>
+          ) : null}
+        </div>
+
         <div
           className={cn(
-            "flex flex-col overflow-hidden rounded-t-2xl border border-white/10 border-b-0 bg-nav-bg/92 backdrop-blur-md",
-            // Only animate on a snap; during a drag the height must track the
-            // finger exactly or it feels like it is lagging behind.
-            dragging ? "" : "transition-[height] duration-300 ease-out",
+            "flex min-h-0 flex-1 flex-col overflow-hidden bg-white",
+            sheet.height <= sheet.snaps().hidden + 14 && "pointer-events-none opacity-0",
           )}
-          data-sheet="true"
-          style={{ height: sheetHeight }}
         >
-          <button
-            type="button"
-            onPointerDown={onSheetPointerDown}
-            onPointerMove={onSheetPointerMove}
-            onPointerUp={onSheetPointerUp}
-            aria-label="Drag to resize the alert list"
-            className="flex shrink-0 touch-none flex-col items-center justify-center py-2 transition-colors hover:bg-white/5"
-          >
-            <span className="h-1 w-9 rounded-full bg-white/30" />
-          </button>
-
-          <AlertsList
-            feedChips={feedChips}
-            feedChip={feedChip}
-            onFeedChipChange={setFeedChip}
-            feedItems={feedItems}
-            onSelect={setSelected}
-            isCollapsed={sheetHeight <= SHEET_COLLAPSED + 24}
-            areaName={snapshot?.map.boundary.name}
-          />
+          {!isDesktop ? panelBody : null}
         </div>
       </div>
-
-      {/* Mobile (<1024px): selected incident/concern opens as a bottom sheet over the full-bleed map. */}
-      {!isDesktop ? (
-        <Sheet open={Boolean(selected)} onOpenChange={(open) => { if (!open) setSelected(null) }}>
-          {/* The sheet is capped at 85vh, so its body must scroll. Without
-              `flex` + `min-h-0` + `overflow-y-auto` here, everything below the
-              fold — responders, timeline, evidence, actions — was clipped with
-              no way to reach it, which read as the details failing to load.
-              `overscroll-contain` stops the scroll chaining through to the map
-              underneath once the body hits its end. */}
-          <SheetContent side="bottom" className="staff-dark flex max-h-[85vh] flex-col border-card-line bg-nav-bg">
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4">
-              {snapshot && selected ? <DetailPanel selected={selected} snapshot={snapshot} onClose={clearSelection} onEmergencyUpdated={updateEmergency} /> : null}
-            </div>
-          </SheetContent>
-        </Sheet>
-      ) : null}
     </div>
   )
 }

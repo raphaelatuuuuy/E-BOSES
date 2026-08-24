@@ -6,9 +6,6 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ClockIcon,
-  LandmarkIcon,
-  ShieldUserIcon,
-  UsersRoundIcon,
 } from "lucide-react"
 
 import { apiRequest } from "@/lib/api"
@@ -18,9 +15,9 @@ import {
 } from "../components/landing-page-shell"
 
 const AUDIENCES = [
-  [LandmarkIcon, "Barangay officials", "Configuration hub, verification queue, and audit trail."],
-  [ShieldUserIcon, "First responders", "Dispatch, live location, and shift handover."],
-  [UsersRoundIcon, "Residents' associations", "Reports, alerts, and announcements reach members."],
+  ["apartment", "Barangay officials", "Configuration hub, verification queue, and audit trail."],
+  ["crisis_alert", "First responders", "Dispatch, live location, and shift handover."],
+  ["groups", "Residents' associations", "Reports, alerts, and announcements reach members."],
 ] as const
 
 const SLOTS = [
@@ -180,9 +177,28 @@ export default function BookDemoPage() {
 
         {/* ── features row ── */}
         <div className="mt-14 grid gap-10 sm:grid-cols-3">
-          {AUDIENCES.map(([Icon, title, body]) => (
+          {AUDIENCES.map(([name, title, body]) => (
             <div key={title} className="flex flex-col items-center gap-4 text-center">
-              <Icon className="size-9 text-accent drop-shadow-[0_0_12px_rgba(255,80,3,0.65)]" strokeWidth={1.5} aria-hidden />
+              <span
+                aria-hidden
+                className="material-symbols-outlined select-none transition-all duration-300"
+                style={{
+                  color: "var(--color-brand-orange)",
+                  fontSize: "56px",
+                  lineHeight: 1,
+                  textShadow: "0 0 14px rgba(255,106,26,0.5), 0 0 32px rgba(255,106,26,0.2)",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.textShadow = "0 0 18px rgba(255,106,26,0.85), 0 0 44px rgba(255,106,26,0.45), 0 0 64px rgba(255,106,26,0.15)"
+                  e.currentTarget.style.transform = "scale(1.1)"
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.textShadow = "0 0 14px rgba(255,106,26,0.5), 0 0 32px rgba(255,106,26,0.2)"
+                  e.currentTarget.style.transform = "scale(1)"
+                }}
+              >
+                {name}
+              </span>
               <div>
                 <p className="font-semibold text-landing-cream">{title}</p>
                 <p className="mt-2 text-sm leading-relaxed text-white/55">{body}</p>

@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.cache import caches
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Q
 from django.db import transaction
@@ -8,6 +9,8 @@ from django.shortcuts import get_object_or_404
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.signing import BadSignature, SignatureExpired
 from rest_framework import status
+from drf_spectacular.utils import OpenApiExample, OpenApiResponse, extend_schema, inline_serializer
+from rest_framework import serializers as drf_serializers
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -24,7 +27,13 @@ from apps.concerns.units import sync_responder_designation
 from apps.emergencies.selectors import active_responder_shift_for_update
 from apps.system_state import maintenance_blocks
 
-from .models import AccountRequest, AuditLog, OTPChallenge, ResidenceProof, ResidentSettings
+from .models import AccountRequest, AuditLog, DataSubjectRequest, OTPChallenge, ResidenceProof, ResidentSettings
+from .community_resolution import (
+    CommunityResolutionError,
+    create_resolution,
+    resolve_token,
+    verified_resident_count,
+)
 from .permissions import user_has_role_permission
 from .privacy_services import (
     PrivacyRequestConflict,
@@ -43,7 +52,9 @@ from .serializers import (
     AccountRequestReviewSerializer,
     AdminCreateUserSerializer,
     ChangePasswordSerializer,
+    CommunityResolveSerializer,
     LoginRejected,
+    LoginSerializer,
     LoginSerializer,
     OTPResendSerializer,
     OTPVerifySerializer,
@@ -65,7 +76,6 @@ from .serializers import (
     UserSummarySerializer,
 )
 from .media_services import (
-    ensure_residence_proof_preview,
     log_raw_media_access,
     user_can_access_residence_proof_raw,
 )
@@ -96,10 +106,23 @@ def request_meta(request):
     }
 
 
+LAST_SEEN_WRITE_INTERVAL_SECONDS = 60
+
+
 def touch_last_seen(user):
-    if user and user.is_authenticated:
-        user.last_seen_at = timezone.now()
-        user.save(update_fields=["last_seen_at", "updated_at"])
+    """Record presence without a DB write on every request.
+
+    ActiveResponderListView treats last_seen_at within 5 minutes as "on duty",
+    so a 60-second write throttle keeps that window accurate while removing
+    one UPDATE per authenticated request.
+    """
+    if not (user and user.is_authenticated):
+        return
+    # cache.add is atomic: only the first caller in the window wins.
+    if not caches["default"].add(f"last-seen:{user.pk}", True, LAST_SEEN_WRITE_INTERVAL_SECONDS):
+        return
+    user.last_seen_at = timezone.now()
+    user.save(update_fields=["last_seen_at", "updated_at"])
 
 def can_manage_accounts(user):
     return bool(
@@ -165,6 +188,8 @@ class RegisterView(APIView):
         validated_data["proof_sides"] = request.data.getlist("proof_side")
         try:
             user = register_resident(validated_data, request_meta(request))
+        except CommunityResolutionError as exc:
+            return Response({"code": exc.code, "detail": exc.detail}, status=exc.status_code)
         except OTPVerificationError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except (DuplicateProofError, ValidationError) as exc:
@@ -202,22 +227,77 @@ class EmailAvailabilityView(APIView):
 
 
 class CommunityPreviewView(APIView):
-    """Public stats for the sign-up “verified peek” (neighbor count, etc.)."""
+    """Community data for a previously resolved sign-up location."""
 
     permission_classes = [AllowAny]
     authentication_classes = []
     throttle_scope = "auth"
 
-    def get(self, request):
-        User = get_user_model()
-        # Simple count: every registered account with role=resident.
-        neighbors = User.objects.filter(role=User.Role.RESIDENT).count()
-        return Response(
+    def post(self, request):
+        token = request.data.get("token") or ""
+        email = request.data.get("email") or ""
+        try:
+            resolution = resolve_token(token, email=email)
+        except CommunityResolutionError as exc:
+            return Response({"code": exc.code, "detail": exc.detail}, status=exc.status_code)
+        response = Response(
             {
-                "barangay": "Marikina Heights",
-                "neighbors": neighbors,
+                "community": {
+                    "id": str(resolution.community.public_id),
+                    "name": resolution.community.name,
+                },
+                "neighbors": verified_resident_count(resolution.community),
             }
         )
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+class CommunityResolveView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_scope = "auth"
+
+    def post(self, request):
+        serializer = CommunityResolveSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            resolution, token = create_resolution(**serializer.validated_data)
+        except CommunityResolutionError as exc:
+            return Response({"code": exc.code, "detail": exc.detail}, status=exc.status_code)
+
+        from .ocr_api import _document_payload
+
+        documents = [
+            _document_payload(item)
+            for item in resolution.configuration.document_types.filter(enabled=True).order_by("display_order", "id")
+        ]
+        community = resolution.community
+        response = Response(
+            {
+                "token": token,
+                "community": {
+                    "id": str(community.public_id),
+                    "code": community.code,
+                    "name": community.name,
+                    "center": {
+                        "latitude": float(community.center_latitude),
+                        "longitude": float(community.center_longitude),
+                    },
+                    "boundary": community.boundary.geometry if community.boundary_id else None,
+                    "boundary_revision": community.boundary_revision,
+                },
+                "weather_coordinates": {
+                    "latitude": float(community.center_latitude),
+                    "longitude": float(community.center_longitude),
+                },
+                "neighbors": verified_resident_count(community),
+                "ocr_version": resolution.configuration.version,
+                "proof_options": documents,
+            }
+        )
+        response["Cache-Control"] = "no-store"
+        return response
 
 
 class PhoneOTPRequestView(APIView):
@@ -338,9 +418,18 @@ class EmailOTPVerifyView(APIView):
 class ResidenceProofCheckView(APIView):
     permission_classes = [AllowAny]
     parser_classes = [MultiPartParser, FormParser]
-    throttle_scope = "auth"
+    # Forensics on anonymous uploads is expensive CPU; this endpoint gets its
+    # own budget so login/OTP bursts cannot share (or exhaust) it.
+    throttle_scope = "proof_preflight"
 
     def post(self, request):
+        try:
+            resolution = resolve_token(
+                request.data.get("community_resolution_token") or "",
+                email=request.data.get("email") or "",
+            )
+        except CommunityResolutionError as exc:
+            return Response({"code": exc.code, "detail": exc.detail}, status=exc.status_code)
         proof_files = request.FILES.getlist("proof")
         if not proof_files:
             return Response(
@@ -365,7 +454,7 @@ class ResidenceProofCheckView(APIView):
                 from .ocr_runtime import document_type_for_registration
 
                 # Validate type exists / enabled only — not side completeness
-                document_type_for_registration(proof_type)
+                document_type_for_registration(proof_type, configuration=resolution.configuration)
         except (DuplicateProofError, ValidationError) as exc:
             if hasattr(exc, "message_dict"):
                 return Response(exc.message_dict, status=status.HTTP_400_BAD_REQUEST)
@@ -379,9 +468,16 @@ class ResidenceProofDetectView(APIView):
 
     permission_classes = [AllowAny]
     parser_classes = [MultiPartParser, FormParser]
-    throttle_scope = "auth"
+    throttle_scope = "proof_preflight"
 
     def post(self, request):
+        try:
+            resolution = resolve_token(
+                request.data.get("community_resolution_token") or "",
+                email=request.data.get("email") or "",
+            )
+        except CommunityResolutionError as exc:
+            return Response({"code": exc.code, "detail": exc.detail}, status=exc.status_code)
         proof_files = request.FILES.getlist("proof")
         if not proof_files:
             proof = request.FILES.get("file") or request.FILES.get("proof")
@@ -404,6 +500,47 @@ class ResidenceProofDetectView(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Stage 1 of the pipeline, and it has to happen here. EXIF tags, C2PA
+        # manifests, and the compression history ELA reads all live in the bytes
+        # the resident sent; the validation below normalizes every upload to
+        # JPEG, which destroys all three. Run it first, then hand the verdict
+        # down so detect does not re-derive it from a re-encode.
+        from .media_forensics import forensics_findings
+        from .id_pipeline import FORENSICS_RESUBMIT_MESSAGE, STAGE_FORENSICS
+
+        forensics = {"checked": False, "flagged": False, "layer": "", "message": ""}
+        for proof_file in proof_files:
+            try:
+                proof_file.seek(0)
+                raw = proof_file.read()
+                proof_file.seek(0)
+            except Exception:
+                continue
+            if not raw:
+                continue
+            result = forensics_findings(raw)
+            if not forensics.get("checked") or result.get("flagged"):
+                forensics = result
+            if result.get("flagged"):
+                break
+        if forensics.get("flagged"):
+            return Response(
+                {
+                    "detected": False,
+                    "message": FORENSICS_RESUBMIT_MESSAGE,
+                    "reasons": [FORENSICS_RESUBMIT_MESSAGE],
+                    "id_integrity": None,
+                    "pipeline": {
+                        "reached": STAGE_FORENSICS,
+                        "blocked_by": STAGE_FORENSICS,
+                        "forensics": forensics,
+                        "message": FORENSICS_RESUBMIT_MESSAGE,
+                        "detail": forensics.get("message") or "",
+                    },
+                },
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
         try:
             from .services import validate_residence_proof_uploads_for_detect
 
@@ -459,6 +596,8 @@ class ResidenceProofDetectView(APIView):
                         hint_type=hint_type,
                         side=side,
                         submitted_profile=submitted_profile,
+                        configuration=resolution.configuration,
+                        forensics=forensics,
                     )
 
                 # OCR.space is an I/O-bound HTTP call, so the two sides can run
@@ -504,6 +643,8 @@ class ResidenceProofDetectView(APIView):
                     hint_type=(request.data.get("proof_type") or "").strip() or None,
                     side=detect_side,
                     submitted_profile=submitted_profile,
+                    configuration=resolution.configuration,
+                    forensics=forensics,
                 )
         except Exception:
             import logging
@@ -525,6 +666,42 @@ class LoginView(APIView):
     permission_classes = [AllowAny]
     throttle_classes = [LoginIdentifierThrottle, LoginIPThrottle]
 
+    @extend_schema(
+        summary="Log in",
+        description=(
+            "Exchange an email **or** phone number plus password for a JWT pair. "
+            "The refresh token is also set as an HttpOnly cookie. Rate limited to "
+            "5 attempts per identifier per minute."
+        ),
+        request=LoginSerializer,
+        responses={
+            200: OpenApiResponse(
+                response=inline_serializer(
+                    name="LoginSuccess",
+                    fields={
+                        "access": drf_serializers.CharField(help_text="Short-lived JWT for Authorization: Bearer calls."),
+                        "user": UserSummarySerializer(),
+                    },
+                ),
+                description="Signed in. The refresh token rides an HttpOnly cookie.",
+            ),
+            400: OpenApiResponse(description="`{detail, code}` — e.g. code=invalid_credentials."),
+            503: OpenApiResponse(description="Maintenance window blocks sign-in."),
+        },
+        examples=[
+            OpenApiExample(
+                "Resident login",
+                value={"identifier": "juan.reyes@example.com", "password": "Str0ng!Passphrase"},
+                request_only=True,
+            ),
+            OpenApiExample(
+                "Phone-number login",
+                value={"identifier": "+639171234567", "password": "Str0ng!Passphrase"},
+                request_only=True,
+            ),
+        ],
+        tags=["auth"],
+    )
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         try:
@@ -640,6 +817,16 @@ class LogoutView(APIView):
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        summary="Current account",
+        description="Profile of the authenticated account; updates accept profile fields.",
+        request=None,
+        responses={
+            200: UserSummarySerializer,
+            401: OpenApiResponse(description="Missing or expired access token."),
+        },
+        tags=["auth"],
+    )
     def get(self, request):
         touch_last_seen(request.user)
         return Response(UserSummarySerializer(request.user).data)
@@ -672,6 +859,11 @@ class ResidentSettingsView(APIView):
         serializer = ResidentSettingsSerializer(settings_obj, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        if serializer.validated_data.get("location_sharing_enabled") is False:
+            request.user.current_latitude = None
+            request.user.current_longitude = None
+            request.user.location_updated_at = None
+            request.user.save(update_fields=["current_latitude", "current_longitude", "location_updated_at", "updated_at"])
         create_audit_log("settings.updated", actor=request.user, target_user=request.user, metadata={"fields": sorted(serializer.validated_data.keys())}, request_meta=request_meta(request))
         return Response(serializer.data)
 
@@ -782,6 +974,73 @@ class AccountRequestListCreateView(APIView):
             request_meta=request_meta(request),
         )
         return Response(AccountRequestSerializer(account_request).data, status=status.HTTP_201_CREATED)
+
+
+class DataSubjectRequestView(APIView):
+    """PH Data Privacy Act erasure request: file it, officials approve in admin."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        summary="Latest data privacy request",
+        description="Returns the resident's most recent erasure request and its status.",
+        request=None,
+        responses={
+            200: OpenApiResponse(
+                response=inline_serializer(
+                    name="DataSubjectRequestStatus",
+                    fields={
+                        "id": drf_serializers.IntegerField(),
+                        "kind": drf_serializers.CharField(),
+                        "status": drf_serializers.CharField(help_text="none | pending | approved | declined | completed"),
+                        "requested_at": drf_serializers.DateTimeField(),
+                    },
+                ),
+            ),
+        },
+        tags=["auth"],
+    )
+    def get(self, request):
+        latest = DataSubjectRequest.objects.filter(user=request.user).order_by("-requested_at").first()
+        if not latest:
+            return Response({"status": "none"})
+        return Response({
+            "id": latest.pk,
+            "kind": latest.kind,
+            "status": latest.status,
+            "requested_at": latest.requested_at,
+        })
+
+    @extend_schema(
+        summary="File a data erasure request",
+        description=(
+            "Creates an erasure request under the PH Data Privacy Act. An official "
+            "reviews it in Django admin; on approval a worker deletes every uploaded "
+            "file and the account itself. Idempotent: while one request is pending or "
+            "approved, repeats return it unchanged."
+        ),
+        request=None,
+        responses={
+            201: OpenApiResponse(
+                response=inline_serializer(
+                    name="DataSubjectRequestCreated",
+                    fields={"id": drf_serializers.IntegerField(), "status": drf_serializers.CharField()},
+                ),
+                description="Request filed.",
+            ),
+            200: OpenApiResponse(description="An active request already exists; its state is returned."),
+        },
+        tags=["auth"],
+    )
+    def post(self, request):
+        active = DataSubjectRequest.objects.filter(
+            user=request.user,
+            status__in=[DataSubjectRequest.Status.PENDING, DataSubjectRequest.Status.APPROVED],
+        ).first()
+        if active:
+            return Response({"id": active.pk, "status": active.status}, status=status.HTTP_200_OK)
+        dsr = DataSubjectRequest.objects.create(user=request.user)
+        return Response({"id": dsr.pk, "status": dsr.status}, status=status.HTTP_201_CREATED)
 
 
 class DeactivateAccountView(APIView):
@@ -1703,5 +1962,15 @@ class ResidenceProofPreviewMediaView(APIView):
             object_id=proof.pk,
             request_meta=request_meta(request),
         )
-        preview = ensure_residence_proof_preview(proof)
-        return FileResponse(preview.open("rb"), content_type="image/jpeg")
+        if proof.blurred_preview_file:
+            return FileResponse(proof.blurred_preview_file.open("rb"), content_type="image/jpeg")
+        # Rendering (OpenCV face detection + PIL re-encode) never runs on the
+        # request thread; registration already queued it, this covers gaps.
+        from .ocr_tasks import enqueue_residence_proof_preview
+
+        transaction.on_commit(lambda proof_id=proof.pk: enqueue_residence_proof_preview(proof_id))
+        from io import BytesIO
+
+        from .media_services import placeholder_preview_jpeg
+
+        return FileResponse(BytesIO(placeholder_preview_jpeg()), content_type="image/jpeg")

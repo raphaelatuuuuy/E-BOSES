@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import type {
   Announcement,
@@ -9,7 +9,6 @@ import type {
 } from "@/features/dashboard/api"
 import {
   isLocalGps,
-  MAP_BOUNDS,
   validCoord,
 } from "@/features/dashboard/lib/resident-map-utils"
 import {
@@ -22,14 +21,26 @@ import {
   concernMarkerSize,
 } from "@/features/dashboard/components/map/concern-marker"
 import {
-  dotPinHtml,
   glyphPinHtml,
   glyphPinSize,
   GLYPHS,
   MAP_COLORS,
 } from "@/features/dashboard/components/map/markers"
+import {
+  bindHoverCard,
+  closeHoverCardsOnLeave,
+  makeHoverCard,
+  openHoverCard,
+} from "@/features/dashboard/components/map/photo-tooltip"
 import { geoJsonToRing, polygonCentroid } from "@/features/dashboard/components/community-content/area-lib"
-import { geoJsonToLines } from "@/features/dashboard/components/alerts-map/lib"
+import { geoJsonToLines, isActiveEmergency } from "@/features/dashboard/components/alerts-map/lib"
+import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
+import {
+  StreetViewModal,
+  startStreetViewPick,
+  type StreetViewCoord,
+  type StreetViewMapPoint,
+} from "@/features/dashboard/components/map/street-view"
 
 import type leaflet from "leaflet"
 
@@ -41,25 +52,31 @@ export type MapApi = {
   fitBoundary: (paddingBottom?: number) => void
   zoomIn: () => void
   zoomOut: () => void
+  toggleStreetViewPick: () => void
 }
 
 const EMERGENCY_PIN = 28
 
 /** Ongoing SOS — the same circle-and-glyph an official and a responder see. */
-function emergencyPinHtml(selected: boolean) {
+function emergencyPinHtml(selected: boolean, resolved: boolean) {
   return glyphPinHtml({
     paths: GLYPHS.emergency,
-    color: MAP_COLORS.emergency,
+    color: resolved ? MAP_COLORS.resolved : MAP_COLORS.emergency,
     size: EMERGENCY_PIN,
     selected,
     live: false,
+    tint: resolved,
   })
 }
 
-const USER_PIN = 10
+const USER_PIN = 24
 
 function userPinHtml() {
-  return dotPinHtml({ color: MAP_COLORS.you, size: USER_PIN })
+  return glyphPinHtml({
+    paths: GLYPHS.userResident,
+    color: MAP_COLORS.you,
+    size: USER_PIN,
+  })
 }
 
 /**
@@ -85,6 +102,7 @@ export function ResidentLeafletMap({
   onSelectAnnouncement,
   onReady,
   onMapInteract,
+  onStreetViewPickChange,
   policy,
 }: {
   center: { latitude: number; longitude: number; zoom: number }
@@ -107,6 +125,7 @@ export function ResidentLeafletMap({
   onSelectAnnouncement?: (id: number) => void
   onReady: (api: MapApi) => void
   onMapInteract?: () => void
+  onStreetViewPickChange?: (active: boolean) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
@@ -125,6 +144,107 @@ export function ResidentLeafletMap({
     onMapInteractRef.current = onMapInteract
   }, [onMapInteract])
   const [mapReady, setMapReady] = useState(false)
+  const [svPick, setSvPick] = useState(false)
+  const [svCoord, setSvCoord] = useState<StreetViewCoord | null>(null)
+  const onStreetViewPickChangeRef = useRef(onStreetViewPickChange)
+  useEffect(() => {
+    onStreetViewPickChangeRef.current = onStreetViewPickChange
+  }, [onStreetViewPickChange])
+
+  const svPoints = useMemo<StreetViewMapPoint[]>(() => {
+    const points: StreetViewMapPoint[] = []
+    if (userPos && isLocalGps(userPos, boundary?.geometry)) {
+      points.push({
+        id: "you",
+        lat: userPos.lat,
+        lng: userPos.lng,
+        html: userPinHtml(),
+        size: USER_PIN,
+        title: "You are here",
+      })
+    }
+    for (const post of posts) {
+      const pos = validCoord(post.latitude, post.longitude)
+      if (!pos) continue
+      points.push({
+        id: `c${post.id}`,
+        lat: pos[0],
+        lng: pos[1],
+        html: concernMarkerHtml({
+          category: post.category,
+          iconKey: post.category_ref?.icon_key,
+          imageUrl: post.category_ref?.icon_image_url,
+          customLabel: post.category_ref?.custom_icon_label,
+          status: post.status,
+          selected: false,
+        }),
+        size: concernMarkerSize(false),
+        title: post.title,
+        meta: post.category_ref?.name ?? undefined,
+        excerpt: post.summary || post.description,
+        image: post.media?.[0]?.preview_url ?? null,
+      })
+    }
+    for (const announcement of announcements) {
+      let pos = validCoord(announcement.latitude, announcement.longitude)
+      if (!pos && announcement.area_geometry) pos = polygonCentroid(announcement.area_geometry)
+      if (!pos) continue
+      points.push({
+        id: `a${announcement.id}`,
+        lat: pos[0],
+        lng: pos[1],
+        html: advisoryMarkerHtml(announcement.tag, 26, "light", false),
+        size: advisoryMarkerSize(26, false),
+        title: announcement.title,
+        meta: announcement.place_label || "Barangay advisory",
+        excerpt: announcement.body,
+        image: announcement.image_url,
+      })
+    }
+    for (const emergency of emergencies) {
+      const pos = validCoord(emergency.latitude, emergency.longitude)
+      if (!pos) continue
+      const settled = !isActiveEmergency(emergency)
+      points.push({
+        id: `e${emergency.id}`,
+        lat: pos[0],
+        lng: pos[1],
+        html: emergencyPinHtml(false, settled),
+        size: EMERGENCY_PIN,
+        title: emergency.type_label,
+        meta: emergency.address,
+        excerpt: emergency.note,
+        image: emergency.preview_url,
+      })
+    }
+    return points
+  }, [posts, emergencies, announcements, userPos])
+
+  function toggleStreetViewPick() {
+    setSvPick((value) => {
+      const next = !value
+      onStreetViewPickChangeRef.current?.(next)
+      return next
+    })
+  }
+
+  useEffect(() => {
+    if (!svPick || !mapReady) return
+    const map = mapRef.current
+    if (!map) return
+    const cleanup = startStreetViewPick(map, {
+      onPick: (coord) => {
+        setSvPick(false)
+        onStreetViewPickChangeRef.current?.(false)
+        setSvCoord(coord)
+      },
+      onCancel: () => {
+        setSvPick(false)
+        onStreetViewPickChangeRef.current?.(false)
+      },
+    })
+    return cleanup
+  }, [svPick, mapReady])
 
   const boundaryGeomKey = boundary?.geometry ? JSON.stringify(boundary.geometry) : ""
   const fittedGeomKeyRef = useRef("")
@@ -176,19 +296,11 @@ export function ResidentLeafletMap({
       }
       LRef.current = L
 
-      // Keep the map inside greater Marikina so tiles stay meaningful
-      const maxBounds = L.latLngBounds(
-        [MAP_BOUNDS.minLat - 0.02, MAP_BOUNDS.minLng - 0.02],
-        [MAP_BOUNDS.maxLat + 0.02, MAP_BOUNDS.maxLng + 0.02],
-      )
-
       map = L.map(containerRef.current, {
         center: [center.latitude, center.longitude],
         zoom: Math.min(Math.max(center.zoom || 15, 13), 17),
         minZoom: 12,
         maxZoom: 19,
-        maxBounds,
-        maxBoundsViscosity: 0.85,
         zoomControl: false,
         attributionControl: false,
         preferCanvas: false,
@@ -202,24 +314,19 @@ export function ResidentLeafletMap({
        * Tailwind img max-width is overridden via .eboses-alerts-map CSS so
        * tiles stay visible.
        */
-      const carto = L.tileLayer(
-        "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-        {
-          attribution: "&copy; OpenStreetMap &copy; CARTO",
-          maxZoom: 19,
-          subdomains: "abcd",
-          keepBuffer: 6,
-          updateWhenIdle: true,
-          className: "eboses-map-tiles",
-        },
-      )
-      carto.addTo(map)
+      addBaseTiles(L, map, "light", {
+        attribution: "&copy; OpenStreetMap &copy; CARTO",
+        maxZoom: 19,
+        keepBuffer: 6,
+        className: "eboses-map-tiles",
+      })
 
       // Hover-only barangay fill: sits beneath every advisory road/marker.
       highlightGroupRef.current = L.layerGroup().addTo(map)
       coverageGroupRef.current = L.layerGroup().addTo(map)
       groupRef.current = L.layerGroup().addTo(map)
       mapRef.current = map
+      closeHoverCardsOnLeave(map)
 
       const forcePaint = () => {
         if (!map || cancelled) return
@@ -283,6 +390,7 @@ export function ResidentLeafletMap({
           fitBoundary,
           zoomIn: () => map?.zoomIn(),
           zoomOut: () => map?.zoomOut(),
+          toggleStreetViewPick: () => toggleStreetViewPick(),
         })
         // Multiple paints: container often still settling after route mount
         requestAnimationFrame(forcePaint)
@@ -375,15 +483,16 @@ export function ResidentLeafletMap({
   useEffect(() => {
     if (!mapReady) return
     const L = LRef.current
+    const map = mapRef.current
     const group = groupRef.current
-    if (!L || !group) return
+    if (!L || !map || !group) return
     group.clearLayers()
     advisoryRoadsRef.current.clear()
     highlightGroupRef.current?.clearLayers()
     hoverIdRef.current = null
 
     // Only plot device GPS when near Marikina (avoids far-away user pin)
-    if (userPos && isLocalGps(userPos)) {
+    if (userPos && isLocalGps(userPos, boundary?.geometry)) {
       const userMarker = L.marker([userPos.lat, userPos.lng], {
         icon: L.divIcon({
           className: "",
@@ -394,6 +503,7 @@ export function ResidentLeafletMap({
         zIndexOffset: 1200,
         keyboard: false,
       })
+      userMarker.bindTooltip("You", { direction: "top", offset: [0, -USER_PIN / 2] })
       userMarker.addTo(group)
     }
 
@@ -407,6 +517,9 @@ export function ResidentLeafletMap({
           className: "",
           html: concernMarkerHtml({
             category: post.category,
+            iconKey: post.category_ref?.icon_key,
+            imageUrl: post.category_ref?.icon_image_url,
+            customLabel: post.category_ref?.custom_icon_label,
             status: post.status,
             selected,
           }),
@@ -415,6 +528,17 @@ export function ResidentLeafletMap({
         }),
         zIndexOffset: selected ? 900 : 100,
       })
+      bindHoverCard(
+        L,
+        map,
+        marker,
+        {
+          image: post.media?.[0]?.preview_url ?? null,
+          title: post.title,
+          excerpt: post.summary || post.description,
+        },
+        pinSize,
+      )
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e)
         onSelect(post.id)
@@ -440,9 +564,15 @@ export function ResidentLeafletMap({
         zIndexOffset: selected ? 700 : 600,
         keyboard: true,
       })
+      const card = makeHoverCard(
+        L,
+        { image: announcement.image_url, title: announcement.title, excerpt: announcement.body },
+        pinSize,
+      )
       marker.on("mouseover", () => {
         hoverIdRef.current = id
         applyAdvisoryFocus(id)
+        if (card) openHoverCard(map, card, marker)
       })
       marker.on("mouseout", () => {
         hoverIdRef.current = null
@@ -518,9 +648,7 @@ export function ResidentLeafletMap({
       try {
         const areaLayer = L.geoJSON(geometry as Parameters<typeof L.geoJSON>[0], {
           style: {
-            color: tagColor,
-            weight: 1.5,
-            opacity: 0.55,
+            stroke: false,
             fillColor: tagColor,
             fillOpacity: 0.18,
             interactive: false,
@@ -536,21 +664,31 @@ export function ResidentLeafletMap({
       }
     }
 
-    // Ongoing emergencies — red dots + brief label
+    // Ongoing emergencies — red dots + brief label; settled ones (resolved,
+    // closed, cancelled, false alarm, invalid) go neutral, same rule the
+    // official map uses, so the two never disagree on what "done" means.
     for (const em of emergencies) {
       const pos = validCoord(em.latitude, em.longitude)
       if (!pos) continue
       const selected = selectedEmergencyId === em.id
+      const settled = !isActiveEmergency(em)
       const box = glyphPinSize(EMERGENCY_PIN, selected)
       const marker = L.marker(pos, {
         icon: L.divIcon({
           className: "",
-          html: emergencyPinHtml(selected),
+          html: emergencyPinHtml(selected, settled),
           iconSize: [box, box],
           iconAnchor: [box / 2, box / 2],
         }),
         zIndexOffset: selected ? 1100 : 800,
       })
+      bindHoverCard(
+        L,
+        map,
+        marker,
+        { image: em.preview_url, title: em.type_label, excerpt: em.note },
+        box,
+      )
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e)
         onSelectEmergency?.(em.id)
@@ -707,6 +845,16 @@ export function ResidentLeafletMap({
         className="eboses-alerts-map absolute inset-0 z-0 h-full w-full bg-tint"
         style={{ minHeight: "100%" }}
       />
+      {svCoord ? (
+        <StreetViewModal
+          coord={svCoord}
+          points={svPoints}
+          onMove={(next) => setSvCoord(next)}
+          onClose={() => {
+            setSvCoord(null)
+          }}
+        />
+      ) : null}
     </>
   )
 }

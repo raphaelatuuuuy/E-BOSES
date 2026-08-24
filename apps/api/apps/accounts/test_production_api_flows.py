@@ -163,9 +163,9 @@ class ProductionAPIFlowTests(APITestCase):
         overview = official.get("/api/dashboard/official/summary/")
         categories = official.get("/api/concerns/admin/categories/")
         self.assertEqual(managed.status_code, status.HTTP_200_OK)
-        self.assertIn(concern.pk, [item["id"] for item in managed.data])
+        self.assertIn(concern.pk, [item["id"] for item in managed.data["results"]])
         self.assertEqual(queue.status_code, status.HTTP_200_OK)
-        self.assertIn(alert.pk, [item["id"] for item in queue.data])
+        self.assertIn(alert.pk, [item["id"] for item in queue.data["results"]])
         self.assertEqual(overview.status_code, status.HTTP_200_OK)
         self.assertEqual(categories.status_code, status.HTTP_200_OK)
 

@@ -19,7 +19,6 @@ from rest_framework.views import APIView
 
 from apps.capabilities import MANAGE_USERS, user_has_capability
 
-from .media_services import ensure_residence_proof_preview
 from .models import (
     OCRConfigurationVersion,
     OCRDocumentType,
@@ -57,8 +56,28 @@ SAFE_SETTINGS = {
     "manual_review_on_rule_mismatch": (bool, None, None),
     "auto_approve_on_all_required_pass": (bool, None, None),
     "failure_action": (str, {"manual_review", "reject", "request_resubmission"}, None),
+    # The picture check itself is not configurable — only how sure the model
+    # has to be before its opinion counts against a resident.
+    "id_integrity_min_confidence": (float, 0.0, 1.0),
 }
+# Keys the builder used to send. The picture check is no longer optional, so a
+# value for these decides nothing — but a published configuration or a browser
+# tab left open from before the change still carries them, and rejecting the
+# whole PATCH over a setting that no longer exists breaks every unrelated edit
+# on that screen. Accept and drop.
+RETIRED_SETTINGS = frozenset({"id_integrity_enabled", "id_integrity_compare_sample"})
+
 SAFE_CODE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
+
+
+def _delete_replaced_file(storage, old_name, new_name):
+    """Remove the previous blob when an upload replaces another, best effort."""
+    if not old_name or old_name == new_name:
+        return
+    try:
+        storage.delete(old_name)
+    except Exception:
+        pass
 
 
 def _official(request):
@@ -76,6 +95,20 @@ def _official(request):
             )
         )
     )
+
+
+def _official_community(request):
+    from apps.emergencies.models import Community
+
+    requested = request.data.get("community_id") if hasattr(request, "data") else None
+    requested = requested or request.query_params.get("community_id")
+    if request.user.is_superuser and requested:
+        return Community.objects.filter(public_id=requested, status=Community.Status.ACTIVE).first()
+    community_id = request.user.designations.filter(
+        is_active=True,
+        department__community__status=Community.Status.ACTIVE,
+    ).values_list("department__community_id", flat=True).first()
+    return Community.objects.filter(pk=community_id).first() if community_id else None
 
 
 def _normalize_extraction_hints(raw) -> dict:
@@ -232,6 +265,11 @@ def _document_payload(document_type):
         "provider_names": document_type.provider_names or [],
         "aliases": document_type.aliases or [],
         "display_order": document_type.display_order,
+        # Whether the picture check has a reference to compare submissions
+        # against. Read from the same rows the pipeline reads, so a blank here
+        # means the pipeline really does get nothing — the config screen is
+        # reporting live state, not a label somebody typed.
+        "has_reference_sample": bool(samples) or bool(getattr(document_type, "sample_file", None)),
         "template_name": getattr(document_type, "template_name", None) or document_type.name,
         "template_version": getattr(document_type, "template_version", None) or "v1.0",
         "expected_title": getattr(document_type, "expected_title", None) or "",
@@ -354,6 +392,8 @@ def _validate_settings(settings):
         raise ValidationError({"settings": ["Settings must be an object."]})
     result = {}
     for key, value in settings.items():
+        if key in RETIRED_SETTINGS:
+            continue
         if key not in SAFE_SETTINGS:
             raise ValidationError({"settings": [f"Unsupported setting: {key}."]})
         expected, lower, upper = SAFE_SETTINGS[key]
@@ -390,6 +430,7 @@ def _safe_list(value, *, label, max_items=64):
 @transaction.atomic
 def _clone_configuration(source, *, version, status, based_on=None):
     target = OCRConfigurationVersion.objects.create(
+        community=source.community,
         scope=source.scope,
         version=version,
         status=status,
@@ -792,7 +833,10 @@ class ResidenceProofOptionsView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        published = published_configuration()
+        if not request.user.is_authenticated:
+            return Response({"detail": "Sign-up proof options are returned by community resolution."}, status=status.HTTP_401_UNAUTHORIZED)
+        community = getattr(getattr(request.user, "resident_profile", None), "community", None)
+        published = published_configuration(community=community)
         document_types = []
         if published is not None:
             document_types = [
@@ -847,13 +891,19 @@ class OCRDraftConfigurationView(APIView):
     def get(self, request):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        return Response(_configuration_payload(draft_configuration()))
+        community = _official_community(request)
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
+        return Response(_configuration_payload(draft_configuration(community=community)))
 
     def patch(self, request):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
         try:
-            configuration = _apply_draft_payload(draft_configuration(), request.data)
+            community = _official_community(request)
+            if not community:
+                return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
+            configuration = _apply_draft_payload(draft_configuration(community=community), request.data)
         except (ValidationError, TypeError, ValueError) as exc:
             detail = getattr(exc, "message_dict", None) or getattr(exc, "messages", None) or str(exc)
             return Response(detail, status=status.HTTP_400_BAD_REQUEST)
@@ -868,8 +918,12 @@ class OCRPublishView(APIView):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
         with transaction.atomic():
-            draft = OCRConfigurationVersion.objects.select_for_update().filter(scope="residence_proof", status="draft").first()
-            published = OCRConfigurationVersion.objects.select_for_update().filter(scope="residence_proof", status="published").first()
+            community = _official_community(request)
+            if not community:
+                return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
+            scoped = OCRConfigurationVersion.objects.select_for_update().filter(scope="residence_proof", community=community)
+            draft = scoped.filter(status="draft").first()
+            published = scoped.filter(status="published").first()
             if draft is None:
                 return Response({"detail": "No draft configuration exists."}, status=status.HTTP_409_CONFLICT)
             expected = request.data.get("revision")
@@ -884,7 +938,7 @@ class OCRPublishView(APIView):
             draft.published_at = now
             draft.revision += 1
             draft.save(update_fields=["status", "published_by", "published_at", "revision", "updated_at"])
-            fresh = _clone_configuration(draft, version=OCRConfigurationVersion.objects.filter(scope="residence_proof").order_by("-version").first().version + 1, status=OCRConfigurationVersion.Status.DRAFT, based_on=draft)
+            fresh = _clone_configuration(draft, version=scoped.order_by("-version").first().version + 1, status=OCRConfigurationVersion.Status.DRAFT, based_on=draft)
         published_payload = _configuration_payload(draft)
         enabled_count = sum(1 for item in (published_payload or {}).get("document_types", []) if item.get("enabled", True))
         create_audit_log(
@@ -910,11 +964,15 @@ class OCRResetDefaultsView(APIView):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
         with transaction.atomic():
-            published = OCRConfigurationVersion.objects.filter(scope="residence_proof", status="published").first()
+            community = _official_community(request)
+            if not community:
+                return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
+            scoped = OCRConfigurationVersion.objects.filter(scope="residence_proof", community=community)
+            published = scoped.filter(status="published").first()
             if not published:
                 return Response({"detail": "No published configuration exists."}, status=status.HTTP_409_CONFLICT)
-            OCRConfigurationVersion.objects.filter(scope="residence_proof", status="draft").update(status="archived", updated_at=timezone.now())
-            next_version = OCRConfigurationVersion.objects.filter(scope="residence_proof").order_by("-version").values_list("version", flat=True).first() + 1
+            scoped.filter(status="draft").update(status="archived", updated_at=timezone.now())
+            next_version = scoped.order_by("-version").values_list("version", flat=True).first() + 1
             fresh = _clone_configuration(published, version=next_version, status=OCRConfigurationVersion.Status.DRAFT, based_on=published)
         create_audit_log("ocr.configuration_reset_defaults", actor=request.user, metadata={"based_on": published.version, "draft_version": fresh.version})
         return Response(_configuration_payload(fresh))
@@ -986,13 +1044,19 @@ class OCRTestRunView(APIView):
     def get(self, request):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        runs = OCRTestRun.objects.select_related("document_type", "configuration").order_by("-created_at")[:50]
+        community = _official_community(request)
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
+        runs = OCRTestRun.objects.select_related("document_type", "configuration").filter(configuration__community=community).order_by("-created_at")[:50]
         return Response({"results": [_test_payload(run) for run in runs]})
 
     def post(self, request):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        config = draft_configuration()
+        community = _official_community(request)
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
+        config = draft_configuration(community=community)
         code = request.data.get("document_type")
         file = request.FILES.get("file")
         if not config or not code or not file:
@@ -1005,6 +1069,23 @@ class OCRTestRunView(APIView):
                 {"document_type": ["Select a draft document type from the template builder."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Layer 1-4 forensics read the bytes as uploaded. Validation below
+        # normalizes to JPEG, which strips EXIF and C2PA and rewrites the
+        # compression history ELA depends on, so this cannot wait until the
+        # worker opens the stored file.
+        from .media_forensics import forensics_findings
+
+        try:
+            file.seek(0)
+            original_bytes = file.read()
+            file.seek(0)
+        except Exception:
+            original_bytes = b""
+        forensics = (
+            forensics_findings(original_bytes)
+            if original_bytes
+            else {"checked": False, "flagged": False, "layer": "", "message": ""}
+        )
         try:
             # Soft validation for interactive tests (same as template samples).
             file = validate_uploaded_media_file(file, strict=False, deskew=False)
@@ -1029,11 +1110,12 @@ class OCRTestRunView(APIView):
             for key in ("first_name", "middle_name", "last_name", "gender", "date_of_birth", "address")
         }
         simulated_profile = {key: value for key, value in simulated_profile.items() if value}
+        metadata = dict(run.metadata or {})
+        metadata["forensics"] = forensics
         if simulated_profile:
-            metadata = dict(run.metadata or {})
             metadata["simulated_profile"] = simulated_profile
-            run.metadata = metadata
-            run.save(update_fields=["metadata", "updated_at"])
+        run.metadata = metadata
+        run.save(update_fields=["metadata", "updated_at"])
         # The local development environment commonly has no Celery worker
         # process.  Run the interactive test immediately there so officials
         # see OCR.space results instead of a job that stays queued forever.
@@ -1047,7 +1129,19 @@ class OCRTestRunView(APIView):
 
                 process_test_run_task.delay(run.pk, side=test_side or "")
             except Exception:
-                process_test_run(run.pk, side=test_side)
+                # Never run a 60s OCR.space call on the request thread. Mark
+                # the run failed so the official sees it and can re-submit;
+                # a silently-queued row would sit here with no sweeper.
+                import logging as _logging
+
+                run.status = run.Status.ERROR
+                metadata = dict(run.metadata or {})
+                metadata["failure_reason"] = "task_broker_unavailable"
+                run.metadata = metadata
+                run.save(update_fields=["status", "metadata", "updated_at"])
+                _logging.getLogger(__name__).warning(
+                    "OCR test run %s marked error: broker submission failed", run.pk
+                )
         run.refresh_from_db()
         create_audit_log("ocr.test_run_created", actor=request.user, metadata={"run_id": run.pk, "document_type": document_type.code})
         return Response(_test_payload(run), status=status.HTTP_202_ACCEPTED)
@@ -1056,10 +1150,15 @@ class OCRTestRunView(APIView):
 def _test_payload(run):
     raw_extracted = run.extracted_fields or {}
     template_match = None
+    id_integrity = None
+    pipeline = None
     extracted = raw_extracted
     if isinstance(raw_extracted, dict):
         template_match = raw_extracted.get("__template_match__")
-        extracted = {key: value for key, value in raw_extracted.items() if key != "__template_match__"}
+        id_integrity = raw_extracted.get("__id_integrity__")
+        pipeline = raw_extracted.get("__pipeline__")
+        internal = {"__template_match__", "__id_integrity__", "__pipeline__", "__test_side__"}
+        extracted = {key: value for key, value in raw_extracted.items() if key not in internal}
     extraction_json = {}
     if isinstance(extracted, dict):
         for key, item in extracted.items():
@@ -1086,6 +1185,8 @@ def _test_payload(run):
         "extracted_fields": extracted,
         "extraction_json": extraction_json,
         "template_match": template_match,
+        "id_integrity": id_integrity,
+        "pipeline": pipeline,
         "rule_results": run.rule_results or [],
         "error_code": run.error_code,
         "error_message": run.error_message,
@@ -1139,7 +1240,7 @@ class OCRDocumentSampleView(APIView):
     def get(self, request, code):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        config = draft_configuration()
+        config = draft_configuration(community=_official_community(request))
         document = config.document_types.filter(code=code).first() if config else None
         if not document:
             return Response({"detail": "Document type not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -1167,7 +1268,7 @@ class OCRDocumentSampleView(APIView):
     def post(self, request, code):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        config = draft_configuration()
+        config = draft_configuration(community=_official_community(request))
         document = config.document_types.filter(code=code).first() if config else None
         if not document:
             return Response(
@@ -1195,6 +1296,8 @@ class OCRDocumentSampleView(APIView):
         sample = document.samples.filter(name=side).order_by("-id").first()
         if sample is None:
             sample = OCRSample(document_type=document, name=side)
+        old_sample_name = sample.file.name if (sample.pk and sample.file) else ""
+        legacy_name = document.sample_file.name if (document.sample_file and side in {"front", "single"}) else ""
         sample.file = file
         sample.original_filename = (getattr(file, "name", None) or "sample.jpg")[:255]
         sample.mime_type = getattr(file, "content_type", "") or "image/jpeg"
@@ -1203,12 +1306,14 @@ class OCRDocumentSampleView(APIView):
         sample.created_by = request.user if request.user.is_authenticated else None
         sample.metadata = {**(sample.metadata or {}), "side": side}
         sample.save()
+        _delete_replaced_file(sample.file.storage, old_sample_name, sample.file.name)
 
         # Keep legacy sample_file in sync with primary canvas side (front or single)
         if side in {"front", "single"}:
             document.sample_file = file
             document.sample_original_filename = sample.original_filename[:255]
             document.save(update_fields=["sample_file", "sample_original_filename", "updated_at"])
+            _delete_replaced_file(document.sample_file.storage, legacy_name, document.sample_file.name)
         else:
             document.save(update_fields=["updated_at"])
 
@@ -1226,7 +1331,7 @@ class OCRDocumentSampleView(APIView):
     def delete(self, request, code):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        config = draft_configuration()
+        config = draft_configuration(community=_official_community(request))
         document = config.document_types.filter(code=code).first() if config else None
         if not document:
             return Response({"detail": "Document type not found."}, status=status.HTTP_404_NOT_FOUND)

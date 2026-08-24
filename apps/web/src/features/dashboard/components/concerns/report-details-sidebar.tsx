@@ -1,19 +1,24 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import { useAuthSession } from "@/features/auth/auth-session"
 import {
-  ArrowUpIcon,
-  CalendarIcon,
   ClockIcon,
   CopyIcon,
   FileIcon,
+  InfoIcon,
+  Network,
+  HardHat,
+  CircleCheck,
+  CircleX,
+  TriangleAlert,
+  MessageCircleIcon,
   PlayIcon,
-  Share2Icon,
-  XIcon,
 } from "lucide-react"
+import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
 
-import { CollapsibleSection } from "@/features/dashboard/components/concerns/collapsible-section"
 import type { Concern } from "@/features/dashboard/api"
+import { listConcernChat } from "@/features/dashboard/api"
 import { concernBodyText } from "@/features/dashboard/components/feed-post-text"
 import { ReportChatPanel } from "@/features/dashboard/components/report-chat-panel"
 import {
@@ -28,34 +33,113 @@ import {
 import {
   ReportLocationMap,
 } from "@/features/dashboard/components/report-location-map"
-import { ConcernTimeline } from "@/features/dashboard/components/concerns/concern-timeline"
-import { buildConcernTimelineEntries } from "@/features/dashboard/components/concerns/concern-timeline-lib"
 import {
   concernCategoryLabel,
-  categoryStyles,
-  daysAgo,
   formatDate,
 } from "@/features/dashboard/components/concerns/concern-display"
-import { ReportIcon } from "@/features/dashboard/components/concerns/report-icon"
+import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 import { OfficialStatusPanelWithDraft } from "@/features/dashboard/components/concerns/official-status-panel"
 import { EvidenceGrid } from "@/features/dashboard/components/record/evidence-grid"
+import {
+  SheetDialog,
+  SheetIconButton,
+} from "@/features/dashboard/components/sheet-dialog"
+import { roleLabel } from "@/features/dashboard/lib/people"
 
-/** Extracted verbatim from `pages/reports.tsx` (was inline in the same file as the panels it uses). */
-function DetailSection({ title, children, className }: { title: string; children: ReactNode; className?: string }) {
-  return (
-    <section className={cn("space-y-3", className)}>
-      <h3 className="text-[13px] font-semibold tracking-wide text-neutral-500">{title}</h3>
-      {children}
-    </section>
-  )
+/** Alert banner — icon + bg + border + text by status. */
+function statusAlertStyle(status: string) {
+  switch (status) {
+    case "submitted": return { bg: "bg-blue-50", border: "border-blue-200", text: "text-blue-700", icon: InfoIcon }
+    case "under_review": return { bg: "bg-blue-50", border: "border-blue-200", text: "text-blue-700", icon: InfoIcon }
+    case "assigned": return { bg: "bg-indigo-50", border: "border-indigo-200", text: "text-indigo-700", icon: Network }
+    case "in_progress": return { bg: "bg-amber-50", border: "border-amber-200", text: "text-amber-700", icon: HardHat }
+    case "resolved": return { bg: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-700", icon: CircleCheck }
+    case "rejected": return { bg: "bg-red-50", border: "border-red-200", text: "text-red-700", icon: CircleX }
+    case "appealed": return { bg: "bg-violet-50", border: "border-violet-200", text: "text-violet-700", icon: TriangleAlert }
+    default: return { bg: "bg-neutral-50", border: "border-neutral-200", text: "text-neutral-600", icon: InfoIcon }
+  }
 }
 
-/**
- * Extracted from `pages/reports.tsx`. Behavior-identical, with one structural change:
- * the resident-side follow-up/appeal UI (`ResidentFollowUpPanel`) stays inline and
- * untouched in `reports.tsx` (owned by a later phase) — it's passed in here as the
- * `residentFollowUp` node instead of being imported/moved, so its source never moves.
- */
+/** Brief one-line status summary. */
+function statusSummary(status: string) {
+  switch (status) {
+    case "submitted": return "Your report has been submitted and is pending review."
+    case "under_review": return "An officer is currently reviewing your report."
+    case "assigned": return "This report has been assigned to a unit for action."
+    case "in_progress": return "Work is underway to address this issue."
+    case "resolved": return "This issue has been resolved. Thank you for your report."
+    case "rejected": return "This report was not accepted. You may submit an appeal."
+    case "appealed": return "Your appeal is being reviewed by an officer."
+    default: return "Your report is being processed."
+  }
+}
+
+/** User-friendly timeline sentence. */
+function friendlyTimelineText(status: string, note: string) {
+  const n = (note || "").trim()
+  switch (status) {
+    case "submitted":
+      return n && n !== "Report submitted." && n !== "Status updated."
+        ? n
+        : "Your report has been submitted and is now under review."
+    case "under_review":
+      return n && n !== "Status updated."
+        ? n
+        : "An officer is reviewing your report."
+    case "assigned":
+      return n && n !== "Status updated."
+        ? n
+        : "This report has been assigned to a unit."
+    case "in_progress":
+      return n && n !== "Status updated."
+        ? n
+        : "Work is underway to address this issue."
+    case "resolved":
+      return n && n !== "Status updated."
+        ? n
+        : "This issue has been resolved. Thank you for your report."
+    case "rejected":
+      return n && n !== "Status updated."
+        ? n
+        : "This report was not accepted. You may submit an appeal."
+    case "appealed":
+      return n && n !== "Status updated."
+        ? n
+        : "Your appeal is being reviewed by an officer."
+    default:
+      return n && n !== "Status updated." ? n : "Status updated."
+  }
+}
+
+/** Actor footer label for timeline entries. */
+function actorFooterLabel(status: string, actor: string, isOwnReport: boolean) {
+  const name = isOwnReport ? "You" : (actor.split(" · ")[0] || "System")
+
+  switch (status) {
+    case "submitted": return `Submitted by ${name}`
+    case "under_review": return `Reviewed by ${name}`
+    case "assigned": return `Assigned by ${name}`
+    case "in_progress": return `Updated by ${name}`
+    case "resolved": return `Resolved by ${name}`
+    case "rejected": return `Rejected by ${name}`
+    case "appealed": return `Appealed by ${name}`
+    default: return name
+  }
+}
+
+function statusLabel(status: string) {
+  return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function formatShortTime(value: string) {
+  const date = new Date(value)
+  const day = date.getDate()
+  const suffix = day === 1 || day === 21 || day === 31 ? "st" : day === 2 || day === 22 ? "nd" : day === 3 || day === 23 ? "rd" : "th"
+  const month = date.toLocaleDateString("en", { month: "long" })
+  const time = date.toLocaleTimeString("en", { hour: "numeric", minute: "2-digit" })
+  return `${day}${suffix} ${month}, ${time}`
+}
+
 export function ReportDetailsSidebar({
   report,
   onClose,
@@ -73,7 +157,15 @@ export function ReportDetailsSidebar({
   isOfficial: boolean
   residentFollowUp: ReactNode
 }) {
-  const timelineEntries = buildConcernTimelineEntries(report, openPreview)
+  const [chatOpen, setChatOpen] = useState(false)
+  const [timelineOpen, setTimelineOpen] = useState(false)
+  const [unreadCount, setUnreadCount] = useState(0)
+  const [lightbox, setLightbox] = useState<{ items: MediaPreviewItem[]; index: number } | null>(null)
+  const lastSeenIdRef = useRef<number | null>(null)
+  const timelineRef = useRef<HTMLDivElement>(null)
+  const { user } = useAuthSession()
+  const isOwnReport = user?.id === report.reporter?.id
+
   const showAppeals = !isOfficial && (
     report.status === "rejected" ||
     report.status === "appealed" ||
@@ -81,326 +173,369 @@ export function ReportDetailsSidebar({
   )
   const resolutionEvidence = report.resolution_evidence ?? []
 
-  const [lightbox, setLightbox] = useState<{ items: MediaPreviewItem[]; index: number } | null>(null)
-  const [detailsWidth, setDetailsWidth] = useState<number | null>(() => {
-    if (typeof window === "undefined") return null
-    const saved = Number(window.localStorage.getItem("report-details-width"))
-    return Number.isFinite(saved) && saved > 0 ? saved : null
-  })
-  const asideRef = useRef<HTMLElement>(null)
-  const resizeStart = useRef<{ startX: number; startWidth: number } | null>(null)
-  const appliedWidth =
-    detailsWidth && typeof window !== "undefined" && window.innerWidth >= 1024 ? detailsWidth : null
+  // Build timeline entries from status_events
+  const timelineEntries = (report.status_events ?? [])
+    .filter((e) => !(e.status === "under_review" && e.note.trim() === "An officer is checking the details of this report."))
+    .map((event, i, list) => ({
+      id: String(event.id),
+      status: event.status,
+      time: event.created_at,
+      badge: statusLabel(event.status),
+      actor: event.actor?.full_name ? `${event.actor.full_name} · ${roleLabel(event.actor) || "System"}` : null,
+      note: event.note?.trim() || "Status updated.",
+      isLast: i === list.length - 1,
+    }))
 
   function openPreview(items: MediaPreviewItem[], index: number) {
     setLightbox({ items, index })
   }
 
-  function beginResize(event: React.PointerEvent<HTMLDivElement>) {
-    event.preventDefault()
-    resizeStart.current = {
-      startX: event.clientX,
-      startWidth: asideRef.current?.getBoundingClientRect().width ?? 448,
+  function handleCopyTrackingId() {
+    onCopyTrackingId()
+    toast.success("Tracking ID copied")
+  }
+
+  // Reset chat mode when report changes
+  useEffect(() => {
+    setChatOpen(false)
+    setTimelineOpen(false)
+    setUnreadCount(0)
+    lastSeenIdRef.current = null
+  }, [report.id])
+
+  // Close timeline on click outside
+  useEffect(() => {
+    if (!timelineOpen) return
+    function handleClick(e: MouseEvent) {
+      if (timelineRef.current && !timelineRef.current.contains(e.target as Node)) {
+        setTimelineOpen(false)
+      }
     }
-    event.currentTarget.setPointerCapture(event.pointerId)
-  }
+    document.addEventListener("mousedown", handleClick)
+    return () => document.removeEventListener("mousedown", handleClick)
+  }, [timelineOpen])
 
-  function moveResize(event: React.PointerEvent<HTMLDivElement>) {
-    const start = resizeStart.current
-    if (!start) return
-    const nextWidth = Math.min(960, Math.max(340, start.startWidth + (start.startX - event.clientX)))
-    setDetailsWidth(nextWidth)
-  }
+  // Poll for unread messages
+  const closedCase = ["rejected", "appealed", "resolved"].includes(report.status)
 
-  function endResize() {
-    if (!resizeStart.current) return
-    resizeStart.current = null
-    const width = asideRef.current?.getBoundingClientRect().width
-    if (width) window.localStorage.setItem("report-details-width", String(Math.round(width)))
-  }
-
-  function onResizeKey(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
-    event.preventDefault()
-    setDetailsWidth((current) => {
-      const base = current ?? asideRef.current?.getBoundingClientRect().width ?? 448
-      return event.key === "ArrowLeft" ? Math.max(340, base - 16) : Math.min(960, base + 16)
-    })
-  }
+  const pollUnread = useCallback(async () => {
+    if (chatOpen || closedCase) return
+    try {
+      const messages = await listConcernChat(report.id, { limit: 1 })
+      if (messages.length === 0) return
+      const latestId = messages[messages.length - 1].id
+      if (lastSeenIdRef.current === null) {
+        lastSeenIdRef.current = latestId
+        return
+      }
+      if (latestId > lastSeenIdRef.current) {
+        const newer = await listConcernChat(report.id, { afterId: lastSeenIdRef.current, limit: 20 })
+        const newMessages = newer.filter((m) => !m.is_mine)
+        setUnreadCount((prev) => prev + newMessages.length)
+        lastSeenIdRef.current = latestId
+      }
+    } catch {
+      // silent
+    }
+  }, [chatOpen, closedCase, report.id])
 
   useEffect(() => {
-    const previous = document.body.style.overflow
-    document.body.style.overflow = "hidden"
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose()
-    }
-    window.addEventListener("keydown", onKey)
-    return () => {
-      document.body.style.overflow = previous
-      window.removeEventListener("keydown", onKey)
-    }
-  }, [onClose])
+    if (chatOpen || closedCase) return
+    void listConcernChat(report.id, { limit: 1 }).then((msgs) => {
+      if (msgs.length > 0) lastSeenIdRef.current = msgs[msgs.length - 1].id
+    }).catch(() => {})
+    const timer = window.setInterval(() => {
+      if (document.hidden) return
+      void pollUnread()
+    }, 30_000)
+    return () => window.clearInterval(timer)
+  }, [chatOpen, closedCase, report.id, pollUnread])
 
-  // Fixed right sidebar + solid dark dim (no blur)
+  useEffect(() => {
+    if (chatOpen) setUnreadCount(0)
+  }, [chatOpen])
+
   return (
-    <div className="fixed inset-0 z-[200] flex justify-end">
-      <button
-        type="button"
-        className="absolute inset-0 bg-black/45"
-        aria-label="Close report details"
-        onClick={onClose}
-      />
-      <aside
-        ref={asideRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Report details"
-        style={appliedWidth ? { width: `${appliedWidth}px`, maxWidth: `${appliedWidth}px` } : undefined}
+    <>
+      <SheetDialog
+        open
+        onClose={onClose}
+        size="wide"
+        onBack={chatOpen ? () => setChatOpen(false) : onClose}
+        title={chatOpen ? "Chat" : "Report details"}
+        description={
+          chatOpen
+            ? `${report.tracking_id} · Private thread`
+            : (
+              <span className="flex items-center gap-1.5 text-[13px] text-neutral-500">
+                <span>{report.tracking_id}</span>
+                <span className="text-neutral-300">·</span>
+                <span className="inline-flex items-center gap-1">
+                  {(() => {
+                    const CatIcon = resolveIconByKey(report.category_ref?.icon_key)
+                    return CatIcon ? <CatIcon className="size-3.5" /> : null
+                  })()}
+                  {concernCategoryLabel(report)}
+                </span>
+              </span>
+            )
+        }
+        actions={
+          chatOpen ? undefined : (
+            <div ref={timelineRef} className="relative flex shrink-0 items-center gap-0.5">
+              <SheetIconButton label="Chat" onClick={() => setChatOpen(true)} className="relative">
+                <MessageCircleIcon className="size-[18px]" />
+                {unreadCount > 0 ? (
+                  <span className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-sos text-[9px] font-bold text-white">
+                    {unreadCount > 9 ? "9+" : unreadCount}
+                  </span>
+                ) : null}
+              </SheetIconButton>
+              <SheetIconButton label="Copy tracking ID" onClick={handleCopyTrackingId}>
+                <CopyIcon className="size-[18px]" />
+              </SheetIconButton>
+              <SheetIconButton label="Activity" onClick={() => setTimelineOpen((p) => !p)} className={cn(timelineOpen && "bg-neutral-100 text-neutral-900")}>
+                <ClockIcon className="size-[18px]" />
+              </SheetIconButton>
+
+              {/* Timeline dropdown */}
+              {timelineOpen ? (
+                <div className="absolute right-0 top-full z-50 mt-2 w-80 max-h-[60vh] overflow-y-auto rounded-xl border border-neutral-200 bg-white shadow-lg animate-in fade-in slide-in-from-top-1 duration-150 fill-mode-both">
+                  <div className="flex items-center justify-between border-b border-neutral-100 px-4 py-2.5">
+                    <p className="text-[13px] font-medium text-neutral-700">Activity</p>
+                    <button type="button" onClick={() => setTimelineOpen(false)} className="text-[11px] text-neutral-400 hover:text-neutral-600">
+                      Close
+                    </button>
+                  </div>
+                  <div className="p-4">
+                    {timelineEntries.length > 0 ? (
+                      <div className="space-y-3">
+                        {timelineEntries.map((entry) => (
+                          <div key={entry.id} className="space-y-2">
+                            {/* Date + actor divider */}
+                            {entry.time ? (
+                              <div className="flex items-center gap-3">
+                                <span className="flex-1 h-px bg-neutral-200" />
+                                <div className="shrink-0 text-center">
+                                  <time className="text-[11px] tabular-nums text-neutral-400 block">
+                                    {formatShortTime(entry.time)}
+                                  </time>
+                                  {entry.actor ? (
+                                    <p className="text-[11px] text-neutral-400">
+                                      {actorFooterLabel(entry.status, entry.actor, isOwnReport)}
+                                    </p>
+                                  ) : null}
+                                </div>
+                                <span className="flex-1 h-px bg-neutral-200" />
+                              </div>
+                            ) : null}
+                            {/* Alert banner */}
+                            {(() => {
+                              const style = statusAlertStyle(entry.status)
+                              const Icon = style.icon
+                              return (
+                                <div className={cn("flex items-start gap-2.5 rounded-md px-3 py-2.5", style.bg)}>
+                                  <Icon className={cn("size-4 shrink-0 mt-0.5", style.text)} />
+                                  <p className={cn("text-[12px] leading-snug", style.text)}>
+                                    {friendlyTimelineText(entry.status, entry.note)}
+                                  </p>
+                                </div>
+                              )
+                            })()}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[13px] text-neutral-400 text-center py-4">No activity yet.</p>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          )
+        }
+        bodyClassName={chatOpen ? "px-0 pb-0" : undefined}
         className={cn(
-          "relative flex h-full w-full max-w-[min(100%,28rem)] flex-col bg-white",
-          "border-l border-neutral-200 shadow-[-12px_0_32px_rgba(15,23,42,0.14)]",
-          "sm:max-w-[30rem] md:max-w-[38rem] lg:max-w-[min(calc(100vw-3rem),54rem)]",
+          "max-w-[min(100%,42rem)] sm:max-w-[42rem] md:max-w-[48rem]",
+          chatOpen && "!max-h-[min(900px,95vh)]",
         )}
       >
-        <header className="shrink-0 border-b border-neutral-200 px-5 py-4 sm:px-6 sm:py-5">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-[12px] font-medium tracking-wide text-neutral-500">
-              Report details
-            </p>
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-600 hover:bg-neutral-100"
-              aria-label="Close"
-            >
-              <XIcon className="size-5" />
-            </button>
+        {chatOpen ? (
+          /* ── Chat mode ── */
+          <div key="chat" className="min-h-0 flex-1 animate-in fade-in slide-in-from-right-2 duration-200 fill-mode-both">
+            <ReportChatPanel
+              concernId={report.id}
+              open
+              disabled={closedCase}
+              showHistory
+              plain
+              title={closedCase ? "Chat closed" : "Messages"}
+              subtitle={
+                closedCase
+                  ? "This report is closed. Follow-ups go through the appeal section."
+                  : "Follow-up messages and checked attachments stay with this case."
+              }
+              emptyMessage="Message the barangay team about this report. Updates and questions stay here."
+              onMessageSent={onRefresh}
+              className="h-full border-0 rounded-none p-0"
+            />
           </div>
-          {/* Tracking ID */}
-          <div className="mt-2 flex min-h-9 items-center gap-1.5">
-            <span className="truncate font-mono text-[17px] font-semibold tracking-wide text-neutral-900 sm:text-[18px]">
-              {report.tracking_id}
-            </span>
-            <button
-              type="button"
-              onClick={onCopyTrackingId}
-              className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
-              aria-label="Copy tracking ID"
-            >
-              <CopyIcon className="size-4" />
-            </button>
-          </div>
-        </header>
+        ) : (
+          /* ── Details mode ── */
+          <div key="details" className="animate-in fade-in slide-in-from-left-2 duration-200 fill-mode-both space-y-4">
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-6 sm:px-6 sm:py-7">
-          <div className="pb-[max(2rem,env(safe-area-inset-bottom))]">
-            <div className="flex flex-wrap gap-x-5 gap-y-2 text-[13px] text-neutral-500">
-              <span className="inline-flex items-center gap-1.5">
-                <CalendarIcon className="size-4 text-neutral-400" />
-                Submitted {formatDate(report.created_at)}
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <ClockIcon className="size-4 text-neutral-400" />
-                {daysAgo(report.created_at)} days ago
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <Share2Icon className="size-4 text-neutral-400" />
-                {report.visibility === "community" ? "Public" : "Private"}
-              </span>
-              {report.visibility === "community" ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <ArrowUpIcon className="size-4 text-neutral-400" />
-                  {report.vote_count} upvotes
-                </span>
-              ) : null}
+            {/* Hero Map */}
+            <div className="overflow-hidden rounded-lg border border-neutral-200">
+              <ReportLocationMap
+                latitude={report.latitude}
+                longitude={report.longitude}
+                streetAddress={report.address}
+                category={report.category}
+                iconKey={report.category_ref?.icon_key}
+                heightClassName="h-44 sm:h-48"
+                className="rounded-none border-0"
+              />
             </div>
 
-            {/* One unified surface: every section stacks top-to-bottom with
-                hairline dividers — no two-column rail, no stacked cards. */}
-            <div className="mt-4 min-w-0">
-              <div className="border-t border-neutral-200/80">
-                <CollapsibleSection value="description" title="Description" defaultOpen>
-                  <p className="text-[15px] leading-7 text-neutral-700 whitespace-pre-wrap">
+            {/* Content — reporter + description */}
+              {/* Reporter + description + photos */}
+              <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3.5 py-3 space-y-3">
+                {/* Status banner — above avatar */}
+                {(() => {
+                  const style = statusAlertStyle(report.status)
+                  const Icon = style.icon
+                  return (
+                    <div className={cn("flex items-center gap-2.5 rounded-lg px-3 py-2.5", style.bg)}>
+                      <Icon className={cn("size-4 shrink-0", style.text)} />
+                      <p className={cn("text-[13px] leading-snug", style.text)}>
+                        {statusSummary(report.status)}
+                      </p>
+                    </div>
+                  )
+                })()}
+
+                <div className="flex items-center gap-2.5">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#c5d0e6] text-[14px] font-bold text-[#43507f]">
+                    {(report.reporter_full_name || report.reporter?.full_name || "R")[0]?.toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[14px] font-semibold text-neutral-900 truncate">
+                      {isOwnReport ? "Reported by You" : (report.reporter_full_name || report.reporter?.full_name || "Resident")}
+                    </p>
+                    <p className="text-[12px] text-neutral-500 truncate">
+                      {report.address || "Location pinned on map"} · {formatDate(report.created_at)} · {report.visibility === "community" ? "Public" : "Private"}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Description + photos — aligned with street address */}
+                <div className="pl-[50px] space-y-3">
+                  <p className="text-[13px] leading-5 text-neutral-600 whitespace-pre-wrap">
                     {concernBodyText(report) || "No description provided."}
                   </p>
-                  {report.media?.length ? <EvidenceGrid media={report.media} onPreview={openPreview} /> : null}
-                </CollapsibleSection>
-              </div>
-
-              <div className="border-t border-neutral-200/80">
-                <CollapsibleSection value="category" title="Category" defaultOpen>
-                  <div className="flex items-center gap-4">
-                    <ReportIcon report={report} size="md" forceIcon />
-                    <div>
-                      <p className="text-[15px] font-medium text-neutral-900">{concernCategoryLabel(report)}</p>
-                      <p className="mt-0.5 text-[13px] text-neutral-500">
-                        {categoryStyles[report.category as keyof typeof categoryStyles]?.sub ?? "General concern"}
-                      </p>
-                    </div>
-                  </div>
-                </CollapsibleSection>
-              </div>
-
-              <div className="border-t border-neutral-200/80">
-                <CollapsibleSection value="location" title="Location" defaultOpen>
-                  <ReportLocationMap
-                    latitude={report.latitude}
-                    longitude={report.longitude}
-                    streetAddress={report.address}
-                    heightClassName="h-56 sm:h-72"
-                  />
-                </CollapsibleSection>
-              </div>
-
-              {report.also_reported_count > 0 && report.visibility === "community" ? (
-                <div className="border-t border-neutral-200/80">
-                  <CollapsibleSection value="also-reported" title="Community reports" defaultOpen>
-                    <p className="text-[15px] text-neutral-700">
-                      Also reported by {report.also_reported_count}{" "}
-                      {report.also_reported_count === 1 ? "other resident" : "other residents"}.
-                    </p>
-                    {report.also_reported_by?.length ? (
-                      <ul className="mt-2 space-y-1">
-                        {report.also_reported_by.map((name) => (
-                          <li key={name} className="text-[13px] text-neutral-500">
-                            {name}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                  </CollapsibleSection>
+                  {report.media?.length ? (
+                    <EvidenceGrid media={report.media} onPreview={openPreview} />
+                  ) : null}
                 </div>
-              ) : null}
+              </div>
 
-              {resolutionEvidence.length ? (
-                <div className="border-t border-neutral-200/80">
-                  <DetailSection title="Resolution evidence" className="py-6">
-                    <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3">
-                      <p className="text-[13px] font-semibold leading-5 text-neutral-700">
-                        These photos were uploaded by the barangay as evidence of the completed resolution. They are visible only to you and authorized officials.
-                      </p>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
-                      {resolutionEvidence.map((evidence, evidenceIndex) =>
-                        evidence.mime_type.startsWith("image/") ? (
-                          <button
-                            key={evidence.id}
-                            type="button"
-                            onClick={() =>
-                              openPreview(
-                                resolutionEvidence.map((evidence) =>
-                                  toMediaPreviewItem(mediaDisplaySource(evidence), evidence.original_filename, evidence.mime_type),
-                                ),
-                                evidenceIndex,
-                              )
-                            }
-                            className="overflow-hidden rounded-xl border border-neutral-200 bg-white text-left transition-colors hover:border-brand-orange"
-                          >
-                            <AuthenticatedMediaImage
-                              src={mediaDisplaySource(evidence)}
-                              alt={`${evidence.original_filename} resolution photo`}
-                              className="h-32 w-full object-cover sm:h-36"
-                            />
-                          </button>
+            {/* Community reports */}
+            {report.also_reported_count > 0 && report.visibility === "community" ? (
+              <p className="text-[13px] text-neutral-500">
+                Also reported by {report.also_reported_count} other{" "}
+                {report.also_reported_count === 1 ? "resident" : "residents"}.
+              </p>
+            ) : null}
+
+            {/* Resolution evidence */}
+            {resolutionEvidence.length ? (
+              <div>
+                <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-400">Resolution evidence</p>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {resolutionEvidence.map((evidence, evidenceIndex) =>
+                    evidence.mime_type.startsWith("image/") ? (
+                      <button
+                        key={evidence.id}
+                        type="button"
+                        onClick={() =>
+                          openPreview(
+                            resolutionEvidence.map((e) =>
+                              toMediaPreviewItem(mediaDisplaySource(e), e.original_filename, e.mime_type),
+                            ),
+                            evidenceIndex,
+                          )
+                        }
+                        className="overflow-hidden rounded-xl border border-neutral-200 bg-white text-left transition-colors hover:border-neutral-400"
+                      >
+                        <AuthenticatedMediaImage
+                          src={mediaDisplaySource(evidence)}
+                          alt={evidence.original_filename}
+                          className="h-24 w-full object-cover"
+                        />
+                      </button>
+                    ) : (
+                      <button
+                        key={evidence.id}
+                        type="button"
+                        onClick={() =>
+                          openPreview(
+                            resolutionEvidence.map((e) =>
+                              toMediaPreviewItem(mediaDisplaySource(e), e.original_filename, e.mime_type),
+                            ),
+                            evidenceIndex,
+                          )
+                        }
+                        className="flex h-24 items-center justify-center gap-1.5 rounded-xl border border-neutral-200 bg-white text-[11px] font-medium text-neutral-500 transition-colors hover:border-neutral-400 hover:text-neutral-900"
+                      >
+                        {evidence.mime_type.startsWith("video/") ? (
+                          <><PlayIcon className="size-4" /> Video</>
                         ) : (
-                          <button
-                            key={evidence.id}
-                            type="button"
-                            onClick={() =>
-                              openPreview(
-                                resolutionEvidence.map((evidenceItem) =>
-                                  toMediaPreviewItem(mediaDisplaySource(evidenceItem), evidenceItem.original_filename, evidenceItem.mime_type),
-                                ),
-                                evidenceIndex,
-                              )
-                            }
-                            className="flex h-32 items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 text-center text-[12px] font-semibold text-neutral-700 transition-colors hover:border-brand-orange hover:text-neutral-900 sm:h-36"
-                          >
-                            {evidence.mime_type.startsWith("video/") ? (
-                              <>
-                                <PlayIcon className="size-5" /> Preview video
-                              </>
-                            ) : (
-                              <>
-                                <FileIcon className="size-5" /> Preview file
-                              </>
-                            )}
-                          </button>
-                        ),
-                      )}
-                    </div>
-                  </DetailSection>
+                          <><FileIcon className="size-4" /> File</>
+                        )}
+                      </button>
+                    ),
+                  )}
                 </div>
-              ) : null}
+              </div>
+            ) : null}
 
-              {isOfficial ? (
-                <div className="border-t border-neutral-200/80">
-                  <CollapsibleSection value="official-actions" title="Official actions" defaultOpen>
-                    <OfficialStatusPanelWithDraft key={report.id} report={report} onUpdated={onUpdated} />
-                  </CollapsibleSection>
-                </div>
-              ) : null}
+            {/* Official actions */}
+            {isOfficial ? (
+              <OfficialStatusPanelWithDraft key={report.id} report={report} onUpdated={onUpdated} />
+            ) : null}
 
-              <div className="border-t border-neutral-200/80">
-                <CollapsibleSection
-                  value="conversation"
-                  title="Conversation"
-                  subtitle={
-                    ["rejected", "appealed", "resolved"].includes(report.status)
-                      ? "This case is closed. Follow-ups go through the appeal section."
-                      : "Follow-up messages and checked attachments stay with this case."
-                  }
-                  defaultOpen
+            {/* Action buttons */}
+            {!closedCase ? (
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setChatOpen(true)}
+                  className="flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-full border border-neutral-200 bg-white px-5 py-3 text-[14px] font-medium text-neutral-900 transition-colors hover:bg-neutral-50"
                 >
-                  <ReportChatPanel
-                    concernId={report.id}
-                    open
-                    disabled={["rejected", "appealed", "resolved"].includes(report.status)}
-                    showHistory
-                    plain
-                    onMessageSent={onRefresh}
-                  />
-                </CollapsibleSection>
+                  <MessageCircleIcon className="size-4.5" />
+                  Message
+                </button>
+                {report.status === "rejected" ? (
+                  <button
+                    type="button"
+                    className="flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-full bg-orange-500 px-5 py-3 text-[14px] font-medium text-white transition-colors hover:bg-orange-600"
+                  >
+                    Appeal
+                  </button>
+                ) : null}
               </div>
+            ) : null}
 
-              <div className="border-t border-neutral-200/80">
-                <CollapsibleSection value="timeline" title="Timeline" defaultOpen>
-                  <ConcernTimeline items={timelineEntries} />
-                </CollapsibleSection>
+            {/* Appeals */}
+            {showAppeals ? (
+              <div>
+                <p className="mb-3 text-[11px] font-medium uppercase tracking-wider text-neutral-400">Appeals</p>
+                {residentFollowUp}
               </div>
-
-              {showAppeals ? (
-                <div className="border-t border-neutral-200/80">
-                  <CollapsibleSection value="appeals" title="Appeals" defaultOpen>
-                    {residentFollowUp}
-                  </CollapsibleSection>
-                </div>
-              ) : null}
-            </div>
+            ) : null}
           </div>
-        </div>
-
-        {/* Resize grip on the panel's left edge (desktop only). Dragging
-            left makes the panel wider — the report detail surfaces are
-            intentionally roomy once space allows. */}
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize report panel"
-          aria-valuemin={340}
-          aria-valuemax={960}
-          aria-valuenow={appliedWidth ?? undefined}
-          tabIndex={0}
-          onPointerDown={beginResize}
-          onPointerMove={moveResize}
-          onPointerUp={endResize}
-          onPointerCancel={endResize}
-          onKeyDown={onResizeKey}
-          className="group absolute inset-y-0 left-0 z-30 hidden w-2.5 cursor-col-resize touch-none items-center justify-center outline-none lg:flex"
-        >
-          <span className="h-10 w-1 rounded-full bg-neutral-300 transition-colors group-hover:bg-brand-orange group-focus-visible:bg-brand-orange" />
-        </div>
-      </aside>
+        )}
+      </SheetDialog>
 
       {lightbox ? (
         <MediaLightbox
@@ -409,7 +544,6 @@ export function ReportDetailsSidebar({
           onClose={() => setLightbox(null)}
         />
       ) : null}
-    </div>
+    </>
   )
 }
-
