@@ -7,10 +7,12 @@ import {
   ChevronRightIcon,
   EyeOffIcon,
   FileIcon,
+  MapPinIcon,
   MegaphoneIcon,
   PlayIcon,
   SearchIcon,
   SlidersHorizontalIcon,
+  UsersIcon,
   InfoIcon,
   Network,
   HardHat,
@@ -49,11 +51,11 @@ import {
 } from "@/features/dashboard/components/concerns/concern-display"
 import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 import { FilterRail } from "@/features/dashboard/components/workspace/filter-rail"
-import { QueueTableHeader } from "@/features/dashboard/components/workspace/queue-row"
 import { EmptyState } from "@/features/dashboard/components/record/empty-state"
 import { ReportIcon } from "@/features/dashboard/components/concerns/report-icon"
 import { ReportDetailsSidebar } from "@/features/dashboard/components/concerns/report-details-sidebar"
-import { ConcernQueueItem } from "@/features/dashboard/components/concerns/concern-queue-item"
+import { ConcernQueueItem, concernStatusAccent } from "@/features/dashboard/components/concerns/concern-queue-item"
+import { streetOnly } from "@/features/dashboard/lib/location-text"
 
 import { rankConcerns } from "@/features/dashboard/components/record/concern-adapter"
 import { OfficialStatusPanel } from "@/features/dashboard/components/concerns/official-status-panel"
@@ -304,7 +306,7 @@ function OfficialConcernDashboard({
     "eboses:ws:concerns:action:collapsed",
     !isWideUp,
   )
-  const [recordTab, setRecordTab] = useState("details")
+  const [recordTab, setRecordTab] = useState("chat")
 
   const [blurTarget, setBlurTarget] = useState<ConcernMedia | null>(null)
   const [evidencePreview, setEvidencePreview] = useState<{ items: MediaPreviewItem[]; index: number } | null>(null)
@@ -512,7 +514,6 @@ function OfficialConcernDashboard({
       <div className="border-t border-card-line">
         {pagedRanked.length > 0 ? (
           <>
-          <QueueTableHeader labels={{ title: "Concern", unitAndTime: "Assigned Unit & When" }} />
           {pagedRanked.map((entry) => (
             <ConcernQueueItem
               key={entry.concern.id}

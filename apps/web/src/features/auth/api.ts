@@ -62,6 +62,7 @@ export interface ResidentSettings {
   push_alerts: boolean
   report_updates: boolean
   community_sharing: boolean
+  location_sharing_enabled: boolean
   location_confirmation: boolean
   sos_placement: "sidebar" | "inline" | "compact"
   updated_at: string

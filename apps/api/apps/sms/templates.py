@@ -399,6 +399,13 @@ def responder_decline_ack(alert, *, reassigned: bool) -> str:
     ])
 
 
+def past_incident() -> str:
+    return (
+        f"{BRAND}: This sounds like a past incident, so emergency dispatch was not started. "
+        "If danger is still present, reply HELP and the emergency type. Otherwise, submit it as a concern in E-Boses."
+    )
+
+
 def responder_onscene_ack(alert) -> str:
     return "\n".join([
         f"{BRAND}: Recorded. You are AT THE SCENE for {reference(alert)}.",
@@ -672,6 +679,7 @@ def all_static_templates() -> dict[str, str]:
         "guide_official": guide_official(),
         "unknown_command": unknown_command("HELPP FIER"),
         "help_needs_category": help_needs_category(),
+        "past_incident": past_incident(),
         "no_active_report": no_active_report(),
         "responder_no_assignment": responder_no_assignment(),
         "duty_ack_on": duty_ack(on_duty=True, unit_name="Barangay Tanod"),

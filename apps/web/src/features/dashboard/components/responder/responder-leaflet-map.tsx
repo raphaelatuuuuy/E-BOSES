@@ -369,6 +369,11 @@ export function ResponderLeafletMap({
   return (
     <div className={cn("responder-map-scope relative isolate z-0 h-full min-h-0 overflow-hidden bg-ink", className)}>
       <div ref={containerRef} className="eboses-map-dark absolute inset-0" aria-label="Responder assignment map" />
+      {selectedId && route?.status === "ok" && (route.distance_meters ?? Infinity) <= 5 ? (
+        <div className="pointer-events-none absolute left-3 top-3 z-[600] rounded-lg bg-nav-bg/90 px-3 py-2 text-xs font-semibold text-white shadow-lg backdrop-blur-md">
+          You are at the incident location
+        </div>
+      ) : null}
 
       {/* Scoped to this map's classes only, so the marker stays self-contained
           and can never colour anything on other Leaflet maps. */}

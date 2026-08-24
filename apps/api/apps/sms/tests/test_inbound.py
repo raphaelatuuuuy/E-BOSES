@@ -14,6 +14,8 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentProfile
+from apps.concerns.test_helpers import active_test_community
+from apps.concerns.units import sync_responder_designation
 from apps.emergencies.models import EmergencyAlert, ResponderShift
 from apps.sms.models import InboundSmsMessage, OutboundSmsMessage, SmsPurpose
 from apps.sms.payload import InboundPayload
@@ -73,6 +75,12 @@ class SmsInboundTests(APITestCase):
             address="Base",
             barangay="Marikina Heights",
         )
+        community = active_test_community()
+        ResidentProfile.objects.filter(user__in=[self.resident, self.responder]).update(
+            community=community,
+            barangay=community.name,
+        )
+        sync_responder_designation(self.responder)
         ResponderShift.objects.create(
             responder=self.responder,
             responder_unit=User.ResponderUnit.BDRRMO,
@@ -118,7 +126,7 @@ class SmsInboundTests(APITestCase):
         self.assertEqual(alert.reporter, self.resident)
         self.assertEqual(alert.reported_area, "Champaca Street, Marikina Heights")
         self.assertIsNotNone(alert.latitude)
-        self.assertEqual(alert.location_source, "sms")
+        self.assertEqual(alert.location_source, "sms_gps")
         self.assertEqual(alert.reporter_verification, EmergencyAlert.ReporterVerification.REGISTERED_NUMBER)
         # Routed without any official touching it.
         self.assertTrue(alert.assignments.exists())
@@ -158,7 +166,7 @@ class SmsInboundTests(APITestCase):
             "LOC:14.6760000,121.0437000"
         )
         alert = EmergencyAlert.objects.get()
-        self.assertEqual(alert.location_confidence, EmergencyAlert.LocationConfidence.OUTSIDE_AREA)
+        self.assertEqual(alert.location_confidence, EmergencyAlert.LocationConfidence.UNKNOWN)
         self.assertNotIn(alert.status, {EmergencyAlert.Status.INVALID, EmergencyAlert.Status.CANCELLED})
         self.assertTrue(alert.escalations.exists())
 

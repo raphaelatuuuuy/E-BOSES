@@ -33,21 +33,21 @@ export interface EmergencyCategory {
   updated_at: string
 }
 export function respondToEmergency(id: number, note = "") {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/respond/`, {
+  return alertRequest(`/emergencies/${id}/respond/`, {
     method: "POST",
     body: JSON.stringify({ note }),
   })
 }
 
 export function unableToRespond(id: number, reason: string) {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/unable/`, {
+  return alertRequest(`/emergencies/${id}/unable/`, {
     method: "POST",
     body: JSON.stringify({ reason }),
   })
 }
 
 export function transferEmergency(id: number, departmentCode: string, reason: string) {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/transfer/`, {
+  return alertRequest(`/emergencies/${id}/transfer/`, {
     method: "POST",
     body: JSON.stringify({ department_code: departmentCode, reason }),
   })
@@ -57,7 +57,7 @@ export function requestEmergencyBackup(
   id: number,
   payload: { target_department_id: number; reason: string; urgency: string; idempotency_key: string },
 ) {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/request-backup/`, {
+  return alertRequest(`/emergencies/${id}/request-backup/`, {
     method: "POST",
     body: JSON.stringify(payload),
   })
@@ -132,7 +132,7 @@ export interface EmergencyAssignment {
   acknowledged_at: string | null
   arrived_at: string | null
   last_location: EmergencyLocationPing | null
-  location_history: EmergencyLocationPing[]
+  location_history?: EmergencyLocationPing[]
   travel_profile: TravelProfile
   route: EmergencyRoute | null
 }
@@ -153,7 +153,7 @@ export interface EmergencyAppeal {
 
 export interface EmergencyEscalation {
   id: number
-  previous_assignment: number
+  previous_assignment: number | null
   escalated_to: PublicUser | null
   triggered_by: PublicUser | null
   reason: string
@@ -202,7 +202,7 @@ export interface EmergencyRoute {
   destination_snap: RouteSnap | null
   approach: RouteApproach | null
   /** Only populated by getEmergencyRoute({ steps: true }). */
-  steps: EmergencyRouteStep[]
+  steps?: EmergencyRouteStep[]
 }
 
 export interface EmergencyTimelineEntry {
@@ -259,24 +259,24 @@ export interface EmergencyAlert {
   reporter_verification: "account" | "registered" | "unverified" | "needs_review"
   triage: Record<string, string>
   category_needs_confirmation: boolean
-  unresolved_fields: string[]
-  media_warnings: string[]
+  unresolved_fields?: string[]
+  media_warnings?: string[]
   resolution_report: string
   response_duration_seconds: number | null
   disposition_reason: string
-  media: EmergencyMedia[]
+  media?: EmergencyMedia[]
   status_version: number
   route: EmergencyRoute | null
   current_assignment: EmergencyAssignment | null
   /** The unit that answers this emergency type — known before anyone is assigned. */
   responding_unit: { id: number; code: string; name: string; short_name: string } | null
-  assignments: EmergencyAssignment[]
-  status_events: EmergencyStatusEvent[]
-  timeline: EmergencyTimelineEntry[]
+  assignments?: EmergencyAssignment[]
+  status_events?: EmergencyStatusEvent[]
+  timeline?: EmergencyTimelineEntry[]
   timeline_role: "resident" | "responder" | "official"
-  appeals: EmergencyAppeal[]
-  escalations: EmergencyEscalation[]
-  assignment_logs: EmergencyAssignmentLog[]
+  appeals?: EmergencyAppeal[]
+  escalations?: EmergencyEscalation[]
+  assignment_logs?: EmergencyAssignmentLog[]
   witness_notification_summary: {
     triggered: boolean
     recipient_count: number
@@ -307,6 +307,43 @@ export function isNewerEmergencyAlert(current: EmergencyAlert | null, next: Emer
   return nextTime >= currentTime
 }
 
+function normalizeAssignment<T extends EmergencyAssignment>(assignment: T): T {
+  return { ...assignment, location_history: assignment.location_history ?? [] }
+}
+
+/**
+ * The backend omits collection fields on some rows (and on every websocket
+ * update), so every alert is completed once here before any page sees it.
+ */
+export function normalizeEmergencyAlert<T extends EmergencyAlert>(alert: T): T {
+  if (!alert || typeof alert !== "object") return alert
+  const route = alert.route ? { ...alert.route, steps: alert.route.steps ?? [] } : alert.route
+  return {
+    ...alert,
+    unresolved_fields: alert.unresolved_fields ?? [],
+    media_warnings: alert.media_warnings ?? [],
+    media: alert.media ?? [],
+    route,
+    current_assignment: alert.current_assignment
+      ? normalizeAssignment(alert.current_assignment)
+      : alert.current_assignment,
+    assignments: (alert.assignments ?? []).map(normalizeAssignment),
+    status_events: alert.status_events ?? [],
+    timeline: alert.timeline ?? [],
+    appeals: alert.appeals ?? [],
+    escalations: alert.escalations ?? [],
+    assignment_logs: alert.assignment_logs ?? [],
+  }
+}
+
+function alertListPromise(promise: Promise<EmergencyAlert[]>) {
+  return promise.then((items) => items.map(normalizeEmergencyAlert))
+}
+
+function alertRequest(path: string, init?: RequestInit) {
+  return apiRequest<EmergencyAlert>(path, init).then(normalizeEmergencyAlert)
+}
+
 export interface ResponderShift {
   id: number
   responder: PublicUser
@@ -329,7 +366,7 @@ export interface ResponderShift {
 }
 
 export function createEmergency(formData: FormData) {
-  return apiRequest<EmergencyAlert>("/emergencies/", {
+  return alertRequest("/emergencies/", {
     method: "POST",
     body: formData,
   })
@@ -340,11 +377,15 @@ export function listEmergencyCategories() {
 }
 
 export function getActiveEmergency() {
-  return apiRequest<EmergencyAlert | undefined>("/emergencies/mine/active/")
+  return apiRequest<EmergencyAlert | undefined>("/emergencies/mine/active/").then((alert) =>
+    alert ? normalizeEmergencyAlert(alert) : alert,
+  )
 }
 
 export function listMyEmergencies() {
-  return apiRequest<EmergencyAlert[]>("/emergencies/mine/").then(unwrapList)
+  return alertListPromise(
+    apiRequest<EmergencyAlert[]>("/emergencies/mine/").then(unwrapList),
+  )
 }
 
 /**
@@ -353,13 +394,17 @@ export function listMyEmergencies() {
  * server bounds it to the last 30 days. Omit it for the active-only queue.
  */
 export function listEmergencyQueue(scope?: "active" | "all") {
-  return apiRequest<EmergencyAlert[]>(
-    scope === "all" ? "/emergencies/queue/?scope=all" : "/emergencies/queue/",
-  ).then(unwrapList)
+  return alertListPromise(
+    apiRequest<EmergencyAlert[]>(
+      scope === "all" ? "/emergencies/queue/?scope=all" : "/emergencies/queue/",
+    ).then(unwrapList),
+  )
 }
 
 export function listAssignedEmergencies() {
-  return apiRequest<EmergencyAlert[]>("/emergencies/assigned/").then(unwrapList)
+  return alertListPromise(
+    apiRequest<EmergencyAlert[]>("/emergencies/assigned/").then(unwrapList),
+  )
 }
 
 /** Availability toggle. The unit is server-side only, same as shift start. */
@@ -427,7 +472,7 @@ export function endResponderShift(payload: {
 }
 
 export function getEmergency(id: number) {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/`)
+  return alertRequest(`/emergencies/${id}/`)
 }
 
 /**
@@ -493,21 +538,21 @@ export function sendEmergencyChat(alertId: number, body: string, file?: File | n
 }
 
 export function cancelEmergency(id: number, reason: string) {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/cancel/`, {
+  return alertRequest(`/emergencies/${id}/cancel/`, {
     method: "POST",
     body: JSON.stringify({ reason }),
   })
 }
 
 export function assignEmergency(id: number, responderId: number) {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/assign/`, {
+  return alertRequest(`/emergencies/${id}/assign/`, {
     method: "POST",
     body: JSON.stringify({ responder_id: responderId }),
   })
 }
 
 export function reassignEmergency(id: number, responderId: number, note: string, statusVersion: number) {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/reassign/`, {
+  return alertRequest(`/emergencies/${id}/reassign/`, {
     method: "POST",
     body: JSON.stringify({ responder_id: responderId, note, status_version: statusVersion }),
   })
@@ -518,7 +563,7 @@ export function removeEmergencyAssignment(
   assignmentId: number,
   payload: { reason: string; status_version: number },
 ) {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/assignments/${assignmentId}/remove/`, {
+  return alertRequest(`/emergencies/${id}/assignments/${assignmentId}/remove/`, {
     method: "POST",
     body: JSON.stringify(payload),
   })
@@ -556,7 +601,7 @@ export function setEmergencyDisposition(
   note: string,
   statusVersion?: number,
 ) {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/disposition/`, {
+  return alertRequest(`/emergencies/${id}/disposition/`, {
     method: "POST",
     body: JSON.stringify({
       status,
@@ -570,7 +615,7 @@ export function sendEmergencyLocationPing(
   id: number,
   payload: { latitude: number; longitude: number; accuracy?: number | null },
 ) {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/location-pings/`, {
+  return alertRequest(`/emergencies/${id}/location-pings/`, {
     method: "POST",
     body: JSON.stringify({
       ...payload,
@@ -582,21 +627,21 @@ export function sendEmergencyLocationPing(
 }
 
 export function acknowledgeEmergency(id: number, note = "") {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/acknowledge/`, {
+  return alertRequest(`/emergencies/${id}/acknowledge/`, {
     method: "POST",
     body: JSON.stringify({ note }),
   })
 }
 
 export function markEmergencyArrived(id: number, note = "") {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/arrived/`, {
+  return alertRequest(`/emergencies/${id}/arrived/`, {
     method: "POST",
     body: JSON.stringify({ note }),
   })
 }
 
 export function resolveEmergency(id: number, note = "") {
-  return apiRequest<EmergencyAlert>(`/emergencies/${id}/resolve/`, {
+  return alertRequest(`/emergencies/${id}/resolve/`, {
     method: "POST",
     body: JSON.stringify({ note }),
   })

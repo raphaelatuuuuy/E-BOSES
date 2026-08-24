@@ -24,6 +24,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 
+from apps.emergencies.temporal import NON_CURRENT, infer_incident_timing
+
 # ---------------------------------------------------------------------------
 # Categories
 # ---------------------------------------------------------------------------
@@ -392,6 +394,9 @@ class ParsedEmergency:
     triage: dict = field(default_factory=dict)
     note: str = ""
     urgency_signal: bool = False
+    incident_timing: str = "unclear"
+    incident_timing_reason: str = ""
+    current_danger: bool = False
     unresolved_fields: list = field(default_factory=list)
 
     @property
@@ -417,6 +422,7 @@ def parse_emergency_sms(body: str | None, *, sender_is_known: bool = False) -> P
     prose = strip_loc_footer(text)
 
     code, alias = resolve_category(prose)
+    incident_timing, incident_timing_reason = infer_incident_timing(prose)
     parsed = ParsedEmergency(
         category_code=code,
         category_label=category_label(code) if code else "",
@@ -426,6 +432,9 @@ def parse_emergency_sms(body: str | None, *, sender_is_known: bool = False) -> P
         coordinate_status=coordinate_status,
         triage=parse_triage(prose),
         urgency_signal=urgency,
+        incident_timing=incident_timing,
+        incident_timing_reason=incident_timing_reason,
+        current_danger=incident_timing == "ongoing",
     )
 
     near = NEAR_PATTERN.search(prose)
@@ -445,6 +454,8 @@ def parse_emergency_sms(body: str | None, *, sender_is_known: bool = False) -> P
         or coordinate_status == COORDINATE_OK
         or (sender_is_known and coordinate_status == COORDINATE_INVALID)
     )
+    if incident_timing in NON_CURRENT:
+        parsed.is_emergency = False
 
     if not parsed.is_emergency:
         return parsed

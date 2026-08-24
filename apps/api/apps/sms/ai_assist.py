@@ -68,7 +68,15 @@ def should_run(alert) -> bool:
     whose reported area is not a known barangay street (a typo the matcher
     cannot fix on its own). Fully resolved messages cost nothing.
     """
-    if not enabled() or getattr(alert, "location_source", "") != "sms":
+    sms_sources = {
+        "sms_gps",
+        "message_area",
+        "recent_account_location",
+        "profile_community",
+        "home_context",
+        "none",
+    }
+    if not enabled() or getattr(alert, "location_source", "") not in sms_sources:
         return False
     if alert.unresolved_fields or alert.category_needs_confirmation:
         return True
@@ -244,14 +252,14 @@ def _apply(alert, result: SmsAssistResult, *, model: str, started_at) -> None:
         if "category" in unresolved:
             unresolved.remove("category")
 
-    if result.street and result.street != alert.reported_area:
-        alert.reported_area = result.street
+    if result.street and result.street != alert.canonical_street:
+        alert.canonical_street = result.street
         updates["street"] = result.street
         if "location" in unresolved:
             unresolved.remove("location")
 
-    if result.area and result.area != alert.reported_area:
-        alert.reported_area = result.area
+    if result.area and result.area != alert.resolved_location:
+        alert.resolved_location = result.area
         updates["area"] = result.area
         if "location" in unresolved:
             unresolved.remove("location")
@@ -272,7 +280,8 @@ def _apply(alert, result: SmsAssistResult, *, model: str, started_at) -> None:
         update_fields=[
             "type",
             "category_needs_confirmation",
-            "reported_area",
+            "canonical_street",
+            "resolved_location",
             "unresolved_fields",
             "ai_assist",
             "updated_at",

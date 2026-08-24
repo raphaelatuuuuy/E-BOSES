@@ -859,6 +859,11 @@ class ResidentSettingsView(APIView):
         serializer = ResidentSettingsSerializer(settings_obj, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        if serializer.validated_data.get("location_sharing_enabled") is False:
+            request.user.current_latitude = None
+            request.user.current_longitude = None
+            request.user.location_updated_at = None
+            request.user.save(update_fields=["current_latitude", "current_longitude", "location_updated_at", "updated_at"])
         create_audit_log("settings.updated", actor=request.user, target_user=request.user, metadata={"fields": sorted(serializer.validated_data.keys())}, request_meta=request_meta(request))
         return Response(serializer.data)
 

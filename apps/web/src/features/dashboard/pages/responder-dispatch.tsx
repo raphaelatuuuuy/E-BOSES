@@ -26,6 +26,7 @@ import {
 import {
   listAssignedConcerns,
   listFeedConcerns,
+  sendLocationPing,
   type Concern,
 } from "@/features/dashboard/api"
 import { ResponderLeafletMap } from "@/features/dashboard/components/responder/responder-leaflet-map"
@@ -179,7 +180,7 @@ export default function ResponderDispatchPage() {
 
   const selectedActiveTeam = useMemo(
     () =>
-      selected?.assignments.filter(
+      selected?.assignments?.filter(
         (assignment) => !["cancelled", "declined", "resolved"].includes(assignment.status),
       ) ?? [],
     [selected],
@@ -307,16 +308,26 @@ export default function ResponderDispatchPage() {
 
   useEffect(() => {
     function handleNotification(event: Event) {
-      const notification = (event as CustomEvent<{ concern_id?: number | null }>).detail
-      if (!notification?.concern_id) return
+      const notification = (event as CustomEvent<{ concern_id?: number | null; emergency_id?: number | null }>).detail
+      if (!notification?.concern_id && !notification?.emergency_id) return
       void refresh().catch(() =>
-        toast.error("A concern assignment arrived, but the dispatch could not refresh.", {
-          id: "concern-arrive",
+        toast.error("A new assignment arrived, but the dispatch could not refresh.", {
+          id: "assignment-arrive",
         }),
       )
     }
     window.addEventListener("eboses:notification-created", handleNotification)
     return () => window.removeEventListener("eboses:notification-created", handleNotification)
+  }, [refresh])
+
+  useEffect(() => {
+    const refreshAssigned = () => void refresh().catch(() => {})
+    const timer = window.setInterval(refreshAssigned, 30_000)
+    window.addEventListener("focus", refreshAssigned)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener("focus", refreshAssigned)
+    }
   }, [refresh])
 
   useEffect(() => {
@@ -541,6 +552,14 @@ export default function ResponderDispatchPage() {
         })
       })
       setUserPos(writeLastKnownPosition(pos, viewerId))
+      const result = await sendLocationPing({
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+        source: "manual",
+      })
+      if (!result.accepted) throw new Error("This location is outside the active service area.")
+      await refresh()
       toast.success("Location updated", { id: "locate" })
     } catch (positionError) {
       toast.error(locationFailureMessage(positionError), { id: "locate" })
@@ -588,10 +607,10 @@ export default function ResponderDispatchPage() {
           </span>
           <div className="min-w-0">
             <h2 className="text-[22px] font-bold leading-tight tracking-tight text-foreground">
-              All clear
+              Waiting for dispatch
             </h2>
             <p className="mt-1 text-body leading-6 text-muted-foreground">
-              No emergency is assigned to you. You will be alerted here the moment one is.
+              No emergency is assigned to you. Keep this page open for new assignments.
             </p>
             {assignedConcerns.length > 0 ? (
               <p className="mt-2 text-body text-subtle-foreground">

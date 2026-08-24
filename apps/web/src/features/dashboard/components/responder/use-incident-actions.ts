@@ -57,7 +57,7 @@ export function useIncidentActions({
   }
 
   const ownAssignment =
-    alert.assignments.find((assignment) => assignment.responder.id === viewerId) ??
+    (alert.assignments ?? []).find((assignment) => assignment.responder.id === viewerId) ??
     alert.current_assignment ??
     null
 
@@ -99,7 +99,7 @@ export function useIncidentActions({
     const optimistic: EmergencyAlert = {
       ...alert,
       status: "acknowledged",
-      assignments: alert.assignments.map((assignment) =>
+      assignments: (alert.assignments ?? []).map((assignment) =>
         assignment.id === ownAssignment?.id
           ? { ...assignment, status: "acknowledged", acknowledged_at: new Date().toISOString() }
           : assignment,

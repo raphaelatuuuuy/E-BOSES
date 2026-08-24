@@ -703,8 +703,21 @@ class LocationPingSerializer(serializers.Serializer):
     source = serializers.ChoiceField(choices=["active_session", "pwa_background", "manual", "incident"], default="active_session")
 
     def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        allow_outside = bool(
+            user
+            and user.is_authenticated
+            and user.role == user.Role.FIRST_RESPONDER
+            and user.is_on_duty
+        )
         try:
-            validate_location_pair(attrs.get("latitude"), attrs.get("longitude"), required=True)
+            validate_location_pair(
+                attrs.get("latitude"),
+                attrs.get("longitude"),
+                required=True,
+                allow_outside_service_area=allow_outside,
+            )
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc) from exc
         return attrs
@@ -938,7 +951,7 @@ class LocationPingView(APIView):
 
     def post(self, request):
         touch_last_seen(request.user)
-        serializer = LocationPingSerializer(data=request.data)
+        serializer = LocationPingSerializer(data=request.data, context={"request": request})
         if not serializer.is_valid():
             # Background GPS often reports outside Marikina Heights (VPN, travel,
             # or GPS drift). Treat as soft reject so browsers don't log 400 spam.
@@ -950,6 +963,10 @@ class LocationPingView(APIView):
         request.user.current_longitude = serializer.validated_data["longitude"]
         request.user.location_updated_at = timezone.now()
         request.user.save(update_fields=["current_latitude", "current_longitude", "location_updated_at", "updated_at"])
+        if request.user.role == request.user.Role.FIRST_RESPONDER and request.user.is_on_duty:
+            from apps.emergencies.views import retry_waiting_alerts_for_responder
+
+            retry_waiting_alerts_for_responder(request.user)
         payload = person_payload(request.user)
         # group_send is a synchronous round trip to the remote Redis; keep it
         # off this hot 60/min endpoint's critical path.

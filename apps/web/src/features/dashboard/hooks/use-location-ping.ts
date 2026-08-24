@@ -40,9 +40,13 @@ export function useLocationPing(user: AuthUser | null) {
             longitude: position.coords.longitude,
             accuracy: position.coords.accuracy,
             source: "active_session",
-          }).then(() => {
+          }).then((result) => {
+            if (!result.accepted) throw new Error("The server did not accept this location.")
             lastSentRef.current = { coords: position.coords, sentAt: Date.now() }
-          }).catch(() => {})
+            window.dispatchEvent(new CustomEvent("eboses:location-synced"))
+          }).catch(() => {
+            window.dispatchEvent(new CustomEvent("eboses:location-sync-failed"))
+          })
         },
         (error) => {
           if (error.code === error.PERMISSION_DENIED) deniedRef.current = true

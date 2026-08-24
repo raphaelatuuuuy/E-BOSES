@@ -21,6 +21,7 @@ from rest_framework.views import APIView
 
 from apps.accounts.permissions import HasRolePermission
 from apps.capabilities import CONFIGURE_CLASSIFICATION, HasCapability
+from apps.emergencies.temporal import NON_CURRENT
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +37,15 @@ class SmsSimulationView(APIView):
 
     def post(self, request):
         message = str(request.data.get("message", ""))[:5000]
-        sender_mode = "registered" if str(request.data.get("sender", "")) == "registered" else "unknown"
+        requested_sender = str(request.data.get("sender", ""))
+        sender_mode = requested_sender if requested_sender in {"registered", "unknown", "needs_review"} else "unknown"
+        scenario = str(request.data.get("scenario", "default"))
 
-        payload = simulate_sms(message=message, sender_mode=sender_mode, user=request.user)
-        self._log_decision(request, message, sender_mode, payload)
+        payload = simulate_sms(message=message, sender_mode=sender_mode, user=request.user, scenario=scenario)
+        self._log_decision(request, message, sender_mode, scenario, payload)
         return Response(payload)
 
-    def _log_decision(self, request, message: str, sender_mode: str, payload: dict) -> None:
+    def _log_decision(self, request, message: str, sender_mode: str, scenario: str, payload: dict) -> None:
         from apps.concerns.models import LlmDecisionLog
 
         routing = payload.get("routing") or {}
@@ -57,7 +60,7 @@ class SmsSimulationView(APIView):
             domain=LlmDecisionLog.Domain.EMERGENCY,
             performed_by=request.user,
             model_version=(payload.get("ai_assist") or {}).get("model") or "",
-            input_snapshot={"message": message, "sender": sender_mode},
+            input_snapshot={"message": message, "sender": sender_mode, "scenario": scenario},
             output_snapshot=payload,
             resident_message="",
             recommended_action="",
@@ -66,15 +69,19 @@ class SmsSimulationView(APIView):
         )
 
 
-def simulate_sms(*, message: str, sender_mode: str, user) -> dict:
+def simulate_sms(*, message: str, sender_mode: str, user, scenario: str = "default") -> dict:
     """Run one inbound message through the real pipeline, dry."""
     from . import templates
     from .normalize import SenderMatch, match_sender, mask_ph_mobile
     from .parsing import looks_like_otp, parse_command, parse_emergency_sms
 
     body = (message or "").strip()
-    registered_mode = sender_mode == "registered"
-    match, number = _simulated_sender(registered_mode, user)
+    match, number = _simulated_sender(sender_mode, user, scenario)
+    profile = getattr(getattr(match, "user", None), "resident_profile", None)
+    attached = getattr(profile, "community", None)
+    if attached is None and match.is_registered:
+        designation = match.user.designations.filter(is_active=True).select_related("department__community").first()
+        attached = getattr(getattr(designation, "department", None), "community", None)
 
     result = {
         "branch": "",
@@ -84,6 +91,7 @@ def simulate_sms(*, message: str, sender_mode: str, user) -> dict:
             "label": match.label,
             "masked_number": mask_ph_mobile(number),
             "resident_name": _display_name(match),
+            "attached_community": {"id": attached.pk, "name": attached.name} if attached else None,
         },
         "command": None,
         "parsed": None,
@@ -125,10 +133,24 @@ def simulate_sms(*, message: str, sender_mode: str, user) -> dict:
                 branch="help_needs_category",
                 reason="HELP arrived without a usable category word.",
             )
+        if parsed.incident_timing in NON_CURRENT:
+            return _reply(
+                result,
+                templates.past_incident(),
+                branch="past_incident",
+                reason=parsed.incident_timing_reason,
+            )
         return _emergency_path(result, parsed, match, number, user, via_help=True)
 
     parsed = parse_emergency_sms(body, sender_is_known=match.is_registered)
     result["parsed"] = _parsed_dump(parsed)
+    if parsed.incident_timing in NON_CURRENT and not command.recognised:
+        return _reply(
+            result,
+            templates.past_incident(),
+            branch="past_incident",
+            reason=parsed.incident_timing_reason,
+        )
     if parsed.is_emergency and not command.recognised:
         return _emergency_path(result, parsed, match, number, user, via_help=False)
 
@@ -165,12 +187,41 @@ def simulate_sms(*, message: str, sender_mode: str, user) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _simulated_sender(registered_mode: bool, user):
+def _simulated_sender(sender_mode: str, user, scenario: str = "default"):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
     from .normalize import SenderMatch, match_sender
 
-    if registered_mode:
+    if sender_mode == "registered":
         number = getattr(user, "phone_number", "") or ""
-        return match_sender(number), number
+        match = match_sender(number)
+        account = match.user
+        profile = getattr(account, "resident_profile", None) if account else None
+        community = getattr(profile, "community", None)
+        if account and community is None:
+            designation = account.designations.filter(is_active=True).select_related("department__community").first()
+            community = getattr(getattr(designation, "department", None), "community", None)
+        settings_obj = getattr(account, "resident_settings", None) if account else None
+        if account and scenario in {"fresh", "stale", "context"}:
+            if scenario == "context":
+                account.current_latitude = None
+                account.current_longitude = None
+                account.location_updated_at = None
+                if settings_obj:
+                    settings_obj.location_sharing_enabled = False
+                account._simulation_location_sharing_enabled = False
+            else:
+                account.current_latitude = account.current_latitude or getattr(profile, "home_latitude", None) or getattr(community, "center_latitude", None)
+                account.current_longitude = account.current_longitude or getattr(profile, "home_longitude", None) or getattr(community, "center_longitude", None)
+                account.location_updated_at = timezone.now() - (timedelta(minutes=16) if scenario == "stale" else timedelta())
+                if settings_obj:
+                    settings_obj.location_sharing_enabled = True
+                account._simulation_location_sharing_enabled = True
+        return match, number
+    if sender_mode == "needs_review":
+        return SenderMatch(SenderMatch.NEEDS_REVIEW), UNKNOWN_SENDER_NUMBER
     return SenderMatch(SenderMatch.UNVERIFIED), UNKNOWN_SENDER_NUMBER
 
 
@@ -202,43 +253,33 @@ def _emergency_path(result, parsed, match, number, user, *, via_help: bool) -> d
     from .gateway import count_segments, is_gsm7
     from .parsing import category_label
 
-    from apps.emergencies.location_services import classify_location_confidence
+    from apps.emergencies.location_resolution import resolve_incident_location
     from apps.emergencies.models import EmergencyAlert
     from apps.emergencies.sms_intake import active_alert_for, resolve_category_code
 
     code = resolve_category_code(parsed.category_code)
-    profile = getattr(user, "resident_profile", None) if match.is_registered else None
-    barangay = (getattr(profile, "barangay", "") or "Marikina Heights") if profile else "Marikina Heights"
+    resolution = resolve_incident_location(
+        latitude=parsed.latitude,
+        longitude=parsed.longitude,
+        message_area=parsed.reported_area,
+        match=match,
+    )
 
     alert = EmergencyAlert(
         type=code,
         note=parsed.note,
-        latitude=parsed.latitude,
-        longitude=parsed.longitude,
-        location_source="sms",
+        community=resolution.community,
+        latitude=resolution.latitude,
+        longitude=resolution.longitude,
+        location_source=resolution.source,
         reported_area=parsed.reported_area,
         reporter_contact_number=number,
         triage=parsed.triage or {},
         category_needs_confirmation=parsed.category_needs_confirmation,
         unresolved_fields=list(parsed.unresolved_fields or []),
-        barangay=barangay,
+        barangay=resolution.community.name if resolution.community else "Community pending confirmation",
     )
-    try:
-        alert.location_confidence = classify_location_confidence(alert)
-    except Exception:
-        logger.debug("Location confidence unavailable in SMS simulation.", exc_info=True)
-        alert.location_confidence = EmergencyAlert.LocationConfidence.UNKNOWN
-
-    confidence_labels = {
-        EmergencyAlert.LocationConfidence.CONFIRMED: "Inside the barangay boundary",
-        EmergencyAlert.LocationConfidence.REPORTED: "Reported area only — not yet confirmed against the boundary",
-        EmergencyAlert.LocationConfidence.UNKNOWN: "Not enough location information yet",
-        EmergencyAlert.LocationConfidence.OUTSIDE_AREA: "Outside the barangay service area",
-    }
-    result["location"] = {
-        "confidence": alert.location_confidence,
-        "label": confidence_labels.get(alert.location_confidence, alert.location_confidence),
-    }
+    result["location"] = resolution.payload()
 
     if match.is_registered and getattr(user, "pk", None):
         existing = active_alert_for(user, number)
@@ -293,49 +334,26 @@ def _emergency_path(result, parsed, match, number, user, *, via_help: bool) -> d
 
 
 def _routing_section(alert, code: str) -> dict:
-    from apps.emergencies.views import (
-        find_auto_responders_by_unit,
-        preferred_departments_for,
-        responder_display_unit,
-    )
+    from apps.emergencies.routing_preview import preview_dispatch
 
-    preferred = preferred_departments_for(code)
-    department = preferred[0] if preferred else None
-    candidates = []
-    try:
-        candidates = find_auto_responders_by_unit(alert)
-    except Exception:
-        logger.debug("Responder lookup failed in SMS simulation.", exc_info=True)
-
-    reason = (
-        "No department is configured to handle this emergency type, so it would be escalated to an official."
-        if department is None
-        else f"Routed to {department.name} because the configured rule for this emergency type prioritizes it."
-    )
-
-    section = {
-        "department": _department_label(department),
-        "routing_reason": reason,
-        "responder": None,
-        "escalates": department is None or not candidates,
+    dispatch = preview_dispatch(alert)
+    route = dispatch["route"]
+    responder = dispatch["responder"]
+    return {
+        **dispatch,
+        "routing_reason": dispatch["message"],
+        "escalates": dispatch["manual_dispatch"],
+        "responder": (
+            {
+                "found": True,
+                **responder,
+                "distance_meters": route.get("distance_meters"),
+                "eta_seconds": route.get("eta_seconds"),
+            }
+            if responder
+            else None
+        ),
     }
-    if not candidates:
-        if department is not None:
-            section["routing_reason"] = (
-                reason + " No eligible on-duty responder was available, so it would be escalated for manual dispatch."
-            )
-        return section
-
-    responder = candidates[0]
-    preview = _route_preview(responder, alert)
-    section["responder"] = {
-        "found": True,
-        "full_name": _responder_full_name(responder),
-        "unit_name": responder_display_unit(responder),
-        "distance_meters": preview.get("distance_meters"),
-        "eta_seconds": preview.get("eta_seconds"),
-    }
-    return section
 
 
 def _department_label(department) -> dict | None:
@@ -498,6 +516,9 @@ def _parsed_dump(parsed) -> dict:
         "triage_summary": _triage_summary(parsed.triage),
         "note": parsed.note,
         "urgency_signal": parsed.urgency_signal,
+        "incident_timing": parsed.incident_timing,
+        "incident_timing_reason": parsed.incident_timing_reason,
+        "current_danger": parsed.current_danger,
         "unresolved_fields": list(parsed.unresolved_fields or []),
     }
 

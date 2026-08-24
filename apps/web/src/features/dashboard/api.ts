@@ -1336,7 +1336,10 @@ export function getResidentAlertsMap() {
 }
 
 export function sendLocationPing(payload: { latitude: number; longitude: number; accuracy?: number | null; source?: "active_session" | "pwa_background" | "manual" | "incident" }) {
-  return apiRequest<{ person: LiveMapPerson; source: string }>("/locations/ping/", {
+  return apiRequest<
+    | { accepted: true; person: LiveMapPerson; source: string }
+    | { accepted: false; errors: Record<string, unknown> }
+  >("/locations/ping/", {
     method: "POST",
     body: JSON.stringify(payload),
   })

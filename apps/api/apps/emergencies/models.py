@@ -444,6 +444,10 @@ class EmergencyAlert(models.Model):
     latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
     longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
     location_source = models.CharField(max_length=32, default="gps")
+    location_freshness = models.CharField(max_length=20, default="not_available")
+    location_age_seconds = models.PositiveIntegerField(null=True, blank=True)
+    canonical_street = models.CharField(max_length=255, blank=True)
+    location_evidence = models.JSONField(default=dict, blank=True)
     location_accuracy = models.FloatField(null=True, blank=True)
     address = models.CharField(max_length=255, blank=True)
     # The area exactly as the resident described it. Never overwritten by

@@ -15,7 +15,7 @@ import {
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { SheetPrimaryButton } from "@/features/dashboard/components/sheet-dialog"
+import { SheetDialog, SheetPrimaryButton } from "@/features/dashboard/components/sheet-dialog"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { mediaIntegrityVerdict } from "@/features/dashboard/lib/plain-language"
 
@@ -28,6 +28,7 @@ import {
 } from "./api"
 import { categoryLabel, displayValue, readable, RuleMenu, verdictMeta } from "./shared"
 import { LocationPinMap, type LocationPin, type MapPhotoMarker } from "./location-pin-map"
+import { emergencyTitle } from "./dispatch-copy"
 
 const SAMPLE_LANGUAGE_OPTIONS: { value: SampleLanguage; label: string }[] = [
   { value: "filipino", label: "Filipino" },
@@ -44,10 +45,10 @@ const PRIVACY_BRIEF: Record<string, { tone: "good" | "warn" | "muted"; text: str
   unchecked: { tone: "muted", text: "Could not check for sensitive details automatically" },
   not_required: { tone: "muted", text: "No sensitive details found" },
   protected: { tone: "good", text: "Privacy protection applied" },
-  sensitive_review_required: { tone: "warn", text: "Possible sensitive content found — held for review" },
+  sensitive_review_required: { tone: "warn", text: "Possible sensitive content found. Held for review" },
   no_match_found: { tone: "warn", text: "Possible sensitive content suspected but not confirmed" },
   not_configured: { tone: "muted", text: "Privacy scanning is not enabled" },
-  failed: { tone: "warn", text: "Privacy scan failed — image stays restricted" },
+  failed: { tone: "warn", text: "Privacy scan failed. Image stays restricted" },
 }
 
 type Finding = {
@@ -311,7 +312,18 @@ export function ConcernTestWorkspace({ config }: { config: ConcernClassification
         {busy ? "Checking…" : "Check this sample"}
       </SheetPrimaryButton>
 
-      {reportResult ? <ConcernResult result={reportResult} config={config} selectedCategory={selectedCategory} previews={previews} streetImagery={streetImagery} /> : null}
+      {reportResult ? (
+        <SheetDialog
+          open
+          onClose={() => setReportResult(null)}
+          title="Concern check result"
+          description="This is a test result. No concern was filed."
+          size="wide"
+          bodyClassName="pb-5"
+        >
+          <ConcernResult result={reportResult} config={config} selectedCategory={selectedCategory} previews={previews} streetImagery={streetImagery} />
+        </SheetDialog>
+      ) : null}
     </div>
   )
 }
@@ -363,7 +375,7 @@ function ConcernResult({
       findings.push({
         icon: TriangleAlert,
         tone: "warn",
-        text: `The photo was received but could not be reviewed automatically${result.image_error ? ` (${readable(result.image_error)})` : ""} — this result was written from the text alone.`,
+        text: `The photo was received but could not be reviewed automatically${result.image_error ? ` (${readable(result.image_error)})` : ""}. This result was written from the text alone.`,
       })
     } else {
       const relationship = result.evidence_relationship
@@ -379,6 +391,13 @@ function ConcernResult({
   if (result.urgent_attention) {
     findings.push({ icon: TriangleAlert, tone: "warn", text: "This may describe immediate danger." })
   }
+  if (result.incident_timing && ["ended", "historical", "planned", "hypothetical"].includes(result.incident_timing)) {
+    findings.push({
+      icon: CircleCheck,
+      tone: "muted",
+      text: result.incident_timing_reason || "This is not a current emergency, so emergency dispatch will not start.",
+    })
+  }
   if (result.duplicate) {
     findings.push({ icon: CopyIcon, tone: "warn", text: "A very similar report was filed recently." })
   }
@@ -393,7 +412,7 @@ function ConcernResult({
       icon: Ban,
       tone: "bad",
       text: `${photoLabel}${mediaIntegrityVerdict(finding.verdict).label.toLowerCase()}${
-        finding.signals?.length ? ` — ${finding.signals[0]}` : ""
+        finding.signals?.length ? `. ${finding.signals[0]}` : ""
       }`,
     })
   }
@@ -423,8 +442,8 @@ function ConcernResult({
     const ref = comparison.tracking_id ?? "an earlier report"
     findings.push(
       comparison.verdict === "different"
-        ? { icon: CircleCheck, tone: "good", text: comparison.reason ? `Different from ${ref} — ${comparison.reason}` : `Different from ${ref}` }
-        : { icon: CopyIcon, tone: "warn", text: comparison.reason ? `${comparison.verdict === "same_issue" ? "Same issue as" : "Uncertain next to"} ${ref} — ${comparison.reason}` : `${comparison.verdict === "same_issue" ? "Same issue as" : "Uncertain next to"} ${ref}` },
+        ? { icon: CircleCheck, tone: "good", text: comparison.reason ? `Different from ${ref}. ${comparison.reason}` : `Different from ${ref}` }
+        : { icon: CopyIcon, tone: "warn", text: comparison.reason ? `${comparison.verdict === "same_issue" ? "Same issue as" : "Uncertain next to"} ${ref}. ${comparison.reason}` : `${comparison.verdict === "same_issue" ? "Same issue as" : "Uncertain next to"} ${ref}` },
     )
   }
   if (result.location && !result.location.accepted) {
@@ -436,7 +455,7 @@ function ConcernResult({
   }
   if (result.image_uploaded) {
     const privacy = PRIVACY_BRIEF[result.privacy?.state ?? "unchecked"] ?? PRIVACY_BRIEF.unchecked
-    const classes = result.privacy?.detected_classes?.length ? ` — ${result.privacy.detected_classes.join(", ")}` : ""
+    const classes = result.privacy?.detected_classes?.length ? `. ${result.privacy.detected_classes.join(", ")}` : ""
     findings.push({
       icon: privacy.tone === "good" ? CircleCheck : privacy.tone === "warn" ? TriangleAlert : ScanLineIcon,
       tone: privacy.tone,
@@ -477,12 +496,12 @@ function ConcernResult({
     } else {
       HeaderIcon = TriangleAlert
       headerTone = "text-amber-500"
-      headerLabel = `${headerLabel} — flagged for review`
+      headerLabel = `${headerLabel}, flagged for review`
     }
   }
 
   return (
-    <div className="space-y-6 border-t border-neutral-200 pt-6">
+    <div className="space-y-6">
       <div className="space-y-2">
         <div className="flex items-start gap-3">
           <HeaderIcon className={cn("mt-0.5 size-5 shrink-0", headerTone)} strokeWidth={2} aria-hidden />
@@ -531,8 +550,8 @@ function ConcernResult({
             <div className="mt-1.5 flex items-start gap-2">
               <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-500" strokeWidth={2} aria-hidden />
               <p className="min-w-0 break-words text-sm font-medium leading-relaxed text-neutral-900">
-                Matches: {readable(result.matched_emergency_type)}
-                {result.emergency_routing_reason ? ` — ${result.emergency_routing_reason}` : ""}
+                {emergencyTitle(result.matched_emergency_type)}
+                {result.emergency_routing_reason ? `. ${result.emergency_routing_reason}` : ""}
               </p>
             </div>
           ) : null}

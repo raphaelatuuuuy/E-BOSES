@@ -8,7 +8,7 @@
     "certs": "mkcert -install && mkcert localhost 127.0.0.1 10.35.187.164 172.24.208.1 172.23.32.1",
     "build": "tsc -b && vite build",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --test src/features/dashboard/components/sos-fallback.test.mjs src/features/dashboard/components/record/severity.test.mjs",
+    "test": "node --experimental-strip-types --test src/features/dashboard/components/sos-fallback.test.mjs src/features/dashboard/components/emergency-tracking-state.test.mjs src/features/dashboard/components/record/severity.test.mjs src/features/classification/route-preview-map.test.mjs",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc -b",
     "preview": "vite preview --host"

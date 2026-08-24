@@ -9,18 +9,20 @@ import {
 
 import { cn } from "@workspace/ui/lib/utils"
 
-import type { SmsSimulationResult } from "./api"
+import type { SmsSimulationResult, SmsSimulationScenario } from "./api"
+import { RoutePreviewMap } from "./route-preview-map"
+import { emergencyTitle, locationSourceLabel, responderMessage, routeScopeLabel, routeStateLabel } from "./dispatch-copy"
 
 const PRESETS = [
-  { value: "HELP FIRE near Champaca Street", label: "HELP FIRE near Champaca St" },
-  { value: "sunog!! dito sa kanto please send assistance", label: "sunog!! dito sa kanto" },
-  { value: "HELP MEDICAL LOC:14.6507,121.1133", label: "HELP MEDICAL + GPS" },
-  { value: "GUIDE", label: "GUIDE" },
-  { value: "STATUS", label: "STATUS" },
-  { value: "SAFE", label: "SAFE" },
-  { value: "helo tulong nandito ako sa bahay", label: "helo tulong nandito ako sa bahay" },
-  { value: "Your OTP code is 482913", label: "OTP text" },
-]
+  { value: "HELP MEDICAL", label: "Fresh account location", sender: "registered", scenario: "fresh" },
+  { value: "HELP FIRE", label: "Stale account location", sender: "registered", scenario: "stale" },
+  { value: "HELP CRIME", label: "Home community only", sender: "registered", scenario: "context" },
+  { value: "HELP FIRE in Barangay Concepcion Uno", label: "Another community", sender: "registered", scenario: "default" },
+  { value: "HELP MEDICAL LOC:14.6507,121.1133", label: "Unknown with GPS", sender: "unknown", scenario: "default" },
+  { value: "HELP FIRE near Champaca Street", label: "Unknown with street", sender: "unknown", scenario: "default" },
+  { value: "HELP CRIME near Champaca Street", label: "Number needs review", sender: "needs_review", scenario: "default" },
+  { value: "HELP FIRE near M. L. Quezon Street", label: "Street in two areas", sender: "unknown", scenario: "default" },
+] as const
 
 const BRANCH_TONE: Record<string, { icon: typeof CircleCheck; className: string }> = {
   emergency: { icon: TriangleAlert, className: "text-amber-500" },
@@ -34,12 +36,13 @@ const BRANCH_TONE: Record<string, { icon: typeof CircleCheck; className: string 
   not_authorised: { icon: Ban, className: "text-red-500" },
   otp_dropped: { icon: Ban, className: "text-red-500" },
   unknown: { icon: TriangleAlert, className: "text-amber-500" },
+  past_incident: { icon: CircleCheck, className: "text-green-600" },
 }
 
 function branchTitle(branch: string) {
   const titles: Record<string, string> = {
     emergency: "Emergency created and routed",
-    emergency_help: "HELP shortcut — straight to dispatch",
+    emergency_help: "HELP shortcut, straight to dispatch",
     duplicate: "Treated as a follow-up to the open report",
     guide: "Command list sent",
     status: "Status update sent",
@@ -48,19 +51,20 @@ function branchTitle(branch: string) {
     help_needs_category: "HELP arrived without a category",
     not_authorised: "Command refused for this sender",
     otp_dropped: "Dropped by the OTP firewall",
-    unknown: "Unknown message — guided back",
+    unknown: "Unknown message, guided back",
+    past_incident: "Past incident, no emergency dispatch",
   }
   return titles[branch] ?? branch.replace(/_/g, " ")
 }
 
 function formatEta(seconds: number | null) {
-  if (seconds == null) return "—"
+  if (seconds == null) return "Not available"
   const minutes = Math.round(seconds / 60)
   return minutes < 1 ? "< 1 min" : `${minutes} min`
 }
 
 function formatDistance(meters: number | null) {
-  if (meters == null) return "—"
+  if (meters == null) return "Not available"
   return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`
 }
 
@@ -68,14 +72,15 @@ export function SenderPill({
   sender,
   setSender,
 }: {
-  sender: "registered" | "unknown"
-  setSender: (v: "registered" | "unknown") => void
+  sender: "registered" | "unknown" | "needs_review"
+  setSender: (v: "registered" | "unknown" | "needs_review") => void
 }) {
   return (
     <div className="mr-1 flex shrink-0 items-center gap-0.5 rounded-full bg-neutral-100 p-0.5">
       {([
         ["registered", "Registered"],
         ["unknown", "Unknown"],
+        ["needs_review", "Needs review"],
       ] as const).map(([key, label]) => (
         <button
           key={key}
@@ -98,8 +103,9 @@ export function SenderPill({
 export type SmsWorkspaceProps = {
   message: string
   setMessage: (v: string) => void
-  sender: "registered" | "unknown"
-  setSender: (v: "registered" | "unknown") => void
+  sender: "registered" | "unknown" | "needs_review"
+  setSender: (v: "registered" | "unknown" | "needs_review") => void
+  setScenario: (v: SmsSimulationScenario) => void
   result: SmsSimulationResult | null
   busy: boolean
 }
@@ -109,6 +115,7 @@ export function SmsTestWorkspace({
   setMessage,
   sender,
   setSender,
+  setScenario,
   result,
 }: SmsWorkspaceProps) {
   return (
@@ -120,7 +127,11 @@ export function SmsTestWorkspace({
             <button
               key={p.value}
               type="button"
-              onClick={() => setMessage(p.value)}
+              onClick={() => {
+                setMessage(p.value)
+                setSender(p.sender)
+                setScenario(p.scenario)
+              }}
               className={cn(
                 "rounded-full border px-3 py-1.5 text-[12px] font-medium transition-colors",
                 message === p.value
@@ -147,7 +158,6 @@ export function SmsTestWorkspace({
         ) : null}
       </div>
 
-      {result ? <SmsBreakdown result={result} /> : null}
     </div>
   )
 }
@@ -264,7 +274,7 @@ export function SmsChatInput({
           {busy ? <Loader2Icon className="size-4 animate-spin" /> : <ArrowUpIcon className="size-4" strokeWidth={2.4} />}
         </button>
       </div>
-      <p className="mt-2 text-center text-[11px] text-neutral-400">Simulation only — no message is sent or filed.</p>
+      <p className="mt-2 text-center text-[11px] text-neutral-400">Simulation only. No message is sent or filed.</p>
     </div>
   )
 }
@@ -287,7 +297,7 @@ export function SmsCommandGuide() {
         <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-neutral-400">Report an emergency</p>
         <GuideRow code="HELP &lt;TYPE&gt; [place]">{"Skips every other check and opens an alert straight away. Types: fire, medical, crime, disaster."}</GuideRow>
         <GuideRow code="LOC:14.6507,121.1133">Add this line with GPS coordinates to attach a pin when the phone has no data connection.</GuideRow>
-        <GuideRow code="Any clear description">A text like “sunog sa kanto” needs no keyword — the parser picks up category words and urgency phrases on its own.</GuideRow>
+        <GuideRow code="Any clear description">A text like “sunog sa kanto” needs no keyword. The parser reads category words and urgency phrases.</GuideRow>
       </section>
 
       <section>
@@ -301,7 +311,7 @@ export function SmsCommandGuide() {
       <section>
         <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-neutral-400">Who is texting</p>
         <GuideRow code="Registered">A number matched to an account gets greeted by name and richer replies.</GuideRow>
-        <GuideRow code="Unknown">An unrecognised number still gets help — the reply asks them to register so follow-ups reach them.</GuideRow>
+        <GuideRow code="Unknown">An unrecognised number still gets help. The reply asks them to register so follow-ups reach them.</GuideRow>
         <GuideRow code="One active report per sender">While a report is open, further texts become follow-ups instead of new alerts.</GuideRow>
         <GuideRow code="Verification codes">Code-shaped texts are redacted and dropped before anything else reads them.</GuideRow>
       </section>
@@ -311,7 +321,7 @@ export function SmsCommandGuide() {
 
 /* ─── Results breakdown ─── */
 
-function SmsBreakdown({ result }: { result: SmsSimulationResult }) {
+export function SmsBreakdown({ result }: { result: SmsSimulationResult }) {
   const tone = BRANCH_TONE[result.branch] ?? { icon: Info, className: "text-neutral-400" }
   const ToneIcon = tone.icon
   const parsed = result.parsed
@@ -345,6 +355,7 @@ function SmsBreakdown({ result }: { result: SmsSimulationResult }) {
             ) : null}
             {parsed.needs_confirmation ? <ParsedChip label="Guessed" warn /> : null}
             {parsed.urgency_signal ? <ParsedChip label="Urgency" /> : null}
+            <ParsedChip label={parsed.incident_timing === "ongoing" ? "Happening now" : `Timing: ${parsed.incident_timing.replaceAll("_", " ")}`} warn={parsed.incident_timing === "unclear"} />
             <ParsedChip
               label={
                 parsed.coordinate_status === "ok"
@@ -372,7 +383,20 @@ function SmsBreakdown({ result }: { result: SmsSimulationResult }) {
       {result.location ? (
         <div className="rounded-xl bg-neutral-50 px-3.5 py-2.5">
           <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">Location</p>
-          <p className="mt-0.5 text-[13px] font-medium text-neutral-900">{result.location.label}</p>
+          <p className="mt-0.5 text-[13px] font-medium text-neutral-900">
+            {result.location.community?.name ?? "Community not confirmed"}
+          </p>
+          <p className="text-[12px] text-neutral-500">
+            {locationSourceLabel(result.location.source)}
+          </p>
+          {result.location.age_seconds != null ? (
+            <p className="text-[12px] text-neutral-500">Saved {Math.round(result.location.age_seconds / 60)} min ago</p>
+          ) : null}
+          {result.location.candidate_communities.length ? (
+            <p className="mt-1 text-[12px] text-amber-700">
+              Possible communities: {result.location.candidate_communities.map((item) => item.name).join(", ")}
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -384,12 +408,19 @@ function SmsBreakdown({ result }: { result: SmsSimulationResult }) {
       ) : null}
 
       {result.routing ? (
-        <div className="rounded-xl bg-neutral-50 px-3.5 py-2.5">
+        <div className="space-y-3 rounded-xl bg-neutral-50 px-3.5 py-2.5">
           <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">Routing</p>
-          <p className="mt-0.5 text-[13px] font-medium text-neutral-900">
-            {result.routing.department?.name ?? "No department configured"}
+          <p className="mt-0.5 text-[14px] font-semibold text-neutral-900">
+            {parsed?.category_code ? emergencyTitle(parsed.category_code) : branchTitle(result.branch)}
           </p>
-          <p className="text-[12px] leading-relaxed text-neutral-500">{result.routing.routing_reason}</p>
+          <p className="text-[12px] leading-relaxed text-neutral-500">
+            {responderMessage(parsed?.category_code ?? "emergency", result.routing.route, Boolean(result.routing.responder?.found))}
+          </p>
+          <div className="grid gap-1 text-[12px] text-neutral-500 sm:grid-cols-2">
+            <span>{routeScopeLabel(result.routing.scope, result.routing.responding_community)}</span>
+            <span>{routeStateLabel(result.routing.route)}</span>
+            <span>{result.routing.department?.name ?? "No department configured"}</span>
+          </div>
           {result.routing.responder?.found ? (
             <div className="mt-2 flex gap-4 text-[12px]">
               <div>
@@ -405,6 +436,21 @@ function SmsBreakdown({ result }: { result: SmsSimulationResult }) {
                 <span className="truncate font-semibold text-neutral-900">{result.routing.responder.full_name}</span>
               </div>
             </div>
+          ) : null}
+          {result.location ? (
+            <RoutePreviewMap
+              location={result.location}
+              routing={{
+                scope: result.routing.scope,
+                responder: result.routing.responder,
+                route: result.routing.route,
+              }}
+            />
+          ) : null}
+          {result.routing.manual_dispatch ? (
+            <p className="text-[12px] font-semibold text-amber-700">
+              No qualified responder is available. The emergency remains active and goes to manual dispatch.
+            </p>
           ) : null}
         </div>
       ) : null}

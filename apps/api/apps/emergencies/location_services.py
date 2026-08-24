@@ -33,6 +33,18 @@ def classify_location_confidence(alert) -> str:
             if (alert.reported_area or "").strip()
             else EmergencyAlert.LocationConfidence.UNKNOWN
         )
+    community = getattr(alert, "community", None)
+    boundary = getattr(community, "boundary", None)
+    if community is None:
+        return EmergencyAlert.LocationConfidence.UNKNOWN
+    if boundary and boundary.geometry:
+        from apps.geo_services import point_in_geojson_inclusive
+
+        return (
+            EmergencyAlert.LocationConfidence.CONFIRMED
+            if point_in_geojson_inclusive(alert.longitude, alert.latitude, boundary.geometry)
+            else EmergencyAlert.LocationConfidence.OUTSIDE_AREA
+        )
     try:
         if not is_inside_barangay_boundary(alert.latitude, alert.longitude):
             return EmergencyAlert.LocationConfidence.OUTSIDE_AREA

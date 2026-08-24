@@ -193,7 +193,7 @@ export function DetailPanel({
   if (!emergency) return null
   const currentEmergency = emergency
   const fullEmergency = emergencyDetail?.id === emergency.id ? emergencyDetail : null
-  const activeTeamAssignments = fullEmergency?.assignments.filter(
+  const activeTeamAssignments = (fullEmergency?.assignments ?? []).filter(
     (assignment) => !["cancelled", "declined", "resolved"].includes(assignment.status),
   ) ?? []
   const route = snapshot.routes.find((item) => item.alert_id === emergency.id)
@@ -270,6 +270,8 @@ export function DetailPanel({
   const sections: RecordSection[] = []
 
   if (fullEmergency) {
+    const emergencyMedia = fullEmergency.media ?? []
+    const emergencyEscalations = fullEmergency.escalations ?? []
     sections.push({
       key: "emergency-team",
       title: "Response team",
@@ -305,17 +307,17 @@ export function DetailPanel({
       content: <EmergencyTimeline entries={fullEmergency.timeline ?? []} showNotes />,
     })
 
-    if (fullEmergency.media.length) {
-      const evidenceItems: MediaPreviewItem[] = fullEmergency.media.map((media) =>
+    if (emergencyMedia.length) {
+      const evidenceItems: MediaPreviewItem[] = emergencyMedia.map((media) =>
         toMediaPreviewItem(mediaDisplaySource(media), media.original_filename, media.mime_type),
       )
       sections.push({
         key: "emergency-evidence",
         title: "Protected evidence",
-        badge: String(fullEmergency.media.length),
+        badge: String(emergencyMedia.length),
         content: (
           <div className="grid grid-cols-2 gap-2">
-            {fullEmergency.media.map((media, mediaIndex) => (
+            {emergencyMedia.map((media, mediaIndex) => (
               <button
                 key={media.id}
                 type="button"
@@ -341,15 +343,15 @@ export function DetailPanel({
       })
     }
 
-    if (fullEmergency.escalations.length) {
+    if (emergencyEscalations.length) {
       sections.push({
         key: "emergency-escalations",
         title: "Escalation history",
-        badge: String(fullEmergency.escalations.length),
+        badge: String(emergencyEscalations.length),
         defaultOpen: true,
         content: (
           <div className="grid gap-2">
-            {fullEmergency.escalations.map((escalation) => (
+            {emergencyEscalations.map((escalation) => (
               <div
                 key={escalation.id}
                 className="text-xs font-semibold leading-5 text-severity-moderate-ink"

@@ -22,6 +22,7 @@ from apps.accounts.services import create_audit_log
 from apps.sms.normalize import SenderMatch, normalize_ph_mobile
 
 from .location_services import classify_location_confidence, schedule_location_resolution
+from .location_resolution import resolve_incident_location
 from .models import EmergencyAlert, EmergencyCategory, EmergencyEscalation
 
 logger = logging.getLogger(__name__)
@@ -137,20 +138,31 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
         return SmsIntakeResult(alert=existing, duplicate=True, reason="active_alert_exists")
 
     category_code = resolve_category_code(parsed.category_code)
-    profile = getattr(reporter, "resident_profile", None)
+    resolution = resolve_incident_location(
+        latitude=parsed.latitude,
+        longitude=parsed.longitude,
+        message_area=parsed.reported_area,
+        match=match,
+    )
+    evidence = resolution.payload()
 
     alert = EmergencyAlert(
         reporter=reporter,
         type=category_code,
         note=parsed.note or "",
-        latitude=parsed.latitude,
-        longitude=parsed.longitude,
-        location_source="sms",
-        address="",
+        community=resolution.community,
+        latitude=resolution.latitude,
+        longitude=resolution.longitude,
+        location_source=resolution.source,
+        location_freshness=resolution.freshness,
+        location_age_seconds=resolution.age_seconds,
+        canonical_street=resolution.canonical_street,
+        location_evidence=evidence,
+        address=resolution.canonical_street,
         reported_area=parsed.reported_area,
         reverse_geocoding_status=(
             EmergencyAlert.ReverseGeocodingStatus.PENDING
-            if parsed.has_coordinates
+            if resolution.has_destination
             else EmergencyAlert.ReverseGeocodingStatus.SKIPPED
         ),
         reporter_verification=VERIFICATION_BY_MATCH.get(
@@ -160,7 +172,7 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
         triage=parsed.triage or {},
         category_needs_confirmation=parsed.category_needs_confirmation,
         unresolved_fields=list(parsed.unresolved_fields or []),
-        barangay=getattr(profile, "barangay", "") or "Marikina Heights",
+        barangay=resolution.community.name if resolution.community else "Community pending confirmation",
     )
     alert.location_confidence = classify_location_confidence(alert)
     alert.save()
@@ -170,10 +182,17 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
     # Step 2: route before anything slow. `auto_route_alert` takes a request
     # only to build audit metadata, and tolerates None.
     responder = None
-    try:
-        responder = auto_route_alert(alert, None)
-    except Exception:
-        logger.exception("Auto-routing failed for SMS alert %s; alert remains active.", alert.pk)
+    if resolution.community:
+        try:
+            responder = auto_route_alert(alert, None)
+        except Exception:
+            logger.exception("Auto-routing failed for SMS alert %s; alert remains active.", alert.pk)
+    else:
+        reason = "Manual dispatch required: emergency community is unknown or ambiguous."
+        EmergencyEscalation.objects.get_or_create(alert=alert, reason=reason)
+        alert.status = EmergencyAlert.Status.ESCALATION_REQUIRED
+        alert.save(update_fields=["status", "updated_at"])
+        create_status_event(alert, alert.status, None, note=reason, event_key="no_responder")
 
     # Step 3 onwards: everything that may fail or block, none of it load-bearing.
     if alert.location_confidence == EmergencyAlert.LocationConfidence.OUTSIDE_AREA:
@@ -196,7 +215,7 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
     except Exception:
         logger.warning("Witness notification failed for SMS alert %s.", alert.pk, exc_info=True)
 
-    if parsed.has_coordinates:
+    if resolution.has_destination:
         schedule_location_resolution(alert)
 
     create_audit_log(
@@ -208,6 +227,12 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
             "category": category_code,
             "sender_match": match.status,
             "coordinate_status": parsed.coordinate_status,
+            "location_source": resolution.source,
+            "location_freshness": resolution.freshness,
+            "location_state": resolution.state,
+            "community_id": getattr(resolution.community, "pk", None),
+            "candidate_community_ids": [item.pk for item in resolution.candidates],
+            "location_age_seconds": resolution.age_seconds,
             "unresolved_fields": alert.unresolved_fields,
             "inbound_sms_id": getattr(inbound, "pk", None),
             # The sender's number is deliberately absent: audit rows are widely

@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { CircleCheck, TriangleAlert, UploadCloudIcon, XIcon } from "lucide-react"
+import { CircleCheck, SirenIcon, UploadCloudIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { SheetPrimaryButton } from "@/features/dashboard/components/sheet-dialog"
+import { SheetDialog, SheetPrimaryButton } from "@/features/dashboard/components/sheet-dialog"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 
 import { testEmergencySimulation, type EmergencySimulationResult } from "./api"
-import { SectionLabel, displayValue, readable } from "./shared"
+import { SectionLabel, displayValue } from "./shared"
 import { LocationPinMap, type LocationPin } from "./location-pin-map"
+import { RoutePreviewMap } from "./route-preview-map"
+import { emergencyTitle, locationSourceLabel, responderMessage, routeScopeLabel, routeStateLabel } from "./dispatch-copy"
 
 function formatEta(seconds: number | null) {
   if (seconds == null) return "Unknown"
@@ -136,15 +138,23 @@ export function EmergencyTestWorkspace() {
       </SheetPrimaryButton>
 
       {result ? (
-        <div className="space-y-5 border-t border-neutral-200 pt-5">
+        <SheetDialog
+          open
+          onClose={() => setResult(null)}
+          title={"path" in result && result.path === "emergency" ? emergencyTitle(result.matched_emergency_type) : "Emergency check result"}
+          description="This is a test result. No emergency was filed."
+          size="wide"
+          bodyClassName="pb-5"
+        >
+        <div className="space-y-5">
           {!("path" in result) || result.path === undefined ? (
             result.requires_confirmation ? (
               <>
                 <div className="flex items-start gap-3">
-                  <TriangleAlert className="mt-0.5 size-5 shrink-0 text-amber-500" strokeWidth={2} aria-hidden />
+                  <SirenIcon className="mt-0.5 size-5 shrink-0 text-sos" strokeWidth={2} aria-hidden />
                   <div>
                     <p className="text-[16px] font-bold leading-snug text-neutral-900">
-                      Matches: {readable(result.matched_emergency_type)}
+                      {emergencyTitle(result.matched_emergency_type)}
                     </p>
                     <p className="mt-1 text-[14px] leading-relaxed text-neutral-500">{result.emergency_routing_reason}</p>
                     {result.likely_unit ? (
@@ -181,7 +191,7 @@ export function EmergencyTestWorkspace() {
                 <SectionLabel>What was found</SectionLabel>
                 <p className="mt-1.5 text-sm font-medium leading-relaxed text-neutral-900">
                   {displayValue(result.review.recommended_action || "accept")}
-                  {result.review.explanation ? ` — ${result.review.explanation}` : ""}
+                  {result.review.explanation ? `. ${result.review.explanation}` : ""}
                 </p>
                 <EmergencyPhotoPreview result={result} />
               </div>
@@ -191,7 +201,7 @@ export function EmergencyTestWorkspace() {
               <div className="flex items-start gap-3">
                 <CircleCheck className="mt-0.5 size-5 shrink-0 text-green-600" strokeWidth={2} aria-hidden />
                 <p className="text-[14px] font-medium leading-relaxed text-neutral-900">
-                  Not confirmed as ongoing — this would be processed as a normal concern, not an emergency dispatch.
+                  {result.review.incident_timing_reason || "This is not a current emergency."} It would continue as a concern and would not start emergency dispatch.
                 </p>
               </div>
               <EmergencyPhotoPreview result={result} />
@@ -199,17 +209,34 @@ export function EmergencyTestWorkspace() {
           ) : result.path === "emergency" ? (
             <>
               <div className="flex items-start gap-3">
-                <TriangleAlert className="mt-0.5 size-5 shrink-0 text-amber-500" strokeWidth={2} aria-hidden />
+                <SirenIcon className="mt-0.5 size-5 shrink-0 text-sos" strokeWidth={2} aria-hidden />
                 <div>
                   <p className="text-[16px] font-bold leading-snug text-neutral-900">
-                    Matches: {readable(result.matched_emergency_type)}
+                    {emergencyTitle(result.matched_emergency_type)}
                   </p>
-                  <p className="mt-1 text-[14px] leading-relaxed text-neutral-500">{result.routing.routing_reason}</p>
+                  <p className="mt-1 text-[14px] leading-relaxed text-neutral-500">
+                    {responderMessage(result.matched_emergency_type, result.routing.route, result.routing.responder_preview.found)}
+                  </p>
                 </div>
               </div>
               <EmergencyPhotoPreview result={result} />
+              <div className="grid gap-1 border-y border-neutral-200 py-3 text-[13px] text-neutral-600 sm:grid-cols-3 sm:gap-4">
+                <span className="font-semibold text-neutral-900">{result.location.community?.name ?? "Community not confirmed"}</span>
+                <span>{locationSourceLabel(result.location.source)}</span>
+                <span>{routeScopeLabel(result.routing.scope, result.routing.responding_community)}</span>
+              </div>
+              <RoutePreviewMap
+                location={result.location}
+                routing={{
+                  scope: result.routing.scope,
+                  responder: result.routing.responder_preview.found
+                    ? result.routing.responder_preview.responder
+                    : null,
+                  route: result.routing.route,
+                }}
+              />
               {result.routing.responder_preview.found ? (
-                <dl className="grid grid-cols-3 gap-3 rounded-[14px] border border-neutral-200 p-4">
+                <dl className="grid grid-cols-2 gap-3 rounded-[14px] border border-neutral-200 p-4 sm:grid-cols-3">
                   <div>
                     <dt className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">Distance</dt>
                     <dd className="mt-0.5 text-[14px] font-semibold text-neutral-900">
@@ -228,16 +255,34 @@ export function EmergencyTestWorkspace() {
                       {result.routing.responder_preview.responder.full_name}
                     </dd>
                   </div>
+                  <div>
+                    <dt className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">Unit</dt>
+                    <dd className="mt-0.5 text-[14px] font-semibold text-neutral-900">
+                      {result.routing.department?.name ?? "Manual dispatch"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">Route</dt>
+                    <dd className="mt-0.5 text-[14px] font-semibold text-neutral-900">
+                      {routeStateLabel(result.routing.route)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">Summary</dt>
+                    <dd className="mt-0.5 text-[14px] font-semibold text-neutral-900">
+                      {result.routing.route.summary || "No route summary"}
+                    </dd>
+                  </div>
                 </dl>
               ) : (
                 <p className={cn("rounded-[14px] border border-neutral-200 p-4 text-[13px] font-medium text-neutral-500")}>
-                  No one is currently on duty for this unit. This simulation cannot preview a route — the report
-                  would still be processed as a normal concern.
+                  No qualified responder is available. The emergency remains active and goes to manual dispatch.
                 </p>
               )}
             </>
           ) : null}
         </div>
+        </SheetDialog>
       ) : null}
     </div>
   )

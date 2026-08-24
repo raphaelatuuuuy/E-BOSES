@@ -346,7 +346,7 @@ class EmergencyAPITests(APITestCase):
         ack_response = self.client.post(f"/api/emergencies/{alert.pk}/acknowledge/", {}, format="json")
         ping_response = self.client.post(
             f"/api/emergencies/{alert.pk}/location-pings/",
-            {"latitude": "14.6516000", "longitude": "121.1208000", "accuracy": 8.2},
+            {"latitude": "14.6760000", "longitude": "121.0437000", "accuracy": 8.2},
             format="json",
         )
 
@@ -1593,6 +1593,40 @@ class EmergencyAPITests(APITestCase):
         with self.assertRaises(asyncio.TimeoutError):
             async_to_sync(asyncio.wait_for)(channel_layer.receive(channel_name), timeout=0.05)
 
+    def test_fresh_responder_ping_retries_waiting_emergency_once(self):
+        self.make_on_duty_responder(self.responder)
+        self.responder.location_updated_at = timezone.now() - timedelta(hours=1)
+        self.responder.save(update_fields=["location_updated_at", "updated_at"])
+        alert = self.direct_alert(status=EmergencyAlert.Status.ESCALATION_REQUIRED)
+        EmergencyEscalation.objects.create(alert=alert, reason="No eligible responder.")
+        self.client.force_authenticate(self.responder)
+
+        first = self.client.post(
+            "/api/locations/ping/",
+            {"latitude": "14.6516000", "longitude": "121.1208000", "source": "manual"},
+            format="json",
+        )
+        second = self.client.post(
+            "/api/locations/ping/",
+            {"latitude": "14.6516000", "longitude": "121.1208000", "source": "manual"},
+            format="json",
+        )
+
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertTrue(first.data["accepted"])
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        alert.refresh_from_db()
+        self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
+        self.assertEqual(alert.assignments.count(), 1)
+        self.assertEqual(alert.assignments.get().responder, self.responder)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.responder,
+                emergency=alert,
+                type=Notification.Type.EMERGENCY_ROUTED,
+            ).exists()
+        )
+
     def test_location_ping_rejects_out_of_bounds_coordinates(self):
         self.client.force_authenticate(self.resident)
 
@@ -1605,6 +1639,21 @@ class EmergencyAPITests(APITestCase):
         # Soft 200: GPS noise outside barangay should not error the client
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(response.data.get("accepted", True))
+
+    def test_on_duty_responder_location_can_be_outside_one_barangay(self):
+        self.make_on_duty_responder(self.responder)
+        self.client.force_authenticate(self.responder)
+
+        response = self.client.post(
+            "/api/locations/ping/",
+            {"latitude": "14.6760000", "longitude": "121.0437000", "source": "manual"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["accepted"])
+        self.responder.refresh_from_db()
+        self.assertEqual(str(self.responder.current_latitude), "14.6760000")
 
     @patch("apps.live_map.httpx.get")
     def test_route_api_returns_complete_geometry_and_changes_own_profile(self, route_get):

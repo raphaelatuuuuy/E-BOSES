@@ -15,6 +15,7 @@ export type SettingKey =
   | "push_alerts"
   | "report_updates"
   | "community_sharing"
+  | "location_sharing_enabled"
   | "location_confirmation"
 
 export function SettingsSkeleton() {

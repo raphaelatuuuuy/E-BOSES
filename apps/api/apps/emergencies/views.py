@@ -861,7 +861,7 @@ def apply_routing_effects(alert, responder, request, *, actor=None, audit_action
         pass
 
 
-def auto_route_alert(alert, request):
+def auto_route_alert(alert, request, *, retry_escalated=False):
     with transaction.atomic():
         locked_alert = EmergencyAlert.objects.select_for_update().get(pk=alert.pk)
         active_assignment = (
@@ -876,15 +876,22 @@ def auto_route_alert(alert, request):
             .order_by("assigned_at", "id")
             .first()
         )
-        if locked_alert.status != EmergencyAlert.Status.SUBMITTED or active_assignment:
+        routable_statuses = {EmergencyAlert.Status.SUBMITTED}
+        if retry_escalated:
+            routable_statuses.add(EmergencyAlert.Status.ESCALATION_REQUIRED)
+        if locked_alert.status not in routable_statuses or active_assignment:
             return active_assignment.responder if active_assignment else None
 
         responders = find_auto_responders_by_unit(locked_alert)
         if not responders:
-            preferred = preferred_departments_for(locked_alert.type)
+            preferred = preferred_departments_for(locked_alert.type, locked_alert.community)
             unit_names = ", ".join(sorted(department_label(d) for d in preferred)) or "responder"
             reason = f"No eligible on-duty {unit_names} in {normalize_barangay(locked_alert.barangay)}."
             EmergencyEscalation.objects.get_or_create(alert=locked_alert, reason=reason)
+            locked_alert.status = EmergencyAlert.Status.ESCALATION_REQUIRED
+            locked_alert.status_version += 1
+            locked_alert.save(update_fields=["status", "status_version", "updated_at"])
+            create_status_event(locked_alert, locked_alert.status, None, note=reason, event_key="no_responder")
             notify_officials_no_responder(locked_alert)
             return None
 
@@ -908,6 +915,26 @@ def auto_route_alert(alert, request):
             first = first or responder
         notify_standby_responders(locked_alert, assigned_ids=[responder.pk for responder in responders])
         return first
+
+
+def retry_waiting_alerts_for_responder(responder):
+    if not responder.is_on_duty:
+        return []
+    routed = []
+    alerts = (
+        EmergencyAlert.objects.filter(status=EmergencyAlert.Status.ESCALATION_REQUIRED)
+        .select_related("community")
+        .order_by("created_at", "id")
+    )
+    for alert in alerts:
+        if not role_map_for_responder(alert, responder):
+            continue
+        if responder not in find_auto_responders(alert, limit=5):
+            continue
+        assigned = auto_route_alert(alert, None, retry_escalated=True)
+        if assigned:
+            routed.append(alert.pk)
+    return routed
 
 def create_witness_notifications(alert):
     # Warning neighbours is a proximity feature; with no pin there is no
@@ -1173,13 +1200,18 @@ class EmergencyCreateView(APIView):
             )
         lat = serializer.validated_data.get("latitude")
         lng = serializer.validated_data.get("longitude")
-        incident_community = None
+        from .location_resolution import resolve_incident_location
+
+        location_resolution = resolve_incident_location(
+            latitude=lat,
+            longitude=lng,
+            message_area=serializer.validated_data.get("reported_area", ""),
+            user=request.user,
+        )
+        incident_community = location_resolution.community
         if lat is not None and lng is not None:
-            incident_community = active_community_for_point(lat, lng)
             if incident_community is None:
                 return Response({"location": ["The point is outside an active community or is inside overlapping boundaries."]}, status=status.HTTP_400_BAD_REQUEST)
-        else:
-            incident_community = getattr(getattr(request.user, "resident_profile", None), "community", None)
         if incident_community is None:
             return Response({"location": ["We could not determine the emergency community."]}, status=status.HTTP_400_BAD_REQUEST)
         media_files = []
@@ -1217,16 +1249,20 @@ class EmergencyCreateView(APIView):
             community=incident_community,
             type=serializer.validated_data["type"],
             note=serializer.validated_data.get("note", ""),
-            latitude=serializer.validated_data.get("latitude"),
-            longitude=serializer.validated_data.get("longitude"),
-            location_source=serializer.validated_data.get("location_source", "gps"),
+            latitude=location_resolution.latitude,
+            longitude=location_resolution.longitude,
+            location_source=location_resolution.source,
+            location_freshness=location_resolution.freshness,
+            location_age_seconds=location_resolution.age_seconds,
+            canonical_street=location_resolution.canonical_street,
+            location_evidence=location_resolution.payload(),
             location_accuracy=serializer.validated_data.get("location_accuracy"),
             address=serializer.validated_data.get("address", ""),
             reported_area=serializer.validated_data.get("reported_area", ""),
             triage=serializer.validated_data.get("triage") or {},
             reporter_contact_number=getattr(request.user, "phone_number", "") or "",
             media_warnings=media_warnings,
-            barangay=getattr(profile, "barangay", "") or incident_community.name,
+            barangay=incident_community.name,
             ip_asn=ip_meta.get("asn", ""),
             ip_country=ip_meta.get("country", ""),
             ip_org=ip_meta.get("org", ""),

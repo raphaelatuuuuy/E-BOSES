@@ -435,6 +435,10 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
             "latitude",
             "longitude",
             "location_source",
+            "location_freshness",
+            "location_age_seconds",
+            "canonical_street",
+            "location_evidence",
             "location_accuracy",
             "address",
             "reported_area",
@@ -666,7 +670,12 @@ class EmergencyLocationPingCreateSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         try:
-            validate_location_pair(attrs.get("latitude"), attrs.get("longitude"), required=True)
+            validate_location_pair(
+                attrs.get("latitude"),
+                attrs.get("longitude"),
+                required=True,
+                allow_outside_service_area=True,
+            )
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc) from exc
         return attrs
@@ -790,7 +799,12 @@ class ResponderShiftStartSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         try:
-            validate_location_pair(attrs.get("latitude"), attrs.get("longitude"), required=True)
+            validate_location_pair(
+                attrs.get("latitude"),
+                attrs.get("longitude"),
+                required=True,
+                allow_outside_service_area=True,
+            )
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc) from exc
         return attrs
@@ -807,7 +821,12 @@ class ResponderShiftEndSerializer(serializers.Serializer):
             raise serializers.ValidationError("Latitude and longitude must be sent together.")
         if has_lat and has_lng:
             try:
-                validate_location_pair(attrs.get("latitude"), attrs.get("longitude"), required=True)
+                validate_location_pair(
+                    attrs.get("latitude"),
+                    attrs.get("longitude"),
+                    required=True,
+                    allow_outside_service_area=True,
+                )
             except DjangoValidationError as exc:
                 raise serializers.ValidationError(exc) from exc
         return attrs

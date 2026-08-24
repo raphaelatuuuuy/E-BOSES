@@ -19,6 +19,7 @@ import {
   createEmergencyAppeal,
   getEmergency,
   isNewerEmergencyAlert,
+  normalizeEmergencyAlert,
   type EmergencyAlert,
   type EmergencyChatMessage,
   type EmergencyStatus,
@@ -61,6 +62,28 @@ type TimelineRow = {
   note: string
   time: string | null
   state: "done" | "current" | "pending" | "cancelled"
+}
+
+const ACTIVE_ASSIGNMENT_STATUSES = new Set([
+  "assigned",
+  "acknowledged",
+  "en_route",
+  "arrived",
+  "assisting",
+])
+
+function hasActiveResponder(alert: EmergencyAlert) {
+  if (alert.current_assignment && ACTIVE_ASSIGNMENT_STATUSES.has(alert.current_assignment.status)) {
+    return true
+  }
+  return (alert.assignments ?? []).some((assignment) =>
+    ACTIVE_ASSIGNMENT_STATUSES.has(assignment.status),
+  )
+}
+
+function hadResponderAssignment(alert: EmergencyAlert) {
+  return (alert.assignments?.length ?? 0) > 0 ||
+    (alert.escalations ?? []).some((item) => item.previous_assignment != null)
 }
 
 const PIPELINE: Array<{
@@ -109,7 +132,14 @@ const PIPELINE: Array<{
 ]
 
 function buildStatusTimeline(alert: EmergencyAlert): TimelineRow[] {
-  const timeline = alert.timeline ?? []
+  const timeline = alert.timeline?.length
+    ? alert.timeline
+    : (alert.status_events ?? []).map((event) => ({
+        event_key: event.event_key,
+        title: event.label,
+        description: event.note,
+        at: event.created_at,
+      }))
   const byKey = new Map<string, { title: string; description: string; at: string }>()
   for (const entry of timeline) {
     if (!byKey.has(entry.event_key)) {
@@ -160,6 +190,22 @@ function buildStatusTimeline(alert: EmergencyAlert): TimelineRow[] {
     }
   })
 
+  if (alert.status === "escalation_required") {
+    const previousResponder = hadResponderAssignment(alert)
+    const escalationEvent = byKey.get("no_responder")
+    for (const row of rows) row.state = row.status === "submitted" ? "done" : "pending"
+    rows.splice(1, 0, {
+      key: "manual_dispatch",
+      status: "escalation_required",
+      label: previousResponder ? "Finding a new responder" : "Manual dispatch",
+      note: previousResponder
+        ? "An official is assigning another response team."
+        : "An official is finding an available response team.",
+      time: escalationEvent?.at ?? alert.updated_at,
+      state: "current",
+    })
+  }
+
   const cancelHit = byKey.get("cancelled") ?? byKey.get("false_alarm")
   if (alert.status === "cancelled" || alert.status === "false_alarm") {
     rows.push({
@@ -205,7 +251,9 @@ function statusText(alert: EmergencyAlert) {
     case "transfer_required":
       return "Your case is being handed to a different response unit."
     case "escalation_required":
-      return "The barangay is arranging another responder for your emergency."
+      return hadResponderAssignment(alert)
+        ? "Your earlier responder is no longer assigned. An official is finding another response team."
+        : "No responder is assigned yet. An official is finding an available response team."
     case "resolved":
       return "Emergency has been resolved."
     case "closed":
@@ -228,7 +276,9 @@ function headline(alert: EmergencyAlert) {
   if (alert.status === "backup_requested" || alert.status === "backup_assigned") return "Extra help on the way"
   if (alert.status === "in_progress") return "Response in progress"
   if (alert.status === "transfer_required") return "Transferring response"
-  if (alert.status === "escalation_required") return "Arranging another responder"
+  if (alert.status === "escalation_required") {
+    return hadResponderAssignment(alert) ? "Finding a new responder" : "Manual dispatch in progress"
+  }
   if (alert.status === "resident_safe") return "You reported safe"
   if (alert.status === "resolved") return "Emergency resolved"
   if (alert.status === "closed" || alert.status === "cancelled") return "Alert closed"
@@ -641,7 +691,7 @@ function DetailsColumn({
 }) {
   const live = ACTIVE_EMERGENCY_STATUSES.has(alert.status)
   const address = alert.address?.trim() || alert.barangay || "Pinned location"
-  const hasResponder = (alert.assignments?.length ?? 0) > 0 || Boolean(alert.current_assignment)
+  const hasResponder = hasActiveResponder(alert)
   const reach =
     distance !== null
       ? live
@@ -656,7 +706,7 @@ function DetailsColumn({
         : "Polling for updates"
     : "Final status"
   const [lightbox, setLightbox] = useState<{ items: MediaPreviewItem[]; index: number } | null>(null)
-  const mediaItems: MediaPreviewItem[] = alert.media.map((media) =>
+  const mediaItems: MediaPreviewItem[] = (alert.media ?? []).map((media) =>
     toMediaPreviewItem(media.raw_url, media.original_filename, media.mime_type),
   )
 
@@ -676,7 +726,7 @@ function DetailsColumn({
         </div>
       </div>
 
-      {milestoneMode ? (
+      {milestoneMode && alert.status !== "escalation_required" ? (
         <Section label="Status">
           <MilestoneStepper alert={alert} />
         </Section>
@@ -705,10 +755,10 @@ function DetailsColumn({
         )}
       </Section>
 
-      {alert.media.length > 0 ? (
+      {(alert.media ?? []).length > 0 ? (
         <Section label="Evidence">
           <div className="grid grid-cols-2 gap-2">
-            {alert.media.map((media, mediaIndex) =>
+            {(alert.media ?? []).map((media, mediaIndex) =>
               media.mime_type.startsWith("image/") ? (
                 <button
                   key={media.id}
@@ -817,9 +867,10 @@ export function EmergencyTrackingSheet({
 
   const adoptAlert = useCallback((nextAlert: EmergencyAlert) => {
     if (!isNewerEmergencyAlert(alertRef.current, nextAlert)) return
-    alertRef.current = nextAlert
-    setAlert(nextAlert)
-    onAlertChange?.(nextAlert)
+    const normalized = normalizeEmergencyAlert(nextAlert)
+    alertRef.current = normalized
+    setAlert(normalized)
+    onAlertChange?.(normalized)
   }, [onAlertChange])
 
   // Reset transient sheet state when the sheet closes, and adopt a newly
@@ -870,17 +921,23 @@ export function EmergencyTrackingSheet({
   }, [open])
 
   useEffect(() => {
-    if (!open || !alertId || !alertStatus || !ACTIVE_EMERGENCY_STATUSES.has(alertStatus) || connectionState !== "degraded") return
-    const interval = window.setInterval(async () => {
+    if (!open || !alertId || !alertStatus || !ACTIVE_EMERGENCY_STATUSES.has(alertStatus)) return
+    const refreshAlert = async () => {
       try {
         const nextAlert = await getEmergency(alertId)
         adoptAlert(nextAlert)
       } catch {
         /* keep last */
       }
-    }, 5000)
-    return () => window.clearInterval(interval)
-  }, [open, alertId, alertStatus, connectionState, adoptAlert])
+    }
+    void refreshAlert()
+    const interval = window.setInterval(() => void refreshAlert(), 5000)
+    window.addEventListener("focus", refreshAlert)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener("focus", refreshAlert)
+    }
+  }, [open, alertId, alertStatus, adoptAlert])
 
   useEffect(() => {
     if (!open || !alertId || !alertStatus || !ACTIVE_EMERGENCY_STATUSES.has(alertStatus)) return
@@ -1184,9 +1241,15 @@ export function EmergencyTrackingSheet({
               Close tracking
             </button>
           </div>
-          {isLive && !canCancel ? (
+          {isLive && hasActiveResponder(alert) ? (
             <p className="mt-2 text-center text-[11px] text-neutral-400">
               A responder is already handling this alert. Contact them in chat if circumstances change.
+            </p>
+          ) : isLive && alert.status === "escalation_required" ? (
+            <p className="mt-2 text-center text-[11px] text-neutral-500">
+              {hadResponderAssignment(alert)
+                ? "Keep this page open. Chat will reopen when a new responder is assigned."
+                : "Keep this page open. Updates will appear when a response team is assigned."}
             </p>
           ) : null}
         </div>

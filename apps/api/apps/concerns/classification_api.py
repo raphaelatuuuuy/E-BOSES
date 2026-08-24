@@ -1024,7 +1024,7 @@ def _resident_message_text(
         messages.append("No photo was attached. A clear photo helps confirm your report.")
     if details.get("privacy_scan_required"):
         messages.append("This may show private details. Sensitive parts may be blurred before public display.")
-    if details.get("urgent_attention"):
+    if details.get("urgent_attention") and details.get("matched_emergency_type"):
         messages.append("This may need urgent attention. Submit it now or use Emergency Alert if someone is in immediate danger.")
     if duplicate_feedback and duplicate_feedback.get("found"):
         action = duplicate_feedback.get("action")
@@ -1368,6 +1368,9 @@ def _review_details(result: dict, *, selected_category: str, image_uploaded: boo
         "matched_emergency_type": details.get("matched_emergency_type"),
         "emergency_routing_reason": details.get("emergency_routing_reason"),
         "ongoing_emergency_confirmation_required": bool(details.get("ongoing_emergency_confirmation_required")),
+        "incident_timing": details.get("incident_timing") or "unclear",
+        "incident_timing_reason": details.get("incident_timing_reason") or "",
+        "current_danger": bool(details.get("current_danger")),
         "title_preview": _formatted_title_preview(title, description, details),
         "assigned_unit": _assigned_unit_for_category(category_ref),
     }

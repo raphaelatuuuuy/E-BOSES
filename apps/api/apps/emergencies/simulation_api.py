@@ -65,8 +65,9 @@ class EmergencySimulationView(APIView):
         )
         from apps.concerns.models import ConcernClassificationConfiguration, LlmDecisionLog
         from apps.emergencies.models import EmergencyAlert
-        from apps.emergencies.views import find_auto_responders_by_unit, preferred_departments_for
-        from apps.live_map import route_preview_for_responder
+        from apps.emergencies.location_resolution import resolve_incident_location
+        from apps.emergencies.routing_preview import preview_dispatch
+        from apps.emergencies.views import preferred_departments_for
 
         title = str(request.data.get("title", ""))[:160]
         description = str(request.data.get("description", ""))[:5000]
@@ -89,6 +90,12 @@ class EmergencySimulationView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         confirmed_ongoing = _coerce_confirmed_ongoing(request.data.get("confirmed_ongoing"))
+        location_resolution = resolve_incident_location(
+            latitude=latitude,
+            longitude=longitude,
+            message_area="",
+            user=request.user,
+        )
 
         config = ConcernClassificationConfiguration.current()
         uploaded = _first_uploaded(request)
@@ -105,20 +112,23 @@ class EmergencySimulationView(APIView):
         matched_emergency_type = details.get("matched_emergency_type") or ""
         emergency_routing_reason = details.get("emergency_routing_reason") or ""
         urgent_attention = bool(details.get("urgent_attention"))
+        requires_confirmation = bool(details.get("ongoing_emergency_confirmation_required")) or bool(
+            matched_emergency_type and urgent_attention and (details.get("incident_timing") or "unclear") == "unclear"
+        )
         privacy = _privacy_dry_run(uploaded, details)
 
         routing_reason_for_log = ""
         assigned_department_for_log = None
 
         likely_unit = None
-        if matched_emergency_type:
-            preferred = preferred_departments_for(matched_emergency_type)
+        if matched_emergency_type and location_resolution.community:
+            preferred = preferred_departments_for(matched_emergency_type, location_resolution.community)
             if preferred:
                 likely_unit = {"id": preferred[0].pk, "name": preferred[0].name, "short_name": preferred[0].short_name}
 
-        if confirmed_ongoing is None:
+        if confirmed_ongoing is None and requires_confirmation:
             response_payload = {
-                "requires_confirmation": bool(matched_emergency_type and urgent_attention),
+                "requires_confirmation": True,
                 "matched_emergency_type": matched_emergency_type,
                 "emergency_routing_reason": emergency_routing_reason,
                 "likely_unit": likely_unit,
@@ -132,8 +142,9 @@ class EmergencySimulationView(APIView):
                     title=title,
                     description=description,
                 ),
+                "location": location_resolution.payload(),
             }
-        elif confirmed_ongoing is False:
+        elif confirmed_ongoing is False or not (matched_emergency_type and urgent_attention):
             response_payload = {
                 "requires_confirmation": False,
                 "path": "concern",
@@ -147,46 +158,30 @@ class EmergencySimulationView(APIView):
                     title=title,
                     description=description,
                 ),
+                "location": location_resolution.payload(),
             }
         else:
-            profile = getattr(request.user, "resident_profile", None)
-            barangay = getattr(profile, "barangay", "") or "Marikina Heights"
             alert = EmergencyAlert(
                 reporter=request.user,
                 type=matched_emergency_type,
                 latitude=latitude,
                 longitude=longitude,
-                barangay=barangay,
+                community=location_resolution.community,
+                barangay=location_resolution.community.name if location_resolution.community else "Community pending confirmation",
+                location_source=location_resolution.source,
             )
-
-            preferred = preferred_departments_for(alert.type)
-            department = preferred[0] if preferred else None
-            candidates = find_auto_responders_by_unit(alert)
-            responder = candidates[0] if candidates else None
-
-            type_label = _emergency_type_label(matched_emergency_type)
-            if department:
-                routing_reason = f"Routed to {department.name} because the {type_label} emergency type prioritizes it."
-            else:
-                label_phrase = f"the {type_label} emergency type" if matched_emergency_type else "this emergency type"
-                routing_reason = f"No department is configured to handle {label_phrase}."
-
-            if responder:
-                preview = route_preview_for_responder(responder, latitude=latitude, longitude=longitude)
-                responder_preview = {
+            dispatch = preview_dispatch(alert)
+            department = dispatch["department"]
+            routing_reason = dispatch["message"]
+            responder_preview = (
+                {
                     "found": True,
-                    "responder": {
-                        "id": responder.pk,
-                        "full_name": _responder_full_name(responder),
-                        "latitude": float(responder.current_latitude) if responder.current_latitude is not None else None,
-                        "longitude": float(responder.current_longitude) if responder.current_longitude is not None else None,
-                    },
-                    "distance_meters": preview.get("distance_meters"),
-                    "eta_seconds": preview.get("eta_seconds"),
-                    "geometry": preview.get("geometry"),
+                    "responder": dispatch["responder"],
+                    **dispatch["route"],
                 }
-            else:
-                responder_preview = {"found": False, "reason": "no_on_duty_responder_for_unit"}
+                if dispatch["responder"]
+                else {"found": False, "reason": "no_on_duty_responder_for_unit"}
+            )
 
             response_payload = {
                 "requires_confirmation": False,
@@ -195,18 +190,22 @@ class EmergencySimulationView(APIView):
                 "image_uploaded": bool(uploaded),
                 "image_error": image_error,
                 "privacy": privacy,
+                "location": location_resolution.payload(),
                 "routing": {
-                    "department": (
-                        {"id": department.pk, "name": department.name, "short_name": department.short_name}
-                        if department
-                        else None
-                    ),
+                    "department": department,
                     "routing_reason": routing_reason,
                     "responder_preview": responder_preview,
+                    "scope": dispatch["scope"],
+                    "manual_dispatch": dispatch["manual_dispatch"],
+                    "responding_community": dispatch["responding_community"],
+                    "route": dispatch["route"],
                 },
             }
             routing_reason_for_log = routing_reason
-            assigned_department_for_log = department
+            if department:
+                from apps.concerns.models import Department
+
+                assigned_department_for_log = Department.objects.filter(pk=department["id"]).first()
 
         LlmDecisionLog.objects.create(
             run_kind=LlmDecisionLog.RunKind.SIMULATION,

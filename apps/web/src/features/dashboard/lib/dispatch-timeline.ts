@@ -58,7 +58,7 @@ export function buildDispatchTimeline(
   viewerId: number | null,
 ): TimelineEntry[] {
   const own =
-    alert.assignments.find((assignment) => assignment.responder.id === viewerId) ??
+    (alert.assignments ?? []).find((assignment) => assignment.responder.id === viewerId) ??
     alert.current_assignment ??
     null
 

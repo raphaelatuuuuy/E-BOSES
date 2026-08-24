@@ -182,7 +182,7 @@ def point_in_geojson_inclusive(
     return False
 
 
-def active_community_for_point(latitude, longitude):
+def active_communities_for_point(latitude, longitude):
     from apps.emergencies.models import Community
 
     latitude = float(latitude)
@@ -202,6 +202,11 @@ def active_community_for_point(latitude, longitude):
             continue
         if point_in_geojson_inclusive(longitude, latitude, community.boundary.geometry):
             matches.append(community)
+    return matches
+
+
+def active_community_for_point(latitude, longitude):
+    matches = active_communities_for_point(latitude, longitude)
     return matches[0] if len(matches) == 1 else None
 
 

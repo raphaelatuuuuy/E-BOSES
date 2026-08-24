@@ -27,8 +27,9 @@ export function QueueItem({
 }) {
   const { alert } = entry
 
+  const assignments = alert.assignments ?? []
   const assignment =
-    alert.current_assignment ?? alert.assignments[alert.assignments.length - 1] ?? null
+    alert.current_assignment ?? assignments[assignments.length - 1] ?? null
   const typeLabel = TYPE_LABEL[alert.type] ?? alert.type.replace(/_/g, " ")
 
   return (
@@ -54,7 +55,7 @@ export function QueueItem({
           key: "photos",
           icon: <ImageIcon className="size-3.5" aria-hidden />,
           label: "Photos",
-          value: alert.media.length,
+          value: (alert.media ?? []).length,
         },
       ]}
       active={active}

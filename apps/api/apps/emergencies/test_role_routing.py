@@ -232,7 +232,7 @@ class RoleBasedResponderRoutingTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         alert = EmergencyAlert.objects.get(pk=response.data["emergency_id"])
         self.assertEqual(alert.type, EmergencyAlert.Type.MEDICAL)
-        self.assertEqual(alert.location_source, "sms")
+        self.assertEqual(alert.location_source, "sms_gps")
         self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
         self.assertTrue(alert.assignments.filter(responder=self.bhw).exists())
         self.assertIn("covered court", alert.reported_area)

@@ -162,7 +162,7 @@ export function DispatchOverviewCard({
     entry.id === "chat" ? { ...entry, badge: chatUnread } : entry,
   )
 
-  const support = alert.assignments.filter(
+  const support = (alert.assignments ?? []).filter(
     (assignment) =>
       assignment.responder.id !== viewerId && SUPPORTED_ACTIVE.has(assignment.status),
   )

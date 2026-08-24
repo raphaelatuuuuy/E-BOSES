@@ -156,6 +156,7 @@ class ResidentSettings(models.Model):
     push_alerts = models.BooleanField(default=True)
     report_updates = models.BooleanField(default=True)
     community_sharing = models.BooleanField(default=False)
+    location_sharing_enabled = models.BooleanField(default=False)
     location_confirmation = models.BooleanField(default=True)
     sos_placement = models.CharField(max_length=16, choices=SosPlacement.choices, default=SosPlacement.SIDEBAR)
     created_at = models.DateTimeField(auto_now_add=True)

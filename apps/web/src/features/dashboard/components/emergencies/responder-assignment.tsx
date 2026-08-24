@@ -49,7 +49,7 @@ export function ResponderAssignment({
   const [teamAction, setTeamAction] = useState<TeamAction | null>(null)
   const [teamReason, setTeamReason] = useState("")
 
-  const activeAssignments = alert?.assignments.filter(
+  const activeAssignments = alert?.assignments?.filter(
     (assignment) => !["cancelled", "declined", "resolved"].includes(assignment.status),
   ) ?? []
 
@@ -109,7 +109,7 @@ export function ResponderAssignment({
   return (
     <div className="space-y-4">
       <div className="grid gap-2">
-        {alert?.assignments.length ? alert.assignments.map((assignment) => {
+        {alert?.assignments?.length ? alert.assignments?.map((assignment) => {
           const active = !["cancelled", "declined", "resolved"].includes(assignment.status)
           return (
             <div key={assignment.id} className={cn("flex items-center justify-between gap-2 rounded-control border border-card-line px-3 py-2", !active && "bg-card-raised opacity-60")}>

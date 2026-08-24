@@ -21,6 +21,7 @@ from .gateway import queue_sms
 from .models import InboundSmsMessage, SmsPurpose
 from .normalize import SenderMatch, match_sender, normalize_ph_mobile, surname_for
 from .parsing import ParsedCommand, looks_like_otp, parse_command, parse_emergency_sms
+from apps.emergencies.temporal import NON_CURRENT
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,10 @@ def _dispatch(inbound, payload, match: SenderMatch, role: str) -> Reply | None:
     # A message that reads as an emergency but is not a command at all — this
     # is what the SOS wizard's offline SMS looks like.
     parsed = parse_emergency_sms(payload.body, sender_is_known=match.is_registered)
+    if parsed.incident_timing in NON_CURRENT and not command.recognised:
+        inbound.outcome = InboundSmsMessage.Outcome.COMMAND_HANDLED
+        inbound.detail = "Past or ended incident detected; emergency dispatch was not started."
+        return Reply(templates.past_incident())
     if parsed.is_emergency and not command.recognised:
         return _create_emergency(inbound, parsed, payload, match)
 
@@ -187,6 +192,10 @@ def _handle_help(inbound, payload, match: SenderMatch, command: ParsedCommand) -
 
     # Rebuild a full emergency message so one parser handles both shapes.
     parsed = parse_emergency_sms(payload.body, sender_is_known=True)
+    if parsed.incident_timing in NON_CURRENT:
+        inbound.outcome = InboundSmsMessage.Outcome.COMMAND_HANDLED
+        inbound.detail = "HELP described a past or ended incident; emergency dispatch was not started."
+        return Reply(templates.past_incident())
     parsed.is_emergency = True
     parsed.category_code = code
     parsed.category_needs_confirmation = False

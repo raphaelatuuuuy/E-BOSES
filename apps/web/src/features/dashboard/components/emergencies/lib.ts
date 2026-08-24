@@ -56,7 +56,7 @@ export function responderName(user?: PublicUser | null) {
 export { looksLikeCoordinates, readableLocation } from "@/features/dashboard/lib/location-text"
 
 export function hasAutoRoute(alert: EmergencyAlert) {
-  return alert.status_events.some((event) => event.note.toLowerCase().includes("auto-routed"))
+  return (alert.status_events ?? []).some((event) => event.note.toLowerCase().includes("auto-routed"))
 }
 
 /**

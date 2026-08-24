@@ -124,6 +124,9 @@ export type ReportValidationResult = {
   matched_emergency_type?: string
   emergency_routing_reason?: string
   ongoing_emergency_confirmation_required?: boolean
+  incident_timing?: "ongoing" | "ended" | "historical" | "planned" | "hypothetical" | "unclear"
+  incident_timing_reason?: string
+  current_danger?: boolean
   title_preview?: { official_title: string; summary: string }
   /** null when no pin was sent; accepted=false when the pin was blocked. */
   location?: {
@@ -250,6 +253,41 @@ export function testConcernSubmission(input: {
 
 export type EmergencySimulationReview = ReportValidationResult
 
+export type SimulationCommunity = { id: number; name: string }
+
+export type LocationResolution = {
+  source: "sms_gps" | "web_gps" | "message_area" | "recent_account_location" | "profile_community" | "home_context" | "none"
+  freshness: "fresh" | "stale" | "not_available"
+  state: "confirmed" | "fallback" | "ambiguous" | "unknown"
+  community: SimulationCommunity | null
+  area_label: string
+  age_seconds: number | null
+  latitude: number | null
+  longitude: number | null
+  canonical_street: string
+  candidate_communities: SimulationCommunity[]
+  boundary: GeoJsonGeometry | null
+  has_destination: boolean
+  reason: string
+}
+
+export type GeoJsonGeometry = {
+  type: string
+  coordinates: unknown[]
+}
+
+export type RoutePreview = {
+  status: "ok" | "stale" | "unavailable" | "no_destination" | string
+  profile: string
+  distance_meters: number | null
+  eta_seconds: number | null
+  geometry: GeoJsonGeometry | null
+  summary: string
+  origin_snap?: { latitude: number; longitude: number; meters: number | null } | null
+  destination_snap?: { latitude: number; longitude: number; meters: number | null } | null
+  approach?: { geometry?: GeoJsonGeometry | null } | null
+}
+
 export type EmergencySimulationResponderPreview =
   | {
       found: true
@@ -269,6 +307,7 @@ export type EmergencySimulationResult =
       emergency_routing_reason: string
       likely_unit: EmergencySimulationUnit | null
       image_uploaded: boolean
+      location: LocationResolution
       privacy?: ReportValidationResult["privacy"]
       review: EmergencySimulationReview
     }
@@ -276,6 +315,7 @@ export type EmergencySimulationResult =
       requires_confirmation: false
       path: "concern"
       image_uploaded: boolean
+      location: LocationResolution
       privacy?: ReportValidationResult["privacy"]
       review: EmergencySimulationReview
     }
@@ -285,10 +325,15 @@ export type EmergencySimulationResult =
       matched_emergency_type: string
       image_uploaded: boolean
       privacy?: ReportValidationResult["privacy"]
+      location: LocationResolution
       routing: {
         department: { id: number; name: string; short_name: string } | null
         routing_reason: string
         responder_preview: EmergencySimulationResponderPreview
+        scope: "local" | "cross_community" | "manual_dispatch"
+        manual_dispatch: boolean
+        responding_community: SimulationCommunity | null
+        route: RoutePreview
       }
     }
 
@@ -315,6 +360,7 @@ export type SmsSimulationSender = {
   label: string
   masked_number: string
   resident_name: string
+  attached_community: SimulationCommunity | null
 }
 
 export type SmsSimulationParsed = {
@@ -331,6 +377,9 @@ export type SmsSimulationParsed = {
   triage_summary: string
   note: string
   urgency_signal: boolean
+  incident_timing: "ongoing" | "ended" | "historical" | "planned" | "hypothetical" | "unclear"
+  incident_timing_reason: string
+  current_danger: boolean
   unresolved_fields: string[]
 } | null
 
@@ -340,7 +389,7 @@ export type SmsSimulationResult = {
   sender: SmsSimulationSender
   command: { keyword: string; reference: string; argument: string; rest: string; recognised: boolean } | null
   parsed: SmsSimulationParsed
-  location: { confidence: string; label: string } | null
+  location: LocationResolution | null
   duplicate: { would_suppress: boolean; reference: string; detail: string } | null
   routing: {
     department: { id: number; name: string; short_name: string } | null
@@ -350,11 +399,18 @@ export type SmsSimulationResult = {
           found: boolean
           full_name: string
           unit_name: string
+          latitude: number | null
+          longitude: number | null
           distance_meters: number | null
           eta_seconds: number | null
         }
       | null
     escalates?: boolean
+    scope: "local" | "cross_community" | "manual_dispatch"
+    manual_dispatch: boolean
+    responding_community: SimulationCommunity | null
+    route: RoutePreview
+    message: string
   } | null
   ai_assist: {
     applicable: boolean
@@ -367,7 +423,13 @@ export type SmsSimulationResult = {
   reply: { text: string; characters: number; segments: number; gsm7: boolean; category_label: string } | null
 }
 
-export function testSmsSimulation(input: { message: string; sender: "registered" | "unknown" }) {
+export type SmsSimulationScenario = "default" | "fresh" | "stale" | "context"
+
+export function testSmsSimulation(input: {
+  message: string
+  sender: "registered" | "unknown" | "needs_review"
+  scenario?: SmsSimulationScenario
+}) {
   return apiRequest<SmsSimulationResult>("/concerns/classification/test-sms/", {
     method: "POST",
     body: JSON.stringify(input),

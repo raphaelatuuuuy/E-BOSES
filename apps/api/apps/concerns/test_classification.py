@@ -295,6 +295,7 @@ class ConcernClassificationApiTests(APITestCase):
                 image_review_succeeded=True,
                 urgent_attention=True,
                 recommended_action="escalate_as_emergency",
+                matched_emergency_type="fire",
             ),
             selected_category="vehicle",
         )
@@ -321,6 +322,37 @@ class ConcernClassificationApiTests(APITestCase):
         self.assertIsNotNone(response.data["resolved_address"])
         self.assertIsNone(response.data["active_duplicate"])
         self.assertIsNone(response.data["resolved_match"])
+
+    @patch("apps.concerns.classification_api.classification_payload")
+    def test_resident_precheck_does_not_offer_dispatch_for_an_ended_incident(self, classify):
+        classify.return_value = payload_from_result(
+            gemma_result(
+                category="public_safety",
+                urgent_attention=False,
+                matched_emergency_type="",
+                recommended_action="accept",
+                incident_timing="ended",
+                incident_timing_reason="The report says the fire was extinguished.",
+                current_danger=False,
+            ),
+            selected_category="public_safety",
+        )
+        self.client.force_authenticate(self.resident)
+
+        response = self.client.post(
+            "/api/concerns/classification/precheck/",
+            {
+                "category": "public_safety",
+                "title": "Fire damage",
+                "description": "The fire happened yesterday and was extinguished.",
+                "latitude": "14.6507",
+                "longitude": "121.1029",
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data["emergency_triage"])
 
     @patch("apps.concerns.classification_api.classification_payload")
     def test_resident_precheck_suggests_an_active_duplicate(self, classify):

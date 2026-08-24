@@ -9,6 +9,8 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentProfile
+from apps.concerns.test_helpers import active_test_community
+from apps.concerns.units import sync_responder_designation
 from apps.emergencies.models import (
     EmergencyAlert,
     EmergencyResponderAssignment,
@@ -47,6 +49,12 @@ class StaffCommandTests(APITestCase):
             "Official",
             role=User.Role.BARANGAY_OFFICIAL,
         )
+        community = active_test_community()
+        ResidentProfile.objects.filter(
+            user__in=[self.resident, self.responder, self.backup, self.official]
+        ).update(community=community, barangay=community.name)
+        sync_responder_designation(self.responder)
+        sync_responder_designation(self.backup)
 
     def _user(self, email, phone, first, last, **extra):
         User = get_user_model()
@@ -327,7 +335,7 @@ class StaffCommandTests(APITestCase):
     def test_a_dispatch_text_masks_the_reporter_number(self):
         self.post(
             "I need immediate help. This is a Fire emergency near Champaca Street. "
-            "Please send assistance.",
+            "Please send assistance.\nLOC:14.6507000,121.1133000",
             RESIDENT_NUMBER,
             id="dispatch2",
         )

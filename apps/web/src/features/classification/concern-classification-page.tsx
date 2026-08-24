@@ -47,7 +47,7 @@ import {
 } from "./strictness"
 import { ConcernTestWorkspace } from "./test-workspace-concerns"
 import { EmergencyTestWorkspace } from "./test-workspace-emergencies"
-import { SmsChatInput, SmsChatPanel, SmsCommandGuide, SmsTestWorkspace, SenderPill } from "./test-workspace-sms"
+import { SmsBreakdown, SmsChatInput, SmsChatPanel, SmsCommandGuide, SmsTestWorkspace, SenderPill } from "./test-workspace-sms"
 import { testSmsSimulation } from "./api"
 import { CommunityModerationTestWorkspace } from "./test-workspace-community"
 import { DecisionLogTab } from "./decision-log-tab"
@@ -169,7 +169,7 @@ function ConfigureDialog({
             {STRICTNESS_PRESETS.find((preset) => preset.key === strictness)?.consequence}
           </p>
         ) : (
-          <p className="mt-2 text-xs text-neutral-500">Custom values — no preset is active.</p>
+          <p className="mt-2 text-xs text-neutral-500">Custom values. No preset is active.</p>
         )}
       </div>
 
@@ -559,7 +559,8 @@ function TestDialog({
   const [smsPanelOpen, setSmsPanelOpen] = useState(false)
   const [smsHelpOpen, setSmsHelpOpen] = useState(false)
   const [smsMessage, setSmsMessage] = useState("")
-  const [smsSender, setSmsSender] = useState<"registered" | "unknown">("registered")
+  const [smsSender, setSmsSender] = useState<"registered" | "unknown" | "needs_review">("registered")
+  const [smsScenario, setSmsScenario] = useState<import("./api").SmsSimulationScenario>("default")
   const [smsResult, setSmsResult] = useState<import("./api").SmsSimulationResult | null>(null)
   const [smsBusy, setSmsBusy] = useState(false)
 
@@ -568,7 +569,7 @@ function TestDialog({
     if (!text) return
     setSmsBusy(true)
     try {
-      setSmsResult(await testSmsSimulation({ message: text, sender: smsSender }))
+      setSmsResult(await testSmsSimulation({ message: text, sender: smsSender, scenario: smsScenario }))
     } catch (error) {
       toast.error(describeApiError(error, "The sample text could not be processed."))
     } finally {
@@ -579,6 +580,7 @@ function TestDialog({
   function resetSms() {
     setSmsMessage("")
     setSmsSender("registered")
+    setSmsScenario("default")
     setSmsResult(null)
     setSmsBusy(false)
   }
@@ -595,7 +597,7 @@ function TestDialog({
         onClose()
       }}
       title="LLM Decisions"
-      description="Test how automatic review classifies concerns, emergencies, SMS texts, and community content — nothing here is filed."
+      description="Test how automatic review classifies concerns, emergencies, SMS texts, and community content. Nothing here is filed."
       size="wide"
       actions={
         tab === "sms" ? (
@@ -634,6 +636,7 @@ function TestDialog({
           setMessage={setSmsMessage}
           sender={smsSender}
           setSender={setSmsSender}
+          setScenario={setSmsScenario}
           result={smsResult}
           busy={smsBusy}
         />
@@ -679,6 +682,17 @@ function TestDialog({
       description="What a resident can text the hotline."
     >
       <SmsCommandGuide />
+    </SheetDialog>
+    <SheetDialog
+      open={Boolean(smsResult)}
+      onClose={() => setSmsResult(null)}
+      onBack={() => setSmsResult(null)}
+      title="SMS check result"
+      description="This is a test result. No text or emergency was filed."
+      size="wide"
+      bodyClassName="pb-5"
+    >
+      {smsResult ? <SmsBreakdown result={smsResult} /> : null}
     </SheetDialog>
     </>
   )
@@ -950,7 +964,7 @@ export default function ConcernClassificationPage() {
       icon={BotIcon}
       eyebrow="Operations"
       title="Report checking"
-      description="Configure how the system reviews incoming reports — text, photos, duplicates — before they reach your queue."
+      description="Configure how the system reviews incoming reports, photos, and duplicates before they reach your queue."
       stats={[
         {
           label: "Review mode",
@@ -959,7 +973,7 @@ export default function ConcernClassificationPage() {
         { label: "Reports checked", value: config.metrics?.tested ?? 0 },
         { label: "Went straight through", value: config.metrics?.auto_validated ?? 0 },
         { label: "Rejected by rules", value: config.metrics?.rejected ?? 0 },
-        { label: "Logged decisions", value: logCount ?? "—" },
+        { label: "Logged decisions", value: logCount ?? "Not available" },
       ]}
       action={
         <ConfigHeroAction onClick={() => setConfigureOpen(true)}>

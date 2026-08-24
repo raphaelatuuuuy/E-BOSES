@@ -27,6 +27,7 @@ from django.conf import settings
 
 from apps.concerns.models import Concern, ConcernCategory
 from apps.emergencies.models import EmergencyCategory
+from apps.emergencies.temporal import NON_CURRENT, infer_incident_timing, normalise_incident_timing
 
 from .image_prep import PreparedImage
 from .text_classifier import TextClassificationResult, TextClassifierNotConfigured
@@ -205,6 +206,9 @@ def empty_details() -> dict:
         "matched_emergency_type": "",
         "emergency_routing_reason": "",
         "ongoing_emergency_confirmation_required": False,
+        "incident_timing": "unclear",
+        "incident_timing_reason": "",
+        "current_danger": False,
     }
 
 
@@ -336,6 +340,7 @@ class GemmaAnalyzer:
             image_attached=image_attached,
             image_review_succeeded=image_review_succeeded,
             photo_count=len(prepared_images),
+            report_text=f"{title} {description}".strip(),
         )
         return result
 
@@ -506,14 +511,22 @@ def build_prompt(
         "5. If the description is gibberish, keyboard spam, repeated words, mostly symbols, or unrelated "
         "chatter, mark it UNCLEAR or IRRELEVANT and ask for clearer details.\n"
         "6. Strong language inside a real civic report does not make it invalid. Keep it meaningful.\n"
-        "7. If the text describes immediate danger, fire, medical distress, violent crime, or serious harm, "
-        "set urgent_attention true and consider escalate_as_emergency.\n"
-        "8. When the report describes a possible active emergency, set matched_emergency_type to the single "
+        "7. First decide incident_timing from the grammar and time words: ongoing, ended, historical, planned, "
+        "hypothetical, or unclear. Category words such as fire, crime, accident, or medical do not prove that "
+        "danger exists now. Read tense, negation, completion, drills, examples, quoted news, and future plans. "
+        "Set current_danger true only when harm is happening now or a danger remains. A past start can still be "
+        "ongoing, for example a fire that started yesterday but is still burning or a person who is still trapped.\n"
+        "8. Only ongoing danger can set urgent_attention true and use escalate_as_emergency. Ended, historical, "
+        "planned, and hypothetical events stay normal concerns. When timing is unclear but current danger is "
+        "possible, set ongoing_emergency_confirmation_required true instead of assuming. Examples: 'May sunog "
+        "ngayon' is ongoing; 'Nasunog kahapon, naapula na' is ended; 'The fire was last night but a person is "
+        "still trapped' is ongoing; 'Fire drill bukas' is planned.\n"
+        "9. When the report describes a possible active emergency, set matched_emergency_type to the single "
         "best-matching key from configured_emergency_types (empty string if none fits), and write one "
         "sentence in emergency_routing_reason naming which configured emergency type and why. Do this "
         "independently of primary_category — a report can match both a concern category and an emergency "
         "type.\n"
-        "9. evidence_relationship must be supports_report, partially_supports_report, contradicts_report, "
+        "10. evidence_relationship must be supports_report, partially_supports_report, contradicts_report, "
         "no_useful_image_evidence, or image_unavailable when no image is attached.\n"
         "10. A category mismatch is corrected automatically. Never use reject_as_irrelevant for a "
         "category mismatch on its own.\n"
@@ -608,7 +621,10 @@ def build_prompt(
         '  "media_integrity_overall": null,\n'
         '  "matched_emergency_type": null,\n'
         '  "emergency_routing_reason": null,\n'
-        '  "ongoing_emergency_confirmation_required": false\n'
+        '  "ongoing_emergency_confirmation_required": false,\n'
+        '  "incident_timing": "unclear",\n'
+        '  "incident_timing_reason": "The report does not clearly say if danger remains.",\n'
+        '  "current_danger": false\n'
         "}"
     )
 
@@ -622,6 +638,7 @@ def parse_gemma_result(
     image_attached: bool = False,
     image_review_succeeded: bool | None = None,
     photo_count: int = 0,
+    report_text: str = "",
 ) -> TextClassificationResult:
     """Coerce Gemma's JSON into the schema, discarding anything out of contract."""
     try:
@@ -729,10 +746,32 @@ def parse_gemma_result(
         matched_emergency_type = ""
 
     emergency_routing_reason = _clean_text(data.get("emergency_routing_reason"))
+    inferred_timing, inferred_reason = infer_incident_timing(report_text)
+    model_timing = normalise_incident_timing(data.get("incident_timing"))
+    incident_timing = inferred_timing if inferred_timing != "unclear" else model_timing
+    incident_timing_reason = (
+        inferred_reason
+        if inferred_timing != "unclear"
+        else _clean_text(data.get("incident_timing_reason")) or inferred_reason
+    )
+    current_danger = incident_timing == "ongoing" or (
+        incident_timing == "unclear" and bool(data.get("current_danger"))
+    )
 
-    ongoing_emergency_confirmation_required = bool(
-        data.get("ongoing_emergency_confirmation_required")
-    ) and (urgent and bool(matched_emergency_type))
+    if incident_timing in NON_CURRENT:
+        matched_emergency_type = ""
+        urgent = False
+        current_danger = False
+        ongoing_emergency_confirmation_required = False
+        if action == "escalate_as_emergency":
+            action = "accept"
+        emergency_routing_reason = incident_timing_reason
+    elif incident_timing == "ongoing" and matched_emergency_type:
+        urgent = True
+        action = "escalate_as_emergency"
+        ongoing_emergency_confirmation_required = False
+    else:
+        ongoing_emergency_confirmation_required = bool(matched_emergency_type and urgent)
 
     details = {
         **empty_details(),
@@ -760,6 +799,9 @@ def parse_gemma_result(
         "matched_emergency_type": matched_emergency_type,
         "emergency_routing_reason": emergency_routing_reason,
         "ongoing_emergency_confirmation_required": ongoing_emergency_confirmation_required,
+        "incident_timing": incident_timing,
+        "incident_timing_reason": incident_timing_reason,
+        "current_danger": current_danger,
     }
 
     label = f"related_{primary}" if relevance == "VALID" and primary else "needs_review"

@@ -709,7 +709,7 @@ def validate_emergency_media_file(uploaded_file):
         deskew=False,
     )
 
-def validate_location_pair(latitude, longitude, *, required=False):
+def validate_location_pair(latitude, longitude, *, required=False, allow_outside_service_area=False):
     if latitude is None or longitude is None:
         if required or latitude is not None or longitude is not None:
             raise ValidationError("Latitude and longitude must be provided together.")
@@ -720,6 +720,8 @@ def validate_location_pair(latitude, longitude, *, required=False):
         raise ValidationError({"latitude": "Latitude must be between -90 and 90."})
     if not -180 <= longitude <= 180:
         raise ValidationError({"longitude": "Longitude must be between -180 and 180."})
+    if allow_outside_service_area:
+        return
     bounds = MARIKINA_HEIGHTS_BOUNDS
     if not (
         bounds["min_latitude"] <= latitude <= bounds["max_latitude"]

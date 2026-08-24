@@ -63,6 +63,7 @@ def build_account_data_export(user):
             "push_alerts": settings_obj.push_alerts,
             "report_updates": settings_obj.report_updates,
             "community_sharing": settings_obj.community_sharing,
+            "location_sharing_enabled": settings_obj.location_sharing_enabled,
             "location_confirmation": settings_obj.location_confirmation,
             "sos_placement": settings_obj.sos_placement,
             "updated_at": settings_obj.updated_at,
