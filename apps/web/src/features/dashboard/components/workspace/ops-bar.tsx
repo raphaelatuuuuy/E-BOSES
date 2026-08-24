@@ -75,12 +75,12 @@ export function OpsBar({
   return (
     <header
       className={cn(
-        "flex h-14 shrink-0 items-center gap-4 border-b border-card-line bg-canvas px-4",
+        "m-3 mb-0 flex h-14 shrink-0 items-center gap-4 rounded-2xl bg-card px-4 shadow-md",
         className,
       )}
     >
       <div className="flex min-w-0 shrink-0 items-baseline gap-2.5">
-        <h1 className="truncate text-heading text-foreground">{title}</h1>
+        <h1 className="truncate text-heading font-bold text-foreground">{title}</h1>
         {context ? (
           <span className="hidden truncate text-label text-subtle-foreground md:inline">
             {context}

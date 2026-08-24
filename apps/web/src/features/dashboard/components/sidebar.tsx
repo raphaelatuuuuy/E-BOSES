@@ -65,18 +65,26 @@ function isAlarmItem(itemKey: string, count: number) {
   return (itemKey === "emergencies" || itemKey === "dispatch") && count > 0
 }
 
-function rowClass(tone: Tone, active: boolean, alarm: boolean) {
+function rowClass(tone: Tone, active: boolean, alarm: boolean, accent: boolean, emphasizeRed: boolean) {
   return cn(
-    "flex h-12 w-full items-center gap-2.5 rounded-xl px-4 transition-colors duration-150",
+    "flex h-12 w-full items-center gap-2.5 rounded-xl px-4 transition-[background-color,box-shadow,color] duration-200 ease-out",
+    accent && "border-l-2",
     alarm
       ? "text-sos"
-      : active
-        ? tone === "dark"
-          ? "text-nav-text-active"
-          : "text-brand-navy"
-        : tone === "dark"
-          ? "text-nav-muted hover:bg-nav-raised hover:text-nav-text-active"
-          : "text-neutral-600 hover:bg-neutral-100 hover:text-brand-navy",
+      : emphasizeRed
+        ? cn(accent && (active ? "border-sos bg-sos/12" : "border-transparent"), "text-sos hover:bg-sos/10")
+        : active
+          ? accent
+            ? "border-[#FF8133] bg-[#FF8133]/12 text-[#FF8133]"
+            : tone === "dark"
+              ? "text-nav-text-active"
+              : "text-brand-navy"
+          : cn(
+              accent && "border-transparent",
+              tone === "dark"
+                ? "text-nav-muted hover:bg-white/8 hover:text-nav-text-active hover:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08),inset_0_1px_0_rgba(255,255,255,0.12),inset_0_-1px_0_rgba(0,0,0,0.3)]"
+                : "text-neutral-600 hover:bg-neutral-100 hover:text-brand-navy",
+            ),
   )
 }
 
@@ -90,6 +98,7 @@ function SidebarRow({
   description,
   relatedIcons = [],
   onHover,
+  isOfficial = false,
 }: {
   item: NavItemConfig
   tone: Tone
@@ -102,14 +111,18 @@ function SidebarRow({
   description?: string
   relatedIcons?: LucideIcon[]
   onHover?: () => void
+  isOfficial?: boolean
 }) {
   const Icon = item.icon
   const urgent = alarm
+  const emphasizeRed = item.key === "emergencies"
   const LeftRelatedIcon = relatedIcons[0] !== Icon ? relatedIcons[0] : null
   const RightRelatedIcon = relatedIcons[1] !== Icon ? relatedIcons[1] : null
-  const tooltipSurface = tone === "dark"
-    ? "bg-nav-raised text-nav-text ring-nav-border before:border-nav-border before:bg-nav-raised"
-    : "bg-white text-neutral-900 ring-neutral-200/80 before:border-neutral-200 before:bg-white"
+  const tooltipSurface = isOfficial
+    ? "bg-[#FF8133] text-[#020C4E] ring-[#FF8133] before:border-[#FF8133] before:bg-[#FF8133]"
+    : tone === "dark"
+      ? "bg-nav-raised text-nav-text ring-nav-border before:border-nav-border before:bg-nav-raised"
+      : "bg-white text-neutral-900 ring-neutral-200/80 before:border-neutral-200 before:bg-white"
 
   return (
     <Link
@@ -120,7 +133,7 @@ function SidebarRow({
       className={cn(
         "group relative",
         iconOnly ? "justify-center rounded-none px-0 hover:!bg-transparent" : "",
-        rowClass(tone, active, Boolean(urgent)),
+        rowClass(tone, active, Boolean(urgent), isOfficial && !iconOnly, emphasizeRed),
       )}
     >
       <Icon
@@ -136,8 +149,8 @@ function SidebarRow({
       />
       <span
         className={cn(
-          "min-w-0 flex-1 truncate text-left text-[13px] leading-none",
-          iconOnly && "sr-only",
+          "min-w-0 flex-1 truncate text-left text-[13px] leading-none transition-opacity duration-200 ease-out",
+          iconOnly ? "pointer-events-none absolute opacity-0" : "opacity-100",
           urgent || active ? "font-bold" : "font-medium",
         )}
       >
@@ -210,7 +223,7 @@ tone === "dark"
             ) : null}
           </span>
           <span className="mt-3.5 block text-[14px] font-bold leading-tight">{item.label}</span>
-          <span className={cn("mt-2 block text-[12px] leading-[1.45]", tone === "dark" ? "text-nav-muted" : "text-neutral-500")}>
+          <span className={cn("mt-2 block text-[12px] leading-[1.45]", isOfficial ? "text-[#020C4E]/80" : tone === "dark" ? "text-nav-muted" : "text-neutral-500")}>
             {description}
           </span>
         </span>
@@ -219,14 +232,21 @@ tone === "dark"
   )
 }
 
-export function Sidebar() {
+export function Sidebar({
+  expanded = false,
+  hideAccountBlock = false,
+}: {
+  expanded?: boolean
+  /** Official desktop shell moves the account block into the header instead. */
+  hideAccountBlock?: boolean
+}) {
   const location = useLocation()
   const navigate = useNavigate()
   const { user, signOut } = useAuthSession()
   const isResponderRole = isResponderUser(user)
   const isOfficialRole = isOfficialUser(user)
   const isResident = !isOfficialRole && !isResponderRole
-  const tone: Tone = isResident || isOfficialRole ? "light" : "dark"
+  const tone: Tone = isResident ? "light" : "dark"
 
   const role = isResponderRole ? "responder" : isOfficialRole ? "official" : "resident"
   const nav = getRoleNav(role)
@@ -313,25 +333,47 @@ overview: [FileChartColumnIcon, ChartSplineIcon],
       <nav className={cn(
         "flex min-h-0 flex-1 flex-col overscroll-contain px-3 pt-6 [scrollbar-width:thin]",
         "overflow-visible",
-        (isResident || isOfficialRole || isResponderRole) && "justify-center pt-0",
+        // Official rail toggles between collapsed and expanded, so it always
+        // sits top-aligned — centering only collapsed would make icons jump
+        // vertically on expand/collapse.
+        (isResident || isResponderRole) && "justify-center pt-0",
       )}>
         <ul className="flex flex-col gap-1.5">
-          {navItems.map((item) => {
+          {navItems.map((item, index) => {
             const active = item.isActive(location.pathname)
             const badgeForItemValue = badgeForItem(item.key)
             const alarm = isAlarmItem(item.key, badgeForItemValue)
+            const showSectionHeading =
+              item.section && item.section !== navItems[index - 1]?.section
             return (
               <li key={item.key}>
+                {showSectionHeading ? (
+                  // Fixed height regardless of expanded state — only the text
+                  // fades. Conditionally mounting/unmounting this (as before,
+                  // gated on `expanded`) reflowed every icon below it whenever
+                  // the rail expanded on hover, so icons visibly jumped up and
+                  // down as you moved the pointer.
+                  <div
+                    className={cn(
+                      "flex h-6 items-center px-4 text-[10.5px] font-bold uppercase leading-none tracking-wide transition-opacity duration-200 ease-out",
+                      tone === "dark" ? "text-nav-muted" : "text-neutral-400",
+                      expanded ? "opacity-100" : "opacity-0",
+                    )}
+                  >
+                    {item.section}
+                  </div>
+                ) : null}
                 <SidebarRow
                   item={item}
                   tone={tone}
                   active={active}
                   badge={badgeForItemValue}
                   alarm={alarm}
-                  iconOnly
+                  iconOnly={!expanded}
                   description={descriptions[item.key] ?? `Open ${item.label.toLowerCase()}.`}
                   relatedIcons={relatedIcons[item.key]}
                   onHover={() => setOpen(false)}
+                  isOfficial={isOfficialRole}
                 />
               </li>
             )
@@ -340,10 +382,17 @@ overview: [FileChartColumnIcon, ChartSplineIcon],
       </nav>
 
       {/* Identity block pinned to the floor — avatar, name, role, sign out. */}
+      {hideAccountBlock ? null : (
       <div className="relative shrink-0 px-3 pb-4 pt-2">
           <div>
           {open ? (
-            <ul className={cn("absolute bottom-6 left-[calc(100%+6px)] z-[1100] flex w-52 flex-col gap-0.5 rounded-xl p-3 shadow-[0_14px_35px_rgba(15,23,42,0.16)] ring-1 before:absolute before:bottom-4 before:left-[-6px] before:size-3 before:rotate-45 before:border-b before:border-l", accountSurfaceClass)}>
+            <ul className={cn(
+              "absolute z-[1100] flex w-52 flex-col gap-0.5 rounded-xl p-3 shadow-[0_14px_35px_rgba(15,23,42,0.16)] ring-1",
+              expanded
+                ? "bottom-[calc(100%+8px)] left-0 before:absolute before:bottom-[-6px] before:left-6 before:size-3 before:rotate-45 before:border-b before:border-r"
+                : "bottom-6 left-[calc(100%+6px)] before:absolute before:bottom-4 before:left-[-6px] before:size-3 before:rotate-45 before:border-b before:border-l",
+              accountSurfaceClass,
+            )}>
               <li>
                 {isResident ? (
                   <button
@@ -420,8 +469,8 @@ overview: [FileChartColumnIcon, ChartSplineIcon],
             aria-expanded={open}
             className={cn(
               "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left transition-colors",
-               (isResident || isOfficialRole) && "justify-center px-0",
-               "",
+               (isResident || isOfficialRole) && !expanded && "justify-center px-0",
+               expanded && (tone === "dark" ? "hover:bg-nav-raised" : "hover:bg-neutral-100"),
             )}
           >
             <span
@@ -435,7 +484,7 @@ overview: [FileChartColumnIcon, ChartSplineIcon],
             <span
               className={cn(
                 "flex min-w-0 flex-1 flex-col",
-                "hidden",
+                expanded ? "flex" : "hidden",
               )}
             >
               <span
@@ -458,9 +507,38 @@ overview: [FileChartColumnIcon, ChartSplineIcon],
           </button>
         </div>
       </div>
+      )}
+
+      {/* Sign-out shortcut pinned to the floor — stands in for the account
+          block's sign-out entry when that block moved elsewhere (the
+          official desktop header). */}
+      {hideAccountBlock ? (
+        <div className="shrink-0 px-3 pb-4 pt-2">
+          <button
+            type="button"
+            onClick={() => void handleSignOut()}
+            disabled={signingOut}
+            title="Sign out"
+            className={cn(
+              "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-nav-muted transition-colors hover:bg-nav-raised hover:text-nav-text-active disabled:opacity-60",
+              !expanded && "justify-center px-0",
+            )}
+          >
+            <LogOutIcon className="size-5 shrink-0" strokeWidth={1.8} />
+            <span
+              className={cn(
+                "truncate text-[12.5px] font-semibold",
+                expanded ? "inline" : "hidden",
+              )}
+            >
+              {signingOut ? "Signing out…" : "Sign out"}
+            </span>
+          </button>
+        </div>
+      ) : null}
 
       {/* Role dialogs — the same personal surfaces each role already has. */}
-      {isOfficialRole ? (
+      {hideAccountBlock ? null : isOfficialRole ? (
         <>
           <OfficialProfileDialog
             open={profileOpen}

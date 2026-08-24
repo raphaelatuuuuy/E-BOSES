@@ -5,6 +5,8 @@ import * as React from "react"
 interface SidebarContextValue {
   isOpen: boolean
   toggle: () => void
+  open: () => void
+  close: () => void
 }
 
 const SidebarContext = React.createContext<SidebarContextValue | null>(null)
@@ -16,14 +18,18 @@ function useSidebar() {
 }
 
 function SidebarProvider({ children }: { children: React.ReactNode }) {
-  const [isOpen, setIsOpen] = React.useState(true)
+  // Collapsed by default — the official rail expands on hover rather than
+  // starting pinned open.
+  const [isOpen, setIsOpen] = React.useState(false)
 
   const toggle = React.useCallback(() => {
     setIsOpen((prev) => !prev)
   }, [])
+  const open = React.useCallback(() => setIsOpen(true), [])
+  const close = React.useCallback(() => setIsOpen(false), [])
 
   return (
-    <SidebarContext.Provider value={{ isOpen, toggle }}>
+    <SidebarContext.Provider value={{ isOpen, toggle, open, close }}>
       {children}
     </SidebarContext.Provider>
   )

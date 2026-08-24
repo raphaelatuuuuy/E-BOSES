@@ -969,7 +969,7 @@ body[data-ops-resizing="horizontal"] * {
   inset-block: 0;
   left: 4px;
   width: 1px;
-  background: var(--color-card-line-strong);
+  background: transparent;
   transition: width var(--duration-micro) var(--ease-out-expo),
     background-color var(--duration-micro) var(--ease-out-expo);
 }

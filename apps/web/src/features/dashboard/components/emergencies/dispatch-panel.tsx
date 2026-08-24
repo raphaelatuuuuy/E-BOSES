@@ -167,76 +167,84 @@ export function DispatchPanel({
   }
 
   return (
-    <Surface>
-      <Band
-        label="Response team"
-        action={
-          alert ? (
-            <span
-              className="text-[11px] font-semibold tabular-nums text-subtle-foreground"
-              title={`Received ${alert.created_at}`}
-            >
-              {elapsedLabel(alert.created_at, now)}
-            </span>
-          ) : undefined
-        }
-      >
-        <ResponderAssignment
-          alert={alert}
-          responders={responders.map(toAssignable)}
-          onChanged={onChanged}
-        />
-      </Band>
-
-      <Band label="Actions">
-        <div className="grid grid-cols-2 gap-2">
-          <ActionButton icon={<PhoneCallIcon className="size-4" />} label={dialBusy ? "Opening…" : "Call resident"} onClick={() => void callResident()} disabled={!alert || dialBusy} />
-          <ActionButton icon={<RefreshCwIcon className="size-4" />} label={busyAction === "refresh-team" ? "Refreshing" : "Refresh"} onClick={() => void refreshTeam()} disabled={!alert || Boolean(busyAction)} />
-          <ActionButton icon={<AlertTriangleIcon className="size-4" />} label={busyAction === "escalate" ? "Escalating" : "Escalate"} onClick={() => { setQuickAction({ kind: "escalate" }); setQuickReason("") }} disabled={!alert || Boolean(busyAction)} />
-          <ActionButton tone="danger" icon={<ShieldCheckIcon className="size-4" />} label={busyAction === "false-alarm" ? "Recording" : "False alarm"} onClick={() => { setQuickAction({ kind: "false-alarm" }); setQuickReason("") }} disabled={!alert || Boolean(busyAction)} />
-        </div>
-
-        {quickAction ? (
-          <div className="mt-3 rounded-control border border-severity-moderate/40 bg-severity-moderate-surface p-3">
-            <p className="text-xs font-semibold text-severity-moderate-ink">
-              {quickAction.kind === "escalate"
-                ? "Escalate this incident — the next available on-duty responder is routed in as backup support."
-                : "Record this as a false alarm — the response team is stood down and the disposition is written to the record."}
-            </p>
-            <label htmlFor={`dispatch-reason-${alert?.id ?? "none"}`} className="mt-2 block text-[11px] font-bold text-severity-moderate-ink">
-              {quickAction.kind === "escalate" ? "Escalation reason" : "Why this is not an emergency"}
-            </label>
-            <textarea
-              id={`dispatch-reason-${alert?.id ?? "none"}`}
-              value={quickReason}
-              onChange={(event) => setQuickReason(event.target.value)}
-              rows={2}
-              maxLength={255}
-              placeholder={quickAction.kind === "escalate" ? "Explain why backup support is needed" : "Explain why this is not a real emergency"}
-              className="mt-1 w-full resize-none rounded-panel border border-severity-moderate/40 bg-card px-3 py-2 text-xs text-brand-navy outline-none focus:border-brand-orange"
+    <div className="space-y-3 -mx-3">
+      <div className="overflow-hidden rounded-2xl border border-card-line bg-card pt-12 px-4 pb-4 shadow-md">
+        <Surface className="rounded border-2 bg-transparent">
+          <Band
+            label="Response team"
+            action={
+              alert ? (
+                <span
+                  className="text-[11px] font-semibold tabular-nums text-subtle-foreground"
+                  title={`Received ${alert.created_at}`}
+                >
+                  {elapsedLabel(alert.created_at, now)}
+                </span>
+              ) : undefined
+            }
+          >
+            <ResponderAssignment
+              alert={alert}
+              responders={responders.map(toAssignable)}
+              onChanged={onChanged}
             />
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <Button type="button" size="sm" variant="outline" disabled={Boolean(busyAction)} onClick={() => { setQuickAction(null); setQuickReason("") }}>Cancel</Button>
-              <Button
-                type="button"
-                size="sm"
-                disabled={Boolean(busyAction) || quickReason.trim().length < 5}
-                onClick={() => void (quickAction.kind === "escalate" ? confirmEscalate() : confirmFalseAlarm())}
-                className="bg-brand-navy text-white hover:bg-brand-navy"
-              >
-                {busyAction === "escalate" || busyAction === "false-alarm"
-                  ? <span className="inline-flex items-center gap-1.5"><LoaderCircleIcon className="size-3.5 animate-spin" />{busyAction === "escalate" ? "Escalating" : "Recording"}</span>
-                  : quickAction.kind === "escalate" ? "Escalate incident" : "Record false alarm"}
-              </Button>
-            </div>
-          </div>
-        ) : null}
-      </Band>
+          </Band>
+        </Surface>
+      </div>
 
-      {/* The "Incident summary" band that used to close this pane is gone. It
-          reported Active 1, Responders N, Auto route Yes/No and "Dispatch rule:
-          Official config" — four values that never changed what a dispatcher
-          would do next, in a fifth bordered box. */}
-    </Surface>
+      <div className="overflow-hidden rounded-2xl border border-card-line bg-card p-4 shadow-md">
+      <Surface className="rounded border-2 bg-transparent">
+        <Band label="Actions">
+          <div className="grid grid-cols-2 gap-2">
+            <ActionButton icon={<PhoneCallIcon className="size-4" />} label={dialBusy ? "Opening…" : "Call resident"} onClick={() => void callResident()} disabled={!alert || dialBusy} />
+            <ActionButton icon={<RefreshCwIcon className="size-4" />} label={busyAction === "refresh-team" ? "Refreshing" : "Refresh"} onClick={() => void refreshTeam()} disabled={!alert || Boolean(busyAction)} />
+            <ActionButton icon={<AlertTriangleIcon className="size-4" />} label={busyAction === "escalate" ? "Escalating" : "Escalate"} onClick={() => { setQuickAction({ kind: "escalate" }); setQuickReason("") }} disabled={!alert || Boolean(busyAction)} />
+            <ActionButton tone="danger" icon={<ShieldCheckIcon className="size-4" />} label={busyAction === "false-alarm" ? "Recording" : "False alarm"} onClick={() => { setQuickAction({ kind: "false-alarm" }); setQuickReason("") }} disabled={!alert || Boolean(busyAction)} />
+          </div>
+
+          {quickAction ? (
+            <div className="mt-3 rounded-control border border-severity-moderate/40 bg-severity-moderate-surface p-3">
+              <p className="text-xs font-semibold text-severity-moderate-ink">
+                {quickAction.kind === "escalate"
+                  ? "Escalate this incident — the next available on-duty responder is routed in as backup support."
+                  : "Record this as a false alarm — the response team is stood down and the disposition is written to the record."}
+              </p>
+              <label htmlFor={`dispatch-reason-${alert?.id ?? "none"}`} className="mt-2 block text-[11px] font-bold text-severity-moderate-ink">
+                {quickAction.kind === "escalate" ? "Escalation reason" : "Why this is not an emergency"}
+              </label>
+              <textarea
+                id={`dispatch-reason-${alert?.id ?? "none"}`}
+                value={quickReason}
+                onChange={(event) => setQuickReason(event.target.value)}
+                rows={2}
+                maxLength={255}
+                placeholder={quickAction.kind === "escalate" ? "Explain why backup support is needed" : "Explain why this is not a real emergency"}
+                className="mt-1 w-full resize-none rounded-panel border border-severity-moderate/40 bg-card px-3 py-2 text-xs text-brand-navy outline-none focus:border-brand-orange"
+              />
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <Button type="button" size="sm" variant="outline" disabled={Boolean(busyAction)} onClick={() => { setQuickAction(null); setQuickReason("") }}>Cancel</Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={Boolean(busyAction) || quickReason.trim().length < 5}
+                  onClick={() => void (quickAction.kind === "escalate" ? confirmEscalate() : confirmFalseAlarm())}
+                  className="bg-brand-navy text-white hover:bg-brand-navy"
+                >
+                  {busyAction === "escalate" || busyAction === "false-alarm"
+                    ? <span className="inline-flex items-center gap-1.5"><LoaderCircleIcon className="size-3.5 animate-spin" />{busyAction === "escalate" ? "Escalating" : "Recording"}</span>
+                    : quickAction.kind === "escalate" ? "Escalate incident" : "Record false alarm"}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </Band>
+
+        {/* The "Incident summary" band that used to close this pane is gone. It
+            reported Active 1, Responders N, Auto route Yes/No and "Dispatch rule:
+            Official config" — four values that never changed what a dispatcher
+            would do next, in a fifth bordered box. */}
+      </Surface>
+      </div>
+    </div>
   )
 }

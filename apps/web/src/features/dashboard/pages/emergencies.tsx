@@ -33,9 +33,7 @@ import {
 import {
   EMERGENCY_FILTERS,
   matchesEmergencyFilter,
-  useMinWidth,
 } from "@/features/dashboard/components/emergencies/lib"
-import { usePaneCollapse } from "@/features/dashboard/components/responder/pane-collapse"
 import { FilterRail } from "@/features/dashboard/components/workspace/filter-rail"
 import { EmergencyAppealsPanel } from "@/features/dashboard/components/emergencies/queue-list"
 import { QueueItem } from "@/features/dashboard/components/emergencies/queue-item"
@@ -47,7 +45,6 @@ import { IncidentBoard } from "@/features/dashboard/components/emergencies/incid
 import { DispatchPanel } from "@/features/dashboard/components/emergencies/dispatch-panel"
 import {
   OpsWorkspace,
-  OpsPaneHeader,
   type OpsPaneSpec,
 } from "@/features/dashboard/components/workspace/ops-workspace"
 import { OpsBar, OpsBarButton, type OpsCounter } from "@/features/dashboard/components/workspace/ops-bar"
@@ -77,13 +74,6 @@ export default function EmergenciesPage() {
     setQueuePage(1)
   }
 
-  const isWideUp = useMinWidth(1440)
-  const [queueCollapsed, setQueueCollapsed] = usePaneCollapse("eboses:ws:emergencies:queue:collapsed")
-  const [recordCollapsed, setRecordCollapsed] = usePaneCollapse("eboses:ws:emergencies:record:collapsed")
-  const [actionCollapsed, setActionCollapsed] = usePaneCollapse(
-    "eboses:ws:emergencies:action:collapsed",
-    !isWideUp,
-  )
   const isOfficial = user?.role === "barangay_official" || user?.is_staff || user?.is_superuser
 
   const isLgUp = useIsDesktop()
@@ -224,6 +214,7 @@ export default function EmergenciesPage() {
     />
   )
 
+  
   const counters: OpsCounter[] = [
     { label: "active", value: counts.active, tone: counts.active > 0 ? "alert" : "good" },
     { label: "on duty", value: counts.respondersOnDuty, tone: "live" },
@@ -238,13 +229,13 @@ export default function EmergenciesPage() {
       context={user?.barangay || "Barangay Marikina Heights"}
       counters={counters}
     >
-      <label className="hidden h-8 items-center gap-2 rounded-control border border-card-line bg-card px-2.5 md:flex">
+      <label className="hidden h-8 items-center gap-2 rounded-control border border-card-line bg-card px-3 md:flex">
         <SearchIcon className="size-3.5 shrink-0 text-subtle-foreground" />
         <input
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           placeholder="Search alerts…"
-          className="w-40 min-w-0 bg-transparent text-label text-foreground outline-none placeholder:text-faint-foreground lg:w-52"
+          className="w-40 min-w-0 bg-transparent text-label text-foreground outline-none placeholder:text-faint-foreground lg:w-72 "
         />
       </label>
       {!isLgUp ? (
@@ -258,14 +249,15 @@ export default function EmergenciesPage() {
     </OpsBar>
   )
 
+  const queueTopBadge = (
+    <div className="flex w-[350px] items-center justify-center gap-1.5 rounded-b-xl bg-[linear-gradient(to_bottom,#910522_10%,#020C4E)] px-5 py-4 text-label font-bold uppercase tracking-wide text-white shadow-[0_4px_10px_rgba(15,23,42,0.35)]">
+      Alerts
+    </div>
+  )
+
   const queuePane = (
     <>
-      <OpsPaneHeader
-        title="Alerts"
-        collapsed={queueCollapsed}
-        onToggleCollapse={() => setQueueCollapsed((value) => !value)}
-      />
-      <div className="space-y-3 p-3 pb-0">
+      <div className="space-y-4 p-3 pb-0 pt-12">
         <FilterRail
           ariaLabel="Emergency queue filters"
           active={activeFilter}
@@ -297,7 +289,7 @@ export default function EmergenciesPage() {
           Loading emergencies…
         </div>
       ) : triaged.length === 0 ? (
-        <div className="border-t border-card-line bg-card px-4 py-10 text-center">
+        <div className="mx-3 mt-3 rounded-xl border bg-card px-4 py-10 text-center">
           <ShieldCheckIcon className="mx-auto size-8 text-status-closed" />
           <h2 className="mt-2.5 text-heading text-foreground">
             {search.trim()
@@ -312,7 +304,7 @@ export default function EmergenciesPage() {
         </div>
       ) : (
         <>
-          <div className="border-t border-card-line">
+          <div>
             <QueueTableHeader labels={{ title: "Emergency", unitAndTime: "Assigned Unit & When" }} />
             {pagedTriaged.map((entry) => (
               <QueueItem
@@ -366,13 +358,11 @@ export default function EmergenciesPage() {
           <ChevronLeftIcon className="size-4" /> Back to queue
         </button>
       ) : (
-        <OpsPaneHeader
-          title="Incident"
-          collapsed={recordCollapsed}
-          onToggleCollapse={() => setRecordCollapsed((value) => !value)}
-
-          action={
-            selected ? (
+        <div className="sticky top-0 z-10 grid shrink-0 grid-cols-[1fr_auto_1fr] rounded-t-2xl items-center gap-3 border-b-2 border-card-line bg-canvas/85 px-4 py-2.5 backdrop-blur-md">
+          <span aria-hidden />
+          <h2 className="truncate text-center text-micro text-subtle-foreground">Incident Report</h2>
+          <div className="flex justify-end">
+            {selected ? (
               <button
                 type="button"
                 onClick={() => {
@@ -384,21 +374,35 @@ export default function EmergenciesPage() {
                 <CopyIcon className="size-3.5" aria-hidden />
                 Copy ID
               </button>
-            ) : undefined
-          }
-        />
+            ) : null}
+          </div>
+        </div>
       )}
 
       {selected ? (
-        <div className="p-4">
-          <IncidentBoard alert={selected} />
-        </div>
-      ) : (
-        <div className="flex h-full items-center justify-center p-8 text-body text-muted-foreground">
-          Select an alert from the queue.
-        </div>
-      )}
-    </>
+  <div className="p-4">
+    <IncidentBoard alert={selected} />
+  </div>
+) : (
+  <div className="p-4 h-full">
+    <div className="flex h-full min-h-[300px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-350 bg-slate-150/70 p-8 text-center dark:border-slate-600 dark:bg-slate-800/50">
+      {/* Icon */}
+      <svg 
+        className="mb-4 h-12 w-12 text-slate-400 dark:text-slate-400" 
+        fill="none" 
+        stroke="currentColor" 
+        viewBox="0 0 24 24"
+      >
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+      </svg>
+      {/* Text */}
+      <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">
+        Click the report to view the details here
+      </p>
+    </div>
+  </div>
+)}
+      </>
   )
 
   const panes: OpsPaneSpec[] = [
@@ -409,22 +413,23 @@ export default function EmergenciesPage() {
       min: 300,
       max: 760,
       label: "Alerts",
-      collapsible: true,
-      collapsed: queueCollapsed,
-      onCollapsedChange: setQueueCollapsed,
       node: queuePane,
+      topBadge: queueTopBadge,
     },
     {
       id: "record",
       role: "detail",
       min: 460,
       label: "Incident",
-      collapsible: true,
-      collapsed: recordCollapsed,
-      onCollapsedChange: setRecordCollapsed,
       node: recordPane,
     },
   ]
+
+  const asideTopBadge = (
+    <div className="flex w-[350px] items-center justify-center gap-1.5 rounded-b-xl bg-[linear-gradient(to_bottom,#020C4E_10%,#29368C)] px-5 py-4 text-label font-bold uppercase tracking-wide text-white shadow-[0_4px_10px_rgba(15,23,42,0.35)]">
+      {asideLabel}
+    </div>
+  )
 
   panes.push({
     id: "action",
@@ -433,19 +438,9 @@ export default function EmergenciesPage() {
     min: 300,
     max: 480,
     label: asideLabel,
-    collapsible: true,
-    collapsed: actionCollapsed,
-    onCollapsedChange: setActionCollapsed,
-    node: (
-      <>
-        <OpsPaneHeader
-          title={asideLabel}
-          collapsed={actionCollapsed}
-          onToggleCollapse={() => setActionCollapsed((value) => !value)}
-        />
-        <div className="p-3">{actionsPanel}</div>
-      </>
-    ),
+    topBadge: asideTopBadge,
+    bare: true,
+    node: <div className="px-3 pb-3">{actionsPanel}</div>,
   })
 
   return (

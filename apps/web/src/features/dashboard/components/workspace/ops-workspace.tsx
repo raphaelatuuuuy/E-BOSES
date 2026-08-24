@@ -19,6 +19,23 @@ export interface OpsPaneSpec {
   label?: string
   icon?: LucideIcon
 
+  /**
+   * Rendered outside the pane's scrolling/clipped body, straddling the seam
+   * above it — for a tab that needs to visually overlap whatever sits above
+   * the pane (the command bar) instead of scrolling away with the content.
+   */
+  topBadge?: React.ReactNode
+
+  /**
+   * Drops the pane's own rounded-2xl/bg-card/shadow wrapper, leaving just a
+   * plain flex column. For a pane whose content already renders as several
+   * independent cards (e.g. Dispatch's separate "Response team" and
+   * "Actions" surfaces) — without this, those cards sit nested inside one
+   * bigger shared card instead of reading as standalone containers on the
+   * page background.
+   */
+  bare?: boolean
+
   collapsible?: boolean
   collapsed?: boolean
   onCollapsedChange?: (next: boolean) => void
@@ -109,18 +126,32 @@ function PaneShell({
   children,
   style,
   className,
+  topBadge,
+  bare,
 }: {
   children: React.ReactNode
   style?: React.CSSProperties
   className?: string
+  topBadge?: React.ReactNode
+  bare?: boolean
 }) {
   return (
-    <section
-      className={cn("ops-pane relative flex min-w-0 flex-col", className)}
-      style={style}
-    >
-      {children}
-    </section>
+    <div className="relative flex min-h-0 min-w-0 flex-col" style={style}>
+      {topBadge ? (
+        <div className="pointer-events-none absolute inset-x-0 -top-6 z-20 flex justify-center">
+          <div className="pointer-events-auto">{topBadge}</div>
+        </div>
+      ) : null}
+      <section
+        className={cn(
+          "ops-pane flex min-h-0 min-w-0 flex-1 flex-col",
+          bare ? "" : "rounded-2xl bg-card shadow-md",
+          className,
+        )}
+      >
+        {children}
+      </section>
+    </div>
   )
 }
 
@@ -132,7 +163,7 @@ function CollapsedPane({
   onExpand: () => void
 }) {
   return (
-    <div className="flex h-full shrink-0 items-stretch" style={{ width: COLLAPSED_PANE_WIDTH }}>
+    <div className="flex h-full shrink-0 items-stretch overflow-hidden rounded-2xl shadow-md" style={{ width: COLLAPSED_PANE_WIDTH }}>
       <CollapsedStrip label={label} onExpand={onExpand} className="h-full w-full" />
     </div>
   )
@@ -404,13 +435,13 @@ export function OpsWorkspace({
   return (
     <div
       className={cn(
-        "grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden bg-canvas",
+        "grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden",
         className,
       )}
     >
       {bar}
 
-      <div ref={rowRef} className="relative flex min-h-0 overflow-hidden">
+      <div ref={rowRef} className="relative flex min-h-0 gap-2 overflow-x-hidden p-4">
         {list ? (
           listShown ? (
 
@@ -420,6 +451,8 @@ export function OpsWorkspace({
                   ? { flex: "none", width: effectiveListWidth }
                   : { flex: "1 1 0%", minWidth: 0 }
               }
+              topBadge={list.topBadge}
+              bare={list.bare}
             >
               {list.node}
             </PaneShell>
@@ -445,7 +478,7 @@ export function OpsWorkspace({
 
         {detail ? (
           detailShown ? (
-            <PaneShell style={{ flex: "1 1 0%", minWidth: 0 }}>{detail.node}</PaneShell>
+            <PaneShell style={{ flex: "1 1 0%", minWidth: 0 }} topBadge={detail.topBadge} bare={detail.bare}>{detail.node}</PaneShell>
           ) : (
             <CollapsedPane
               label={detail.label ?? "Details"}
@@ -468,7 +501,7 @@ export function OpsWorkspace({
 
         {aside && asideInline ? (
           asideShown ? (
-            <PaneShell style={{ flex: "none", width: effectiveAsideWidth }}>{aside.node}</PaneShell>
+            <PaneShell style={{ flex: "none", width: effectiveAsideWidth }} topBadge={aside.topBadge} bare={aside.bare}>{aside.node}</PaneShell>
           ) : (
             <CollapsedPane
               label={aside.label ?? "Actions"}

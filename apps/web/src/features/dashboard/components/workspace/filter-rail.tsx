@@ -136,7 +136,7 @@ export function FilterRail({
         onScroll={measure}
         role="tablist"
         aria-label={ariaLabel}
-        className="scrollbar-hide -mx-1 flex min-w-0 overflow-x-auto overscroll-x-contain border-b border-card-line px-1 touch-pan-x [-webkit-overflow-scrolling:touch]"
+        className="scrollbar-hide -mx-1 flex min-w-0 gap-1.5 overflow-x-auto overscroll-x-contain px-1 touch-pan-x [-webkit-overflow-scrolling:touch]"
       >
         {options.map((option, index) => (
           <FilterChip
