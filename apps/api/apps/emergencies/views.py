@@ -2207,6 +2207,48 @@ class EmergencyReporterContactView(APIView):
         return Response({"phone_number": number, "alert_id": alert.pk})
 
 
+class EmergencyResponderContactView(APIView):
+    """Reveal the assigned responder's mobile number to the reporter.
+
+    Mirror of EmergencyReporterContactView: only the alert's reporter or an
+    official who can manage emergencies may unmask it, and every reveal is
+    audit-logged so the barangay can answer "who looked up this number".
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        touch_last_seen(request.user)
+        alert = get_object_or_404(scope_emergency_queryset(EmergencyAlert.objects.all(), request.user), pk=pk)
+
+        is_reporter = alert.reporter_id == request.user.id
+        if not (is_reporter or can_manage_emergencies(request.user)):
+            return Response(
+                {"detail": "Only the reporter or an official can reveal the responder's number."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        assignment = (
+            alert.assignments.select_related("responder")
+            .filter(status__in=ACTIVE_ASSIGNMENT_STATUSES)
+            .order_by("-id")
+            .first()
+        ) or alert.assignments.select_related("responder").order_by("-id").first()
+        responder = assignment.responder if assignment else None
+        number = (getattr(responder, "phone_number", "") or "").strip()
+        if not number:
+            return Response({"detail": "No contact number is on file for this responder."}, status=status.HTTP_404_NOT_FOUND)
+
+        create_audit_log(
+            "emergency.responder_contact_revealed",
+            actor=request.user,
+            target_user=responder,
+            metadata={"alert_id": alert.pk, "assignment_id": assignment.pk if assignment else None},
+            request_meta=request_meta(request),
+        )
+        return Response({"phone_number": number, "alert_id": alert.pk})
+
+
 class EmergencyRouteView(APIView):
     """Return the OSRM route between the primary responder and the incident."""
 

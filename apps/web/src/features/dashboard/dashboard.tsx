@@ -101,6 +101,7 @@ function DashboardContent() {
   // light until their screens are migrated off hardcoded light colours.
   const isResponder = Boolean(!isResident && user && isResponderUser(user))
   const shellScope = isResponder ? "staff-dark" : undefined
+  const shellBg = isResident ? "bg-white" : isOfficialRole ? "portal-gradient" : "bg-canvas"
 
   // Triage routes own their vertical space (see RouteChrome.workspace). Below
   // the desktop breakpoint they revert to a scrolling column, so the flag only
@@ -108,9 +109,9 @@ function DashboardContent() {
   const isWorkspaceRoute = chrome.workspace && isDesktop
 
   return (
-    <div className={cn("min-h-svh overflow-x-hidden", shellScope, isResident || isOfficialRole ? "bg-white" : "bg-canvas")}>
+    <div className={cn("min-h-svh overflow-x-hidden", shellScope, shellBg)}>
         <div
-          className={cn("mx-auto min-h-svh w-full", isResident || isOfficialRole ? "bg-white" : "bg-canvas")}
+          className={cn("mx-auto min-h-svh w-full", shellBg)}
           style={{
             maxWidth: isResident ? SHELL_MAX_RESIDENT : SHELL_MAX_STAFF,
             minWidth: 0,
@@ -127,7 +128,7 @@ function DashboardContent() {
                <div
                 className={cn(
                   "flex h-full min-h-0 min-w-0 flex-col overflow-visible",
-                  isResident || isOfficialRole ? "bg-white" : "bg-transparent",
+                  isResident ? "bg-white" : "bg-transparent",
                 )}
               >
                  <ResidentLogoBar homeTo={shellHome} tone={isResident || isOfficialRole ? "light" : "dark"} compact={isResident || isOfficialRole || isResponder} />
@@ -142,7 +143,7 @@ function DashboardContent() {
                 <main
                   className={cn(
                     "min-h-0 min-w-0 flex-1 overflow-x-hidden [scrollbar-width:thin]",
-                    isResident || isOfficialRole ? "bg-white" : "bg-canvas",
+                    isResident ? "bg-white" : "bg-transparent",
                     // Workspace routes scroll inside their own panes, so the
                     // shell must not add a second scroll container around them.
                     isWorkspaceRoute
@@ -159,11 +160,15 @@ function DashboardContent() {
               className={cn(
                 "flex min-h-svh min-w-0 flex-col",
                 hideMobileNav || chrome.fullBleedMap ? "overflow-hidden" : "overflow-x-hidden pb-24",
-                // Staff pages are card-on-canvas; residents and officials stay
-                // on white. Leaving officials on canvas here — while desktop
-                // put them on white — left a grey band under short pages,
-                // behind the floating mobile nav.
-                isResident || isOfficialRole || chrome.fullBleedMap ? "bg-white" : "bg-canvas",
+                // Staff pages are card-on-canvas; residents stay on white and
+                // officials float on the portal gradient.
+                isResident
+                  ? "bg-white"
+                  : isOfficialRole
+                    ? "portal-gradient"
+                    : chrome.fullBleedMap
+                      ? "bg-white"
+                      : "bg-canvas",
               )}
             >
               {/* Full-bleed maps carry their own top bar and own the viewport

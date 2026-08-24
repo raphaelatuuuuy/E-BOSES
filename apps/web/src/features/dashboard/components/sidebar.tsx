@@ -167,17 +167,39 @@ function SidebarRow({
         rowClass(tone, active, Boolean(urgent)),
       )}
     >
-      <Icon
-        className={cn(
-          cn(
-            iconOnly ? "size-6" : "size-5",
-            "shrink-0 transition-transform duration-200 ease-out group-hover:scale-[1.16]",
-          ),
-          urgent && "animate-sos-icon-blink",
-        )}
-        strokeWidth={active || urgent ? 2.2 : 1.8}
-        fill="none"
-      />
+      {iconOnly && tone === "light" ? (
+        <span
+          className={cn(
+            "flex size-11 shrink-0 items-center justify-center rounded-full transition-colors duration-150",
+            urgent
+              ? "bg-sos text-white"
+              : active
+                ? "bg-brand-orange text-white"
+                : "bg-white/70 text-neutral-500 group-hover:bg-white group-hover:text-brand-navy",
+          )}
+        >
+          <Icon
+            className={cn(
+              "size-[21px] shrink-0 transition-transform duration-200 ease-out group-hover:scale-[1.12]",
+              urgent && "animate-sos-icon-blink",
+            )}
+            strokeWidth={active || urgent ? 2 : 1.8}
+            fill="none"
+          />
+        </span>
+      ) : (
+        <Icon
+          className={cn(
+            cn(
+              iconOnly ? "size-6" : "size-5",
+              "shrink-0 transition-transform duration-200 ease-out group-hover:scale-[1.16]",
+            ),
+            urgent && "animate-sos-icon-blink",
+          )}
+          strokeWidth={active || urgent ? 2.2 : 1.8}
+          fill="none"
+        />
+      )}
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-left text-[13px] leading-none",
@@ -359,7 +381,7 @@ overview: [FileChartColumnIcon, ChartSplineIcon],
         "overflow-visible",
         (isResident || isOfficialRole || isResponderRole) && "justify-center pt-0",
       )}>
-        <ul className="flex flex-col gap-1.5">
+        <ul className="flex flex-col gap-2.5">
           {isResident ? (
             <li>
               <SosRailRow onHover={() => setOpen(false)} />

@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from "react"
-import { ChevronDownIcon } from "lucide-react"
+import { useState, type ElementType, type ReactNode } from "react"
+import { ChevronDownIcon, ChevronUpIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -23,7 +23,7 @@ export function Surface({ children, className }: { children: ReactNode; classNam
   return (
     <section
       className={cn(
-        "divide-y divide-card-line overflow-hidden rounded-panel border border-card-line bg-card",
+        "divide-y divide-card-line overflow-hidden rounded-[24px] bg-neutral-50",
         className,
       )}
     >
@@ -47,7 +47,7 @@ const toneSurface: Record<BandTone, string> = {
 }
 
 const toneLabel: Record<BandTone, string> = {
-  default: "text-subtle-foreground",
+  default: "",
   alert: "text-sos",
   warn: "text-subtle-foreground",
   good: "text-subtle-foreground",
@@ -55,28 +55,49 @@ const toneLabel: Record<BandTone, string> = {
 
 export function Band({
   label,
+  icon: Icon,
   action,
   tone = "default",
+  collapsible = false,
   children,
   className,
 }: {
   /** Small region label. Omit for a band that speaks for itself. */
   label?: string
+  /** Optional leading icon beside the label. */
+  icon?: ElementType
   /** Right-aligned control on the label row. Requires `label`. */
   action?: ReactNode
   tone?: BandTone
+  /** When true, content collapses behind the header. */
+  collapsible?: boolean
   children: ReactNode
   className?: string
 }) {
+  const [open, setOpen] = useState(true)
   return (
-    <div className={cn("p-4", toneSurface[tone], className)}>
+    <div className={cn("p-5", toneSurface[tone], className)}>
       {label ? (
-        <div className="mb-2.5 flex items-center justify-between gap-3">
-          <p className={cn("text-meta font-medium", toneLabel[tone])}>{label}</p>
-          {action}
+        <div className={collapsible ? "" : "mb-3"}>
+          <button
+            type="button"
+            onClick={collapsible ? () => setOpen(!open) : undefined}
+            className={cn("flex w-full items-center justify-between gap-3", collapsible && "cursor-pointer")}
+          >
+            <div className="flex items-center gap-2.5">
+              {Icon ? <Icon className="size-4 text-neutral-500" /> : null}
+              <p className={cn("text-[14px] font-medium text-neutral-800", toneLabel[tone])}>{label}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              {action}
+              {collapsible ? (
+                open ? <ChevronUpIcon className="size-4 text-neutral-400" /> : <ChevronDownIcon className="size-4 text-neutral-400" />
+              ) : null}
+            </div>
+          </button>
         </div>
       ) : null}
-      {children}
+      {open ? <div className={collapsible ? "mt-3" : ""}>{children}</div> : null}
     </div>
   )
 }

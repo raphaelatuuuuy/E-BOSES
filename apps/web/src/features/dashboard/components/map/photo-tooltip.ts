@@ -5,6 +5,7 @@ export type MapTip = {
   image?: string | null
   title?: string | null
   excerpt?: string | null
+  centered?: boolean
 }
 
 function escapeHtml(value: string) {
@@ -33,7 +34,10 @@ export function mapCardHtml(tip: MapTip) {
   const excerpt = tip.excerpt?.trim()
     ? `<p class="eboses-sv-pop__desc">${escapeHtml(tip.excerpt.trim())}</p>`
     : ""
-  return `<div class="eboses-sv-pop__body">${image}${title}${excerpt}</div>`
+  const bodyClass = tip.centered
+    ? "eboses-sv-pop__body eboses-sv-pop__body--centered"
+    : "eboses-sv-pop__body"
+  return `<div class="${bodyClass}">${image}${title}${excerpt}</div>`
 }
 
 function hoverCard(L: typeof leaflet, pinSize: number) {

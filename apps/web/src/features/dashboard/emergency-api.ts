@@ -75,6 +75,12 @@ export function revealReporterContact(id: number) {
   )
 }
 
+export function revealResponderContact(id: number) {
+  return apiRequest<{ phone_number: string; alert_id: number }>(
+    `/emergencies/${id}/responder-contact/`,
+  )
+}
+
 export type EmergencyStatus =
   | "submitted"
   | "routing"

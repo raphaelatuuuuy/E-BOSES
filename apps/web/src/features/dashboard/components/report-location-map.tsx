@@ -7,7 +7,7 @@ import type leaflet from "leaflet"
 import { cn } from "@workspace/ui/lib/utils"
 import { matchMarikinaHeightsStreet } from "@/features/auth/lib/marikina-heights-streets"
 import { reverseGeocodeToMarikinaStreet } from "@/features/auth/lib/reverse-geocode"
-import { reverseGeocode } from "@/lib/geocode"
+import { reverseGeocode, searchGeocode } from "@/lib/geocode"
 import {
   concernMarkerHtml,
   concernMarkerSize,
@@ -230,11 +230,38 @@ export function ReportLocationMap({
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
   const coverageRef = useRef<leaflet.LayerGroup | null>(null)
 
-  const lat = Number(latitude)
-  const lng = Number(longitude)
-  const valid = Number.isFinite(lat) && Number.isFinite(lng)
+  const rawLat = Number(latitude)
+  const rawLng = Number(longitude)
+  const hasPinnedCoords = Number.isFinite(rawLat) && Number.isFinite(rawLng)
 
   const streetLabel = streetAddress ? streetFromStoredAddress(streetAddress) : null
+
+  // No pin on file — resolve the stored address into approximate coordinates
+  // so the card still shows a map instead of a dead end.
+  const [geocoded, setGeocoded] = useState<{ address: string; lat: number; lng: number } | null>(null)
+  const resolvedGeocoded = geocoded?.address === streetAddress ? geocoded : null
+  useEffect(() => {
+    if (hasPinnedCoords || !streetAddress) return
+    let cancelled = false
+    searchGeocode(streetAddress, 1).then((rows) => {
+      if (cancelled) return
+      const first = rows[0]
+      const lat = Number(first?.lat)
+      const lng = Number(first?.lon)
+      setGeocoded(
+        Number.isFinite(lat) && Number.isFinite(lng)
+          ? { address: streetAddress, lat, lng }
+          : null,
+      )
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [hasPinnedCoords, streetAddress])
+
+  const lat = hasPinnedCoords ? rawLat : (resolvedGeocoded?.lat ?? NaN)
+  const lng = hasPinnedCoords ? rawLng : (resolvedGeocoded?.lng ?? NaN)
+  const valid = Number.isFinite(lat) && Number.isFinite(lng)
 
   useEffect(() => {
     if (!valid || !containerRef.current) return
@@ -370,7 +397,7 @@ export function ReportLocationMap({
     return (
       <div
         className={cn(
-          "flex items-center justify-center rounded-xl border border-dashed border-neutral-200 bg-neutral-50 text-[14px] text-neutral-500",
+          "flex items-center justify-center rounded-[16px] bg-neutral-100 text-[13px] text-neutral-400",
           heightClassName,
           className,
         )}

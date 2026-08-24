@@ -38,6 +38,7 @@ from .models import (
     RoutingRule,
 )
 from apps.geo_services import validate_report_location
+from apps.media_urls import concern_media_preview_url
 
 
 AREA_ADDRESS_SEGMENTS = {
@@ -1428,7 +1429,13 @@ class ConcernCategoryMiniSerializer(serializers.ModelSerializer):
 
 
 class ConcernListReporterSerializer(serializers.Serializer):
-    full_name = serializers.CharField(read_only=True)
+    full_name = serializers.SerializerMethodField()
+
+    def get_full_name(self, obj) -> str:
+        profile = getattr(obj, "resident_profile", None)
+        if profile:
+            return f"{profile.first_name.strip()} {profile.last_name.strip()}".strip()
+        return obj.email.split("@", 1)[0].replace(".", " ")
 
 
 class ConcernListSerializer(serializers.ModelSerializer):
@@ -1442,6 +1449,7 @@ class ConcernListSerializer(serializers.ModelSerializer):
     reporter = ConcernListReporterSerializer(read_only=True)
     category_ref = ConcernCategoryMiniSerializer(read_only=True)
     tracking_id = serializers.CharField(read_only=True)
+    first_photo = serializers.SerializerMethodField()
 
     class Meta:
         model = Concern
@@ -1461,7 +1469,12 @@ class ConcernListSerializer(serializers.ModelSerializer):
             "updated_at",
             "reporter",
             "category_ref",
+            "first_photo",
         )
+
+    def get_first_photo(self, obj) -> str | None:
+        media = next((m for m in obj.media.all()), None)
+        return concern_media_preview_url(media.pk) if media else None
 
 
 class AnnouncementSerializer(serializers.ModelSerializer):

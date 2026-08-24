@@ -2,14 +2,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import {
+  ReplyIcon,
+  SendIcon,
   ArrowUpDownIcon,
+  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  ChevronUpIcon,
+  ClockIcon,
   EyeOffIcon,
   FileIcon,
+  GitMergeIcon,
+  ImageIcon,
   MapPinIcon,
   MegaphoneIcon,
   PlayIcon,
+  ScaleIcon,
   SearchIcon,
   SlidersHorizontalIcon,
   UsersIcon,
@@ -26,6 +34,7 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { useDebouncedCallback } from "@/hooks/use-debounced-callback"
 import {
+  commentOnConcern,
   getConcern,
   listManagedConcernsPage,
   listMyConcernsPage,
@@ -47,14 +56,12 @@ import {
   categoryLabels,
   filters,
   formatDate,
-  useMinWidth,
 } from "@/features/dashboard/components/concerns/concern-display"
 import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
-import { FilterRail } from "@/features/dashboard/components/workspace/filter-rail"
 import { EmptyState } from "@/features/dashboard/components/record/empty-state"
 import { ReportIcon } from "@/features/dashboard/components/concerns/report-icon"
 import { ReportDetailsSidebar } from "@/features/dashboard/components/concerns/report-details-sidebar"
-import { ConcernQueueItem, concernStatusAccent } from "@/features/dashboard/components/concerns/concern-queue-item"
+import { ConcernQueueItem, avatarTone, concernReporterName, initialsOf } from "@/features/dashboard/components/concerns/concern-queue-item"
 import { streetOnly } from "@/features/dashboard/lib/location-text"
 import { statusLabelOf } from "@/features/dashboard/lib/status-vocabulary"
 
@@ -75,14 +82,11 @@ import { useAuthSession } from "@/features/auth/auth-session"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { useWheelScroll } from "@/hooks/use-wheel-scroll"
 import { useIsDesktop } from "@/features/dashboard/lib/shell"
-import { usePaneCollapse } from "@/features/dashboard/components/responder/pane-collapse"
 import {
   OpsWorkspace,
-  OpsPaneHeader,
   type OpsPaneSpec,
 } from "@/features/dashboard/components/workspace/ops-workspace"
-import { OpsBar, OpsBarButton } from "@/features/dashboard/components/workspace/ops-bar"
-import { OpsTabs } from "@/features/dashboard/components/workspace/ops-tabs"
+import { OpsBarButton } from "@/features/dashboard/components/workspace/ops-bar"
 
 const residentReportsPageSize = 10
 
@@ -182,6 +186,224 @@ function sortReports(reports: Concern[], key: SortKey, asc: boolean) {
   return sorted
 }
 
+function ActionPane({ report, draft, onUpdated, onRefresh }: { report: Concern; draft: ReturnType<typeof useDecisionDraft>; onUpdated: (r: Concern) => void; onRefresh: () => Promise<void> }) {
+  const [locOpen, setLocOpen] = useState(true)
+
+  return (
+    <div className="scrollbar-hide min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 pb-4 pt-4">
+      <section className="rounded-[24px] bg-white">
+        <button type="button" onClick={() => setLocOpen(!locOpen)} className="flex w-full items-center justify-between p-5">
+          <div className="flex items-center gap-2.5">
+            <MapPinIcon className="size-4 text-neutral-500" />
+            <h3 className="text-[14px] font-medium text-neutral-800">Location</h3>
+          </div>
+          {locOpen ? <ChevronUpIcon className="size-4 text-neutral-400" /> : <ChevronDownIcon className="size-4 text-neutral-400" />}
+        </button>
+        {locOpen ? (
+          <div className="px-5 pb-5">
+            <ReportLocationMap
+              latitude={report.latitude}
+              longitude={report.longitude}
+              streetAddress={report.community_incident?.address || report.address}
+              category={report.category}
+              iconKey={report.category_ref?.icon_key}
+              heightClassName="h-40"
+              className="overflow-hidden rounded-[16px] border border-neutral-100"
+            />
+          </div>
+        ) : null}
+      </section>
+
+      <div className="[&>section]:rounded-[24px] [&>section]:border-transparent [&>section]:bg-white">
+        <OfficialStatusPanel report={report} draft={draft} onUpdated={onUpdated} onRefresh={onRefresh} />
+      </div>
+
+      <CommunitySignalSection concern={report} />
+    </div>
+  )
+}
+
+function CommunitySignalSection({ concern }: { concern: Concern }) {
+  const [expanded, setExpanded] = useState(false)
+  const [expandedRow, setExpandedRow] = useState<number | null>(null)
+  const [commentDrafts, setCommentDrafts] = useState<Record<number, string>>({})
+  const [commentLoading, setCommentLoading] = useState<number | null>(null)
+  const [previewPhoto, setPreviewPhoto] = useState<{ items: MediaPreviewItem[]; index: number } | null>(null)
+  const reports = concern.community_incident?.reports ?? []
+  const photos = concern.community_incident?.photos ?? []
+  const commentAuthors = (concern.comments ?? []).filter((c) => !c.parent).slice(0, 3).map((c) => (c.author?.full_name || "R").charAt(0).toUpperCase())
+  const upvoterNames = reports.slice(0, 3).map((r) => (r.reporter_name || "R").charAt(0).toUpperCase())
+  const reportAvatars = reports.slice(0, 3).map((r) => r.reporter_name?.charAt(0)?.toUpperCase() || "R")
+  const isPublic = concern.visibility === "community"
+  const tilesData = [
+    { total: reports.length || 0, label: "reports", names: reportAvatars },
+    ...(isPublic ? [
+      { total: concern.vote_count ?? 0, label: "upvotes", names: upvoterNames },
+      { total: concern.comment_count ?? 0, label: "comments", names: commentAuthors },
+    ] : []),
+  ]
+  const hasItems = reports.length > 0 || (isPublic && (concern.comments?.length ?? 0) > 0)
+
+  async function submitComment(reportId: number) {
+    const body = (commentDrafts[reportId] ?? "").trim()
+    if (!body) return
+    setCommentLoading(reportId)
+    try {
+      await commentOnConcern(concern.id, { body })
+      setCommentDrafts((prev) => ({ ...prev, [reportId]: "" }))
+      toast.success("Comment posted")
+    } catch {
+      toast.error("Could not post comment.")
+    } finally {
+      setCommentLoading(null)
+    }
+  }
+
+  return (
+    <section className="rounded-[24px] bg-white p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <UsersIcon className="size-4 text-neutral-500" />
+          <h3 className="text-[14px] font-medium text-neutral-800">Community signal</h3>
+        </div>
+        {hasItems ? (
+          <button
+            type="button"
+            onClick={() => setExpanded(!expanded)}
+            className="text-[11px] text-neutral-400 transition-colors hover:text-neutral-600"
+          >
+            {expanded ? "Hide" : "View all"}
+          </button>
+        ) : null}
+      </div>
+      <div className="grid grid-cols-3 gap-2.5">
+        {tilesData.map((tile) => (
+          <div key={tile.label} className="rounded-[14px] bg-neutral-100 px-3.5 py-3">
+            <p className="text-[11px] text-neutral-400">{tile.label}</p>
+            {tile.names.length > 0 ? (
+              <div className="mt-2 flex items-center gap-1">
+                <div className="flex -space-x-1.5">
+                  {tile.names.slice(0, 3).map((initial, i) => (
+                    <span
+                      key={i}
+                      className="flex size-5 items-center justify-center rounded-full bg-slate-soft text-[8px] font-semibold text-navy-muted ring-1 ring-white"
+                    >
+                      {initial}
+                    </span>
+                  ))}
+                </div>
+                {tile.total > 3 ? <span className="text-[9px] text-neutral-400">+{tile.total - 3}</span> : null}
+              </div>
+            ) : (
+              <p className="mt-2 text-[11px] text-neutral-300">none</p>
+            )}
+          </div>
+        ))}
+      </div>
+      {expanded && (reports.length > 0 || concern.comments?.length > 0) ? (
+        <>
+          <div className="my-3 border-t border-neutral-100" />
+          <div className="space-y-2">
+          {reports.map((report) => {
+            const photo = photos.find((p) => p.report_id === report.id)
+            const rowOpen = expandedRow === report.id
+            return (
+              <div
+                key={`report-${report.id}`}
+                className="rounded-[14px] bg-neutral-100 p-3"
+              >
+                <button
+                  type="button"
+                  onClick={() => setExpandedRow(rowOpen ? null : report.id)}
+                  className="flex w-full gap-3 text-left"
+                >
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[13px] font-semibold text-navy-muted">
+                    {report.reporter_name?.charAt(0)?.toUpperCase() || "R"}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[12px] font-medium text-neutral-800">{report.reporter_name}</p>
+                    <p className={`mt-0.5 text-[11px] text-neutral-500 ${rowOpen ? "" : "line-clamp-2"}`}>{report.description}</p>
+                  </div>
+                  {photo && !rowOpen ? (
+                    <AuthenticatedMediaImage
+                      src={photo.preview_url}
+                      alt=""
+                      className="size-12 shrink-0 rounded-[8px] object-cover"
+                    />
+                  ) : null}
+                </button>
+                {rowOpen && photo ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const items: MediaPreviewItem[] = [{ src: photo.preview_url, filename: photo.original_filename, kind: "image" }]
+                      setPreviewPhoto({ items, index: 0 })
+                    }}
+                    className="mt-2 ml-12 block w-[calc(100%-3rem)] overflow-hidden rounded-[12px]"
+                  >
+                    <AuthenticatedMediaImage
+                      src={photo.preview_url}
+                      alt=""
+                      className="w-full max-h-48 object-cover"
+                    />
+                  </button>
+                ) : null}
+                {rowOpen ? (
+                  <div className="mt-2 ml-12 flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={commentDrafts[report.id] ?? ""}
+                      onChange={(e) => setCommentDrafts((prev) => ({ ...prev, [report.id]: e.target.value }))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault()
+                          void submitComment(report.id)
+                        }
+                      }}
+                      placeholder="Write a comment..."
+                      className="flex-1 rounded-full bg-white px-3.5 py-1.5 text-[12px] text-neutral-900 outline-none placeholder:text-neutral-400"
+                    />
+                    <button
+                      type="button"
+                      disabled={!commentDrafts[report.id]?.trim() || commentLoading === report.id}
+                      onClick={() => void submitComment(report.id)}
+                      className="flex size-7 items-center justify-center rounded-full bg-neutral-900 text-white disabled:opacity-40"
+                    >
+                      <SendIcon className="size-3" />
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
+          {isPublic && (concern.comments ?? []).filter((c) => !c.parent).map((comment) => (
+            <div
+              key={`comment-${comment.id}`}
+              className="flex gap-3 rounded-[14px] bg-neutral-100 p-3"
+            >
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[13px] font-semibold text-navy-muted">
+                {(comment.author?.full_name || "R").charAt(0).toUpperCase()}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[12px] font-medium text-neutral-800">{comment.author?.full_name || "Resident"}</p>
+                <p className="mt-0.5 line-clamp-2 text-[11px] text-neutral-500">{comment.body}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+        </>
+      ) : null}
+      {previewPhoto ? (
+        <MediaLightbox
+          items={previewPhoto.items}
+          index={previewPhoto.index}
+          onClose={() => setPreviewPhoto(null)}
+        />
+      ) : null}
+    </section>
+  )
+}
+
 const officialFilters = [
   "In Progress",
   "Resolved",
@@ -189,6 +411,14 @@ const officialFilters = [
   "Appealed",
   "All",
 ] as const
+
+const filterMeta: Record<string, { icon: typeof ClockIcon; bg: string; subtext: string }> = {
+  "In Progress": { icon: ClockIcon, bg: "bg-brand-navy", subtext: "Active concerns" },
+  Resolved: { icon: CircleCheck, bg: "bg-emerald-600", subtext: "Closed concerns" },
+  Rejected: { icon: CircleX, bg: "bg-red-500", subtext: "Declined concerns" },
+  Appealed: { icon: ScaleIcon, bg: "bg-amber-500", subtext: "Under review" },
+  All: { icon: UsersIcon, bg: "bg-neutral-700", subtext: "All concerns" },
+}
 
 const CLOSED_STATUSES = ["resolved", "rejected"]
 
@@ -282,31 +512,11 @@ function OfficialConcernDashboard({
 
   const ranked = useMemo(() => rankConcerns(filtered, now), [filtered, now])
 
-  const QUEUE_PAGE_SIZE = 5
-  const [queuePage, setQueuePage] = useState(1)
-  const queueTotalPages = Math.max(1, Math.ceil(ranked.length / QUEUE_PAGE_SIZE))
-  const currentQueuePage = Math.min(queuePage, queueTotalPages)
-  const pagedRanked = ranked.slice(
-    (currentQueuePage - 1) * QUEUE_PAGE_SIZE,
-    currentQueuePage * QUEUE_PAGE_SIZE,
-  )
-
-  const [prevQueueKey, setPrevQueueKey] = useState(`${activeFilter}|${search}`)
-  if (prevQueueKey !== `${activeFilter}|${search}`) {
-    setPrevQueueKey(`${activeFilter}|${search}`)
-    setQueuePage(1)
-  }
-
   const draft = useDecisionDraft(current)
   const [actionPaneOpen, setActionPaneOpen] = useState(false)
+  const [filterOpen, setFilterOpen] = useState(false)
+  const [queueWidth, setQueueWidth] = useState(380)
 
-  const isWideUp = useMinWidth(1440)
-  const [queueCollapsed, setQueueCollapsed] = usePaneCollapse("eboses:ws:concerns:queue:collapsed")
-  const [recordCollapsed, setRecordCollapsed] = usePaneCollapse("eboses:ws:concerns:record:collapsed")
-  const [actionCollapsed, setActionCollapsed] = usePaneCollapse(
-    "eboses:ws:concerns:action:collapsed",
-    !isWideUp,
-  )
   const [recordTab, setRecordTab] = useState("chat")
 
   const [blurTarget, setBlurTarget] = useState<ConcernMedia | null>(null)
@@ -317,8 +527,6 @@ function OfficialConcernDashboard({
   const hasExplicitSelection = Boolean(selected)
 
   const closedCase = current ? ["rejected", "resolved"].includes(current.status) : false
-  const openCount = reports.filter((report) => isOpenStatus(report.status)).length
-  const appealCount = reports.filter(hasOpenAppeal).length
 
   const openAppealCount = current?.appeals?.filter((appeal) => appeal.status === "submitted").length ?? 0
 
@@ -463,16 +671,11 @@ function OfficialConcernDashboard({
       concernId={current.id}
       open
       showHistory
+      plain
       disabled={closedCase}
-      title={closedCase ? "Chat closed" : "Messages"}
-      subtitle={
-        closedCase
-          ? "This report is closed. Reopen it to continue the conversation."
-          : "Talk to the resident. They see these messages."
-      }
-      emptyMessage="Ask the resident for anything you need — a clearer photo, an exact landmark, or a time you can visit."
+      emptyMessage="Ask the resident for anything you need â€” a clearer photo, an exact landmark, or a time you can visit."
       onMessageSent={onRefresh}
-      className="border-card-line"
+      className="h-full"
     />
   ) : null
 
@@ -487,156 +690,185 @@ function OfficialConcernDashboard({
     <ConcernAppealsPanel key={`appeals-${current.id}`} report={current} onRefresh={onRefresh} />
   ) : null
 
-  const queuePane = (
+  const filterDropdown = (
     <>
-      <OpsPaneHeader
-        title="Incoming queue"
-        collapsed={queueCollapsed}
-        onToggleCollapse={() => setQueueCollapsed((value) => !value)}
+      <button
+        type="button"
+        aria-label="Close filters"
+        onClick={() => setFilterOpen(false)}
+        className="fixed inset-0 z-20 cursor-default"
       />
-      <div className="space-y-3 p-3 pb-0">
-        <FilterRail
-          ariaLabel="Concern queue filters"
-          active={activeFilter}
-          onSelect={setActiveFilter}
-          options={officialFilters.map((filter) => ({
-            label: filter,
-            count: reports.filter((report) => matchesOfficialFilter(report, filter)).length,
-          }))}
-        />
+      <div
+        role="listbox"
+        aria-label="Concern queue filters"
+        className="absolute left-4 top-[64px] z-30 overflow-hidden rounded-[20px] bg-white p-1.5 shadow-lg"
+        style={{ width: queueWidth ? Math.max(queueWidth - 32, 240) : 300 }}
+      >
+        {officialFilters.map((filter) => {
+          const optionActive = activeFilter === filter
+          const count = reports.filter((report) => matchesOfficialFilter(report, filter)).length
+          const meta = filterMeta[filter]
+          const Icon = meta.icon
+          return (
+            <button
+              key={filter}
+              type="button"
+              role="option"
+              aria-selected={optionActive}
+              onClick={() => {
+                setActiveFilter(filter)
+                setFilterOpen(false)
+              }}
+              className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] transition hover:bg-neutral-50"
+            >
+              <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-md text-white", meta.bg)}>
+                <Icon className="size-3.5" strokeWidth={1.7} />
+              </span>
+              <span className="flex-1 min-w-0">
+                <span className="block font-medium text-neutral-900">{filter}</span>
+                <span className="block text-[13px] text-neutral-500">{meta.subtext} · {count}</span>
+              </span>
+              {optionActive && <CircleCheck className="size-4 shrink-0 text-green-600" strokeWidth={2} />}
+            </button>
+          )
+        })}
+      </div>
+    </>
+  )
 
+  const queuePane = (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="scrollbar-hide min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 pb-4 pt-4">
         {error ? (
-          <p className="rounded-control border border-severity-critical/40 bg-severity-critical-surface px-3 py-2 text-label text-severity-critical-ink">
+          <p className="rounded-[16px] border border-severity-critical/40 bg-severity-critical-surface px-3 py-2 text-label text-severity-critical-ink">
             {error}
           </p>
         ) : null}
-      </div>
-
-      <div className="border-t border-card-line">
-        {pagedRanked.length > 0 ? (
-          <>
-          {pagedRanked.map((entry) => (
+        {ranked.length > 0 ? (
+          ranked.map((entry) => (
             <ConcernQueueItem
               key={entry.concern.id}
               entry={entry}
               active={current?.id === entry.concern.id}
               onSelect={() => onSelect(entry.concern)}
             />
-          ))}
-          </>
+          ))
         ) : (
-          <div className="bg-card px-4 py-10 text-center text-body text-muted-foreground">
+          <div className="rounded-[24px] bg-white p-8 text-center text-[14px] font-normal text-foreground">
             No concerns match this queue.
           </div>
         )}
       </div>
-
-      <div className="space-y-3 p-3">
-
-        {}
-        {queueTotalPages > 1 ? (
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-[12px] font-medium text-subtle-foreground">
-              Page {currentQueuePage} of {queueTotalPages} · {ranked.length} total
-            </p>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setQueuePage(Math.max(1, currentQueuePage - 1))}
-                disabled={currentQueuePage <= 1}
-                className="flex h-8 items-center gap-1 rounded-control border border-card-line px-2.5 text-[12px] font-semibold text-foreground transition-colors hover:bg-card-raised disabled:opacity-40"
-              >
-                <ChevronLeftIcon className="size-3.5" /> Prev
-              </button>
-              <button
-                type="button"
-                onClick={() => setQueuePage(Math.min(queueTotalPages, currentQueuePage + 1))}
-                disabled={currentQueuePage >= queueTotalPages}
-                className="flex h-8 items-center gap-1 rounded-control border border-card-line px-2.5 text-[12px] font-semibold text-foreground transition-colors hover:bg-card-raised disabled:opacity-40"
-              >
-                Next <ChevronRightIcon className="size-3.5" />
-              </button>
-            </div>
-          </div>
-        ) : null}
-      </div>
-    </>
+    </div>
   )
 
+  const recordTabs = [
+    { id: "details", label: "Details", icon: MapPinIcon, count: null as number | null },
+    { id: "evidence", label: "Photos", icon: ImageIcon, count: current?.media?.length ?? 0 },
+    { id: "appeals", label: "Appeals", icon: ScaleIcon, count: openAppealCount },
+    { id: "merges", label: "Merges", icon: GitMergeIcon, count: null },
+  ]
+
   const recordPane = current ? (
-    <>
+    <div className="flex h-full min-h-0 flex-col">
       {hasExplicitSelection ? (
         <button
           type="button"
           onClick={onBack}
-          className="sticky top-0 z-10 flex w-full items-center gap-1 border-b border-card-line bg-canvas/85 px-4 py-2.5 text-label text-brand-orange backdrop-blur-md lg:hidden"
+          className="flex shrink-0 items-center gap-1 px-4 py-2 text-label text-brand-orange lg:hidden"
         >
           <ChevronLeftIcon className="size-4" /> Back to queue
         </button>
       ) : null}
 
-      <OpsPaneHeader
-        title="Concern information"
-        collapsed={recordCollapsed}
-        onToggleCollapse={() => setRecordCollapsed((value) => !value)}
-      />
-      {(() => {
-        const fullName =
-          current.reporter_full_name?.trim() ||
-          current.reporter?.full_name?.trim() ||
-          "Resident"
-        const initials = current.reporter?.initials || "R"
-        const accent = concernStatusAccent(current.status)
-        const photoCount = current.community_incident?.photo_count ?? current.media?.length ?? 0
-        return (
-          <div className="flex flex-col items-center gap-1 border-b border-card-line px-4 pb-4 pt-5 text-center">
-            <span className="flex size-12 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
-              {initials}
-            </span>
-            <p className="text-[16px] font-bold leading-tight text-foreground">{fullName}</p>
-            <p className="text-[12px] text-subtle-foreground">
-              Resident · {streetOnly(current.address) || current.barangay}
-            </p>
-            <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-full border border-card-line bg-card px-2.5 py-1 text-[11px] font-semibold text-foreground",
-                )}
-              >
-                <span className={cn("size-1.5 rounded-full", accent.dot)} />
-                {statusLabelOf(current.status)}
-              </span>
-              {photoCount > 0 ? (
-                <span className="inline-flex items-center rounded-full border border-card-line bg-card px-2.5 py-1 text-[11px] font-semibold text-foreground">
-                  {photoCount} photo{photoCount === 1 ? "" : "s"}
-                </span>
-              ) : null}
-              <span className="inline-flex items-center rounded-full border border-card-line bg-card px-2.5 py-1 text-[11px] font-semibold text-foreground">
-                {current.comment_count} messages
-              </span>
+      <div className="min-h-0 flex-1 px-4 pb-4 pt-3">
+        <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] bg-white">
+          {(() => {
+            const fullName = concernReporterName(current)
+            const initials = current.reporter?.initials || initialsOf(fullName)
+            const submitted = new Date(current.created_at)
+            return (
+              <div className="shrink-0 px-6 pt-5">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[13px] font-normal text-subtle-foreground">
+                    {statusLabelOf(current.status)}
+                  </span>
+                  <span className="text-[13px] font-normal text-faint-foreground">
+                    {Number.isNaN(submitted.getTime())
+                      ? ""
+                      : new Intl.DateTimeFormat("en", {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                          hour: "numeric",
+                          minute: "2-digit",
+                        }).format(submitted)}
+                  </span>
+                </div>
+
+                <div className="mt-4 flex flex-col items-center text-center">
+                  <span
+                    className={cn(
+                      "flex size-14 items-center justify-center rounded-full text-[18px] font-bold",
+                      avatarTone,
+                    )}
+                  >
+                    {initials}
+                  </span>
+                  <p className="mt-2 text-[17px] font-bold leading-tight text-foreground">
+                    {fullName}
+                  </p>
+                  <p className="text-[12px] text-faint-foreground">
+                    Resident · {streetOnly(current.address) || current.barangay}
+                  </p>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center justify-center gap-2 pb-4">
+                  <button
+                    type="button"
+                    onClick={() => setRecordTab("chat")}
+                    aria-pressed={recordTab === "chat"}
+                    className="flex h-10 items-center gap-2 rounded-pill bg-gradient-to-b from-white to-neutral-200 px-4 text-[13px] font-semibold text-neutral-800 transition-all duration-[--duration-micro]"
+                  >
+                    <ReplyIcon className="size-4" /> Reply
+                  </button>
+                  {recordTabs.map(({ id, label, icon: Icon, count }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setRecordTab(id)}
+                      aria-pressed={recordTab === id}
+                      title={label}
+                      className="relative flex size-10 items-center justify-center rounded-full bg-gradient-to-b from-white to-neutral-200 text-neutral-800 transition-all duration-[--duration-micro]"
+                    >
+                      <Icon className="size-4" />
+                      {count ? (
+                        <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-pill bg-ink px-1 text-[10px] font-bold text-white">
+                          {count}
+                        </span>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+                <div className="mx-auto w-28 border-t border-card-line" />
+              </div>
+            )
+          })()}
+
+          {recordTab === "chat" ? (
+            <div className="min-h-0 flex-1 px-4 pb-4 pt-3">{chatTabContent}</div>
+          ) : (
+            <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6 pt-4">
+              {recordTab === "details" ? detailsTabContent : null}
+              {recordTab === "evidence" ? evidenceTabContent : null}
+              {recordTab === "appeals" ? appealsTabContent : null}
+              {recordTab === "merges" ? mergeTabContent : null}
             </div>
-          </div>
-        )
-      })()}
-      <div className="space-y-4 p-4">
-        <OpsTabs
-          value={recordTab}
-          onValueChange={setRecordTab}
-          tabs={[
-            { id: "chat", label: "Chat", content: chatTabContent },
-            { id: "details", label: "Details", content: detailsTabContent },
-            { id: "evidence", label: "Photos", count: current.media?.length ?? 0, content: evidenceTabContent },
-            { id: "appeals", label: "Appeals", count: openAppealCount, content: appealsTabContent },
-            { id: "merges", label: "Merges", content: mergeTabContent },
-          ]}
-        />
+          )}
+        </div>
       </div>
-    </>
-  ) : (
-    <div className="flex h-full items-center justify-center p-8 text-body text-muted-foreground">
-      Select a concern from the queue.
     </div>
-  )
+  ) : null
 
   const panes: OpsPaneSpec[] = [
     {
@@ -646,9 +878,6 @@ function OfficialConcernDashboard({
       min: 300,
       max: 760,
       label: "Incoming queue",
-      collapsible: true,
-      collapsed: queueCollapsed,
-      onCollapsedChange: setQueueCollapsed,
       node: queuePane,
     },
     {
@@ -656,9 +885,6 @@ function OfficialConcernDashboard({
       role: "detail",
       min: 460,
       label: "Concern information",
-      collapsible: true,
-      collapsed: recordCollapsed,
-      onCollapsedChange: setRecordCollapsed,
       node: recordPane,
     },
   ]
@@ -671,78 +897,10 @@ function OfficialConcernDashboard({
       min: 300,
       max: 720,
       label: "Update report",
-      collapsible: true,
-      collapsed: actionCollapsed,
-      onCollapsedChange: setActionCollapsed,
       node: (
-        <>
-          <OpsPaneHeader
-            title="Update report"
-            collapsed={actionCollapsed}
-            onToggleCollapse={() => setActionCollapsed((value) => !value)}
-          />
-          <div className="p-3">
-            <OfficialStatusPanel
-              report={current}
-              draft={draft}
-              onUpdated={onUpdated}
-              onRefresh={onRefresh}
-            />
-          </div>
-          <div className="space-y-3 border-t border-card-line p-3">
-            <section className="rounded-panel border border-card-line bg-card p-3">
-              <div className="mb-2 flex items-center gap-2">
-                <MapPinIcon className="size-4 text-subtle-foreground" />
-                <h3 className="text-[13px] font-bold text-foreground">Location</h3>
-              </div>
-              <ReportLocationMap
-                latitude={current.latitude}
-                longitude={current.longitude}
-                streetAddress={current.community_incident?.address || current.address}
-                category={current.category}
-                iconKey={current.category_ref?.icon_key}
-                heightClassName="h-36"
-                className="overflow-hidden rounded-control border border-card-line"
-              />
-              <p className="mt-2 text-[12px] font-semibold text-foreground">
-                {streetOnly(current.community_incident?.address || current.address) ||
-                  current.address ||
-                  "Location pinned on the map"}
-              </p>
-              <p className="text-[11px] text-subtle-foreground">
-                {current.location_source === "gps"
-                  ? "Pinned by resident GPS"
-                  : "Pinned on the map"}
-              </p>
-            </section>
-
-            <section className="rounded-panel border border-card-line bg-card p-3">
-              <div className="mb-2 flex items-center gap-2">
-                <UsersIcon className="size-4 text-subtle-foreground" />
-                <h3 className="text-[13px] font-bold text-foreground">Community signal</h3>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  {
-                    value: current.community_incident?.report_count ?? 1,
-                    caption: "reports",
-                  },
-                  { value: current.vote_count, caption: "upvotes" },
-                  { value: current.comment_count, caption: "comments" },
-                ].map((tile) => (
-                  <div key={tile.caption} className="rounded-control bg-card-raised p-2.5">
-                    <p className="text-[16px] font-bold leading-tight text-foreground">
-                      {tile.value}
-                    </p>
-                    <p className="mt-0.5 text-[10.5px] font-medium text-subtle-foreground">
-                      {tile.caption}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </section>
-          </div>
-        </>
+        <div className="flex h-full min-h-0 flex-col">
+          <ActionPane report={current} draft={draft} onUpdated={onUpdated} onRefresh={onRefresh} />
+        </div>
       ),
     })
   }
@@ -772,43 +930,58 @@ function OfficialConcernDashboard({
       asideOpen={actionPaneOpen}
       onAsideOpenChange={setActionPaneOpen}
       panes={panes}
+      className="ops-plain bg-transparent"
+      onListResize={setQueueWidth}
       bar={
-        <OpsBar
-          title="Concerns"
-          counters={[
-
-            { label: "in progress", value: openCount, onClick: () => setActiveFilter("In Progress") },
-            {
-              label: "appeals",
-              value: appealCount,
-              tone: appealCount > 0 ? "alert" : "default",
-              onClick: () => setActiveFilter("Appealed"),
-            },
-          ]}
-        >
-          <label className="hidden h-8 items-center gap-2 rounded-control border border-card-line bg-card px-2.5 md:flex">
-            <SearchIcon className="size-3.5 shrink-0 text-subtle-foreground" />
+        <header className="relative flex h-16 shrink-0 items-center justify-between gap-4 px-4">
+          <label
+            className="hidden h-12 items-center gap-2 rounded-full bg-white pl-4 pr-1.5 md:flex"
+            style={{ width: queueWidth ? Math.max(queueWidth - 32, 240) : 300 }}
+          >
+            <SearchIcon className="size-4 shrink-0 text-faint-foreground" />
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search concerns…"
-              className="w-40 min-w-0 bg-transparent text-label text-foreground outline-none placeholder:text-faint-foreground lg:w-52"
+              placeholder="Search concerns"
+              className="min-w-0 flex-1 bg-transparent text-[13px] font-medium text-foreground outline-none placeholder:text-faint-foreground"
             />
+            <button
+              type="button"
+              onClick={() => setFilterOpen((value) => !value)}
+              title={filterOpen ? "Hide filters" : "Show filters"}
+              aria-pressed={filterOpen}
+              className={cn(
+                "flex size-9 shrink-0 items-center justify-center rounded-full transition-colors duration-[--duration-micro]",
+                filterOpen
+                  ? "bg-card-raised text-foreground"
+                  : "text-faint-foreground hover:text-foreground",
+              )}
+            >
+              <SlidersHorizontalIcon className="size-4" />
+            </button>
           </label>
-          <OpsBarButton
-            icon={MegaphoneIcon}
-            label="Community"
-            onClick={() => navigate("/dashboard/community-content")}
-          />
-          {!isLgUp && current ? (
-            <OpsBarButton
-              icon={SlidersHorizontalIcon}
-              label="Update"
-              tone="primary"
-              onClick={() => setActionPaneOpen(true)}
-            />
-          ) : null}
-        </OpsBar>
+          {filterOpen ? filterDropdown : null}
+
+          <div className="ml-auto flex shrink-0 items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => navigate("/dashboard/community-content")}
+              title="Community"
+              aria-label="Community"
+              className="flex size-10 items-center justify-center rounded-full bg-white text-neutral-900 transition-colors duration-[--duration-micro] hover:bg-card-raised"
+            >
+              <MegaphoneIcon className="size-4" />
+            </button>
+            {!isLgUp && current ? (
+              <OpsBarButton
+                icon={SlidersHorizontalIcon}
+                label="Update"
+                tone="primary"
+                onClick={() => setActionPaneOpen(true)}
+              />
+            ) : null}
+          </div>
+        </header>
       }
     />
     </>
@@ -1114,7 +1287,7 @@ export default function ReportsPage() {
                 <input
                   value={residentSearch}
                   onChange={(e) => { setResidentSearch(e.target.value); setReportPage(1) }}
-                  placeholder="Search reports…"
+                  placeholder="Search reportsâ€¦"
                   className="w-36 min-w-0 bg-transparent text-[13px] text-neutral-900 outline-none placeholder:text-neutral-400 sm:w-48"
                 />
               </label>
@@ -1172,7 +1345,7 @@ export default function ReportsPage() {
                       <div className="min-w-0">
                         <p className="truncate text-[13px] font-medium text-neutral-800">
                           {report.title || report.description.slice(0, 80)}
-                          {(report.title ? report.title.length > 80 : report.description.length > 80) ? "…" : ""}
+                          {(report.title ? report.title.length > 80 : report.description.length > 80) ? "â€¦" : ""}
                         </p>
                         <p className="mt-0.5 text-[11px] text-neutral-400">
                           {report.address?.replace(/,?\s*Marikina( Heights)?$/, "") || ""}
@@ -1227,7 +1400,7 @@ export default function ReportsPage() {
             {filtered.length > 0 && (
               <div className="flex items-center justify-between border-t border-neutral-100 px-4 py-3">
                 <p className="text-[12px] text-neutral-500">
-                  {firstShown}–{lastShown} of {filtered.length}
+                  {firstShown}â€“{lastShown} of {filtered.length}
                 </p>
                 <div className="flex items-center gap-2">
                   {nextReportPage && (
@@ -1237,7 +1410,7 @@ export default function ReportsPage() {
                       disabled={loadingMore}
                       className="rounded-md border border-neutral-200 px-3 py-1.5 text-[12px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-50 disabled:opacity-40"
                     >
-                      {loadingMore ? "Loading…" : "Load more"}
+                      {loadingMore ? "Loadingâ€¦" : "Load more"}
                     </button>
                   )}
                   <div className="flex items-center gap-0.5">

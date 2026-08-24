@@ -34,6 +34,8 @@ export interface OpsWorkspaceProps {
 
   asideOpen?: boolean
   onAsideOpenChange?: (open: boolean) => void
+  /** Reports the live list-pane width so a page can align bar content to it. */
+  onListResize?: (width: number) => void
   className?: string
 }
 
@@ -289,6 +291,7 @@ export function OpsWorkspace({
   mobileView = "list",
   asideOpen = false,
   onAsideOpenChange,
+  onListResize,
   className,
 }: OpsWorkspaceProps) {
   const tier = useWorkspaceTier()
@@ -379,6 +382,10 @@ export function OpsWorkspace({
     },
     [aside, id],
   )
+
+  React.useEffect(() => {
+    if (listShown && effectiveListWidth > 0) onListResize?.(effectiveListWidth)
+  }, [listShown, effectiveListWidth, onListResize])
 
   const closeAside = React.useCallback(() => onAsideOpenChange?.(false), [onAsideOpenChange])
 

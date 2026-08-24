@@ -454,7 +454,7 @@ export function ReportChatPanel({
           ) : null}
           {attachmentError ? <p className="mb-2 text-[11px] font-medium text-red-500">{attachmentError}</p> : null}
           {recording || readyFile ? (
-            <div className="mx-auto flex w-fit items-center gap-2.5 rounded-full border border-neutral-200 bg-white py-2 pl-4 pr-2">
+            <div className="mx-auto flex w-fit items-center gap-2.5 rounded-full border border-transparent bg-neutral-100 py-2 pl-4 pr-2">
               {recording ? (
                 <span className="size-2 shrink-0 rounded-full animate-pulse bg-red-500" aria-hidden />
               ) : null}
@@ -505,7 +505,7 @@ export function ReportChatPanel({
               </div>
             </div>
           ) : (
-            <div className="flex items-center gap-2 rounded-full border border-neutral-200 bg-white py-1.5 pl-4 pr-1.5 transition-colors focus-within:border-neutral-300">
+            <div className="flex items-center gap-2 rounded-full border border-transparent bg-neutral-100 py-1.5 pl-4 pr-1.5 transition-colors focus-within:border-neutral-200">
               <button
                 type="button"
                 onClick={() => void startRecording()}

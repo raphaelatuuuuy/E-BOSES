@@ -820,9 +820,10 @@ function AlertsLeafletMapInner({
             }),
           z: focused ? 800 : 400,
           tip: {
-            image: emergency.preview_url,
-            title: emergency.type.replaceAll("_", " "),
-            excerpt: emergency.note,
+            title: `There is an ongoing ${emergency.type.replaceAll("_", " ")} around ${
+              emergency.address?.trim() || emergency.barangay?.trim() || "the reported area"
+            }`,
+            centered: true,
           },
           onClick: () => onSelectRef.current({ kind: "emergency", id: emergency.id }),
         })

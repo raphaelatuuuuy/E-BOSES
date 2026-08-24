@@ -279,6 +279,7 @@ export interface Concern {
   status_version: number
   reporter: PublicUser
   reporter_full_name?: string
+  first_photo?: string | null
   title: string
   description: string
 

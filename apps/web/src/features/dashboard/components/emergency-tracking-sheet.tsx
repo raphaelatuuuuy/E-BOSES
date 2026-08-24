@@ -3,9 +3,10 @@ import { createPortal } from "react-dom"
 import {
   CheckIcon,
   CircleDotIcon,
-  MinusIcon,
+  InfoIcon,
+  MessageCircleIcon,
+  PhoneIcon,
   PlayIcon,
-  PlusIcon,
   RadioIcon,
   XIcon,
 } from "lucide-react"
@@ -13,6 +14,7 @@ import { toast } from "sonner"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { websocketTicket, websocketUrl } from "@/lib/api"
 import {
   cancelEmergency,
@@ -20,6 +22,7 @@ import {
   getEmergency,
   isNewerEmergencyAlert,
   normalizeEmergencyAlert,
+  revealResponderContact,
   type EmergencyAlert,
   type EmergencyChatMessage,
   type EmergencyStatus,
@@ -40,11 +43,7 @@ import {
 } from "@/features/dashboard/lib/authenticated-media"
 import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/record/status"
 import { formatClock } from "@/features/dashboard/lib/responder-format"
-import {
-  MapControlStack,
-  MapStackButton,
-  MapStackDivider,
-} from "@/features/dashboard/components/map-control-stack"
+import { initialsFor, roleLabel } from "@/features/dashboard/lib/people"
 
 import type leaflet from "leaflet"
 
@@ -71,6 +70,18 @@ const ACTIVE_ASSIGNMENT_STATUSES = new Set([
   "arrived",
   "assisting",
 ])
+
+const ASSIGNMENT_STATUS_LABELS: Record<string, string> = {
+  assigned: "Assigned",
+  acknowledged: "Acknowledged",
+  en_route: "On the way",
+  nearby: "Nearby",
+  arrived: "On scene",
+  assisting: "Assisting",
+  cancelled: "Cancelled",
+  declined: "Declined",
+  resolved: "Completed",
+}
 
 function hasActiveResponder(alert: EmergencyAlert) {
   if (alert.current_assignment && ACTIVE_ASSIGNMENT_STATUSES.has(alert.current_assignment.status)) {
@@ -310,6 +321,28 @@ function formatEta(meters: number) {
 }
 
 
+function pinIcon(L: typeof leaflet, color: string, size = 34) {
+  const d =
+    "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zM12 5.2a2.1 2.1 0 100 4.2 2.1 2.1 0 100-4.2zM12 10.5c-2.4 0-4.3 1.1-4.3 2.4 0 1.5 2.1 2.5 4.3 2.5s4.3-1 4.3-2.5c0-1.3-1.9-2.4-4.3-2.4z"
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="${size}" height="${size}"><path fill="${color}" fill-rule="evenodd" d="${d}"/></svg>`
+  return L.divIcon({
+    className: "",
+    html: `<span style="display:block;line-height:0;filter:drop-shadow(0 3px 5px rgba(15,23,42,0.45))">${svg}</span>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, Math.round(size * 22 / 24)],
+  })
+}
+
+function responderIcon(L: typeof leaflet, size = 32) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="${size}" height="${size}"><circle cx="12" cy="12" r="11.5" fill="#07145f"/><g transform="translate(5 5) scale(0.583)" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M6.376 18.91a6 6 0 0 1 11.249.003"/><circle cx="12" cy="11" r="4"/></g></svg>`
+  return L.divIcon({
+    className: "",
+    html: `<span style="display:block;line-height:0;filter:drop-shadow(0 3px 6px rgba(7,20,95,0.5))">${svg}</span>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  })
+}
+
 function EmergencyTrackingMap({
   alert,
   wide,
@@ -324,6 +357,8 @@ function EmergencyTrackingMap({
   const leafletRef = useRef<typeof leaflet | null>(null)
   const responderMarkerRefs = useRef<Map<number, leaflet.Marker>>(new Map())
   const routeRef = useRef<RouteLayers | null>(null)
+  const routeSigRef = useRef("")
+  const fittedRef = useRef(false)
   const [mapReady, setMapReady] = useState(0)
   const isLive = ACTIVE_EMERGENCY_STATUSES.has(alert.status)
 
@@ -341,7 +376,7 @@ function EmergencyTrackingMap({
         zoomControl: false,
         attributionControl: false,
         dragging: true,
-        scrollWheelZoom: false,
+        scrollWheelZoom: true,
       })
       mapRef.current = map
 
@@ -350,13 +385,11 @@ function EmergencyTrackingMap({
         maxZoom: 19,
       }).addTo(map)
 
-      const residentIcon = L.divIcon({
-        className: "",
-        html: `<div style="width:16px;height:16px;border-radius:999px;background:#2b7fff;border:3px solid white;box-shadow:0 2px 10px rgba(37,99,235,.45),0 0 0 8px rgba(43,127,255,.18)"></div>`,
-        iconSize: [16, 16],
-        iconAnchor: [8, 8],
-      })
-      L.marker([Number(alert.latitude), Number(alert.longitude)], { icon: residentIcon }).addTo(map)
+      L.marker([Number(alert.latitude), Number(alert.longitude)], {
+        icon: pinIcon(L, "#ffffff"),
+      }).addTo(map)
+      routeSigRef.current = ""
+      fittedRef.current = false
       setMapReady((value) => value + 1)
       requestAnimationFrame(() => map?.invalidateSize())
       window.setTimeout(() => map?.invalidateSize(), 400)
@@ -388,11 +421,16 @@ function EmergencyTrackingMap({
     if (!map || !L) return
 
     const assignments = alert.assignments ?? []
+    const current = alert.current_assignment
+    const locatedAssignments =
+      current && !assignments.some((a) => a.id === current.id)
+        ? [current, ...assignments]
+        : assignments
     const activeAssignments = isLive
-      ? assignments.filter((a) =>
+      ? locatedAssignments.filter((a) =>
           ["assigned", "acknowledged", "en_route", "arrived", "assisting"].includes(a.status),
         )
-      : assignments
+      : locatedAssignments
 
     for (const assignment of activeAssignments) {
       const lastLocation = assignment.last_location
@@ -405,16 +443,18 @@ function EmergencyTrackingMap({
       if (existingMarker) existingMarker.setLatLng(responderLatLng)
       else {
         const marker = L.marker(responderLatLng, {
-          icon: L.divIcon({
-            className: "",
-            html: `<div style="width:22px;height:22px;border-radius:999px;background:#07145f;border:3px solid white;box-shadow:0 4px 10px rgba(7,20,95,.35)"></div>`,
-            iconSize: [22, 22],
-            iconAnchor: [11, 11],
-          }),
+          icon: responderIcon(L, 22),
+          zIndexOffset: 1000,
         }).addTo(map)
         responderMarkerRefs.current.set(assignment.id, marker)
       }
     }
+
+    const signature = `${isLive ? "live" : "done"}|${activeAssignments
+      .map((a) => `${a.id}:${a.last_location?.latitude ?? ""},${a.last_location?.longitude ?? ""}`)
+      .join("|")}|${alert.route ? JSON.stringify(alert.route.geometry) : ""}`
+    if (signature === routeSigRef.current) return
+    routeSigRef.current = signature
 
     routeRef.current?.remove()
     const destination: leaflet.LatLngTuple = [Number(alert.latitude), Number(alert.longitude)]
@@ -427,6 +467,8 @@ function EmergencyTrackingMap({
     })
     routeRef.current = drawRoute(L, map, { road, approach, connectors, live: isLive })
 
+    if (fittedRef.current) return
+    fittedRef.current = true
     if (routeRef.current) {
       map.fitBounds(L.latLngBounds(routeRef.current.points), { padding: [44, 44], maxZoom: 17 })
     } else if (!isLive && activeAssignments.length === 0) {
@@ -445,27 +487,6 @@ function EmergencyTrackingMap({
   return (
     <div className={cn("relative h-full w-full", className)}>
       <div ref={containerRef} className="h-full w-full bg-tint" />
-      {/* The wheel stays bound to the sheet's scroll, so these buttons are the
-          only way to zoom. */}
-      <div className="absolute bottom-3 right-3 z-[600]">
-        <MapControlStack className="border-black/10 bg-white shadow-[0_4px_14px_rgba(15,23,42,0.18)]">
-          <MapStackButton
-            label="Zoom in"
-            onClick={() => mapRef.current?.zoomIn()}
-            className="text-neutral-800 hover:bg-black/5 hover:text-black"
-          >
-            <PlusIcon className="size-5" />
-          </MapStackButton>
-          <MapStackDivider className="bg-black/10" />
-          <MapStackButton
-            label="Zoom out"
-            onClick={() => mapRef.current?.zoomOut()}
-            className="text-neutral-800 hover:bg-black/5 hover:text-black"
-          >
-            <MinusIcon className="size-5" />
-          </MapStackButton>
-        </MapControlStack>
-      </div>
     </div>
   )
 }
@@ -490,7 +511,7 @@ function Section({
   className?: string
 }) {
   return (
-    <section className={cn("-mx-5 mt-5 flex flex-col border-t border-neutral-200 px-5 pt-4 first-of-type:mt-0", className)}>
+    <section className={cn("mt-6 flex flex-col first-of-type:mt-0", className)}>
       {label ? (
         <p className="text-[12px] font-semibold text-neutral-500">{label}</p>
       ) : null}
@@ -581,12 +602,12 @@ function StatusTimeline({ alert }: { alert: EmergencyAlert }) {
   )
 }
 
-const MILESTONE_STATUSES: EmergencyStatus[] = [
-  "submitted",
-  "routed",
-  "en_route",
-  "nearby",
-  "arrived",
+const MILESTONE_STATUSES: Array<{ status: EmergencyStatus; short: string }> = [
+  { status: "submitted", short: "Received" },
+  { status: "routed", short: "Assigned" },
+  { status: "en_route", short: "On the way" },
+  { status: "nearby", short: "Nearby" },
+  { status: "arrived", short: "Arrived" },
 ]
 
 /**
@@ -596,19 +617,15 @@ const MILESTONE_STATUSES: EmergencyStatus[] = [
  */
 function MilestoneStepper({ alert }: { alert: EmergencyAlert }) {
   const rows = buildStatusTimeline(alert)
-  const milestones = MILESTONE_STATUSES.map((status) =>
-    rows.find((row) => row.status === status),
-  ).filter((row): row is TimelineRow => Boolean(row))
-  const currentRow =
-    milestones.find((row) => row.state === "current") ??
-    [...milestones].reverse().find((row) => row.state === "done")
+  const milestones = MILESTONE_STATUSES.map(({ status, short }) => {
+    const row = rows.find((row) => row.status === status)
+    return row ? { ...row, short } : null
+  }).filter((row): row is TimelineRow & { short: string } => Boolean(row))
   const reachedCount = milestones.filter((row) => row.state !== "pending").length
 
   return (
     <div>
       <div className="relative">
-        {/* Track spans the node centers: nodes sit centered in their
-            flex-1 columns at 10%, 30%, 50%, 70%, 90% of the width. */}
         <div className="absolute left-[10%] right-[10%] top-[9px] h-0.5 rounded-full bg-neutral-200" />
         <div
           className="absolute left-[10%] top-[9px] h-0.5 rounded-full bg-brand-navy transition-all duration-500"
@@ -619,44 +636,47 @@ function MilestoneStepper({ alert }: { alert: EmergencyAlert }) {
             <span key={row.key} className="flex flex-1 justify-center">
               <span
                 className={cn(
-                  "flex size-5 items-center justify-center rounded-full border-2",
-                  row.state === "done" && "border-neutral-300 bg-brand-navy text-white",
-                  row.state === "current" && "sos-timeline__now border-brand-orange bg-brand-orange text-white",
-                  row.state === "pending" && "border-neutral-200 bg-white text-transparent",
-                  row.state === "cancelled" && "border-sos bg-sos text-white",
+                  "flex size-5 items-center justify-center rounded-full",
+                  row.state === "done" && "bg-brand-navy text-white",
+                  row.state === "current" && "sos-timeline__now bg-brand-orange",
+                  row.state === "pending" && "border-2 border-neutral-200 bg-white",
+                  row.state === "cancelled" && "bg-sos text-white",
                 )}
                 aria-hidden
               >
                 {row.state === "done" ? (
-                  <CheckIcon className="size-3" strokeWidth={3} />
+                  <CheckIcon className="size-2.5" strokeWidth={3.5} />
                 ) : row.state === "current" ? (
-                  <RadioIcon className="size-3" strokeWidth={2.5} />
+                  <span className="size-1 rounded-full bg-brand-orange" />
                 ) : row.state === "cancelled" ? (
-                  <XIcon className="size-3" strokeWidth={3} />
+                  <XIcon className="size-2.5" strokeWidth={3} />
                 ) : null}
               </span>
             </span>
           ))}
         </div>
       </div>
-      <div className="mt-1.5 flex w-full justify-between">
+      <div className="mt-2.5 flex w-full justify-between">
         {milestones.map((row) => (
-          <span
-            key={row.key}
-            className={cn(
-              "flex-1 text-center text-[10px] font-semibold leading-4",
-              row.state === "pending" ? "text-neutral-400" : "text-neutral-700",
-            )}
-          >
-            {row.label}
+          <span key={row.key} className="flex flex-1 flex-col items-center gap-0.5 text-center">
+            <span
+              className={cn(
+                "text-[10px] font-medium leading-4",
+                row.state === "current"
+                  ? "font-semibold text-neutral-900"
+                  : row.state === "pending"
+                    ? "text-neutral-400"
+                    : "text-neutral-600",
+              )}
+            >
+              {row.short}
+            </span>
+            <span className="block h-3 text-[9px] leading-3 tabular-nums text-neutral-400">
+              {row.time && row.state !== "pending" ? formatClock(row.time) : ""}
+            </span>
           </span>
         ))}
       </div>
-      {currentRow?.note ? (
-        <p className="mt-3 border-t border-neutral-200 pt-3 text-[12px] leading-5 text-neutral-600">
-          {currentRow.note}
-        </p>
-      ) : null}
     </div>
   )
 }
@@ -671,8 +691,8 @@ function DetailsColumn({
   appealBusy,
   submitAppeal,
   appealHistory,
-  chatOpen,
-  chatMessage,
+  callResponder,
+  callingResponder,
   milestoneMode,
 }: {
   alert: EmergencyAlert
@@ -684,14 +704,14 @@ function DetailsColumn({
   appealBusy: boolean
   submitAppeal: () => void
   appealHistory: EmergencyAlert["appeals"]
-  chatOpen: boolean
-  chatMessage: EmergencyChatMessage | null
+  callResponder: () => void
+  callingResponder: boolean
   /** Expanded two-column layout: compact horizontal tracker instead of the vertical timeline. */
   milestoneMode?: boolean
 }) {
   const live = ACTIVE_EMERGENCY_STATUSES.has(alert.status)
   const address = alert.address?.trim() || alert.barangay || "Pinned location"
-  const hasResponder = hasActiveResponder(alert)
+  const responderAssignment = alert.current_assignment ?? (alert.assignments ?? [])[0] ?? null
   const reach =
     distance !== null
       ? live
@@ -713,16 +733,16 @@ function DetailsColumn({
   return (
     <div className="flex flex-1 flex-col pb-2">
       <div className="pb-4">
-        <p className="text-base font-semibold leading-6 text-neutral-900">{statusText(alert)}</p>
-        <p className="mt-1 text-[13px] leading-5 text-neutral-500">{address}</p>
-        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
-          {reach ? <span className="tabular-nums text-neutral-600">{reach}</span> : null}
+        <p className="line-clamp-2 min-h-6 text-base font-semibold leading-6 text-neutral-900">{statusText(alert)}</p>
+        <p className="mt-1 truncate text-[13px] leading-5 text-neutral-500">{address}</p>
+        <div className="mt-2 flex min-h-5 flex-nowrap items-center whitespace-nowrap text-[13px]">
+          {reach ? <span className="shrink-0 tabular-nums text-neutral-600">{reach}</span> : null}
           {reach ? (
-            <span aria-hidden className="text-neutral-300">
+            <span aria-hidden className="mx-2 text-neutral-300">
               ·
             </span>
           ) : null}
-          <span className="text-neutral-500">{connection}</span>
+          <span className="min-w-0 truncate text-neutral-500">{connection}</span>
         </div>
       </div>
 
@@ -736,24 +756,41 @@ function DetailsColumn({
         </Section>
       )}
 
-      <Section label="Chat">
-        {hasResponder && alert.status !== "submitted" ? (
-          <EmergencyChatPanel
-            alertId={alert.id}
-            open={chatOpen}
-            disabled={alert.status === "cancelled" || alert.status === "resolved"}
-            incomingMessage={chatMessage}
-            realtime={false}
-            bare
-          />
-        ) : (
-          <div className="flex min-h-[140px] items-center justify-center">
-            <p className="text-[12px] leading-5 text-neutral-500">
-              Chat opens once a responder is assigned to this emergency.
-            </p>
+      {responderAssignment ? (
+        <Section label="Responder" className="mt-auto pt-6">
+          <div className="flex items-center gap-3">
+            <Avatar>
+              <AvatarFallback>{initialsFor(responderAssignment.responder)}</AvatarFallback>
+            </Avatar>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[13px] font-semibold text-neutral-900">
+                {responderAssignment.responder.full_name}
+              </p>
+              <p className="mt-0.5 truncate text-[12px] text-neutral-500">
+                {responderAssignment.assigned_unit?.short_name || roleLabel(responderAssignment.responder)}
+                {" · "}
+                {ASSIGNMENT_STATUS_LABELS[responderAssignment.status] ??
+                  responderAssignment.status.replace(/_/g, " ")}
+              </p>
+            </div>
+            <time className="shrink-0 text-[11px] tabular-nums text-neutral-400">
+              {formatClock(responderAssignment.assigned_at)}
+            </time>
+            {live ? (
+              <button
+                type="button"
+                onClick={() => void callResponder()}
+                disabled={callingResponder}
+                aria-label="Call responder"
+                title="Call responder"
+                className="flex size-9 shrink-0 items-center justify-center rounded-full border border-neutral-200 text-neutral-500 transition-colors hover:bg-neutral-50 hover:text-neutral-700 disabled:opacity-50"
+              >
+                <PhoneIcon className="size-4" />
+              </button>
+            ) : null}
           </div>
-        )}
-      </Section>
+        </Section>
+      ) : null}
 
       {(alert.media ?? []).length > 0 ? (
         <Section label="Evidence">
@@ -852,7 +889,6 @@ export function EmergencyTrackingSheet({
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
   const [wide, setWide] = useState(false)
-  const [detailsExpanded, setDetailsExpanded] = useState(false)
   const [alert, setAlert] = useState<EmergencyAlert | null>(initialAlert)
   const alertRef = useRef<EmergencyAlert | null>(initialAlert)
   const [appealReason, setAppealReason] = useState("")
@@ -864,6 +900,8 @@ export function EmergencyTrackingSheet({
     initialAlert && ACTIVE_EMERGENCY_STATUSES.has(initialAlert.status) ? "connecting" : "live"
   )
   const [chatMessage, setChatMessage] = useState<EmergencyChatMessage | null>(null)
+  const [chatView, setChatView] = useState(false)
+  const [callingResponder, setCallingResponder] = useState(false)
 
   const adoptAlert = useCallback((nextAlert: EmergencyAlert) => {
     if (!isNewerEmergencyAlert(alertRef.current, nextAlert)) return
@@ -877,8 +915,10 @@ export function EmergencyTrackingSheet({
   // selected alert — render-adjust instead of sync setStates inside effects.
   const [prevInitialAlert, setPrevInitialAlert] = useState(initialAlert)
   if (prevInitialAlert !== initialAlert) {
+    const switchedAlert = prevInitialAlert?.id !== initialAlert?.id
     setPrevInitialAlert(initialAlert)
     setAlert(initialAlert)
+    if (switchedAlert) setChatView(false)
   }
 
   const [prevOpen, setPrevOpen] = useState(open)
@@ -886,8 +926,8 @@ export function EmergencyTrackingSheet({
     setPrevOpen(open)
     if (!open) {
       setWide(false)
-      setDetailsExpanded(false)
       setChatMessage(null)
+      setChatView(false)
       setCancelOpen(false)
       setCancelReason("")
     }
@@ -931,13 +971,16 @@ export function EmergencyTrackingSheet({
       }
     }
     void refreshAlert()
-    const interval = window.setInterval(() => void refreshAlert(), 5000)
+    const interval = window.setInterval(
+      () => void refreshAlert(),
+      connectionState === "live" ? 15000 : 5000,
+    )
     window.addEventListener("focus", refreshAlert)
     return () => {
       window.clearInterval(interval)
       window.removeEventListener("focus", refreshAlert)
     }
-  }, [open, alertId, alertStatus, adoptAlert])
+  }, [open, alertId, alertStatus, adoptAlert, connectionState])
 
   useEffect(() => {
     if (!open || !alertId || !alertStatus || !ACTIVE_EMERGENCY_STATUSES.has(alertStatus)) return
@@ -1056,25 +1099,18 @@ export function EmergencyTrackingSheet({
     }
   }
 
-  // One chip: what state this alert is in. Distance, connection and the
-  // resident's address all read once, in the sheet header below.
-  const mapOverlay = (
-    <div className="pointer-events-none absolute left-3 top-3 z-[500]">
-      {isLive ? (
-        <span className="w-fit rounded-full bg-sos px-2.5 py-1 text-[10px] font-bold tracking-wide text-white shadow-md">
-          Live · Alert
-        </span>
-      ) : alert.status === "resolved" ? (
-        <span className="w-fit rounded-full bg-brand-navy px-2.5 py-1 text-[10px] font-bold tracking-wide text-white shadow-md">
-          Resolved
-        </span>
-      ) : alert.status === "cancelled" ? (
-        <span className="w-fit rounded-full bg-neutral-600 px-2.5 py-1 text-[10px] font-bold tracking-wide text-white shadow-md">
-          Closed
-        </span>
-      ) : null}
-    </div>
-  )
+  async function callResponder() {
+    if (!alert || callingResponder) return
+    setCallingResponder(true)
+    try {
+      const { phone_number } = await revealResponderContact(alert.id)
+      window.location.href = `tel:${phone_number}`
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not get the responder's number.")
+    } finally {
+      setCallingResponder(false)
+    }
+  }
 
   const details = (
     <DetailsColumn
@@ -1087,13 +1123,28 @@ export function EmergencyTrackingSheet({
       appealBusy={appealBusy}
       submitAppeal={() => void submitAppeal()}
       appealHistory={appealHistory}
-      chatOpen={open}
-      chatMessage={chatMessage}
+      callResponder={() => void callResponder()}
+      callingResponder={callingResponder}
       milestoneMode={wide}
     />
   )
 
-  const toggleDetails = () => setDetailsExpanded((v) => !v)
+  const chatAvailable = hasActiveResponder(alert) && alert.status !== "submitted"
+  const chatPaneLabel = (
+    <p className="pb-3 text-[15px] font-bold leading-5 text-neutral-900">Chat</p>
+  )
+  const chatPanel = (
+    <EmergencyChatPanel
+      alertId={alert.id}
+      open={open}
+      disabled={alert.status === "cancelled" || alert.status === "resolved"}
+      incomingMessage={chatMessage}
+      realtime={false}
+      theme="light"
+      variant="modern"
+      className="h-full"
+    />
+  )
 
   return createPortal(
     <div className="fixed inset-0 z-[400]">
@@ -1129,6 +1180,22 @@ export function EmergencyTrackingSheet({
             </h2>
           </div>
           <div className="-mr-2 flex shrink-0 items-center gap-0.5">
+            {chatAvailable ? (
+              <button
+                type="button"
+                onClick={() => setChatView((v) => !v)}
+                aria-pressed={chatView}
+                aria-label={chatView ? "Show emergency details" : "Open chat"}
+                title={chatView ? "Show emergency details" : "Open chat"}
+                className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
+              >
+                {chatView ? (
+                  <InfoIcon className="size-[22px]" strokeWidth={2} />
+                ) : (
+                  <MessageCircleIcon className="size-[22px]" strokeWidth={2} />
+                )}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => onOpenChange(false)}
@@ -1144,45 +1211,30 @@ export function EmergencyTrackingSheet({
           <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,5fr)_minmax(0,4fr)] px-5 pb-4">
             <div className="relative mr-4 min-h-0 overflow-hidden rounded-[18px] border border-neutral-200">
               <EmergencyTrackingMap alert={alert} wide={wide} />
-              {mapOverlay}
             </div>
-            <div className="scrollbar-hide min-h-0 overflow-y-auto overscroll-contain pr-1">
-              <div className="ops-pane-fade flex min-h-full flex-col">{details}</div>
-            </div>
+            {chatView && chatAvailable ? (
+              <div className="flex min-h-0 flex-col pr-1">
+                {chatPaneLabel}
+                <div className="min-h-0 flex-1">{chatPanel}</div>
+              </div>
+            ) : (
+              <div className="scrollbar-hide min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain pr-1">
+                <div className="flex min-h-full flex-col">{details}</div>
+              </div>
+            )}
+          </div>
+        ) : chatView && chatAvailable ? (
+          <div className="flex min-h-0 flex-1 flex-col px-5 pb-2">
+            {chatPaneLabel}
+            <div className="min-h-0 flex-1">{chatPanel}</div>
           </div>
         ) : (
-          <>
-            <div
-              className={cn(
-                "relative mx-5 shrink-0 overflow-hidden rounded-[18px] border border-neutral-200",
-                detailsExpanded ? "h-[min(30vh,220px)]" : "h-[min(48vh,420px)]",
-              )}
-            >
+          <div className="scrollbar-hide min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-5 pb-1">
+            <div className="relative mb-2 h-[min(48vh,420px)] shrink-0 overflow-hidden rounded-[18px] border border-neutral-200">
               <EmergencyTrackingMap alert={alert} wide={wide} />
-              {mapOverlay}
             </div>
-            {!detailsExpanded ? (
-              <button
-                type="button"
-                onClick={toggleDetails}
-                className="flex shrink-0 flex-col items-center gap-1 py-2.5 lg:min-h-[44px] lg:flex-row lg:justify-center lg:gap-0"
-              >
-                <span className="h-1 w-10 rounded-full bg-neutral-300 lg:hidden" />
-                <span className="text-[11px] font-semibold text-neutral-500 lg:text-[13px]">Show details</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={toggleDetails}
-                className="flex shrink-0 items-center justify-center py-2.5"
-              >
-                <span className="text-[11px] font-semibold text-neutral-500 lg:text-[13px]">Hide details</span>
-              </button>
-            )}
-            <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-5">
-              <div className="ops-pane-fade flex min-h-full flex-col">{details}</div>
-            </div>
-          </>
+            <div className="flex flex-col">{details}</div>
+          </div>
         )}
 
         <div className="shrink-0 border-t border-neutral-200 bg-white px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">

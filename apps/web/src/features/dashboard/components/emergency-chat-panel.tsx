@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
+  ArrowUpIcon,
   ChevronUpIcon,
   Loader2Icon,
   MicIcon,
@@ -50,6 +51,7 @@ export function EmergencyChatPanel({
    theme = "dark",
    scrollable = true,
    bare = false,
+   variant = "classic",
    className,
  }: {
    alertId: number
@@ -66,8 +68,11 @@ export function EmergencyChatPanel({
   scrollable?: boolean
   /** Bare = host surface already supplies the chrome; drop the card wrapper. */
   bare?: boolean
+  /** modern = report-details styling: pill input, thumb preview, waveform pill. */
+  variant?: "classic" | "modern"
   className?: string
 }) {
+  const modern = variant === "modern"
   const { user } = useAuthSession()
   const [messages, setMessages] = useState<EmergencyChatMessage[]>([])
   const [draft, setDraft] = useState("")
@@ -77,6 +82,7 @@ export function EmergencyChatPanel({
   const [loadError, setLoadError] = useState("")
   const [sending, setSending] = useState(false)
   const [attachment, setAttachment] = useState<File | null>(null)
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [previewMedia, setPreviewMedia] = useState<MediaPreviewItem | null>(null)
   const [socketLive, setSocketLive] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -200,9 +206,9 @@ export function EmergencyChatPanel({
         .catch(() => {
           /* ignore poll errors */
         })
-    }, socketLive ? 30000 : 8000)
+    }, realtime ? (socketLive ? 30000 : 8000) : 30000)
     return () => window.clearInterval(id)
-  }, [open, alertId, socketLive])
+  }, [open, alertId, socketLive, realtime])
 
   useEffect(() => {
     if (!incomingMessage || incomingMessage.alert !== alertId) return
@@ -227,6 +233,7 @@ export function EmergencyChatPanel({
       const created = await sendEmergencyChat(alertId, bodyText, file)
       setDraft("")
       setAttachment(null)
+      setAttachmentError(null)
       setLoadError("")
       setMessages((prev) => {
         if (prev.some((m) => m.id === created.id)) return prev
@@ -266,11 +273,15 @@ export function EmergencyChatPanel({
   async function chooseAttachment(file: File | null) {
     if (!file) return
     if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
-      toast.error("Attach an image or video only.")
+      const message = "Only image or video files can be attached."
+      setAttachmentError(message)
+      toast.error(message)
       return
     }
     if (file.size > 25 * 1024 * 1024) {
-      toast.error("Media must be 25 MB or smaller.")
+      const message = "Attachments must be 25MB or smaller."
+      setAttachmentError(message)
+      toast.error(message)
       return
     }
     try {
@@ -278,9 +289,12 @@ export function EmergencyChatPanel({
       checkData.append("media", file)
       await checkConcernMedia(checkData)
       setAttachment(file)
+      setAttachmentError(null)
     } catch (error) {
       setAttachment(null)
-      toast.error(error instanceof Error ? error.message : "This media failed authenticity checks and cannot be sent.")
+      const message = error instanceof Error ? error.message : "This media failed authenticity checks and cannot be sent."
+      setAttachmentError(message)
+      toast.error(message)
     }
   }
 
@@ -288,12 +302,18 @@ export function EmergencyChatPanel({
     <div
       className={cn(
         "flex min-h-0 flex-col",
-        !bare && "overflow-hidden rounded-xl border",
-        !bare && (isDark ? "border-white/10 bg-white/10" : "border-slate-200 bg-white"),
+        modern ? "h-full" : "overflow-hidden rounded-xl border",
+        !modern && !bare && (isDark ? "border-white/10 bg-white/10" : "border-slate-200 bg-white"),
         className,
       )}
     >
-      <div className={cn("scrollbar-hide min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 py-3", !scrollable && "max-h-[340px]")}>
+      <div
+        className={cn(
+          "scrollbar-hide min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 py-3",
+          modern && "px-1 py-2",
+          !modern && !scrollable && "max-h-[340px]",
+        )}
+      >
         {hasOlder ? (
           <div className="flex justify-center">
             <button
@@ -314,18 +334,19 @@ export function EmergencyChatPanel({
         ) : null}
         {loadError && messages.length === 0 && !loading ? (
           <div className="py-6 text-center">
-            <p className={cn("text-[12px]", isDark ? "text-sos" : "text-sos")}>{loadError}</p>
+            <p className={cn("text-[12px]", "text-sos")}>{loadError}</p>
             <button type="button" onClick={() => void load()} className={cn("mt-2 rounded-lg border px-3 py-1.5 text-xs font-bold", isDark ? "border-white/20 text-white" : "border-slate-200 text-brand-navy")}>Try again</button>
           </div>
         ) : messages.length === 0 && !loading ? (
           <p
             className={cn(
-              "py-6 text-center text-[12px]",
-              isDark ? "text-white/45" : "text-subtle-foreground",
+              "py-6 text-center text-[12px] leading-5",
+              modern ? "text-neutral-400" : isDark ? "text-white/45" : "text-subtle-foreground",
             )}
           >
-            Group chat is open. Status updates (en route, nearby, arrived) appear here automatically.
-            Everyone assigned to this alert can read and reply.
+            {modern
+              ? "Chat with your responder here. Status updates land in this thread as they happen."
+              : "Group chat is open. Status updates (en route, nearby, arrived) appear here automatically. Everyone assigned to this alert can read and reply."}
           </p>
         ) : null}
 
@@ -405,7 +426,10 @@ export function EmergencyChatPanel({
             content = (
               <Bubble
                 variant={mine ? "default" : "muted"}
-                className={!mine && isDark ? "border-white/10 bg-white text-neutral-900" : undefined}
+                className={cn(
+                  !mine && isDark && "border-white/10 bg-white text-neutral-900",
+                  modern && "border border-neutral-200 bg-white text-neutral-900 shadow-none",
+                )}
               >
                 <BubbleContent>
                   {msg.body ? <p>{msg.body}</p> : null}
@@ -419,12 +443,12 @@ export function EmergencyChatPanel({
             <Message key={msg.id} align={mine ? "end" : "start"}>
               <MessageAvatar>
                 <Avatar className={isDark ? "bg-white/15" : undefined}>
-                  <AvatarFallback className={isDark ? "bg-white/20 text-white" : undefined}>{initialsFor(msg.sender)}</AvatarFallback>
+                  <AvatarFallback className={isDark ? "bg-white/20 text-white" : undefined}>{initialsFor(msg.sender).charAt(0)}</AvatarFallback>
                 </Avatar>
               </MessageAvatar>
               <MessageContent className={mine ? "items-end" : "items-start"}>
                 {content}
-                <MessageFooter className={cn(mine ? "text-right" : "text-left", isDark && "text-white/40")}>{footer}</MessageFooter>
+                <MessageFooter className={cn(mine ? "text-right" : "text-left", "font-normal", isDark && "text-white/40")}>{footer}</MessageFooter>
               </MessageContent>
             </Message>
           )
@@ -436,6 +460,164 @@ export function EmergencyChatPanel({
       ) : null}
 
       {!disabled ? (
+        modern ? (
+          <div className="px-1 pb-1 pt-1">
+            {attachment && !recording && !readyFile ? (
+              <div className="mb-2 flex items-center gap-2">
+                {attachment.type.startsWith("image/") ? (
+                  <div className="relative shrink-0">
+                    <img
+                      src={URL.createObjectURL(attachment)}
+                      alt={attachment.name}
+                      className="h-20 w-20 rounded-xl object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setAttachment(null)}
+                      className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
+                      aria-label="Remove attachment"
+                    >
+                      <XIcon className="size-3" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex w-full items-center justify-between gap-2 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-medium text-neutral-600">
+                    <span className="flex min-w-0 items-center gap-2 truncate">
+                      <PaperclipIcon className="size-3.5 shrink-0" />
+                      {attachment.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setAttachment(null)}
+                      className="rounded-full p-0.5 hover:bg-neutral-200"
+                      aria-label="Remove attachment"
+                    >
+                      <XIcon className="size-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : null}
+            {attachmentError ? (
+              <p className="mb-2 text-[11px] font-medium text-red-500">{attachmentError}</p>
+            ) : null}
+            {recording || readyFile ? (
+              <div className="mx-auto flex w-fit items-center gap-2.5 rounded-full border border-neutral-200 bg-white py-2 pl-4 pr-2">
+                {recording ? (
+                  <span className="size-2 shrink-0 rounded-full animate-pulse bg-red-500" aria-hidden />
+                ) : null}
+                <div className="flex items-center gap-[2px]">
+                  {Array.from({ length: 30 }, (_, i) => {
+                    const level = levels[i] ?? 0.08
+                    return (
+                      <span
+                        key={i}
+                        className="w-[2.5px] shrink-0 rounded-full bg-neutral-900"
+                        style={{ height: `${4 + level * 14}px` }}
+                      />
+                    )
+                  })}
+                </div>
+                <span className="shrink-0 font-mono text-[11px] font-semibold tabular-nums text-neutral-900">
+                  {formatVoiceTime(recording ? recordSeconds : durationSeconds)}
+                </span>
+                <div className="flex items-center gap-1">
+                  {recording ? (
+                    <button
+                      type="button"
+                      onClick={() => void stopRecording()}
+                      aria-label="Stop recording"
+                      className="flex size-8 items-center justify-center rounded-full bg-neutral-900 text-white hover:bg-neutral-800"
+                    >
+                      <SquareIcon className="size-3" fill="currentColor" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={sending}
+                      onClick={() => void sendReadyVoiceNote()}
+                      aria-label="Send voice note"
+                      className="flex size-8 items-center justify-center rounded-full bg-neutral-900 text-white hover:bg-neutral-800 disabled:opacity-50"
+                    >
+                      {sending ? <Loader2Icon className="size-3 animate-spin" /> : <ArrowUpIcon className="size-3" strokeWidth={2.4} />}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => (recording ? cancelRecording() : discardRecording())}
+                    aria-label="Cancel voice note"
+                    className="flex size-8 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
+                  >
+                    <XIcon className="size-3.5" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 rounded-full border border-neutral-200 bg-white py-1.5 pl-4 pr-1.5 transition-colors focus-within:border-neutral-300">
+                <button
+                  type="button"
+                  onClick={() => void startRecording()}
+                  disabled={sending}
+                  aria-label="Record a voice note"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-50"
+                >
+                  <MicIcon className="size-4" />
+                </button>
+                <label
+                  className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
+                  aria-label="Attach image or video"
+                >
+                  <PaperclipIcon className="size-4" />
+                  <input
+                    type="file"
+                    accept="image/*,video/mp4,video/webm,video/quicktime"
+                    className="sr-only"
+                    onChange={(event) => {
+                      void chooseAttachment(event.target.files?.[0] ?? null)
+                      event.currentTarget.value = ""
+                    }}
+                  />
+                </label>
+                <input
+                  type="text"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault()
+                      void handleSend()
+                    }
+                  }}
+                  placeholder="Message your responder..."
+                  className="h-10 min-w-0 flex-1 bg-transparent text-[14px] text-neutral-900 outline-none placeholder:text-neutral-400"
+                />
+                <button
+                  type="button"
+                  disabled={sending || recording || (!draft.trim() && !attachment)}
+                  onClick={() => void handleSend()}
+                  className={cn(
+                    "flex size-10 shrink-0 items-center justify-center rounded-full transition-all duration-150",
+                    (draft.trim() || attachment)
+                      ? "bg-neutral-900 text-white hover:bg-neutral-800"
+                      : "bg-neutral-100 text-neutral-300",
+                  )}
+                  aria-label="Send message"
+                >
+                  {sending ? (
+                    <Loader2Icon className="size-4 animate-spin" />
+                  ) : (
+                    <ArrowUpIcon className="size-4" strokeWidth={2.4} />
+                  )}
+                </button>
+              </div>
+            )}
+            {!modern ? (
+              <p className="mt-2.5 text-center text-[11px] leading-normal text-neutral-400">
+                Please be kind and respectful to your neighbours.
+              </p>
+            ) : null}
+          </div>
+        ) : (
         <div
           className={cn(
             "relative flex items-end gap-2 border-t p-2.5",
@@ -577,11 +759,14 @@ export function EmergencyChatPanel({
             </>
           )}
         </div>
+        )
       ) : (
         <p
           className={cn(
-            "border-t px-3 py-2 text-center text-[11px]",
-            isDark ? "border-white/10 text-white/40" : "border-slate-100 text-slate-400",
+            "px-3 py-2 text-center text-[12px]",
+            modern
+              ? "text-neutral-400"
+              : cn("border-t", isDark ? "border-white/10 text-white/40" : "border-slate-100 text-slate-400"),
           )}
         >
           Chat is closed for this alert.

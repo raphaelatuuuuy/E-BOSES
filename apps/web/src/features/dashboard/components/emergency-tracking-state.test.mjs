@@ -25,8 +25,8 @@ test("manual dispatch never claims that a responder is handling the alert", () =
 test("tracking falls back to real status events and shows manual dispatch", () => {
   assert.match(tracking, /alert\.status_events/)
   assert.match(tracking, /byKey\.get\("no_responder"\)/)
-  assert.match(tracking, /Chat opens once a responder is assigned/)
-  assert.match(tracking, /window\.setInterval\(\(\) => void refreshAlert\(\), 5000\)/)
+  assert.match(tracking, /hasActiveResponder\(alert\) && alert\.status !== "submitted"/)
+  assert.match(tracking, /connectionState === "live" \? 15000 : 5000/)
   assert.doesNotMatch(tracking, /connectionState !== "degraded"/)
 })
 

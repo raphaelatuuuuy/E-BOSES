@@ -500,7 +500,7 @@ export function ResidentLeafletMap({
           iconSize: [USER_PIN, USER_PIN],
           iconAnchor: [USER_PIN / 2, USER_PIN / 2],
         }),
-        zIndexOffset: 1200,
+        zIndexOffset: 0,
         keyboard: false,
       })
       userMarker.bindTooltip("You", { direction: "top", offset: [0, -USER_PIN / 2] })
@@ -686,7 +686,12 @@ export function ResidentLeafletMap({
         L,
         map,
         marker,
-        { image: em.preview_url, title: em.type_label, excerpt: em.note },
+        {
+          title: `There is an ongoing ${em.type_label.toLowerCase()} around ${
+            em.address?.trim() || em.barangay?.trim() || "the reported area"
+          }`,
+          centered: true,
+        },
         box,
       )
       marker.on("click", (e) => {

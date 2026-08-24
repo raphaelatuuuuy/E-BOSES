@@ -32,6 +32,7 @@ from .views import (
     EmergencyTypeRoleMapListCreateView,
     EmergencyReassignView,
     EmergencyReporterContactView,
+    EmergencyResponderContactView,
     EmergencyRespondView,
     EmergencyTransferView,
     EmergencyUnableView,
@@ -81,6 +82,7 @@ urlpatterns = [
     path("<int:pk>/", EmergencyDetailView.as_view(), name="emergency-detail"),
     path("<int:pk>/route/", EmergencyRouteView.as_view(), name="emergency-route"),
     path("<int:pk>/reporter-contact/", EmergencyReporterContactView.as_view(), name="emergency-reporter-contact"),
+    path("<int:pk>/responder-contact/", EmergencyResponderContactView.as_view(), name="emergency-responder-contact"),
     path(
         "<int:pk>/community-comments/",
         EmergencyCommunityCommentListCreateView.as_view(),
