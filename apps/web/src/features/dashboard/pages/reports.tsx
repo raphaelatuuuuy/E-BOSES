@@ -56,6 +56,7 @@ import { ReportIcon } from "@/features/dashboard/components/concerns/report-icon
 import { ReportDetailsSidebar } from "@/features/dashboard/components/concerns/report-details-sidebar"
 import { ConcernQueueItem, concernStatusAccent } from "@/features/dashboard/components/concerns/concern-queue-item"
 import { streetOnly } from "@/features/dashboard/lib/location-text"
+import { statusLabelOf } from "@/features/dashboard/lib/status-vocabulary"
 
 import { rankConcerns } from "@/features/dashboard/components/record/concern-adapter"
 import { OfficialStatusPanel } from "@/features/dashboard/components/concerns/official-status-panel"
@@ -579,15 +580,52 @@ function OfficialConcernDashboard({
         collapsed={recordCollapsed}
         onToggleCollapse={() => setRecordCollapsed((value) => !value)}
       />
+      {(() => {
+        const fullName =
+          current.reporter_full_name?.trim() ||
+          current.reporter?.full_name?.trim() ||
+          "Resident"
+        const initials = current.reporter?.initials || "R"
+        const accent = concernStatusAccent(current.status)
+        const photoCount = current.community_incident?.photo_count ?? current.media?.length ?? 0
+        return (
+          <div className="flex flex-col items-center gap-1 border-b border-card-line px-4 pb-4 pt-5 text-center">
+            <span className="flex size-12 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
+              {initials}
+            </span>
+            <p className="text-[16px] font-bold leading-tight text-foreground">{fullName}</p>
+            <p className="text-[12px] text-subtle-foreground">
+              Resident · {streetOnly(current.address) || current.barangay}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full border border-card-line bg-card px-2.5 py-1 text-[11px] font-semibold text-foreground",
+                )}
+              >
+                <span className={cn("size-1.5 rounded-full", accent.dot)} />
+                {statusLabelOf(current.status)}
+              </span>
+              {photoCount > 0 ? (
+                <span className="inline-flex items-center rounded-full border border-card-line bg-card px-2.5 py-1 text-[11px] font-semibold text-foreground">
+                  {photoCount} photo{photoCount === 1 ? "" : "s"}
+                </span>
+              ) : null}
+              <span className="inline-flex items-center rounded-full border border-card-line bg-card px-2.5 py-1 text-[11px] font-semibold text-foreground">
+                {current.comment_count} messages
+              </span>
+            </div>
+          </div>
+        )
+      })()}
       <div className="space-y-4 p-4">
         <OpsTabs
           value={recordTab}
           onValueChange={setRecordTab}
           tabs={[
+            { id: "chat", label: "Chat", content: chatTabContent },
             { id: "details", label: "Details", content: detailsTabContent },
             { id: "evidence", label: "Photos", count: current.media?.length ?? 0, content: evidenceTabContent },
-            { id: "chat", label: "Chat", content: chatTabContent },
-
             { id: "appeals", label: "Appeals", count: openAppealCount, content: appealsTabContent },
             { id: "merges", label: "Merges", content: mergeTabContent },
           ]}
@@ -650,6 +688,59 @@ function OfficialConcernDashboard({
               onUpdated={onUpdated}
               onRefresh={onRefresh}
             />
+          </div>
+          <div className="space-y-3 border-t border-card-line p-3">
+            <section className="rounded-panel border border-card-line bg-card p-3">
+              <div className="mb-2 flex items-center gap-2">
+                <MapPinIcon className="size-4 text-subtle-foreground" />
+                <h3 className="text-[13px] font-bold text-foreground">Location</h3>
+              </div>
+              <ReportLocationMap
+                latitude={current.latitude}
+                longitude={current.longitude}
+                streetAddress={current.community_incident?.address || current.address}
+                category={current.category}
+                iconKey={current.category_ref?.icon_key}
+                heightClassName="h-36"
+                className="overflow-hidden rounded-control border border-card-line"
+              />
+              <p className="mt-2 text-[12px] font-semibold text-foreground">
+                {streetOnly(current.community_incident?.address || current.address) ||
+                  current.address ||
+                  "Location pinned on the map"}
+              </p>
+              <p className="text-[11px] text-subtle-foreground">
+                {current.location_source === "gps"
+                  ? "Pinned by resident GPS"
+                  : "Pinned on the map"}
+              </p>
+            </section>
+
+            <section className="rounded-panel border border-card-line bg-card p-3">
+              <div className="mb-2 flex items-center gap-2">
+                <UsersIcon className="size-4 text-subtle-foreground" />
+                <h3 className="text-[13px] font-bold text-foreground">Community signal</h3>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  {
+                    value: current.community_incident?.report_count ?? 1,
+                    caption: "reports",
+                  },
+                  { value: current.vote_count, caption: "upvotes" },
+                  { value: current.comment_count, caption: "comments" },
+                ].map((tile) => (
+                  <div key={tile.caption} className="rounded-control bg-card-raised p-2.5">
+                    <p className="text-[16px] font-bold leading-tight text-foreground">
+                      {tile.value}
+                    </p>
+                    <p className="mt-0.5 text-[10.5px] font-medium text-subtle-foreground">
+                      {tile.caption}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </section>
           </div>
         </>
       ),

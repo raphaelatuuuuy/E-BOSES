@@ -2479,7 +2479,10 @@ class EmergencyAssignView(APIView):
             alert = scoped_alert_or_404(request.user, pk, lock=True)
             if alert.status not in ACTIVE_STATUSES:
                 return Response({"detail": "Responders cannot be assigned to a closed emergency."}, status=status.HTTP_409_CONFLICT)
-            was_unrouted = alert.status == EmergencyAlert.Status.SUBMITTED
+            was_unrouted = alert.status in {
+                EmergencyAlert.Status.SUBMITTED,
+                EmergencyAlert.Status.ESCALATION_REQUIRED,
+            }
             role_maps = {responder.pk: role_map_for_responder(alert, responder) for responder in responders}
             ineligible = [
                 responder.pk for responder in responders
@@ -2537,7 +2540,7 @@ class EmergencyAssignView(APIView):
                     newly_assigned_responders.append(responder)
             if not newly_assigned_responders:
                 return Response(serialize_alert(alert, request))
-            if alert.status == EmergencyAlert.Status.SUBMITTED:
+            if was_unrouted:
                 alert.status = EmergencyAlert.Status.ROUTED
             alert.status_version += 1
             alert.routed_at = alert.routed_at or timezone.now()

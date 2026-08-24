@@ -1,7 +1,7 @@
 import { cn } from "@workspace/ui/lib/utils"
 
 import type { RankedConcern } from "@/features/dashboard/components/record/concern-adapter"
-import { statusGroupOf, statusLabelOf } from "@/lib/status-vocabulary"
+import { statusGroupOf, statusLabelOf } from "@/features/dashboard/lib/status-vocabulary"
 
 export function concernStatusAccent(status: string): { dot: string; chip: string } {
   const group = statusGroupOf(status)
@@ -26,7 +26,7 @@ function queueTime(iso: string) {
 function nameParts(concern: RankedConcern["concern"]) {
   const full =
     concern.reporter_full_name?.trim() ||
-    `${concern.reporter?.first_name ?? ""} ${concern.reporter?.last_name ?? ""}`.trim() ||
+    concern.reporter?.full_name?.trim() ||
     "Resident"
   const words = full.split(/\s+/)
   return { first: words[0] ?? full, last: words.slice(1).join(" "), full }
@@ -43,10 +43,7 @@ export function ConcernQueueItem({
 }) {
   const { concern } = entry
   const { first, last, full } = nameParts(concern)
-  const initials = (full.match(/\b\w/g) ?? ["R"])
-    .slice(0, 2)
-    .map((part) => part.toUpperCase())
-    .join("")
+  const initials = concern.reporter?.initials || full
   const accent = concernStatusAccent(concern.status)
   const photoCount = concern.community_incident?.photo_count ?? concern.media?.length ?? 0
 
