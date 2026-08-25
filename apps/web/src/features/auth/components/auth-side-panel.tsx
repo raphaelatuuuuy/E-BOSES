@@ -13,7 +13,7 @@ export function AuthSidePanel() {
         />
         <div
           key={current}
-          className="absolute inset-x-0 bottom-0 top-0 animate-fade-in bg-[length:500px] bg-bottom bg-no-repeat md:bottom-40 md:right-36"
+          className="absolute inset-x-0 bottom-0 top-0 animate-slide-fade-in bg-[length:500px] bg-bottom bg-no-repeat md:bottom-40 md:right-36"
           style={{ backgroundImage: `url(${slide.image})` }}
         />
       </div>
