@@ -7,19 +7,19 @@ type Slide = {
 
 const SLIDES: Slide[] = [
   {
-    image: "/contents/feature-1.webp",
+    image: "/contents/feature-1.png",
     headline: "Report issues in seconds",
   },
   {
-    image: "/contents/feature-3.webp",
+    image: "/contents/feature-3.png",
     headline: "Send emergency alerts instantly",
   },
   {
-    image: "/contents/feature-2.webp",
+    image: "/contents/feature-2.png",
     headline: "Track resolution progress",
   },
   {
-    image: "/contents/feature-4.webp",
+    image: "/contents/feature-4.png",
     headline: "Stay connected with your community",
   },
 ] as const

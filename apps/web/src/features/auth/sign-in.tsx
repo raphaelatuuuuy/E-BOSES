@@ -24,7 +24,7 @@ export default function LoginPage({ onForgotPassword, onSignUp, onSuccess }: Log
           <div className="mx-auto w-full max-w-[400px]">
             <AuthPageLogo className="hidden lg:flex mb-4 px-0 py-0 md:px-0" />
             <h1 className="text-[1.5rem] font-medium leading-tight tracking-tight text-foreground md:text-[1.75rem]">
-              Welcome back
+              Welcome back!
             </h1>
 
             <div className="mt-[26px]">

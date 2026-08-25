@@ -8,17 +8,22 @@ export function AuthSidePanel() {
       {/* Image area */}
       <div className="relative flex-1 overflow-hidden">
         <div
+          className="absolute inset-0 bg-cover bg-center"
+          style={{ backgroundImage: "url(/contents/orange.png)" }}
+        />
+        <div
           key={current}
-          className="h-full w-full animate-fade-in bg-contain bg-bottom bg-no-repeat"
+          className="absolute inset-x-0 bottom-0 top-0 animate-fade-in bg-[length:500px] bg-bottom bg-no-repeat md:bottom-40 md:right-36"
           style={{ backgroundImage: `url(${slide.image})` }}
         />
       </div>
 
-      {/* Text area */}
-      <div className="flex flex-col items-center px-8 pb-8 pt-2 text-center md:px-10 md:pb-10 md:pt-3">
+      {/* Text area. Negative margin overlaps the image area by a hair so no
+          seam/gap can appear between them regardless of rounding. */}
+      <div className="-mt-15 flex flex-col items-center px-8 pb-4 pt-0 text-center md:px-10 md:pb-6 md:pt-0">
         <h2
           key={`${current}-title`}
-          className="font-heading animate-fade-in text-balance text-3xl font-medium leading-tight text-foreground md:text-4xl"
+          className="-mt-15 mr-40 font-heading animate-fade-in text-balance text-3xl font-medium leading-none text-foreground md:text-3xl"
         >
           {slide.headline}
         </h2>
