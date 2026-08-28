@@ -1,8 +1,9 @@
 import * as React from "react"
-import { ChevronDownIcon, XIcon, type LucideIcon } from "lucide-react"
+import { ChevronDownIcon, InfoIcon, MessageSquareIcon, XIcon, type LucideIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { CollapsedStrip } from "@/features/dashboard/components/responder/dispatch-surface"
+import { useBottomSheetSnap } from "@/features/dashboard/lib/use-bottom-sheet-snap"
 
 export type OpsPaneRole = "list" | "detail" | "aside"
 
@@ -22,6 +23,7 @@ export interface OpsPaneSpec {
   collapsible?: boolean
   collapsed?: boolean
   onCollapsedChange?: (next: boolean) => void
+  className?: string
 }
 
 export interface OpsWorkspaceProps {
@@ -34,8 +36,12 @@ export interface OpsWorkspaceProps {
 
   asideOpen?: boolean
   onAsideOpenChange?: (open: boolean) => void
+  /** Mobile only: dismiss the detail sheet (X button). */
+  onMobileDetailClose?: () => void
   /** Reports the live list-pane width so a page can align bar content to it. */
   onListResize?: (width: number) => void
+  /** Lets an inline aside span above the workspace bar while list/detail remain inset below it. */
+  fullHeightAside?: boolean
   className?: string
 }
 
@@ -118,7 +124,7 @@ function PaneShell({
 }) {
   return (
     <section
-      className={cn("ops-pane relative flex min-w-0 flex-col", className)}
+      className={cn("relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden", className)}
       style={style}
     >
       {children}
@@ -278,8 +284,145 @@ function AsideOverlay({
             <XIcon className="size-4" />
           </button>
         </header>
-        <div className="ops-pane flex-1 p-4">{children}</div>
+        <div className="ops-pane flex min-h-0 flex-1 flex-col overflow-hidden p-4">
+          {children}
+        </div>
       </aside>
+    </div>
+  )
+}
+
+function MobileSheetLayout({
+  list,
+  detail,
+  aside,
+  asideOpen,
+  detailOpen,
+  onCloseDetail,
+}: {
+  list: OpsPaneSpec | null
+  detail: OpsPaneSpec | null
+  aside: OpsPaneSpec | null
+  asideOpen: boolean
+  detailOpen: boolean
+  onCloseDetail: () => void
+}) {
+  const {
+    snaps,
+    height,
+    dragging,
+    snapTo,
+    onHandlePointerDown,
+    onHandlePointerMove,
+    onHandlePointerUp,
+  } = useBottomSheetSnap({ initialMode: "hidden" })
+  const [sheetTab, setSheetTab] = React.useState<"detail" | "aside">("detail")
+
+  React.useEffect(() => {
+    snapTo(detailOpen ? "expanded" : "hidden")
+  }, [detailOpen, snapTo])
+
+  React.useEffect(() => {
+    if (asideOpen) setSheetTab("aside")
+  }, [asideOpen])
+
+  const sheetShown = Boolean(detail) && detailOpen
+  React.useEffect(() => {
+    if (!sheetShown) return
+    document.body.dataset.opsSheet = "open"
+    return () => {
+      delete document.body.dataset.opsSheet
+    }
+  }, [sheetShown])
+
+  const contentVisible = height > snaps().hidden + 14
+
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className="ops-pane min-h-0 flex-1">{list?.node}</div>
+
+      {detail && detailOpen ? (
+        <div
+          className={cn(
+            "absolute bottom-[calc(-1*env(safe-area-inset-bottom))] left-0 right-0 z-20 flex flex-col overflow-hidden rounded-t-3xl border border-b-0 border-neutral-200 bg-white shadow-[0_-10px_36px_rgba(15,23,42,.18)]",
+            !dragging && "transition-[height] duration-200 ease-out",
+          )}
+          style={{
+            height: `calc(${Math.min(height, snaps().max)}px + env(safe-area-inset-bottom))`,
+            maxHeight: "calc(80svh + env(safe-area-inset-bottom))",
+          }}
+          role="dialog"
+          aria-label={detail.label ?? "Details"}
+        >
+          <div
+            className="flex shrink-0 touch-none cursor-grab justify-center pt-2 active:cursor-grabbing"
+            onPointerDown={onHandlePointerDown}
+            onPointerMove={onHandlePointerMove}
+            onPointerUp={onHandlePointerUp}
+            onPointerCancel={onHandlePointerUp}
+            aria-label="Drag sheet"
+          >
+            <span className="h-1.5 w-11 rounded-full bg-neutral-300" />
+          </div>
+
+          {contentVisible ? (
+            <div className="flex shrink-0 items-center gap-2 px-5 pb-3 pt-2">
+              <h2 className="min-w-0 flex-1 truncate text-[22px] font-bold leading-[1.2] tracking-tight text-neutral-900">
+                Report detail
+              </h2>
+              {aside ? (
+                <div className="flex shrink-0 items-center gap-1 rounded-full bg-neutral-100 p-1">
+                  <button
+                    type="button"
+                    aria-label={detail.label ?? "Conversation"}
+                    aria-pressed={sheetTab === "detail"}
+                    onClick={() => setSheetTab("detail")}
+                    className={cn(
+                      "flex size-9 items-center justify-center rounded-full transition-colors",
+                      sheetTab === "detail"
+                        ? "bg-white text-neutral-900 shadow-sm"
+                        : "text-neutral-500 hover:text-neutral-800",
+                    )}
+                  >
+                    <MessageSquareIcon className="size-5" strokeWidth={2} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={aside.label ?? "Info"}
+                    aria-pressed={sheetTab === "aside"}
+                    onClick={() => setSheetTab("aside")}
+                    className={cn(
+                      "flex size-9 items-center justify-center rounded-full transition-colors",
+                      sheetTab === "aside"
+                        ? "bg-white text-neutral-900 shadow-sm"
+                        : "text-neutral-500 hover:text-neutral-800",
+                    )}
+                  >
+                    <InfoIcon className="size-5" strokeWidth={2} />
+                  </button>
+                </div>
+              ) : null}
+              <button
+                type="button"
+                onClick={onCloseDetail}
+                aria-label="Close"
+                className="flex size-9 shrink-0 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800"
+              >
+                <XIcon className="size-5" strokeWidth={2} />
+              </button>
+            </div>
+          ) : null}
+
+          <div
+            className={cn(
+              "ops-sheet-flat flex min-h-0 flex-1 flex-col px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))]",
+              contentVisible ? "opacity-100" : "pointer-events-none opacity-0",
+            )}
+          >
+            {contentVisible ? (sheetTab === "aside" && aside ? aside.node : detail.node) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -291,7 +434,9 @@ export function OpsWorkspace({
   mobileView = "list",
   asideOpen = false,
   onAsideOpenChange,
+  onMobileDetailClose,
   onListResize,
+  fullHeightAside = false,
   className,
 }: OpsWorkspaceProps) {
   const tier = useWorkspaceTier()
@@ -325,43 +470,37 @@ export function OpsWorkspace({
   const dividersDetailAside = detailShown && asideShown ? 1 : 0
   const totalDividers = dividersListDetail + dividersDetailAside
 
-  const clampPane = React.useCallback(
-    (pane: OpsPaneSpec | null, next: number, otherPaneWidth: number, dividers: number) => {
-      if (!pane) return next
-      const lower = pane.min ?? 200
-      const upper = pane.max ?? 640
-      const available = rowWidth - otherPaneWidth - dividers * DIVIDER_PX - (detailShown ? detailMin : 0)
-      const ceiling = rowWidth > 0 ? Math.min(upper, Math.max(lower, available)) : upper
-      return Math.round(Math.min(ceiling, Math.max(lower, next)))
-    },
-    [rowWidth, detailMin, detailShown],
-  )
+  function clampPane(
+    pane: OpsPaneSpec | null,
+    next: number,
+    otherPaneWidth: number,
+    dividers: number,
+  ) {
+    if (!pane) return next
+    const lower = pane.min ?? 200
+    const upper = pane.max ?? 640
+    const available = rowWidth - otherPaneWidth - dividers * DIVIDER_PX - (detailShown ? detailMin : 0)
+    const ceiling = rowWidth > 0 ? Math.min(upper, Math.max(lower, available)) : upper
+    return Math.round(Math.min(ceiling, Math.max(lower, next)))
+  }
 
-  const effectiveAsideWidth = React.useMemo(
-    () =>
-      asideShown
-        ? clampPane(
-            aside,
-            asideWidth,
-            list ? (listShown ? listWidth : COLLAPSED_PANE_WIDTH) : 0,
-            totalDividers,
-          )
-        : 0,
-    [aside, asideShown, asideWidth, clampPane, list, listShown, listWidth, totalDividers],
-  )
+  const effectiveAsideWidth = asideShown
+    ? clampPane(
+        aside,
+        asideWidth,
+        list ? (listShown ? listWidth : COLLAPSED_PANE_WIDTH) : 0,
+        totalDividers,
+      )
+    : 0
 
-  const effectiveListWidth = React.useMemo(
-    () =>
-      listShown
-        ? clampPane(
-            list,
-            listWidth,
-            aside ? (asideShown ? effectiveAsideWidth : COLLAPSED_PANE_WIDTH) : 0,
-            totalDividers,
-          )
-        : 0,
-    [listShown, list, listWidth, aside, asideShown, effectiveAsideWidth, clampPane, totalDividers],
-  )
+  const effectiveListWidth = listShown
+    ? clampPane(
+        list,
+        listWidth,
+        aside ? (asideShown ? effectiveAsideWidth : COLLAPSED_PANE_WIDTH) : 0,
+        totalDividers,
+      )
+    : 0
 
   const commitList = React.useCallback(
     (next: number) => {
@@ -390,20 +529,17 @@ export function OpsWorkspace({
   const closeAside = React.useCallback(() => onAsideOpenChange?.(false), [onAsideOpenChange])
 
   if (tier === "mobile") {
-    const active = mobileView === "detail" ? detail : list
     return (
-
       <div className={cn("flex min-h-0 w-full flex-1 flex-col bg-canvas", className)}>
         {bar}
-        {}
-        <div className="relative flex min-h-0 flex-1 flex-col">
-          <div className="ops-pane flex-1">{active?.node}</div>
-          {aside ? (
-            <AsideOverlay open={asideOpen} onClose={closeAside} label={aside.label ?? "Actions"}>
-              {aside.node}
-            </AsideOverlay>
-          ) : null}
-        </div>
+        <MobileSheetLayout
+          list={list}
+          detail={detail}
+          aside={aside}
+          asideOpen={asideOpen}
+          detailOpen={mobileView === "detail"}
+          onCloseDetail={onMobileDetailClose ?? closeAside}
+        />
       </div>
     )
   }
@@ -411,17 +547,36 @@ export function OpsWorkspace({
   return (
     <div
       className={cn(
-        "grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden bg-canvas",
+        "relative grid h-full min-h-0 overflow-hidden bg-canvas",
+        fullHeightAside && asideInline
+          ? "grid-rows-[minmax(0,1fr)]"
+          : "grid-rows-[auto_minmax(0,1fr)]",
         className,
       )}
     >
-      {bar}
+      {fullHeightAside && asideInline ? (
+        <div
+          className="absolute left-0 top-0 z-20"
+          style={{
+            right: asideShown
+              ? effectiveAsideWidth + dividersDetailAside * DIVIDER_PX
+              : aside
+                ? COLLAPSED_PANE_WIDTH
+                : 0,
+          }}
+        >
+          {bar}
+        </div>
+      ) : (
+        bar
+      )}
 
-      <div ref={rowRef} className="relative flex min-h-0 overflow-hidden">
+      <div ref={rowRef} className="relative flex h-full min-h-0 flex-1 overflow-hidden">
         {list ? (
           listShown ? (
 
             <PaneShell
+              className={cn(fullHeightAside && asideInline && "pt-16", list.className)}
               style={
                 detailShown
                   ? { flex: "none", width: effectiveListWidth }
@@ -452,7 +607,12 @@ export function OpsWorkspace({
 
         {detail ? (
           detailShown ? (
-            <PaneShell style={{ flex: "1 1 0%", minWidth: 0 }}>{detail.node}</PaneShell>
+            <PaneShell
+              className={cn(fullHeightAside && asideInline && "pt-16", detail.className)}
+              style={{ flex: "1 1 0%", minWidth: 0 }}
+            >
+              {detail.node}
+            </PaneShell>
           ) : (
             <CollapsedPane
               label={detail.label ?? "Details"}
@@ -475,7 +635,9 @@ export function OpsWorkspace({
 
         {aside && asideInline ? (
           asideShown ? (
-            <PaneShell style={{ flex: "none", width: effectiveAsideWidth }}>{aside.node}</PaneShell>
+            <PaneShell className={aside.className} style={{ flex: "none", width: effectiveAsideWidth }}>
+              {aside.node}
+            </PaneShell>
           ) : (
             <CollapsedPane
               label={aside.label ?? "Actions"}
@@ -506,7 +668,6 @@ export function OpsPaneHeader({
   meta?: React.ReactNode
   action?: React.ReactNode
   className?: string
-
   collapsed?: boolean
   onToggleCollapse?: () => void
 }) {

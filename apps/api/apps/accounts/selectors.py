@@ -50,3 +50,30 @@ def latest_active_otp_challenge(user, channel, purpose):
         purpose=purpose,
         verified_at__isnull=True,
     ).latest("created_at")
+
+
+def served_community_areas():
+    """Active communities with a drawn outline, for the public sign-up map."""
+    from apps.emergencies.models import Community
+
+    communities = (
+        Community.objects.filter(
+            status=Community.Status.ACTIVE,
+            boundary__isnull=False,
+            boundary__is_active=True,
+        )
+        .select_related("boundary")
+        .order_by("name")
+    )
+    return [
+        {
+            "id": str(community.public_id),
+            "name": community.name,
+            "center": {
+                "latitude": float(community.center_latitude),
+                "longitude": float(community.center_longitude),
+            },
+            "boundary": community.boundary.geometry,
+        }
+        for community in communities
+    ]

@@ -88,7 +88,10 @@ class GateOrderTests(TestCase):
         self.assertFalse(gate["passed"])
         self.assertEqual(gate["blocked_by"], STAGE_INTEGRITY)
         self.assertEqual(gate["message"], RESUBMIT_MESSAGE)
-        self.assertEqual(gate["detail"], "the portrait is a cartoon")
+        self.assertEqual(
+            gate["detail"],
+            "Please upload an unedited photo of the original document.",
+        )
 
     def test_both_layers_clean_reaches_ocr(self):
         with patch(FORENSICS, return_value=CLEAN_FILE), patch(
@@ -117,6 +120,24 @@ class GateOrderTests(TestCase):
             )
         self.assertFalse(gate["passed"])
         self.assertEqual(gate["blocked_by"], STAGE_INTEGRITY)
+
+    def test_each_uploaded_side_uses_its_matching_picture_check(self):
+        with patch(FORENSICS, return_value=CLEAN_FILE), patch(
+            INTEGRITY, side_effect=[integrity_result(), integrity_result()]
+        ) as picture_check:
+            gate = run_pre_ocr_gate(
+                contents=[b"front", b"back"],
+                document_type=self.document_type,
+                configuration=self.configuration,
+                sides=["front", "back"],
+            )
+
+        self.assertTrue(gate["passed"])
+        self.assertEqual(
+            [call.kwargs["side"] for call in picture_check.call_args_list],
+            ["front", "back"],
+        )
+        self.assertEqual(len(gate["integrity_checks"]), 2)
 
     def test_a_precomputed_file_verdict_is_used_instead_of_rereading_bytes(self):
         """Normalized bytes cannot answer layer 1, so the caller's answer wins."""

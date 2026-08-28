@@ -15,7 +15,7 @@ function HelpGrid() {
           return (
             <Link
               key={collection.slug}
-              to={`/help/c/${collection.slug}`}
+              to={`/help/collections/${collection.slug}`}
               className="group flex items-start gap-6 no-underline"
             >
               <span className="flex size-20 shrink-0 items-center justify-center rounded-2xl bg-brand-navy text-white transition-[background-color,box-shadow] duration-200 ease-out group-hover:bg-accent group-hover:shadow-lg motion-reduce:transition-none">

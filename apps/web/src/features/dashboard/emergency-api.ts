@@ -276,6 +276,8 @@ export interface EmergencyAlert {
   current_assignment: EmergencyAssignment | null
   /** The unit that answers this emergency type — known before anyone is assigned. */
   responding_unit: { id: number; code: string; name: string; short_name: string } | null
+  is_public?: boolean
+  comment_count?: number
   assignments?: EmergencyAssignment[]
   status_events?: EmergencyStatusEvent[]
   timeline?: EmergencyTimelineEntry[]

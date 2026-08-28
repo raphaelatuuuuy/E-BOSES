@@ -119,9 +119,6 @@ export function SettingsWorkspace({
   function setPanel(next: SettingsPanel) {
     setPanelState(next)
     if (!syncsPanelToUrl) return
-    const onSettingsRoute =
-      typeof window !== "undefined" && window.location.pathname.startsWith("/dashboard/settings")
-    if (!onSettingsRoute) return
     if (next === "hub") {
       setSearchParams({}, { replace: true })
     } else {

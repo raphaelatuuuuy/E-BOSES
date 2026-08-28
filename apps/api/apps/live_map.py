@@ -187,6 +187,194 @@ def static_map_payload(community=None):
     return payload
 
 
+def _representative_street_point(geometries, boundary_geometry):
+    """First vertex of a street that falls inside the community outline."""
+    from apps.geo_services import point_in_geojson_inclusive
+
+    for geometry in geometries or []:
+        stack = [(geometry or {}).get("coordinates") or []]
+        while stack:
+            item = stack.pop()
+            if (
+                isinstance(item, (list, tuple))
+                and len(item) >= 2
+                and all(isinstance(value, (int, float)) for value in item[:2])
+            ):
+                if point_in_geojson_inclusive(item[0], item[1], boundary_geometry):
+                    return float(item[1]), float(item[0])
+            elif isinstance(item, (list, tuple)):
+                stack.extend(item)
+    return None
+
+
+def registration_street_matches(query, limit=8):
+    """
+    Streets a registering resident can pick, drawn from each active community's
+    own catalog rather than a hardcoded list.
+
+    Every hit carries a coordinate that already sits inside that community's
+    boundary, so confirming the address resolves instead of landing on a
+    same-named street in another city.
+    """
+    from apps.emergencies.models import Community
+
+    needle = (query or "").strip().casefold()
+    if len(needle) < 2:
+        return []
+    results = []
+    communities = (
+        Community.objects.filter(
+            status=Community.Status.ACTIVE,
+            boundary__isnull=False,
+            boundary__is_active=True,
+        )
+        .select_related("boundary")
+        .order_by("name")
+    )
+    for community in communities:
+        payload = static_map_payload(community)
+        boundary_geometry = (payload.get("boundary") or {}).get("geometry")
+        center = (float(community.center_latitude), float(community.center_longitude))
+        for street in (payload.get("streets") or {}).get("streets") or []:
+            name = street.get("name") or ""
+            if needle not in name.casefold():
+                continue
+            geometries = street.get("geometries") or []
+            if geometries and boundary_geometry:
+                point = _representative_street_point(geometries, boundary_geometry)
+                if point is None:
+                    continue
+            else:
+                point = center
+            results.append(
+                {
+                    "name": name,
+                    "community": community.name,
+                    "community_id": str(community.public_id),
+                    "latitude": point[0],
+                    "longitude": point[1],
+                }
+            )
+            if len(results) >= limit:
+                return results
+    return results
+
+
+def _line_strings(geometry):
+    """Flatten a street geometry into plain [[lng, lat], ...] polylines."""
+    coordinates = (geometry or {}).get("coordinates") or []
+    kind = (geometry or {}).get("type")
+    if kind == "LineString":
+        return [coordinates]
+    if kind == "MultiLineString":
+        return [line for line in coordinates if line]
+    if kind == "Point":
+        return [[coordinates, coordinates]] if len(coordinates) >= 2 else []
+    lines = []
+    stack = [coordinates]
+    while stack:
+        item = stack.pop()
+        if not isinstance(item, (list, tuple)) or not item:
+            continue
+        first = item[0]
+        if isinstance(first, (int, float)):
+            continue
+        if (
+            isinstance(first, (list, tuple))
+            and len(first) >= 2
+            and all(isinstance(value, (int, float)) for value in first[:2])
+        ):
+            lines.append(item)
+        else:
+            stack.extend(item)
+    return lines
+
+
+def nearest_community_street(latitude, longitude, community):
+    """Closest catalog street to a dropped pin, with its distance in meters."""
+    from apps.geo_services import _distance_to_ring_meters
+
+    payload = static_map_payload(community)
+    best_name = ""
+    best_distance = None
+    for street in (payload.get("streets") or {}).get("streets") or []:
+        for geometry in street.get("geometries") or []:
+            for line in _line_strings(geometry):
+                distance = _distance_to_ring_meters(longitude, latitude, line)
+                if distance is None:
+                    continue
+                if best_distance is None or distance < best_distance:
+                    best_distance = distance
+                    best_name = street.get("name") or ""
+    if not best_name:
+        return None
+    return {"name": best_name, "distance_meters": best_distance}
+
+
+def address_for_pin(latitude, longitude):
+    """
+    Turn a dropped pin into a street address using community-owned data first.
+
+    The catalog answers with a street this community actually serves; OSM is the
+    fallback so a pin outside every boundary still comes back with a name the
+    resident recognises instead of an empty field.
+    """
+    from apps.emergencies.models import MapAddressPoint
+    from apps.geo_services import active_communities_for_point, haversine_meters, nominatim_reverse
+
+    latitude = float(latitude)
+    longitude = float(longitude)
+    matches = active_communities_for_point(latitude, longitude)
+    community = matches[0] if len(matches) == 1 else None
+
+    street = ""
+    house_number = ""
+    if community is not None:
+        nearest = nearest_community_street(latitude, longitude, community)
+        if nearest and (nearest["distance_meters"] is None or nearest["distance_meters"] <= 120):
+            street = nearest["name"]
+
+    closest_point = None
+    closest_distance = None
+    for point in MapAddressPoint.objects.filter(
+        latitude__gte=latitude - 0.001,
+        latitude__lte=latitude + 0.001,
+        longitude__gte=longitude - 0.001,
+        longitude__lte=longitude + 0.001,
+    )[:200]:
+        distance = haversine_meters(latitude, longitude, float(point.latitude), float(point.longitude))
+        if closest_distance is None or distance < closest_distance:
+            closest_distance = distance
+            closest_point = point
+    if closest_point is not None and closest_distance is not None and closest_distance <= 40:
+        house_number = closest_point.house_number or ""
+        if not street:
+            street = closest_point.street or ""
+
+    if not street:
+        payload = nominatim_reverse(latitude, longitude, zoom=18) or {}
+        address = payload.get("address") or {}
+        street = (
+            address.get("road")
+            or address.get("pedestrian")
+            or address.get("residential")
+            or address.get("path")
+            or ""
+        )
+        house_number = house_number or address.get("house_number") or ""
+
+    return {
+        "street": street,
+        "house_number": house_number,
+        "community": community.name if community else "",
+        "community_id": str(community.public_id) if community else "",
+        "inside_community": community is not None,
+        "latitude": latitude,
+        "longitude": longitude,
+        "label": " ".join(part for part in [house_number, street] if part).strip(),
+    }
+
+
 def decimal_string(value):
     if value is None:
         return None

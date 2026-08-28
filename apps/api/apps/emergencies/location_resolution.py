@@ -165,7 +165,7 @@ def resolve_incident_location(*, latitude=None, longitude=None, message_area="",
             freshness="not_available",
             state="fallback",
             community=community,
-            area_label=street or message_area or community.name,
+            area_label=f"{street or message_area}, {community.name}" if (street or message_area) else community.name,
             canonical_street=street,
         )
     if len(named) > 1:
@@ -185,6 +185,21 @@ def resolve_incident_location(*, latitude=None, longitude=None, message_area="",
             if community not in street_communities:
                 street_communities.append(community)
     if streets:
+        canonical_street = streets[0].name if len({item.name.casefold() for item in streets}) == 1 else ""
+        # A street that only sits inside one active community is already an
+        # unambiguous match — a landmark mention was being required on top of
+        # that, which almost no real message includes ("near Champaca Street"
+        # has no POI to corroborate), so an otherwise-clean street match was
+        # reported as "unknown" instead of resolving.
+        if len(street_communities) == 1:
+            return LocationResolution(
+                source="message_area",
+                freshness="not_available",
+                state="fallback",
+                community=street_communities[0],
+                area_label=f"{canonical_street or message_area}, {street_communities[0].name}",
+                canonical_street=canonical_street,
+            )
         landmark_communities = _landmark_communities(message_area)
         combined = [community for community in street_communities if community in landmark_communities]
         if len(combined) == 1:
@@ -193,15 +208,15 @@ def resolve_incident_location(*, latitude=None, longitude=None, message_area="",
                 freshness="not_available",
                 state="fallback",
                 community=combined[0],
-                area_label=message_area,
-                canonical_street=streets[0].name if len({item.name.casefold() for item in streets}) == 1 else "",
+                area_label=f"{canonical_street or message_area}, {combined[0].name}",
+                canonical_street=canonical_street,
             )
         return LocationResolution(
             source="message_area",
             freshness="not_available",
             state="ambiguous" if len(street_communities) > 1 else "unknown",
             area_label=message_area,
-            canonical_street=streets[0].name if len({item.name.casefold() for item in streets}) == 1 else "",
+            canonical_street=canonical_street,
             candidates=tuple(street_communities),
             reason="street_requires_community",
         )

@@ -72,7 +72,7 @@ function HelpShellInner({ children }: { children: ReactNode }) {
                 if (event.key === "Enter" && hits[0]) {
                   event.preventDefault()
                   setOpen(false)
-                  navigate(`/help/a/${hits[0].article.slug}`)
+                  navigate(`/help/articles/${hits[0].article.slug}`)
                 }
               }}
               placeholder={t.searchPlaceholder}
@@ -103,7 +103,7 @@ function HelpShellInner({ children }: { children: ReactNode }) {
                 hits.map((hit) => (
                   <Link
                     key={hit.article.slug}
-                    to={`/help/a/${hit.article.slug}`}
+                    to={`/help/articles/${hit.article.slug}`}
                     onClick={() => setOpen(false)}
                     className="block rounded-2xl border border-neutral-200 px-6 py-5 no-underline transition-colors hover:border-brand-navy/25 hover:bg-neutral-50"
                   >

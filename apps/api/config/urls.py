@@ -41,7 +41,7 @@ from apps.emergencies.views import (
     BoundarySearchView,
 )
 from apps.service_status import ResendHealthWebhookView, ServiceStatusView, WeatherHealthReportView
-from apps.dashboard_views import OfficialDashboardSummaryView, ResidentDashboardSummaryView, ResponderDashboardSummaryView
+from apps.dashboard_views import OfficialAnalyticsView, OfficialDashboardSummaryView, ResidentDashboardSummaryView, ResponderDashboardSummaryView
 from apps.live_map import (
     GeocodeReverseView,
     GeocodeSearchView,
@@ -99,6 +99,7 @@ urlpatterns = [
     path("api/notifications/", include("apps.notifications.urls")),
     path("api/dashboard/resident/summary/", ResidentDashboardSummaryView.as_view(), name="dashboard-resident-summary"),
     path("api/dashboard/official/summary/", OfficialDashboardSummaryView.as_view(), name="dashboard-official-summary"),
+    path("api/dashboard/official/analytics/", OfficialAnalyticsView.as_view(), name="dashboard-official-analytics"),
     path("api/dashboard/official/live-map/", OfficialLiveMapView.as_view(), name="dashboard-official-live-map"),
     path("api/dashboard/responder/summary/", ResponderDashboardSummaryView.as_view(), name="dashboard-responder-summary"),
     path("api/locations/ping/", LocationPingView.as_view(), name="location-ping"),

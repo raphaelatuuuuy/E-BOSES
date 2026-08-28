@@ -86,7 +86,7 @@ function ResponderBar() {
   const liveCount = activeAlerts.length
 
   return (
-    <div className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 lg:hidden">
+    <div data-mobile-nav className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 lg:hidden">
       <div className="pointer-events-none flex items-end justify-center px-4 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))]">
         <nav
           aria-label="Primary"
@@ -241,7 +241,7 @@ export function MobileNav() {
 
   return (
     <>
-      <div className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 lg:hidden">
+      <div data-mobile-nav className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 lg:hidden">
         <div className="pointer-events-none flex items-end justify-center px-4 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))]">
 
           <nav

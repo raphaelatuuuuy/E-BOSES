@@ -1,4 +1,5 @@
 import type { PublicUser } from "@/features/dashboard/api"
+import { cartoTileUrl } from "@/features/dashboard/components/map/tile-layers"
 import { streetLabelFromAddress } from "@/features/dashboard/components/feed-post-text"
 
 export const FS = {
@@ -42,7 +43,12 @@ function lat2tile(lat: number, zoom: number) {
 export function railLiveMapSrc(lat: number, lng: number, zoom = 16) {
   const x = lon2tile(lng, zoom)
   const y = lat2tile(lat, zoom)
-  return `https://a.basemaps.cartocdn.com/light_all/${zoom}/${x}/${y}@2x.png`
+  return cartoTileUrl("light")
+    .replace("{s}", "a")
+    .replace("{z}", String(zoom))
+    .replace("{x}", String(x))
+    .replace("{y}", String(y))
+    .replace("{r}", "@2x")
 }
 
 export function commentPlaceLabel(author: PublicUser) {

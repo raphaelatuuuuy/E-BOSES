@@ -159,7 +159,13 @@ def notification_category(notification) -> str:
         return "emergency"
     if "appeal" in type_value:
         return "appeal"
-    if type_value in {"clarification_requested", "clarification_replied", "concern_comment", "concern_mention"}:
+    if type_value in {
+        "clarification_requested",
+        "clarification_replied",
+        "concern_comment",
+        "concern_mention",
+        "chat_message",
+    }:
         return "chat"
     return "report"
 
@@ -200,7 +206,13 @@ def notification_icon_url(notification) -> str:
             "disaster": "/contents/disaster.png",
             "other": "/contents/alerts.png",
         }.get(emergency_type, "/contents/alerts.png")
-    if notification.type in {"concern_comment", "concern_mention", "clarification_requested", "clarification_replied"}:
+    if notification.type in {
+        "concern_comment",
+        "concern_mention",
+        "clarification_requested",
+        "clarification_replied",
+        "chat_message",
+    }:
         return "/contents/chat-comment.png"
     if "appeal" in (notification.type or ""):
         return "/contents/reports.png"
@@ -215,6 +227,10 @@ def notification_icon_url(notification) -> str:
 
 
 def notification_image_url(notification) -> str:
+    # Nearby witnesses receive safety guidance only. Never attach incident
+    # media, even when a public preview exists for authorized participants.
+    if notification.type == "witness_alert":
+        return ""
     metadata = _safe_metadata(notification)
     # Announcements store a publish-time URL snapshot. Resolving the live
     # announcement is more reliable: it stays correct if the image was added
@@ -237,9 +253,19 @@ def notification_image_url(notification) -> str:
     # into metadata. Use only the processed public preview, never the original.
     media = None
     if getattr(notification, "concern_id", None):
-        media = notification.concern.media.filter(public_visible=True).exclude(preview_file="").first()
+        media = next(
+            (
+                item
+                for item in notification.concern.media.all()
+                if item.public_visible and bool(item.preview_file)
+            ),
+            None,
+        )
     elif getattr(notification, "emergency_id", None):
-        media = notification.emergency.media.exclude(preview_file="").first()
+        media = next(
+            (item for item in notification.emergency.media.all() if bool(item.preview_file)),
+            None,
+        )
     return _safe_url(media.preview_file.url if media and media.preview_file else "")
 
 
@@ -279,9 +305,10 @@ def _display_concern_notification(notification) -> tuple[str, str]:
         "appeal_denied": "Report appeal denied",
         "concern_comment": notification.title or "New community comment",
         "concern_mention": notification.title or "You were mentioned",
+        "chat_message": notification.title or "New report message",
     }
     title = special_titles.get(type_value) or status_titles.get(type_value) or notification.title or f"Report {status_label.lower()}"
-    context = f"{tracking} Â· {concern_title}" if tracking else concern_title
+    context = f"{tracking} · {concern_title}" if tracking else concern_title
     if note:
         body = f"{context}. {note}"
     else:
@@ -327,7 +354,7 @@ def _display_emergency_notification(notification) -> tuple[str, str]:
         }
         title = title_map.get(type_value) or notification.title or f"Emergency {status_label.lower()}"
     body_bits = [f"{emergency_type} emergency", address]
-    body = " Â· ".join(part for part in body_bits if part)
+    body = " · ".join(part for part in body_bits if part)
     if note:
         body = f"{body}. {note}"
     else:
@@ -612,7 +639,10 @@ def send_browser_push(notification, payload: dict | None = None) -> dict:
                     "message": _truncate(detail or str(exc), 240),
                 }
             )
-            if status_code in {404, 410}:
+            # 401/403 commonly mean this endpoint was subscribed with an old
+            # VAPID key. It cannot recover through retries; make the browser
+            # register a fresh subscription with the current key instead.
+            if status_code in {401, 403, 404, 410}:
                 subscription.is_active = False
                 subscription.save(update_fields=["is_active", "updated_at"])
         except Exception as exc:

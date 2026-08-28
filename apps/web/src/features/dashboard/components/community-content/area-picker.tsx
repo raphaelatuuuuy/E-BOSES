@@ -19,6 +19,7 @@ import {
   type LiveMapStreet,
 } from "@/features/dashboard/api"
 import { geoJsonToLines } from "@/features/dashboard/components/alerts-map/lib"
+import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import { advisoryMeta, advisoryMarkerHtml } from "./advisory-tags"
 import {
   emptyArea,
@@ -292,16 +293,14 @@ export function AreaPicker({
         preferCanvas: false,
       })
 
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-        attribution: "",
-        subdomains: "abcd",
+      addBaseTiles(L, map, "dark", {
         maxZoom: 20,
         // Load a ring of tiles past the viewport so panning and zooming out
         // never expose bare background.
         keepBuffer: 6,
         updateWhenIdle: false,
         updateWhenZooming: true,
-      }).addTo(map)
+      })
 
       baseLayerRef.current = L.layerGroup().addTo(map)
       drawLayerRef.current = L.layerGroup().addTo(map)

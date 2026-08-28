@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react"
 import { ChevronLeftIcon, LoaderCircleIcon } from "lucide-react"
 import { Link } from "react-router-dom"
 
@@ -17,11 +18,21 @@ interface SignUpShellProps {
   progressPercent?: number
   onBack?: () => void
   showBack?: boolean
+  /** Back stays visible but inert — used once a prior step can no longer be safely reopened. */
+  backDisabled?: boolean
   /** Full-bleed content (e.g. verified peek with left carousel on desktop). */
   wideContent?: boolean
   /** account = top nav + Sign in; wizard = back + progress only (no logo / Sign in). */
   variant?: SignUpShellVariant
   className?: string
+  /**
+   * Change this (e.g. the step index) to scroll the shell back to the top.
+   * `<main>` itself scrolls (see `overflow-y-auto` below), so a step change
+   * that jumps back to an earlier, shorter step otherwise leaves the reader
+   * stranded mid-scroll looking at nothing — indistinguishable from the
+   * click having done nothing at all.
+   */
+  scrollKey?: string | number
 }
 
 export function SignUpShell({
@@ -31,15 +42,23 @@ export function SignUpShell({
   progressPercent = 0,
   onBack,
   showBack = false,
+  backDisabled = false,
   wideContent = false,
   variant = "account",
   className,
+  scrollKey,
 }: SignUpShellProps) {
   const isWizard = variant === "wizard"
   const contentMax = isWizard ? CONTENT_MAX : ACCOUNT_CONTENT_MAX
+  const mainRef = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    mainRef.current?.scrollTo({ top: 0 })
+  }, [scrollKey])
 
   return (
     <main
+      ref={mainRef}
       className={cn(
         "flex min-h-svh w-full flex-col overflow-x-hidden overflow-y-auto bg-white",
         className,
@@ -59,12 +78,14 @@ export function SignUpShell({
            * Same max-width + padding as the form column so edges align.
            */
           <div className={cn("mx-auto w-full px-5 pt-5 md:px-0 md:pt-6", CONTENT_MAX)}>
-            {showBack && onBack ? (
+            {showBack ? (
               <header className="relative flex w-full items-center">
                 <button
                   type="button"
-                  onClick={onBack}
-                  className="inline-flex size-11 items-center justify-center rounded-full text-neutral-800 transition-colors hover:bg-neutral-100"
+                  onClick={backDisabled ? undefined : onBack}
+                  disabled={backDisabled || !onBack}
+                  aria-disabled={backDisabled || !onBack}
+                  className="inline-flex size-11 items-center justify-center rounded-full text-neutral-800 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:pointer-events-none disabled:opacity-40 disabled:hover:bg-transparent"
                   aria-label="Go back"
                 >
                   <ChevronLeftIcon className="size-6 stroke-[2]" />
@@ -76,7 +97,7 @@ export function SignUpShell({
               <div
                 className={cn(
                   "w-full pb-5 md:pb-6",
-                  showBack && onBack ? "mt-3 md:mt-4" : "mt-1",
+                  showBack ? "mt-3 md:mt-4" : "mt-1",
                 )}
               >
                 <div className="h-[5px] w-full overflow-hidden rounded-full bg-brand-orange-soft md:h-[7px]">

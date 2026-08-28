@@ -4,16 +4,19 @@
  * On each file upload (immediate, fail-closed):
  *  1) Client type / size
  *  2) Client duplicate check
- *  3) POST /auth/register/proof/check/ — media_forensics Layers 1–5 on ORIGINAL
+ *  3) POST /auth/register/proof/check/ — media_forensics Layers 1–5 plus the
+ *     side-aware LLM picture/template check on ORIGINAL
  *  4) Keep ORIGINAL for registration (server normalizes once)
  *
  * On Verify (after all required sides pass forensics):
- *  5) POST /auth/register/proof/detect/ — OCR (server authenticity + soft quality + one deskew)
+ *  5) POST /auth/register/proof/detect/ — OCR (the same picture gate is rerun
+ *     server-side before text extraction)
  */
 
 import {
   checkRegistrationProof,
   detectRegistrationProof,
+  type ResidenceProofCheckResult,
   type ResidenceProofDetectResult,
 } from "@/features/auth/api"
 import { getProofOfResidencyFileError } from "@/features/auth/schemas/sign-up-schema"
@@ -26,6 +29,7 @@ export type ProcessProofOk = {
   file: File
   side: ProofSide
   option: ResidenceProofOption
+  check: ResidenceProofCheckResult
   detect: ResidenceProofDetectResult | null
 }
 
@@ -71,6 +75,13 @@ export function humanizeProofError(message: string, _side?: ProofSide | null): s
     .replace(/^On the (front|back) of your ID:\s*/i, "")
     .replace(/^(Front|Back):\s*/i, "")
     .trim()
+
+  if (/duplicate proof|document has already been used|already attached|same image/i.test(text)) {
+    return "This document was already used; please submit a different one."
+  }
+  if (/AI-generated media|edited or manipulated media|digitally manipulated|media authenticity|C2PA/i.test(text)) {
+    return "Please upload a clear photo of the original document."
+  }
 
   // The picture check found something. Already short and already says what to
   // do, so it is returned untouched rather than run through the rewrites
@@ -248,30 +259,35 @@ export async function checkProofSide(args: {
   const checkData = new FormData()
   checkData.append("proof_type", option.key)
   checkData.append("proof", rawFile)
+  checkData.append("proof_side", side)
   if (args.email) checkData.append("email", args.email)
   if (args.communityResolutionToken) checkData.append("community_resolution_token", args.communityResolutionToken)
   try {
-    await withNetworkRetry("Quality check", () => checkRegistrationProof(checkData))
+    const check = await withNetworkRetry("Quality check", () => checkRegistrationProof(checkData))
+    return {
+      ok: true,
+      file: rawFile,
+      side,
+      option,
+      check,
+      detect: null,
+    }
   } catch (error) {
     // Fail closed — including network/status-0
-    return {
-      ok: false,
-      message: humanError(
+    const message = humanizeProofError(
+      humanError(
         error,
         "Could not verify this photo. Check your connection and try again.",
       ),
+      side,
+    )
+    return {
+      ok: false,
+      message,
       detect: null,
     }
   }
 
-  // Keep ORIGINAL for registration — server normalizes once
-  return {
-    ok: true,
-    file: rawFile,
-    side,
-    option,
-    detect: null,
-  }
 }
 
 /**

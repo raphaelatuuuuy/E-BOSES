@@ -1,9 +1,10 @@
-import { lazy, Suspense, type ReactNode, useState } from "react"
-import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom"
+import { lazy, Suspense, type ReactNode, useEffect, useState } from "react"
+import { Navigate, Route, Routes, useParams, useLocation, useNavigate, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 
 import { confirmPasswordReset, requestPasswordReset, verifyPasswordReset } from "@/features/auth/api"
 import { AuthSessionProvider, getStatusPath, useAuthSession } from "@/features/auth/auth-session"
+import { getMyResidenceVerification } from "@/features/ocr/api"
 import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import { LogoSpinner } from "@/components/ui/logo-spinner"
 import { RouteScrollTop } from "@/components/ui/route-scroll-top"
@@ -25,7 +26,6 @@ const ResidentAlertsMapPage = lazy(() => import("@/features/dashboard/pages/resi
 const OnboardingPage = lazy(() => import("@/features/onboarding/onboarding-page"))
 const OfficialOnboardingPage = lazy(() => import("@/features/onboarding/official-onboarding-page"))
 const ResponderOnboardingPage = lazy(() => import("@/features/onboarding/responder-onboarding-page"))
-const EmergenciesPage = lazy(() => import("@/features/dashboard/pages/emergencies"))
 const HomePage = lazy(() => import("@/features/dashboard/pages/home"))
 const OfficialOverviewPage = lazy(() => import("@/features/dashboard/pages/official-overview"))
 const ProfilePage = lazy(() => import("@/features/dashboard/pages/profile"))
@@ -171,9 +171,13 @@ function AlertsMapRoute() {
   return <ResidentAlertsMapPage />
 }
 
-function EmergencyOpsRoute({ children }: { children: ReactNode }) {
+function EmergencyOpsRoute() {
   const { user } = useAuthSession()
-  if (isOfficialUser(user)) return children
+  const [params] = useSearchParams()
+  if (isOfficialUser(user)) {
+    const alert = params.get("alert")
+    return <Navigate to={`/dashboard/reports${alert ? `?alert=${alert}` : ""}`} replace />
+  }
   if (isResponderUser(user)) return <Navigate to="/dashboard/responders/dispatch" replace />
   return <Navigate to="/dashboard" replace />
 }
@@ -206,7 +210,36 @@ function AccountInactiveGate() {
 }
 
 function AccountPendingGate() {
-  const { loading, user } = useAuthSession()
+  const { loading, user, refreshUser } = useAuthSession()
+  const navigate = useNavigate()
+  // Verification can resolve synchronously (the self-heal on /verification/me
+  // runs OCR inline when no worker has picked the case up yet), so a resident
+  // who is about to be approved should never see the waiting page at all —
+  // check once before rendering it instead of flashing it and redirecting away.
+  const [checked, setChecked] = useState(false)
+
+  useEffect(() => {
+    if (!user || user.status !== "pending_verification") return
+    let cancelled = false
+    void (async () => {
+      try {
+        await getMyResidenceVerification()
+        const next = await refreshUser()
+        if (cancelled) return
+        if (next && next.status !== "pending_verification") {
+          navigate(getStatusPath(next.status, { isOnboarded: next.is_onboarded }), { replace: true })
+          return
+        }
+      } catch {
+        // Transient network/auth error — fall through and show the waiting page.
+      } finally {
+        if (!cancelled) setChecked(true)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [user, refreshUser, navigate])
 
   if (loading && !user) {
     return (
@@ -229,7 +262,25 @@ function AccountPendingGate() {
     )
   }
 
+  if (!checked) {
+    return (
+      <div className="flex min-h-svh items-center justify-center">
+        <LogoSpinner className="size-20" />
+      </div>
+    )
+  }
+
   return <AccountPendingPage />
+}
+
+function HelpCollectionRedirect() {
+  const { collectionSlug } = useParams()
+  return <Navigate to={`/help/collections/${collectionSlug ?? ""}`} replace />
+}
+
+function HelpArticleRedirect() {
+  const { articleSlug } = useParams()
+  return <Navigate to={`/help/articles/${articleSlug ?? ""}`} replace />
 }
 
 function AppRoutes() {
@@ -248,7 +299,7 @@ function AppRoutes() {
         <Route index element={<DashboardIndex />} />
         <Route path="home" element={<ResidentRoute><HomePage /></ResidentRoute>} />
         <Route path="overview" element={<OfficialRoute><OfficialOverviewPage /></OfficialRoute>} />
-        <Route path="emergencies" element={<EmergencyOpsRoute><EmergenciesPage /></EmergencyOpsRoute>} />
+        <Route path="emergencies" element={<EmergencyOpsRoute />} />
         <Route path="alerts-map" element={<AlertsMapRoute />} />
         <Route path="admin" element={<OfficialRoute><Navigate to="/dashboard/configuration/users" replace /></OfficialRoute>} />
         <Route path="configuration/verification" element={<OfficialRoute><Navigate to="/dashboard/configuration/id-proof-template" replace /></OfficialRoute>} />
@@ -358,14 +409,15 @@ function AppRoutes() {
               })
               setResetToken(response.reset_token)
               window.sessionStorage.setItem("eboses-reset-token", response.reset_token)
-              navigate("/new-password")
+              navigate("/reset-password")
             } catch {
               throw new Error("Invalid or expired code. Request a new one.")
             }
           }}
         />
       } />
-      <Route path="/new-password" element={
+      <Route path="/new-password" element={<Navigate to="/reset-password" replace />} />
+      <Route path="/reset-password" element={
         <NewPasswordPage
           onBack={() => navigate("/sign-in")}
           onSuccess={async (password) => {
@@ -384,12 +436,15 @@ function AppRoutes() {
         />
       } />
 
-      <Route path="/privacy" element={<Navigate to="/help/a/privacy-policy" replace />} />
+      <Route path="/privacy" element={<Navigate to="/help/articles/privacy-policy" replace />} />
       <Route path="/help" element={<HelpPage />} />
-      <Route path="/help/c/:collectionSlug" element={<HelpCollectionPage />} />
-      <Route path="/help/a/:articleSlug" element={<HelpArticlePage />} />
+      <Route path="/help/c/:collectionSlug" element={<HelpCollectionRedirect />} />
+      <Route path="/help/a/:articleSlug" element={<HelpArticleRedirect />} />
+      <Route path="/help/collections/:collectionSlug" element={<HelpCollectionPage />} />
+      <Route path="/help/articles/:articleSlug" element={<HelpArticlePage />} />
       <Route path="/communities" element={<ActiveCommunitiesPage />} />
-      <Route path="/create-community" element={<CreateCommunityPage />} />
+      <Route path="/communities/new" element={<CreateCommunityPage />} />
+      <Route path="/create-community" element={<Navigate to="/communities/new" replace />} />
       <Route path="/book-demo" element={<BookDemoPage />} />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
@@ -403,9 +458,9 @@ const ASSISTANT_PATHS = [
   "/sign-up-otp",
   "/forgot-password",
   "/forgot-password-otp",
-  "/new-password",
+  "/reset-password",
   "/communities",
-  "/create-community",
+  "/communities/new",
   "/book-demo",
 ]
 
@@ -442,6 +497,7 @@ function MaintenanceGate({ children }: { children: ReactNode }) {
     location.pathname === "/" ||
     location.pathname.startsWith("/help") ||
     location.pathname === "/communities" ||
+    location.pathname === "/communities/new" ||
     location.pathname === "/create-community" ||
     location.pathname === "/book-demo"
 

@@ -18,6 +18,7 @@ import type { AuthUser, ResidenceProofDetectResult } from "@/features/auth/api"
 import { SignUpShell } from "@/features/auth/components/sign-up-shell"
 import { AccountStep } from "@/features/auth/components/sign-up-steps/account-step"
 import { AddressStep } from "@/features/auth/components/sign-up-steps/address-step"
+import { CommunityPeekStep } from "@/features/auth/components/sign-up-steps/community-peek-step"
 import { DobStep } from "@/features/auth/components/sign-up-steps/dob-step"
 import { EmailOtpStep } from "@/features/auth/components/sign-up-steps/email-otp-step"
 import { GenderStep } from "@/features/auth/components/sign-up-steps/gender-step"
@@ -26,7 +27,6 @@ import { MiddleNameStep } from "@/features/auth/components/sign-up-steps/middle-
 import { NameStep } from "@/features/auth/components/sign-up-steps/name-step"
 import { PhoneStep } from "@/features/auth/components/sign-up-steps/phone-step"
 import { ProofStep } from "@/features/auth/components/sign-up-steps/proof-step"
-import { VerifiedPeekStep } from "@/features/auth/components/sign-up-steps/verified-peek-step"
 import { useSignUpForm } from "@/features/auth/hooks/use-sign-up-form"
 
 interface SignUpFormProps extends React.ComponentProps<"div"> {
@@ -148,7 +148,12 @@ export function SignUpForm({
 
   const showProgress = step > 0
   // Back on OTP returns to email/password (same as "Edit your email").
+  // Nothing goes back once the document is verified: the proof step (7) is the
+  // last point where anything upstream of the verification can still change,
+  // so from the phone step onward the control stays visible but disabled
+  // instead of disappearing, so the wizard header does not jump around.
   const showBack = step > 0
+  const backDisabled = step >= 8
   // Full-width layout no longer needed (verified peek no longer has a left carousel).
   const wideContent = false
   const shellVariant = step === 0 ? "account" : "wizard"
@@ -160,7 +165,9 @@ export function SignUpForm({
         showProgress={showProgress}
         progressPercent={progressPercent}
         showBack={showBack}
+        backDisabled={backDisabled}
         onBack={step === 1 ? editEmailFromOtp : goBack}
+        scrollKey={step}
         wideContent={wideContent}
         variant={shellVariant}
       >
@@ -239,21 +246,14 @@ export function SignUpForm({
           <AddressStep
             values={values}
             errors={errors}
-            onChange={handleChange}
-            onContinue={() => goNext()}
-          />
-        ) : null}
-
-        {step === 7 ? (
-          <VerifiedPeekStep
-            values={values}
             resolving={proofOptionsLoading}
+            onChange={handleChange}
             onResolve={resolveCommunity}
             onContinue={() => goNext()}
           />
         ) : null}
 
-        {step === 8 ? (
+        {step === 7 ? (
           <ProofStep
             key={values.communityResolutionToken}
             values={values}
@@ -271,7 +271,7 @@ export function SignUpForm({
           />
         ) : null}
 
-        {step === 9 ? (
+        {step === 8 ? (
           <PhoneStep
             values={values}
             errors={errors}
@@ -285,6 +285,16 @@ export function SignUpForm({
             onVerifyOtp={() => void handleVerifyPhoneOtp()}
             onEditPhone={editPhoneFromOtp}
             onContinue={() => goNext()}
+          />
+        ) : null}
+
+        {step === 9 ? (
+          <CommunityPeekStep
+            communityName={values.communityMatch?.name ?? "your community"}
+            neighbors={values.communityMatch?.neighbors ?? 0}
+            latitude={values.homeLatitude}
+            longitude={values.homeLongitude}
+            onContinue={() => void goNext()}
           />
         ) : null}
 

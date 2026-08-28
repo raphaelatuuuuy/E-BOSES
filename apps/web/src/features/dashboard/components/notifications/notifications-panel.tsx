@@ -3,15 +3,18 @@
 import { useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import {
-  AlertTriangleIcon,
+  TriangleAlertIcon,
   ArchiveIcon,
   ArchiveRestoreIcon,
   ArrowLeftIcon,
+  BellRingIcon,
+  CheckCircle2Icon,
   InboxIcon,
-  ImageIcon,
   CheckCheckIcon,
   FileTextIcon,
+  LoaderCircleIcon,
   MegaphoneIcon,
+  SendIcon,
   Trash2Icon,
   XIcon,
   type LucideIcon,
@@ -21,6 +24,20 @@ import { cn } from "@workspace/ui/lib/utils"
 import { apiRequest } from "@/lib/api"
 import { useNotifications, type NotificationItem } from "@/features/dashboard/components/notification-context"
 import {
+  AuthenticatedMediaImage,
+  MediaLightbox,
+} from "@/features/dashboard/components/authenticated-media"
+import {
+  toMediaPreviewItem,
+  type MediaPreviewItem,
+} from "@/features/dashboard/lib/authenticated-media"
+import {
+  enableBrowserNotifications,
+  getBrowserNotificationState,
+  showBrowserNotification,
+  type BrowserNotificationState,
+} from "@/features/dashboard/browser-notifications"
+import {
   notificationsPageFilter,
   openNotificationsPop,
 } from "@/features/dashboard/components/notifications/notifications-event"
@@ -29,23 +46,47 @@ type NotificationView = "inbox" | "archived"
 const notificationViewEvent = "eboses:notification-view"
 const holdTimers = new WeakMap<HTMLElement, number>()
 
-function NotificationImage({ src }: { src: string }) {
-  const [failed, setFailed] = useState(false)
-  if (failed) {
-    return (
-      <span className="mt-2 flex h-32 w-full items-center justify-center rounded-lg border border-neutral-200 bg-neutral-100 text-neutral-500">
-        <ImageIcon className="size-5" aria-label="Image unavailable" />
-      </span>
-    )
-  }
+function NotificationImage({
+  item,
+  onPreview,
+}: {
+  item: NotificationItem
+  onPreview: (items: MediaPreviewItem[]) => void
+}) {
+  const images = item.images?.length
+    ? item.images
+    : item.image_url
+      ? [{ url: item.image_url, filename: "Notification photo", mime_type: "image" }]
+      : []
+  if (!images.length) return null
+
+  const previewItems = images.map((image) =>
+    toMediaPreviewItem(image.url, image.filename, image.mime_type),
+  )
+
   return (
-    <img
-      src={src}
-      alt=""
-      loading="lazy"
-      onError={() => setFailed(true)}
-      className="mt-2 h-32 w-full rounded-lg border border-neutral-200 object-cover"
-    />
+    <button
+      type="button"
+      aria-label={`Preview ${images.length === 1 ? "photo" : `${images.length} photos`}`}
+      onClick={(event) => {
+        event.stopPropagation()
+        onPreview(previewItems)
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+      className="group relative mt-2 block w-full overflow-hidden rounded-lg border border-neutral-200 text-left empty:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-orange"
+    >
+      <AuthenticatedMediaImage
+        src={images[0].url}
+        alt={`Photo attached to ${item.display_title || item.title}`}
+        className="h-32 w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+        hideOnError
+      />
+      {images.length > 1 ? (
+        <span className="absolute bottom-2 right-2 rounded-full bg-black/70 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur-sm">
+          1 / {images.length}
+        </span>
+      ) : null}
+    </button>
   )
 }
 
@@ -137,16 +178,23 @@ function snippet(text: string | null | undefined, max = 90): string {
   return `${base}...`
 }
 
-function defaultIconFor(item: NotificationItem): { Icon: LucideIcon; chipClass: string } {
+function isEmergencyNotification(item: NotificationItem) {
   const type = (item.type ?? "").toLowerCase()
   const category = item.category ?? ""
-  const isEmergency =
+  return (
     category === "emergency" ||
     !!item.emergency_id ||
     type.startsWith("emergency") ||
     type === "witness_alert"
+  )
+}
+
+function defaultIconFor(item: NotificationItem): { Icon: LucideIcon; chipClass: string } {
+  const type = (item.type ?? "").toLowerCase()
+  const category = item.category ?? ""
+  const isEmergency = isEmergencyNotification(item)
   const isAnnouncement = category === "announcement" || type === "announcement"
-  if (isEmergency) return { Icon: AlertTriangleIcon, chipClass: "bg-neutral-100 text-sos" }
+  if (isEmergency) return { Icon: TriangleAlertIcon, chipClass: "bg-sos/10 text-sos" }
   if (isAnnouncement) return { Icon: MegaphoneIcon, chipClass: "bg-neutral-100 text-neutral-600" }
   return { Icon: FileTextIcon, chipClass: "bg-neutral-100 text-neutral-700" }
 }
@@ -205,6 +253,32 @@ export function NotificationsPanel({
     () =>
       initialView ?? (initialFilter === "archived" ? "archived" : "inbox"),
   )
+  const [browserNotificationState, setBrowserNotificationState] =
+    useState<BrowserNotificationState | null>(null)
+  const [enablingBrowserNotifications, setEnablingBrowserNotifications] = useState(false)
+  const [sendingTestNotification, setSendingTestNotification] = useState(false)
+  const [mediaPreview, setMediaPreview] = useState<MediaPreviewItem[] | null>(null)
+
+  useEffect(() => {
+    let active = true
+    void getBrowserNotificationState()
+      .then((nextState) => {
+        if (active) setBrowserNotificationState(nextState)
+      })
+      .catch(() => {
+        if (active) {
+          setBrowserNotificationState({
+            supported: false,
+            permission: "unsupported",
+            serverConfigured: false,
+            subscribed: false,
+          })
+        }
+      })
+    return () => {
+      active = false
+    }
+  }, [])
 
   useEffect(() => {
     function onViewChange(event: Event) {
@@ -246,7 +320,7 @@ export function NotificationsPanel({
     if (filter === "unread") return rows.filter((item) => !item.is_read)
     if (filter === "read") return rows.filter((item) => item.is_read)
     return rows
-  }, [merged, filter, config, view])
+  }, [merged, filter, view])
 
   const hasArchivableReadNotifications = useMemo(
     () => notifications.some((item) => item.is_read && !item.is_archived),
@@ -292,8 +366,81 @@ export function NotificationsPanel({
     config.onOpen(item)
   }
 
+  async function enableNotifications() {
+    setEnablingBrowserNotifications(true)
+    try {
+      await enableBrowserNotifications()
+      const nextState = await getBrowserNotificationState()
+      setBrowserNotificationState(nextState)
+      toast.success("Notifications are enabled on this device.")
+    } catch (error) {
+      const detail = error instanceof Error ? error.message.toLowerCase() : ""
+      if (detail.includes("blocked") || browserNotificationState?.permission === "denied") {
+        toast.error("Allow notifications in your browser settings, then try again.")
+      } else if (detail.includes("not configured") || detail.includes("public key")) {
+        toast.error("Notifications are not available right now.")
+      } else {
+        toast.error("Could not enable notifications. Please try again.")
+      }
+    } finally {
+      setEnablingBrowserNotifications(false)
+    }
+  }
+
+  async function sendTestNotification() {
+    setSendingTestNotification(true)
+    try {
+      const result = await apiRequest<{
+        notification: NotificationItem
+        push_result: { status: string }
+        active_subscriptions: number
+      }>("/notifications/browser-push/test/", {
+        method: "POST",
+        body: JSON.stringify({}),
+      })
+      await refresh()
+      // The server send verifies closed-browser delivery. Showing the same
+      // fixed-tag payload through the active worker also verifies this tab's
+      // permission/display path; matching tags prevent duplicate test alerts.
+      await showBrowserNotification(result.notification)
+      if (result.push_result.status === "delivered") {
+        toast.success("Test browser notification sent.")
+      } else if (result.push_result.status === "partial") {
+        toast.warning("Test displayed, but some saved devices need notifications re-enabled.")
+      } else if (result.active_subscriptions === 0) {
+        toast.error("Enable notifications on this device first.")
+      } else if (result.push_result.status === "not_configured") {
+        toast.error("Background notifications are not configured on the server.")
+      } else if (result.push_result.status === "disabled") {
+        toast.error("Notifications are disabled in your account settings.")
+      } else {
+        toast.warning("The browser test opened, but background delivery failed.")
+      }
+    } catch {
+      toast.error("Could not send a test notification. Please try again.")
+    } finally {
+      setSendingTestNotification(false)
+    }
+  }
+
   const iconFor = config.iconFor ?? defaultIconFor
   const darkTheme = Boolean(config.dark)
+  const browserNotificationsEnabled = Boolean(
+    browserNotificationState?.supported &&
+      browserNotificationState.permission === "granted" &&
+      browserNotificationState.subscribed,
+  )
+  const browserNotificationsUnavailable = Boolean(
+    browserNotificationState &&
+      (!browserNotificationState.supported || !browserNotificationState.serverConfigured),
+  )
+  const browserNotificationButtonLabel = browserNotificationsEnabled
+    ? "Notifications enabled"
+    : browserNotificationsUnavailable
+      ? "Notifications unavailable"
+      : browserNotificationState
+        ? "Enable notifications"
+        : "Checking notifications"
 
   const isEmpty = visible.length === 0
   const emptyTitle = isEmpty
@@ -317,7 +464,7 @@ export function NotificationsPanel({
   const sheetToolbar = null
 
   return (
-    <div className={cn("flex w-full flex-col", variant === "sheet" ? "" : "h-full min-h-0")}>
+    <div className={cn("ops-plain flex w-full flex-col", variant === "sheet" ? "" : "h-full min-h-0")}>
       {variant === "sheet" ? sheetToolbar : null}
       <header
         className={cn(
@@ -420,8 +567,66 @@ export function NotificationsPanel({
             ? ""
             : "scrollbar-hide flex-1 overflow-y-auto overscroll-contain px-3 py-3 md:px-6",
         )}
-      >
+        >
         <div className="mx-auto flex min-w-0 max-w-3xl flex-col gap-3">
+          <div className="flex items-center gap-3 rounded-2xl border border-neutral-200 bg-white p-3">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-700">
+              <BellRingIcon className="size-[18px]" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[14px] font-semibold text-neutral-900">
+                Browser alerts
+              </span>
+              <span className="mt-0.5 block text-[12px] leading-4 text-neutral-500">
+                {browserNotificationsEnabled
+                  ? "You will receive alerts on this device."
+                  : browserNotificationState?.permission === "denied"
+                    ? "Allow notifications in your browser settings."
+                    : browserNotificationsUnavailable
+                      ? "Browser alerts are not available on this device."
+                      : "Receive updates even when E-Boses is closed."}
+              </span>
+            </span>
+            <span className="flex shrink-0 flex-col items-stretch gap-1.5 sm:flex-row sm:items-center">
+              <button
+                type="button"
+                onClick={() => void enableNotifications()}
+                disabled={
+                  enablingBrowserNotifications ||
+                  browserNotificationsEnabled ||
+                  browserNotificationsUnavailable ||
+                  !browserNotificationState
+                }
+                className={cn(
+                  "flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full border border-neutral-200 px-3 text-[12px] font-semibold text-neutral-900 transition-colors hover:bg-neutral-50 disabled:cursor-default disabled:opacity-60",
+                  browserNotificationsEnabled && "border-emerald-500/30 text-emerald-700",
+                )}
+              >
+                {enablingBrowserNotifications || !browserNotificationState ? (
+                  <LoaderCircleIcon className="size-3.5 animate-spin" />
+                ) : browserNotificationsEnabled ? (
+                  <CheckCircle2Icon className="size-3.5" />
+                ) : null}
+                {browserNotificationButtonLabel}
+              </button>
+              {browserNotificationsEnabled ? (
+                <button
+                  type="button"
+                  onClick={() => void sendTestNotification()}
+                  disabled={sendingTestNotification}
+                  className="flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full border border-neutral-200 px-3 text-[12px] font-semibold text-neutral-900 transition-colors hover:bg-neutral-50 disabled:opacity-60"
+                >
+                  {sendingTestNotification ? (
+                    <LoaderCircleIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <SendIcon className="size-3.5" />
+                  )}
+                  Send test
+                </button>
+              ) : null}
+            </span>
+          </div>
+
           <nav
             aria-label="Notification filters"
             className="scrollbar-hide flex w-full gap-1 overflow-x-auto overscroll-x-contain rounded-full bg-neutral-100 p-1"
@@ -484,25 +689,22 @@ export function NotificationsPanel({
               </p>
             </div>
           ) : (
-            <ul
-              className={cn(
-                "space-y-3",
-                  variant === "sheet"
-                   ? darkTheme ? "bg-nav-bg" : "bg-white"
-                  : "bg-card",
-              )}
-            >
+            <ul className="space-y-3">
               {visible.map((item) => {
-                const { Icon } = iconFor(item)
+                const configuredIcon = iconFor(item)
+                const emergency = isEmergencyNotification(item)
+                const Icon = configuredIcon.Icon
+                const iconClass = emergency
+                  ? "bg-sos/10 text-sos"
+                  : configuredIcon.chipClass
                 const body = snippet(item.display_body || item.body)
+                const hasMedia = Boolean(item.images?.length || item.image_url)
                 return (
                   <li
                     key={item.id}
                     className={cn(
-                      "relative touch-pan-y overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-50",
-                      darkTheme && "border-nav-border bg-nav-raised",
-                      !item.is_read &&
-                        darkTheme ? "bg-nav-raised" : "bg-neutral-50",
+                      "relative touch-pan-y overflow-hidden rounded-2xl border border-neutral-200 bg-white",
+                      !item.is_read && (emergency ? "border-sos/30 bg-sos/5" : "bg-neutral-50"),
                     )}
                   >
                     <button
@@ -516,8 +718,13 @@ export function NotificationsPanel({
                         void openItem(item)
                       }}
                        className={cn(
-                         "flex w-full items-start gap-3.5 px-3.5 py-3.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-neutral-400",
-                         darkTheme ? "hover:bg-brand-orange/10" : "hover:bg-neutral-100",
+                         "flex w-full items-start gap-3.5 px-3.5 pt-3.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-neutral-400",
+                         hasMedia ? "pb-1" : "pb-3.5",
+                         emergency && !item.is_read
+                           ? "hover:bg-sos/10"
+                           : darkTheme
+                             ? "hover:bg-brand-orange/10"
+                             : "hover:bg-neutral-100",
                        )}
                      onPointerDown={(event) => {
                        document.querySelectorAll<HTMLElement>("[data-notification-actions]").forEach((actions) => {
@@ -576,19 +783,46 @@ export function NotificationsPanel({
                          actions.style.background = ""
                        }
                        delete event.currentTarget.dataset.swipeStart
-                     }}
-                   >
+                      }}
+                      onPointerCancel={(event) => {
+                        const timer = holdTimers.get(event.currentTarget)
+                        if (timer) window.clearTimeout(timer)
+                        holdTimers.delete(event.currentTarget)
+                        delete event.currentTarget.dataset.swipeStart
+                        delete event.currentTarget.dataset.held
+                        const actions = event.currentTarget.parentElement?.querySelector<HTMLElement>(
+                          "[data-notification-actions]",
+                        )
+                        if (actions) {
+                          actions.style.opacity = ""
+                          actions.style.transform = ""
+                          actions.style.pointerEvents = ""
+                          actions.style.left = ""
+                          actions.style.right = ""
+                          actions.style.background = ""
+                        }
+                      }}
+                    >
                       <span
                         className={cn(
-                           "flex size-12 shrink-0 items-center justify-center rounded-xl",
-                            darkTheme ? "bg-nav-active text-nav-text-active" : "bg-neutral-100 text-neutral-700",
+                          "flex size-12 shrink-0 items-center justify-center rounded-xl",
+                          iconClass,
                         )}
                       >
-                         <Icon className="size-5" />
+                         {emergency ? (
+                           <TriangleAlertIcon className="size-5" strokeWidth={2} aria-hidden="true" />
+                         ) : (
+                           <Icon className="size-5" aria-hidden="true" />
+                         )}
                       </span>
                       <span className="min-w-0 flex-1 pr-8">
                         <span className="flex items-start justify-between gap-3">
-                           <span className="text-[15px] font-semibold text-neutral-950">
+                           <span
+                             className={cn(
+                               "text-[15px] font-semibold text-neutral-950",
+                               emergency && !item.is_read && "text-sos",
+                             )}
+                           >
                             {item.display_title || item.title}
                           </span>
                            <span className="shrink-0 pt-0.5 text-[12px] text-neutral-700">
@@ -600,8 +834,7 @@ export function NotificationsPanel({
                             {body}
                           </span>
                         ) : null}
-                        {item.image_url ? <NotificationImage src={item.image_url} /> : null}
-                        {item.safety_limited ? (
+                         {item.safety_limited ? (
                           <span className="mt-2 block rounded-lg border border-sos/30 bg-sos/10 px-3 py-2.5">
                             <span className="block text-[12px] font-bold tracking-wide text-sos">
                               Nearby safety alert
@@ -616,21 +849,14 @@ export function NotificationsPanel({
                             </span>
                           </span>
                         ) : null}
-                        {item.action_label && item.type !== "announcement" && !item.safety_limited ? (
-                          <span
-                            className={cn(
-                              "mt-1.5 block text-[12px] font-bold",
-                              variant === "sheet"
-                                ? "text-neutral-600 underline underline-offset-2"
-                                : "text-brand-orange",
-                            )}
-                          >
-                            {item.action_label}
-                          </span>
-                        ) : null}
                       </span>
                     </button>
-                    <span data-notification-actions className={cn("pointer-events-none absolute inset-0 z-10 flex shrink-0 flex-row items-stretch justify-center gap-0 opacity-0 transition-[opacity,transform] duration-200", darkTheme ? "bg-nav-raised" : "bg-neutral-100")}>
+                    {hasMedia ? (
+                      <div className="ml-[4.75rem] mr-11 pb-3.5">
+                        <NotificationImage item={item} onPreview={setMediaPreview} />
+                      </div>
+                    ) : null}
+                    <span data-notification-actions className="pointer-events-none absolute inset-0 z-10 flex shrink-0 flex-row items-stretch justify-center gap-0 bg-neutral-100 opacity-0 transition-[opacity,transform] duration-200">
                       <button
                         type="button"
                         onClick={() => void archiveItem(item)}
@@ -638,12 +864,7 @@ export function NotificationsPanel({
                           item.is_archived ? "Restore notification" : "Archive notification"
                         }
                         title={item.is_archived ? "Restore notification" : "Archive notification"}
-                          className={cn(
-                            "flex min-w-24 flex-1 flex-col items-center justify-center gap-1 border-r px-4 transition-colors",
-                            darkTheme
-                              ? "border-nav-border text-nav-text-active hover:bg-brand-orange/10 hover:text-brand-orange"
-                              : "border-neutral-200 text-neutral-700 hover:bg-neutral-200",
-                          )}
+                        className="flex min-w-24 flex-1 flex-col items-center justify-center gap-1 border-r border-neutral-200 px-4 text-neutral-700 transition-colors hover:bg-neutral-200"
                       >
                          {item.is_archived ? (
                            <ArchiveRestoreIcon className="size-4" />
@@ -657,12 +878,7 @@ export function NotificationsPanel({
                         onClick={() => void deleteItem(item)}
                         aria-label="Delete notification"
                         title="Delete notification"
-                          className={cn(
-                            "flex min-w-24 flex-1 flex-col items-center justify-center gap-1 px-4 transition-colors",
-                            darkTheme
-                              ? "text-nav-text-active hover:bg-brand-orange/10 hover:text-brand-orange"
-                              : "text-neutral-700 hover:bg-neutral-200",
-                          )}
+                        className="flex min-w-24 flex-1 flex-col items-center justify-center gap-1 px-4 text-neutral-700 transition-colors hover:bg-neutral-200"
                       >
                          <Trash2Icon className="size-4" />
                          <span className="text-[11px] font-semibold">Delete</span>
@@ -688,6 +904,9 @@ export function NotificationsPanel({
           ) : null}
         </div>
       </div>
+      {mediaPreview ? (
+        <MediaLightbox items={mediaPreview} index={0} onClose={() => setMediaPreview(null)} />
+      ) : null}
     </div>
   )
 }

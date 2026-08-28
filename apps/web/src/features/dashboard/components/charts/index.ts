@@ -5,12 +5,7 @@
  */
 export { Sparkline, type SparklineProps } from "./sparkline"
 export { ActivityGrid, type ActivityCell, type ActivityGridProps } from "./activity-grid"
-export { HeatmapGrid, HeatmapLegend, type HeatmapRow, type HeatmapGridProps } from "./heatmap-grid"
-export { GroupedBars, type GroupedBarPoint, type GroupedBarsProps } from "./grouped-bars"
-export {
-  SegmentedDonut,
-  DonutLegend,
-  type DonutSlice,
-  type SegmentedDonutProps,
-} from "./segmented-donut"
+export { ColumnChart, type ColumnPoint, type ColumnChartProps } from "./column-chart"
+export { ArcGauge, type ArcGaugeProps } from "./arc-gauge"
+export { ShareBar, type ShareSegment, type ShareBarProps } from "./share-bar"
 export { CHART_COLORS, CHART_TRACK, CHART_GRID, niceMax, ratio } from "./lib"

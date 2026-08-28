@@ -535,6 +535,13 @@ class ConcernStatusEventSerializer(serializers.ModelSerializer):
         model = ConcernStatusEvent
         fields = ("id", "status", "note", "actor", "created_at")
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.status in {Concern.Status.UNDER_REVIEW, Concern.Status.IN_PROGRESS} and not instance.note.strip():
+            data["note"] = "An official has viewed your report."
+            data["actor"] = None
+        return data
+
 
 class ConcernCommentSerializer(serializers.ModelSerializer):
     author = PublicUserSerializer(read_only=True)
@@ -582,6 +589,7 @@ class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
             "status",
             "detected_objects",
             "severity_estimate",
+            "severity_reason",
             "nlp_validity",
             "nlp_confidence",
             "category_match",
@@ -663,6 +671,7 @@ class ContentFlagSerializer(serializers.ModelSerializer):
     comment = serializers.IntegerField(required=False, allow_null=True)
     target = serializers.SerializerMethodField()
     reviewed_by_name = serializers.SerializerMethodField()
+    llm_review = serializers.SerializerMethodField()
 
     class Meta:
         model = ContentFlag
@@ -679,6 +688,7 @@ class ContentFlagSerializer(serializers.ModelSerializer):
             "auto_moderated",
             "reviewed_by_name",
             "target",
+            "llm_review",
             "created_at",
             "updated_at",
         )
@@ -695,6 +705,20 @@ class ContentFlagSerializer(serializers.ModelSerializer):
 
     def get_reviewed_by_name(self, obj):
         return self._content_author_name(obj.reviewed_by) if obj.reviewed_by_id else None
+
+    def get_llm_review(self, obj):
+        log = obj.llm_decision_logs.order_by("-created_at", "-id").first()
+        if log is None:
+            return None
+        output = log.output_snapshot if isinstance(log.output_snapshot, dict) else {}
+        return {
+            "assessment": output.get("assessment", ""),
+            "recommended_disposition": output.get("recommended_disposition", ""),
+            "short_explanation": output.get("short_explanation", ""),
+            "image_review": output.get("image_review"),
+            "model_version": log.model_version,
+            "created_at": log.created_at,
+        }
 
     def get_reporter_full_name(self, obj):
         profile = getattr(obj.reporter, "resident_profile", None)
@@ -894,6 +918,7 @@ class ConcernSerializer(serializers.ModelSerializer):
     comments = serializers.SerializerMethodField()
     ai_assessment = ConcernAiAssessmentSerializer(read_only=True)
     assignments = serializers.SerializerMethodField()
+    viewers = serializers.SerializerMethodField()
     category_ref = ConcernCategorySerializer(read_only=True)
     assigned_department = DepartmentSerializer(read_only=True)
     form_values = serializers.SerializerMethodField()
@@ -975,6 +1000,7 @@ class ConcernSerializer(serializers.ModelSerializer):
             "comments",
             "ai_assessment",
             "assignments",
+            "viewers",
             "clarifications",
             "appeals",
             "official_remarks",
@@ -1111,6 +1137,12 @@ class ConcernSerializer(serializers.ModelSerializer):
         assignments = sorted(obj.assignments.all(), key=lambda item: (-item.created_at.timestamp(), -item.pk))
         return ConcernAssignmentSerializer(assignments, many=True, context=self.context).data
 
+    def get_viewers(self, obj):
+        if not self._can_view_case(obj):
+            return []
+        views = sorted(obj.views.all(), key=lambda item: item.first_viewed_at)
+        return [self._public_user(view.viewer) for view in views if view.viewer_id]
+
     def get_clarifications(self, obj):
         if not self._can_view_case(obj):
             return []
@@ -1187,8 +1219,8 @@ class ConcernSerializer(serializers.ModelSerializer):
                 metadata={"phase": "status_change"},
             )
 
-        assignments = obj.assignments.all()
-        for assignment in assignments:
+        assignments = sorted(obj.assignments.all(), key=lambda item: (item.created_at, item.pk))
+        for assignment_index, assignment in enumerate(assignments):
             assignee_name = (
                 self._public_user(assignment.assignee).get("full_name")
                 if assignment.assignee
@@ -1197,7 +1229,8 @@ class ConcernSerializer(serializers.ModelSerializer):
             assignment_context = " · ".join(
                 part for part in (assignee_name, assignment.office.strip()) if part
             )
-            body = f"Assigned to {assignment_context}."
+            assignment_verb = "Reassigned to" if assignment_index else "Assigned to"
+            body = f"{assignment_verb} {assignment_context}."
             if assignment.note.strip():
                 body = f"{body} {assignment.note.strip()}"
             add(
@@ -1406,6 +1439,11 @@ class ConcernStatusUpdateSerializer(serializers.Serializer):
     status_version = serializers.IntegerField(min_value=0, required=False)
     category = serializers.CharField(max_length=32, required=False, allow_blank=True)
     department_id = serializers.IntegerField(required=False, allow_null=True)
+    assignee_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        allow_empty=True,
+    )
     internal_note = serializers.CharField(max_length=2000, required=False, allow_blank=True)
     applied_ai_suggestion = serializers.BooleanField(required=False, default=False)
 
@@ -1438,6 +1476,12 @@ class ConcernListReporterSerializer(serializers.Serializer):
         return obj.email.split("@", 1)[0].replace(".", " ")
 
 
+class DepartmentMiniSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Department
+        fields = ("id", "name", "code", "short_name", "description")
+
+
 class ConcernListSerializer(serializers.ModelSerializer):
     """Slim row payload for list endpoints.
 
@@ -1448,8 +1492,19 @@ class ConcernListSerializer(serializers.ModelSerializer):
 
     reporter = ConcernListReporterSerializer(read_only=True)
     category_ref = ConcernCategoryMiniSerializer(read_only=True)
+    assigned_department = DepartmentMiniSerializer(read_only=True)
     tracking_id = serializers.CharField(read_only=True)
     first_photo = serializers.SerializerMethodField()
+    photo_count = serializers.SerializerMethodField()
+    vote_count = serializers.IntegerField(read_only=True, default=0)
+    comment_count = serializers.IntegerField(read_only=True, default=0)
+    also_reported_count = serializers.SerializerMethodField()
+    upvoters = serializers.SerializerMethodField()
+    severity = serializers.CharField(read_only=True, default="low")
+    severity_assessed = serializers.BooleanField(read_only=True, default=False)
+    priority_score = serializers.IntegerField(read_only=True, default=0)
+    urgent_attention = serializers.SerializerMethodField()
+    severity_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = Concern
@@ -1469,12 +1524,56 @@ class ConcernListSerializer(serializers.ModelSerializer):
             "updated_at",
             "reporter",
             "category_ref",
+            "assigned_department",
             "first_photo",
+            "photo_count",
+            "vote_count",
+            "comment_count",
+            "also_reported_count",
+            "upvoters",
+            "official_title",
+            "summary",
+            "severity",
+            "severity_assessed",
+            "priority_score",
+            "urgent_attention",
+            "severity_reason",
         )
+
+    def get_severity_reason(self, obj) -> str:
+        assessment = getattr(obj, "ai_assessment", None)
+        if not assessment or assessment.status != ConcernAiAssessment.Status.COMPLETED:
+            return ""
+        return assessment.severity_reason or ""
+
+    def get_urgent_attention(self, obj) -> bool:
+        assessment = getattr(obj, "ai_assessment", None)
+        if not assessment or assessment.status != ConcernAiAssessment.Status.COMPLETED:
+            return False
+        return bool(assessment.urgent_attention)
 
     def get_first_photo(self, obj) -> str | None:
         media = next((m for m in obj.media.all()), None)
         return concern_media_preview_url(media.pk) if media else None
+
+    def get_photo_count(self, obj) -> int:
+        return len(obj.media.all())
+
+    def get_also_reported_count(self, obj) -> int:
+        from .community_incident import group_members
+
+        _, duplicates = group_members(obj)
+        return len(duplicates)
+
+    def get_upvoters(self, obj) -> list[str]:
+        names = []
+        for vote in obj.votes.all().order_by("-created_at", "-id")[:3]:
+            profile = getattr(vote.user, "resident_profile", None)
+            if profile:
+                names.append(f"{profile.first_name.strip()} {profile.last_name.strip()}".strip())
+            else:
+                names.append(vote.user.get_full_name() or vote.user.email.split("@", 1)[0])
+        return names
 
 
 class AnnouncementSerializer(serializers.ModelSerializer):

@@ -41,6 +41,51 @@ def execute_takedown(flag, staff_note, *, actor=None, request=None):
         )
 
 
+def restore_automated_takedown(flag, staff_note, *, actor=None):
+    """Undo a takedown that was made by the moderation model.
+
+    This path is deliberately limited to an official review flow. It restores
+    the public content, clears the automated marker, and leaves a timeline
+    entry so the reversal is as visible as the original action.
+    """
+    target_kind = flag.target_kind
+    if target_kind == "concern":
+        concern = flag.concern
+        if concern and concern.status == Concern.Status.REJECTED:
+            concern.status = Concern.Status.SUBMITTED
+            concern.rejection_code = ""
+            concern.archived_at = None
+            concern.update_text = staff_note[:255]
+            concern.status_version += 1
+            concern.save(update_fields=["status", "rejection_code", "archived_at", "update_text", "status_version", "updated_at"])
+            ConcernTimelineEntry.objects.create(
+                concern=concern,
+                event_type=ConcernTimelineEntry.EventType.STATUS_CHANGE,
+                status=Concern.Status.SUBMITTED,
+                message=f"Automated moderation action reverted by an official. {staff_note}",
+                actor=actor,
+                visible_to_resident=True,
+                is_custom=False,
+                metadata={"reverted_automated_takedown": True},
+            )
+        return
+
+    if target_kind == "concern_comment" and flag.comment:
+        flag.comment.status = ConcernComment.Status.VISIBLE
+        flag.comment.moderation_note = staff_note[:255]
+        flag.comment.save(update_fields=["status", "moderation_note", "updated_at"])
+    elif target_kind == "announcement_comment" and flag.announcement_comment:
+        flag.announcement_comment.status = AnnouncementComment.Status.VISIBLE
+        flag.announcement_comment.moderation_note = staff_note[:255]
+        flag.announcement_comment.save(update_fields=["status", "moderation_note", "updated_at"])
+    elif target_kind == "emergency_comment" and flag.emergency_comment:
+        from apps.emergencies.models import EmergencyCommunityComment
+
+        flag.emergency_comment.status = EmergencyCommunityComment.Status.VISIBLE
+        flag.emergency_comment.moderation_note = staff_note[:255]
+        flag.emergency_comment.save(update_fields=["status", "moderation_note", "updated_at"])
+
+
 def _take_down_concern(flag, staff_note, *, actor):
     from apps.notifications.models import Notification
     from apps.notifications.services import broadcast_live_map_event, create_user_notification

@@ -63,7 +63,7 @@ function ArticleBody({ slug }: { slug: string | undefined }) {
       <HelpBreadcrumb
         trail={[
           { label: t.allCollections, to: "/help" },
-          { label: pick(collection.title, locale), to: `/help/c/${collection.slug}` },
+          { label: pick(collection.title, locale), to: `/help/collections/${collection.slug}` },
           { label: pick(article.title, locale) },
         ]}
       />
@@ -95,7 +95,7 @@ function ArticleBody({ slug }: { slug: string | undefined }) {
             {others.map((item) => (
               <li key={item.slug} className="border-b border-neutral-200 last:border-b-0">
                 <Link
-                  to={`/help/a/${item.slug}`}
+                  to={`/help/articles/${item.slug}`}
                   className="flex items-center gap-4 px-6 py-5 no-underline transition-colors hover:bg-neutral-100"
                 >
                   <div className="min-w-0 flex-1">

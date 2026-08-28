@@ -19,6 +19,7 @@ import { toast } from "sonner"
 import type leaflet from "leaflet"
 
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
+import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import {
   ConfigHeroAction,
   ConfigPanel,
@@ -441,14 +442,12 @@ export default function OfficialCoverageAreaPage() {
         doubleClickZoom: false,
       })
 
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-        attribution: "",
-        subdomains: "abcd",
+      addBaseTiles(L, map, "dark", {
         maxZoom: 20,
         keepBuffer: 6,
         updateWhenIdle: false,
         updateWhenZooming: true,
-      }).addTo(map)
+      })
 
       layerRef.current = L.layerGroup().addTo(map)
       mapRef.current = map

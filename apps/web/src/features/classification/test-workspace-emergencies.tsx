@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { CircleCheck, SirenIcon, UploadCloudIcon, XIcon } from "lucide-react"
+import { CircleCheck, Info, MessageSquareIcon, SirenIcon, TriangleAlert, UploadCloudIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -11,6 +11,7 @@ import { SectionLabel, displayValue } from "./shared"
 import { LocationPinMap, type LocationPin } from "./location-pin-map"
 import { RoutePreviewMap } from "./route-preview-map"
 import { emergencyTitle, locationSourceLabel, responderMessage, routeScopeLabel, routeStateLabel } from "./dispatch-copy"
+import { formatNominatimParts, reverseGeocode } from "@/lib/geocode"
 
 function formatEta(seconds: number | null) {
   if (seconds == null) return "Unknown"
@@ -23,7 +24,34 @@ function formatDistance(meters: number | null) {
   return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`
 }
 
-export function EmergencyTestWorkspace() {
+type Finding = {
+  icon: typeof CircleCheck
+  tone: "good" | "warn" | "bad" | "muted"
+  text: string
+}
+
+const FINDING_TONE: Record<Finding["tone"], string> = {
+  good: "text-green-600",
+  warn: "text-amber-500",
+  bad: "text-sos",
+  muted: "text-neutral-400",
+}
+
+function FindingList({ findings }: { findings: Finding[] }) {
+  if (!findings.length) return null
+  return (
+    <ul className="space-y-1.5 pl-8">
+      {findings.map((finding, index) => (
+        <li key={index} className="flex gap-2 text-[13.5px] leading-relaxed text-neutral-700">
+          <finding.icon className={cn("mt-0.5 size-4 shrink-0", FINDING_TONE[finding.tone])} strokeWidth={2} aria-hidden />
+          <span className="min-w-0 break-words">{finding.text}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+export function EmergencyTestWorkspace({ onUseSms }: { onUseSms?: () => void }) {
   const [description, setDescription] = useState("")
   const [pin, setPin] = useState<LocationPin | null>(null)
   const [file, setFile] = useState<File | null>(null)
@@ -36,6 +64,27 @@ export function EmergencyTestWorkspace() {
   const fileRef = useRef<HTMLInputElement | null>(null)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<EmergencySimulationResult | null>(null)
+
+  // The location finding only ever said "Community — Location from pinned
+  // map", which named nothing about where on the map that actually was.
+  // Reverse-geocode the pin so the finding can name the street.
+  const [pinStreet, setPinStreet] = useState("")
+  useEffect(() => {
+    const latitude = result && "location" in result ? result.location.latitude : null
+    const longitude = result && "location" in result ? result.location.longitude : null
+    if (latitude == null || longitude == null) {
+      setPinStreet("")
+      return
+    }
+    let cancelled = false
+    void reverseGeocode(latitude, longitude).then((data) => {
+      if (cancelled || !data) return
+      setPinStreet(formatNominatimParts(data).primary)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [result])
 
   const canCheck = description.trim().length >= 10 && pin != null
 
@@ -128,15 +177,26 @@ export function EmergencyTestWorkspace() {
         <LocationPinMap pin={pin} onPinChange={setPin} />
       </div>
 
-      <SheetPrimaryButton
-        type="button"
-        onClick={() => void runTest()}
-        disabled={!canCheck || busy}
-        className="bg-brand-navy text-white hover:bg-brand-navy/85 disabled:bg-neutral-200 disabled:text-neutral-400 disabled:hover:bg-neutral-200"
-      >
-        {busy ? "Checking…" : "Check this sample"}
-      </SheetPrimaryButton>
-
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <SheetPrimaryButton
+          type="button"
+          onClick={() => void runTest()}
+          disabled={!canCheck || busy}
+          className="flex-1 bg-brand-navy text-white hover:bg-brand-navy/85 disabled:bg-neutral-200 disabled:text-neutral-400 disabled:hover:bg-neutral-200"
+        >
+          {busy ? "Checking…" : "Check this sample"}
+        </SheetPrimaryButton>
+        {onUseSms ? (
+          <button
+            type="button"
+            onClick={onUseSms}
+            className="inline-flex h-[52px] items-center justify-center gap-2 rounded-full border border-neutral-300 px-5 text-[15px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-100 active:scale-[0.99]"
+          >
+            <MessageSquareIcon className="size-4" aria-hidden />
+            Use SMS
+          </button>
+        ) : null}
+      </div>
       {result ? (
         <SheetDialog
           open
@@ -152,11 +212,11 @@ export function EmergencyTestWorkspace() {
               <>
                 <div className="flex items-start gap-3">
                   <SirenIcon className="mt-0.5 size-5 shrink-0 text-sos" strokeWidth={2} aria-hidden />
-                  <div>
-                    <p className="text-[16px] font-bold leading-snug text-neutral-900">
+                  <div className="min-w-0">
+                    <p className="text-[16px] font-semibold leading-snug text-neutral-900">
                       {emergencyTitle(result.matched_emergency_type)}
                     </p>
-                    <p className="mt-1 text-[14px] leading-relaxed text-neutral-500">{result.emergency_routing_reason}</p>
+                    <p className="mt-1 text-[14px] leading-relaxed text-neutral-600">{result.emergency_routing_reason}</p>
                     {result.likely_unit ? (
                       <p className="mt-1 text-[13px] font-medium text-neutral-500">
                         Would likely go to <span className="font-semibold text-neutral-900">{result.likely_unit.name}</span>, the
@@ -207,79 +267,91 @@ export function EmergencyTestWorkspace() {
               <EmergencyPhotoPreview result={result} />
             </>
           ) : result.path === "emergency" ? (
-            <>
-              <div className="flex items-start gap-3">
-                <SirenIcon className="mt-0.5 size-5 shrink-0 text-sos" strokeWidth={2} aria-hidden />
-                <div>
-                  <p className="text-[16px] font-bold leading-snug text-neutral-900">
-                    {emergencyTitle(result.matched_emergency_type)}
-                  </p>
-                  <p className="mt-1 text-[14px] leading-relaxed text-neutral-500">
-                    {responderMessage(result.matched_emergency_type, result.routing.route, result.routing.responder_preview.found)}
-                  </p>
-                </div>
-              </div>
-              <EmergencyPhotoPreview result={result} />
-              <div className="grid gap-1 border-y border-neutral-200 py-3 text-[13px] text-neutral-600 sm:grid-cols-3 sm:gap-4">
-                <span className="font-semibold text-neutral-900">{result.location.community?.name ?? "Community not confirmed"}</span>
-                <span>{locationSourceLabel(result.location.source)}</span>
-                <span>{routeScopeLabel(result.routing.scope, result.routing.responding_community)}</span>
-              </div>
-              <RoutePreviewMap
-                location={result.location}
-                routing={{
-                  scope: result.routing.scope,
-                  responder: result.routing.responder_preview.found
-                    ? result.routing.responder_preview.responder
-                    : null,
-                  route: result.routing.route,
-                }}
-              />
-              {result.routing.responder_preview.found ? (
-                <dl className="grid grid-cols-2 gap-3 rounded-[14px] border border-neutral-200 p-4 sm:grid-cols-3">
-                  <div>
-                    <dt className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">Distance</dt>
-                    <dd className="mt-0.5 text-[14px] font-semibold text-neutral-900">
-                      {formatDistance(result.routing.responder_preview.distance_meters)}
-                    </dd>
+            (() => {
+              const responderFound = result.routing.responder_preview.found
+              const communityName = result.location.community?.name ?? "Community not confirmed"
+              const findings: Finding[] = [
+                {
+                  icon: CircleCheck,
+                  tone: "good",
+                  text: `${pinStreet ? `${pinStreet}, ` : ""}${communityName} — ${locationSourceLabel(result.location.source)}.`,
+                },
+                {
+                  icon: Info,
+                  tone: "muted",
+                  text: routeScopeLabel(result.routing.scope, result.routing.responding_community),
+                },
+                {
+                  icon: Info,
+                  tone: "muted",
+                  text: result.routing.department
+                    ? `Assigned unit for this category: ${result.routing.department.name}.`
+                    : "No unit is configured to handle this category.",
+                },
+              ]
+              if (responderFound) {
+                const responder = result.routing.responder_preview.responder
+                findings.push({
+                  icon: CircleCheck,
+                  tone: "good",
+                  text: `Would go to ${responder.full_name} — ${formatDistance(result.routing.responder_preview.distance_meters)} away, ETA ${formatEta(result.routing.responder_preview.eta_seconds)}.`,
+                })
+                findings.push({
+                  icon: Info,
+                  tone: "muted",
+                  text: `${routeStateLabel(result.routing.route)}${result.routing.route.summary ? `. ${result.routing.route.summary}` : "."}`,
+                })
+              } else {
+                findings.push({
+                  icon: TriangleAlert,
+                  tone: "warn",
+                  text: "No qualified responder is available. The emergency remains active and goes to manual dispatch.",
+                })
+              }
+
+              return (
+                <>
+                  <div className="space-y-2">
+                    <div className="flex items-start gap-3">
+                      <SirenIcon className="mt-0.5 size-5 shrink-0 text-sos" strokeWidth={2} aria-hidden />
+                      <div className="min-w-0">
+                        <p className="text-[16px] font-semibold leading-snug text-neutral-900">
+                          {emergencyTitle(result.matched_emergency_type)}
+                        </p>
+                        <p className="mt-1 text-[14px] leading-relaxed text-neutral-600">
+                          {responderMessage(result.matched_emergency_type, result.routing.route, responderFound)}
+                        </p>
+                      </div>
+                    </div>
+                    <FindingList findings={findings} />
                   </div>
-                  <div>
-                    <dt className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">ETA</dt>
-                    <dd className="mt-0.5 text-[14px] font-semibold text-neutral-900">
-                      {formatEta(result.routing.responder_preview.eta_seconds)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">Responder</dt>
-                    <dd className="mt-0.5 text-[14px] font-semibold text-neutral-900">
-                      {result.routing.responder_preview.responder.full_name}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">Unit</dt>
-                    <dd className="mt-0.5 text-[14px] font-semibold text-neutral-900">
-                      {result.routing.department?.name ?? "Manual dispatch"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">Route</dt>
-                    <dd className="mt-0.5 text-[14px] font-semibold text-neutral-900">
-                      {routeStateLabel(result.routing.route)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">Summary</dt>
-                    <dd className="mt-0.5 text-[14px] font-semibold text-neutral-900">
-                      {result.routing.route.summary || "No route summary"}
-                    </dd>
-                  </div>
-                </dl>
-              ) : (
-                <p className={cn("rounded-[14px] border border-neutral-200 p-4 text-[13px] font-medium text-neutral-500")}>
-                  No qualified responder is available. The emergency remains active and goes to manual dispatch.
-                </p>
-              )}
-            </>
+
+                  <EmergencyPhotoPreview result={result} />
+
+                  <RoutePreviewMap
+                    location={result.location}
+                    routing={
+                      responderFound
+                        ? {
+                            scope: result.routing.scope,
+                            responder: result.routing.responder_preview.responder,
+                            route: result.routing.route,
+                          }
+                        : result.routing.sample_route
+                          ? {
+                              scope: result.routing.scope,
+                              responder: {
+                                latitude: result.routing.sample_route.latitude,
+                                longitude: result.routing.sample_route.longitude,
+                              },
+                              route: result.routing.sample_route.route,
+                            }
+                          : { scope: result.routing.scope, responder: null, route: result.routing.route }
+                    }
+                  />
+                </>
+              )
+            })()
           ) : null}
         </div>
         </SheetDialog>

@@ -42,9 +42,9 @@ function lookup(map: Record<string, PlainTerm>, value: string | null | undefined
  */
 export const CONCERN_STATUS: Record<string, PlainTerm> = {
   submitted: { label: "Received", help: "Logged and waiting for an officer. Not yet routed to a unit." },
-  under_review: { label: "Being checked", help: "An officer is confirming the category and details." },
-  assigned: { label: "Reassigned to another unit", help: "Routed to a barangay unit that now owns it." },
-  in_progress: { label: "Being worked on", help: "Work has started on the ground." },
+  under_review: { label: "Being handled", help: "An officer is reviewing the report and coordinating the next step." },
+  assigned: { label: "Assigned to a unit", help: "Routed to a barangay unit that now owns it." },
+  in_progress: { label: "Being handled", help: "The assigned unit is working on the concern." },
   resolved: { label: "Resolved", help: "Finished, with proof attached." },
   rejected: { label: "Denied appeal", help: "Declined. The resident was given a reason." },
   appealed: { label: "Under appeal", help: "The resident objected. It is back with an officer." },

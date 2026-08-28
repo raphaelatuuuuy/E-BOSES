@@ -310,12 +310,11 @@ export function ResidentLeafletMap({
       })
 
       /**
-       * Product basemap: Carto light (clean grey streets — original E-Boses look).
+       * Product basemap: CARTO light (clean grey streets — original E-Boses look).
        * Tailwind img max-width is overridden via .eboses-alerts-map CSS so
        * tiles stay visible.
        */
       addBaseTiles(L, map, "light", {
-        attribution: "&copy; OpenStreetMap &copy; CARTO",
         maxZoom: 19,
         keepBuffer: 6,
         className: "eboses-map-tiles",

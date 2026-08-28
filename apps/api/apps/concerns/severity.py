@@ -33,8 +33,11 @@ from __future__ import annotations
 
 SEVERITY_ORDER = ("low", "moderate", "high", "critical")
 
-# Minimum severity a category holds when no photo was submitted or the AI has
-# not scored it yet.
+# Starting severity a category holds until the AI has scored the report. It is
+# a placeholder for an unassessed row, not a floor under the model: applying it
+# with max() once a judgement exists made a videoke noise complaint "high"
+# purely because it was filed under public safety, while the reason shown beside
+# it still read "does not pose an immediate physical danger".
 CATEGORY_BASELINE = {
     "public_safety": 2,
     "infrastructure": 1,
@@ -81,7 +84,7 @@ def severity_level(concern) -> tuple[int, bool]:
     if getattr(assessment, "urgent_attention", False):
         return 3, True
 
-    level = max(SEVERITY_ESTIMATE_LEVEL[estimate], baseline)
+    level = SEVERITY_ESTIMATE_LEVEL[estimate]
 
     relevance = getattr(assessment, "nlp_confidence", None)
     if relevance is not None:

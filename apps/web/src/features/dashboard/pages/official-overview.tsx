@@ -1,105 +1,41 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 
-import { cn } from "@workspace/ui/lib/utils"
+import { getOfficialAnalytics, type OfficialAnalytics } from "@/features/dashboard/api"
+import { AttentionCard } from "@/features/dashboard/components/overview/attention-card"
+import { AwaitingActionCard } from "@/features/dashboard/components/overview/awaiting-action-card"
 import {
-  getOfficialDashboardSummary,
-  listManagedConcerns,
-  type Concern,
-  type OfficialRoleSummary,
-} from "@/features/dashboard/api"
-import { CategoryTable } from "@/features/dashboard/components/overview/category-table"
-import { ConcernTrendCard } from "@/features/dashboard/components/overview/insights"
-import { KpiRow } from "@/features/dashboard/components/overview/kpi-row"
-import { MiniAlertsMap } from "@/features/dashboard/components/overview/mini-alerts-map"
-import { LatestConcernsCard, OutcomesCard } from "@/features/dashboard/components/overview/outcomes"
-import { dailyCounts } from "@/features/dashboard/lib/overview-series"
-import { isMergedChild } from "@/features/dashboard/lib/status-vocabulary"
+  EmergencyAlertBanner,
+  OverviewMasthead,
+} from "@/features/dashboard/components/overview/overview-masthead"
+import { ResolutionCard } from "@/features/dashboard/components/overview/resolution-card"
+import { TrendCard } from "@/features/dashboard/components/overview/trend-card"
 import { usePageTitle } from "@/hooks/use-page-title"
-import { useAuthSession } from "@/features/auth/auth-session"
 
-function StatusMasthead({
-  live,
-  responders,
-  loading,
-  now,
-}: {
-  live: number
-  responders: number
-  loading: boolean
-  now: Date
-}) {
-  const { user } = useAuthSession()
-  const communityName = (user?.barangay || "Community").replace(/^Barangay\s+/i, "")
-  const alarm = live > 0
-
-  return (
-    <header className="mb-5">
-      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
-        <div className="min-w-0">
-          <p
-            className={cn(
-              "flex items-center gap-2 text-micro",
-              alarm ? "text-severity-critical" : "text-status-closed",
-            )}
-          >
-            <span
-              className={cn(
-                "relative flex size-2 shrink-0 rounded-pill",
-                alarm ? "bg-sos" : "bg-status-closed",
-              )}
-            >
-              {alarm ? <span aria-hidden className="ops-pulse absolute inset-0 rounded-pill" /> : null}
-            </span>
-            {loading
-              ? "Checking the barangay"
-              : alarm
-                ? `${live} ${live === 1 ? "emergency" : "emergencies"} active right now`
-                : "All clear"}
-          </p>
-
-          <h1 className="mt-2 text-display text-foreground">Operations Overview</h1>
-          <p className="mt-1.5 text-body text-muted-foreground">
-            {communityName}
-            <span className="text-faint-foreground"> · </span>
-            <span>
-              {responders} {responders === 1 ? "responder" : "responders"} on duty
-            </span>
-          </p>
-        </div>
-
-        <p className="shrink-0 text-label text-subtle-foreground">
-          {new Intl.DateTimeFormat("en", {
-            weekday: "long",
-            month: "long",
-            day: "numeric",
-          }).format(now)}
-        </p>
-      </div>
-
-      <div className="mt-4 h-px w-full bg-card-line" />
-    </header>
-  )
-}
-
+/**
+ * Four regions, one request.
+ *
+ * The page this replaces fetched a page of managed concerns and counted them in
+ * the browser. DRF pages that endpoint at twenty, so every figure on the screen
+ * described the twenty most recent concerns while claiming to describe the
+ * barangay. `/dashboard/official/analytics/` aggregates in the database, which
+ * is the only place those numbers can be true — and it means the page no longer
+ * pulls media, comments and AI assessments across the wire to count rows.
+ *
+ * The live map and the category table left the screen. Seven regions at equal
+ * weight is not an overview; the map has its own page, and the category split
+ * is five numbers, which the trend card states as facts.
+ */
 export default function OfficialOverviewPage() {
   usePageTitle("Overview")
-  const [summary, setSummary] = useState<OfficialRoleSummary | null>(null)
-  const [concerns, setConcerns] = useState<Concern[]>([])
+  const [analytics, setAnalytics] = useState<OfficialAnalytics | null>(null)
   const [loading, setLoading] = useState(true)
-
-  const now = new Date()
 
   useEffect(() => {
     let cancelled = false
     async function load() {
       try {
-        const [nextSummary, nextConcerns] = await Promise.all([
-          getOfficialDashboardSummary(),
-          listManagedConcerns(),
-        ])
-        if (cancelled) return
-        setSummary(nextSummary)
-        setConcerns(nextConcerns)
+        const next = await getOfficialAnalytics()
+        if (!cancelled) setAnalytics(next)
       } catch {
         void 0
       } finally {
@@ -121,43 +57,21 @@ export default function OfficialOverviewPage() {
     }
   }, [])
 
-  const incidents = useMemo(
-    () => concerns.filter((concern) => !isMergedChild(concern) && !concern.archived_at),
-    [concerns],
-  )
-
-  const weekDelta = useMemo(() => {
-    const fortnight = dailyCounts(incidents, 14)
-    const thisWeek = fortnight.slice(7).reduce((sum, point) => sum + point.value, 0)
-    const lastWeek = fortnight.slice(0, 7).reduce((sum, point) => sum + point.value, 0)
-    return thisWeek - lastWeek
-  }, [incidents])
+  const live = analytics?.emergencies.active ?? 0
 
   return (
-    <div className="px-4 pb-12 pt-5 md:px-6 md:pt-6 lg:px-8">
-      <StatusMasthead
-        live={summary?.active_emergencies ?? 0}
-        responders={summary?.responders_on_duty ?? 0}
-        loading={loading}
-        now={now}
-      />
+    <div className="px-5 pb-16 pt-8 md:px-8 lg:px-10">
+      {live > 0 ? <EmergencyAlertBanner count={live} /> : null}
+      <OverviewMasthead analytics={analytics} loading={loading} />
 
-      <KpiRow summary={summary} concerns={incidents} loading={loading} weekDelta={weekDelta} />
-
-            <div className="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-[1.35fr_0.95fr_1fr]">
-        <div className="min-w-0 lg:col-span-2 xl:col-span-1">
-          <ConcernTrendCard concerns={incidents} loading={loading} />
-        </div>
-        <OutcomesCard concerns={incidents} loading={loading} />
-        <LatestConcernsCard concerns={incidents} loading={loading} />
+      <div className="mt-8 grid gap-4 xl:grid-cols-[0.85fr_1.4fr]">
+        <AwaitingActionCard analytics={analytics} loading={loading} />
+        <TrendCard analytics={analytics} loading={loading} />
       </div>
 
-            <div className="mt-3">
-        <MiniAlertsMap />
-      </div>
-
-            <div className="mt-3">
-        <CategoryTable concerns={incidents} loading={loading} />
+      <div className="mt-4 grid gap-4 xl:grid-cols-[0.85fr_1.4fr]">
+        <ResolutionCard analytics={analytics} loading={loading} />
+        <AttentionCard analytics={analytics} loading={loading} />
       </div>
     </div>
   )

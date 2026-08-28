@@ -21,9 +21,9 @@ import type { Concern } from "@/features/dashboard/api"
  */
 const STATUS_CHOICE_LABEL: Record<string, string> = {
   submitted: "Received",
-  under_review: "Being checked",
-  assigned: "Reassigned to another unit",
-  in_progress: "Being worked on",
+  under_review: "Being handled",
+  assigned: "Assigned to a unit",
+  in_progress: "Being handled",
   resolved: "Resolved",
   rejected: "Denied appeal",
   appealed: "Under appeal",
@@ -43,10 +43,9 @@ export const ALL_STATUSES = [
 /**
  * Which statuses the dropdown offers, in order.
  *
- * Every status, not just the legal next moves: the backend enforces
- * transitions on save, but officials asked to see the whole lifecycle so they
- * can pick what the report is actually heading for instead of what the map
- * happens to permit. A custom status is offered separately by the panel.
+ * Every status, not just a presumed next move: officials can correct or
+ * advance a report directly, and the API validates the write itself. A
+ * custom status is offered separately by the panel.
  */
 export function statusOptionsFor(): string[] {
   return [...ALL_STATUSES]

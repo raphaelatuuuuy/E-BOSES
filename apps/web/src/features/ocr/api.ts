@@ -253,6 +253,7 @@ export interface OcrTemplateMatch {
  */
 export interface OcrIdIntegrity {
   checked: boolean
+  side?: ProofSide | "front" | "back" | "single"
   compared_to_sample: boolean
   format_verdict: "format_matches" | "format_mismatch" | "no_reference" | "inconclusive"
   integrity_verdict:
@@ -264,6 +265,9 @@ export interface OcrIdIntegrity {
     | "inconclusive"
   confidence: number
   flagged: boolean
+  integrity_advisory?: boolean
+  /** Controlled user-facing feedback; raw model signals are not displayed. */
+  feedback?: string
   signals: string[]
   note?: string
 }
@@ -291,10 +295,24 @@ export interface OcrPipeline {
   reached: OcrPipelineStage
   blocked_by: OcrPipelineStage | null
   forensics: OcrPipelineForensics
+  integrity_checked?: boolean
+  integrity_checks?: OcrIdIntegrity[]
   /** What the resident would be told. */
   message?: string
   /** The specific finding behind that message, for the official only. */
   detail?: string
+}
+
+export interface OcrReadability {
+  reason: "too_small" | "out_of_focus" | "too_dark" | "too_bright" | "low_contrast" | string
+  message: string
+  metrics?: {
+    width?: number
+    height?: number
+    brightness?: number
+    contrast?: number
+    sharpness?: number
+  }
 }
 
 export interface OcrTestResult {
@@ -308,7 +326,10 @@ export interface OcrTestResult {
   extraction_json?: Record<string, string>
   template_match?: OcrTemplateMatch | null
   id_integrity?: OcrIdIntegrity | null
+  id_integrity_checks?: OcrIdIntegrity[]
   pipeline?: OcrPipeline | null
+  /** Why OCR read little or nothing from the photo, when it did. */
+  readability?: OcrReadability | null
   rule_results?: VerificationRuleResult[]
   error?: string
   created_at?: string
@@ -319,6 +340,8 @@ export interface OcrTestResult {
   provider?: "ocrspace" | "easyocr" | string
   model?: string
   provider_job_id?: string
+  /** Protected URL for the uploaded image used in this test run. */
+  image_url?: string | null
 }
 
 /** Normalize backend extracted_fields (object or array) into a UI list. */

@@ -5,14 +5,20 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentSettings
-from apps.concerns.models import Concern, Department
+from apps.concerns.models import Announcement, Concern, ConcernMedia, Department
 from apps.concerns.test_helpers import active_test_community, ensure_test_profile
-from apps.emergencies.models import EmergencyAlert, WitnessNotification
+from apps.emergencies.models import EmergencyAlert, EmergencyMedia, WitnessNotification
 
 from .models import BrowserPushSubscription, Notification
 from .selectors import notification_queryset
-from .services import broadcast_notification, notify_status_change
-from .tickets import consume_websocket_ticket
+from .services import (
+    broadcast_notification,
+    create_user_notification,
+    notification_display_payload,
+    notify_status_change,
+    send_browser_push,
+)
+from .tickets import consume_websocket_ticket, issue_websocket_ticket
 
 
 class NotificationPreferenceTests(TestCase):
@@ -54,6 +60,83 @@ class NotificationPreferenceTests(TestCase):
         self.assertTrue(Notification.objects.filter(recipient=user, concern=concern).exists())
 
 
+class NotificationRealtimeTests(TestCase):
+    TEST_CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(
+            email="notification-realtime@example.com",
+            phone_number="+639353333399",
+            password="Str0ng!Pass123",
+            status=User.Status.VERIFIED,
+        )
+
+    @patch("apps.notifications.tasks.deliver_notification_task.delay")
+    def test_creating_notification_queues_realtime_delivery_after_commit(self, deliver):
+        with self.captureOnCommitCallbacks(execute=True):
+            notification = create_user_notification(
+                recipient=self.user,
+                type=Notification.Type.ANNOUNCEMENT,
+                title="Barangay update",
+                body="Water service resumes at noon.",
+            )
+
+        deliver.assert_called_once_with(notification.pk)
+
+    @patch("apps.notifications.services.send_browser_push")
+    @patch("apps.notifications.services._broadcast")
+    def test_delivery_targets_the_recipient_realtime_group(self, realtime_broadcast, browser_push):
+        notification = Notification.objects.create(
+            recipient=self.user,
+            type=Notification.Type.CHAT_MESSAGE,
+            title="New message on your report",
+            body="An official replied.",
+        )
+
+        broadcast_notification(notification)
+
+        realtime_broadcast.assert_called_once()
+        group_name, event_type, payload = realtime_broadcast.call_args.args
+        self.assertEqual(group_name, f"user_{self.user.pk}")
+        self.assertEqual(event_type, "notification.created")
+        self.assertEqual(payload["id"], notification.pk)
+        self.assertEqual(payload["type"], Notification.Type.CHAT_MESSAGE)
+        browser_push.assert_called_once()
+
+    @override_settings(CHANNEL_LAYERS=TEST_CHANNEL_LAYERS)
+    def test_authenticated_user_receives_notification_over_websocket(self):
+        from asgiref.sync import async_to_sync
+        from channels.testing import WebsocketCommunicator
+        from config.asgi import application
+
+        communicator = WebsocketCommunicator(
+            application,
+            f"/ws/notifications/?ticket={issue_websocket_ticket(self.user)}",
+        )
+
+        async def scenario():
+            connected, _ = await communicator.connect()
+            if not connected:
+                return connected, None
+            from channels.layers import get_channel_layer
+
+            await get_channel_layer().group_send(
+                f"user_{self.user.pk}",
+                {
+                    "type": "notification.created",
+                    "payload": {"id": 42, "type": Notification.Type.ANNOUNCEMENT},
+                },
+            )
+            event = await communicator.receive_json_from(timeout=5)
+            await communicator.disconnect()
+            return connected, event
+
+        connected, event = async_to_sync(scenario)()
+        self.assertTrue(connected)
+        self.assertEqual(event["type"], "notification.created")
+        self.assertEqual(event["payload"]["id"], 42)
+
 class NotificationPreferenceAPITests(APITestCase):
     def create_verified_user(self, suffix="base"):
         return get_user_model().objects.create_user(
@@ -93,6 +176,42 @@ class NotificationPreferenceAPITests(APITestCase):
         self.assertEqual([item["id"] for item in list_response.data], [Notification.objects.get(recipient=user).pk])
         self.assertEqual(count_response.data["count"], 1)
 
+    def test_unread_count_excludes_archived_notifications(self):
+        user = self.create_verified_user("archived-count")
+        Notification.objects.create(
+            recipient=user,
+            type=Notification.Type.ANNOUNCEMENT,
+            title="Visible unread",
+        )
+        Notification.objects.create(
+            recipient=user,
+            type=Notification.Type.ANNOUNCEMENT,
+            title="Archived unread",
+            is_archived=True,
+        )
+        self.client.force_authenticate(user)
+
+        response = self.client.get("/api/notifications/unread-count/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 1)
+
+    def test_mark_all_read_updates_unread_count_immediately(self):
+        user = self.create_verified_user("read-all-count")
+        Notification.objects.create(
+            recipient=user,
+            type=Notification.Type.ANNOUNCEMENT,
+            title="Unread update",
+        )
+        self.client.force_authenticate(user)
+        self.assertEqual(self.client.get("/api/notifications/unread-count/").data["count"], 1)
+
+        response = self.client.post("/api/notifications/read-all/", {}, format="json")
+        refreshed_count = self.client.get("/api/notifications/unread-count/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(refreshed_count.data["count"], 0)
+
     def test_user_can_register_browser_push_subscription(self):
         user = get_user_model().objects.create_user(
             email="push-sub@example.com",
@@ -113,6 +232,24 @@ class NotificationPreferenceAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertTrue(BrowserPushSubscription.objects.filter(user=user, endpoint="https://push.example.test/sub/1", is_active=True).exists())
+
+    def test_registering_browser_push_reenables_resident_push_preference(self):
+        user = self.create_verified_user("reenable-push")
+        settings_obj = ResidentSettings.objects.create(user=user, push_alerts=False)
+        self.client.force_authenticate(user)
+
+        response = self.client.post(
+            "/api/notifications/browser-push/subscriptions/",
+            {
+                "endpoint": "https://push.example.test/sub/reenabled",
+                "keys": {"p256dh": "p256dh-key", "auth": "auth-key"},
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        settings_obj.refresh_from_db()
+        self.assertTrue(settings_obj.push_alerts)
 
     def test_notification_payload_includes_public_resource_ids(self):
         user = self.create_verified_user("public-ids")
@@ -144,6 +281,172 @@ class NotificationPreferenceAPITests(APITestCase):
         by_type = {item["type"]: item for item in response.data}
         self.assertEqual(by_type[Notification.Type.SUBMITTED]["concern_public_id"], str(concern.public_id))
         self.assertEqual(by_type[Notification.Type.EMERGENCY_SUBMITTED]["emergency_public_id"], str(emergency.public_id))
+
+    def test_notification_inbox_only_returns_the_authenticated_users_rows(self):
+        user = self.create_verified_user("recipient-isolation")
+        other = self.create_verified_user("recipient-isolation-other")
+        own = Notification.objects.create(
+            recipient=user,
+            type=Notification.Type.ANNOUNCEMENT,
+            title="For this user",
+        )
+        Notification.objects.create(
+            recipient=other,
+            type=Notification.Type.ANNOUNCEMENT,
+            title="For another user",
+        )
+        self.client.force_authenticate(user)
+
+        response = self.client.get("/api/notifications/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in response.data], [own.pk])
+
+    def test_concern_notification_uses_authenticated_image_preview(self):
+        user = self.create_verified_user("concern-image")
+        concern = Concern.objects.create(reporter=user, title="Report with a photo")
+        media = ConcernMedia.objects.create(
+            concern=concern,
+            file="raw/concern-media/test-notification.jpg",
+            original_filename="report.jpg",
+            mime_type="image/jpeg",
+        )
+        Notification.objects.create(
+            recipient=user,
+            concern=concern,
+            type=Notification.Type.SUBMITTED,
+            title="Report received",
+        )
+        self.client.force_authenticate(user)
+
+        response = self.client.get("/api/notifications/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data[0]["image_url"],
+            f"/api/concerns/media/{media.pk}/preview/",
+        )
+        self.assertEqual(
+            response.data[0]["images"],
+            [
+                {
+                    "url": f"/api/concerns/media/{media.pk}/preview/",
+                    "filename": "report.jpg",
+                    "mime_type": "image/jpeg",
+                }
+            ],
+        )
+
+    def test_notification_returns_every_image_for_preview_and_omits_empty_media(self):
+        user = self.create_verified_user("notification-gallery")
+        concern = Concern.objects.create(reporter=user, title="Report gallery")
+        first = ConcernMedia.objects.create(
+            concern=concern,
+            file="raw/concern-media/gallery-one.jpg",
+            original_filename="one.jpg",
+            mime_type="image/jpeg",
+        )
+        second = ConcernMedia.objects.create(
+            concern=concern,
+            file="raw/concern-media/gallery-two.png",
+            original_filename="two.png",
+            mime_type="image/png",
+        )
+        with_images = Notification.objects.create(
+            recipient=user,
+            concern=concern,
+            type=Notification.Type.SUBMITTED,
+            title="Report received",
+        )
+        without_images = Notification.objects.create(
+            recipient=user,
+            type=Notification.Type.ANNOUNCEMENT,
+            title="Text only",
+        )
+        emergency = EmergencyAlert.objects.create(
+            reporter=user,
+            type=EmergencyAlert.Type.MEDICAL,
+            latitude="14.6500000",
+            longitude="121.1200000",
+            barangay="Marikina Heights",
+        )
+        emergency_media = EmergencyMedia.objects.create(
+            alert=emergency,
+            file="raw/emergency-media/gallery-emergency.jpg",
+            original_filename="emergency.jpg",
+            mime_type="image/jpeg",
+        )
+        emergency_notification = Notification.objects.create(
+            recipient=user,
+            emergency=emergency,
+            type=Notification.Type.EMERGENCY_SUBMITTED,
+            title="Emergency received",
+        )
+        self.client.force_authenticate(user)
+
+        response = self.client.get("/api/notifications/")
+
+        by_id = {item["id"]: item for item in response.data}
+        self.assertEqual(
+            [image["url"] for image in by_id[with_images.pk]["images"]],
+            [
+                f"/api/concerns/media/{first.pk}/preview/",
+                f"/api/concerns/media/{second.pk}/preview/",
+            ],
+        )
+        self.assertEqual(by_id[without_images.pk]["images"], [])
+        self.assertIsNone(by_id[without_images.pk]["image_url"])
+        self.assertEqual(
+            by_id[emergency_notification.pk]["images"][0],
+            {
+                "url": f"/api/emergencies/media/{emergency_media.pk}/preview/",
+                "filename": "emergency.jpg",
+                "mime_type": "image/jpeg",
+            },
+        )
+
+    def test_announcement_notification_exposes_its_photo_for_preview(self):
+        user = self.create_verified_user("announcement-photo")
+        announcement = Announcement.objects.create(
+            title="Weather advisory",
+            body="Heavy rain expected.",
+            image="announcements/test-advisory.jpg",
+        )
+        notification = Notification.objects.create(
+            recipient=user,
+            type=Notification.Type.ANNOUNCEMENT,
+            title=announcement.title,
+            metadata={"announcement_id": announcement.pk},
+        )
+        self.client.force_authenticate(user)
+
+        response = self.client.get("/api/notifications/")
+
+        payload = next(item for item in response.data if item["id"] == notification.pk)
+        self.assertEqual(payload["image_url"], "/media/announcements/test-advisory.jpg")
+        self.assertEqual(payload["images"][0]["url"], payload["image_url"])
+
+    def test_public_concern_preview_is_in_system_push_payload(self):
+        user = self.create_verified_user("concern-push-image")
+        concern = Concern.objects.create(reporter=user, title="Public report with a photo")
+        ConcernMedia.objects.create(
+            concern=concern,
+            file="raw/concern-media/test-push.jpg",
+            preview_file="previews/concern-media/test-push.jpg",
+            original_filename="report.jpg",
+            mime_type="image/jpeg",
+            public_visible=True,
+        )
+        notification = Notification.objects.create(
+            recipient=user,
+            concern=concern,
+            type=Notification.Type.SUBMITTED,
+            title="Report received",
+        )
+
+        payload = notification_display_payload(notification)
+
+        self.assertEqual(payload["image"], "/media/previews/concern-media/test-push.jpg")
 
     def test_responder_concern_notification_targets_responder_map(self):
         User = get_user_model()
@@ -214,6 +517,13 @@ class NotificationPreferenceAPITests(APITestCase):
             title="Emergency reported nearby",
             body="Stay alert.",
         )
+        EmergencyMedia.objects.create(
+            alert=emergency,
+            file="raw/emergency-media/private-test.jpg",
+            preview_file="previews/emergency-media/public-test.jpg",
+            original_filename="incident.jpg",
+            mime_type="image/jpeg",
+        )
         self.client.force_authenticate(user)
 
         response = self.client.get("/api/notifications/")
@@ -224,6 +534,8 @@ class NotificationPreferenceAPITests(APITestCase):
         self.assertIsNone(payload["emergency_id"])
         self.assertIsNone(payload["emergency_public_id"])
         self.assertIsNone(payload["emergency_status"])
+        self.assertIsNone(payload["image_url"])
+        self.assertEqual(payload["images"], [])
         self.assertIn("do not intervene", payload["safety_guidance"])
 
     def test_reading_witness_notification_records_delivery_receipt(self):
@@ -356,6 +668,35 @@ class NotificationPreferenceAPITests(APITestCase):
         self.assertIsNone(witness.push_delivered_at)
         self.assertEqual(witness.push_failure_count, 1)
         webpush.assert_called_once()
+
+    @override_settings(WEB_PUSH_PUBLIC_KEY="public-key", WEB_PUSH_PRIVATE_KEY="private-key")
+    def test_vapid_mismatch_deactivates_stale_subscription(self):
+        from unittest.mock import Mock
+        from pywebpush import WebPushException
+
+        user = self.create_verified_user("stale-vapid")
+        subscription = BrowserPushSubscription.objects.create(
+            user=user,
+            endpoint="https://push.example.test/stale-vapid",
+            p256dh="old-key",
+            auth="old-auth",
+        )
+        notification = Notification.objects.create(
+            recipient=user,
+            type=Notification.Type.ANNOUNCEMENT,
+            title="Test stale subscription",
+        )
+        response = Mock(status_code=403, reason="Forbidden", text="VAPID key mismatch")
+
+        with patch(
+            "pywebpush.webpush",
+            side_effect=WebPushException("Push failed", response=response),
+        ):
+            result = send_browser_push(notification)
+
+        subscription.refresh_from_db()
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(subscription.is_active)
 
 
 class LiveMapEventFanoutTests(TestCase):

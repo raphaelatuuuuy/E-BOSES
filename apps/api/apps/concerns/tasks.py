@@ -417,8 +417,28 @@ def run_content_moderation_ai_task(self, flag_id):
         return {"flag_id": flag_id, "skipped": True, "skip_reason": "not_found"}
 
     target_kind = flag.target_kind
+    image_payloads = []
+    image_submitted = False
     if target_kind == "concern":
         content_text = f"{flag.concern.title}\n{flag.concern.description}"
+        from .ai.image_prep import prepare_image_for_gemma
+
+        for media in flag.concern.media.all():
+            if not (media.mime_type or "").lower().startswith("image/"):
+                continue
+            image_submitted = True
+            try:
+                with media.file.open("rb") as handle:
+                    prepared = prepare_image_for_gemma(
+                        handle.read(),
+                        filename=media.original_filename,
+                        mime_type=media.mime_type,
+                    )
+            except Exception:
+                logger.warning("Could not read flagged concern image media_id=%s", media.pk, exc_info=True)
+                prepared = None
+            if prepared is not None:
+                image_payloads.append(prepared.data)
     elif target_kind == "concern_comment":
         content_text = flag.comment.body
     elif target_kind == "announcement_comment":
@@ -431,6 +451,8 @@ def run_content_moderation_ai_task(self, flag_id):
             content_text=content_text,
             reason=flag.reason,
             reporter_note=flag.note,
+            images=image_payloads,
+            image_submitted=image_submitted,
         )
         model_version = model_version_in_use()
 
@@ -453,6 +475,8 @@ def run_content_moderation_ai_task(self, flag_id):
                     "content_text": content_text[:2000],
                     "reason": flag.reason,
                     "note": flag.note,
+                    "image_submitted": image_submitted,
+                    "image_count": len(image_payloads),
                 },
                 output_snapshot=result,
                 resident_message=result.get("short_explanation", ""),

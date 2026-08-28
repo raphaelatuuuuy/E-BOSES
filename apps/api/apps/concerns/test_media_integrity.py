@@ -226,8 +226,7 @@ class ConcernIntegrityActionTests(TransactionTestCase):
         )
         return concern
 
-    def _run(self, *, verdict="impossible_content", confidence=0.92, second_opinion_agrees=True):
-        """`second_opinion_agrees=None` means the second call failed outright."""
+    def _run(self, *, verdict="impossible_content", confidence=0.92):
         concern = self._concern_with_photo()
         flagged = gemma_result(
             category=Concern.Category.ENVIRONMENT,
@@ -236,18 +235,9 @@ class ConcernIntegrityActionTests(TransactionTestCase):
             media_integrity=[integrity_finding(verdict=verdict, confidence=confidence)],
             media_integrity_overall=verdict,
         )
-        if second_opinion_agrees is None:
-            second = None
-        else:
-            second = {
-                "agrees": second_opinion_agrees,
-                "verdict": verdict if second_opinion_agrees else "authentic",
-                "confidence": confidence,
-                "signals": ["the shadow falls the wrong way"] if second_opinion_agrees else [],
-            }
         with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier, patch(
-            "apps.concerns.ai.pipeline.confirm_media_integrity", return_value=second
-        ), patch("apps.concerns.tasks.enqueue_concern_media_privacy"):
+            "apps.concerns.tasks.enqueue_concern_media_privacy"
+        ):
             classifier.return_value.analyze.return_value = flagged
             assessment = process_concern_ai(concern.pk)
         concern.refresh_from_db()
@@ -289,13 +279,6 @@ class ConcernIntegrityActionTests(TransactionTestCase):
         self.assertEqual(accepted.validation_status, Concern.ValidationStatus.ACCEPTED)
         self.assertEqual(rejected.validation_status, Concern.ValidationStatus.REJECTED)
 
-    def test_a_second_opinion_that_disagrees_drops_the_flag(self):
-        self._set_action(Actions.AUTO_REJECT)
-        concern, assessment = self._run(second_opinion_agrees=False)
-        self.assertEqual(concern.validation_status, Concern.ValidationStatus.ACCEPTED)
-        reasons = [item.get("reason") for item in assessment.flag_reasons]
-        self.assertNotIn("media_integrity", reasons)
-
     def test_a_low_confidence_verdict_never_acts(self):
         self._set_action(Actions.AUTO_REJECT)
         concern, _ = self._run(confidence=0.4)
@@ -331,20 +314,12 @@ class ConcernIntegrityActionTests(TransactionTestCase):
             media_integrity_overall="impossible_content",
         )
         with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier, patch(
-            "apps.concerns.ai.pipeline.confirm_media_integrity",
-            return_value={"agrees": True, "verdict": "impossible_content", "confidence": 0.95, "signals": []},
-        ), patch("apps.concerns.tasks.enqueue_concern_media_privacy"):
+            "apps.concerns.tasks.enqueue_concern_media_privacy"
+        ):
             classifier.return_value.analyze.return_value = uncertain
             process_concern_ai(concern.pk)
         concern.refresh_from_db()
         self.assertNotEqual(concern.validation_status, Concern.ValidationStatus.REJECTED)
-
-    def test_a_second_opinion_outage_drops_the_flag(self):
-        # confirm_media_integrity returns None when the model is unreachable.
-        # An outage must not be able to reject a resident's report.
-        self._set_action(Actions.AUTO_REJECT)
-        concern, _ = self._run(second_opinion_agrees=None)
-        self.assertEqual(concern.validation_status, Concern.ValidationStatus.ACCEPTED)
 
     def test_a_report_with_no_photo_is_never_flagged(self):
         self._set_action(Actions.AUTO_REJECT)
@@ -398,9 +373,8 @@ class DecisionLogTests(TransactionTestCase):
             sha256_hash="d" * 64,
         )
         with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier, patch(
-            "apps.concerns.ai.pipeline.confirm_media_integrity",
-            return_value={"agrees": True, "verdict": "suspected_ai", "confidence": 0.9, "signals": ["no grain"]},
-        ), patch("apps.concerns.tasks.enqueue_concern_media_privacy"):
+            "apps.concerns.tasks.enqueue_concern_media_privacy"
+        ):
             classifier.return_value.analyze.return_value = gemma_result(
                 category=Concern.Category.ENVIRONMENT,
                 evidence_relationship="supports_report",
@@ -426,7 +400,6 @@ class DecisionLogTests(TransactionTestCase):
         concern = self._run()
         row = LlmDecisionLog.objects.filter(concern=concern).first()
         self.assertEqual(row.output_snapshot["media_integrity_overall"], "suspected_ai")
-        self.assertEqual(row.output_snapshot["second_opinion"], "confirmed")
 
     def test_the_row_records_how_long_the_call_took(self):
         from apps.concerns.models import LlmDecisionLog
@@ -529,14 +502,9 @@ class TesterPreviewTests(TestCase):
             "media_integrity": [integrity_finding()],
             "image_review_succeeded": True,
         }
-        with patch(
-            "apps.concerns.ai.pipeline.confirm_media_integrity",
-            return_value={"agrees": True, "verdict": "impossible_content", "confidence": 0.95, "signals": ["a UFO"]},
-        ):
-            result = self._preview(details, [image])
+        result = self._preview(details, [image])
         self.assertEqual(result["status"], "checked")
         self.assertEqual(result["overall"], "impossible_content")
-        self.assertEqual(result["second_opinion"], "confirmed")
 
     def test_the_preview_applies_the_same_confidence_floor(self):
         from apps.concerns.ai.image_prep import PreparedImage

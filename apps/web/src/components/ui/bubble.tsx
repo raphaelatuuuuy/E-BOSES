@@ -14,10 +14,8 @@ export function Bubble({
       data-slot="bubble"
       data-variant={variant}
       className={cn(
-        "relative w-fit max-w-full rounded-2xl px-3 py-2 text-[13px] leading-5 shadow-sm",
-        variant === "default"
-          ? "rounded-br-md bg-brand-orange text-white"
-          : "rounded-bl-md border border-neutral-200 bg-canvas text-brand-navy",
+        "relative w-fit max-w-full rounded-2xl border border-neutral-200 px-3 py-2 text-[13px] leading-5 text-neutral-900",
+        variant === "default" ? "rounded-br-md bg-white" : "rounded-bl-md bg-white",
         className,
       )}
       {...props}

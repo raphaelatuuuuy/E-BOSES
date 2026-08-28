@@ -122,12 +122,8 @@ def _classification():
         held.append("edited photos")
 
     return {
-        "status": _strictness_label(config.relevance_threshold),
-        "detail": (
-            f"Holds {', '.join(held)} for review"
-            if held
-            else "Nothing is held for review — every report goes straight to your queue"
-        ),
+        "status": "Checking carefully",
+        "detail": "Monitor live report checks, test sample reports, and review the actions taken.",
         # Nothing being held means the checks are effectively off, which an
         # official should notice rather than discover from a flooded queue.
         "needs_attention": not held,

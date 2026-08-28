@@ -859,6 +859,12 @@ def deliver_registration_otp(phone_number, code):
     from apps.sms.models import SmsPurpose
     from apps.sms.templates import otp_message
 
+    if settings.DEBUG or getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+        # Same as DevelopmentOTPProvider for email: console only, never the
+        # log file, so the gateway does not have to be configured to test
+        # registration locally.
+        print(f"Development OTP for {phone_number} (registration): {code}", flush=True)
+
     body = otp_message(code)
     message = queue_sms(
         phone_number,

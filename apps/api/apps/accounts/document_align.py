@@ -227,9 +227,11 @@ def align_bytes_to_sample(submitted: bytes, sample: bytes) -> tuple[bytes, dict]
 def sample_bytes_for_side(document_type, side: str | None) -> bytes | None:
     """The stored Mark Areas photo the regions for `side` were drawn on.
 
-    Prefers the matching side, then a real sample of any side, and only then a
-    synthetic one — a synthetic card is drawn to exercise the field boxes, not
-    to look like the genuine article, so nothing photographed will align to it.
+    A front and a back are different frames. Never use a sample from the other
+    side: doing so can move field regions onto unrelated parts of the photo and
+    makes the OCR path disagree with the picture-check path. A synthetic card
+    is still allowed only when it belongs to the requested side; it is drawn to
+    exercise field boxes, not to look like the genuine article.
     """
     if document_type is None:
         return None
@@ -240,18 +242,24 @@ def sample_bytes_for_side(document_type, side: str | None) -> bytes | None:
     except Exception:
         samples = []
 
+    if wanted in {"front", "back", "single"}:
+        samples = [
+            sample
+            for sample in samples
+            if ((getattr(sample, "metadata", None) or {}).get("side") or getattr(sample, "name", "") or "")
+            .strip()
+            .lower()
+            == wanted
+        ]
+
     def rank(sample):
-        name = (getattr(sample, "name", "") or "").strip().lower()
-        return (
-            0 if wanted and name == wanted else 1,
-            1 if getattr(sample, "is_synthetic", False) else 0,
-        )
+        return (1 if getattr(sample, "is_synthetic", False) else 0, getattr(sample, "name", ""))
 
     for sample in sorted(samples, key=rank):
         if sample.file:
             candidates.append(sample.file)
     legacy = getattr(document_type, "sample_file", None)
-    if legacy:
+    if legacy and wanted in {"", "front", "single"}:
         candidates.append(legacy)
 
     for field_file in candidates:

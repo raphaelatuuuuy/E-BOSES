@@ -1,4 +1,5 @@
 import math
+import random
 
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
@@ -39,6 +40,35 @@ def _responder_full_name(responder) -> str:
     if profile:
         return f"{profile.first_name} {profile.last_name}".strip()
     return responder.email.split("@")[0]
+
+
+def _sample_route_preview(dest_lat, dest_lng):
+    """A real road route from a random nearby point, for when no responder was
+    matched. The map otherwise has nothing to draw but a lone pin; this gives
+    an official previewing the tool an actual OSRM route to look at rather
+    than a straight line, while staying clearly labelled as a sample.
+    """
+    from apps.live_map import _osrm_route
+
+    meters = 200 + random.random() * 400
+    bearing = random.random() * 2 * math.pi
+    metres_per_degree_lat = 111_320
+    metres_per_degree_lng = 111_320 * math.cos(math.radians(dest_lat))
+    origin_lat = dest_lat + (math.cos(bearing) * meters) / metres_per_degree_lat
+    origin_lng = dest_lng + (math.sin(bearing) * meters) / metres_per_degree_lng
+
+    route = _osrm_route(
+        origin_lat=origin_lat,
+        origin_lng=origin_lng,
+        dest_lat=dest_lat,
+        dest_lng=dest_lng,
+        cache_key="emergency-sim-sample-route:%s:%s:%s:%s" % (
+            round(origin_lat, 5), round(origin_lng, 5), round(dest_lat, 5), round(dest_lng, 5),
+        ),
+    )
+    if route.get("status") != "ok":
+        return None
+    return {"latitude": origin_lat, "longitude": origin_lng, "route": route}
 
 
 class EmergencySimulationView(APIView):
@@ -182,6 +212,7 @@ class EmergencySimulationView(APIView):
                 if dispatch["responder"]
                 else {"found": False, "reason": "no_on_duty_responder_for_unit"}
             )
+            sample_route = None if dispatch["responder"] else _sample_route_preview(latitude, longitude)
 
             response_payload = {
                 "requires_confirmation": False,
@@ -199,6 +230,7 @@ class EmergencySimulationView(APIView):
                     "manual_dispatch": dispatch["manual_dispatch"],
                     "responding_community": dispatch["responding_community"],
                     "route": dispatch["route"],
+                    "sample_route": sample_route,
                 },
             }
             routing_reason_for_log = routing_reason

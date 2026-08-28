@@ -1147,17 +1147,55 @@ class OCRTestRunView(APIView):
         return Response(_test_payload(run), status=status.HTTP_202_ACCEPTED)
 
 
+class OCRTestFileView(APIView):
+    """Serve a stored OCR test image to the official who owns its community."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        if not _official(request):
+            return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
+        community = _official_community(request)
+        run = OCRTestRun.objects.select_related("configuration").filter(
+            pk=pk,
+            configuration__community=community,
+        ).first()
+        if not run:
+            return Response({"detail": "OCR test run not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not run.file:
+            return Response({"detail": "This OCR test has no stored image."}, status=status.HTTP_404_NOT_FOUND)
+        from django.http import FileResponse
+
+        return FileResponse(run.file.open("rb"), content_type=run.mime_type or "application/octet-stream")
+
+
 def _test_payload(run):
     raw_extracted = run.extracted_fields or {}
     template_match = None
     id_integrity = None
+    id_integrity_checks = []
     pipeline = None
+    readability = None
     extracted = raw_extracted
     if isinstance(raw_extracted, dict):
         template_match = raw_extracted.get("__template_match__")
         id_integrity = raw_extracted.get("__id_integrity__")
+        if not isinstance(id_integrity, dict) or not id_integrity.get("checked"):
+            id_integrity = None
         pipeline = raw_extracted.get("__pipeline__")
-        internal = {"__template_match__", "__id_integrity__", "__pipeline__", "__test_side__"}
+        id_integrity_checks = [
+            item
+            for item in ((pipeline or {}).get("integrity_checks") or [])
+            if isinstance(item, dict) and item.get("checked")
+        ]
+        readability = raw_extracted.get("__readability__")
+        internal = {
+            "__template_match__",
+            "__id_integrity__",
+            "__pipeline__",
+            "__test_side__",
+            "__readability__",
+        }
         extracted = {key: value for key, value in raw_extracted.items() if key not in internal}
     extraction_json = {}
     if isinstance(extracted, dict):
@@ -1186,13 +1224,16 @@ def _test_payload(run):
         "extraction_json": extraction_json,
         "template_match": template_match,
         "id_integrity": id_integrity,
+        "id_integrity_checks": id_integrity_checks,
         "pipeline": pipeline,
+        "readability": readability,
         "rule_results": run.rule_results or [],
         "error_code": run.error_code,
         "error_message": run.error_message,
         "error": run.error_message or None,
         "simulated_profile": metadata.get("simulated_profile") or {},
         "profile_source": metadata.get("profile_source") or "empty",
+        "image_url": f"/api/auth/ocr/tests/{run.pk}/file/" if run.file else None,
         "created_at": run.created_at,
         "completed_at": run.completed_at,
     }

@@ -62,7 +62,6 @@ import {
   defaultLayers,
   emptyLiveMapSnapshot,
   mergeUpdate,
-  validCoord,
   type LayerKey,
   type Selection,
 } from "@/features/dashboard/components/alerts-map/lib"
@@ -81,10 +80,9 @@ const FEED_CHIPS: MapFilterChip[] = [
   { key: "resolved", label: "Resolved" },
 ]
 
-const SELECTION_LABEL: Record<"emergency" | "concern" | "person", string> = {
+const SELECTION_LABEL: Record<"emergency" | "concern", string> = {
   emergency: "Emergency",
   concern: "Concern",
-  person: "Person",
 }
 
 function ConcernIcon({ category, className }: { category: ConcernCategory; className?: string }) {
@@ -520,21 +518,8 @@ export default function AlertsMapPage() {
     return rows.slice(0, 50)
   }, [snapshot, visibleEmergencies, visibleConcerns, feedChip, navigate, selectOnMap])
 
-  /**
-   * Counts describe what is actually drawn, not the size of the roster.
-   *
-   * `summary.residents` is every verified resident in the barangay, but the map
-   * can only pin someone whose device has reported a location — so the legend
-   * read "Residents 15" beside a single dot. Counting `snapshot.people` instead
-   * means the number and the pins can never disagree.
-   */
   const mapCounts = useMemo(() => {
-    const withLocation = (snapshot?.people ?? []).filter(
-      (person) => validCoord(person.latitude, person.longitude) !== null,
-    )
-    const byRole = (role: string) => withLocation.filter((person) => person.role === role).length
     return {
-      responders: byRole("first_responder"),
       emergencies: visibleEmergencies.length,
       concerns: visibleConcerns.length,
       advisories: (snapshot?.advisories ?? []).length,

@@ -25,6 +25,8 @@ export type MediaPreviewItem = {
   src: string
   filename: string
   kind: "image" | "video" | "file"
+  /** Full media record when available — lets the lightbox offer blur editing. */
+  media?: import("@/features/dashboard/api").ConcernMedia
 }
 
 /**
@@ -36,11 +38,20 @@ export function toMediaPreviewItem(
   src: string,
   filename: string,
   mimeOrKind?: string | null,
+  media?: import("@/features/dashboard/api").ConcernMedia,
 ): MediaPreviewItem {
   const value = mimeOrKind || ""
-  if (value.startsWith("video/") || value === "video") return { src, filename, kind: "video" }
-  if (value.startsWith("image/") || value === "image" || !value) return { src, filename, kind: "image" }
-  return { src, filename, kind: "file" }
+  if (value.startsWith("video/") || value === "video") return { src, filename, kind: "video", media }
+  if (value.startsWith("image/") || value === "image" || !value) return { src, filename, kind: "image", media }
+  return { src, filename, kind: "file", media }
+}
+
+/**
+ * Drop the cached blob for a source so the next render re-fetches it — used
+ * after a blur edit changes what the preview endpoint returns.
+ */
+export function invalidateAuthenticatedMedia(src: string) {
+  window.dispatchEvent(new CustomEvent("eboses:media-invalidate", { detail: { src } }))
 }
 
 export function mediaDisplaySource(media: {

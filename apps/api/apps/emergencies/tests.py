@@ -2007,6 +2007,21 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(attachment.data["attachment"]["authenticity"], "pending")
         self.assertEqual(attachment.data["attachment"]["edited"], "pending")
         self.assertEqual(empty.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            Notification.objects.filter(
+                recipient=self.responder,
+                emergency=alert,
+                type=Notification.Type.CHAT_MESSAGE,
+            ).count(),
+            2,
+        )
+        self.assertFalse(
+            Notification.objects.filter(
+                recipient=self.resident,
+                emergency=alert,
+                type=Notification.Type.CHAT_MESSAGE,
+            ).exists()
+        )
 
     def test_chat_rejects_historical_only_assignment(self):
         alert = self.direct_alert(status=EmergencyAlert.Status.ROUTED)
@@ -2025,6 +2040,33 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("active responder", response.data["detail"].lower())
         self.assertFalse(EmergencyChatMessage.objects.filter(alert=alert).exists())
+
+    def test_responder_chat_notifies_resident_but_not_sender(self):
+        alert = self.direct_alert(status=EmergencyAlert.Status.ROUTED)
+        EmergencyResponderAssignment.objects.create(alert=alert, responder=self.responder)
+        self.client.force_authenticate(self.responder)
+
+        response = self.client.post(
+            f"/api/emergencies/{alert.pk}/chat/",
+            {"body": "We are approaching your location."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.resident,
+                emergency=alert,
+                type=Notification.Type.CHAT_MESSAGE,
+            ).exists()
+        )
+        self.assertFalse(
+            Notification.objects.filter(
+                recipient=self.responder,
+                emergency=alert,
+                type=Notification.Type.CHAT_MESSAGE,
+            ).exists()
+        )
 
     def test_chat_rejects_messages_after_resolution(self):
         alert = self.direct_alert(status=EmergencyAlert.Status.RESOLVED)

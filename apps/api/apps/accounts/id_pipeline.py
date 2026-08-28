@@ -37,13 +37,10 @@ STAGE_LABELS = {
     STAGE_OCR: "Text reading",
 }
 
-FORENSICS_RESUBMIT_MESSAGE = (
-    "This file has been edited or re-saved by photo software. "
-    "Please submit the original photo of your document."
-)
+FORENSICS_RESUBMIT_MESSAGE = "Please upload the original document photo."
 
 
-def _safe_id_integrity(*, content, document_type, configuration) -> dict | None:
+def _safe_id_integrity(*, content, document_type, configuration, side: str | None = None) -> dict | None:
     """Run the picture check, swallowing every failure into "not checked".
 
     Advisory by design. A missing key, a dead socket, or an unreadable file must
@@ -57,6 +54,7 @@ def _safe_id_integrity(*, content, document_type, configuration) -> dict | None:
             submitted=content,
             document_type=document_type,
             configuration=configuration,
+            side=side,
         )
     except Exception:
         logger.exception("ID integrity check failed; continuing without it")
@@ -70,6 +68,7 @@ def run_pre_ocr_gate(
     configuration,
     run_forensics=True,
     forensics=None,
+    sides=None,
 ) -> dict:
     """Layers 1-2 over every photo in one submission. OCR runs only if passed.
 
@@ -105,26 +104,40 @@ def run_pre_ocr_gate(
             "reached": STAGE_FORENSICS,
             "forensics": forensics,
             "integrity": None,
+            "integrity_checks": [],
             "message": FORENSICS_RESUBMIT_MESSAGE,
             "detail": forensics.get("message") or "",
         }
 
     integrity = None
-    for content in blobs:
+    integrity_checks = []
+    for index, content in enumerate(blobs):
+        side = None
+        if sides and index < len(sides):
+            candidate_side = str(sides[index] or "").strip().lower()
+            side = candidate_side if candidate_side in {"front", "back", "single"} else None
         result = _safe_id_integrity(
             content=content,
             document_type=document_type,
             configuration=configuration,
+            side=side,
         )
         if result is None:
             continue
-        if integrity is None or result.get("flagged"):
+        integrity_checks.append(result)
+        if (
+            integrity is None
+            or result.get("flagged")
+            or (
+                result.get("integrity_advisory")
+                and not integrity.get("flagged")
+                and not integrity.get("integrity_advisory")
+            )
+        ):
             integrity = result
-        if result.get("flagged"):
-            break
 
     if integrity and integrity.get("flagged"):
-        from .id_integrity import RESUBMIT_MESSAGE
+        from .id_integrity import RESUBMIT_MESSAGE, integrity_feedback
 
         return {
             "passed": False,
@@ -132,8 +145,9 @@ def run_pre_ocr_gate(
             "reached": STAGE_INTEGRITY,
             "forensics": forensics,
             "integrity": integrity,
+            "integrity_checks": integrity_checks,
             "message": RESUBMIT_MESSAGE,
-            "detail": (integrity.get("signals") or [None])[0] or integrity.get("note") or "",
+            "detail": integrity.get("feedback") or integrity_feedback(integrity),
         }
 
     return {
@@ -142,6 +156,7 @@ def run_pre_ocr_gate(
         "reached": STAGE_OCR,
         "forensics": forensics,
         "integrity": integrity,
+        "integrity_checks": integrity_checks,
         "message": "",
         "detail": "",
     }
@@ -154,6 +169,8 @@ def gate_payload(gate: dict | None) -> dict:
             "reached": STAGE_OCR,
             "blocked_by": None,
             "forensics": {"checked": False, "flagged": False, "layer": "", "message": ""},
+            "integrity_checked": False,
+            "integrity_checks": [],
             "message": "",
             "detail": "",
         }
@@ -161,6 +178,8 @@ def gate_payload(gate: dict | None) -> dict:
         "reached": gate.get("reached") or STAGE_OCR,
         "blocked_by": gate.get("blocked_by"),
         "forensics": gate.get("forensics") or {"checked": False, "flagged": False},
+        "integrity_checked": bool(gate.get("integrity_checks")),
+        "integrity_checks": gate.get("integrity_checks") or [],
         "message": gate.get("message") or "",
         "detail": gate.get("detail") or "",
     }

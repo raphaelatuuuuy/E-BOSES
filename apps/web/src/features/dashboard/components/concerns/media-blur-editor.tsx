@@ -101,6 +101,24 @@ export function MediaBlurEditor({
     }
   }
 
+  async function removeAllSaved() {
+    const regions = (media.redactions ?? []).slice()
+    if (!regions.length) return
+    setBusy(true)
+    try {
+      let current = media
+      for (const region of regions) {
+        current = await removeConcernMediaRedaction(media.id, region.id)
+      }
+      onUpdated(current)
+      toast.success("All blurred areas were removed.")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The blurred areas could not be removed.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const saved = media.redactions ?? []
 
   return (
@@ -162,7 +180,18 @@ export function MediaBlurEditor({
 
           {saved.length ? (
             <div className="mt-4">
-              <p className="text-micro text-subtle-foreground">Already blurred</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-micro text-subtle-foreground">Already blurred</p>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void removeAllSaved()}
+                  className="inline-flex items-center gap-1.5 rounded-pill px-2 py-1 text-[12px] font-medium text-severity-critical transition-colors hover:bg-severity-critical-surface disabled:opacity-50"
+                >
+                  <EraserIcon className="size-3.5" />
+                  Remove all blur
+                </button>
+              </div>
               <div className="mt-2 flex flex-wrap gap-2">
                 {saved.map((region, index) => (
                   <button

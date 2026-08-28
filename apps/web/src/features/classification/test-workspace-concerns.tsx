@@ -391,13 +391,6 @@ function ConcernResult({
   if (result.urgent_attention) {
     findings.push({ icon: TriangleAlert, tone: "warn", text: "This may describe immediate danger." })
   }
-  if (result.incident_timing && ["ended", "historical", "planned", "hypothetical"].includes(result.incident_timing)) {
-    findings.push({
-      icon: CircleCheck,
-      tone: "muted",
-      text: result.incident_timing_reason || "This is not a current emergency, so emergency dispatch will not start.",
-    })
-  }
   if (result.duplicate) {
     findings.push({ icon: CopyIcon, tone: "warn", text: "A very similar report was filed recently." })
   }
@@ -408,19 +401,11 @@ function ConcernResult({
     if (finding.verdict === "authentic" || finding.verdict === "inconclusive") continue
     const photoLabel =
       (result.media_integrity?.findings?.length ?? 0) > 1 ? `Photo ${finding.index + 1}: ` : ""
+    const label = mediaIntegrityVerdict(finding.verdict).label.replace(/\.$/, "")
     findings.push({
       icon: Ban,
       tone: "bad",
-      text: `${photoLabel}${mediaIntegrityVerdict(finding.verdict).label.toLowerCase()}${
-        finding.signals?.length ? `. ${finding.signals[0]}` : ""
-      }`,
-    })
-  }
-  if (result.media_integrity?.second_opinion === "not_confirmed") {
-    findings.push({
-      icon: ScanLineIcon,
-      tone: "muted",
-      text: "A photo looked edited on the first pass, but the second look disagreed, so nothing was flagged.",
+      text: `${photoLabel}${label}.`,
     })
   }
   if (result.street_imagery?.status === "checked") {
@@ -438,13 +423,20 @@ function ConcernResult({
   } else if (result.street_imagery?.status === "no_coverage") {
     findings.push({ icon: ScanLineIcon, tone: "muted", text: "No street imagery covers this pin, so the ground-truth check was skipped." })
   }
+  // Candidates are picked by category + proximity + recency, not by looking
+  // alike first — most comparisons will legitimately come back "different"
+  // against some unrelated nearby report. That's the ordinary outcome, not a
+  // finding: reporting it every time trains a reviewer to read past this row.
+  // Only a real duplicate suspicion is worth surfacing.
   for (const comparison of result.photo_duplicate_llm?.comparisons ?? []) {
+    if (comparison.verdict === "different") continue
     const ref = comparison.tracking_id ?? "an earlier report"
-    findings.push(
-      comparison.verdict === "different"
-        ? { icon: CircleCheck, tone: "good", text: comparison.reason ? `Different from ${ref}. ${comparison.reason}` : `Different from ${ref}` }
-        : { icon: CopyIcon, tone: "warn", text: comparison.reason ? `${comparison.verdict === "same_issue" ? "Same issue as" : "Uncertain next to"} ${ref}. ${comparison.reason}` : `${comparison.verdict === "same_issue" ? "Same issue as" : "Uncertain next to"} ${ref}` },
-    )
+    const label = comparison.verdict === "same_issue" ? "Same issue as" : "Uncertain next to"
+    findings.push({
+      icon: CopyIcon,
+      tone: "warn",
+      text: comparison.reason ? `${label} ${ref}. ${comparison.reason}` : `${label} ${ref}`,
+    })
   }
   if (result.location && !result.location.accepted) {
     findings.push({
@@ -473,6 +465,14 @@ function ConcernResult({
   }))
   if (streetImagery) {
     galleryPhotos.push({ key: "street-view", src: streetImagery.image as string, label: "Street view" })
+  }
+  for (const comparison of result.photo_duplicate_llm?.comparisons ?? []) {
+    if (comparison.verdict === "different" || !comparison.image) continue
+    galleryPhotos.push({
+      key: `dup-${comparison.concern_id ?? comparison.tracking_id}`,
+      src: comparison.image,
+      label: comparison.tracking_id ? `Possible match: ${comparison.tracking_id}` : "Possible match",
+    })
   }
 
   // Gemma's own recommended_action is computed before the street-imagery

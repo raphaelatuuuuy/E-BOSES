@@ -3,7 +3,6 @@ import {
   BotIcon,
   CircleQuestionMarkIcon,
   LoaderCircleIcon,
-  MessageSquareIcon,
   RotateCcwIcon,
   SearchIcon,
   TestTube2Icon,
@@ -31,26 +30,22 @@ import {
 } from "./shared"
 import {
   getConcernClassificationConfig,
-  getLlmDecisionLog,
   getValidationActivity,
   saveConcernClassificationConfig,
   type ConcernClassificationConfig,
   type ValidationActivityResponse,
 } from "./api"
 import {
-  applyStrictness,
-  detectStrictness,
   EMERGENCY_MEDIA_INTEGRITY_OPTIONS,
   MEDIA_INTEGRITY_OPTIONS,
   MISMATCH_OPTIONS,
-  STRICTNESS_PRESETS,
 } from "./strictness"
 import { ConcernTestWorkspace } from "./test-workspace-concerns"
 import { EmergencyTestWorkspace } from "./test-workspace-emergencies"
-import { SmsBreakdown, SmsChatInput, SmsChatPanel, SmsCommandGuide, SmsTestWorkspace, SenderPill } from "./test-workspace-sms"
+import { SmsBreakdown, SmsChatInput, SmsChatPanel, SmsCommandGuide, SenderPill } from "./test-workspace-sms"
 import { testSmsSimulation } from "./api"
-import { CommunityModerationTestWorkspace } from "./test-workspace-community"
 import { DecisionLogTab } from "./decision-log-tab"
+import { VerificationTestWorkspace } from "./test-workspace-verification"
 
 const defaults: ConcernClassificationConfig = {
   revision: 0,
@@ -100,8 +95,6 @@ function ConfigureDialog({
   dirty: boolean
   onOpenTest: () => void
 }) {
-  const strictness = detectStrictness(config)
-
   return (
     <SheetDialog
       open={open}
@@ -136,46 +129,13 @@ function ConfigureDialog({
         </div>
       }
     >
-      {/* 1. Review preset */}
-      <SheetSectionLabel>Review preset</SheetSectionLabel>
-      <div className="mb-4">
-        <div className="flex gap-0.5 rounded-full bg-neutral-100 p-1">
-          {STRICTNESS_PRESETS.map((preset) => {
-            const active = strictness === preset.key
-            return (
-              <button
-                key={preset.key}
-                type="button"
-                onClick={() => {
-                  const next = applyStrictness(config, preset.key)
-                  onUpdate("text_relevance_threshold", next.text_relevance_threshold)
-                  onUpdate("duplicate_similarity_threshold", next.duplicate_similarity_threshold)
-                  onUpdate("minimum_description_length", next.minimum_description_length)
-                }}
-                className={cn(
-                  "flex-1 rounded-full py-2 text-[13px] font-medium transition-colors",
-                  active
-                    ? "bg-white/70 text-neutral-900 shadow-sm"
-                    : "text-neutral-400 hover:bg-white/60 hover:text-neutral-900",
-                )}
-              >
-                {preset.label}
-              </button>
-            )
-          })}
-        </div>
-        {strictness ? (
-          <p className="mt-2 text-xs leading-relaxed text-neutral-500">
-            {STRICTNESS_PRESETS.find((preset) => preset.key === strictness)?.consequence}
-          </p>
-        ) : (
-          <p className="mt-2 text-xs text-neutral-500">Custom values. No preset is active.</p>
-        )}
+      <div className="mb-5 rounded-[16px] border border-blue-100 bg-blue-50 px-4 py-3">
+        <p className="text-[13px] font-semibold text-blue-950">Careful review is always on</p>
+        <p className="mt-1 text-[12px] leading-relaxed text-blue-900/75">Unclear reports are asked for more detail or held for a staff decision. There is no preset to switch between.</p>
       </div>
 
-      {/* 2. Report quality rules */}
-      <SheetSectionLabel>Report quality rules</SheetSectionLabel>
-      <p className="mb-2 text-xs text-neutral-500">Decide how the system handles common quality issues.</p>
+      <SheetSectionLabel>Concerns · report quality</SheetSectionLabel>
+      <p className="mb-2 text-xs text-neutral-500">These checks apply to resident reports, posts, and comments before they reach the queue.</p>
       <SheetList className="mb-6">
         <SheetOptionRow
           title="Missing required information"
@@ -248,8 +208,7 @@ function ConfigureDialog({
         />
       </SheetList>
 
-      {/* 3. Content safety */}
-      <SheetSectionLabel>Content safety</SheetSectionLabel>
+      <SheetSectionLabel>Concerns · content safety</SheetSectionLabel>
       <p className="mb-2 text-xs text-neutral-500">How the system handles unsafe or inappropriate content.</p>
       <SheetList>
         <SheetOptionRow
@@ -325,13 +284,6 @@ function ConfigureDialog({
       />
       {config.media_integrity_enabled === false ? null : (
         <>
-          <SheetToggleRow
-            id="media-integrity-second-opinion"
-            label="Check a flagged photo twice"
-            description="A flagged photo is looked at again before anything happens. Fewer wrong flags, one extra check."
-            checked={config.media_integrity_second_opinion_enabled ?? true}
-            onChange={(checked) => onUpdate("media_integrity_second_opinion_enabled", checked)}
-          />
           <SheetList>
             <SheetOptionRow
               title="Emergency photos"
@@ -348,8 +300,7 @@ function ConfigureDialog({
         </>
       )}
 
-      {/* 4. Similar reports */}
-      <SheetSectionLabel>Similar reports</SheetSectionLabel>
+      <SheetSectionLabel>Concerns · similar reports</SheetSectionLabel>
       <p className="mb-2 text-xs text-neutral-500">Prevent duplicates while keeping residents informed.</p>
       <SheetToggleRow
         id="duplicate-detection"
@@ -427,8 +378,7 @@ function ConfigureDialog({
         ) : null}
       </SheetList>
 
-      {/* Street view verification */}
-      <SheetSectionLabel>Street view verification</SheetSectionLabel>
+      <SheetSectionLabel>Concerns · photo and location checks</SheetSectionLabel>
       <p className="mb-2 text-xs text-neutral-500">
         For selected categories, the system fetches the newest street-level photo of the pinned location and compares it with the submitted photo.
       </p>
@@ -502,8 +452,7 @@ function ConfigureDialog({
         </SheetList>
       ) : null}
 
-      {/* Emergency triage */}
-      <SheetSectionLabel>Emergency triage</SheetSectionLabel>
+      <SheetSectionLabel>Emergencies</SheetSectionLabel>
       <p className="mb-2 text-xs text-neutral-500">How the system confirms a matched emergency before routing it.</p>
       <SheetToggleRow
         id="ongoing-emergency-confirmation"
@@ -513,8 +462,7 @@ function ConfigureDialog({
         onChange={(checked) => onUpdate("require_ongoing_emergency_confirmation", checked)}
       />
 
-      {/* 5. Fallback */}
-      <SheetSectionLabel>If automated validation is unavailable</SheetSectionLabel>
+      <SheetSectionLabel>System safeguards</SheetSectionLabel>
       <p className="mb-2 text-xs text-neutral-500">Choose how the system should behave if the AI validation service is offline.</p>
       <SheetList>
         <SheetOptionRow
@@ -540,9 +488,7 @@ function ConfigureDialog({
 const TEST_TABS = [
   { key: "concerns", label: "Concerns" },
   { key: "emergencies", label: "Emergencies" },
-  { key: "sms", label: "SMS" },
-  { key: "community", label: "Community content" },
-  { key: "log", label: "Log" },
+  { key: "verification", label: "Verification" },
 ] as const
 type TestTabKey = (typeof TEST_TABS)[number]["key"]
 
@@ -596,29 +542,16 @@ function TestDialog({
         setSmsHelpOpen(false)
         onClose()
       }}
-      title="LLM Decisions"
-      description="Test how automatic review classifies concerns, emergencies, SMS texts, and community content. Nothing here is filed."
+      title="LLM decisions"
+      description="Preview how the system reads concerns, emergencies, and identity documents. Nothing here is filed or changed."
       size="wide"
-      actions={
-        tab === "sms" ? (
-          <button
-            type="button"
-            onClick={() => setSmsPanelOpen(true)}
-            aria-label="Open SMS preview"
-            title="Open SMS preview"
-            className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
-          >
-            <MessageSquareIcon className="size-[18px]" strokeWidth={2} />
-          </button>
-        ) : null
-      }
     >
       <div className="mb-5 flex gap-0.5 rounded-full bg-neutral-100 p-1">
         {TEST_TABS.map((t) => (
           <button
             key={t.key}
             type="button"
-            onClick={() => { setTab(t.key); if (t.key !== "sms") setSmsPanelOpen(false) }}
+            onClick={() => setTab(t.key)}
             className={cn(
               "flex-1 rounded-full py-2 text-[13px] font-medium transition-colors",
               tab === t.key ? "bg-white text-neutral-900 shadow-sm" : "text-neutral-400 hover:bg-white/60 hover:text-neutral-900",
@@ -628,21 +561,13 @@ function TestDialog({
           </button>
         ))}
       </div>
-      {tab === "concerns" ? <ConcernTestWorkspace config={config} /> : null}
-      {tab === "emergencies" ? <EmergencyTestWorkspace /> : null}
-      {tab === "sms" ? (
-        <SmsTestWorkspace
-          message={smsMessage}
-          setMessage={setSmsMessage}
-          sender={smsSender}
-          setSender={setSmsSender}
-          setScenario={setSmsScenario}
-          result={smsResult}
-          busy={smsBusy}
-        />
+      {tab === "emergencies" ? <EmergencyTestWorkspace onUseSms={() => setSmsPanelOpen(true)} /> : null}
+      {tab === "verification" ? <VerificationTestWorkspace /> : null}
+      {tab === "concerns" ? (
+        <div className="space-y-8">
+          <ConcernTestWorkspace config={config} />
+        </div>
       ) : null}
-      {tab === "community" ? <CommunityModerationTestWorkspace /> : null}
-      {tab === "log" ? <DecisionLogTab /> : null}
     </SheetDialog>
 
     <SheetDialog
@@ -666,12 +591,20 @@ function TestDialog({
         <SmsChatInput
           message={smsMessage}
           setMessage={setSmsMessage}
+          setSender={setSmsSender}
+          setScenario={setSmsScenario}
           busy={smsBusy}
           onSend={() => void runSms()}
         />
       }
     >
-      <SmsChatPanel message={smsMessage} result={smsResult} busy={smsBusy} />
+      <div className="space-y-6">
+        {smsMessage.trim() || smsResult ? (
+          <div className="border-t border-neutral-200 pt-5">
+            <SmsChatPanel message={smsMessage} result={smsResult} busy={smsBusy} />
+          </div>
+        ) : null}
+      </div>
     </SheetDialog>
 
     <SheetDialog
@@ -700,7 +633,7 @@ function TestDialog({
 
 /* ─── Activity tab ─── */
 
-function ActivityTab({ config }: { config: ConcernClassificationConfig }) {
+export function LegacyActivityTab({ config }: { config: ConcernClassificationConfig }) {
   const [data, setData] = useState<ValidationActivityResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [days, setDays] = useState(30)
@@ -886,14 +819,13 @@ function ActivityTab({ config }: { config: ConcernClassificationConfig }) {
 /* ─── Main page ─── */
 
 export default function ConcernClassificationPage() {
-  usePageTitle("Report checking")
+  usePageTitle("System behavior")
   const [config, setConfig] = useState<ConcernClassificationConfig>(defaults)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState("")
   const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null)
   const [configureOpen, setConfigureOpen] = useState(false)
   const [testOpen, setTestOpen] = useState(false)
-  const [logCount, setLogCount] = useState<number | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -910,21 +842,6 @@ export default function ConcernClassificationPage() {
     return () => { cancelled = true }
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    void getLlmDecisionLog({ page: 1, page_size: 1 })
-      .then((response) => {
-        if (!cancelled) setLogCount(response.count)
-      })
-      .catch(() => {
-        // Non-critical: the stat just stays blank if the log can't be reached.
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  const strictness = detectStrictness(config)
   const dirty = useMemo(
     () => savedSnapshot !== null && JSON.stringify(config) !== savedSnapshot,
     [config, savedSnapshot],
@@ -951,7 +868,7 @@ export default function ConcernClassificationPage() {
     }
   }
 
-  if (loading) {
+   if (loading) {
     return (
       <div className="flex min-h-[70vh] items-center justify-center">
         <LoaderCircleIcon className="size-8 animate-spin text-brand-navy" />
@@ -963,25 +880,15 @@ export default function ConcernClassificationPage() {
     <ConfigShell
       icon={BotIcon}
       eyebrow="Operations"
-      title="Report checking"
-      description="Configure how the system reviews incoming reports, photos, and duplicates before they reach your queue."
-      stats={[
-        {
-          label: "Review mode",
-          value: STRICTNESS_PRESETS.find((preset) => preset.key === strictness)?.label ?? "Custom",
-        },
-        { label: "Reports checked", value: config.metrics?.tested ?? 0 },
-        { label: "Went straight through", value: config.metrics?.auto_validated ?? 0 },
-        { label: "Rejected by rules", value: config.metrics?.rejected ?? 0 },
-        { label: "Logged decisions", value: logCount ?? "Not available" },
-      ]}
+       title="System behavior"
+       description="Set how E-Boses reads and routes concerns, emergencies, and identity documents. The pages below show what happened, what the system decided, and how staff can correct it."
       action={
         <ConfigHeroAction onClick={() => setConfigureOpen(true)}>
           Configure
         </ConfigHeroAction>
       }
     >
-      <ActivityTab config={config} />
+      <DecisionLogTab />
 
       <ConfigureDialog
         open={configureOpen}

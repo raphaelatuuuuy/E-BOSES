@@ -58,6 +58,7 @@ export function approachLineStyle(dim = false): leaflet.PolylineOptions {
     color: "var(--color-map-route-idle)",
     weight: 4,
     opacity: dim ? 0.85 * DIM_FACTOR : 0.85,
+    dashArray: "1 8",
     lineCap: "round",
     lineJoin: "round",
     interactive: false,

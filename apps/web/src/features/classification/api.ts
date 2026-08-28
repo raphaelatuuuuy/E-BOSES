@@ -69,6 +69,13 @@ export type ConcernClassificationConfig = {
   }
 }
 
+/** The screen intentionally keeps the system in its careful operating mode. */
+export const CAREFUL_REVIEW_VALUES = {
+  text_relevance_threshold: 0.8,
+  duplicate_similarity_threshold: 0.78,
+  minimum_description_length: 40,
+} as const
+
 export type ReportValidationResult = {
   classification: "related" | "irrelevant" | "suspicious" | "needs_review"
   category_match: boolean | null
@@ -139,7 +146,6 @@ export type ReportValidationResult = {
     status: "checked" | "skipped" | "disabled"
     reason?: string
     overall?: string
-    second_opinion?: "not_required" | "disabled" | "confirmed" | "not_confirmed"
     findings?: {
       index: number
       verdict: string
@@ -170,6 +176,7 @@ export type ReportValidationResult = {
       captured_at?: string
       verdict: "same_issue" | "different" | "uncertain"
       reason?: string
+      image?: string
     }[]
   } | null
   /** The unit this report would be routed to, per the configured routing rules. */
@@ -212,6 +219,7 @@ type RawJson = any
 function normalizeConfig(raw: RawJson): ConcernClassificationConfig {
   return {
     ...raw,
+    ...CAREFUL_REVIEW_VALUES,
     category_keywords: raw?.category_keywords ?? {},
     categories: (raw?.categories ?? []).map((category: RawJson) => ({
       key: category.key ?? category.code,
@@ -334,6 +342,10 @@ export type EmergencySimulationResult =
         manual_dispatch: boolean
         responding_community: SimulationCommunity | null
         route: RoutePreview
+        /** A real OSRM route from a random nearby point, only present when no
+         * responder was actually found — lets the preview map show an actual
+         * road route instead of nothing (or a fake straight line). */
+        sample_route: { latitude: number; longitude: number; route: RoutePreview } | null
       }
     }
 
@@ -499,15 +511,21 @@ export type CommunityModerationResult = {
   recommended_disposition: "dismiss" | "take_down"
   short_explanation: string
   model_version: string
+  image_review?: { status: string; explanation: string }
 }
 
 export function testCommunityModeration(input: {
   content_text: string
   reason: ContentFlagReason
+  image?: File | null
 }) {
+  const body = new FormData()
+  body.append("content_text", input.content_text)
+  body.append("reason", input.reason)
+  if (input.image) body.append("image", input.image)
   return apiRequest<CommunityModerationResult>("/concerns/classification/test-community/", {
     method: "POST",
-    body: JSON.stringify(input),
+    body,
   })
 }
 
@@ -545,7 +563,7 @@ export function getValidationActivity(params?: { days?: number; category?: strin
   )
 }
 
-export type LlmDecisionLogDomain = "concern" | "emergency" | "community"
+export type LlmDecisionLogDomain = "concern" | "emergency" | "verification" | "community"
 
 export type LlmDecisionLogEntry = {
   id: number
@@ -558,8 +576,11 @@ export type LlmDecisionLogEntry = {
   routing_reason: string
   model_version: string
   duration_ms: number | null
+  location?: string
   input_snapshot: RawJson
   output_snapshot: RawJson
+  content_flag_id?: number | null
+  concern_id?: number | null
 }
 
 export type LlmDecisionLogResponse = { results: LlmDecisionLogEntry[]; count: number }
@@ -577,4 +598,11 @@ export function getLlmDecisionLog(params?: {
   if (params?.page_size) query.set("page_size", String(params.page_size))
   const qs = query.toString()
   return apiRequest<LlmDecisionLogResponse>(`/concerns/classification/log/${qs ? `?${qs}` : ""}`)
+}
+
+export function revertAutomatedContentAction(flagId: number, staffNote = "Automated moderation action reverted by an official.") {
+  return apiRequest(`/concerns/flags/${flagId}/review/`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "dismissed", staff_note: staffNote }),
+  })
 }

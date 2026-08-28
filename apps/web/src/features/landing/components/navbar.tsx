@@ -163,7 +163,7 @@ export function Navbar() {
               </nav>
 
               <div className="mt-8 flex flex-col gap-3">
-                <Link to="/create-community" onClick={closeMenu} tabIndex={tab} className={`${OUTLINE_CTA} flex min-h-12 w-full justify-center`}>
+                <Link to="/communities/new" onClick={closeMenu} tabIndex={tab} className={`${OUTLINE_CTA} flex min-h-12 w-full justify-center`}>
                   Make your Own Community
                 </Link>
                 <Link to="/book-demo" onClick={closeMenu} tabIndex={tab} className={`${SOLID_CTA} flex min-h-12 w-full justify-center`}>

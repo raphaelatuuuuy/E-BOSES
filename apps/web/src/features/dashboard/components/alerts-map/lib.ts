@@ -1,6 +1,5 @@
 import type {
   LiveMapGeometry,
-  LiveMapPerson,
   LiveMapSnapshot,
   LiveMapUpdate,
 } from "@/features/dashboard/api"
@@ -13,30 +12,23 @@ import {
 import { formatTime as formatDateTime } from "@/features/dashboard/components/emergencies/lib"
 import { MAP_COLORS as BASE_MAP_COLORS, personDotHtml } from "@/features/dashboard/components/map/markers"
 import type { MapLegendRow } from "@/features/dashboard/components/map/map-legend"
-import { roleLabelOf } from "@/features/dashboard/lib/people"
 
 export type LayerKey =
   | "boundary"
   | "streets"
-  | "residents"
-  | "officials"
-  | "responders"
   | "concerns"
   | "emergencies"
   | "advisories"
   | "resolved"
   | "acceptance_zone"
 
-export type Selection = { kind: "person" | "concern" | "emergency"; id: number } | null
+export type Selection = { kind: "concern" | "emergency"; id: number } | null
 
 export type StreetLine = { name: string; line: leaflet.LatLngTuple[] }
 
 export const defaultLayers: Record<LayerKey, boolean> = {
   boundary: false,
   streets: false,
-  residents: true,
-  officials: true,
-  responders: true,
   concerns: true,
   emergencies: true,
   advisories: true,
@@ -45,7 +37,6 @@ export const defaultLayers: Record<LayerKey, boolean> = {
 }
 
 export type AlertLayerCounts = {
-  responders: number
   emergencies: number
   concerns: number
   advisories: number
@@ -66,13 +57,6 @@ export function alertLayerRows(counts: AlertLayerCounts): MapLegendRow<LayerKey>
       hint: "Reports neighbours have filed",
       count: counts.concerns,
       tone: OFFICIAL_MAP_COLORS.concern,
-    },
-    {
-      key: "responders",
-      label: "Responders",
-      hint: "Crews on and off duty",
-      count: counts.responders,
-      tone: OFFICIAL_MAP_COLORS.responder,
     },
     {
       key: "advisories",
@@ -170,10 +154,6 @@ export function formatEta(seconds: number | null) {
 export function policyNumber(value: number | string, fallback: number) {
   const next = Number(value)
   return Number.isFinite(next) ? next : fallback
-}
-
-export function roleLabel(role: LiveMapPerson["role"]) {
-  return roleLabelOf(role) || "Resident"
 }
 
 export function lineCoordinates(coordinates: unknown): leaflet.LatLngTuple[] {

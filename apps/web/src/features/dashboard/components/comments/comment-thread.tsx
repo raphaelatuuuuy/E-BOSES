@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from "react"
-import { MessageCircleIcon } from "lucide-react"
+import { useEffect, useState, type ReactNode } from "react"
+import { MessageCircleIcon, MoreHorizontalIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import {
@@ -120,6 +120,28 @@ export function CommentThread({
   const [replyDraft, setReplyDraft] = useState("")
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState("")
+  const [openMenuId, setOpenMenuId] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (openMenuId == null) return
+    function onDocClick(e: MouseEvent) {
+      const target = e.target as HTMLElement | null
+      if (target?.closest?.("[data-comment-menu]")) return
+      setOpenMenuId(null)
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpenMenuId(null)
+    }
+    const timer = window.setTimeout(() => {
+      document.addEventListener("mousedown", onDocClick)
+      document.addEventListener("keydown", onKeyDown)
+    }, 0)
+    return () => {
+      window.clearTimeout(timer)
+      document.removeEventListener("mousedown", onDocClick)
+      document.removeEventListener("keydown", onKeyDown)
+    }
+  }, [openMenuId])
 
   const hiddenCount = collapseToLatest ? Math.max(0, comments.length - 1) : 0
   const visible =
@@ -168,57 +190,121 @@ export function CommentThread({
     const isEditing = editingId === comment.id
     const isReplying = replyOpenId === comment.id
 
-    const actions = (
-      <>
-        {allowReplies ? (
-          <CommentAction
-            onClick={() => {
-              const opening = !isReplying
-              setReplyOpenId(opening ? comment.id : null)
-              // Replies flatten onto the root comment, so a reply-to-a-reply
-              // has to carry who it answers as a real mention token.
-              setReplyDraft(
-                opening && isReply && comment.author.user
-                  ? `${mentionToken(toMentionUser(comment.author.user))} `
-                  : "",
-              )
-            }}
+    const hasMenuActions =
+      allowReplies ||
+      (comment.isMine && Boolean(onEdit || onDelete)) ||
+      (!comment.isMine && Boolean(onRemove || onReport))
+
+    const menu = hasMenuActions ? (
+      <div data-comment-menu className="relative">
+        <button
+          type="button"
+          aria-label="Comment actions"
+          aria-haspopup="menu"
+          aria-expanded={openMenuId === comment.id}
+          title="Comment actions"
+          onClick={() => setOpenMenuId((current) => (current === comment.id ? null : comment.id))}
+          className="-my-1 inline-flex size-7 items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-800"
+        >
+          <MoreHorizontalIcon className="size-4" strokeWidth={2} />
+        </button>
+        {openMenuId === comment.id ? (
+          <div
+            role="menu"
+            className="absolute right-0 top-full z-20 mt-1 min-w-32 rounded-xl border border-neutral-200 bg-white p-1 shadow-lg"
           >
-            {isReplying ? "Cancel" : "Reply"}
-          </CommentAction>
+            {allowReplies ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-neutral-700 hover:bg-neutral-100"
+                onClick={() => {
+                  const opening = !isReplying
+                  setOpenMenuId(null)
+                  setReplyOpenId(opening ? comment.id : null)
+                  // Replies flatten onto the root comment, so a reply-to-a-reply
+                  // has to carry who it answers as a real mention token.
+                  setReplyDraft(
+                    opening && isReply && comment.author.user
+                      ? `${mentionToken(toMentionUser(comment.author.user))} `
+                      : "",
+                  )
+                }}
+              >
+                {isReplying ? "Cancel reply" : "Reply"}
+              </button>
+            ) : null}
+            {comment.isMine && onEdit ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-neutral-700 hover:bg-neutral-100"
+                onClick={() => {
+                  setOpenMenuId(null)
+                  setEditingId(comment.id)
+                  setEditDraft(comment.body)
+                }}
+              >
+                Edit
+              </button>
+            ) : null}
+            {comment.isMine && onDelete ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-neutral-700 hover:bg-neutral-100"
+                onClick={() => {
+                  setOpenMenuId(null)
+                  void onDelete(comment.id)
+                }}
+              >
+                Delete
+              </button>
+            ) : null}
+            {!comment.isMine && onRemove ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-neutral-700 hover:bg-neutral-100"
+                onClick={() => {
+                  setOpenMenuId(null)
+                  void onRemove(comment.id)
+                }}
+              >
+                Hide
+              </button>
+            ) : null}
+            {!comment.isMine && onReport ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-red-600 hover:bg-red-50"
+                onClick={() => {
+                  setOpenMenuId(null)
+                  onReport(comment.id)
+                }}
+              >
+                Report
+              </button>
+            ) : null}
+          </div>
         ) : null}
-        {!isReply && comment.replies.length > 0 ? (
-          <span className="text-[12px] font-medium text-neutral-400">
-            {comment.replies.length} {comment.replies.length === 1 ? "reply" : "replies"}
-          </span>
-        ) : null}
-        {comment.isMine && onEdit ? (
-          <CommentAction
-            onClick={() => {
-              setEditingId(comment.id)
-              setEditDraft(comment.body)
-            }}
-          >
-            Edit
-          </CommentAction>
-        ) : null}
-        {comment.isMine && onDelete ? (
-          <CommentAction onClick={() => void onDelete(comment.id)}>Delete</CommentAction>
-        ) : null}
-        {!comment.isMine && onRemove ? (
-          <CommentAction onClick={() => void onRemove(comment.id)}>Hide</CommentAction>
-        ) : null}
-        {!comment.isMine && onReport ? (
-          <CommentAction onClick={() => onReport(comment.id)}>Report</CommentAction>
-        ) : null}
-      </>
-    )
+      </div>
+    ) : null
+
+    const replyCount =
+      !isReply && comment.replies.length > 0 ? (
+        <span className="text-[12px] font-medium text-neutral-400">
+          {comment.replies.length} {comment.replies.length === 1 ? "reply" : "replies"}
+        </span>
+      ) : null
 
     return (
       <div key={comment.id} className="space-y-3">
         <CommentRow
           comment={comment}
-          actions={isEditing ? null : actions}
+          meta={isEditing ? null : menu}
+          actions={replyCount}
           trailing={renderTrailing?.(comment)}
           trunk={!isReply && comment.replies.length > 0}
         >

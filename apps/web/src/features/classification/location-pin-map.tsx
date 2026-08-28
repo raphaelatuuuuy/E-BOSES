@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import type leaflet from "leaflet"
-import { HomeIcon, LocateFixedIcon } from "lucide-react"
+import { FootprintsIcon, HomeIcon, LocateFixedIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -14,11 +14,13 @@ import {
   OUT_OF_SCOPE_MESSAGE,
   type CoverageInput,
 } from "@/features/dashboard/components/map/coverage-layer"
+import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import {
   MapControlStack,
   MapStackButton,
   MapStackDivider,
 } from "@/features/dashboard/components/map-control-stack"
+import { StreetViewModal, type StreetViewCoord } from "@/features/dashboard/components/map/street-view"
 
 const DEFAULT_CENTER: [number, number] = [14.6507, 121.1133]
 
@@ -75,6 +77,8 @@ export function LocationPinMap({
   const [height, setHeight] = useState(224)
   const [street, setStreet] = useState("")
   const [geocoding, setGeocoding] = useState(false)
+  const [svCoord, setSvCoord] = useState<StreetViewCoord | null>(null)
+  const [svPicking, setSvPicking] = useState(false)
 
   function scheduleStreetLookup(lat: number, lng: number) {
     if (reverseTimer.current) window.clearTimeout(reverseTimer.current)
@@ -148,6 +152,11 @@ export function LocationPinMap({
         .eboses-map-blocked .leaflet-interactive {
           cursor: not-allowed !important;
         }
+        .eboses-sv-pick.leaflet-container,
+        .eboses-sv-pick .leaflet-grab,
+        .eboses-sv-pick .leaflet-interactive {
+          cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 3.11-2 5.66-2 8.68V16a2 2 0 1 1-4 0Z"/><path d="M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 3.11 2 5.66 2 8.68V20a2 2 0 1 0 4 0Z"/><path d="M16 17h4"/><path d="M4 13h4"/></svg>') 13 13, pointer !important;
+        }
         .eboses-map-blocked::after {
           content: "";
           position: absolute;
@@ -208,14 +217,12 @@ export function LocationPinMap({
         preferCanvas: false,
       })
 
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-        attribution: "",
-        subdomains: "abcd",
+      addBaseTiles(L, map, "dark", {
         maxZoom: 19,
         keepBuffer: 6,
         updateWhenIdle: false,
         updateWhenZooming: true,
-      }).addTo(map)
+      })
 
       coverageLayerRef.current = L.layerGroup().addTo(map)
       markerLayerRef.current = L.layerGroup().addTo(map)
@@ -353,6 +360,35 @@ export function LocationPinMap({
     )
   }
 
+  useEffect(() => {
+    if (!svPicking) return
+    const map = mapRef.current
+    if (!map) return
+    const container = map.getContainer()
+    container.classList.add("eboses-sv-pick")
+    function onMapClick(event: leaflet.LeafletMouseEvent) {
+      const lat = event.latlng.lat
+      const lng = event.latlng.lng
+      if (!insideCoverage(lat, lng, coverageRef.current)) {
+        toast.error(OUT_OF_SCOPE_MESSAGE)
+        return
+      }
+      setSvPicking(false)
+      mapRef.current?.setView([lat, lng], Math.max(mapRef.current.getZoom(), 16))
+      setSvCoord({ lat, lng })
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setSvPicking(false)
+    }
+    map.on("click", onMapClick)
+    document.addEventListener("keydown", onKey)
+    return () => {
+      container.classList.remove("eboses-sv-pick")
+      map.off("click", onMapClick)
+      document.removeEventListener("keydown", onKey)
+    }
+  }, [svPicking])
+
   return (
     <div>
       <div
@@ -364,7 +400,7 @@ export function LocationPinMap({
       >
         <div ref={containerRef} className="eboses-pin-map absolute inset-0 z-0" />
 
-        {mapReady ? (
+        {mapReady && !svCoord ? (
           <MapControlStack className="absolute right-3 top-3 z-[1100] border-0 bg-white">
             <MapStackButton
               className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
@@ -381,7 +417,37 @@ export function LocationPinMap({
             >
               <LocateFixedIcon className="size-5" strokeWidth={1.8} aria-hidden />
             </MapStackButton>
+            <MapStackDivider className="bg-neutral-200" />
+            <MapStackButton
+              className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
+              active={svPicking}
+              label={svPicking ? "Cancel Street View pick" : "Click the map, then open Street View there"}
+              onClick={() => setSvPicking((value) => !value)}
+            >
+              <FootprintsIcon className="size-5" strokeWidth={1.9} aria-hidden />
+            </MapStackButton>
           </MapControlStack>
+        ) : null}
+
+        {svPicking && !svCoord ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 z-[1100] flex justify-center px-4">
+            <p className="rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-neutral-700 shadow-md">
+              Click the map to open Street View there · Esc cancels
+            </p>
+          </div>
+        ) : null}
+
+        {svCoord ? (
+          <StreetViewModal
+            coord={svCoord}
+            mode="pick"
+            onMove={(next) => {
+              mapRef.current?.setView([next.lat, next.lng], Math.max(mapRef.current.getZoom(), 16))
+              setSvCoord(next)
+            }}
+            coverage={coverageRef.current}
+            onClose={() => setSvCoord(null)}
+          />
         ) : null}
 
         {mapReady && !outOfScope && pin ? (
@@ -391,6 +457,7 @@ export function LocationPinMap({
           />
         ) : null}
 
+        {!svCoord && !svPicking ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-3 z-[1100] flex flex-col items-center gap-2 px-4">
           {outOfScope ? (
             <p
@@ -415,6 +482,7 @@ export function LocationPinMap({
             </div>
           )}
         </div>
+        ) : null}
 
         <div
           aria-hidden

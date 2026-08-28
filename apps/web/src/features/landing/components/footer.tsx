@@ -133,7 +133,7 @@ export function Footer() {
             </ul>
             <div className="mt-6 flex flex-col items-start gap-3">
               <Link
-                to="/create-community"
+                to="/communities/new"
                 className="inline-flex min-h-10 w-60 items-center justify-center rounded-none border border-white/20 px-5 text-sm font-medium text-white/85 transition-colors hover:border-white/40 hover:bg-white/5 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
               >
                 Make your Own Community

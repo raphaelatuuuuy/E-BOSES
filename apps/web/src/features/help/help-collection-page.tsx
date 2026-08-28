@@ -56,7 +56,7 @@ function CollectionBody({ slug }: { slug: string | undefined }) {
         {collection.articles.map((article) => (
           <li key={article.slug} className="border-b border-neutral-200 last:border-b-0">
             <Link
-              to={`/help/a/${article.slug}`}
+              to={`/help/articles/${article.slug}`}
               className="flex items-center gap-4 px-8 py-7 no-underline transition-colors hover:bg-neutral-100"
             >
               <div className="min-w-0 flex-1">

@@ -30,6 +30,14 @@ def scope_emergency_queryset(queryset, user):
     if user.is_superuser:
         return queryset
     communities = community_ids_for_user(user)
+
+    from apps.capabilities import DISPATCH_EMERGENCIES, user_has_capability
+
+    if user.is_staff or user_has_capability(user, DISPATCH_EMERGENCIES):
+        return queryset.filter(
+            Q(reporter=user) | Q(community_id__in=communities)
+        ).distinct()
+
     departments = department_ids_for_user(user)
     allowed_types = set(
         user.designations.filter(
@@ -38,11 +46,31 @@ def scope_emergency_queryset(queryset, user):
             department__emergency_role_maps__is_active=True,
         ).values_list("department__emergency_role_maps__emergency_type", flat=True)
     )
-    return queryset.filter(
+    visible = (
         Q(reporter=user)
         | Q(assignments__responder=user, assignments__status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting"])
         | Q(community_id__in=communities, type__in=allowed_types)
-    ).distinct()
+    )
+
+    # A resident sees the public alerts on their own community's map, so the
+    # detail endpoint behind those pins has to resolve for them too. Responders
+    # are deliberately excluded: an unassigned responder must still 404 on an
+    # incident that is not theirs.
+    if getattr(user, "role", None) == "resident":
+        from apps.emergencies.models import EmergencyCategory
+
+        public_types = set(
+            EmergencyCategory.objects.filter(
+                is_active=True, visible_to_residents=True
+            ).values_list("code", flat=True)
+        )
+        profile = getattr(user, "resident_profile", None)
+        resident_community = getattr(profile, "community_id", None)
+        resident_communities = communities | ({resident_community} if resident_community else set())
+        if resident_communities and public_types:
+            visible |= Q(community_id__in=resident_communities, type__in=public_types)
+
+    return queryset.filter(visible).distinct()
 
 
 def user_can_view_emergency(user, alert):

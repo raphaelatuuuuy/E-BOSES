@@ -272,7 +272,6 @@ function AuthenticityRows({
   const forensicsChecked = pipelines.some((item) => item.forensics?.checked)
   const worstIntegrity =
     integrities.find((item) => item.flagged) ?? integrities[0] ?? null
-  const signals = [...new Set(integrities.flatMap((item) => item.signals ?? []))]
 
   const fileStage: Stage = {
     key: "media_forensics",
@@ -316,26 +315,36 @@ function AuthenticityRows({
         ? "Not reached"
         : "Not checked",
     lines: worstIntegrity
-      ? [FORMAT_WORDING[worstIntegrity.format_verdict], ...signals]
+      ? [
+          worstIntegrity.feedback || FORMAT_WORDING[worstIntegrity.format_verdict],
+        ]
       : blockedBy === "media_forensics"
         ? ["The file check stopped this photo."]
         : ["The model could not be reached."],
   }
 
+  // Why the text stage came back empty, in terms an official can act on:
+  // "no text was read" is not a finding, "it is out of focus" is.
+  const readability = present.map((item) => item.readability).find(Boolean) ?? null
+
   const textStage: Stage = {
     key: "ocr",
     title: "Text",
-    state: blockedBy ? "skipped" : "passed",
+    state: blockedBy ? "skipped" : readability ? "blocked" : "passed",
     headline: blockedBy
       ? "Not reached"
-      : "Extracted and validated against the field rules",
+      : readability
+        ? "Too little text could be read"
+        : "Extracted and validated against the field rules",
     lines: blockedBy
       ? [
           blockedBy === "media_forensics"
             ? "The file check stopped this photo."
             : "The picture check stopped this photo.",
         ]
-      : [],
+      : readability
+        ? [readability.message]
+        : [],
   }
 
   const stages = [fileStage, pictureStage, textStage]

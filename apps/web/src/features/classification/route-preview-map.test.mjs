@@ -19,7 +19,7 @@ test("community-only locations do not draw a fake destination", () => {
     { geometry: { type: "LineString", coordinates: [] } },
   )
   assert.deepEqual(state, {
-    showBoundary: true,
+    showBoundary: false,
     showIncident: false,
     showResponder: false,
     showRoute: false,

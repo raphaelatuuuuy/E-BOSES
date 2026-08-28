@@ -86,7 +86,7 @@
 :root {
   --background: #f5f6f8;
   --foreground: #020c4e;
-  --card: #fbfbff;
+  --card: #ffffff;
   --card-foreground: #020c4e;
   --popover: oklch(1 0 0);
   --popover-foreground: #020c4e;
@@ -125,7 +125,7 @@
   --color-nav-muted: rgba(255, 255, 255, 0.46);
 
   --color-canvas: #f6f7f9;
-  --color-card-line: #e7e9ee;
+  --color-card-line: #e5e5e5;
 
   --color-ink: #0b1020;
   --color-ink-raised: #161d33;
@@ -456,6 +456,9 @@
   --radius-panel: 14px;
   --radius-control: 10px;
   --radius-pill: 999px;
+  /* The overview's large cards. `band.tsx` already hard-coded this value; it is
+     a token so the next big surface does not invent a fourth radius. */
+  --radius-bento: 24px;
 
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --duration-micro: 120ms;
@@ -1034,6 +1037,25 @@ body.eboses-sv-open .eboses-pin__core {
   }
 }
 
+/* Panes are authored as cards for the desktop column. Inside the mobile sheet
+   the sheet is the card, so only the nested chrome is stripped — each pane keeps
+   its own flex layout so its composer and scroll region still work. */
+.ops-sheet-flat section {
+  border-radius: 0;
+  box-shadow: none;
+  --tw-ring-shadow: 0 0 #0000;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.ops-sheet-flat section + section {
+  border-top: 1px solid var(--color-card-line);
+}
+
+body[data-ops-sheet="open"] [data-mobile-nav] {
+  display: none;
+}
+
 .scrollbar-hide {
   -ms-overflow-style: none;
   scrollbar-width: none;
@@ -1051,6 +1073,7 @@ body.eboses-sv-open .eboses-pin__core {
 .ops-plain {
   --foreground: #0b1020;
   --card-foreground: #0b1020;
+  --muted-foreground: #64748b;
 }
 
 .ops-pane {
@@ -1081,28 +1104,70 @@ body.eboses-sv-open .eboses-pin__core {
   flex: none;
   background: transparent;
   touch-action: none;
+  z-index: 20;
 }
 .ops-resizer::before {
   content: "";
   position: absolute;
   inset: 0;
   margin: auto;
+  border-radius: 999px;
   background: var(--color-card-line);
-  transition: background-color 120ms ease;
+  transition: background-color 140ms ease, width 140ms ease, height 140ms ease;
 }
 .ops-resizer[data-orientation="vertical"] {
-  width: 11px;
+  width: 12px;
   cursor: col-resize;
 }
 .ops-resizer[data-orientation="vertical"]::before {
   width: 1px;
 }
 .ops-resizer[data-orientation="horizontal"] {
-  height: 11px;
+  height: 12px;
   cursor: row-resize;
 }
 .ops-resizer[data-orientation="horizontal"]::before {
   height: 1px;
+}
+.ops-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  border-radius: 999px;
+  background-color: #ffffff;
+  background-image: radial-gradient(circle, #9aa1ad 1px, transparent 1.35px);
+  background-size: 4px 5px;
+  background-position: center;
+  border: 1px solid #e2e6ec;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1);
+  opacity: 0.9;
+  transform: scale(0.92);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+  pointer-events: none;
+}
+.ops-resizer[data-orientation="vertical"]::after {
+  width: 6px;
+  height: 34px;
+}
+.ops-resizer[data-orientation="horizontal"]::after {
+  width: 34px;
+  height: 6px;
+}
+.ops-resizer:hover::after,
+.ops-resizer:focus-visible::after,
+.ops-resizer[data-dragging="true"]::after {
+  opacity: 1;
+  transform: scale(1);
+  border-color: var(--color-brand-orange);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.16);
+}
+.ops-resizer[data-dragging="true"]::after {
+  background-image: radial-gradient(circle, var(--color-brand-orange) 1px, transparent 1.35px);
 }
 .ops-resizer:hover::before,
 .ops-resizer[data-dragging="true"]::before,
@@ -1167,12 +1232,18 @@ body[data-ops-resizing="horizontal"] * {
 .ops-divider:focus-visible {
   outline: none;
 }
+.ops-plain .ops-divider {
+  cursor: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Crect x='4.5' y='4.5' width='5' height='15' rx='2.5' fill='%23ffffff' fill-opacity='0.85'/%3E%3Crect x='14.5' y='4.5' width='5' height='15' rx='2.5' fill='%23ffffff' fill-opacity='0.85'/%3E%3Crect x='6' y='6' width='2' height='12' rx='1' fill='%2364748b'/%3E%3Crect x='16' y='6' width='2' height='12' rx='1' fill='%2364748b'/%3E%3C/svg%3E") 12 12, col-resize;
+}
 .ops-plain .ops-divider::after {
   opacity: 0;
 }
 .ops-plain .ops-divider:hover::after,
 .ops-plain .ops-divider[data-dragging="true"]::after,
 .ops-plain .ops-divider:focus-visible::after {
+  width: 1px;
+  left: 4px;
+  background: var(--color-card-line-strong);
   opacity: 1;
 }
 .ops-plain :focus,

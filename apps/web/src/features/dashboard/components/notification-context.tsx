@@ -29,6 +29,11 @@ export interface NotificationItem {
   tag?: string
   icon_url?: string
   image_url?: string | null
+  images?: Array<{
+    url: string
+    filename: string
+    mime_type?: string | null
+  }>
   actions?: Array<{ action: string; title: string; url: string; icon?: string }>
 }
 

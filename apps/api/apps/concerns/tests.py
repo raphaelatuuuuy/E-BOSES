@@ -2007,6 +2007,34 @@ class AssignedResponderStatusProgressionAPITests(APITestCase):
         concern.refresh_from_db()
         self.assertEqual(concern.status, Concern.Status.IN_PROGRESS)
 
+    def test_assigned_responder_can_resolve_directly_with_evidence(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            title="Assigned drainage",
+            status=Concern.Status.ASSIGNED,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+        ConcernAssignment.objects.create(
+            concern=concern,
+            assignee=self.responder,
+            status=ConcernAssignment.Status.ACTIVE,
+        )
+        self.client.force_authenticate(self.responder)
+
+        response = self.client.post(
+            f"/api/concerns/{concern.pk}/status/",
+            {
+                "status": Concern.Status.RESOLVED,
+                "note": "Drainage clearing was completed today.",
+                "resolution_evidence": png_upload("direct-resolution.png"),
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        concern.refresh_from_db()
+        self.assertEqual(concern.status, Concern.Status.RESOLVED)
+
     def test_assigned_responder_resolve_requires_evidence_then_succeeds_with_it(self):
         concern = Concern.objects.create(
             reporter=self.resident,

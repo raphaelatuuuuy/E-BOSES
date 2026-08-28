@@ -49,6 +49,24 @@ export function statusGroup(status: ConcernStatus): (typeof filters)[number] {
   return "Active"
 }
 
+export function unitShortTag(
+  unit: { short_name?: string; code?: string; name?: string } | null | undefined,
+): string {
+  if (!unit) return ""
+  const raw = (unit.short_name || unit.code || unit.name || "").trim()
+  if (!raw) return ""
+  const paren = raw.match(/\(([^)]+)\)/)
+  if (paren) return paren[1].replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase()
+  if (/[^A-Za-z0-9]/.test(raw)) {
+    const words = raw.split(/\s+/).filter(Boolean)
+    if (words.length > 1 && words.length <= 5) {
+      const letters = words.map((word) => word[0]).join("")
+      if (letters.length >= 2 && letters.length <= 5) return letters.toUpperCase()
+    }
+  }
+  return raw.replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase()
+}
+
 export function formatDate(value: string) {
   return new Intl.DateTimeFormat("en", {
     month: "short",

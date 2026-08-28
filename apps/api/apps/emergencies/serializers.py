@@ -416,6 +416,9 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
     escalations = EmergencyEscalationSerializer(many=True, read_only=True)
     assignment_logs = EmergencyAssignmentLogSerializer(many=True, read_only=True)
     current_assignment = serializers.SerializerMethodField()
+    responding_unit = serializers.SerializerMethodField()
+    is_public = serializers.SerializerMethodField()
+    comment_count = serializers.SerializerMethodField()
     route = serializers.SerializerMethodField()
     witness_notification_summary = serializers.SerializerMethodField()
     response_duration_seconds = serializers.SerializerMethodField()
@@ -458,6 +461,9 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
             "assignments",
             "active_assignments",
             "current_assignment",
+            "responding_unit",
+            "is_public",
+            "comment_count",
             "route",
             "status_events",
             "appeals",
@@ -518,6 +524,85 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
         if assignment:
             assignment._parent_alert = obj
         return EmergencyResponderAssignmentSerializer(assignment, context=self.context).data if assignment else None
+
+    def _scope_cache(self) -> dict:
+        """Per-request memo.
+
+        `serialize_alert()` builds a fresh serializer for every alert, so the
+        serializer's own context cannot cache across a page. The request can.
+        """
+        request = self.context.get("request")
+        holder = request if request is not None else self.context
+        cache = getattr(holder, "_emergency_serializer_cache", None)
+        if cache is None:
+            cache = {}
+            try:
+                setattr(holder, "_emergency_serializer_cache", cache)
+            except (AttributeError, TypeError):
+                self.context["_emergency_serializer_cache"] = cache
+        return cache
+
+    def _public_types(self) -> set:
+        cache = self._scope_cache()
+        if "public_types" not in cache:
+            cache["public_types"] = set(
+                EmergencyCategory.objects.filter(
+                    is_active=True, visible_to_residents=True
+                ).values_list("code", flat=True)
+            )
+        return cache["public_types"]
+
+    def get_is_public(self, obj) -> bool:
+        return obj.type in self._public_types()
+
+    def get_comment_count(self, obj) -> int:
+        # Annotated by alert_queryset() so a page of alerts costs no extra
+        # queries; the fallback only runs for an unannotated single read.
+        annotated = getattr(obj, "visible_comment_count", None)
+        if annotated is not None:
+            return annotated
+        from .models import EmergencyCommunityComment
+
+        return obj.community_comments.filter(
+            status=EmergencyCommunityComment.Status.VISIBLE
+        ).count()
+
+    def get_responding_unit(self, obj):
+        from .views import preferred_departments_for
+
+        scope = self._scope_cache()
+        if "role_map" not in scope:
+            # One query for the whole active routing table beats three per
+            # distinct emergency type on a page of alerts.
+            rows = (
+                EmergencyTypeRoleMap.objects.filter(is_active=True, department__isnull=False)
+                .select_related("department")
+                .order_by("priority", "pk")
+            )
+            table: dict = {}
+            for row in rows:
+                table.setdefault((row.emergency_type, row.department.community_id), row.department)
+                table.setdefault((row.emergency_type, None), row.department)
+            scope["role_map"] = table
+
+        cache = scope.setdefault("responding_units", {})
+        key = (obj.type, getattr(obj, "community_id", None))
+        if key not in cache:
+            department = scope["role_map"].get(key) or scope["role_map"].get((obj.type, None))
+            if department is None:
+                departments = preferred_departments_for(obj.type, getattr(obj, "community", None))
+                department = departments[0] if departments else None
+            cache[key] = (
+                {
+                    "id": department.pk,
+                    "code": department.code,
+                    "name": department.name,
+                    "short_name": department.short_name,
+                }
+                if department
+                else None
+            )
+        return cache[key]
 
     def get_route(self, obj):
         if obj.route is not None:

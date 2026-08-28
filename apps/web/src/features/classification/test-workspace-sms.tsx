@@ -2,9 +2,12 @@ import {
   ArrowUpIcon,
   Ban,
   CircleCheck,
+  CopyIcon,
   Info,
   Loader2Icon,
+  SparklesIcon,
   TriangleAlert,
+  UserIcon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -98,70 +101,6 @@ export function SenderPill({
   )
 }
 
-/* ─── Main workspace ─── */
-
-export type SmsWorkspaceProps = {
-  message: string
-  setMessage: (v: string) => void
-  sender: "registered" | "unknown" | "needs_review"
-  setSender: (v: "registered" | "unknown" | "needs_review") => void
-  setScenario: (v: SmsSimulationScenario) => void
-  result: SmsSimulationResult | null
-  busy: boolean
-}
-
-export function SmsTestWorkspace({
-  message,
-  setMessage,
-  sender,
-  setSender,
-  setScenario,
-  result,
-}: SmsWorkspaceProps) {
-  return (
-    <div className="space-y-4">
-      <div>
-        <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-neutral-400">Try an example</p>
-        <div className="flex flex-wrap gap-1.5">
-          {PRESETS.map((p) => (
-            <button
-              key={p.value}
-              type="button"
-              onClick={() => {
-                setMessage(p.value)
-                setSender(p.sender)
-                setScenario(p.scenario)
-              }}
-              className={cn(
-                "rounded-full border px-3 py-1.5 text-[12px] font-medium transition-colors",
-                message === p.value
-                  ? "border-brand-navy bg-brand-navy text-white"
-                  : "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:text-neutral-900",
-              )}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-        <p className="mt-2.5 text-[12px] leading-relaxed text-neutral-400">
-          Tap an example or type your own below, then open the chat preview to see the reply.
-        </p>
-      </div>
-
-      <div className="flex items-center justify-between border-t border-neutral-100 pt-4">
-        <SenderPill sender={sender} setSender={setSender} />
-        {result?.reply ? (
-          <span className="text-[12px] tabular-nums text-neutral-400">
-            {result.reply.characters} chars · {result.reply.segments} seg{result.reply.segments === 1 ? "" : "s"}
-            {!result.reply.gsm7 ? <span className="ml-1.5 font-semibold text-amber-600">non-GSM</span> : null}
-          </span>
-        ) : null}
-      </div>
-
-    </div>
-  )
-}
-
 /* ─── Chat conversation (messages only; input is pinned by the parent sheet) ─── */
 
 function BubblePlain({ side, children }: { side: "start" | "end"; children: React.ReactNode }) {
@@ -188,17 +127,11 @@ export function SmsChatPanel({
 }) {
   const empty = !message.trim() && !result
 
+  if (empty) return null
+
   return (
     <div className="flex min-h-full flex-col">
-      {empty ? (
-        <div className="flex flex-1 flex-col items-center justify-center py-16 text-center">
-          <p className="text-[14px] font-semibold text-neutral-900">No conversation yet</p>
-          <p className="mt-1 max-w-[280px] text-[12px] leading-relaxed text-neutral-400">
-            Send a sample text to see exactly how the hotline or system would answer a resident.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-3">
+      <div className="space-y-3">
           {message.trim() ? (
             <div className="flex flex-col items-end gap-1">
               <BubblePlain side="end">{message.trim()}</BubblePlain>
@@ -226,8 +159,7 @@ export function SmsChatPanel({
               <p className="px-2 text-[10px] font-medium leading-4 text-neutral-400">Hotline · now</p>
             </div>
           ) : null}
-        </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -235,11 +167,15 @@ export function SmsChatPanel({
 export function SmsChatInput({
   message,
   setMessage,
+  setSender,
+  setScenario,
   busy,
   onSend,
 }: {
   message: string
   setMessage: (v: string) => void
+  setSender: (v: "registered" | "unknown" | "needs_review") => void
+  setScenario: (v: SmsSimulationScenario) => void
   busy: boolean
   onSend: () => void
 }) {
@@ -247,6 +183,30 @@ export function SmsChatInput({
 
   return (
     <div className="w-full">
+      <div className="mb-3">
+        <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-neutral-400">Auto reply</p>
+        <div className="flex flex-wrap gap-1.5">
+          {PRESETS.map((p) => (
+            <button
+              key={p.value}
+              type="button"
+              onClick={() => {
+                setMessage(p.value)
+                setSender(p.sender)
+                setScenario(p.scenario)
+              }}
+              className={cn(
+                "rounded-full border px-3 py-1.5 text-[12px] font-medium transition-colors",
+                message === p.value
+                  ? "border-brand-navy bg-brand-navy text-white"
+                  : "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:text-neutral-900",
+              )}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="flex items-center gap-2 rounded-full border border-neutral-200 bg-white py-1.5 pl-4 pr-1.5 transition-colors focus-within:border-neutral-300">
         <input
           type="text"
@@ -321,91 +281,124 @@ export function SmsCommandGuide() {
 
 /* ─── Results breakdown ─── */
 
+type Finding = {
+  icon: typeof CircleCheck
+  tone: "good" | "warn" | "bad" | "muted"
+  text: string
+}
+
+const FINDING_TONE: Record<Finding["tone"], string> = {
+  good: "text-green-600",
+  warn: "text-amber-500",
+  bad: "text-sos",
+  muted: "text-neutral-400",
+}
+
 export function SmsBreakdown({ result }: { result: SmsSimulationResult }) {
   const tone = BRANCH_TONE[result.branch] ?? { icon: Info, className: "text-neutral-400" }
   const ToneIcon = tone.icon
   const parsed = result.parsed
 
+  const findings: Finding[] = []
+
+  findings.push({
+    icon: UserIcon,
+    tone: "muted",
+    text: `${result.sender.label} · ${result.sender.masked_number}${result.sender.resident_name ? ` · ${result.sender.resident_name}` : ""}`,
+  })
+
+  if (parsed) {
+    findings.push({
+      icon: parsed.needs_confirmation ? TriangleAlert : CircleCheck,
+      tone: parsed.needs_confirmation ? "warn" : parsed.category_label ? "good" : "muted",
+      text: parsed.category_label
+        ? `${parsed.needs_confirmation ? "Guessed category: " : "Category: "}${parsed.category_label}${parsed.matched_alias && parsed.matched_alias !== parsed.category_label ? ` (matched "${parsed.matched_alias}")` : ""}`
+        : "No category recognised.",
+    })
+    findings.push({
+      icon: parsed.incident_timing === "ongoing" ? TriangleAlert : CircleCheck,
+      tone: parsed.incident_timing === "ongoing" ? "warn" : parsed.incident_timing === "unclear" ? "muted" : "good",
+      text: parsed.incident_timing === "ongoing" ? "Happening now." : `Timing: ${parsed.incident_timing.replaceAll("_", " ")}.`,
+    })
+    if (parsed.urgency_signal) {
+      findings.push({ icon: TriangleAlert, tone: "warn", text: "Urgency language detected." })
+    }
+    findings.push({
+      icon: parsed.coordinate_status === "ok" ? CircleCheck : parsed.coordinate_status === "invalid" ? Ban : Info,
+      tone: parsed.coordinate_status === "ok" ? "good" : parsed.coordinate_status === "invalid" ? "bad" : "muted",
+      text:
+        parsed.coordinate_status === "ok"
+          ? `GPS attached: ${parsed.latitude}, ${parsed.longitude}.`
+          : parsed.coordinate_status === "invalid"
+            ? "GPS line present but invalid."
+            : "No GPS attached.",
+    })
+    if (parsed.reported_area) {
+      findings.push({ icon: Info, tone: "muted", text: `Area mentioned: "${parsed.reported_area}".` })
+    }
+    for (const field of parsed.unresolved_fields) {
+      findings.push({ icon: TriangleAlert, tone: "warn", text: `${field.replaceAll("_", " ")} missing.` })
+    }
+    if (parsed.triage_summary) {
+      findings.push({ icon: Info, tone: "muted", text: parsed.triage_summary })
+    }
+    if (parsed.note) {
+      findings.push({ icon: Info, tone: "muted", text: `"${parsed.note}"` })
+    }
+  }
+
+  if (result.location) {
+    const loc = result.location
+    findings.push({
+      icon: loc.state === "confirmed" || loc.state === "fallback" ? CircleCheck : loc.state === "ambiguous" ? TriangleAlert : Ban,
+      tone: loc.state === "confirmed" || loc.state === "fallback" ? "good" : loc.state === "ambiguous" ? "warn" : "bad",
+      text: loc.community
+        ? `${loc.area_label || loc.community.name} — ${locationSourceLabel(loc.source)}${loc.age_seconds != null ? ` (saved ${Math.round(loc.age_seconds / 60)} min ago)` : ""}`
+        : "Community not confirmed.",
+    })
+    if (loc.candidate_communities.length) {
+      findings.push({
+        icon: TriangleAlert,
+        tone: "warn",
+        text: `Possible communities: ${loc.candidate_communities.map((item) => item.name).join(", ")}.`,
+      })
+    }
+  }
+
+  if (result.duplicate) {
+    findings.push({ icon: CopyIcon, tone: "warn", text: result.duplicate.detail })
+  }
+
+  if (result.ai_assist && Object.keys(result.ai_assist.applied).length > 0) {
+    findings.push({
+      icon: SparklesIcon,
+      tone: "muted",
+      text: `${result.ai_assist.reason} (${Object.entries(result.ai_assist.applied).map(([slot, fix]) => `${slot} → ${fix.value}`).join(", ")})`,
+    })
+  }
+
   return (
-    <div className="space-y-3 border-t border-neutral-100 pt-4">
-      <div className="flex items-start gap-2.5">
-        <ToneIcon className={cn("mt-0.5 size-4 shrink-0", tone.className)} strokeWidth={2} aria-hidden />
-        <div className="min-w-0 flex-1">
-          <p className="text-[14px] font-bold leading-snug text-neutral-900">{branchTitle(result.branch)}</p>
-          <p className="mt-0.5 text-[12px] leading-relaxed text-neutral-500">{result.branch_reason}</p>
-        </div>
-      </div>
-
-      <div className="rounded-xl bg-neutral-50 px-3.5 py-2.5">
-        <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">Sender</p>
-        <p className="mt-0.5 text-[13px] font-medium text-neutral-900">{result.sender.label}</p>
-        <p className="text-[12px] text-neutral-500">
-          {result.sender.masked_number}
-          {result.sender.resident_name ? ` · ${result.sender.resident_name}` : ""}
-        </p>
-      </div>
-
-      {parsed ? (
-        <div className="rounded-xl bg-neutral-50 px-3.5 py-2.5">
-          <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">Parsed</p>
-          <div className="mt-1.5 flex flex-wrap gap-1">
-            <ParsedChip label={parsed.category_label || "No category"} strong={Boolean(parsed.category_label)} />
-            {parsed.matched_alias && parsed.matched_alias !== parsed.category_label ? (
-              <ParsedChip label={`alias: ${parsed.matched_alias}`} />
-            ) : null}
-            {parsed.needs_confirmation ? <ParsedChip label="Guessed" warn /> : null}
-            {parsed.urgency_signal ? <ParsedChip label="Urgency" /> : null}
-            <ParsedChip label={parsed.incident_timing === "ongoing" ? "Happening now" : `Timing: ${parsed.incident_timing.replaceAll("_", " ")}`} warn={parsed.incident_timing === "unclear"} />
-            <ParsedChip
-              label={
-                parsed.coordinate_status === "ok"
-                  ? `GPS ${parsed.latitude}, ${parsed.longitude}`
-                  : parsed.coordinate_status === "invalid"
-                    ? "Invalid GPS"
-                    : "No GPS"
-              }
-              warn={parsed.coordinate_status === "invalid"}
-            />
-            {parsed.reported_area ? <ParsedChip label={parsed.reported_area} /> : null}
-            {parsed.unresolved_fields.map((field) => (
-              <ParsedChip key={field} label={`${field} missing`} warn />
-            ))}
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <div className="flex items-start gap-3">
+          <ToneIcon className={cn("mt-0.5 size-5 shrink-0", tone.className)} strokeWidth={2} aria-hidden />
+          <div className="min-w-0">
+            <p className="text-[16px] font-semibold leading-snug text-neutral-900">{branchTitle(result.branch)}</p>
+            <p className="mt-1 text-[14px] leading-relaxed text-neutral-600">{result.branch_reason}</p>
           </div>
-          {parsed.triage_summary ? (
-            <p className="mt-2 text-[12px] font-medium text-neutral-700">{parsed.triage_summary}</p>
-          ) : null}
-          {parsed.note ? (
-            <p className="mt-1.5 text-[12px] italic leading-relaxed text-neutral-500">"{parsed.note}"</p>
-          ) : null}
         </div>
-      ) : null}
 
-      {result.location ? (
-        <div className="rounded-xl bg-neutral-50 px-3.5 py-2.5">
-          <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">Location</p>
-          <p className="mt-0.5 text-[13px] font-medium text-neutral-900">
-            {result.location.community?.name ?? "Community not confirmed"}
-          </p>
-          <p className="text-[12px] text-neutral-500">
-            {locationSourceLabel(result.location.source)}
-          </p>
-          {result.location.age_seconds != null ? (
-            <p className="text-[12px] text-neutral-500">Saved {Math.round(result.location.age_seconds / 60)} min ago</p>
-          ) : null}
-          {result.location.candidate_communities.length ? (
-            <p className="mt-1 text-[12px] text-amber-700">
-              Possible communities: {result.location.candidate_communities.map((item) => item.name).join(", ")}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-
-      {result.duplicate ? (
-        <div className="rounded-xl bg-neutral-50 px-3.5 py-2.5">
-          <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">Duplicate</p>
-          <p className="mt-0.5 text-[13px] leading-relaxed text-neutral-700">{result.duplicate.detail}</p>
-        </div>
-      ) : null}
+        {findings.length ? (
+          <ul className="space-y-1.5 pl-8">
+            {findings.map((finding, index) => (
+              <li key={index} className="flex gap-2 text-[13.5px] leading-relaxed text-neutral-700">
+                <finding.icon className={cn("mt-0.5 size-4 shrink-0", FINDING_TONE[finding.tone])} strokeWidth={2} aria-hidden />
+                <span className="min-w-0 break-words">{finding.text}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
 
       {result.routing ? (
         <div className="space-y-3 rounded-xl bg-neutral-50 px-3.5 py-2.5">
@@ -454,33 +447,6 @@ export function SmsBreakdown({ result }: { result: SmsSimulationResult }) {
           ) : null}
         </div>
       ) : null}
-
-      {result.ai_assist && Object.keys(result.ai_assist.applied).length > 0 ? (
-        <div className="rounded-xl bg-neutral-50 px-3.5 py-2.5">
-          <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-400">AI assist</p>
-          <p className="mt-0.5 text-[12px] leading-relaxed text-neutral-600">{result.ai_assist.reason}</p>
-          <div className="mt-1.5 flex flex-wrap gap-1">
-            {Object.entries(result.ai_assist.applied).map(([slot, fix]) => (
-              <span key={slot} className="rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700">
-                {slot} → {fix.value}
-              </span>
-            ))}
-          </div>
-        </div>
-      ) : null}
     </div>
-  )
-}
-
-function ParsedChip({ label, warn, strong }: { label: string; warn?: boolean; strong?: boolean }) {
-  return (
-    <span
-      className={cn(
-        "rounded-full px-2.5 py-0.5 text-[11px] font-medium",
-        warn ? "bg-amber-50 text-amber-700" : strong ? "bg-neutral-900 text-white" : "bg-neutral-100 text-neutral-600",
-      )}
-    >
-      {label}
-    </span>
   )
 }

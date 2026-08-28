@@ -1,11 +1,9 @@
 import { useEffect, useState } from "react"
 import {
   AlertTriangleIcon,
-  ClockIcon,
   LoaderCircleIcon,
   MapPinIcon,
   PlayIcon,
-  ShieldCheckIcon,
   UserIcon,
 } from "lucide-react"
 import { useNavigate } from "react-router-dom"
@@ -39,10 +37,9 @@ import { RecordDetail } from "@/features/dashboard/components/record/record-deta
 import { toEmergencyRecordView } from "@/features/dashboard/components/record/emergency-adapter"
 import type { RecordAction, RecordSection } from "@/features/dashboard/components/record/types"
 import { concernCategoryLabel } from "@/features/dashboard/components/concerns/concern-display"
-import { responderUnitLabel } from "@/features/dashboard/lib/people"
 import { looksLikeCoordinates } from "@/features/dashboard/lib/location-text"
 import { PanelShell, InfoRow } from "./panel-shell"
-import { formatDistance, formatEta, formatTime, roleLabel, type Selection } from "./lib"
+import { formatDistance, formatEta, formatTime, type Selection } from "./lib"
 
 /**
  * A location that reads as an incident location, not a bare place name.
@@ -131,25 +128,6 @@ export function DetailPanel({
   }, [selectedEmergencyId, selectedEmergencyUpdatedAt, detailRefreshKey])
 
   if (!selected) return null
-  if (selected.kind === "person") {
-    const person = snapshot.people.find((item) => item.id === selected.id)
-    if (!person) return null
-    // More than the bare role: the unit/designation an official needs to know
-    // who they are actually looking at. `responderUnitLabel` turns the stored
-    // code ("bhw") into the name officials use ("Barangay Health Worker").
-    const unit = person.responder_unit ? responderUnitLabel(person.responder_unit) : ""
-    const dutyValue =
-      person.role === "first_responder" ? (person.is_on_duty ? "On duty" : "Off duty") : "Verified"
-    return (
-      <PanelShell title={person.full_name}>
-        <InfoRow icon={<UserIcon className="size-4" />} label="Role" value={roleLabel(person.role)} />
-        {unit ? <InfoRow icon={<ShieldCheckIcon className="size-4" />} label="Unit" value={unit} /> : null}
-        <InfoRow icon={<MapPinIcon className="size-4" />} label="Location" value={locationLabel(person.address, person.barangay)} />
-        <InfoRow icon={<ClockIcon className="size-4" />} label="Last GPS" value={formatTime(person.location_updated_at)} />
-        <InfoRow icon={<ShieldCheckIcon className="size-4" />} label="Duty" value={dutyValue} />
-      </PanelShell>
-    )
-  }
   if (selected.kind === "concern") {
     const concern = snapshot.concerns.find((item) => item.id === selected.id)
     if (!concern) return null

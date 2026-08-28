@@ -168,34 +168,41 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
   const [proofOptions, setProofOptions] = useState<ResidenceProofOption[]>([])
   const [proofOptionsLoading, setProofOptionsLoading] = useState(false)
 
-  async function resolveCommunity(input: { latitude: number; longitude: number; accuracy?: number | null; source: "gps" | "search" | "manual" }) {
+  async function resolveCommunity(input: { latitude: number; longitude: number; accuracy?: number | null; source: "gps" | "search" | "manual"; address?: string }) {
     setProofOptionsLoading(true)
     try {
+      // AddressStep fires this in the same tick as the onChange calls that
+      // set the pin's address, before React has re-rendered — valuesRef.current
+      // would still read the previous address. Callers that have the fresh
+      // value on hand (the pin) must pass it explicitly instead of relying on
+      // the ref; refreshProofOptions (no pending writes) can still fall back to it.
+      const address = input.address ?? valuesRef.current.address
       const result = await resolveRegistrationCommunity({
         email: valuesRef.current.email.trim().toLowerCase(),
         latitude: input.latitude,
         longitude: input.longitude,
         accuracy_meters: input.accuracy,
-        address: { full: valuesRef.current.address },
+        address: { full: address },
         source: input.source,
       })
       const options = normalizeResidenceProofOptions(result.proof_options).filter((item) => item.enabled !== false)
       setProofOptions(options)
-      setValues((current) => {
-        const next = {
-          ...current,
-          homeLatitude: input.latitude,
-          homeLongitude: input.longitude,
-          homeAccuracyMeters: input.accuracy ?? null,
-          homeLocationSource: input.source,
-          communityResolutionToken: result.token,
-          communityMatch: { ...result.community, neighbors: result.neighbors },
-          proofType: options[0]?.key ?? "",
-          proofOfResidency: [],
-        }
-        valuesRef.current = next
-        return next
-      })
+      // AddressStep resolves the community and immediately advances. Update
+      // the ref before React schedules the render so goNext() validates the
+      // fresh resolution token instead of the previous form snapshot.
+      const next = {
+        ...valuesRef.current,
+        homeLatitude: input.latitude,
+        homeLongitude: input.longitude,
+        homeAccuracyMeters: input.accuracy ?? null,
+        homeLocationSource: input.source,
+        communityResolutionToken: result.token,
+        communityMatch: { ...result.community, neighbors: result.neighbors },
+        proofType: options[0]?.key ?? "",
+        proofOfResidency: [],
+      }
+      valuesRef.current = next
+      setValues(next)
       return result
     } finally {
       setProofOptionsLoading(false)
@@ -463,7 +470,7 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     const current = valuesRef.current
     let stepErrors = validateSignUpStep(step, current)
 
-    if (step === 9 && !phoneOtpVerifiedRef.current) {
+    if (step === 8 && !phoneOtpVerifiedRef.current) {
       stepErrors = {
         ...stepErrors,
         phoneNumber: "Phone number must be verified.",
@@ -756,10 +763,15 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
       else if (nextErrors.middleName) setStep(3)
       else if (nextErrors.gender) setStep(4)
       else if (nextErrors.dateOfBirth) setStep(5)
-      else if (nextErrors.address || nextErrors.street) setStep(6)
-      else if (!payloadValues.communityResolutionToken || !payloadValues.communityMatch) setStep(7)
-      else if (nextErrors.proofOfResidency || nextErrors.proofType) setStep(8)
-      else if (nextErrors.phoneNumber || nextErrors.phoneOtpCode) setStep(9)
+      else if (
+        nextErrors.address ||
+        nextErrors.street ||
+        !payloadValues.communityResolutionToken ||
+        !payloadValues.communityMatch
+      )
+        setStep(6)
+      else if (nextErrors.proofOfResidency || nextErrors.proofType) setStep(7)
+      else if (nextErrors.phoneNumber || nextErrors.phoneOtpCode) setStep(8)
       return
     }
 
@@ -860,9 +872,9 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
           if (mapped.email || mapped.password) setStep(0)
           else if (mapped.emailOtpCode) setStep(1)
           else if (mapped.firstName || mapped.lastName) setStep(2)
-          else if (mapped.address) setStep(7)
-          else if (mapped.proofOfResidency || mapped.proofType) setStep(8)
-          else if (mapped.phoneNumber || mapped.phoneOtpCode) setStep(9)
+          else if (mapped.address) setStep(6)
+          else if (mapped.proofOfResidency || mapped.proofType) setStep(7)
+          else if (mapped.phoneNumber || mapped.phoneOtpCode) setStep(8)
           setSubmitError(detailMessage || leftover || "")
           return
         }
@@ -884,7 +896,7 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
 
   async function handleSubmit(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault()
-    if (step === 10) {
+    if (step === 9) {
       await submitRegistration()
       return
     }

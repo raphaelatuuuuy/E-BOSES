@@ -14,6 +14,7 @@ import {
 } from "@/features/dashboard/components/record/severity"
 import { concernSeverityOf } from "@/features/dashboard/components/record/concern-adapter"
 import { derivePriority } from "@/features/dashboard/components/record/severity"
+import { streetOnly } from "@/features/dashboard/lib/location-text"
 import { Band, Fact, Surface } from "@/features/dashboard/components/workspace/band"
 
 const INITIAL_REPORTS = 3
@@ -314,7 +315,9 @@ export function CommunityIncidentDetails({
         </Band>
       ) : null}
 
-      <Band label="Location">{locationSlot}</Band>
+      <Band label="Location" meta={streetOnly(incident.address || report.address) || undefined}>
+        {locationSlot}
+      </Band>
 
       <Band label="Updates">
         <p className="mb-3 text-[12px] text-muted-foreground">

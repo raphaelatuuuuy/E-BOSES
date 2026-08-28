@@ -5,6 +5,7 @@ import { MapPinIcon } from "lucide-react"
 import type leaflet from "leaflet"
 
 import { cn } from "@workspace/ui/lib/utils"
+import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import { matchMarikinaHeightsStreet } from "@/features/auth/lib/marikina-heights-streets"
 import { reverseGeocodeToMarikinaStreet } from "@/features/auth/lib/reverse-geocode"
 import { reverseGeocode, searchGeocode } from "@/lib/geocode"
@@ -12,14 +13,6 @@ import {
   concernMarkerHtml,
   concernMarkerSize,
 } from "@/features/dashboard/components/map/concern-marker"
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-}
 
 type ReportLocationMapProps = {
   latitude: number | string | null | undefined
@@ -234,8 +227,6 @@ export function ReportLocationMap({
   const rawLng = Number(longitude)
   const hasPinnedCoords = Number.isFinite(rawLat) && Number.isFinite(rawLng)
 
-  const streetLabel = streetAddress ? streetFromStoredAddress(streetAddress) : null
-
   // No pin on file — resolve the stored address into approximate coordinates
   // so the card still shows a map instead of a dead end.
   const [geocoded, setGeocoded] = useState<{ address: string; lat: number; lng: number } | null>(null)
@@ -289,41 +280,17 @@ export function ReportLocationMap({
         zoom: 18,
         zoomControl: false,
         attributionControl: false,
-        dragging: true,
-        scrollWheelZoom: true,
-        doubleClickZoom: true,
+        dragging: false,
+        scrollWheelZoom: false,
+        doubleClickZoom: false,
         boxZoom: false,
-        keyboard: true,
+        keyboard: false,
       })
 
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-        attribution: "&copy; OSM &copy; CARTO",
-        subdomains: "abcd",
+      addBaseTiles(L, map, "light", {
         maxZoom: 19,
         className: "eboses-report-map-tiles",
-      }).addTo(map)
-
-      const labelHtml = streetLabel
-        ? `<span class="eboses-report-label" style="
-            position:absolute;left:50%;bottom:calc(100% + 6px);transform:translateX(-50%);
-            display:inline-block;
-            white-space:nowrap;max-width:220px;
-            background:#ffffff;color:#525252;
-            font-size:11px;font-weight:500;line-height:1.35;
-            padding:3px 8px;border-radius:6px;
-            border:1px solid #e5e7eb;
-            box-shadow:0 1px 3px rgba(15,23,42,.08);
-            pointer-events:none;
-          ">${escapeHtml(streetLabel)}<span style="
-            position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);
-            width:0;height:0;
-            border-left:6px solid transparent;border-right:6px solid transparent;border-top:6px solid #e5e7eb;
-          "></span><span style="
-            position:absolute;left:50%;bottom:-4px;transform:translateX(-50%);
-            width:0;height:0;
-            border-left:5px solid transparent;border-right:5px solid transparent;border-top:5px solid #ffffff;
-          "></span></span>`
-        : ""
+      })
 
       const pinSelected = true
       const pinSize = concernMarkerSize(pinSelected)
@@ -331,7 +298,7 @@ export function ReportLocationMap({
       L.marker([lat, lng], {
         icon: L.divIcon({
           className: "eboses-report-pin",
-          html: `<div style="position:relative;width:${pinSize}px;height:${pinSize}px">${labelHtml}${concernMarkerHtml(
+          html: `<div style="position:relative;width:${pinSize}px;height:${pinSize}px">${concernMarkerHtml(
             {
               category: category ?? "other",
               iconKey,
@@ -346,8 +313,6 @@ export function ReportLocationMap({
         zIndexOffset: 900,
       }).addTo(map)
 
-      // Centre the pin in the card. The taller map gives the label above the
-      // pin enough headroom, so no vertical offset is needed.
       const centerView = () => {
         map?.setView([lat, lng], 18, { animate: false })
       }
@@ -391,7 +356,7 @@ export function ReportLocationMap({
       }
       mapRef.current = null
     }
-  }, [lat, lng, valid, streetLabel, category, status])
+  }, [lat, lng, valid, iconKey, category, status])
 
   if (!valid) {
     return (
@@ -415,7 +380,7 @@ export function ReportLocationMap({
         className,
       )}
     >
-      <div ref={containerRef} className="eboses-report-map absolute inset-0 z-0 h-full w-full" />
+      <div ref={containerRef} className="eboses-report-map pointer-events-none absolute inset-0 z-0 h-full w-full" />
       <style>{`
         .eboses-report-map.leaflet-container {
           width: 100%;

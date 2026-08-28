@@ -97,8 +97,8 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
       },
       {
         key: "classification",
-        label: "Report checking",
-        description: "What happens to a report before it reaches your queue",
+        label: "System behavior",
+        description: "How concerns, emergencies, and verification are handled",
         icon: BotIcon,
         to: "/dashboard/configuration/classification",
         capability: CAPABILITIES.configureClassification,

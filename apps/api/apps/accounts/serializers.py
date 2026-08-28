@@ -50,7 +50,13 @@ class CommunityResolveSerializer(serializers.Serializer):
     email = serializers.EmailField()
     latitude = serializers.FloatField(min_value=-90, max_value=90)
     longitude = serializers.FloatField(min_value=-180, max_value=180)
-    accuracy_meters = serializers.FloatField(min_value=0, max_value=100000, required=False, allow_null=True)
+    accuracy_meters = serializers.FloatField(
+        min_value=0,
+        max_value=100000,
+        required=False,
+        allow_null=True,
+        default=None,
+    )
     address = serializers.JSONField(required=False, default=dict)
     source = serializers.ChoiceField(choices=["gps", "search", "manual"])
 

@@ -42,7 +42,6 @@ from .gemma_analyzer import (
     INTEGRITY_FLAGGED_VERDICTS,
     GemmaAnalyzer,
     compare_photo_duplicates,
-    confirm_media_integrity,
     flagged_integrity_findings,
     integrity_overall,
     safe_needs_review,
@@ -298,19 +297,8 @@ def _media_integrity_check(
     """Settle whether any submitted photo looks manipulated, AI-made, or impossible.
 
     The main analysis already produced a per-photo opinion — the image was
-    attached to that call anyway, so asking cost nothing extra. What happens
-    here is the part that decides whether that opinion is allowed to act.
-
-    A flag has to survive a second, independent look before it counts. One
-    vision pass over a compressed night photo of a wet road will occasionally
-    call it edited, and the price of believing that is turning away a real
-    report from a real resident. The second pass is asked cold, with the first
-    verdict presented as a claim to check rather than a conclusion to endorse.
-
-    Every failure path here lands on "not flagged". A model outage, a photo
-    that would not decode, the check being switched off — none of them may
-    invent a finding, and none of them may state that a photo is genuine
-    either. Both directions are unsupported when nobody looked.
+    attached to that call anyway, so asking cost nothing extra. This applies
+    the confidence floor and hands that verdict back as-is.
     """
     minimum = float(getattr(config, "media_integrity_min_confidence", None) or 0.70)
     # The parser applies this floor too. It is applied again here because this
@@ -325,57 +313,13 @@ def _media_integrity_check(
         for finding in (details.get("media_integrity") or [])
     ]
     overall = integrity_overall(findings)
-    result = {
-        "status": "checked",
-        "findings": findings,
-        "overall": overall,
-        "second_opinion": "not_required",
-    }
 
     if not config.media_integrity_enabled:
-        return {"status": "disabled", "findings": [], "overall": "inconclusive", "second_opinion": "not_required"}
+        return {"status": "disabled", "findings": [], "overall": "inconclusive"}
     if not prepared_images or image_review_succeeded is not True:
-        return {"status": "skipped", "reason": "no_reviewable_photo", "findings": [], "overall": "inconclusive", "second_opinion": "not_required"}
+        return {"status": "skipped", "reason": "no_reviewable_photo", "findings": [], "overall": "inconclusive"}
 
-    flagged = flagged_integrity_findings(findings)
-    if not flagged:
-        return result
-    if not config.media_integrity_second_opinion_enabled:
-        result["second_opinion"] = "disabled"
-        return result
-
-    minimum = float(getattr(config, "media_integrity_min_confidence", None) or 0.70)
-    confirmations = []
-    survivors = []
-    for finding in flagged:
-        index = int(finding.get("index", -1))
-        if index < 0 or index >= len(prepared_images):
-            continue
-        second = confirm_media_integrity(
-            image=prepared_images[index],
-            verdict=str(finding.get("verdict") or ""),
-            signals=list(finding.get("signals") or []),
-            min_confidence=minimum,
-        )
-        confirmations.append({"index": index, "result": second})
-        if second and second["agrees"]:
-            survivors.append(index)
-
-    # Anything the second pass did not confirm is downgraded in place, so the
-    # findings list an official reads never carries a flag the system chose not
-    # to act on.
-    settled = []
-    for finding in findings:
-        if finding in flagged and int(finding.get("index", -1)) not in survivors:
-            settled.append({**finding, "verdict": "inconclusive", "signals": []})
-        else:
-            settled.append(finding)
-
-    result["findings"] = settled
-    result["overall"] = integrity_overall(settled)
-    result["second_opinion"] = "confirmed" if survivors else "not_confirmed"
-    result["confirmations"] = confirmations
-    return result
+    return {"status": "checked", "findings": findings, "overall": overall}
 
 
 def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -> ConcernAiAssessment:
@@ -518,6 +462,7 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         "status": run_status,
         "detected_objects": details.get("detected_objects") or [],
         "severity_estimate": gemma_result.severity,
+        "severity_reason": details.get("severity_reason") or "",
         "nlp_validity": gemma_result.label,
         "nlp_confidence": gemma_result.confidence,
         "category_match": bool(category_match),
@@ -557,6 +502,8 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
             image_review_succeeded=image_review_succeeded,
         )
 
+        _apply_formatted_summary(concern, details=details, run_status=run_status)
+
         _apply_automated_validation(
             concern,
             run_status=run_status,
@@ -586,6 +533,23 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
     return current
 
 
+def _apply_formatted_summary(concern, *, details, run_status) -> None:
+    if run_status != ConcernAiAssessment.Status.COMPLETED:
+        return
+    title = (details.get("report_title") or "").strip()[:140]
+    summary = (details.get("text_assessment") or "").strip()[:300]
+    updates = {}
+    if title and concern.official_title != title:
+        updates["official_title"] = title
+    if summary and concern.summary != summary:
+        updates["summary"] = summary
+    if not updates:
+        return
+    for field, value in updates.items():
+        setattr(concern, field, value)
+    concern.save(update_fields=list(updates))
+
+
 def _record_decision_log(concern, *, details, integrity_check, model_version, duration_ms) -> None:
     """Append one audit row for this run.
 
@@ -612,6 +576,7 @@ def _record_decision_log(concern, *, details, integrity_check, model_version, du
                 "title": (concern.title or "")[:300],
                 "description": (concern.description or "")[:2000],
                 "selected_category": concern.category,
+                "location": (concern.address or "")[:255],
             },
             output_snapshot={
                 "relevance": details.get("relevance"),
@@ -621,7 +586,6 @@ def _record_decision_log(concern, *, details, integrity_check, model_version, du
                 "media_integrity": (integrity_check or {}).get("findings") or [],
                 "media_integrity_overall": (integrity_check or {}).get("overall"),
                 "media_integrity_status": (integrity_check or {}).get("status"),
-                "second_opinion": (integrity_check or {}).get("second_opinion"),
             },
             resident_message=details.get("short_explanation") or "",
             recommended_action=details.get("recommended_action") or "",

@@ -94,6 +94,18 @@ export interface ConcernStatusEvent {
   created_at: string
 }
 
+export interface ConcernTimelineRecord {
+  id: number
+  event_type: string
+  status: string
+  message: string
+  actor: PublicUser | null
+  visible_to_resident: boolean
+  is_custom: boolean
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
 export type ConcernEvidenceRelationship =
   | "supports_report"
   | "partially_supports_report"
@@ -119,6 +131,7 @@ export interface ConcernAiAssessment {
 
   detected_objects: string[]
   severity_estimate: string
+  severity_reason: string
   nlp_validity: string
   nlp_confidence: number | null
   category_match: boolean | null
@@ -171,6 +184,14 @@ export interface ContentFlag {
   auto_moderated: boolean
   reviewed_by_name: string | null
   target: ContentFlagTarget
+  llm_review: {
+    assessment: string
+    recommended_disposition: string
+    short_explanation: string
+    image_review: { status: string; explanation: string } | null
+    model_version: string
+    created_at: string
+  } | null
   created_at: string
   updated_at: string
 }
@@ -178,7 +199,8 @@ export interface ContentFlag {
 export interface ConcernAssignment {
   id: number
   assignee: PublicUser | null
-  assigned_by: PublicUser
+  assigned_by: PublicUser | null
+  department?: BarangayUnit | null
   office: string
   note: string
   status: string
@@ -280,6 +302,8 @@ export interface Concern {
   reporter: PublicUser
   reporter_full_name?: string
   first_photo?: string | null
+  photo_count?: number
+  upvoters?: string[]
   title: string
   description: string
 
@@ -306,9 +330,15 @@ export interface Concern {
   visibility: ConcernVisibility
   media: ConcernMedia[]
   status_events: ConcernStatusEvent[]
+  timeline?: ConcernTimelineRecord[]
   comments: ConcernComment[]
   ai_assessment?: ConcernAiAssessment | null
   assignments?: ConcernAssignment[]
+  viewers?: PublicUser[]
+  severity?: "low" | "moderate" | "high" | "critical"
+  severity_assessed?: boolean
+  urgent_attention?: boolean
+  severity_reason?: string
   clarifications?: ConcernClarification[]
   appeals?: ConcernAppeal[]
   official_remarks?: ConcernOfficialRemark[]
@@ -670,6 +700,7 @@ export interface ConcernStatusUpdatePayload {
   resolution_evidence?: File[]
   category?: string
   department_id?: number | null
+  assignee_ids?: number[]
   internal_note?: string
   applied_ai_suggestion?: boolean
 }
@@ -682,6 +713,9 @@ export function updateConcernStatus(id: number, payload: ConcernStatusUpdatePayl
     if (payload.status_version != null) body.append("status_version", String(payload.status_version))
     if (payload.category) body.append("category", payload.category)
     if (payload.department_id != null) body.append("department_id", String(payload.department_id))
+    if (payload.assignee_ids) {
+      for (const assigneeId of payload.assignee_ids) body.append("assignee_ids", String(assigneeId))
+    }
     if (payload.internal_note) body.append("internal_note", payload.internal_note)
     if (payload.applied_ai_suggestion) body.append("applied_ai_suggestion", "true")
     for (const file of payload.resolution_evidence) body.append("resolution_evidence", file)
@@ -698,6 +732,7 @@ export function updateConcernStatus(id: number, payload: ConcernStatusUpdatePayl
       status_version: payload.status_version,
       category: payload.category,
       department_id: payload.department_id,
+      assignee_ids: payload.assignee_ids,
       internal_note: payload.internal_note,
       applied_ai_suggestion: payload.applied_ai_suggestion,
     }),
@@ -888,6 +923,70 @@ export function getOfficialDashboardSummary() {
   return apiRequest<OfficialRoleSummary>("/dashboard/official/summary/")
 }
 
+export interface AnalyticsSeriesPoint {
+  /** ISO date, local to the barangay. */
+  date: string
+  filed: number
+  closed: number
+}
+
+export interface AnalyticsCategoryCount {
+  code: string
+  label: string
+  total: number
+}
+
+export interface AnalyticsAttentionRow {
+  id: number
+  tracking_id: string
+  title: string
+  /** Full name of the assigned unit, or "" when nobody has routed it. */
+  unit: string
+  status: ConcernStatus
+  created_at: string
+}
+
+/**
+ * Everything the official overview draws, aggregated server-side.
+ *
+ * The page used to count rows from `/concerns/manage/`, which is paginated at
+ * twenty, so a figure labelled "All time" described the twenty most recent
+ * concerns. Nothing here is derived in the browser.
+ */
+export interface OfficialAnalytics {
+  window_days: number
+  generated_at: string
+  totals: {
+    open: number
+    working: number
+    new_today: number
+    filed_window: number
+    closed_window: number
+    net_window: number
+  }
+  /** Where the whole caseload sits right now — not windowed. */
+  share: { open: number; working: number; closed: number }
+  /** Exactly `window_days` entries, oldest first, zero-filled. */
+  series: AnalyticsSeriesPoint[]
+  by_category: AnalyticsCategoryCount[]
+  resolution: {
+    rate_percent: number
+    resolved: number
+    settled: number
+    median_days: number | null
+  }
+  emergencies: {
+    active: number
+    responders_on_duty: number
+    median_response_minutes: number | null
+  }
+  attention: AnalyticsAttentionRow[]
+}
+
+export function getOfficialAnalytics() {
+  return apiRequest<OfficialAnalytics>("/dashboard/official/analytics/")
+}
+
 export interface BarangayUnit {
   id: number
   name: string
@@ -920,6 +1019,10 @@ export interface BarangayUnitDeleteResult {
 
 export function listBarangayUnits() {
   return apiRequest<BarangayUnit[]>("/concerns/admin/departments/")
+}
+
+export function listBarangayUnitMembers(departmentId: number) {
+  return apiRequest<PublicUser[]>(`/concerns/admin/departments/${departmentId}/members/`)
 }
 
 export function createBarangayUnit(draft: BarangayUnitDraft) {

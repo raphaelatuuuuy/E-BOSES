@@ -1,7 +1,11 @@
 import * as React from "react"
 import { flushSync } from "react-dom"
 import {
+  CreditCardIcon,
+  IdCardIcon,
   LoaderCircleIcon,
+  Maximize2Icon,
+  RefreshCwIcon,
   ShieldCheckIcon,
   XIcon,
 } from "lucide-react"
@@ -131,6 +135,11 @@ export function ProofStep({
   const [dialogError, setDialogError] = React.useState<string | null>(null)
   const [activeSide, setActiveSide] = React.useState(0)
   const [fullPreviewUrl, setFullPreviewUrl] = React.useState<string | null>(null)
+  const [fullPreviewIndex, setFullPreviewIndex] = React.useState<number | null>(null)
+  function closeFullPreview() {
+    setFullPreviewUrl(null)
+    setFullPreviewIndex(null)
+  }
   const fileInputRef = React.useRef<HTMLInputElement>(null)
 
   const selectedOption =
@@ -232,10 +241,14 @@ export function ProofStep({
     requestAnimationFrame(() => fileInputRef.current?.click())
   }
 
-  async function handleFileSelected(fileList: FileList | null) {
+  function handleFileSelected(fileList: FileList | null) {
     const input = fileInputRef.current
     const raw = fileList?.[0] ?? null
     if (input) input.value = ""
+    void acceptSideFile(raw)
+  }
+
+  async function acceptSideFile(raw: File | null) {
     if (!raw || !dialogOption) return
 
     const sideIndex = activeSide
@@ -470,7 +483,7 @@ export function ProofStep({
                   onClick={() => openUploadDialog(option)}
                   className={cn(
                     // Same light-grey card for every option (no check / close icons)
-                    "group relative flex w-full items-center gap-3 rounded-2xl bg-tint px-4 py-3.5 text-left text-neutral-800 transition-[background-color,transform] duration-150 ease-out hover:bg-tint active:scale-[0.99] disabled:cursor-not-allowed",
+                    "group relative flex w-full items-center gap-3 rounded-2xl bg-neutral-100 px-4 py-3.5 text-left text-neutral-800 transition-[background-color,transform] duration-150 ease-out hover:bg-neutral-100 active:scale-[0.99] disabled:cursor-not-allowed",
                     typesLocked && !selected && "opacity-50",
                     typesLocked && selected && "opacity-100",
                     !typesLocked && "disabled:opacity-50",
@@ -539,9 +552,20 @@ export function ProofStep({
               aria-hidden
             />
 
-            <h2 className="text-xl font-semibold leading-snug tracking-tight text-neutral-900">
-              {dialogOption ? `Upload your ${dialogOption.name}` : "Upload document"}
-            </h2>
+            <div className="flex items-start justify-between gap-3">
+              <h2 className="text-xl font-semibold leading-snug tracking-tight text-neutral-900">
+                {dialogOption ? `Upload your ${dialogOption.name}` : "Upload document"}
+              </h2>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={closeDialog}
+                className="-mr-1 -mt-1 flex size-9 shrink-0 items-center justify-center rounded-full text-neutral-600 transition-colors hover:bg-neutral-100 disabled:opacity-50"
+                aria-label="Close"
+              >
+                <XIcon className="size-5" />
+              </button>
+            </div>
             <p className="mt-2 flex items-start gap-2 text-sm leading-snug text-neutral-500">
               <ShieldCheckIcon
                 className="mt-0.5 size-4 shrink-0 text-neutral-400"
@@ -561,9 +585,53 @@ export function ProofStep({
                 const err = sideErrors[index]
                 const isChecking = checkingSide === index
                 const label = sideLabel(side)
+                const UploadIcon = side === "back" ? CreditCardIcon : IdCardIcon
+                const uploadPromptLabel =
+                  side === "back" ? "Upload the back ID" : side === "front" ? "Upload the front ID" : "Upload your ID"
                 const hasFile = Boolean(file && preview && !isChecking)
                 // Only this row’s own error — never paint Front+Back red from one failure.
                 const showError = Boolean(err)
+                if (hasFile) {
+                  return (
+                    <div key={side}>
+                      <p
+                        className={cn(
+                          "mb-1.5 text-center text-sm font-semibold",
+                          showError ? "text-destructive" : "text-foreground",
+                        )}
+                      >
+                        {label}
+                      </p>
+                      <div className="relative overflow-hidden rounded-2xl border border-input">
+                        <button
+                          type="button"
+                          className="group block w-full"
+                          onClick={() => {
+                            setFullPreviewUrl(preview)
+                            setFullPreviewIndex(index)
+                          }}
+                          aria-label={`Preview ${label}`}
+                        >
+                          <img
+                            src={preview!}
+                            alt=""
+                            className="aspect-[3/2] w-full object-cover"
+                          />
+                          <span className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all duration-150 group-hover:bg-black/30 group-hover:opacity-100">
+                            <Maximize2Icon className="size-6 text-white" strokeWidth={2} aria-hidden />
+                          </span>
+                        </button>
+                        {isChecking ? (
+                          <div className="absolute inset-0 flex items-center justify-center gap-1.5 bg-black/40 text-xs font-medium text-white">
+                            <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin" />
+                            <span>{checkStatus || "Running checks…"}</span>
+                          </div>
+                        ) : null}
+                      </div>
+                      {err ? <FieldError className="mt-1.5 text-left">{err}</FieldError> : null}
+                    </div>
+                  )
+                }
                 return (
                   <div key={side}>
                     <div
@@ -580,8 +648,7 @@ export function ProofStep({
                         }
                       }}
                       className={cn(
-                        "relative flex w-full cursor-pointer items-center rounded-xl border-2 px-3 py-3.5 transition-colors",
-                        hasFile ? "gap-3 text-left" : "justify-center text-center",
+                        "relative flex w-full cursor-pointer items-center justify-center rounded-xl border-2 px-3 py-3.5 text-center transition-colors",
                         showError
                           ? "border-[3px] border-destructive bg-neutral-100/40"
                           : "border-input",
@@ -591,50 +658,27 @@ export function ProofStep({
                         isChecking && "cursor-wait",
                       )}
                       aria-invalid={showError || undefined}
-                      aria-label={file ? `Replace ${label}` : `Upload ${label}`}
+                      aria-label={uploadPromptLabel}
                     >
-                      {hasFile ? (
-                        <button
-                          type="button"
+                      <div className="min-w-0 text-center">
+                        <UploadIcon
                           className={cn(
-                            "size-14 shrink-0 overflow-hidden rounded-lg border-2 bg-white",
-                            showError ? "border-destructive" : "border-input",
+                            "mx-auto mb-1.5 size-6",
+                            showError ? "text-destructive" : "text-muted-foreground",
                           )}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setFullPreviewUrl(preview)
-                          }}
-                          aria-label={`Preview ${label}`}
-                        >
-                          <img
-                            src={preview!}
-                            alt=""
-                            className="size-full object-cover"
-                          />
-                        </button>
-                      ) : null}
-
-                      <div
-                        className={cn(
-                          "min-w-0",
-                          hasFile ? "flex-1 text-left" : "text-center",
-                        )}
-                      >
+                          strokeWidth={1.75}
+                          aria-hidden
+                        />
                         <p
                           className={cn(
                             "text-sm font-semibold",
                             showError ? "text-destructive" : "text-foreground",
                           )}
                         >
-                          {label}
+                          {uploadPromptLabel}
                         </p>
                         {isChecking ? (
-                          <p
-                            className={cn(
-                              "mt-0.5 inline-flex items-center gap-1.5 text-xs text-muted-foreground",
-                              !hasFile && "justify-center",
-                            )}
-                          >
+                          <p className="mt-0.5 inline-flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
                             <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin" />
                             <span>{checkStatus || "Running checks…"}</span>
                           </p>
@@ -645,28 +689,10 @@ export function ProofStep({
                               showError ? "text-destructive/80" : "text-muted-foreground",
                             )}
                           >
-                            {file ? "Tap to replace" : "Tap to upload"}
+                            Tap to upload
                           </p>
                         )}
                       </div>
-
-                      {hasFile ? (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            removeSide(index)
-                          }}
-                          className={cn(
-                            "flex size-8 shrink-0 items-center justify-center rounded-lg hover:bg-neutral-100",
-                            showError ? "text-destructive" : "text-black",
-                          )}
-                          aria-label={`Remove ${label}`}
-                        >
-                          <XIcon className="size-4" />
-                        </button>
-                      ) : null}
                     </div>
                     {err ? <FieldError className="mt-1.5 text-left">{err}</FieldError> : null}
                   </div>
@@ -686,10 +712,10 @@ export function ProofStep({
               className="pointer-events-none absolute h-0 w-0 overflow-hidden opacity-0"
               tabIndex={-1}
               aria-hidden
-              onChange={(e) => void handleFileSelected(e.target.files)}
+              onChange={(e) => handleFileSelected(e.target.files)}
             />
 
-            <div className="mt-6 flex flex-col gap-2">
+            <div className="mt-6">
               <button
                 type="button"
                 disabled={busy || !allSidesAccepted}
@@ -702,41 +728,62 @@ export function ProofStep({
                   "Verify"
                 )}
               </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={closeDialog}
-                className="inline-flex h-12 w-full items-center justify-center rounded-full text-[15px] font-semibold text-black transition-colors hover:bg-neutral-100 disabled:opacity-50"
-              >
-                Close
-              </button>
             </div>
           </div>
         </DialogContent>
       </Dialog>
 
-      {fullPreviewUrl ? (
+
+      {fullPreviewUrl && fullPreviewIndex != null ? (
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4"
           role="dialog"
           aria-modal="true"
           aria-label="Document full preview"
-          onClick={() => setFullPreviewUrl(null)}
+          onClick={closeFullPreview}
         >
-          <button
-            type="button"
-            onClick={() => setFullPreviewUrl(null)}
-            className="absolute top-1/2 right-4 z-[101] flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-black text-white shadow-lg transition-colors hover:bg-neutral-900"
-            aria-label="Close preview"
-          >
-            <XIcon className="size-5" strokeWidth={2.5} />
-          </button>
-          <img
-            src={fullPreviewUrl}
-            alt="Document full preview"
-            className="max-h-[90vh] max-w-[min(100%,56rem)] rounded-lg object-contain shadow-2xl"
+          <div
+            className="relative flex max-h-[92vh] w-full max-w-4xl flex-col items-center"
             onClick={(e) => e.stopPropagation()}
-          />
+          >
+            <img src={fullPreviewUrl} alt="Document full preview" className="max-h-[80vh] w-auto max-w-full rounded-xl object-contain" />
+
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  const index = fullPreviewIndex
+                  closeFullPreview()
+                  pickSide(index)
+                }}
+                className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/20 disabled:opacity-50"
+              >
+                <RefreshCwIcon className="size-4" />
+                Replace
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  const index = fullPreviewIndex
+                  closeFullPreview()
+                  removeSide(index)
+                }}
+                className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/20 disabled:opacity-50"
+              >
+                <XIcon className="size-4" />
+                Remove
+              </button>
+              <button
+                type="button"
+                onClick={closeFullPreview}
+                className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/20"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

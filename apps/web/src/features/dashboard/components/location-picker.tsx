@@ -5,15 +5,19 @@ import { createPortal } from "react-dom"
 import { toast } from "sonner"
 import {
   ArrowLeftIcon,
+  Building2Icon,
   FootprintsIcon,
   HomeIcon,
   LocateFixedIcon,
+  MinusIcon,
+  PlusIcon,
   SearchIcon,
 } from "lucide-react"
 import type leaflet from "leaflet"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { apiRequest } from "@/lib/api"
+import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import {
   formatNominatimParts,
   reverseGeocode,
@@ -33,6 +37,12 @@ import {
   OUT_OF_SCOPE_MESSAGE,
   type CoverageInput,
 } from "@/features/dashboard/components/map/coverage-layer"
+import {
+  fetchRegistrationCommunities,
+  lookupRegistrationPinAddress,
+  searchRegistrationStreets,
+} from "@/features/auth/api"
+import type { GeoJsonPolygon } from "@/features/dashboard/api"
 import { useBottomSheetSnap } from "@/features/dashboard/lib/use-bottom-sheet-snap"
 
 const DEFAULT_CENTER: [number, number] = [14.6507, 121.1133]
@@ -71,6 +81,41 @@ interface LocationPickerModalProps {
   initialAddress?: string
   /** When true, render just the map content inline — no portal, overlay, header, or drag handle. */
   renderInline?: boolean
+  /**
+   * Sign-up mode: the visitor has no session yet, so the picker reads the
+   * served areas, the pinned address and street search from the public
+   * registration endpoints instead of the resident map APIs.
+   */
+  signup?: boolean
+  /**
+   * Live pin state, so a host screen can drive its own Continue button instead
+   * of making the resident hunt for the pill on the map.
+   */
+  onPinStateChange?: (state: PinState | null) => void
+}
+
+export interface PinState {
+  lat: number
+  lng: number
+  address: string
+  addressPrimary: string
+  addressSecondary: string
+  ready: boolean
+}
+
+export const NO_COMMUNITY_MESSAGE = "No community covers this location yet."
+
+/** Every served outline as one shape, so one pin check covers all communities. */
+function mergeBoundaries(areas: { boundary: GeoJsonPolygon | null }[]): GeoJsonPolygon | null {
+  const parts: unknown[] = []
+  for (const area of areas) {
+    const geometry = area.boundary
+    if (!geometry) continue
+    if (geometry.type === "Polygon") parts.push(geometry.coordinates)
+    else if (geometry.type === "MultiPolygon") parts.push(...(geometry.coordinates as unknown[]))
+  }
+  if (parts.length === 0) return null
+  return { type: "MultiPolygon", coordinates: parts } as unknown as GeoJsonPolygon
 }
 
 type MapContext = {
@@ -131,6 +176,8 @@ export default function LocationPickerModal({
   initialLng,
   initialAddress = "",
   renderInline,
+  signup = false,
+  onPinStateChange,
 }: LocationPickerModalProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
@@ -161,6 +208,10 @@ export default function LocationPickerModal({
   const coverageRef = useRef<CoverageInput>({})
   const coverageLayerRef = useRef<leaflet.LayerGroup | null>(null)
   const [gpsFix, setGpsFix] = useState<{ lat: number; lng: number } | null>(null)
+  const [signupAreas, setSignupAreas] = useState<
+    { id: string; name: string; center: { latitude: number; longitude: number }; boundary: GeoJsonPolygon | null }[]
+  >([])
+  const [areaListOpen, setAreaListOpen] = useState(false)
   const [svCoord, setSvCoord] = useState<StreetViewCoord | null>(null)
   const [svPicking, setSvPicking] = useState(false)
 
@@ -182,6 +233,31 @@ export default function LocationPickerModal({
     if (reverseTimer.current) window.clearTimeout(reverseTimer.current)
     reverseTimer.current = window.setTimeout(() => {
       setGeocoding(true)
+      if (signup) {
+        // One public call answers both questions a pin raises during sign-up:
+        // which street is this, and does any community actually cover it.
+        void lookupRegistrationPinAddress(lat, lng)
+          .then((result) => {
+            setPreviewParts({
+              primary: result.label || result.street || "Finding street…",
+              secondary: result.community,
+              full: [result.label || result.street, result.community].filter(Boolean).join(", "),
+            })
+            setLocationClass({
+              status: result.inside_community ? "inside" : "far",
+              zone: result.community || "unknown",
+              accepted: result.inside_community,
+              warning: null,
+              message: result.inside_community ? "" : NO_COMMUNITY_MESSAGE,
+              distance_meters: null,
+            })
+          })
+          .catch(() => {
+            setPreviewParts({ primary: "Finding street…", secondary: "", full: "" })
+          })
+          .finally(() => setGeocoding(false))
+        return
+      }
       void Promise.all([
         reverseGeocodeParts(lat, lng),
         apiRequest<LocationClass>("/locations/validate/", {
@@ -204,15 +280,43 @@ export default function LocationPickerModal({
         setGeocoding(false)
       })
     }, 350)
-  }, [])
+  }, [signup])
 
   // Load map context
   useEffect(() => {
     if (!open) return
+    if (signup) {
+      void fetchRegistrationCommunities()
+        .then((data) => {
+          const areas = data.results ?? []
+          setSignupAreas(areas)
+          const boundary = mergeBoundaries(areas)
+          const first = areas[0]
+          setMapContext({
+            center: {
+              latitude: first?.center.latitude ?? DEFAULT_CENTER[0],
+              longitude: first?.center.longitude ?? DEFAULT_CENTER[1],
+              zoom: 15,
+            },
+            bounds: {
+              min_latitude: -90,
+              max_latitude: 90,
+              min_longitude: -180,
+              max_longitude: 180,
+            },
+            boundary: { name: first?.name ?? "", geometry: boundary },
+            dispatch_policy: null,
+            soft_buffer_meters: 0,
+            hard_reject_meters: 0,
+          })
+        })
+        .catch(() => setMapContext(null))
+      return
+    }
     void apiRequest<MapContext>("/locations/map-context/")
       .then(setMapContext)
       .catch(() => setMapContext(null))
-  }, [open])
+  }, [open, signup])
 
   // Init map
   useEffect(() => {
@@ -251,26 +355,25 @@ export default function LocationPickerModal({
       `
       document.head.appendChild(styleEl)
 
-      const center: [number, number] =
-        initialLat != null && initialLng != null
-          ? [initialLat, initialLng]
-          : mapContext
-            ? [mapContext.center.latitude, mapContext.center.longitude]
-            : DEFAULT_CENTER
-
+      const initialZoom = mapContext?.center.zoom ?? 15
+      const hasInitialPin = initialLat != null && initialLng != null
       map = L.map(containerRef.current, {
-        center,
-        zoom: mapContext?.center.zoom ?? 15,
+        center: hasInitialPin ? [initialLat, initialLng] : mapContext ? [mapContext.center.latitude, mapContext.center.longitude] : DEFAULT_CENTER,
+        zoom: initialZoom,
         zoomControl: false,
         attributionControl: false,
       })
 
-      // Clean Carto light basemap (sign-up style — not busy)
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-        attribution: "&copy; OSM &copy; CARTO",
-        subdomains: "abcd",
-        maxZoom: 19,
-      }).addTo(map)
+      // The visual pin is intentionally above the map's geometric center so
+      // the confirmation pill cannot cover it. Keep an existing report pin
+      // under that visual pin; using it as the raw map center shifts the real
+      // checked coordinate and can incorrectly trip the radius boundary.
+      if (initialLat != null && initialLng != null) {
+        map.setView(pinAdjustedCenter(map, initialLat, initialLng, initialZoom), initialZoom, { animate: false })
+      }
+
+      // Clean CARTO light basemap (sign-up style — not busy)
+      addBaseTiles(L, map, "light", { maxZoom: 19 })
 
       coverageLayerRef.current = L.layerGroup().addTo(map)
 
@@ -346,14 +449,14 @@ export default function LocationPickerModal({
       })
       const center = pinLatLng(map)
       setOutOfScope(!insideCoverage(center.lat, center.lng, coverageRef.current))
-      if (!boundary) return
+      if (!boundary || (initialLat != null && initialLng != null)) return
       try {
         map.fitBounds(L.geoJSON(boundary).getBounds(), { padding: [28, 28], maxZoom: 16 })
       } catch {
         /* ignore */
       }
     })
-  }, [open, mapContext])
+  }, [open, mapContext, initialLat, initialLng])
 
   // Clear stale results when the query drops below the debounce threshold, or
   // the picker opens/closes — via render-adjust instead of a sync setState in
@@ -370,15 +473,27 @@ export default function LocationPickerModal({
     if (!open || search.trim().length < 2) return
     const t = window.setTimeout(() => {
       setSearching(true)
-      void apiRequest<{ results: SearchHit[] }>(
-        `/locations/search/?q=${encodeURIComponent(search.trim())}`,
-      )
-        .then((data) => setResults(data.results || []))
+      const request = signup
+        ? searchRegistrationStreets(search.trim(), 10).then((data) =>
+            (data.results ?? []).map((hit) => ({
+              lat: hit.latitude,
+              lng: hit.longitude,
+              label: `${hit.name}, ${hit.community}`,
+              primary: hit.name,
+              secondary: hit.community,
+              accepted: true,
+            })),
+          )
+        : apiRequest<{ results: SearchHit[] }>(
+            `/locations/search/?q=${encodeURIComponent(search.trim())}`,
+          ).then((data) => data.results || [])
+      void request
+        .then(setResults)
         .catch(() => setResults([]))
         .finally(() => setSearching(false))
     }, 350)
     return () => window.clearTimeout(t)
-  }, [search, open])
+  }, [search, open, signup])
 
   function flyTo(lat: number, lng: number, parts?: AddressParts) {
     const map = mapRef.current
@@ -391,6 +506,12 @@ export default function LocationPickerModal({
     window.setTimeout(() => {
       ignoreMove.current = false
     }, 500)
+  }
+
+  function zoomBy(delta: number) {
+    const map = mapRef.current
+    if (!map) return
+    map.setZoom(map.getZoom() + delta)
   }
 
   function recenter() {
@@ -408,6 +529,27 @@ export default function LocationPickerModal({
     } else {
       map.setView(DEFAULT_CENTER, 15)
     }
+  }
+
+  function showCommunity(area: { center: { latitude: number; longitude: number }; boundary: GeoJsonPolygon | null }) {
+    const map = mapRef.current
+    if (!map) return
+    setAreaListOpen(false)
+    ignoreMove.current = true
+    void import("leaflet").then((L) => {
+      try {
+        if (!area.boundary) throw new Error("no outline")
+        map.fitBounds(L.geoJSON(area.boundary as never).getBounds(), { padding: [24, 24], maxZoom: 17 })
+      } catch {
+        map.setView(pinAdjustedCenter(map, area.center.latitude, area.center.longitude, 16), 16)
+      }
+      window.setTimeout(() => {
+        ignoreMove.current = false
+        const center = pinLatLng(map)
+        setOutOfScope(!insideCoverage(center.lat, center.lng, coverageRef.current))
+        scheduleReverseAndValidate(center.lat, center.lng)
+      }, 450)
+    })
   }
 
   function locate() {
@@ -478,7 +620,7 @@ export default function LocationPickerModal({
     if (badPrimary || geocoding) {
       return
     }
-    const secondary = (previewParts.secondary || "Marikina Heights").trim()
+    const secondary = (previewParts.secondary || mapContext?.boundary?.name || "").trim()
     const full = previewParts.full?.trim() || `${primary}, ${secondary}`
     onConfirm({
       lat,
@@ -503,7 +645,9 @@ export default function LocationPickerModal({
   }, [open, onClose, svCoord, svPicking])
 
   const hasQuery = search.trim().length >= 2
-  const sheetMode: "collapsed" | "peek" | "expanded" = !hasQuery
+  // Sign-up has no search sheet: the resident places the pin, and the address
+  // is read off it. Nothing can raise the sheet, so it stays collapsed.
+  const sheetMode: "collapsed" | "peek" | "expanded" = signup || !hasQuery
     ? "collapsed"
     : searchFocused
       ? "expanded"
@@ -518,6 +662,25 @@ export default function LocationPickerModal({
     !/^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(streetPrimary)
   const canConfirm =
     !outOfScope && (!locationClass || locationClass.accepted) && hasUsableStreet && !geocoding
+
+  const reportPin = onPinStateChange
+  useEffect(() => {
+    if (!reportPin) return
+    if (!previewLatLng) {
+      reportPin(null)
+      return
+    }
+    const primary = (previewParts.primary || "").trim()
+    const secondary = (previewParts.secondary || "").trim()
+    reportPin({
+      lat: previewLatLng.lat,
+      lng: previewLatLng.lng,
+      address: previewParts.full?.trim() || [primary, secondary].filter(Boolean).join(", "),
+      addressPrimary: primary,
+      addressSecondary: secondary,
+      ready: canConfirm,
+    })
+  }, [reportPin, previewLatLng, previewParts, canConfirm])
 
   const svPoints = useMemo<StreetViewMapPoint[]>(
     () =>
@@ -539,6 +702,11 @@ export default function LocationPickerModal({
   if (!open) return null
 
   const LOCATION_STYLES = `
+    .eboses-noscrollbar {
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    .eboses-noscrollbar::-webkit-scrollbar { width: 0; height: 0; }
     .eboses-pin-pulse::before,
     .eboses-pin-pulse::after {
       content: "";
@@ -592,14 +760,35 @@ export default function LocationPickerModal({
       />
 
       {!svCoord ? (
-        <MapControlStack className="absolute right-3 top-3 z-[1100] border-0 bg-white">
-          <MapStackButton
-            className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
-            label="Recenter to the barangay"
-            onClick={recenter}
-          >
-            <HomeIcon className="size-5" strokeWidth={1.8} aria-hidden />
-          </MapStackButton>
+        <div className="pointer-events-none absolute inset-y-0 right-3 z-[1100] flex flex-col items-end gap-2 pt-3 pb-24">
+        <MapControlStack className="pointer-events-auto shrink-0 border-0 bg-white">
+          {signup ? (
+            <>
+              <MapStackButton
+                className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
+                label="Zoom in"
+                onClick={() => zoomBy(1)}
+              >
+                <PlusIcon className="size-5" strokeWidth={1.8} aria-hidden />
+              </MapStackButton>
+              <MapStackDivider className="bg-neutral-200" />
+              <MapStackButton
+                className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
+                label="Zoom out"
+                onClick={() => zoomBy(-1)}
+              >
+                <MinusIcon className="size-5" strokeWidth={1.8} aria-hidden />
+              </MapStackButton>
+            </>
+          ) : (
+            <MapStackButton
+              className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
+              label="Recenter to the barangay"
+              onClick={recenter}
+            >
+              <HomeIcon className="size-5" strokeWidth={1.8} aria-hidden />
+            </MapStackButton>
+          )}
           <MapStackDivider className="bg-neutral-200" />
           <MapStackButton
             className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
@@ -608,19 +797,61 @@ export default function LocationPickerModal({
           >
             <LocateFixedIcon className="size-5" strokeWidth={1.8} aria-hidden />
           </MapStackButton>
-          <MapStackDivider className="bg-neutral-200" />
-          <MapStackButton
-            className={cn(
-              "text-neutral-900 hover:bg-white hover:text-neutral-900",
-              svPicking ? "bg-neutral-100" : "bg-white",
-            )}
-            active={svPicking}
-            label={svPicking ? "Cancel Street View pick" : "Click the map, then open Street View there"}
-            onClick={() => setSvPicking((value) => !value)}
-          >
-            <FootprintsIcon className="size-5" strokeWidth={1.9} aria-hidden />
-          </MapStackButton>
+          {signup ? (
+            <>
+              <MapStackDivider className="bg-neutral-200" />
+              <MapStackButton
+                className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
+                label="See the communities we serve"
+                active={areaListOpen}
+                onClick={() => setAreaListOpen((value) => !value)}
+              >
+                <Building2Icon className="size-5" strokeWidth={1.8} aria-hidden />
+              </MapStackButton>
+            </>
+          ) : (
+            <>
+              <MapStackDivider className="bg-neutral-200" />
+              <MapStackButton
+                className={cn(
+                  "text-neutral-900 hover:bg-white hover:text-neutral-900",
+                  svPicking ? "bg-neutral-100" : "bg-white",
+                )}
+                active={svPicking}
+                label={svPicking ? "Cancel Street View pick" : "Click the map, then open Street View there"}
+                onClick={() => setSvPicking((value) => !value)}
+              >
+                <FootprintsIcon className="size-5" strokeWidth={1.9} aria-hidden />
+              </MapStackButton>
+            </>
+          )}
         </MapControlStack>
+
+        {signup && areaListOpen ? (
+        <div className="pointer-events-auto flex max-h-[min(11rem,100%)] w-60 min-h-0 flex-col overflow-hidden rounded-2xl bg-white shadow-[0_8px_28px_rgba(15,23,42,0.18)]">
+          <p className="shrink-0 border-b border-neutral-100 px-4 py-3 text-[13px] font-semibold text-neutral-900">
+            Communities we serve
+          </p>
+          {signupAreas.length === 0 ? (
+            <p className="px-4 py-3 text-[13px] text-neutral-500">No communities are live yet.</p>
+          ) : (
+            <div className="eboses-noscrollbar min-h-0 flex-1 overflow-y-auto py-1">
+              {signupAreas.map((area) => (
+                <button
+                  key={area.id}
+                  type="button"
+                  onClick={() => showCommunity(area)}
+                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-[14px] font-medium text-neutral-800 transition-colors hover:bg-neutral-50"
+                >
+                  <Building2Icon className="size-4 shrink-0 text-neutral-500" strokeWidth={1.8} />
+                  {area.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        ) : null}
+        </div>
       ) : null}
 
       {sheetMode !== "expanded" && !svCoord && !svPicking ? (
@@ -639,7 +870,7 @@ export default function LocationPickerModal({
           <div
             className={cn(
               "pointer-events-none absolute inset-x-0 z-[1100] flex flex-col items-center gap-2 px-4",
-              sheetMode === "peek" ? "bottom-[116px]" : "bottom-[88px]",
+              signup ? "bottom-5" : sheetMode === "peek" ? "bottom-[116px]" : "bottom-[88px]",
             )}
           >
             {outOfScope ? (
@@ -648,10 +879,12 @@ export default function LocationPickerModal({
                 className="pointer-events-none flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)]"
               >
                 <span className="text-[15px] font-semibold leading-none text-neutral-900">
-                  {OUT_OF_SCOPE_MESSAGE}
+                  {signup ? NO_COMMUNITY_MESSAGE : OUT_OF_SCOPE_MESSAGE}
                 </span>
                 <span className="mt-1.5 text-[13px] font-medium leading-snug text-neutral-500">
-                  Move the map back to a covered area.
+                  {signup
+                    ? "Drag the map to a barangay that uses E-Boses."
+                    : "Drag the map back inside your barangay."}
                 </span>
               </p>
             ) : (
@@ -687,7 +920,7 @@ export default function LocationPickerModal({
       ) : null}
 
       {/* Search bottom sheet */}
-      {!svCoord ? (
+      {!svCoord && !signup ? (
         <div
         className={cn(
           "absolute inset-x-0 bottom-0 z-[1400] flex h-full flex-col overflow-hidden bg-white",

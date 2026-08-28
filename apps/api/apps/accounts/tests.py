@@ -8,6 +8,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
+from datetime import timedelta
 from io import BytesIO, StringIO
 from unittest.mock import patch
 
@@ -18,8 +19,9 @@ from PIL import Image, ImageDraw, ImageFilter, PngImagePlugin
 # Force DEBUG=True for all tests so DevelopmentOTPProvider works
 DEBUG_ALL = override_settings(DEBUG=True)
 
-from apps.accounts.models import AccountRequest, AuditLog, OTPChallenge, PhoneOTPChallenge, ResidenceProof, ResidenceVerificationCase, ResidentProfile, ResidentSettings
-from apps.accounts.serializers import RegisterSerializer
+from apps.accounts.community_resolution import _verified_email
+from apps.accounts.models import AccountRequest, AuditLog, EmailOTPChallenge, OTPChallenge, PhoneOTPChallenge, ResidenceProof, ResidenceVerificationCase, ResidentProfile, ResidentSettings
+from apps.accounts.serializers import CommunityResolveSerializer, RegisterSerializer
 from apps.accounts.services import (
     create_email_otp_challenge,
     create_otp_challenge,
@@ -35,6 +37,22 @@ from apps.concerns.test_helpers import grant_position
 from apps.notifications.models import BrowserPushSubscription, Notification
 
 VALID_PDF_BYTES = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF"
+
+
+class CommunityResolveSerializerTests(TestCase):
+    def test_missing_accuracy_is_normalized_to_none(self):
+        serializer = CommunityResolveSerializer(
+            data={
+                "email": "resident@example.com",
+                "latitude": 14.6507,
+                "longitude": 121.1029,
+                "address": {},
+                "source": "gps",
+            }
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertIsNone(serializer.validated_data["accuracy_meters"])
 
 
 class MediaPrivacyRedactionTests(TestCase):
@@ -392,6 +410,18 @@ class AccountServiceTests(TestCase):
 class AuthAPITests(APITestCase):
     def setUp(self):
         cache.clear()
+
+    def test_verified_email_remains_available_after_otp_window_for_signup(self):
+        email = "delayed-location@example.com"
+        challenge = EmailOTPChallenge.objects.create(
+            email=email,
+            destination_hash="test-destination-hash",
+            code_hash="test-code-hash",
+            expires_at=timezone.now() - timedelta(seconds=1),
+            verified_at=timezone.now() - timedelta(minutes=20),
+        )
+
+        self.assertEqual(_verified_email(email), challenge)
 
     def test_phone_otp_request_and_verify_endpoints_work_before_registration(self):
         request_response = self.client.post(

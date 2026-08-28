@@ -157,22 +157,12 @@ const officialOperationsMap: NavItemConfig = {
   capability: "configure_geography",
 }
 
-const officialEmergencies: NavItemConfig = {
-  key: "emergencies",
-  label: "Emergencies",
-  to: "/dashboard/emergencies",
-  icon: TriangleAlert,
-  isActive: (pathname) => matches(pathname, "/dashboard/emergencies"),
-  section: "Operations",
-  capability: "dispatch_emergencies",
-}
-
 const officialConcerns: NavItemConfig = {
   key: "concerns",
   label: "Concerns",
   to: "/dashboard/reports",
   icon: ClipboardListIcon,
-  isActive: (pathname) => matches(pathname, "/dashboard/reports"),
+  isActive: (pathname) => matches(pathname, "/dashboard/reports") || matches(pathname, "/dashboard/emergencies"),
   section: "Operations",
   capability: "resolve_concerns",
 }
@@ -221,7 +211,6 @@ const officialProfile: NavItemConfig = {
 // The mobile pill gives each tab ~72px, so the long sidebar labels are
 // shortened rather than allowed to wrap or clip.
 const officialOperationsMapMobile: NavItemConfig = { ...officialOperationsMap, label: "Alerts" }
-const officialEmergenciesMobile: NavItemConfig = { ...officialEmergencies, label: "Emergencies" }
 
 const officialMoreItems: NavItemConfig[] = [
   officialCommunity,
@@ -232,10 +221,9 @@ const officialMoreItems: NavItemConfig[] = [
 
 const officialNav: RoleNavConfig = {
   items: [
-    officialEmergencies,
+    officialConcerns,
     officialOverview,
     officialOperationsMap,
-    officialConcerns,
     officialCommunity,
     officialConfiguration,
   ],
@@ -246,10 +234,9 @@ const officialNav: RoleNavConfig = {
     officialNotifications,
   ],
   mobileItems: [
-    officialEmergenciesMobile,
+    officialConcerns,
     officialOverview,
     officialOperationsMapMobile,
-    officialConcerns,
   ],
   more: {
     label: "More",
@@ -292,9 +279,9 @@ const responderProfile: NavItemConfig = {
 const responderNotifications: NavItemConfig = {
   key: "notifications",
   label: "Notifications",
-  to: "/dashboard/responders/notifications",
+  to: "/dashboard/notifications",
   icon: InboxIcon,
-  isActive: (pathname) => matches(pathname, "/dashboard/responders/notifications"),
+  isActive: (pathname) => matches(pathname, "/dashboard/notifications"),
 }
 
 const responderNav: RoleNavConfig = {

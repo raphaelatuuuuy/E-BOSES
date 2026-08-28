@@ -20,7 +20,7 @@ export function useBottomSheetSnap({
       hidden: 56,
       peek: Math.round(Math.min(268, vh * 0.34)),
       expanded: Math.round(Math.min(vh * 0.58, 560)),
-      max: Math.round(Math.min(vh * 0.88, 720)),
+      max: Math.round(Math.min(vh * 0.8, 640)),
     }
   }, [])
   const [mode, setMode] = useState<SheetMode>(initialMode)

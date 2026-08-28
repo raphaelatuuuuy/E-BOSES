@@ -253,6 +253,57 @@ class CommunityPreviewView(APIView):
         return response
 
 
+class RegistrationCommunitiesView(APIView):
+    """Served community outlines, so the sign-up map can show where we cover."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_scope = "geocode"
+
+    def get(self, request):
+        from .selectors import served_community_areas
+
+        return Response({"results": served_community_areas()})
+
+
+class RegistrationStreetSearchView(APIView):
+    """Street suggestions during sign-up, from each community's own catalog."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_scope = "geocode"
+
+    def get(self, request):
+        from apps.live_map import registration_street_matches
+
+        query = (request.query_params.get("q") or "").strip()
+        try:
+            limit = max(1, min(20, int(request.query_params.get("limit", 8))))
+        except (TypeError, ValueError):
+            limit = 8
+        return Response({"results": registration_street_matches(query[:120], limit=limit)})
+
+
+class RegistrationPinAddressView(APIView):
+    """Address for a pin the resident dropped on the sign-up map."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_scope = "geocode"
+
+    def get(self, request):
+        from apps.live_map import address_for_pin
+
+        try:
+            latitude = float(request.query_params.get("lat"))
+            longitude = float(request.query_params.get("lng"))
+        except (TypeError, ValueError):
+            return Response({"detail": "lat and lng are required."}, status=400)
+        if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+            return Response({"detail": "That point is not on the earth."}, status=400)
+        return Response(address_for_pin(latitude, longitude))
+
+
 class CommunityResolveView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -450,17 +501,96 @@ class ResidenceProofCheckView(APIView):
             validate_residence_proof_uploads_preflight(proof_files)
 
             proof_type = (request.data.get("proof_type") or "").strip()
-            if proof_type:
-                from .ocr_runtime import document_type_for_registration
+            if not proof_type:
+                return Response(
+                    {"proof": ["Select a residence document type before uploading."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            from .ocr_runtime import document_type_for_registration
 
-                # Validate type exists / enabled only — not side completeness
-                document_type_for_registration(proof_type, configuration=resolution.configuration)
+            # Validate type exists / enabled only — not side completeness. The
+            # resolver returns (configuration, document_type); keep only the
+            # document type here so the picture gate can load its real sample.
+            _, document_type = document_type_for_registration(
+                proof_type, configuration=resolution.configuration
+            )
         except (DuplicateProofError, ValidationError) as exc:
             if hasattr(exc, "message_dict"):
                 return Response(exc.message_dict, status=status.HTTP_400_BAD_REQUEST)
             message = exc.message if hasattr(exc, "message") else str(exc)
             return Response({"proof": [message]}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(status=status.HTTP_204_NO_CONTENT)
+
+        # Layer 2 on this one photo, here rather than only at Verify. Media
+        # forensics reads bytes, so a genuine camera photo of the wrong thing —
+        # a selfie, a receipt, an ID on someone else's screen — passes it and
+        # lands in the slot looking accepted. The picture check is the layer
+        # that can say "that is not this document", so it has to run before the
+        # side is kept.
+        if document_type is not None:
+            from .id_integrity import RESUBMIT_MESSAGE, integrity_feedback
+            from .id_pipeline import gate_payload, run_pre_ocr_gate
+
+            submitted_sides = request.data.getlist("proof_side")
+            if not submitted_sides and len(proof_files) == 2:
+                submitted_sides = ["front", "back"]
+            proof_sides = []
+            proof_contents = []
+            for index, proof in enumerate(proof_files):
+                raw_side = str(
+                    submitted_sides[index] if index < len(submitted_sides) else ""
+                ).strip().lower()
+                proof_sides.append(raw_side if raw_side in {"front", "back", "single"} else None)
+                proof.seek(0)
+                proof_contents.append(proof.read())
+                proof.seek(0)
+
+            gate = run_pre_ocr_gate(
+                contents=proof_contents,
+                document_type=document_type,
+                configuration=resolution.configuration,
+                run_forensics=False,
+                sides=proof_sides,
+            )
+            integrity = gate.get("integrity")
+            if integrity and integrity.get("flagged"):
+                detail = integrity_feedback(integrity)
+                return Response(
+                    {
+                        "proof": [detail or RESUBMIT_MESSAGE],
+                        "code": "id_integrity_flagged",
+                        "integrity_detail": detail,
+                        "integrity": integrity,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not gate.get("integrity_checks"):
+                return Response(
+                    {
+                        "proof": [
+                            "The document picture check is temporarily unavailable. Please try again later."
+                        ],
+                        "code": "id_integrity_unavailable",
+                    },
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            checked_side = next((side for side in proof_sides if side), None)
+            return Response(
+                {
+                    "checked": True,
+                    "side": checked_side,
+                    "media_authenticity": {"checked": True, "passed": True},
+                    "id_integrity": integrity,
+                    "pipeline": gate_payload(gate),
+                },
+                status=status.HTTP_200_OK,
+            )
+        return Response(
+            {
+                "checked": True,
+                "media_authenticity": {"checked": True, "passed": True},
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class ResidenceProofDetectView(APIView):
@@ -614,8 +744,25 @@ class ResidenceProofDetectView(APIView):
                     back_result.get("extracted_fields") or {},
                 )
                 # Prefer front type detection; require both sides to look readable.
+                # Keep both picture-check results so a back-side mismatch or
+                # cartoon warning is not hidden by the front response.
+                integrity_checks = [
+                    item
+                    for item in (front_result.get("id_integrity"), back_result.get("id_integrity"))
+                    if item
+                ]
+                flagged_integrity = next(
+                    (item for item in integrity_checks if item.get("flagged")),
+                    None,
+                )
                 result = dict(front_result)
                 result["extracted_fields"] = merged_fields
+                result["id_integrity"] = flagged_integrity or (integrity_checks[0] if integrity_checks else None)
+                result["id_integrity_checks"] = integrity_checks
+                result["pipeline"] = {
+                    **(front_result.get("pipeline") or {}),
+                    "integrity_checks": integrity_checks,
+                }
                 confidences = [
                     float((item or {}).get("confidence") or 0)
                     for item in merged_fields.values()
@@ -627,6 +774,15 @@ class ResidenceProofDetectView(APIView):
                     result["confidence"] = round(fmean(confidences), 4)
                 if not front_result.get("detected") or not back_result.get("detected"):
                     result["detected"] = False
+                    failed_side_result = next(
+                        (item for item in (front_result, back_result) if not item.get("detected")),
+                        None,
+                    )
+                    if failed_side_result:
+                        result["pipeline"] = {
+                            **(failed_side_result.get("pipeline") or {}),
+                            "integrity_checks": integrity_checks,
+                        }
                     reasons = []
                     if not front_result.get("detected"):
                         reasons.append(front_result.get("message") or "Front side could not be verified.")

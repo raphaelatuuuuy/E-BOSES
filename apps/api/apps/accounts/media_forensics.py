@@ -568,3 +568,69 @@ def analyze_video_authenticity(
                 os.unlink(temporary_path)
             except Exception:
                 pass
+
+
+def diagnose_image_readability(content: bytes) -> dict | None:
+    """Why OCR could not read this photo, in terms the resident can act on.
+
+    "We could not read this photo" tells someone nothing they can do about it.
+    The same measurements the quality gate already takes — size, focus,
+    exposure, contrast — name the actual problem, so the retake fixes it
+    instead of repeating it. Returns None when nothing measurable is wrong;
+    the caller then falls back to its generic wording.
+    """
+    try:
+        with Image.open(BytesIO(content)) as image:
+            width, height = image.size
+            grayscale = image.convert("L")
+            stats = ImageStat.Stat(grayscale)
+            brightness = float(stats.mean[0])
+            contrast = float(stats.stddev[0])
+            blur_variance = float(cv2.Laplacian(np.array(grayscale), cv2.CV_64F).var())
+    except Exception:
+        return None
+
+    metrics = {
+        "width": width,
+        "height": height,
+        "brightness": round(brightness, 1),
+        "contrast": round(contrast, 1),
+        "sharpness": round(blur_variance, 1),
+    }
+
+    # Ordered by what most often ruins a phone photo of a card, and by what a
+    # resident can actually correct on the next try.
+    if width < MIN_IMAGE_WIDTH or height < MIN_IMAGE_HEIGHT:
+        reason, message = (
+            "too_small",
+            "The photo is too small to read. Move closer so the card fills the frame, "
+            "and send the full-size photo rather than a shrunken copy.",
+        )
+    elif blur_variance < MIN_BLUR_VARIANCE:
+        reason, message = (
+            "out_of_focus",
+            "The photo is out of focus. Rest the card on a flat surface, hold the phone "
+            "steady, and tap the card on screen to focus before taking the shot.",
+        )
+    elif brightness < MIN_BRIGHTNESS:
+        reason, message = (
+            "too_dark",
+            "The photo is too dark to read. Move somewhere brighter, or turn on a light "
+            "facing the card.",
+        )
+    elif brightness > MAX_BRIGHTNESS:
+        reason, message = (
+            "too_bright",
+            "The photo is washed out by glare. Turn off the flash and tilt the card away "
+            "from the light.",
+        )
+    elif contrast < MIN_CONTRAST:
+        reason, message = (
+            "low_contrast",
+            "The text does not stand out from the card. Try even, indirect light with no "
+            "shadow across the card.",
+        )
+    else:
+        return None
+
+    return {"reason": reason, "message": message, "metrics": metrics}

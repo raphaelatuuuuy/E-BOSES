@@ -44,7 +44,11 @@ class NotificationListView(APIView):
     def get(self, request):
         unread_only = request.query_params.get("unread_only", "").lower() in ("true", "1")
         include_archived = request.query_params.get("include_archived", "").lower() in ("true", "1")
-        qs = Notification.objects.filter(recipient=request.user).select_related("recipient", "concern", "emergency")
+        qs = (
+            Notification.objects.filter(recipient=request.user)
+            .select_related("recipient", "concern", "emergency")
+            .prefetch_related("concern__media", "emergency__media")
+        )
         if not include_archived:
             qs = qs.filter(is_archived=False)
         if unread_only:
@@ -70,20 +74,11 @@ class NotificationUnreadCountView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        from django.core.cache import cache
-
-        key = f"notifications:unread-count:v1:{request.user.pk}"
-        try:
-            cached = cache.get(key)
-        except Exception:
-            cached = None
-        if cached is not None:
-            return Response({"count": cached})
-        count = Notification.objects.filter(recipient=request.user, is_read=False).count()
-        try:
-            cache.set(key, count, 5)
-        except Exception:
-            pass
+        count = Notification.objects.filter(
+            recipient=request.user,
+            is_read=False,
+            is_archived=False,
+        ).count()
         return Response({"count": count})
 
 
@@ -96,11 +91,6 @@ class NotificationReadView(APIView):
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         notification.is_read = True
         notification.save(update_fields=["is_read"])
-        try:
-            from django.core.cache import cache
-            cache.delete(f"notifications:unread-count:v1:{request.user.pk}")
-        except Exception:
-            pass
         if notification.type == Notification.Type.WITNESS_ALERT and notification.emergency_id:
             mark_witness_notifications_read(request.user, alert_id=notification.emergency_id)
         return Response(NotificationSerializer(notification).data)
@@ -162,7 +152,6 @@ class BrowserPushTestView(APIView):
                 "tag_key": "test",  # fixed tag so new test notifications replace old ones
                 "urgency": "important",
                 "icon_url": "/contents/notification-bell.png",
-                "icon_url": "/contents/notification-bell.png",
                 "action_url": "/dashboard/notifications",
                 "actions": [
                     {
@@ -204,6 +193,12 @@ class BrowserPushSubscriptionView(APIView):
         serializer = BrowserPushSubscriptionSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         subscription = serializer.save()
+        # Subscribing from the notifications panel is an explicit opt-in. If a
+        # resident previously disabled push, turn the preference back on so a
+        # valid browser subscription is not silently ignored by delivery.
+        from apps.accounts.models import ResidentSettings
+
+        ResidentSettings.objects.filter(user=request.user).update(push_alerts=True)
         return Response({"id": subscription.pk, "is_active": subscription.is_active}, status=status.HTTP_201_CREATED)
 
     def delete(self, request):

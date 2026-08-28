@@ -30,11 +30,14 @@ def email_hash(email):
 
 
 def _verified_email(email):
+    # The OTP must be unexpired when it is entered, but once verified it is
+    # the signup session's proof of email ownership. Registration is a
+    # multi-step flow (location, proof, phone), so the original 10-minute OTP
+    # window must not expire while the resident is completing those steps.
     return EmailOTPChallenge.objects.filter(
         email__iexact=email,
         verified_at__isnull=False,
         consumed_at__isnull=True,
-        expires_at__gt=timezone.now(),
     ).order_by("-verified_at", "-id").first()
 
 
@@ -80,7 +83,7 @@ def create_resolution(*, email, latitude, longitude, accuracy_meters, address, s
     if not matches:
         raise CommunityResolutionError(
             "community_not_served",
-            "This address is not inside a supported community.",
+            "No community covers this location yet. Move the pin to your home inside a served community.",
             status_code=404,
         )
     if len(matches) > 1:

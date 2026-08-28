@@ -58,9 +58,12 @@ class ConcernSeverityTests(APITestCase):
         concern = self._concern(estimate="low", urgent=True)
         self.assertEqual(severity_label(concern), "critical")
 
-    def test_category_baseline_floors_severity(self):
-        concern = self._concern(category="public_safety", estimate="low")
-        self.assertEqual(severity_label(concern), "high")
+    def test_category_baseline_applies_only_until_the_model_scores(self):
+        unassessed = self._concern(category="public_safety")
+        self.assertEqual(severity_label(unassessed), "high")
+
+        assessed = self._concern(category="public_safety", estimate="low")
+        self.assertEqual(severity_label(assessed), "low")
 
     def test_missing_assessment_is_reported_as_unassessed(self):
         concern = self._concern(category="infrastructure")

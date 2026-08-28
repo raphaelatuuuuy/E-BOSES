@@ -55,8 +55,9 @@ const toneLabel: Record<BandTone, string> = {
 
 export function Band({
   label,
-  icon: Icon,
+  icon,
   action,
+  meta,
   tone = "default",
   collapsible = false,
   children,
@@ -68,6 +69,8 @@ export function Band({
   icon?: ElementType
   /** Right-aligned control on the label row. Requires `label`. */
   action?: ReactNode
+  /** Quiet inline detail beside the label. Requires `label`. */
+  meta?: ReactNode
   tone?: BandTone
   /** When true, content collapses behind the header. */
   collapsible?: boolean
@@ -75,6 +78,7 @@ export function Band({
   className?: string
 }) {
   const [open, setOpen] = useState(true)
+  const Icon = icon
   return (
     <div className={cn("p-5", toneSurface[tone], className)}>
       {label ? (
@@ -84,9 +88,10 @@ export function Band({
             onClick={collapsible ? () => setOpen(!open) : undefined}
             className={cn("flex w-full items-center justify-between gap-3", collapsible && "cursor-pointer")}
           >
-            <div className="flex items-center gap-2.5">
-              {Icon ? <Icon className="size-4 text-neutral-500" /> : null}
-              <p className={cn("text-[14px] font-medium text-neutral-800", toneLabel[tone])}>{label}</p>
+            <div className="flex min-w-0 items-center gap-2.5">
+              {Icon ? <Icon className="size-4 shrink-0 text-neutral-500" /> : null}
+              <p className={cn("shrink-0 text-[14px] font-medium text-neutral-800", toneLabel[tone])}>{label}</p>
+              {meta ? <span className="min-w-0 truncate text-[12px] font-normal text-neutral-400">{meta}</span> : null}
             </div>
             <div className="flex items-center gap-2">
               {action}
@@ -156,16 +161,22 @@ export function Fact({
   label,
   value,
   hint,
+  icon: Icon,
   className,
 }: {
   label: string
   value: ReactNode
   hint?: ReactNode
+  /** Optional leading icon beside the label. */
+  icon?: ElementType
   className?: string
 }) {
   return (
     <div className={cn("min-w-0", className)}>
-      <p className="text-meta text-subtle-foreground">{label}</p>
+      <p className="flex items-center gap-1.5 text-meta text-subtle-foreground">
+        {Icon ? <Icon className="size-3.5 shrink-0" aria-hidden /> : null}
+        {label}
+      </p>
       <div className="mt-1 text-row font-semibold text-foreground">{value}</div>
       {hint ? <p className="mt-1 text-meta leading-relaxed text-muted-foreground">{hint}</p> : null}
     </div>

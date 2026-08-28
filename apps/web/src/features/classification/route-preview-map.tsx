@@ -59,13 +59,6 @@ export function RoutePreviewMap({ location, routing }: { location: LocationResol
       const state = routePreviewState(location, routing.route)
       const bounds = L.latLngBounds([])
 
-      if (state.showBoundary && location.boundary) {
-        const boundary = L.geoJSON(location.boundary as never, {
-          style: { color: "#aab5cf", weight: 2, fillColor: "#53617d", fillOpacity: 0.16 },
-        }).addTo(map)
-        bounds.extend(boundary.getBounds())
-      }
-
       const destination: leaflet.LatLngTuple | null =
         state.showIncident && location.latitude != null && location.longitude != null
           ? [location.latitude, location.longitude]
@@ -135,9 +128,9 @@ export function RoutePreviewMap({ location, routing }: { location: LocationResol
       <div ref={containerRef} className="eboses-map-dark absolute inset-0" aria-label="Dispatch route map" />
       <style>{`
         .route-preview-map-scope .eboses-map-dark .eboses-pin--glyph .eboses-pin__disc {
-          background: #ffffff;
+          background: ${MAP_COLORS.emergency};
           border-color: rgb(255 255 255 / 0.28);
-          color: #14203c;
+          color: #ffffff;
         }
         .route-preview-map-scope .eboses-map-dark .eboses-pin--glyph.is-you .eboses-pin__disc {
           background: #0a0a0a;

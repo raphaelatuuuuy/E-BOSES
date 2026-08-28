@@ -12,6 +12,7 @@ import {
 } from "@/features/dashboard/components/map/coverage-layer"
 import { loadCoverageContext } from "@/features/dashboard/lib/use-coverage"
 import { dotPinHtml, MAP_COLORS } from "@/features/dashboard/components/map/markers"
+import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import {
   formatNominatimParts,
   reverseGeocode,
@@ -283,13 +284,7 @@ export function SosLocationStep({
         attributionControl: false,
         scrollWheelZoom: true,
       })
-      L.tileLayer(
-        "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-        {
-          subdomains: "abcd",
-          maxZoom: 19,
-        }
-      ).addTo(map)
+      addBaseTiles(L, map, "light", { maxZoom: 19 })
 
       try {
         const context = await loadCoverageContext()

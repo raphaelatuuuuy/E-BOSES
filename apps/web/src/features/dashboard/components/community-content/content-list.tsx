@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
+import { ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
 import {
   getConcern,
   reviewContentFlag,
@@ -12,7 +13,6 @@ import {
   type Concern,
   type ContentFlag,
 } from "@/features/dashboard/api"
-import { ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
 import {
   concernCategoryLabel,
   formatDate,
@@ -140,11 +140,14 @@ export function ContentList({
 
   // A new filter or search starts back at page one.
   useEffect(() => {
+    // This is a deliberate local pagination reset when the query changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setOffset(0)
   }, [typeFilter, query])
 
   // Reset the decision picker each time the review dialog opens or closes.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDecision(null)
     setDecisionOpen(false)
     setConfirmTakeDown(false)
@@ -156,6 +159,7 @@ export function ContentList({
   // dialog needs in `target` — no fetch required.
   useEffect(() => {
     if (!reviewTarget || reviewTarget.target.kind !== "concern" || reviewTarget.concern == null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setConcern(null)
       setConcernError("")
       return
@@ -771,6 +775,15 @@ const TARGET_KIND_LABELS: Record<ContentFlag["target"]["kind"], string> = {
   emergency_comment: "Comment on an emergency update",
 }
 
+const IMAGE_REVIEW_LABELS: Record<string, string> = {
+  supports_flag: "Image supports the report",
+  not_supported: "Image does not support the report",
+  unclear: "Image needs staff review",
+  unavailable: "Image could not be checked",
+  checked: "Image was checked",
+  not_present: "No image attached",
+}
+
 function FlagRow({
   flag,
   onReview,
@@ -819,10 +832,10 @@ function FlagRow({
               <span className="block min-w-0 truncate text-row text-brand-navy">{title}</span>
             )}
             <span className="shrink-0 text-meta text-neutral-500">
-              {flag.status === "submitted" ? "Pending" : "Decided"}
+              {flag.status === "submitted" ? (flag.llm_review ? "Checked" : "Checking") : "Decided"}
             </span>
             {flag.auto_moderated ? (
-              <span className="shrink-0 text-meta text-neutral-400">Automated</span>
+              <span className="shrink-0 text-meta text-neutral-400">System action</span>
             ) : null}
           </div>
 
@@ -845,6 +858,20 @@ function FlagRow({
               <dt className={factClass.dt}>Type</dt>
               <dd className={factClass.dd}>{flagNoteParts(flag).title}</dd>
             </div>
+            {flag.llm_review ? (
+              <div>
+                <dt className={factClass.dt}>System check</dt>
+                <dd className={factClass.dd}>{flag.llm_review.short_explanation || "Checked and held for staff."}</dd>
+              </div>
+            ) : null}
+            {flag.llm_review?.image_review ? (
+              <div>
+                <dt className={factClass.dt}>Photo check</dt>
+                <dd className={factClass.dd}>
+                  {IMAGE_REVIEW_LABELS[flag.llm_review.image_review.status] || "Image needs staff review"}
+                </dd>
+              </div>
+            ) : null}
           </dl>
         </div>
 

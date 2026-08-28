@@ -19,7 +19,8 @@ const NAME_MESSAGE = "Use letters only, including Ñ/ñ."
 
 export const SIGN_UP_STEP_COUNT = 11
 
-/** 0 account · 1 email OTP · 2 name … 7 proof · 8 peek · 9 phone · 10 guidelines */
+/** 0 account · 1 email OTP · 2 name · 3 middle name · 4 gender · 5 dob · 6 address ·
+ *  7 proof · 8 phone · 9 community peek · 10 guidelines */
 export type SignUpStepIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10
 
 export function getProofOfResidencyFileError(file: File) {
@@ -278,26 +279,31 @@ export function validateSignUpStep(
       return pick(genderStepSchema, { gender: values.gender })
     case 5:
       return pick(dobStepSchema, { dateOfBirth: values.dateOfBirth })
-    case 6:
-      return pick(addressStepSchema, {
+    case 6: {
+      const addressErrors = pick(addressStepSchema, {
         street: values.street,
         houseNumber: values.houseNumber ?? "",
         address: values.address,
       })
-    case 7:
+      if (Object.values(addressErrors).some(Boolean)) return addressErrors
+      // The pin step also resolves the community, so there is no separate
+      // confirmation screen to fall back on.
       return values.communityResolutionToken && values.communityMatch
         ? {}
-        : { address: "Confirm your home pin and community." }
-    case 8:
+        : { street: "Pin your home inside a supported community." }
+    }
+    case 7:
       return pick(proofStepSchema, {
         proofOfResidency: values.proofOfResidency,
         proofType: values.proofType,
       })
-    case 9:
+    case 8:
       return pick(phoneStepSchema, {
         phoneNumber: values.phoneNumber,
         phoneOtpCode: values.phoneOtpCode ?? "",
       })
+    case 9:
+      return {}
     case 10:
       return {}
     default:

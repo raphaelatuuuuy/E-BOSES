@@ -1,5 +1,7 @@
 import { useState, type ReactNode } from "react"
 
+import { ShieldUserIcon } from "lucide-react"
+
 import { cn } from "@workspace/ui/lib/utils"
 import { timeAgo } from "@/features/dashboard/lib/format"
 import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
@@ -36,17 +38,32 @@ export function CommentAvatar({
   comment: UnifiedComment
   className?: string
 }) {
-  if (comment.author.user) {
-    return <UserAvatar user={comment.author.user} size="sm" className={cn(AVATAR, className)} />
-  }
+  const role = comment.author.user?.role ?? ""
+  const badge =
+    role === "barangay_official"
+      ? "bg-brand-orange"
+      : role === "first_responder"
+        ? "bg-brand-blue"
+        : ""
   return (
-    <span
-      className={cn(
-        "inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[13px] font-semibold text-navy-muted",
-        className,
+    <span className="relative inline-flex shrink-0">
+      {comment.author.user ? (
+        <UserAvatar user={comment.author.user} size="sm" className={cn(AVATAR, className)} />
+      ) : (
+        <span
+          className={cn(
+            "inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[13px] font-semibold text-navy-muted",
+            className,
+          )}
+        >
+          {(comment.author.label[0] || "?").toUpperCase()}
+        </span>
       )}
-    >
-      {(comment.author.label[0] || "?").toUpperCase()}
+      {badge ? (
+        <span className={cn("absolute -bottom-0.5 -right-0.5 flex size-3 items-center justify-center rounded-full ring-1 ring-white", badge)}>
+          <ShieldUserIcon className="size-1.5 text-white" strokeWidth={2.5} />
+        </span>
+      ) : null}
     </span>
   )
 }
@@ -68,13 +85,15 @@ export function CommentMeta({
 }) {
   const place = comment.author.user ? commentPlaceLabel(comment.author.user) : null
   return (
-    <p className="flex flex-wrap items-center gap-x-1.5 text-[13px] leading-snug text-neutral-400">
-      <span className="font-semibold text-neutral-900">{comment.author.label}</span>
-      {comment.author.isOfficial ? <OfficialBadge /> : null}
-      <span>· {timeAgo(comment.createdAt)}</span>
-      {place ? <span>· {place}</span> : null}
-      {extra}
-    </p>
+    <div className="flex items-center justify-between gap-x-2 text-[13px] leading-snug text-neutral-400">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-1.5">
+        <span className="font-semibold text-neutral-900">{comment.author.label}</span>
+        {comment.author.isOfficial ? <OfficialBadge /> : null}
+        <span>· {timeAgo(comment.createdAt)}</span>
+        {place ? <span>· {place}</span> : null}
+      </div>
+      {extra ? <div className="ml-auto shrink-0">{extra}</div> : null}
+    </div>
   )
 }
 

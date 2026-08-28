@@ -4,6 +4,10 @@ import * as React from "react"
 
 interface SidebarContextValue {
   isOpen: boolean
+  /** Expand the rail (e.g. official desktop shell hover). */
+  open: () => void
+  /** Collapse the rail (e.g. official desktop shell hover exit). */
+  close: () => void
   toggle: () => void
 }
 
@@ -18,12 +22,20 @@ function useSidebar() {
 function SidebarProvider({ children }: { children: React.ReactNode }) {
   const [isOpen, setIsOpen] = React.useState(true)
 
+  const open = React.useCallback(() => {
+    setIsOpen(true)
+  }, [])
+
+  const close = React.useCallback(() => {
+    setIsOpen(false)
+  }, [])
+
   const toggle = React.useCallback(() => {
     setIsOpen((prev) => !prev)
   }, [])
 
   return (
-    <SidebarContext.Provider value={{ isOpen, toggle }}>
+    <SidebarContext.Provider value={{ isOpen, open, close, toggle }}>
       {children}
     </SidebarContext.Provider>
   )

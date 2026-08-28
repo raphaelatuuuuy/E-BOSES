@@ -7,6 +7,7 @@ import {
   MicIcon,
   PaperclipIcon,
   PlayIcon,
+  ScaleIcon,
   SquareIcon,
   XIcon,
 } from "lucide-react"
@@ -20,8 +21,11 @@ import { Marker, MarkerContent } from "@/components/ui/marker"
 import { Message, MessageAvatar, MessageContent, MessageFooter } from "@/components/ui/message"
 import { useAuthSession } from "@/features/auth/auth-session"
 import {
+  createConcernAppeal,
   listConcernChat,
+  reviewConcernAppeal,
   sendConcernChat,
+  type ConcernAppeal,
   type ConcernChatMessage,
 } from "@/features/dashboard/api"
 import { checkConcernMedia } from "@/features/dashboard/api"
@@ -53,6 +57,10 @@ export function ReportChatPanel({
   showHistory = true,
   realtime = true,
   plain = false,
+  appeals,
+  canFileAppeal = false,
+  canDecideAppeals = false,
+  onAppealsChanged,
   onMessageSent,
   className,
 }: {
@@ -68,6 +76,14 @@ export function ReportChatPanel({
   realtime?: boolean
 
   plain?: boolean
+  /** Appeal records rendered as bubbles inside the thread. */
+  appeals?: ConcernAppeal[]
+  /** Resident may file an appeal while the chat is closed. */
+  canFileAppeal?: boolean
+  /** Official may approve or deny pending appeals inline. */
+  canDecideAppeals?: boolean
+  /** Refreshes the parent after an appeal is filed or decided. */
+  onAppealsChanged?: () => void | Promise<void>
   onMessageSent?: () => void | Promise<void>
   className?: string
 }) {
@@ -169,6 +185,7 @@ export function ReportChatPanel({
           setMessages((current) => current.some((item) => item.id === message.payload!.id)
             ? current
             : [...current, message.payload!])
+          void onMessageSent?.()
         } catch {
           void 0
         }
@@ -188,25 +205,25 @@ export function ReportChatPanel({
       if (reconnectTimer) window.clearTimeout(reconnectTimer)
       socket?.close()
     }
-  }, [concernId, open, realtime])
+  }, [concernId, onMessageSent, open, realtime])
 
   useEffect(() => {
     if (!open || !concernId || !showHistory) return
     const id = window.setInterval(() => {
       void listConcernChat(concernId)
         .then((next) => {
-          setMessages((prev) => {
-            if (next.length === prev.length && next.at(-1)?.id === prev.at(-1)?.id) return prev
-            const knownIds = new Set(prev.map((message) => message.id))
-            return [...prev, ...next.filter((message) => !knownIds.has(message.id))]
-          })
+          const knownIds = new Set(messages.map((message) => message.id))
+          const newMessages = next.filter((message) => !knownIds.has(message.id))
+          if (!newMessages.length) return
+          setMessages((prev) => [...prev, ...newMessages.filter((message) => !prev.some((item) => item.id === message.id))])
+          void onMessageSent?.()
         })
       .catch(() => {
 
         })
     }, socketLive ? 30000 : 6000)
     return () => window.clearInterval(id)
-  }, [open, concernId, showHistory, socketLive])
+  }, [messages, open, concernId, onMessageSent, showHistory, socketLive])
 
   useEffect(() => {
     scrollToBottom()
@@ -300,6 +317,100 @@ export function ReportChatPanel({
     }
   }
 
+  const appealList = appeals ?? []
+  const pendingAppeal = appealList.find((appeal) => appeal.status === "submitted")
+
+  const [appealComposerOpen, setAppealComposerOpen] = useState(false)
+  const [appealReason, setAppealReason] = useState("")
+  const [appealMedia, setAppealMedia] = useState<File | null>(null)
+  const [appealMediaError, setAppealMediaError] = useState<string | null>(null)
+  const [filingAppeal, setFilingAppeal] = useState(false)
+  const [decisionNotes, setDecisionNotes] = useState<Record<number, string>>({})
+  const [decidingId, setDecidingId] = useState<string | null>(null)
+
+  async function chooseAppealMedia(file: File | undefined) {
+    if (!file) return
+    if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
+      setAppealMediaError("Only image or video files can be attached.")
+      return
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      setAppealMediaError("Attachments must be 25MB or smaller.")
+      return
+    }
+    try {
+      const checkData = new FormData()
+      checkData.append("media", file)
+      await checkConcernMedia(checkData)
+      setAppealMedia(file)
+      setAppealMediaError(null)
+    } catch (error) {
+      setAppealMedia(null)
+      setAppealMediaError(error instanceof Error ? error.message : "This media failed authenticity checks and cannot be attached.")
+      toast.error(error instanceof Error ? error.message : "This media failed authenticity checks and cannot be attached.")
+    }
+  }
+
+  async function submitAppeal() {
+    const reason = appealReason.trim()
+    if (!reason || filingAppeal) return
+    setFilingAppeal(true)
+    try {
+      await createConcernAppeal(concernId, reason)
+      if (appealMedia) {
+        try {
+          await sendConcernChat(concernId, "", appealMedia)
+        } catch {
+          toast.error("The evidence photo could not be added to the chat. The appeal itself was submitted.")
+        }
+      }
+      setAppealComposerOpen(false)
+      setAppealReason("")
+      setAppealMedia(null)
+      toast.success("Appeal submitted")
+      await onAppealsChanged?.()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not submit appeal.")
+    } finally {
+      setFilingAppeal(false)
+    }
+  }
+
+  async function decideAppeal(appeal: ConcernAppeal, decision: "approved" | "denied") {
+    if (decidingId) return
+    const note =
+      decisionNotes[appeal.id]?.trim() ||
+      (decision === "approved"
+        ? "Appeal approved after official review."
+        : "Appeal denied after official review.")
+    setDecidingId(`${appeal.id}-${decision}`)
+    try {
+      await reviewConcernAppeal(appeal.id, { status: decision, decision_note: note })
+      setDecisionNotes((current) => {
+        const copy = { ...current }
+        delete copy[appeal.id]
+        return copy
+      })
+      toast.success(decision === "approved" ? "Appeal approved" : "Appeal denied")
+      await onAppealsChanged?.()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Appeal decision could not be saved.")
+    } finally {
+      setDecidingId(null)
+    }
+  }
+
+  const timeline: { key: string; at: number; message?: ConcernChatMessage; appeal?: ConcernAppeal }[] = [
+    ...messages.map((message) => ({ key: `m-${message.id}`, at: new Date(message.created_at).getTime(), message })),
+    ...appealList.map((appeal) => ({ key: `a-${appeal.id}`, at: new Date(appeal.created_at).getTime(), appeal })),
+  ].sort((a, b) => a.at - b.at)
+
+  const appealChip = {
+    submitted: "bg-violet-100 text-violet-700",
+    approved: "bg-emerald-100 text-emerald-700",
+    denied: "bg-red-100 text-red-700",
+  }
+
   return (
     <div
       className={cn(
@@ -338,7 +449,7 @@ export function ReportChatPanel({
             </button>
           </div>
         ) : null}
-        {messages.length === 0 && !loading ? (
+        {messages.length === 0 && appealList.length === 0 && !loading ? (
           loadError ? (
             <div className="py-8 text-center">
               <p className="text-[13px] leading-5 text-sos">{loadError}</p>
@@ -351,11 +462,73 @@ export function ReportChatPanel({
           )
         ) : null}
 
-        {messages.map((msg) => {
+        {timeline.map((entry) => {
+          if (entry.appeal) {
+            const appeal = entry.appeal
+            const own = user?.id != null && appeal.appellant.id === user.id
+            const name = appeal.appellant.full_name || "Resident"
+            const footer = [own ? "You" : name, formatChatTime(appeal.created_at)].filter(Boolean).join(" · ")
+            return (
+              <Message key={entry.key} align={own ? "end" : "start"}>
+                <MessageAvatar>
+                  <Avatar><AvatarFallback>{initialsFor(appeal.appellant).charAt(0)}</AvatarFallback></Avatar>
+                </MessageAvatar>
+                <MessageContent className={own ? "items-end" : "items-start"}>
+                  <div className="w-full max-w-full rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <ScaleIcon className="size-3.5 shrink-0 text-violet-700" strokeWidth={2.25} />
+                      <span className="text-[11px] font-bold uppercase tracking-wide text-violet-700">Appeal</span>
+                      <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize", appealChip[appeal.status])}>
+                        {appeal.status}
+                      </span>
+                    </div>
+                    <p className="mt-1.5 text-[13px] leading-relaxed text-neutral-800">{appeal.reason}</p>
+                    {appeal.status !== "submitted" && appeal.decision_note ? (
+                      <p className="mt-1.5 rounded-lg bg-white/70 px-2 py-1.5 text-[11.5px] leading-relaxed text-neutral-600">
+                        Decision: {appeal.decision_note}
+                      </p>
+                    ) : null}
+                    {appeal.status === "submitted" && canDecideAppeals ? (
+                      <div className="mt-2 space-y-1.5">
+                        <textarea
+                          value={decisionNotes[appeal.id] ?? ""}
+                          onChange={(event) => setDecisionNotes((current) => ({ ...current, [appeal.id]: event.target.value }))}
+                          rows={2}
+                          placeholder="Reason for your decision — the resident sees this."
+                          className="w-full resize-y rounded-lg border border-violet-200 bg-white px-2.5 py-1.5 text-[12px] text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-violet-400"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            disabled={Boolean(decidingId)}
+                            onClick={() => void decideAppeal(appeal, "approved")}
+                            className="rounded-full bg-emerald-600 px-3 py-1.5 text-[11px] font-bold text-white transition-colors hover:bg-emerald-700 disabled:opacity-60"
+                          >
+                            {decidingId === `${appeal.id}-approved` ? "Approving…" : "Approve"}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={Boolean(decidingId)}
+                            onClick={() => void decideAppeal(appeal, "denied")}
+                            className="rounded-full bg-red-600 px-3 py-1.5 text-[11px] font-bold text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+                          >
+                            {decidingId === `${appeal.id}-denied` ? "Denying…" : "Deny"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                  <MessageFooter className={own ? "text-right" : "text-left"}>{footer}</MessageFooter>
+                </MessageContent>
+              </Message>
+            )
+          }
+
+          const msg = entry.message!
           const mine = isMine(msg)
           const name = msg.sender?.full_name || "User"
           const role = roleLabel(msg.sender)
-          const footer = [mine ? "You" : name, !mine && role ? role : "", formatChatTime(msg.created_at)].filter(Boolean).join(" · ")
+          const footer = [formatChatTime(msg.created_at), name, role].filter(Boolean).join(" · ")
           if (!msg.body && msg.attachment && msg.attachment.authenticity_status !== "clear") return null
           const attachment = msg.attachment
           const attachmentVisible = Boolean(
@@ -408,7 +581,7 @@ export function ReportChatPanel({
           return (
             <Message key={msg.id} align={mine ? "end" : "start"}>
               <MessageAvatar>
-                <Avatar>                  <AvatarFallback>{initialsFor(msg.sender)}</AvatarFallback>
+                <Avatar>                  <AvatarFallback>{initialsFor(msg.sender).charAt(0)}</AvatarFallback>
                 </Avatar>
               </MessageAvatar>
               <MessageContent className={mine ? "items-end" : "items-start"}>
@@ -557,9 +730,100 @@ export function ReportChatPanel({
           </p>
         </div>
       ) : (
-        <p className="px-4 py-3 text-center text-[12px] text-neutral-400">
-          Chat is closed for this report.
-        </p>
+        <div className="px-4 pb-4 pt-1">
+          <p className="py-1.5 text-center text-[12px] text-neutral-400">
+            Chat is closed for this report.
+          </p>
+          {pendingAppeal ? (
+            <p className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 text-center text-[12px] font-medium text-violet-700">
+              Your appeal is being reviewed by the barangay. The decision will appear in this thread.
+            </p>
+          ) : canFileAppeal && !appealComposerOpen ? (
+            <div className="flex justify-center pb-1">
+              <button
+                type="button"
+                onClick={() => setAppealComposerOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-3.5 py-1.5 text-[12px] font-bold text-violet-700 transition-colors hover:border-violet-300 hover:bg-violet-100"
+              >
+                <ScaleIcon className="size-3.5" strokeWidth={2.25} />
+                Appeal this decision
+              </button>
+            </div>
+          ) : canFileAppeal && appealComposerOpen ? (
+            <div className="rounded-xl border border-violet-200 bg-violet-50/70 p-3">
+              <p className="text-[12px] font-bold text-neutral-900">Appeal this decision</p>
+              <p className="mt-0.5 text-[11.5px] leading-relaxed text-neutral-500">
+                Explain what the barangay should reconsider. Your appeal and any evidence appear in this thread.
+              </p>
+              <textarea
+                autoFocus
+                value={appealReason}
+                onChange={(event) => setAppealReason(event.target.value)}
+                rows={3}
+                placeholder="Explain why this report should be reviewed again…"
+                className="mt-2 w-full resize-y rounded-lg border border-violet-200 bg-white px-3 py-2 text-[13px] text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-violet-400"
+              />
+              {appealMedia ? (
+                <div className="mt-2 flex items-center gap-2">
+                  {appealMedia.type.startsWith("image/") ? (
+                    <div className="relative shrink-0">
+                      <img
+                        src={URL.createObjectURL(appealMedia)}
+                        alt={appealMedia.name}
+                        className="size-16 rounded-lg object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setAppealMedia(null)}
+                        className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
+                        aria-label="Remove evidence"
+                      >
+                        <XIcon className="size-3" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-lg border border-violet-200 bg-white px-3 py-2 text-[11px] font-medium text-neutral-600">
+                      <span className="flex min-w-0 items-center gap-2 truncate"><PaperclipIcon className="size-3.5 shrink-0" />{appealMedia.name}</span>
+                      <button type="button" onClick={() => setAppealMedia(null)} className="rounded-full p-0.5 hover:bg-neutral-100" aria-label="Remove evidence"><XIcon className="size-3.5" /></button>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+              {appealMediaError ? <p className="mt-2 text-[11px] font-medium text-red-500">{appealMediaError}</p> : null}
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <label
+                  className="flex size-8 cursor-pointer items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-white hover:text-neutral-600"
+                  aria-label="Attach image or video as evidence"
+                >
+                  <PaperclipIcon className="size-4" />
+                  <input
+                    type="file"
+                    accept="image/*,video/mp4,video/webm,video/quicktime"
+                    className="sr-only"
+                    onChange={(event) => { void chooseAppealMedia(event.target.files?.[0]); event.currentTarget.value = "" }}
+                  />
+                </label>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAppealComposerOpen(false)}
+                    className="rounded-full px-3 py-1.5 text-[11.5px] font-semibold text-neutral-500 transition-colors hover:text-neutral-800"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={filingAppeal || !appealReason.trim()}
+                    onClick={() => void submitAppeal()}
+                    className="rounded-full bg-brand-orange px-4 py-1.5 text-[11.5px] font-bold text-white transition-colors hover:bg-brand-orange-strong disabled:opacity-50"
+                  >
+                    {filingAppeal ? "Submitting…" : "Submit appeal"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
       )}
     </div>
   )

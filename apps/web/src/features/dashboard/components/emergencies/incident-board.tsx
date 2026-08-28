@@ -6,6 +6,7 @@ import { fullTimestamp } from "@/features/dashboard/components/record/emergency-
 import { isActiveEmergency } from "@/features/dashboard/components/alerts-map/lib"
 import { dotPinHtml, MAP_COLORS } from "@/features/dashboard/components/map/markers"
 import { drawCoverage } from "@/features/dashboard/components/map/coverage-layer"
+import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import { loadCoverageContext } from "@/features/dashboard/lib/use-coverage"
 import { drawRoute, routeRenderGeometry } from "@/features/dashboard/lib/route-line"
 import {
@@ -98,10 +99,9 @@ function IncidentMap({ alert }: { alert: EmergencyAlert }) {
 
       L.control.zoom({ position: "topright" }).addTo(map)
 
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
+      addBaseTiles(L, map, "voyager", {
         maxZoom: 20,
-        subdomains: "abcd",
-      }).addTo(map)
+      })
 
       const history = (assignment?.location_history ?? [])
         .map((ping) => coord(ping.latitude, ping.longitude))

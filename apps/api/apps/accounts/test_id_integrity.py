@@ -1,9 +1,8 @@
 """The picture check on submitted ID documents.
 
 The OCR engine reads what a card *says*. It has no opinion on what the card
-*looks like*, so an ID with a cartoon portrait passes every text rule as long
-as the fields parse. This layer is the one that can say "that portrait is a
-cartoon".
+*looks like*, so an altered ID can pass every text rule as long as the fields
+parse. This suite covers the picture gate directly.
 
 Two rules hold everywhere below:
 
@@ -115,24 +114,107 @@ class CheckIdIntegrityTests(TestCase):
             )
         return result, call
 
+    def test_template_or_picture_mismatch_blocks(self):
+        # A confident mismatch in either check turns the upload away.
+        for verdict in ("impossible_content", "photo_of_screen"):
+            with self.subTest(verdict=verdict):
+                result, _ = self._check(
+                    vision_reply(integrity_verdict=verdict, confidence=0.95),
+                    reference=prepared("cmVm"),
+                )
+                self.assertTrue(result["flagged"])
+        result, _ = self._check(
+            vision_reply(format_verdict="format_mismatch", confidence=0.95),
+            reference=prepared("cmVm"),
+        )
+        self.assertTrue(result["flagged"])
+
     def test_a_genuine_looking_id_is_not_flagged(self):
         result, _ = self._check(vision_reply(), reference=prepared("cmVm"))
         self.assertFalse(result["flagged"])
         self.assertEqual(result["integrity_verdict"], "authentic")
         self.assertTrue(result["compared_to_sample"])
 
-    def test_a_cartoon_portrait_is_flagged(self):
+    def test_a_real_portrait_different_from_the_template_is_not_flagged(self):
+        result, _ = self._check(
+            vision_reply(
+                integrity_verdict="impossible_content",
+                confidence=0.99,
+                signals=["portrait_mismatch"],
+            ),
+            reference=prepared("cmVm"),
+        )
+        self.assertFalse(result["flagged"])
+        self.assertEqual(result["integrity_verdict"], "inconclusive")
+        self.assertFalse(result["signals"])
+
+    def test_suspected_portrait_edit_is_not_a_template_check_block(self):
+        result, _ = self._check(
+            vision_reply(
+                integrity_verdict="suspected_edit",
+                confidence=0.99,
+                signals=["portrait_does_not_blend_with_card"],
+            ),
+            reference=prepared("cmVm"),
+        )
+        self.assertFalse(result["flagged"])
+        self.assertEqual(result["integrity_verdict"], "inconclusive")
+
+    def test_normal_portrait_lighting_and_edge_artifacts_are_not_a_flag(self):
+        result, _ = self._check(
+            vision_reply(
+                integrity_verdict="suspected_edit",
+                confidence=0.99,
+                signals=["portrait_lighting_mismatch", "portrait_edge_artifacts"],
+            ),
+            reference=prepared("cmVm"),
+        )
+        self.assertFalse(result["flagged"])
+        self.assertEqual(result["integrity_verdict"], "inconclusive")
+
+
+    def test_impossible_content_blocks_with_controlled_feedback(self):
         result, _ = self._check(
             vision_reply(
                 integrity_verdict="impossible_content",
                 confidence=0.94,
-                signals=["the portrait is a cartoon character, not a photograph"],
+                signals=["the image is not a valid document"],
             ),
             reference=prepared("cmVm"),
         )
         self.assertTrue(result["flagged"])
+        self.assertTrue(result["integrity_advisory"])
         self.assertEqual(result["integrity_verdict"], "impossible_content")
         self.assertTrue(result["signals"])
+        self.assertEqual(
+            result["feedback"],
+            "Upload a clear photo of the complete original document.",
+        )
+
+    def test_raw_model_signal_is_never_used_as_resident_feedback(self):
+        result, _ = self._check(
+            vision_reply(
+                integrity_verdict="impossible_content",
+                confidence=0.94,
+                signals=["the image is a photograph of fire, not a document"],
+            ),
+            reference=prepared("cmVm"),
+        )
+        self.assertTrue(result["flagged"])
+        self.assertEqual(
+            result["feedback"],
+            "Upload a clear photo of the complete original document.",
+        )
+        self.assertNotIn("fire", result["feedback"].lower())
+
+    def test_simple_prompt_does_not_add_identity_comparison_rules(self):
+        _, call = self._check(vision_reply(), reference=prepared("cmVm"))
+        prompt = call.call_args.kwargs["prompt"].lower()
+        self.assertNotIn("cartoon", prompt)
+        self.assertIn("same document overall", prompt)
+        self.assertIn("complement each other", prompt)
+        self.assertNotIn("generated", prompt)
+        self.assertNotIn("does not blend", prompt)
 
     def test_a_different_document_is_a_format_mismatch(self):
         result, _ = self._check(
@@ -142,12 +224,13 @@ class CheckIdIntegrityTests(TestCase):
         self.assertTrue(result["flagged"])
         self.assertEqual(result["format_verdict"], "format_mismatch")
 
-    def test_a_photo_of_a_screen_is_flagged(self):
+    def test_a_photo_of_a_screen_blocks(self):
         result, _ = self._check(
             vision_reply(integrity_verdict="photo_of_screen", confidence=0.85),
             reference=prepared("cmVm"),
         )
         self.assertTrue(result["flagged"])
+        self.assertTrue(result["integrity_advisory"])
 
     def test_a_low_confidence_opinion_never_flags(self):
         result, _ = self._check(
@@ -155,6 +238,7 @@ class CheckIdIntegrityTests(TestCase):
             reference=prepared("cmVm"),
         )
         self.assertFalse(result["flagged"])
+        self.assertFalse(result["integrity_advisory"])
         self.assertEqual(result["integrity_verdict"], "inconclusive")
 
     def test_a_low_confidence_format_mismatch_never_flags(self):
@@ -377,6 +461,7 @@ class FinalizeDowngradeTests(TestCase):
 
     def test_the_resident_message_says_what_to_do_and_makes_no_accusation(self):
         lowered = RESUBMIT_MESSAGE.lower()
-        self.assertIn("legitimate document", lowered)
+        self.assertIn("selected document", lowered)
+        self.assertIn("clear photo", lowered)
         for word in ("ai", "fake", "forged", "fraud"):
             self.assertNotIn(f" {word} ", f" {lowered} ")

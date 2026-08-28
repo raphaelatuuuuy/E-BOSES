@@ -75,6 +75,7 @@ from .models import (
     ConcernResolutionEvidence,
     ConcernTimelineEntry,
     ConcernStatusEvent,
+    ConcernView,
     ConcernVote,
     ContentFlag,
     Department,
@@ -85,7 +86,7 @@ from .models import (
     RoutingRule,
 )
 from .announcement_services import dispatch_due_announcements, mark_announcement_published
-from .severity import priority_score as compute_priority_score, severity_label
+from .severity import priority_score as compute_priority_score, severity_label, severity_level
 
 from .serializers import (
     ActiveResponderSerializer,
@@ -135,7 +136,7 @@ from .services import (
     user_can_access_concern_media_raw,
 )
 from .tasks import enqueue_concern_ai, enqueue_concern_media_privacy, enqueue_content_moderation_ai
-from .moderation import execute_takedown
+from .moderation import execute_takedown, restore_automated_takedown
 
 logger = logging.getLogger(__name__)
 
@@ -403,6 +404,10 @@ def decorate_concerns(queryset, user):
         )
         .prefetch_related(
             "media",
+            "duplicates",
+            "votes",
+            "votes__user",
+            "votes__user__resident_profile",
             "ai_assessment",
             "status_events",
             "status_events__actor",
@@ -467,6 +472,7 @@ def decorate_concerns(queryset, user):
         # `votes * 3 + comments * 2` was wrong for this system.
         concern.priority_score = compute_priority_score(concern)
         concern.severity = severity_label(concern)
+        concern.severity_assessed = severity_level(concern)[1]
     return concerns
 
 def create_concern_notification(concern, *, recipient, type, title, body):
@@ -813,6 +819,7 @@ class MyConcernListView(APIView):
         if date_to:
             queryset = queryset.filter(created_at__date__lte=date_to)
         queryset = queryset.order_by("-created_at", "-id")
+        queryset = queryset.select_related("assigned_department", "category_ref")
         return paginate_response(
             request,
             queryset,
@@ -848,10 +855,19 @@ class AssignedConcernListView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
         queryset = Concern.objects.filter(
-            assignments__assignee=request.user,
-            assignments__status=ConcernAssignment.Status.ACTIVE,
+            Q(
+                assignments__assignee=request.user,
+                assignments__status=ConcernAssignment.Status.ACTIVE,
+            )
+            | Q(
+                assignments__status=ConcernAssignment.Status.ACTIVE,
+                assignments__assignee__isnull=True,
+                assignments__department__designations__user=request.user,
+                assignments__department__designations__is_active=True,
+            ),
             validation_status=Concern.ValidationStatus.ACCEPTED,
         ).exclude(status__in=[Concern.Status.RESOLVED, Concern.Status.REJECTED]).distinct().order_by("-created_at", "-id")
+        queryset = queryset.select_related("assigned_department", "category_ref")
         return paginate_response(
             request,
             queryset,
@@ -902,7 +918,7 @@ class ManagedConcernListView(APIView):
                 | Q(barangay__icontains=search)
                 | Q(update_text__icontains=search)
             )
-        concerns_queryset = queryset.order_by("-updated_at", "-created_at", "-id")
+        concerns_queryset = queryset.order_by("-updated_at", "-created_at", "-id").select_related("assigned_department", "category_ref")
         return paginate_response(
             request,
             concerns_queryset,
@@ -912,6 +928,20 @@ class ManagedConcernListView(APIView):
                 context={"request": request},
             ).data,
         )
+
+def _record_official_view(user, concern):
+    """Log that an official opened this report — a resident's only way to see
+    someone has actually looked, before any assignment exists to name them.
+    """
+    if concern.reporter_id == user.pk:
+        return
+    is_official = bool(user.is_staff or user.is_superuser or user.role == user.Role.BARANGAY_OFFICIAL)
+    if not is_official:
+        return
+    view, created = ConcernView.objects.get_or_create(concern=concern, viewer=user)
+    if not created:
+        view.save(update_fields=["last_viewed_at"])
+
 
 class ConcernDetailView(APIView):
     permission_classes = [IsAuthenticated]
@@ -936,6 +966,7 @@ class ConcernDetailView(APIView):
         concern = get_object_or_404(Concern, pk=pk)
         if not can_access_concern(request.user, concern):
             return Response({"detail": "You do not have permission to view this report."}, status=status.HTTP_403_FORBIDDEN)
+        _record_official_view(request.user, concern)
         decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
         return Response(ConcernSerializer(decorated, context={"request": request}).data)
 
@@ -948,6 +979,7 @@ class ConcernPublicDetailView(APIView):
         concern = get_object_or_404(Concern, public_id=public_id)
         if not can_access_concern(request.user, concern):
             return Response({"detail": "You do not have permission to view this report."}, status=status.HTTP_403_FORBIDDEN)
+        _record_official_view(request.user, concern)
         decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
         can_view_private_case = bool(
             request.user.is_superuser
@@ -1219,6 +1251,11 @@ class ContentFlagReviewView(APIView):
                 {"detail": "This report is already closed and can no longer be taken down."},
                 status=status.HTTP_409_CONFLICT,
             )
+        was_automated_takedown = (
+            decision == ContentFlag.Status.DISMISSED
+            and flag.status == ContentFlag.Status.TAKEN_DOWN
+            and flag.auto_moderated
+        )
         flag.status = decision
         flag.staff_note = staff_note
         flag.reviewed_by = request.user
@@ -1227,6 +1264,10 @@ class ContentFlagReviewView(APIView):
         target_author = _flag_target_author(flag)
         if decision == ContentFlag.Status.TAKEN_DOWN:
             execute_takedown(flag, staff_note, actor=request.user, request=request)
+        elif was_automated_takedown:
+            restore_automated_takedown(flag, staff_note, actor=request.user)
+            flag.auto_moderated = False
+            flag.save(update_fields=["auto_moderated", "updated_at"])
         elif target_author is not None and flag.reporter_id != target_author.pk:
             self._notify_flag_reporter_dismissed(flag, staff_note)
 
@@ -1360,8 +1401,9 @@ class ConcernAssignView(APIView):
             note=assignment_note,
         )
         assignee_name = PublicUserSerializer(assignee).data["full_name"] if assignee else assignment.office
-        note = assignment.note or f"Assigned to {assignee_name or 'the barangay response team'}."
-        if department and not concern.assigned_department_id:
+        assignment_verb = "Reassigned to" if previous_assignment_ids else "Assigned to"
+        note = assignment.note or f"{assignment_verb} {assignee_name or 'the barangay response team'}."
+        if department and concern.assigned_department_id != department.pk:
             concern.assigned_department = department
         concern.status = Concern.Status.ASSIGNED
         concern.update_text = note
@@ -1610,16 +1652,32 @@ class ConcernChatView(APIView):
                 concern.assigned_department_id,
                 getattr(concern.category_ref, "department_id", None),
             ]))
-            officials = User.objects.filter(
-                role=User.Role.BARANGAY_OFFICIAL,
+            recipient_ids = set(
+                concern.assignments.filter(status=ConcernAssignment.Status.ACTIVE)
+                .exclude(assignee_id=request.user.pk)
+                .values_list("assignee_id", flat=True)
+            )
+            recipient_ids.update(
+                User.objects.filter(
+                    role=User.Role.BARANGAY_OFFICIAL,
+                    status=User.Status.VERIFIED,
+                    is_active=True,
+                    designations__is_active=True,
+                    designations__department_id__in=department_ids,
+                )
+                .exclude(pk=request.user.pk)
+                .distinct()
+                .values_list("pk", flat=True)[:20]
+            )
+            recipients = User.objects.filter(
+                pk__in=recipient_ids,
                 status=User.Status.VERIFIED,
-                designations__is_active=True,
-                designations__department_id__in=department_ids,
-            ).exclude(pk=request.user.pk).distinct()[:20]
-            for official in officials:
+                is_active=True,
+            )
+            for recipient in recipients:
                 create_concern_notification(
                     concern,
-                    recipient=official,
+                    recipient=recipient,
                     type="chat_message",
                     title=f"New message on {concern.tracking_id}",
                     body=preview,
@@ -1901,12 +1959,51 @@ class DepartmentListCreateView(AdminModelListCreateView):
     read_capabilities = (MANAGE_UNITS, MANAGE_ROLES, MANAGE_USERS)
     serializer_class = DepartmentSerializer
 
+    def _allowed(self, user, *, read=False):
+        if read and can_update_concern_status(user):
+            return True
+        return super()._allowed(user, read=read)
+
 
 class DepartmentDetailView(AdminModelDetailView):
     model = Department
     required_capability = MANAGE_UNITS
     serializer_class = DepartmentSerializer
     protected_relation = "concerns"
+
+
+class DepartmentMembersView(APIView):
+    """Return verified staff currently designated to one barangay unit."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, department_id):
+        touch_last_seen(request.user)
+        if not can_update_concern_status(request.user):
+            return capability_denied(RESOLVE_CONCERNS)
+
+        from apps.community_scope import community_ids_for_user
+
+        department = get_object_or_404(
+            Department,
+            pk=department_id,
+            is_active=True,
+            community_id__in=community_ids_for_user(request.user),
+        )
+        User = get_user_model()
+        members = (
+            User.objects.filter(
+                status=User.Status.VERIFIED,
+                is_active=True,
+                role__in=[User.Role.BARANGAY_OFFICIAL, User.Role.FIRST_RESPONDER],
+                designations__department=department,
+                designations__is_active=True,
+            )
+            .select_related("resident_profile")
+            .distinct()
+            .order_by("resident_profile__last_name", "resident_profile__first_name", "email")
+        )
+        return Response(PublicUserSerializer(members, many=True).data)
 
 
 class PositionListCreateView(AdminModelListCreateView):
@@ -2156,12 +2253,11 @@ class ConcernStatusUpdateView(APIView):
                 {"status_version": ["This report was updated elsewhere. Refresh and try again."]},
                 status=status.HTTP_409_CONFLICT,
             )
-        allowed = LEGAL_STATUS_TRANSITIONS.get(concern.status, set())
-        if next_status not in allowed:
-            return Response(
-                {"status": [f"A report cannot move from {concern.status} to {next_status}."]},
-                status=status.HTTP_409_CONFLICT,
-            )
+        # Status updates are intentionally flexible. Officials may correct or
+        # advance a report directly (for example, assigned -> resolved), and
+        # posting an update may keep the current status. Permissions,
+        # validation, evidence, and the optimistic status-version check still
+        # protect the write below.
         note = serializer.validated_data.get("note", "").strip()
         evidence_files = request.FILES.getlist("resolution_evidence")
         if evidence_files and next_status != Concern.Status.RESOLVED:
@@ -2224,6 +2320,64 @@ class ConcernStatusUpdateView(APIView):
             concern.assigned_department = department
             changed_fields.append("assigned_department")
 
+        assignee_ids = serializer.validated_data.get("assignee_ids")
+        assignment_members = []
+        assignment_changed = False
+        if next_status == Concern.Status.ASSIGNED and assignee_ids is not None:
+            assignment_department = department or concern.assigned_department
+            if assignment_department is None:
+                return Response(
+                    {"department_id": ["Choose the unit that will handle this report."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            User = get_user_model()
+            assignment_members = list(
+                User.objects.filter(
+                    pk__in=set(assignee_ids),
+                    role__in=[User.Role.BARANGAY_OFFICIAL, User.Role.FIRST_RESPONDER],
+                    status=User.Status.VERIFIED,
+                    is_active=True,
+                    designations__department=assignment_department,
+                    designations__is_active=True,
+                )
+                .select_related("resident_profile")
+                .distinct()
+            )
+            if len(assignment_members) != len(set(assignee_ids)):
+                return Response(
+                    {"assignee_ids": ["Choose members of the selected unit."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            active_assignments = list(
+                concern.assignments.filter(status=ConcernAssignment.Status.ACTIVE)
+            )
+            current_assignee_ids = {item.assignee_id for item in active_assignments if item.assignee_id}
+            assignment_changed = (
+                department_changed
+                or current_assignee_ids != set(assignee_ids)
+                or any(item.department_id != assignment_department.pk for item in active_assignments)
+            )
+            if assignment_changed:
+                concern.assignments.filter(status=ConcernAssignment.Status.ACTIVE).update(
+                    status=ConcernAssignment.Status.CANCELLED
+                )
+                assignment_note = note or f"Assigned to {assignment_department.name}."
+                for member in assignment_members:
+                    ConcernAssignment.objects.create(
+                        concern=concern,
+                        assignee=member,
+                        assigned_by=request.user,
+                        department=assignment_department,
+                        note=assignment_note,
+                    )
+                    create_concern_notification(
+                        concern,
+                        recipient=member,
+                        type="assigned",
+                        title="Concern report assigned",
+                        body=assignment_note,
+                    )
+
         concern.status = next_status
         concern.update_text = note
         concern.status_version += 1
@@ -2243,14 +2397,19 @@ class ConcernStatusUpdateView(APIView):
                 actor=request.user,
                 metadata={"category": new_category},
             )
-        if department_changed and department is not None:
+        if (department_changed or assignment_changed) and (department or concern.assigned_department) is not None:
+            assignment_department = department or concern.assigned_department
+            assignment_verb = "Reassigned to" if assignment_changed and active_assignments else "Assigned to"
             create_timeline_entry(
                 concern=concern,
                 event_type=ConcernTimelineEntry.EventType.ASSIGNMENT,
                 status=next_status,
-                message=f"Assigned to {department.name}.",
+                message=f"{assignment_verb} {assignment_department.name}.",
                 actor=request.user,
-                metadata={"department_id": department.pk},
+                metadata={
+                    "department_id": assignment_department.pk,
+                    "assignee_ids": [member.pk for member in assignment_members],
+                },
             )
         internal_note = (serializer.validated_data.get("internal_note") or "").strip()
         if internal_note:
@@ -2293,7 +2452,7 @@ class ConcernStatusUpdateView(APIView):
                     create_concern_notification(
                         concern,
                         recipient=closed_assignment.assignee,
-                        type="assigned",
+                        type=next_status,
                         title=f"Assigned concern {next_status.replace('_', ' ')}",
                         body=note,
                     )

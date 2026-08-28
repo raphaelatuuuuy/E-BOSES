@@ -15,6 +15,7 @@ import { toast } from "sonner"
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import { websocketTicket, websocketUrl } from "@/lib/api"
 import {
   cancelEmergency,
@@ -380,13 +381,12 @@ function EmergencyTrackingMap({
       })
       mapRef.current = map
 
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-        subdomains: "abcd",
+      addBaseTiles(L, map, "light", {
         maxZoom: 19,
-      }).addTo(map)
+      })
 
       L.marker([Number(alert.latitude), Number(alert.longitude)], {
-        icon: pinIcon(L, "#ffffff"),
+        icon: pinIcon(L, "#111113"),
       }).addTo(map)
       routeSigRef.current = ""
       fittedRef.current = false

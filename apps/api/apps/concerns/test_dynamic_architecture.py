@@ -306,6 +306,20 @@ class DynamicConcernArchitectureTests(APITestCase):
         self.assertEqual(read.status_code, status.HTTP_200_OK)
         self.assertTrue(ChatMessageRead.objects.filter(message_id=message.data["id"], user=self.resident).exists())
 
+        reply = self.client.post(
+            f"/api/concerns/{concern.pk}/chat/",
+            {"body": "Thank you. I will be available at that time."},
+            format="json",
+        )
+        self.assertEqual(reply.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.responder,
+                type="chat_message",
+                concern=concern,
+            ).exists()
+        )
+
         typing = self.client.post(
             f"/api/concerns/{concern.pk}/chat/typing/",
             {"is_typing": True},

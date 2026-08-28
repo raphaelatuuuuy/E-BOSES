@@ -96,11 +96,22 @@ export async function getBrowserNotificationState(): Promise<BrowserNotification
     // Leave publicKey as its initial "" — the server has no key configured, or
     // the request failed. Re-assigning it here made the initialiser dead code.
   }
+  let subscribed = false
+  if (subscription && publicKey) {
+    try {
+      subscribed = buffersMatch(
+        subscription.options.applicationServerKey,
+        urlBase64ToUint8Array(publicKey),
+      )
+    } catch {
+      subscribed = false
+    }
+  }
   return {
     supported: true,
     permission: Notification.permission,
     serverConfigured: Boolean(publicKey),
-    subscribed: Boolean(subscription),
+    subscribed,
     config,
   }
 }
@@ -218,6 +229,14 @@ export async function showBrowserNotification(item: NotificationItem) {
     rawBody.length > 90
       ? `${(rawBody.slice(0, 90).replace(/\s+\S*$/, "").trim() || rawBody.slice(0, 90)).trim()}...`
       : rawBody
+  // Native notification renderers fetch images without the app's bearer
+  // token. Public, processed media can be shown; authenticated API previews
+  // stay inside the app and open after the user taps the notification.
+  const notificationImage =
+    item.image_url &&
+    !new URL(item.image_url, window.location.origin).pathname.startsWith("/api/")
+      ? item.image_url
+      : undefined
 
   registration?.active?.postMessage({
     type: "eboses.show-notification",
@@ -230,7 +249,7 @@ export async function showBrowserNotification(item: NotificationItem) {
       priority: item.priority,
       icon: item.icon_url || "/contents/logo.webp",
       badge: "/contents/logo.webp",
-      image: item.image_url || undefined,
+      image: notificationImage,
       actions: item.actions?.length ? item.actions : item.action_label ? [{ action: "open", title: item.action_label, url }] : undefined,
       requireInteraction: item.priority === "urgent",
       renotify: item.priority === "urgent" || item.priority === "important",

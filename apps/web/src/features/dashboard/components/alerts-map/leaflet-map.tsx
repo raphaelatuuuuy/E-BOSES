@@ -3,10 +3,9 @@ import { FootprintsIcon, HomeIcon, MinusIcon, NavigationIcon, PlusIcon } from "l
 import { toast } from "sonner"
 
 import {
-  type LiveMapEmergency,
   type LiveMapSnapshot,
 } from "@/features/dashboard/api"
-import { connectorLineStyle, drawRoute, routeRenderGeometry } from "@/features/dashboard/lib/route-line"
+import { drawRoute, routeRenderGeometry } from "@/features/dashboard/lib/route-line"
 import {
   MapControlButton,
   MapControlStack,
@@ -28,7 +27,6 @@ import {
   glyphPinHtml,
   glyphPinSize,
   GLYPHS,
-  personDotHtml,
 } from "@/features/dashboard/components/map/markers"
 import { escapeHtml } from "@/features/dashboard/components/map/concern-marker"
 import { lucideIconPaths } from "@/features/dashboard/components/map/lucide-glyphs"
@@ -160,7 +158,7 @@ function AlertsLeafletMapInner({
   onToggleLayer: (key: LayerKey) => void
   onResetLayers: () => void
   onMapInteract?: () => void
-  counts: { responders: number; emergencies: number; concerns: number; advisories: number }
+  counts: { emergencies: number; concerns: number; advisories: number }
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
@@ -179,10 +177,7 @@ function AlertsLeafletMapInner({
    * emergency pin, every route polyline and every street line on the map.
    */
   const alertLayersRef = useRef<leaflet.LayerGroup | null>(null)
-  const peopleLayersRef = useRef<leaflet.LayerGroup | null>(null)
-  const connectorLayersRef = useRef<leaflet.LayerGroup | null>(null)
   const alertMarkersRef = useRef<Map<string, MarkerEntry>>(new Map())
-  const peopleMarkersRef = useRef<Map<string, MarkerEntry>>(new Map())
   const onSelectRef = useRef(onSelect)
   const onMapInteractRef = useRef(onMapInteract)
   const streetLayersRef = useRef<leaflet.LayerGroup | null>(null)
@@ -445,8 +440,6 @@ function AlertsLeafletMapInner({
       advisoryLayersRef.current = L.layerGroup().addTo(map)
       routeLayersRef.current = L.layerGroup().addTo(map)
       alertLayersRef.current = L.layerGroup().addTo(map)
-      connectorLayersRef.current = L.layerGroup().addTo(map)
-      peopleLayersRef.current = L.layerGroup().addTo(map)
       mapRef.current = map
       closeHoverCardsOnLeave(map)
 
@@ -482,13 +475,11 @@ function AlertsLeafletMapInner({
     }
 
     const alertMarkers = alertMarkersRef.current
-    const peopleMarkers = peopleMarkersRef.current
 
     void init()
     return () => {
       cancelled = true
       alertMarkers.clear()
-      peopleMarkers.clear()
       resizeObserverRef.current?.disconnect()
       resizeObserverRef.current = null
       framedRef.current = false
@@ -858,99 +849,6 @@ function AlertsLeafletMapInner({
     const coord = emergency ? validCoord(emergency.latitude, emergency.longitude) : null
     if (coord) map.setView(coord, Math.max(map.getZoom(), 16), { animate: true })
   }, [selected?.kind, selected?.id, mapReady])
-
-  // People. Re-runs on every location ping, which is why it owns its own layer
-  // group and touches nothing else on the map.
-  useEffect(() => {
-    const L = LRef.current
-    const map = mapRef.current
-    const group = peopleLayersRef.current
-    const connectors = connectorLayersRef.current
-    if (!L || !map || !group || !connectors) return
-
-    // Every responder committed to an open incident, not only the one on the
-    // selected incident. A dispatcher must be able to see who is going where
-    // without clicking each emergency in turn; selection only decides which leg
-    // is lifted and which are held back.
-    const assignmentByResponder = new Map<number, LiveMapEmergency>()
-    for (const emergency of snapshot.emergencies) {
-      if (!isActiveEmergency(emergency)) continue
-      const responderId = emergency.current_assignment?.responder.id
-      if (responderId != null) assignmentByResponder.set(responderId, emergency)
-    }
-    const focusId = selected?.kind === "emergency" ? selected.id : null
-
-    const specs: MarkerSpec[] = []
-    connectors.clearLayers()
-
-    for (const person of snapshot.people) {
-      const coord = validCoord(person.latitude, person.longitude)
-      if (!coord) continue
-      if (person.role === "resident" && !layers.residents) continue
-      if (person.role === "barangay_official" && !layers.officials) continue
-      if (person.role === "first_responder" && !layers.responders) continue
-
-      const isResponder = person.role === "first_responder"
-      const incident = isResponder ? assignmentByResponder.get(person.id) ?? null : null
-      const isAssigned = incident != null
-      const isFocused = isAssigned && incident.id === focusId
-
-      // Residents and officials are context. Responders are the resource a
-      // dispatcher allocates, so they get their own hue, and the one assigned
-      // to the selected incident is lifted out of the rest.
-      const color = !isResponder
-        ? person.role === "barangay_official"
-          ? MAP_COLORS.official
-          : MAP_COLORS.structure
-        : isAssigned
-          ? MAP_COLORS.responderAssigned
-          : person.is_on_duty
-            ? MAP_COLORS.responder
-            : MAP_COLORS.responderOffDuty
-
-      const box = isFocused ? 13 : 10
-      specs.push({
-        key: `person-${person.id}`,
-        coord,
-        iconKey: `person:${color}:${box}:${isFocused}`,
-        box,
-        html: () => personDotHtml(color, false, "light"),
-        z: isFocused ? 500 : isAssigned ? 250 : 0,
-        onClick: () => onSelectRef.current({ kind: "person", id: person.id }),
-      })
-
-      // The leg from a committed responder to their incident, so "who is going
-      // to this" is answered by looking at the map rather than reading a panel.
-      // It lives here rather than with the route because it has to follow the
-      // responder's position, which updates on every ping.
-      if (incident) {
-        // Onto the route when there is one, straight to the incident when
-        // there is not.
-        const assignedRoute = snapshot.routes.find(
-          (item) => item.responder_id === person.id && item.alert_id === incident.id,
-        )
-        const target = validCoord(incident.latitude, incident.longitude)
-        const { connectors: legs } = routeRenderGeometry(assignedRoute, { origin: coord })
-        const link = legs[0] ?? (target ? [coord, target] : null)
-        if (link) {
-          L.polyline(link, connectorLineStyle(focusId != null && !isFocused)).addTo(connectors)
-        }
-      }
-    }
-
-    syncMarkers(L, map, group, peopleMarkersRef.current, specs)
-  }, [
-    snapshot.people,
-    snapshot.emergencies,
-    snapshot.routes,
-    layers.residents,
-    layers.officials,
-    layers.responders,
-    selected?.kind,
-    selected?.id,
-    mapReady,
-  ])
-
 
   const layerRows = alertLayerRows(counts)
 

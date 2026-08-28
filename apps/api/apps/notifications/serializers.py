@@ -22,6 +22,7 @@ class NotificationSerializer(serializers.ModelSerializer):
     tag = serializers.SerializerMethodField()
     icon_url = serializers.SerializerMethodField()
     image_url = serializers.SerializerMethodField()
+    images = serializers.SerializerMethodField()
     actions = serializers.SerializerMethodField()
 
     def _display_payload(self, obj):
@@ -60,21 +61,44 @@ class NotificationSerializer(serializers.ModelSerializer):
     def get_icon_url(self, obj):
         return self._display_payload(obj).get("icon")
 
-    def get_image_url(self, obj):
+    def get_images(self, obj):
+        if obj.type == Notification.Type.WITNESS_ALERT:
+            return []
+
+        if obj.concern_id:
+            from apps.media_urls import concern_media_preview_url
+
+            return [
+                {
+                    "url": concern_media_preview_url(media.pk),
+                    "filename": media.original_filename or f"Report photo {index}",
+                    "mime_type": media.mime_type or "image",
+                }
+                for index, media in enumerate(obj.concern.media.all(), start=1)
+                if media.mime_type.startswith("image/") or not media.mime_type
+            ]
+
+        if obj.emergency_id:
+            from apps.media_urls import emergency_media_preview_url
+
+            return [
+                {
+                    "url": emergency_media_preview_url(media.pk),
+                    "filename": media.original_filename or f"Emergency photo {index}",
+                    "mime_type": media.mime_type or "image",
+                }
+                for index, media in enumerate(obj.emergency.media.all(), start=1)
+                if media.mime_type.startswith("image/") or not media.mime_type
+            ]
+
         image = self._display_payload(obj).get("image")
         if not image:
-            media = None
-            if obj.concern_id:
-                media = obj.concern.media.filter(public_visible=True).exclude(preview_file="").first()
-            elif obj.emergency_id:
-                media = obj.emergency.media.exclude(preview_file="").first()
-            if media and media.preview_file:
-                image = media.preview_file.url
-        if image and image.startswith("/"):
-            request = self.context.get("request")
-            if request:
-                image = request.build_absolute_uri(image)
-        return image or None
+            return []
+        return [{"url": image, "filename": "Announcement photo", "mime_type": "image"}]
+
+    def get_image_url(self, obj):
+        images = self.get_images(obj)
+        return images[0]["url"] if images else None
 
     def get_actions(self, obj):
         return self._display_payload(obj).get("actions") or []
@@ -133,6 +157,7 @@ class NotificationSerializer(serializers.ModelSerializer):
             "tag",
             "icon_url",
             "image_url",
+            "images",
             "actions",
         ]
 

@@ -402,6 +402,7 @@ def detect_residence_proof(
         configuration=configuration,
         forensics=forensics,
         run_forensics=False,
+        sides=[side] if side else None,
     )
     integrity = gate.get("integrity")
     if not gate["passed"]:
@@ -531,6 +532,15 @@ def detect_residence_proof(
             "message": "We could not read the document. Try a clearer photo.",
         }
 
+    # Measured once, and only consulted on a read failure: "we could not read
+    # this" is not something a resident can act on, but "it is out of focus" is.
+    from .media_forensics import diagnose_image_readability
+
+    line_count_for_diagnosis = len(lines or [])
+    diagnosis = (
+        diagnose_image_readability(original_content) if line_count_for_diagnosis < 3 else None
+    )
+
     detected_type, type_score, _mismatch = classify_document_type(configuration, lines, hint)
     # Only allow enabled published types.
     if detected_type is not None and not any(item.pk == detected_type.pk for item in enabled_types):
@@ -563,6 +573,7 @@ def detect_residence_proof(
             content=original_content,
             document_type=detected_type,
             configuration=configuration,
+            side=side,
         )
         if second_pass is not None:
             integrity = second_pass
@@ -599,9 +610,11 @@ def detect_residence_proof(
             "template_match": None,
             "id_integrity": integrity,
             "pipeline": gate_payload(gate),
-            "reasons": reasons,
+            "reasons": reasons + ([diagnosis["message"]] if diagnosis else []),
+            "readability": diagnosis,
             "message": (
-                "We could not read enough text from this photo. Use a clearer, well-lit image of your document."
+                (diagnosis["message"] if diagnosis else
+                 "We could not read enough text from this photo. Use a clearer, well-lit image of your document.")
                 if line_count < 3
                 else "This document does not match any approved Barangay template. Select the correct ID type and try again."
             ),
@@ -621,8 +634,13 @@ def detect_residence_proof(
             "template_match": None,
             "id_integrity": integrity,
             "pipeline": gate_payload(gate),
-            "reasons": ["No readable text found in the photo"],
-            "message": "We could not read any text from this photo. Retake with better lighting and hold steady.",
+            "reasons": ["No readable text found in the photo"] + ([diagnosis["message"]] if diagnosis else []),
+            "readability": diagnosis,
+            "message": (
+                diagnosis["message"]
+                if diagnosis
+                else "We could not read any text from this photo. Retake with better lighting and hold steady."
+            ),
         }
 
     # Trust the sign-up form values when provided — the whole point of the
@@ -941,6 +959,10 @@ def process_verification_case(case_id, *, trigger=VerificationCheck.Trigger.SYST
         document_type=case.document_type,
         configuration=case.configuration,
         run_forensics=True,
+        sides=[
+            (getattr(attempt.proof, "side", None) or "single").strip().lower()
+            for attempt in attempts
+        ],
     )
     if not gate["passed"]:
         return reject_case_before_ocr(case.pk, attempts, gate)
@@ -1620,6 +1642,7 @@ def process_test_run(test_run_id, *, provider=None, force=False, side: str | Non
         document_type=test_run.document_type,
         configuration=test_run.configuration,
         forensics=(test_run.metadata or {}).get("forensics"),
+        sides=[test_side] if test_side else None,
     )
     if not gate["passed"]:
         return finalize_blocked_test_run(test_run_id, gate, side=test_side)
@@ -1693,6 +1716,14 @@ def process_test_run(test_run_id, *, provider=None, force=False, side: str | Non
         extracted["__template_match__"] = template_match
         extracted["__id_integrity__"] = test_integrity or {"checked": False}
         extracted["__pipeline__"] = gate_payload(gate)
+        # An official testing a template needs the same answer a resident gets:
+        # not "no text was read" but why — out of focus, too dark, too small.
+        if len(response.lines or []) < 3:
+            from .media_forensics import diagnose_image_readability
+
+            readability = diagnose_image_readability(image_bytes)
+            if readability:
+                extracted["__readability__"] = readability
         if test_side:
             extracted["__test_side__"] = test_side
         is_easyocr = response.job_id == "local-easyocr"
@@ -1705,8 +1736,18 @@ def process_test_run(test_run_id, *, provider=None, force=False, side: str | Non
         }
         template_ok = bool(template_match.get("passed", True))
         integrity_ok = not (test_integrity or {}).get("flagged")
+        integrity_warning = bool(
+            not (gate.get("integrity_checks") or [])
+            or
+            (test_integrity or {}).get("integrity_advisory")
+            or any(item.get("integrity_advisory") for item in (gate.get("integrity_checks") or []))
+        )
         outcome_passed = engine.outcome == "passed" and template_ok and integrity_ok
-        test_run.status = OCRTestRun.Status.PASSED if outcome_passed else OCRTestRun.Status.WARNING
+        test_run.status = (
+            OCRTestRun.Status.WARNING
+            if not outcome_passed or integrity_warning
+            else OCRTestRun.Status.PASSED
+        )
         test_run.provider_job_id = response.job_id
         test_run.ocr_confidence = Decimal(str(engine.confidence))
         test_run.extracted_fields = extracted

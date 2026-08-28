@@ -1,5 +1,6 @@
 import { apiRequest } from "@/lib/api"
-import type { ResidenceProofOption } from "@/features/ocr/api"
+import type { OcrIdIntegrity, OcrPipeline, ResidenceProofOption } from "@/features/ocr/api"
+import type { GeoJsonPolygon } from "@/features/dashboard/api"
 
 export type UserStatus =
   | "pending_otp"
@@ -104,6 +105,58 @@ export interface CommunityResolveResult {
   proof_options: ResidenceProofOption[]
 }
 
+export interface RegistrationStreetHit {
+  name: string
+  community: string
+  community_id: string
+  latitude: number
+  longitude: number
+}
+
+export function searchRegistrationStreets(query: string, limit = 8) {
+  const params = new URLSearchParams({ q: query, limit: String(limit) })
+  return apiRequest<{ results: RegistrationStreetHit[] }>(
+    `/auth/register/streets/?${params.toString()}`,
+    { method: "GET" },
+    { auth: false },
+  )
+}
+
+export interface RegistrationPinAddress {
+  street: string
+  house_number: string
+  community: string
+  community_id: string
+  inside_community: boolean
+  latitude: number
+  longitude: number
+  label: string
+}
+
+export function lookupRegistrationPinAddress(latitude: number, longitude: number) {
+  const params = new URLSearchParams({ lat: String(latitude), lng: String(longitude) })
+  return apiRequest<RegistrationPinAddress>(
+    `/auth/register/pin-address/?${params.toString()}`,
+    { method: "GET" },
+    { auth: false },
+  )
+}
+
+export interface RegistrationCommunityArea {
+  id: string
+  name: string
+  center: { latitude: number; longitude: number }
+  boundary: GeoJsonPolygon | null
+}
+
+export function fetchRegistrationCommunities() {
+  return apiRequest<{ results: RegistrationCommunityArea[] }>(
+    "/auth/register/communities/",
+    { method: "GET" },
+    { auth: false },
+  )
+}
+
 export function resolveRegistrationCommunity(payload: {
   email: string
   latitude: number
@@ -135,8 +188,19 @@ export function checkEmailAvailability(payload: { email: string }) {
   )
 }
 
+export interface ResidenceProofCheckResult {
+  checked: boolean
+  side?: "front" | "back" | "single" | null
+  media_authenticity?: {
+    checked: boolean
+    passed: boolean
+  }
+  id_integrity?: OcrIdIntegrity | null
+  pipeline?: OcrPipeline | null
+}
+
 export function checkRegistrationProof(formData: FormData) {
-  return apiRequest<void>(
+  return apiRequest<ResidenceProofCheckResult>(
     "/auth/register/proof/check/",
     {
       method: "POST",
@@ -155,6 +219,9 @@ export interface ResidenceProofDetectResult {
   template_match?: { passed?: boolean; score?: number; checks?: Array<{ label?: string; passed?: boolean; detail?: string }> } | null
   field_checks?: Array<{ field?: string; label?: string; passed?: boolean; rule?: string; detail?: string }>
   deskew?: { deskewed?: boolean; score?: number; reason?: string } | null
+  id_integrity?: OcrIdIntegrity | null
+  id_integrity_checks?: OcrIdIntegrity[]
+  pipeline?: OcrPipeline | null
   reasons?: string[]
   message?: string
 }

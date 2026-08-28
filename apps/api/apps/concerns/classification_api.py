@@ -7,7 +7,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Count
 from django.utils import timezone
 from rest_framework import serializers, status
-from rest_framework.parsers import JSONParser, MultiPartParser
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -391,9 +391,9 @@ class OfficialClassificationTextTestView(APIView):
 def _media_integrity_preview(config, *, details: dict, images: list[PreparedImage]) -> dict:
     """Run the real picture check against the sample photos.
 
-    Same function, same confidence floor, same second opinion as the live
-    pipeline — the point of the tester is that an official can trust what it
-    shows, so nothing here is a simulation of the behaviour.
+    Same function, same confidence floor as the live pipeline — the point of
+    the tester is that an official can trust what it shows, so nothing here
+    is a simulation of the behaviour.
     """
     from apps.concerns.ai.pipeline import _media_integrity_check
 
@@ -450,6 +450,15 @@ def _photo_dedup_llm_preview(config, *, category: str, latitude, longitude, imag
     """Visually compare the sample photo(s) against recent real concern photos."""
     if not config.photo_duplicate_llm_enabled or not images:
         return None
+    origin_lat = float(latitude) if latitude not in (None, "") else None
+    origin_lon = float(longitude) if longitude not in (None, "") else None
+    # Without a pin there is nothing to bound the candidate pool by distance —
+    # comparing against same-category reports from anywhere, however old or
+    # far away, produced misleading "possible match" results. No location
+    # means the check cannot run, not "check against everything."
+    if origin_lat is None or origin_lon is None:
+        return None
+
     limit = max(1, int(config.photo_duplicate_candidate_limit))
     since = timezone.now() - timedelta(days=config.report_duplicate_lookback_days)
     pool = (
@@ -458,17 +467,16 @@ def _photo_dedup_llm_preview(config, *, category: str, latitude, longitude, imag
         .prefetch_related("media")
         .order_by("-created_at")[:200]
     )
-    origin_lat = float(latitude) if latitude not in (None, "") else None
-    origin_lon = float(longitude) if longitude not in (None, "") else None
 
     candidates: list[dict] = []
     for other in pool:
         if len(candidates) >= limit:
             break
-        if origin_lat is not None and other.latitude is not None:
-            distance = _preview_haversine(origin_lat, origin_lon, float(other.latitude), float(other.longitude))
-            if distance > config.report_duplicate_distance_meters:
-                continue
+        if other.latitude is None or other.longitude is None:
+            continue
+        distance = _preview_haversine(origin_lat, origin_lon, float(other.latitude), float(other.longitude))
+        if distance > config.report_duplicate_distance_meters:
+            continue
         media = next((m for m in other.media.all() if m.mime_type.startswith("image/")), None)
         if media is None:
             continue
@@ -490,6 +498,19 @@ def _photo_dedup_llm_preview(config, *, category: str, latitude, longitude, imag
         return None
 
     comparisons = compare_photo_duplicates(submitted_images=images, candidates=candidates)
+    # The candidate's own photo is only worth sending back for a genuine
+    # duplicate suspicion — attaching it to "different" verdicts (the common
+    # case, since candidates are picked by category/proximity, not looks)
+    # would bloat the response for a comparison nobody needs to see.
+    candidates_by_id = {candidate["concern_id"]: candidate for candidate in candidates}
+    for comparison in comparisons or []:
+        if comparison.get("verdict") == "different":
+            continue
+        candidate = candidates_by_id.get(comparison.get("concern_id"))
+        if candidate is None:
+            continue
+        image = candidate["image"]
+        comparison["image"] = f"data:{image.mime_type};base64,{image.data}"
     return {
         "checked": bool(comparisons),
         "skip_reason": "" if comparisons else "vision_check_unavailable",
@@ -1330,7 +1351,12 @@ def _resolved_address(latitude, longitude, *, local_only=False) -> dict | None:
 
 
 def _formatted_title_preview(title, description, details) -> dict:
-    official_title = (title or "").strip()[:140] or (description or "").strip()[:60] or "Untitled sample report"
+    official_title = (
+        (details.get("report_title") or "").strip()[:140]
+        or (title or "").strip()[:140]
+        or (description or "").strip()[:60]
+        or "Untitled sample report"
+    )
     summary = (details.get("text_assessment") or "").strip() or (description or "").strip()[:300]
     return {"official_title": official_title, "summary": summary}
 
@@ -1386,10 +1412,12 @@ class LlmDecisionLogListView(APIView):
     required_capability = CONFIGURE_CLASSIFICATION
 
     def get(self, request):
-        qs = LlmDecisionLog.objects.select_related("assigned_department")
+        qs = LlmDecisionLog.objects.select_related("assigned_department", "concern")
 
         domain = request.query_params.get("domain", "")
-        if domain in LlmDecisionLog.Domain.values:
+        if domain == LlmDecisionLog.Domain.CONCERN:
+            qs = qs.filter(domain__in=[LlmDecisionLog.Domain.CONCERN, LlmDecisionLog.Domain.COMMUNITY])
+        elif domain in LlmDecisionLog.Domain.values:
             qs = qs.filter(domain=domain)
 
         run_kind = request.query_params.get("run_kind", "")
@@ -1425,8 +1453,14 @@ class LlmDecisionLogListView(APIView):
                 "routing_reason": row.routing_reason,
                 "model_version": row.model_version,
                 "duration_ms": row.duration_ms,
+                "location": (
+                    (row.input_snapshot or {}).get("location")
+                    or (row.concern.address if row.concern_id and row.concern else "")
+                ),
                 "input_snapshot": row.input_snapshot,
                 "output_snapshot": row.output_snapshot,
+                "content_flag_id": row.content_flag_id,
+                "concern_id": row.concern_id,
             }
             for row in rows
         ]
@@ -1434,14 +1468,14 @@ class LlmDecisionLogListView(APIView):
 
 
 class CommunityModerationSimulationView(APIView):
-    """Text-only simulation of the community-content moderation pass, for the
+    """Simulation of the community-content moderation pass, for the
     admin test workspace. Same analyzer call `run_content_moderation_ai_task`
     uses in production — nothing is persisted beyond the LlmDecisionLog row.
     """
     permission_classes = [IsAuthenticated, HasRolePermission, HasCapability]
     required_permission = "concerns.manage"
     required_capability = CONFIGURE_CLASSIFICATION
-    parser_classes = [JSONParser]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def post(self, request):
         from apps.concerns.ai.community_moderation_analyzer import (
@@ -1452,12 +1486,29 @@ class CommunityModerationSimulationView(APIView):
         content_text = str(request.data.get("content_text", ""))[:2000]
         reason = str(request.data.get("reason", ""))
         reporter_note = str(request.data.get("reporter_note", ""))[:500]
+        image = request.FILES.get("image")
+        image_submitted = image is not None
+        image_payloads = []
+        if image is not None:
+            prepared = prepare_image_for_gemma(
+                image.read(),
+                filename=getattr(image, "name", ""),
+                mime_type=getattr(image, "content_type", ""),
+            )
+            if prepared is not None:
+                image_payloads.append(prepared.data)
         if not content_text.strip():
             return Response({"content_text": ["Enter the flagged content text."]}, status=status.HTTP_400_BAD_REQUEST)
         if reason not in ContentFlag.Reason.values:
             return Response({"reason": ["Choose a valid flag reason."]}, status=status.HTTP_400_BAD_REQUEST)
 
-        result = analyze_flagged_content(content_text=content_text, reason=reason, reporter_note=reporter_note)
+        result = analyze_flagged_content(
+            content_text=content_text,
+            reason=reason,
+            reporter_note=reporter_note,
+            images=image_payloads,
+            image_submitted=image_submitted,
+        )
         model_version = model_version_in_use()
 
         LlmDecisionLog.objects.create(
@@ -1465,7 +1516,13 @@ class CommunityModerationSimulationView(APIView):
             domain=LlmDecisionLog.Domain.COMMUNITY,
             performed_by=request.user,
             model_version=model_version,
-            input_snapshot={"content_text": content_text, "reason": reason, "reporter_note": reporter_note},
+            input_snapshot={
+                "content_text": content_text,
+                "reason": reason,
+                "reporter_note": reporter_note,
+                "image_submitted": image_submitted,
+                "image_count": len(image_payloads),
+            },
             output_snapshot=result,
             resident_message=result.get("short_explanation", ""),
             recommended_action=result.get("recommended_disposition", ""),

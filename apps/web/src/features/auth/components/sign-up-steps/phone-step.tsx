@@ -120,13 +120,6 @@ function maskDisplayPhone(e164: string): string {
   return `+63 9•• ••• ${local.slice(-4)}`
 }
 
-function formatCountdown(totalSeconds: number): string {
-  const safe = Math.max(0, Math.floor(totalSeconds))
-  const minutes = Math.floor(safe / 60)
-  const seconds = safe % 60
-  return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
-}
-
 export function PhoneStep({
   values,
   errors,
@@ -244,23 +237,11 @@ export function PhoneStep({
           ) : null}
         </div>
 
-        <p className="mt-3 text-sm text-neutral-600" aria-live="polite">
-          {codeExpired ? (
-            <span className="font-medium text-destructive">
-              Code expired. Request a new one.
-            </span>
-          ) : (
-            <>Code expires in <span className="tabular-nums">{formatCountdown(secondsLeft)}</span></>
-          )}
-        </p>
-
-        <p className="mt-1 text-sm text-neutral-500" aria-live="polite">
-          {isSendingPhoneOtp
-            ? "Sending code…"
-            : isVerifyingPhoneOtp
-              ? "Checking your code…"
-              : "Didn't receive the code?"}
-        </p>
+        {codeExpired ? (
+          <p className="mt-3 text-sm font-medium text-destructive" aria-live="polite">
+            Code expired. Request a new one.
+          </p>
+        ) : null}
 
         <button
           type="button"

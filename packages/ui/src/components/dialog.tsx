@@ -87,7 +87,7 @@ function DialogOverlay({ className }: { className?: string }) {
   const { setOpen } = useDialog()
   return (
     <div
-      className={cn("fixed inset-0 z-50 bg-black/40", className)}
+      className={cn("fixed inset-0 z-[70] bg-black/40", className)}
       onClick={() => setOpen(false)}
     />
   )
@@ -108,7 +108,7 @@ function DialogContent({
       <DialogOverlay className={overlayClassName} />
       <div
         className={cn(
-          "fixed bottom-0 left-0 right-0 top-auto z-50 flex max-h-[85vh] w-full flex-col rounded-t-2xl border border-border/50 bg-background shadow-2xl",
+          "fixed bottom-0 left-0 right-0 top-auto z-[70] flex max-h-[85vh] w-full flex-col rounded-t-2xl border border-border/50 bg-background shadow-2xl",
           "sm:left-1/2 sm:top-1/2 sm:bottom-auto sm:right-auto sm:-translate-x-1/2 sm:-translate-y-1/2 sm:max-w-lg sm:rounded-2xl sm:max-h-[90vh]",
           className,
         )}

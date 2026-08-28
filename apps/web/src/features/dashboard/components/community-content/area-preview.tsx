@@ -3,6 +3,7 @@ import type leaflet from "leaflet"
 
 import type { GeoJsonPolygon } from "@/features/dashboard/api"
 import { geoJsonToLines } from "@/features/dashboard/components/alerts-map/lib"
+import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import { ADVISORY_COLOR, advisoryMarkerHtml } from "./advisory-tags"
 import { polygonCentroid } from "./area-lib"
 
@@ -85,11 +86,9 @@ export function AreaPreview({
         preferCanvas: true,
       })
       created.map = map
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-        attribution: "",
+      addBaseTiles(L, map, "light", {
         maxZoom: 19,
-        subdomains: "abcd",
-      }).addTo(map)
+      })
       mapRef.current = map
       map.invalidateSize()
       requestAnimationFrame(() => map.invalidateSize())

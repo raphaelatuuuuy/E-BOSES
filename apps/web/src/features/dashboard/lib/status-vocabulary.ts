@@ -15,9 +15,9 @@ export const STATUS_GROUP_LABEL: Record<StatusGroup, string> = {
 export const VOCABULARY: Record<string, StatusEntry> = {
   submitted: { residentLabel: "Received", officialLabel: "Received", group: "open" },
   pending_verification: { residentLabel: "Being verified", officialLabel: "Pending verification", group: "open" },
-  under_review: { residentLabel: "Being checked", officialLabel: "Acknowledged", group: "active" },
+  under_review: { residentLabel: "Being handled", officialLabel: "Being handled", group: "active" },
   assigned: { residentLabel: "Assigned to a unit", officialLabel: "Assigned", group: "active" },
-  in_progress: { residentLabel: "Being worked on", officialLabel: "In progress", group: "active" },
+  in_progress: { residentLabel: "Being handled", officialLabel: "Being handled", group: "active" },
   partially_resolved: { residentLabel: "Partly done", officialLabel: "Partially resolved", group: "active" },
   resolved: { residentLabel: "Resolved", officialLabel: "Resolved", group: "closed" },
   closed: { residentLabel: "Closed", officialLabel: "Closed", group: "closed" },

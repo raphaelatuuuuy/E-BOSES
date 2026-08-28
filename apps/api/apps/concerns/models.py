@@ -641,6 +641,7 @@ class ConcernAiAssessment(models.Model):
     # not a fixed class vocabulary — there is no detector taxonomy any more.
     detected_objects = models.JSONField(default=list, blank=True)
     severity_estimate = models.CharField(max_length=32, blank=True)
+    severity_reason = models.TextField(blank=True)
     nlp_validity = models.CharField(max_length=32, blank=True)
     nlp_confidence = models.FloatField(null=True, blank=True)
     category_match = models.BooleanField(null=True, blank=True)
@@ -683,6 +684,7 @@ class LlmDecisionLog(models.Model):
     class Domain(models.TextChoices):
         CONCERN = "concern", "Concern"
         EMERGENCY = "emergency", "Emergency"
+        VERIFICATION = "verification", "Verification"
         COMMUNITY = "community", "Community content"
 
     run_kind = models.CharField(max_length=16, choices=RunKind.choices)
@@ -803,7 +805,7 @@ class ConcernClassificationConfiguration(models.Model):
     media_integrity_enabled = models.BooleanField(default=True)
     media_integrity_action = models.CharField(max_length=24, choices=MediaIntegrityAction.choices, default=MediaIntegrityAction.HOLD)
     media_integrity_min_confidence = models.FloatField(default=0.70)
-    media_integrity_second_opinion_enabled = models.BooleanField(default=True)
+    media_integrity_second_opinion_enabled = models.BooleanField(default=False)
     media_integrity_emergency_action = models.CharField(max_length=24, choices=EmergencyMediaIntegrityAction.choices, default=EmergencyMediaIntegrityAction.FLAG_NOTIFY)
     photo_duplicate_llm_enabled = models.BooleanField(default=True)
     photo_duplicate_candidate_limit = models.PositiveSmallIntegerField(default=3)
@@ -816,6 +818,11 @@ class ConcernClassificationConfiguration(models.Model):
 
 
     CLASSIFICATION_CONFIG_CACHE_KEY = "concerns:classification-config:v1"
+    CAREFUL_REVIEW_VALUES = {
+        "relevance_threshold": 0.8,
+        "duplicate_threshold": 0.78,
+        "minimum_description_length": 40,
+    }
 
     @classmethod
     def _config_defaults(cls):
@@ -848,6 +855,8 @@ class ConcernClassificationConfiguration(models.Model):
         if isinstance(cached, cls):
             return cached
         obj, _ = cls.objects.get_or_create(pk=1, defaults=cls._config_defaults())
+        for field, value in cls.CAREFUL_REVIEW_VALUES.items():
+            setattr(obj, field, value)
         cache.set(cls.CLASSIFICATION_CONFIG_CACHE_KEY, obj, 60)
         return obj
 
@@ -860,6 +869,8 @@ class ConcernClassificationConfiguration(models.Model):
         low-traffic, so they take the extra query.
         """
         obj, _ = cls.objects.get_or_create(pk=1, defaults=cls._config_defaults())
+        for field, value in cls.CAREFUL_REVIEW_VALUES.items():
+            setattr(obj, field, value)
         return obj
 
     def save(self, *args, **kwargs):
@@ -876,6 +887,27 @@ class ConcernClassificationConfiguration(models.Model):
         from django.core.cache import cache
 
         cache.delete(ConcernClassificationConfiguration.CLASSIFICATION_CONFIG_CACHE_KEY)
+
+class ConcernView(models.Model):
+    """One row per official who has opened a concern's detail view.
+
+    Lets a resident see who has actually looked at their report even before
+    anyone is formally assigned — "Being handled" otherwise had no one to
+    name until an assignment existed, which could be long after an official
+    had already read it.
+    """
+
+    concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="views")
+    viewer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="concern_views")
+    first_viewed_at = models.DateTimeField(auto_now_add=True)
+    last_viewed_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["concern", "viewer"], name="concerns_concernview_uniq"),
+        ]
+        ordering = ["first_viewed_at"]
+
 
 class ConcernAssignment(models.Model):
     class Status(models.TextChoices):

@@ -84,3 +84,5 @@ tests/
 AGENTS.md
 # Nightly backup artifacts
 backups/
+sample
+scripts

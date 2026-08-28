@@ -154,8 +154,14 @@ UNIT_BY_EMERGENCY_TYPE = {
     EmergencyAlert.Type.DISASTER: {"bdrrmo"},
 }
 
-# Prefer responders with GPS updated within this window when ranking
-RESPONDER_LOCATION_FRESH_MINUTES = 30
+# Prefer responders with GPS updated within this window when ranking. Local
+# development has nothing actually pinging a responder's live location, so a
+# seeded test account goes stale within the production window and silently
+# drops out of dispatch — widened here so local testing does not need a
+# manual DB touch every 30 minutes just to keep a responder eligible.
+RESPONDER_LOCATION_FRESH_MINUTES = (
+    24 * 60 if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) else 30
+)
 WITNESS_LOCATION_FRESH_MINUTES = 15
 
 
@@ -1004,6 +1010,7 @@ def active_alert_for_reporter(reporter):
 
 ALERT_SERIALIZATION_PREFETCH = (
     "media",
+
     "status_events__actor",
     "status_events__actor__resident_profile",
     "appeals__appellant",
@@ -1032,6 +1039,13 @@ def alert_serialization_queryset():
     return (
         EmergencyAlert.objects
         .select_related("reporter", "reporter__resident_profile")
+        .annotate(
+            visible_comment_count=models.Count(
+                "community_comments",
+                filter=models.Q(community_comments__status="visible"),
+                distinct=True,
+            )
+        )
         .prefetch_related(*ALERT_SERIALIZATION_PREFETCH)
     )
 
@@ -2393,6 +2407,29 @@ class EmergencyChatView(APIView):
             .get(pk=message.pk)
         )
         payload = EmergencyChatMessageSerializer(message, context={"request": request}).data
+        recipient_ids = set(
+            alert.assignments.filter(status__in=ACTIVE_ASSIGNMENT_STATUSES)
+            .exclude(responder_id=request.user.pk)
+            .values_list("responder_id", flat=True)
+        )
+        if alert.reporter_id != request.user.pk:
+            recipient_ids.add(alert.reporter_id)
+        User = get_user_model()
+        recipients = User.objects.filter(
+            pk__in=recipient_ids,
+            is_active=True,
+            status=User.Status.VERIFIED,
+        )
+        message_preview = message.body[:240] or "New emergency chat attachment"
+        for recipient in recipients:
+            create_emergency_notification(
+                alert=alert,
+                recipient=recipient,
+                type="chat_message",
+                title="New emergency message",
+                body=message_preview,
+                event_key=f"emergency-chat:{message.pk}:{recipient.pk}",
+            )
         # Live delivery via emergency tracking websocket; REST poll is fallback
         transaction.on_commit(lambda m=message: broadcast_emergency_chat_message(m))
         return Response(payload, status=status.HTTP_201_CREATED)

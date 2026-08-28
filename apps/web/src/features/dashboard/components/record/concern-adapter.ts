@@ -73,9 +73,17 @@ export function rankConcerns(concerns: readonly Concern[], now: number): RankedC
       }
     })
     .sort((a, b) => {
+      const settled = settledRank(a.concern.status) - settledRank(b.concern.status)
+      if (settled !== 0) return settled
       const band = severityLevel(b.severity) - severityLevel(a.severity)
       return band !== 0 ? band : b.priority - a.priority
     })
+}
+
+function settledRank(status: string) {
+  if (status === "rejected") return 2
+  if (status === "resolved") return 1
+  return 0
 }
 
 export interface ConcernAdapterOptions {

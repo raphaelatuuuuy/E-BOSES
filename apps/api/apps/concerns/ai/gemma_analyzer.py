@@ -187,6 +187,8 @@ def empty_details() -> dict:
         "possible_categories": [],
         "selected_category_match": None,
         "detected_objects": [],
+        "report_title": "",
+        "severity_reason": "",
         "text_assessment": "",
         "photo_assessment": "",
         "evidence_relationship": "image_unavailable",
@@ -530,8 +532,32 @@ def build_prompt(
         "no_useful_image_evidence, or image_unavailable when no image is attached.\n"
         "10. A category mismatch is corrected automatically. Never use reject_as_irrelevant for a "
         "category mismatch on its own.\n"
-        "11. severity is low, medium, or high. Low is minor and non-urgent; medium blocks access or needs "
-        "official action; high is immediate danger or serious harm.\n"
+        "11. Decide severity in this order: first write severity_reason, then pick the severity that "
+        "reason actually supports. Judge the real risk to people from the description AND the photo "
+        "together — read scale from the image: how deep, how wide, how close to where people walk, "
+        "whether anything is already broken or exposed.\n"
+        "    high  = someone can be hurt as things stand. A hole or opening a person can fall into, "
+        "exposed or sagging electrical wiring, a structure at risk of collapse, water entering "
+        "occupied homes, a hazard right where children pass such as a school or day-care gate, or "
+        "anyone already reported hurt.\n"
+        "    medium = it blocks access, damages property, or is a health risk that needs official "
+        "action, but nobody is about to be injured. Clogged or overflowing canals, uncollected "
+        "garbage, a dark streetlight on an ordinary street, a rough or cracked road surface.\n"
+        "    low   = nuisance, comfort or upkeep with no physical risk. Noise, videoke, faded paint, "
+        "overgrown grass, scattered litter, a stray animal that has not harmed anyone.\n"
+        "    Do not default to medium. Most ordinary reports are low or medium; keep high for a real "
+        "risk of injury. These two must never disagree: if your reason says nobody is in physical "
+        "danger, severity is not high; if your reason names someone who could be hurt today, "
+        "severity is not low.\n"
+        "11a. severity_reason is one sentence naming the specific thing in the description or image "
+        "that set that severity — what is damaged, blocked, or at risk, and who it affects. Never "
+        "restate the level itself. Good: 'An open drainage hole about a metre wide sits in the "
+        "pedestrian lane with no cover.' Bad: 'The severity is high.', 'This is a serious issue.'\n"
+        "11b. report_title is a short official heading for the barangay queue: at most 10 words, no "
+        "ending period, naming the issue and where it is. Write it in English even when the report is "
+        "in Filipino or Taglish. State only what the report and image support, never a cause or blame. "
+        "Good: 'Stray dogs gathering outside the day-care on Dao Street'. "
+        "Bad: 'Urgent!!! ang daming askal!!!', 'Negligent owners letting dogs roam'.\n"
         "12. Privacy: set privacy_scan_required true when the image may show something that should not "
         "be public. In suspected_sensitive_classes, name each one as a SHORT CONCRETE OBJECT of one or "
         "two words — the words a person would use to point at it in the photo. These are passed to an "
@@ -604,11 +630,13 @@ def build_prompt(
         '  "possible_categories": [],\n'
         '  "selected_category_match": null,\n'
         '  "detected_objects": [],\n'
+        '  "report_title": null,\n'
         '  "text_assessment": null,\n'
         '  "photo_assessment": null,\n'
         '  "evidence_relationship": null,\n'
         '  "missing_information": [],\n'
         '  "urgent_attention": false,\n'
+        '  "severity_reason": null,\n'
         '  "severity": null,\n'
         '  "privacy_scan_required": false,\n'
         '  "privacy_scan_reasons": [],\n'
@@ -758,7 +786,13 @@ def parse_gemma_result(
         incident_timing == "unclear" and bool(data.get("current_danger"))
     )
 
-    if incident_timing in NON_CURRENT:
+    # Timing only matters when the report was otherwise an emergency signal.
+    # Running the drill/past/future downgrade on every concern -- including
+    # ordinary ones the model never called urgent -- surfaced an irrelevant
+    # "this is not a current emergency" line on plain infrastructure reports.
+    had_emergency_signal = bool(matched_emergency_type) or urgent or bool(data.get("current_danger"))
+
+    if incident_timing in NON_CURRENT and had_emergency_signal:
         matched_emergency_type = ""
         urgent = False
         current_danger = False
@@ -772,6 +806,9 @@ def parse_gemma_result(
         ongoing_emergency_confirmation_required = False
     else:
         ongoing_emergency_confirmation_required = bool(matched_emergency_type and urgent)
+        if incident_timing in NON_CURRENT:
+            incident_timing = "unclear"
+            incident_timing_reason = ""
 
     details = {
         **empty_details(),
@@ -780,6 +817,8 @@ def parse_gemma_result(
         "possible_categories": possible,
         "selected_category_match": selected_match,
         "detected_objects": detected_objects,
+        "report_title": _clean_text(data.get("report_title"))[:140],
+        "severity_reason": _clean_text(data.get("severity_reason"))[:300],
         "text_assessment": _clean_text(data.get("text_assessment")),
         "photo_assessment": _clean_text(data.get("photo_assessment")),
         "evidence_relationship": relationship,
@@ -1144,29 +1183,48 @@ def verify_street_context(*, submitted: list[PreparedImage], street: PreparedIma
         "irrelevant and must never affect your verdict — a real, correctly "
         "located report will very often not have its exact issue visible in a "
         "drive-by panorama, and that is completely normal.\n\n"
-        "Before deciding, actually synthesize the two — do not skim. Compare "
-        "small, specific details, not just the general impression of "
-        "\"a residential street\": fence material and color, gate style and "
-        "color, house facade colors and shapes, roofline and roof color, "
-        "utility pole positions and wiring, tree placement, road markings, "
-        "curb and sidewalk material, parked vehicles, visible signage or "
-        "shop names, and the relative geometry of these things to each other. "
-        "Two ordinary residential streets can look similar at a glance but "
-        "differ in these specifics; matching on vague similarity alone "
-        "produces false positives, and dismissing a real match because the "
-        "single most obvious feature is not lined up produces false "
-        "negatives. Weigh the whole set of details together.\n\n"
+        f"First check: does {photo_ref} even show enough surroundings to compare "
+        "— a street, a fence, a building, anything beyond the reported issue "
+        "itself? A tight close-up of a pothole, a pile of garbage, or a crack "
+        "with no background is NOT evidence of a different place — it is simply "
+        "not evidence of anything. If none of the submitted photos show enough "
+        "surroundings to compare, stop here and answer \"inconclusive\". Never "
+        "answer \"area_mismatch\" just because a close-up photo has little or no "
+        "background to check.\n\n"
+        "If there is background to compare, judge the general TYPE OF "
+        "ENVIRONMENT first — this is the main signal, weigh it more than any "
+        "single small detail: the pavement and ground itself (paved asphalt "
+        "vs. concrete vs. bare dirt/gravel, road width, presence and material "
+        "of a sidewalk or curb, drainage canal or gutter), and the overall "
+        "setting (a residential street vs. a market vs. an open lot vs. a "
+        "highway shoulder, roughly how dense the buildings are, the kind of "
+        "fencing or vegetation). If the pavement/ground and general setting "
+        "look like the same kind of place, that alone is enough to call it a "
+        "match — you do not need every specific detail to also line up. Use "
+        "specific details (fence and gate style, house facades, roofline, "
+        "utility poles, road markings, parked vehicles, signage) only as a "
+        "tiebreaker when two candidate places could otherwise look alike, not "
+        "as a checklist every item must individually match. Expect and ignore "
+        "ordinary differences: different time of day or weather, different "
+        "camera distance or angle, cars or people present in one image and not "
+        "the other, foliage that has grown or been trimmed. None of those "
+        "alone justify \"area_mismatch\".\n\n"
         "Decide only this:\n"
         f"- \"area_matches\": IMAGE {pano_number}'s surroundings are "
         f"recognizably the same street/block as {photo_ref} (any one submitted "
         "photo matching is enough), even if the specific reported issue is not "
-        f"visible in IMAGE {pano_number}.\n"
-        f"- \"area_mismatch\": IMAGE {pano_number} clearly shows a different, "
-        f"unrelated place — nothing about the street or surroundings matches "
-        f"any of {photo_ref}.\n"
+        f"visible in IMAGE {pano_number}. If it's plausibly the same place, "
+        "prefer this over \"area_mismatch\".\n"
+        f"- \"area_mismatch\": you are confident IMAGE {pano_number} shows a "
+        f"clearly different, unrelated place — a different kind of area, or "
+        f"specific features that directly contradict each other (e.g. a "
+        "concrete perimeter wall where the photo shows an open lot). Reserve "
+        "this for cases you are sure about, not merely unsure.\n"
         "- \"inconclusive\": you genuinely cannot tell either way (poor image "
         f"quality, heavy occlusion, or {photo_ref} has no distinguishing "
-        "surroundings to compare against).\n\n"
+        "surroundings to compare against). When in doubt between "
+        "\"area_mismatch\" and \"inconclusive\", choose \"inconclusive\" — a "
+        "wrong mismatch blocks a resident's real report.\n\n"
         "The imagery may be newer or older than the report; never judge based on "
         "timing.\n\n"
         'Respond as JSON: {"verdict": "...", "explanation": "one short sentence '
