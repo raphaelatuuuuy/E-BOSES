@@ -10,6 +10,7 @@ from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentProfile
 from apps.emergencies.models import EmergencyAlert
+from apps.emergencies.location_resolution import LocationResolution
 
 from ..ai_assist import SmsAiAssistNotConfigured, run_rescue, should_run
 from ..streets import match_street
@@ -147,6 +148,28 @@ class SmsAiAssistTests(APITestCase):
         self.assertEqual(payload["error"], "TimeoutError")
         self.assertEqual(self.alert.type, "other")
 
+    @patch("ollama.Client")
+    def test_model_timeout_propagates_when_celery_requests_a_retry(self, mock_client):
+        mock_client.return_value.chat.side_effect = TimeoutError("slow model")
+        with self.assertRaises(TimeoutError):
+            run_rescue(self.alert, propagate_timeout=True)
+        self.alert.refresh_from_db()
+        self.assertEqual(self.alert.ai_assist["status"], "failed")
+
+    @patch("ollama.Client")
+    def test_assist_never_changes_category_after_assignment(self, mock_client):
+        self.alert.assignments.create(responder=self.resident)
+        mock_client.return_value.chat.return_value = self._mock_response(
+            "fire", 0.99, None, 0.0
+        )
+
+        run_rescue(self.alert)
+
+        self.alert.refresh_from_db()
+        self.assertEqual(self.alert.type, "other")
+        self.assertIsNone(self.alert.ai_assist["applied"]["category"])
+        self.assertEqual(self.alert.ai_assist["suggested"]["category"], "fire")
+
     def test_disabled_assist_raises_not_configured(self):
         with override_settings(SMS_AI_ASSIST_ENABLED=False):
             self.assertRaises(SmsAiAssistNotConfigured, run_rescue, self.alert)
@@ -161,7 +184,7 @@ class SmsAiAssistTests(APITestCase):
         self.assertFalse(should_run(self.alert))
 
     @patch("ollama.Client")
-    def test_rescue_fills_area_from_plain_text(self, mock_client):
+    def test_rescue_keeps_unverified_area_as_advisory(self, mock_client):
         mock_client.return_value.chat.return_value = {
             "message": {
                 "content": json.dumps(
@@ -179,6 +202,51 @@ class SmsAiAssistTests(APITestCase):
         run_rescue(self.alert)
         self.alert.refresh_from_db()
         self.assertEqual(self.alert.reported_area, "")
-        self.assertEqual(self.alert.resolved_location, "sa likod ng simbahan")
+        self.assertEqual(self.alert.resolved_location, "")
+        self.assertIn("location", self.alert.unresolved_fields)
+        self.assertIsNone(self.alert.ai_assist["applied"]["area"])
+        self.assertEqual(self.alert.ai_assist["suggested"]["area"], "sa likod ng simbahan")
+
+    @patch("apps.sms.ai_assist._geocode_ai_location")
+    @patch("ollama.Client")
+    def test_rescue_applies_only_boundary_verified_map_place(self, mock_client, geocode):
+        community = self.alert.community
+        if community is None:
+            from apps.emergencies.models import Community
+
+            community = Community.objects.filter(status=Community.Status.ACTIVE).first()
+        self.assertIsNotNone(community)
+        mock_client.return_value.chat.return_value = {
+            "message": {
+                "content": json.dumps(
+                    {
+                        "category": None,
+                        "category_confidence": 0.0,
+                        "street": "Unlisted Rescue Road",
+                        "street_confidence": 0.9,
+                        "area": None,
+                        "area_confidence": 0.0,
+                    }
+                )
+            }
+        }
+        geocode.return_value = LocationResolution(
+            source="sms_geocoded",
+            state="reported",
+            community=community,
+            area_label="Unlisted Rescue Road, Marikina",
+            latitude=14.6507,
+            longitude=121.1133,
+            canonical_street="Unlisted Rescue Road",
+            provider="nominatim",
+        )
+
+        run_rescue(self.alert)
+
+        self.alert.refresh_from_db()
+        geocode.assert_called_once_with("Unlisted Rescue Road")
+        self.assertEqual(self.alert.location_source, "sms_geocoded")
+        self.assertEqual(self.alert.location_confidence, EmergencyAlert.LocationConfidence.REPORTED)
+        self.assertEqual(float(self.alert.latitude), 14.6507)
+        self.assertEqual(float(self.alert.longitude), 121.1133)
         self.assertNotIn("location", self.alert.unresolved_fields)
-        self.assertEqual(self.alert.ai_assist["applied"]["area"], "sa likod ng simbahan")

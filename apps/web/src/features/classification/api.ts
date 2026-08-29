@@ -264,9 +264,9 @@ export type EmergencySimulationReview = ReportValidationResult
 export type SimulationCommunity = { id: number; name: string }
 
 export type LocationResolution = {
-  source: "sms_gps" | "web_gps" | "message_area" | "recent_account_location" | "profile_community" | "home_context" | "none"
+  source: "sms_gps" | "sms_geocoded" | "web_gps" | "message_area" | "recent_account_location" | "profile_community" | "home_context" | "none"
   freshness: "fresh" | "stale" | "not_available"
-  state: "confirmed" | "fallback" | "ambiguous" | "unknown"
+  state: "confirmed" | "reported" | "fallback" | "ambiguous" | "unknown"
   community: SimulationCommunity | null
   area_label: string
   age_seconds: number | null
@@ -431,6 +431,7 @@ export type SmsSimulationResult = {
     model: string
     error?: string
     applied: Record<string, { value: string; confidence: number }>
+    map_resolution: LocationResolution | null
   } | null
   reply: { text: string; characters: number; segments: number; gsm7: boolean; category_label: string } | null
 }
@@ -581,6 +582,34 @@ export type LlmDecisionLogEntry = {
   output_snapshot: RawJson
   content_flag_id?: number | null
   concern_id?: number | null
+  record_type?: "concern" | "emergency" | "verification"
+  priority?: "low" | "moderate" | "high" | "critical" | null
+  final_decision?: {
+    action: string
+    label: string
+    reason: string
+    source: string
+    legacy?: boolean
+  }
+  submitted_media?: Array<{
+    id: number
+    label: string
+    preview_url: string
+    raw_url: string
+    privacy_state?: string
+  }>
+  street_imagery?: {
+    status?: "checked" | "skipped" | "no_coverage" | "disabled"
+    reason?: string
+    verdict?: string
+    explanation?: string
+    pano_id?: string
+    captured_date?: string
+    distance_meters?: number
+    latitude?: number
+    longitude?: number
+    image?: string
+  } | null
 }
 
 export type LlmDecisionLogResponse = { results: LlmDecisionLogEntry[]; count: number }
@@ -590,14 +619,25 @@ export function getLlmDecisionLog(params?: {
   run_kind?: "production" | "simulation"
   page?: number
   page_size?: number
+  search?: string
+  days?: number
 }) {
   const query = new URLSearchParams()
   if (params?.domain) query.set("domain", params.domain)
   if (params?.run_kind) query.set("run_kind", params.run_kind)
   if (params?.page) query.set("page", String(params.page))
   if (params?.page_size) query.set("page_size", String(params.page_size))
+  if (params?.search) query.set("search", params.search)
+  if (params?.days) query.set("days", String(params.days))
   const qs = query.toString()
   return apiRequest<LlmDecisionLogResponse>(`/concerns/classification/log/${qs ? `?${qs}` : ""}`)
+}
+
+export function rerunLlmDecisionLogStreetImagery(logId: number) {
+  return apiRequest<NonNullable<LlmDecisionLogEntry["street_imagery"]>>(
+    `/concerns/classification/log/${logId}/street-view/`,
+    { method: "POST" },
+  )
 }
 
 export function revertAutomatedContentAction(flagId: number, staffNote = "Automated moderation action reverted by an official.") {

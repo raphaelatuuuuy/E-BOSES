@@ -375,6 +375,18 @@ export function SmsBreakdown({ result }: { result: SmsSimulationResult }) {
       tone: "muted",
       text: `${result.ai_assist.reason} (${Object.entries(result.ai_assist.applied).map(([slot, fix]) => `${slot} → ${fix.value}`).join(", ")})`,
     })
+    const map = result.ai_assist.map_resolution
+    if (map) {
+      findings.push({
+        icon: map.has_destination ? CircleCheck : map.state === "ambiguous" ? TriangleAlert : Ban,
+        tone: map.has_destination ? "good" : map.state === "ambiguous" ? "warn" : "bad",
+        text: map.has_destination
+          ? `Map verified: ${map.area_label} · ${map.community?.name ?? "community unknown"} · ${map.latitude}, ${map.longitude}. This is a reported-place pin, not phone GPS.`
+          : map.state === "ambiguous"
+            ? "Map found multiple plausible places, so no pin would be attached."
+            : "The extracted place did not pass the Marikina city and active-barangay boundary checks.",
+      })
+    }
   }
 
   return (

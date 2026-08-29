@@ -169,6 +169,10 @@ class SmsInboundView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
+    # Gateway retries must not be rejected by the resident-facing API throttle.
+    # This endpoint has its own HMAC/shared-token authentication and durable
+    # deduplication, which are the appropriate controls for machine webhooks.
+    throttle_classes = []
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def post(self, request):
@@ -194,7 +198,10 @@ class SmsInboundView(APIView):
         if not payload.is_received_message:
             if payload.event == "system:ping":
                 cache.set("sms-gateway:last-device-ping", time.time(), 3600)
-            elif payload.event in {"sms:sent", "sms:delivered"}:
+            elif payload.event in {"sms:sent", "sms:delivered", "sms:failed"}:
+                from .gateway import reconcile_delivery_event
+
+                reconcile_delivery_event(payload)
                 cache.set("sms-gateway:last-delivery-event", time.time(), 86400)
             return Response(
                 {"detail": f"Ignored event '{payload.event}'.", "ignored": True},

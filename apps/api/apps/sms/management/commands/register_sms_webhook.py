@@ -1,7 +1,7 @@
 """Register (or list/delete) the inbound webhook on the SMS gateway phone.
 
     python manage.py register_sms_webhook --list
-    python manage.py register_sms_webhook --url "https://10.118.12.164:8443/api/sms/inbound/?token=..."
+    python manage.py register_sms_webhook --url "https://example.ngrok-free.dev/api/sms/inbound/"
     python manage.py register_sms_webhook --delete <webhook-id>
 
 Reads OUTBOUND_SMS_URL / OUTBOUND_SMS_USERNAME / OUTBOUND_SMS_PASSWORD so the
@@ -111,16 +111,16 @@ class Command(BaseCommand):
                     self.stdout.write("No webhooks registered.")
                 for hook in hooks:
                     self.stdout.write(f"  {hook.get('id')}  {hook.get('event')}  {hook.get('url')}")
-                    if "token=" not in (hook.get("url") or ""):
+                    if "token=" in (hook.get("url") or ""):
                         self.stdout.write(self.style.WARNING(
-                            "    ^ no ?token= here. The app cannot send a custom header,\n"
-                            "      so unless the signing key verifies, this returns 403."
+                            "    ^ remove the query token from this URL. SMSGate signs webhook\n"
+                            "      bodies with SMS_WEBHOOK_SIGNING_KEY; URL tokens leak into logs."
                         ))
                 if not options["url"]:
                     self.stdout.write(
                         "\nRegister one with:\n"
                         "  python manage.py register_sms_webhook --url "
-                        '"https://<your-pc>:8443/api/sms/inbound/?token=<SMS_INBOUND_WEBHOOK_TOKEN>"'
+                        '"https://<your-domain>/api/sms/inbound/"'
                     )
                 return
 

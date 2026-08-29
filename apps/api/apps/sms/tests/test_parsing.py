@@ -122,6 +122,16 @@ class EmergencyParsingTests(SimpleTestCase):
         parsed = parsing.parse_emergency_sms("good morning po, tanong lang about sa barangay clearance")
         self.assertFalse(parsed.is_emergency)
 
+    def test_globe_promotion_with_other_is_not_an_emergency(self):
+        parsed = parsing.parse_emergency_sms(
+            "Supercharge your surfing experience with Go5G TURBO 50! Enjoy faster speeds "
+            "and lower latency (vs all other Globe Prepaid promos) with UNLI 5G and 3GB "
+            "for all sites, valid for 1 day. Register via Just For You on GlobeOne, GCash, "
+            "or at sari-sari stores. You may also text Go5GTURBO50 to 8080.",
+            sender_is_known=True,
+        )
+        self.assertFalse(parsed.is_emergency)
+
     def test_public_safety_maps_onto_the_crime_code(self):
         parsed = parsing.parse_emergency_sms(
             "I need immediate help. This is a Crime or Public Safety emergency near the "

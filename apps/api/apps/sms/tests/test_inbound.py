@@ -19,6 +19,7 @@ from apps.concerns.units import sync_responder_designation
 from apps.emergencies.models import EmergencyAlert, ResponderShift
 from apps.sms.models import InboundSmsMessage, OutboundSmsMessage, SmsPurpose
 from apps.sms.payload import InboundPayload
+from apps.sms.router import recover_stuck_inbound_messages
 
 TOKEN = "test-inbound-token"
 TEST_CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
@@ -203,6 +204,53 @@ class SmsInboundTests(APITestCase):
         self.assertEqual(second.status_code, status.HTTP_200_OK)
         self.assertEqual(EmergencyAlert.objects.count(), 1)
         self.assertEqual(InboundSmsMessage.objects.count(), 1)
+
+    @override_settings(SMS_INBOUND_PENDING_RECOVERY_SECONDS=15)
+    def test_stale_pending_gateway_retry_is_recovered(self):
+        payload = InboundPayload(
+            body="GUIDE",
+            sender="+639451234821",
+            gateway_timestamp=None,
+            gateway_message_id="stale-pending-1",
+            raw={"from": "+639451234821", "msg": "GUIDE", "id": "stale-pending-1"},
+        )
+        row = InboundSmsMessage.objects.create(
+            sender_number=payload.sender,
+            body=payload.body,
+            dedupe_key=payload.dedupe_key(),
+            gateway_message_id=payload.gateway_message_id,
+            raw_payload=payload.raw,
+        )
+        InboundSmsMessage.objects.filter(pk=row.pk).update(
+            server_received_at=timezone.now() - timedelta(minutes=2)
+        )
+
+        response = self.post("GUIDE", id="stale-pending-1")
+
+        row.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(row.outcome, InboundSmsMessage.Outcome.COMMAND_HANDLED)
+        self.assertEqual(InboundSmsMessage.objects.count(), 1)
+
+    @override_settings(SMS_INBOUND_PENDING_MAX_AGE_HOURS=1)
+    def test_ancient_pending_message_expires_without_delayed_reply(self):
+        row = InboundSmsMessage.objects.create(
+            sender_number="+639451234821",
+            body="GUIDE",
+            dedupe_key="a" * 64,
+            gateway_message_id="ancient-1",
+            raw_payload={"from": "+639451234821", "msg": "GUIDE", "id": "ancient-1"},
+        )
+        InboundSmsMessage.objects.filter(pk=row.pk).update(
+            server_received_at=timezone.now() - timedelta(hours=2)
+        )
+
+        result = recover_stuck_inbound_messages()
+
+        row.refresh_from_db()
+        self.assertEqual(result["expired"], 1)
+        self.assertEqual(row.outcome, InboundSmsMessage.Outcome.ERROR)
+        self.assertFalse(row.replies.exists())
 
     def test_dedupe_without_gateway_id_is_stable(self):
         first = InboundPayload(

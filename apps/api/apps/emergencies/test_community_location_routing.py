@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -9,8 +10,9 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 from apps.accounts.models import ResidentProfile, ResidentSettings
 from apps.sms.normalize import SenderMatch, match_sender
 from apps.sms.simulation_api import simulate_sms
+from apps.sms.ai_assist import SmsAssistResult
 
-from .location_resolution import resolve_incident_location
+from .location_resolution import LocationResolution, geocode_reported_place, resolve_incident_location
 from .models import Community, EmergencyAlert, EmergencyResponderAssignment, MapGeometry
 from .sms_intake import create_alert_from_sms
 
@@ -158,6 +160,76 @@ class CommunityLocationResolutionTests(TestCase):
         only_edge = resolve_incident_location(latitude=14.60, longitude=121.15, match=self.match)
         self.assertEqual(only_edge.community, self.first)
 
+    @patch("apps.geo_services.nominatim_search")
+    def test_map_place_requires_marikina_and_one_active_boundary(self, search):
+        search.return_value = [
+            {
+                "lat": "14.6500",
+                "lon": "121.1500",
+                "display_name": "Alpha Community Hall, Marikina, Metro Manila, Philippines",
+                "osm_type": "node",
+                "osm_id": 1234,
+                "address": {
+                    "amenity": "Alpha Community Hall",
+                    "road": "Sample Street",
+                    "city": "Marikina",
+                },
+            }
+        ]
+
+        result = geocode_reported_place("Alpha Community Hall")
+
+        self.assertEqual(result.source, "sms_geocoded")
+        self.assertEqual(result.state, "reported")
+        self.assertEqual(result.community, self.first)
+        self.assertEqual(result.latitude, 14.65)
+        self.assertEqual(result.longitude, 121.15)
+        self.assertEqual(result.canonical_street, "Sample Street")
+        self.assertEqual(result.provider, "nominatim")
+        search.assert_called_once_with(
+            "Alpha Community Hall, Marikina, Metro Manila, Philippines",
+            limit=8,
+        )
+
+    @patch("apps.geo_services.nominatim_search")
+    def test_map_place_rejects_same_name_from_another_city(self, search):
+        search.return_value = [
+            {
+                "lat": "14.6500",
+                "lon": "121.1500",
+                "display_name": "Alpha Community Hall, Quezon City, Philippines",
+                "address": {"amenity": "Alpha Community Hall", "city": "Quezon City"},
+            }
+        ]
+
+        result = geocode_reported_place("Alpha Community Hall")
+
+        self.assertFalse(result.has_destination)
+        self.assertEqual(result.reason, "no_in_boundary_marikina_map_match")
+
+    @patch("apps.geo_services.nominatim_search")
+    def test_map_place_keeps_two_far_equal_matches_unresolved(self, search):
+        search.return_value = [
+            {
+                "lat": "14.6200",
+                "lon": "121.1200",
+                "display_name": "Sample Hall, Marikina, Philippines",
+                "address": {"amenity": "Sample Hall", "city": "Marikina"},
+            },
+            {
+                "lat": "14.6800",
+                "lon": "121.1800",
+                "display_name": "Sample Hall, Marikina, Philippines",
+                "address": {"amenity": "Sample Hall", "city": "Marikina"},
+            },
+        ]
+
+        result = geocode_reported_place("Sample Hall")
+
+        self.assertFalse(result.has_destination)
+        self.assertEqual(result.state, "ambiguous")
+        self.assertEqual(result.reason, "multiple_map_matches")
+
     def test_same_street_never_selects_a_community_without_area(self):
         for index, community in enumerate((self.first, self.second), start=1):
             MapGeometry.objects.create(
@@ -269,3 +341,33 @@ class CommunityLocationResolutionTests(TestCase):
         self.assertEqual(stale["location"]["freshness"], "stale")
         self.assertEqual(context["location"]["source"], "profile_community")
         self.assertFalse(context["location"]["has_destination"])
+
+    @patch("apps.emergencies.location_resolution.geocode_reported_place")
+    @patch("apps.sms.ai_assist._ask_model")
+    @patch("apps.sms.ai_assist.enabled", return_value=True)
+    def test_sms_simulation_previews_llm_map_verification(self, _enabled, ask_model, geocode):
+        ask_model.return_value = SmsAssistResult(
+            area="Unlisted Rescue Road",
+            raw={"area_confidence": 0.9},
+        )
+        geocode.return_value = LocationResolution(
+            source="sms_geocoded",
+            state="reported",
+            community=self.first,
+            area_label="Unlisted Rescue Road, Marikina",
+            latitude=14.65,
+            longitude=121.15,
+            canonical_street="Unlisted Rescue Road",
+            provider="nominatim",
+        )
+
+        result = simulate_sms(
+            message="HELP FIRE near Unlisted Rescue Road",
+            sender_mode="registered",
+            user=self.user,
+        )
+
+        preview = result["ai_assist"]["map_resolution"]
+        self.assertTrue(preview["has_destination"])
+        self.assertEqual(preview["source"], "sms_geocoded")
+        self.assertEqual(preview["community"]["id"], self.first.pk)

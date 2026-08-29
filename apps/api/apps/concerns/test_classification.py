@@ -211,7 +211,6 @@ class ConcernClassificationApiTests(APITestCase):
         response = self.client.post(
             "/api/concerns/classification/precheck/",
             {
-                "category": "others",
                 "title": "test",
                 "description": "asdf asdf qwerty 12345",
                 "latitude": "14.6507",
@@ -234,7 +233,6 @@ class ConcernClassificationApiTests(APITestCase):
         response = self.client.post(
             "/api/concerns/classification/precheck/",
             {
-                "category": "others",
                 "title": "test",
                 "description": "May nakaharang na sasakyan sa kalsada malapit sa amin.",
                 "latitude": "14.6507",
@@ -245,6 +243,7 @@ class ConcernClassificationApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data["can_submit"])
+        self.assertEqual(response.data["category"], "others")
         self.assertIn("could not run", response.data["message"])
 
     @patch("apps.concerns.classification_api.validate_concern_media_file", side_effect=lambda uploaded: uploaded)
@@ -287,7 +286,7 @@ class ConcernClassificationApiTests(APITestCase):
 
     @patch("apps.concerns.classification_api.validate_concern_media_file", side_effect=lambda uploaded: uploaded)
     @patch("apps.concerns.classification_api.classification_payload")
-    def test_resident_precheck_fills_the_confirm_dialog_fields(self, classify, _validate):
+    def test_resident_precheck_infers_category_and_escalates_without_manual_choice(self, classify, _validate):
         classify.return_value = payload_from_result(
             gemma_result(
                 category="environment",
@@ -296,6 +295,7 @@ class ConcernClassificationApiTests(APITestCase):
                 urgent_attention=True,
                 recommended_action="escalate_as_emergency",
                 matched_emergency_type="fire",
+                incident_timing="ongoing",
             ),
             selected_category="vehicle",
         )
@@ -305,7 +305,6 @@ class ConcernClassificationApiTests(APITestCase):
             "/api/concerns/classification/precheck/",
             {
                 "media": png_upload(),
-                "category": "vehicle",
                 "title": "Blocked driveway",
                 "description": "May sasakyang nakaharang sa driveway.",
                 "latitude": "14.6507",
@@ -315,8 +314,11 @@ class ConcernClassificationApiTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertTrue(response.data["category_confirm_required"])
-        self.assertTrue(response.data["suggested_category_label"])
+        self.assertEqual(response.data["category"], "environment")
+        self.assertFalse(response.data["category_confirm_required"])
+        self.assertEqual(response.data["category_label"], "Environment")
+        self.assertTrue(response.data["auto_escalate"])
+        self.assertEqual(response.data["emergency_type"], "fire")
         self.assertEqual(response.data["emergency_triage"]["is_emergency"], True)
         self.assertEqual(response.data["emergency_triage"]["escalation_offered"], True)
         self.assertIsNotNone(response.data["resolved_address"])

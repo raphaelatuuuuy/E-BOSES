@@ -398,7 +398,8 @@ overview: [FileChartColumnIcon, ChartSplineIcon],
   return (
     <aside
       className={cn(
-        "relative flex h-full min-h-0 w-full flex-col overflow-visible bg-transparent",
+        "relative flex h-full min-h-0 w-full flex-col overflow-visible",
+        tone === "dark" ? "bg-nav-bg" : "bg-transparent",
       )}
     >
       <nav className={cn(

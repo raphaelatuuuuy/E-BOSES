@@ -333,6 +333,8 @@ export interface Concern {
   timeline?: ConcernTimelineRecord[]
   comments: ConcernComment[]
   ai_assessment?: ConcernAiAssessment | null
+  /** Present when automatic concern validation also raised an emergency. */
+  escalated_alert?: import("./emergency-api").EmergencyAlert | null
   assignments?: ConcernAssignment[]
   viewers?: PublicUser[]
   severity?: "low" | "moderate" | "high" | "critical"
@@ -532,11 +534,11 @@ export interface AnnouncementAreaContext {
 }
 
 export function createConcern(formData: FormData, options?: { escalate?: boolean; emergencyType?: string; recurrenceOf?: number; duplicateOf?: number }) {
-  const query = options?.escalate ? "?escalate=1" : ""
+  if (options?.escalate) formData.append("auto_escalate", "true")
   if (options?.escalate && options.emergencyType) formData.append("emergency_type", options.emergencyType)
   if (options?.recurrenceOf) formData.append("recurrence_of", String(options.recurrenceOf))
   if (options?.duplicateOf) formData.append("duplicate_of", String(options.duplicateOf))
-  return apiRequest<Concern & { escalated_alert?: EmergencyAlert }>(`/concerns/${query}`, {
+  return apiRequest<Concern & { escalated_alert?: EmergencyAlert }>("/concerns/", {
     method: "POST",
     body: formData,
   })
@@ -599,6 +601,13 @@ export interface ConcernPrecheckResult {
   }
   active_duplicate?: ConcernActiveDuplicate | null
   assigned_unit?: { code: string; name: string } | null
+  category?: string
+  category_label?: string
+  public_feed_allowed?: boolean
+  auto_escalate?: boolean
+  emergency_type?: string
+  description_required?: boolean
+  location_required?: boolean
   photo_feedback: string
   emergency_triage?: ConcernEmergencyTriage | null
   resolved_match?: ConcernResolvedMatch | null

@@ -13,6 +13,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.concerns.models import Announcement, Concern
+from apps.concerns.notification_subject import build_notification_subject
 
 
 def _notification_title(concern: Concern) -> str:
@@ -151,6 +152,261 @@ def _concern_tracking_id(concern) -> str:
     return _clean_text(getattr(concern, "tracking_id", "")) or f"Report #{getattr(concern, 'pk', '')}".strip()
 
 
+def _community_payload(community) -> dict | None:
+    if not community:
+        return None
+    return {
+        "id": getattr(community, "pk", None),
+        "name": _clean_text(getattr(community, "name", "")) or "Community",
+        "code": _clean_text(getattr(community, "code", "")) or None,
+    }
+
+
+def _department_payload(department) -> dict | None:
+    if not department:
+        return None
+    return {
+        "id": getattr(department, "pk", None),
+        "name": _clean_text(getattr(department, "name", "")) or "Assigned unit",
+        "short_name": _clean_text(getattr(department, "short_name", "")) or None,
+        "code": _clean_text(getattr(department, "code", "")) or None,
+    }
+
+
+def _user_display_name(user) -> str:
+    profile = getattr(user, "resident_profile", None)
+    first_name = _clean_text(getattr(profile, "first_name", "")) or _clean_text(getattr(user, "first_name", ""))
+    last_name = _clean_text(getattr(profile, "last_name", "")) or _clean_text(getattr(user, "last_name", ""))
+    return _clean_text(f"{first_name} {last_name}") or _clean_text(getattr(user, "email", ""))
+
+
+def _recipient_last_name(notification) -> str:
+    recipient = getattr(notification, "recipient", None)
+    profile = getattr(recipient, "resident_profile", None)
+    return (
+        _clean_text(getattr(profile, "last_name", ""))
+        or _clean_text(getattr(recipient, "last_name", ""))
+    )
+
+
+def _greeting(notification) -> str:
+    sent_at = getattr(notification, "created_at", None) or timezone.now()
+    local_time = timezone.localtime(sent_at)
+    if local_time.hour < 12:
+        salutation = "Good morning"
+    elif local_time.hour < 18:
+        salutation = "Good afternoon"
+    else:
+        salutation = "Good evening"
+    last_name = _recipient_last_name(notification)
+    return f"{salutation}, {last_name}." if last_name else f"{salutation}."
+
+
+def _with_greeting(notification, body: str) -> str:
+    cleaned = _clean_text(body) or "Open E-Boses for more details."
+    if cleaned.lower().startswith(("good morning", "good afternoon", "good evening")):
+        return _truncate(cleaned, 190)
+    return _truncate(f"{_greeting(notification)} {cleaned}", 190)
+
+
+def _active_concern_assignment(concern):
+    assignments = getattr(concern, "assignments", None)
+    if assignments is None:
+        return None
+    prefetched = getattr(concern, "_prefetched_objects_cache", {}).get("assignments")
+    if prefetched is not None:
+        active = [item for item in prefetched if item.status == "active"]
+        if active:
+            return max(active, key=lambda item: (item.created_at, item.pk))
+        return max(prefetched, key=lambda item: (item.created_at, item.pk), default=None)
+    assignment = (
+        assignments.select_related("department", "assignee", "assignee__resident_profile")
+        .filter(status="active")
+        .order_by("-created_at", "-id")
+        .first()
+    )
+    return assignment or assignments.select_related(
+        "department", "assignee", "assignee__resident_profile"
+    ).order_by("-created_at", "-id").first()
+
+
+def _active_emergency_assignment(alert, recipient=None):
+    assignments = getattr(alert, "assignments", None)
+    if assignments is None:
+        return None
+    active_statuses = ["assigned", "acknowledged", "en_route", "arrived", "assisting", "escalated"]
+    prefetched = getattr(alert, "_prefetched_objects_cache", {}).get("assignments")
+    if prefetched is not None:
+        active = [item for item in prefetched if item.status in active_statuses]
+        if recipient is not None:
+            own = [item for item in active if item.responder_id == recipient.pk]
+            if own:
+                return max(own, key=lambda item: (item.assigned_at, item.pk))
+        if active:
+            return max(active, key=lambda item: (item.assigned_at, item.pk))
+        own = [item for item in prefetched if recipient is not None and item.responder_id == recipient.pk]
+        return max(own or prefetched, key=lambda item: (item.assigned_at, item.pk), default=None)
+    queryset = assignments.select_related(
+        "role_map__department",
+        "responding_community",
+        "responder",
+        "responder__resident_profile",
+    ).filter(status__in=active_statuses)
+    if recipient is not None:
+        own = queryset.filter(responder=recipient).order_by("-assigned_at", "-id").first()
+        if own:
+            return own
+    assignment = queryset.order_by("-assigned_at", "-id").first()
+    if assignment:
+        return assignment
+    latest = assignments.select_related(
+        "role_map__department",
+        "responding_community",
+        "responder",
+        "responder__resident_profile",
+    )
+    if recipient is not None:
+        latest = latest.filter(responder=recipient)
+    return latest.order_by("-assigned_at", "-id").first()
+
+
+def _mapped_emergency_department(alert):
+    try:
+        from apps.emergencies.models import EmergencyTypeRoleMap
+
+        role_map = (
+            EmergencyTypeRoleMap.objects.select_related("department", "community")
+            .filter(
+                community_id=getattr(alert, "community_id", None),
+                emergency_type=getattr(alert, "type", ""),
+                is_active=True,
+            )
+            .order_by("-priority", "id")
+            .first()
+        )
+        return getattr(role_map, "department", None)
+    except Exception:
+        return None
+
+
+def notification_context(notification) -> dict:
+    cached = getattr(notification, "_notification_context", None)
+    if cached is not None:
+        return cached
+
+    concern = getattr(notification, "concern", None)
+    alert = getattr(notification, "emergency", None)
+    recipient = getattr(notification, "recipient", None)
+    role = getattr(recipient, "role", "")
+    resident_role = getattr(getattr(recipient, "Role", None), "RESIDENT", "resident")
+    witness = notification.type == "witness_alert"
+    context = {
+        "community": _community_payload(
+            getattr(notification, "community", None)
+            or getattr(concern, "community", None)
+            or getattr(alert, "community", None)
+        ),
+        "department": _department_payload(getattr(notification, "department", None)),
+        "reference": None,
+        "subject": None,
+        "status": None,
+        "location": None,
+        "response": None,
+    }
+
+    if concern is not None:
+        assignment = _active_concern_assignment(concern)
+        department = (
+            getattr(notification, "department", None)
+            or getattr(assignment, "department", None)
+            or getattr(concern, "assigned_department", None)
+        )
+        context.update(
+            {
+                "department": _department_payload(department),
+                "reference": _concern_tracking_id(concern),
+                "subject": build_notification_subject(
+                    getattr(concern, "notification_subject", ""),
+                    title=getattr(concern, "title", ""),
+                    description=getattr(concern, "description", ""),
+                    category=getattr(concern, "category", ""),
+                ),
+                "status": _choice_label(concern, "status", notification.type),
+                "location": {
+                    "barangay": _clean_text(getattr(concern, "barangay", "")) or None,
+                    "address": _clean_text(getattr(concern, "address", "")) or None,
+                    "confidence": _clean_text(getattr(concern, "location_confidence", "")) or None,
+                },
+                "response": {
+                    "assignment_status": _choice_label(assignment, "status", "") if assignment else None,
+                    "assigned_unit": _department_payload(department),
+                    "responding_community": None,
+                    "is_cross_community": False,
+                }
+                if department or assignment
+                else None,
+            }
+        )
+        if assignment and role != resident_role:
+            context["response"]["assignee_name"] = _user_display_name(getattr(assignment, "assignee", None))
+
+    elif alert is not None:
+        assignment = _active_emergency_assignment(alert, recipient=recipient)
+        role_map = getattr(assignment, "role_map", None)
+        department = None if witness else (
+            getattr(notification, "department", None)
+            or getattr(role_map, "department", None)
+            or _mapped_emergency_department(alert)
+        )
+        origin_community = getattr(alert, "community", None) or getattr(notification, "community", None)
+        responding_community = getattr(assignment, "responding_community", None)
+        if assignment and not responding_community:
+            responding_community = getattr(role_map, "community", None)
+        is_cross_community = bool(
+            getattr(assignment, "is_cross_community", False)
+            or (
+                origin_community
+                and responding_community
+                and origin_community.pk != responding_community.pk
+            )
+        )
+        context.update(
+            {
+                # Internal database ids still travel in the action payload and
+                # URL, but they are not useful incident details for people.
+                "reference": None,
+                "subject": _choice_label(alert, "type", "Emergency"),
+                "status": _choice_label(alert, "status", notification.type),
+                "location": None
+                if witness
+                else {
+                    "barangay": _clean_text(getattr(alert, "barangay", "")) or None,
+                    "address": (
+                        _clean_text(getattr(alert, "resolved_location", ""))
+                        or _clean_text(getattr(alert, "reported_area", ""))
+                        or _clean_text(getattr(alert, "address", ""))
+                        or None
+                    ),
+                    "confidence": _clean_text(getattr(alert, "location_confidence", "")) or None,
+                },
+                "department": _department_payload(department),
+                "response": None
+                if witness
+                else {
+                    "assignment_status": _choice_label(assignment, "status", "") if assignment else None,
+                    "assigned_unit": _department_payload(department),
+                    "responding_community": _community_payload(responding_community),
+                    "is_cross_community": is_cross_community,
+                },
+            }
+        )
+        if assignment and role != resident_role and not witness:
+            context["response"]["assignee_name"] = _user_display_name(getattr(assignment, "responder", None))
+
+    setattr(notification, "_notification_context", context)
+    return context
+
+
 def notification_category(notification) -> str:
     type_value = notification.type or ""
     if type_value == "announcement":
@@ -285,80 +541,141 @@ def _display_concern_notification(notification) -> tuple[str, str]:
     concern = notification.concern
     type_value = notification.type or ""
     role = getattr(notification.recipient, "role", "")
-    tracking = _concern_tracking_id(concern)
-    concern_title = _clean_text(getattr(concern, "title", "")) or "your report"
+    context = notification_context(notification)
+    tracking = context.get("reference") or _concern_tracking_id(concern)
+    concern_title = context.get("subject") or "Community report"
+    community = (context.get("community") or {}).get("name") or "your community"
+    department = context.get("department") or {}
+    unit = department.get("name") or department.get("short_name") or "the assigned unit"
     note = _clean_text(notification.body or getattr(concern, "update_text", ""))
-    status_label = _choice_label(concern, "status", type_value)
-    status_titles = {
-        "submitted": "Report received",
-        "under_review": "Report under review",
-        "assigned": "Concern assigned to you" if role == getattr(notification.recipient.Role, "FIRST_RESPONDER", "first_responder") else "Report assigned",
-        "in_progress": "Report in progress",
-        "resolved": "Report resolved",
-        "rejected": "Report rejected",
-    }
-    special_titles = {
-        "clarification_requested": "Reply needed on your report" if role == getattr(notification.recipient.Role, "RESIDENT", "resident") else "Clarification requested",
-        "clarification_replied": "Resident replied",
-        "appeal_submitted": "Report appeal submitted",
-        "appeal_approved": "Report appeal approved",
-        "appeal_denied": "Report appeal denied",
-        "concern_comment": notification.title or "New community comment",
-        "concern_mention": notification.title or "You were mentioned",
-        "chat_message": notification.title or "New report message",
-    }
-    title = special_titles.get(type_value) or status_titles.get(type_value) or notification.title or f"Report {status_label.lower()}"
-    context = f"{tracking} · {concern_title}" if tracking else concern_title
-    if note:
-        body = f"{context}. {note}"
+    status_label = context.get("status") or _choice_label(concern, "status", type_value)
+    resident_role = getattr(getattr(notification.recipient, "Role", None), "RESIDENT", "resident")
+    responder_role = getattr(getattr(notification.recipient, "Role", None), "FIRST_RESPONDER", "first_responder")
+    official_role = getattr(getattr(notification.recipient, "Role", None), "BARANGAY_OFFICIAL", "barangay_official")
+    reference = tracking or "this report"
+
+    if type_value == "submitted":
+        title = f"Report received · {reference}"
+        body = f'Your report “{concern_title}” was received in {community}. We will keep you updated.'
+    elif type_value == "under_review":
+        title = f"Report under review · {reference}"
+        body = f'“{concern_title}” is being reviewed by the barangay team in {community}.'
+    elif type_value == "assigned":
+        title = f"Report assigned · {unit}"
+        if role == responder_role:
+            title = f"New field assignment · {reference}"
+            body = f'“{concern_title}” is assigned to your unit in {community}.'
+        elif role == official_role:
+            body = f'“{concern_title}” was assigned to {unit} for action in {community}.'
+        else:
+            body = f'Your report “{concern_title}” was assigned to {unit} in {community}.'
+    elif type_value == "in_progress":
+        title = f"Work started · {reference}"
+        body = f'“{concern_title}” is now in progress with {unit}.'
+    elif type_value == "resolved":
+        title = f"Report resolved · {reference}"
+        body = f'“{concern_title}” was marked resolved by {unit}.'
+    elif type_value == "rejected":
+        title = f"Report decision recorded · {reference}"
+        body = f'“{concern_title}” was not accepted for action in {community}.'
+    elif type_value == "clarification_requested":
+        title = f"Clarification needed · {reference}"
+        body = f'The barangay team needs more information about “{concern_title}”.'
+    elif type_value == "clarification_replied":
+        title = f"Clarification received · {reference}"
+        body = f'A resident replied to the clarification request for “{concern_title}”.'
+    elif type_value == "appeal_submitted":
+        title = f"Report appeal submitted · {reference}"
+        body = f'An appeal was submitted for “{concern_title}” in {community}.'
+    elif type_value in {"appeal_approved", "appeal_denied"}:
+        decision = "approved" if type_value.endswith("approved") else "denied"
+        title = f"Report appeal {decision} · {reference}"
+        body = f'The appeal for “{concern_title}” was {decision}.'
+    elif type_value == "concern_comment":
+        title = f"New report discussion · {reference}"
+        body = f'New community discussion was added to “{concern_title}”.'
+    elif type_value == "concern_mention":
+        title = f"You were mentioned · {reference}"
+        body = f'You were mentioned in the discussion for “{concern_title}”.'
+    elif type_value == "chat_message":
+        title = f"New report message · {reference}"
+        body = f'A new message is available for “{concern_title}”.'
+    elif type_value == "flag_dismissed":
+        title = f"Report review completed · {reference}"
+        body = f'The content report for “{concern_title}” was reviewed and remains available.'
+    elif type_value == "post_taken_down":
+        title = f"Report content removed · {reference}"
+        body = f'Content connected to “{concern_title}” was removed after review.'
+    elif type_value == "comment_taken_down":
+        title = f"Report comment removed · {reference}"
+        body = f'A comment on “{concern_title}” was removed after review.'
     else:
-        body = f"{context}. Status: {status_label}."
-    return _truncate(title, 80), _truncate(body, 190)
+        title = f"Report update · {reference}"
+        body = f'“{concern_title}” has a new update. Status: {status_label}.'
+
+    if note and note.lower() not in body.lower():
+        body = f"{body} {note}"
+    return _truncate(title, 90), _truncate(body, 190)
 
 
 def _display_emergency_notification(notification) -> tuple[str, str]:
     alert = notification.emergency
     type_value = notification.type or ""
     role = getattr(notification.recipient, "role", "")
-    emergency_type = _choice_label(alert, "type", "Emergency")
-    status_label = _choice_label(alert, "status", type_value)
-    barangay = _clean_text(getattr(alert, "barangay", "")) or "your barangay"
-    address = _clean_text(getattr(alert, "address", "")) or barangay
+    context = notification_context(notification)
+    emergency_type = context.get("subject") or _choice_label(alert, "type", "Emergency")
+    status_label = context.get("status") or _choice_label(alert, "status", type_value)
+    location = context.get("location") or {}
+    barangay = location.get("barangay") or _clean_text(getattr(alert, "barangay", "")) or "the reported area"
+    address = location.get("address") or _clean_text(getattr(alert, "address", "")) or barangay
+    placeholders = {"community pending confirmation", "location needs confirmation", "unknown"}
+    if address.casefold() in placeholders:
+        address = barangay
+    location_label = address
+    if barangay.casefold() not in address.casefold() and barangay.casefold() not in placeholders:
+        location_label = f"{address}, {barangay}"
+    response = context.get("response") or {}
+    department = context.get("department") or {}
+    unit = department.get("short_name") or department.get("name") or "the response team"
+    responding_community = (response.get("responding_community") or {}).get("name")
+    cross_community = bool(response.get("is_cross_community"))
     note = _clean_text(notification.body)
     if type_value == "witness_alert":
         return (
-            f"{emergency_type} emergency nearby",
-            _truncate(note or f"A {emergency_type.lower()} emergency was reported in {barangay}. Stay clear of the area and wait for official instructions.", 190),
+            f"Nearby {emergency_type} emergency · {barangay}",
+            _truncate(note or f"A {emergency_type.lower()} emergency was reported near {barangay}. Stay clear of the area and wait for official instructions.", 190),
         )
 
     responder_role = getattr(notification.recipient.Role, "FIRST_RESPONDER", "first_responder")
     official_role = getattr(notification.recipient.Role, "BARANGAY_OFFICIAL", "barangay_official")
+    title_map = {
+        "emergency_submitted": f"{emergency_type} emergency received · {location_label}",
+        "emergency_routed": f"{emergency_type} emergency dispatched · {location_label}",
+        "emergency_acknowledged": f"{emergency_type} response acknowledged · {location_label}",
+        "emergency_en_route": f"{emergency_type} responder en route · {location_label}",
+        "emergency_nearby": f"{emergency_type} responder nearby · {location_label}",
+        "emergency_arrived": f"{emergency_type} response arrived · {location_label}",
+        "emergency_resolved": f"{emergency_type} emergency resolved · {location_label}",
+        "emergency_cancelled": f"{emergency_type} emergency cancelled · {location_label}",
+        "emergency_escalated": f"Emergency escalation · {emergency_type} · {location_label}",
+        "emergency_appeal_submitted": f"Emergency review requested · {location_label}",
+        "emergency_appeal_approved": f"Emergency review approved · {location_label}",
+        "emergency_appeal_denied": f"Emergency review denied · {location_label}",
+        "emergency_updated": f"Emergency response update · {location_label}",
+    }
+    title = title_map.get(type_value) or f"{emergency_type} emergency update · {location_label}"
+    if cross_community:
+        title = f"Cross-community dispatch · {emergency_type} · {location_label}"
     if role == responder_role and type_value in {"emergency_routed", "emergency_escalated"}:
-        title = f"Dispatch: {emergency_type} emergency"
+        title = f"Dispatch assignment · {emergency_type} · {location_label}"
     elif role == official_role and type_value == "emergency_escalated":
-        title = "Emergency needs attention"
-    else:
-        title_map = {
-            "emergency_submitted": "Emergency alert sent",
-            "emergency_routed": "Responder routed",
-            "emergency_acknowledged": "Responder connected",
-            "emergency_en_route": "Responder en route",
-            "emergency_nearby": "Responder nearby",
-            "emergency_arrived": "Responder arrived",
-            "emergency_resolved": "Emergency resolved",
-            "emergency_cancelled": "Emergency cancelled",
-            "emergency_escalated": "Backup responder requested",
-            "emergency_appeal_submitted": "Emergency review requested",
-            "emergency_appeal_approved": "Emergency review approved",
-            "emergency_appeal_denied": "Emergency review denied",
-        }
-        title = title_map.get(type_value) or notification.title or f"Emergency {status_label.lower()}"
-    body_bits = [f"{emergency_type} emergency", address]
-    body = " · ".join(part for part in body_bits if part)
-    if note:
-        body = f"{body}. {note}"
-    else:
-        body = f"{body}. Status: {status_label}."
+        title = f"Manual attention required · {emergency_type} · {location_label}"
+
+    body = f"{emergency_type} emergency reported around {location_label}. Assigned unit: {unit}. Status: {status_label}."
+    if responding_community and cross_community:
+        body = f"{body} Responding from {responding_community}."
+    if note and note.lower() not in body.lower():
+        body = f"{body} {note}"
     return _truncate(title, 80), _truncate(body, 190)
 
 
@@ -367,7 +684,7 @@ def _display_announcement_notification(notification) -> tuple[str, str]:
     urgency = _clean_text(metadata.get("urgency")).lower()
     tag = _clean_text(metadata.get("tag")) or "Barangay"
     title_prefix = "Urgent announcement" if urgency == "urgent" else "Important announcement" if urgency == "important" else f"{tag} announcement"
-    title = notification.title if notification.title.lower().startswith(("urgent", "important", "barangay")) else f"{title_prefix}: {notification.title}"
+    title = notification.title if notification.title.lower().startswith(("urgent", "important", "barangay")) else f"{title_prefix} · {notification.title}"
     body = notification.body or "Open E-Boses for the announcement details."
     return _truncate(title, 90), _truncate(body, 190)
 
@@ -377,14 +694,17 @@ def notification_display(notification) -> tuple[str, str]:
     custom_title = _clean_text(metadata.get("display_title"))
     custom_body = _clean_text(metadata.get("display_body"))
     if custom_title and custom_body:
-        return _truncate(custom_title, 90), _truncate(custom_body, 190)
+        return _truncate(custom_title, 90), _with_greeting(notification, custom_body)
     if notification.type == "announcement":
-        return _display_announcement_notification(notification)
-    if notification.emergency_id:
-        return _display_emergency_notification(notification)
-    if notification.concern_id:
-        return _display_concern_notification(notification)
-    return _truncate(custom_title or notification.title or "E-Boses update", 90), _truncate(custom_body or notification.body or "Open E-Boses for details.", 190)
+        title, body = _display_announcement_notification(notification)
+    elif notification.emergency_id:
+        title, body = _display_emergency_notification(notification)
+    elif notification.concern_id:
+        title, body = _display_concern_notification(notification)
+    else:
+        title = _truncate(custom_title or notification.title or f"E-Boses update · {notification.type or 'notification'}", 90)
+        body = custom_body or notification.body or "Open E-Boses for more details."
+    return title, _with_greeting(notification, body)
 
 
 def notification_actions(notification) -> list[dict]:
@@ -421,6 +741,7 @@ def notification_actions(notification) -> list[dict]:
 
 def notification_display_payload(notification, serialized: dict | None = None) -> dict:
     display_title, display_body = notification_display(notification)
+    context = notification_context(notification)
     metadata = _safe_metadata(notification)
     priority = notification_priority(notification)
     url = _safe_url(metadata.get("action_url")) or notification_url(notification)
@@ -437,13 +758,15 @@ def notification_display_payload(notification, serialized: dict | None = None) -
         "actions": notification_actions(notification),
         "requireInteraction": priority == "urgent",
         "renotify": priority in {"urgent", "important"},
-        "timestamp": timezone.now().isoformat(),
+        "timestamp": (notification.created_at or timezone.now()).isoformat(),
         "notification": serialized or {},
+        "context": context,
         "data": {
             "notification_id": notification.pk,
             "type": notification.type,
             "concern_id": notification.concern_id,
             "emergency_id": None if notification.type == "witness_alert" else notification.emergency_id,
+            "context": context,
         },
     }
     if notification.emergency_id and notification.type != "witness_alert":
@@ -779,6 +1102,8 @@ def create_user_notification(
     title: str,
     body: str = "",
     concern: Concern | None = None,
+    community=None,
+    department=None,
     metadata: dict | None = None,
     event_key: str = "",
 ) -> object | None:
@@ -796,7 +1121,8 @@ def create_user_notification(
         title=title,
         body=body,
         metadata=metadata or {},
-        community=getattr(concern, "community", None),
+        community=community or getattr(concern, "community", None),
+        department=department or getattr(concern, "assigned_department", None),
         event_key=event_key,
     )
     _deliver_notification_after_commit(notification)
@@ -823,6 +1149,8 @@ def create_emergency_notification(
     recipient=None,
     title: str = "",
     body: str = "",
+    department=None,
+    assignment=None,
     metadata: dict | None = None,
     event_key: str = "",
 ) -> object | None:
@@ -830,6 +1158,9 @@ def create_emergency_notification(
     from .models import Notification
 
     recipient = recipient or alert.reporter
+    assignment = assignment or _active_emergency_assignment(alert, recipient=recipient)
+    role_map = getattr(assignment, "role_map", None)
+    department = department or getattr(role_map, "department", None) or _mapped_emergency_department(alert)
     notification = Notification.objects.create(
         recipient=recipient,
         emergency=alert,
@@ -838,7 +1169,7 @@ def create_emergency_notification(
         body=body or f"Emergency status updated to {alert.status.replace('_', ' ')}.",
         metadata=metadata or {},
         community=alert.community,
-        department=getattr(getattr(alert, "category_ref", None), "department", None),
+        department=department,
         event_key=event_key,
     )
     _deliver_notification_after_commit(notification)

@@ -1,4 +1,4 @@
-self.__EBOSES_CACHE = "eboses-shell-v5"
+self.__EBOSES_CACHE = "eboses-shell-v6"
 self.__EBOSES_SHELL = ["/", "/dashboard", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"]
 
 self.addEventListener("install", (event) => {

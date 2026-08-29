@@ -42,6 +42,8 @@ export interface OpsWorkspaceProps {
   onListResize?: (width: number) => void
   /** Lets an inline aside span above the workspace bar while list/detail remain inset below it. */
   fullHeightAside?: boolean
+  /** Lets the detail pane span above the workspace bar so it sits beside the search input. */
+  fullHeightDetail?: boolean
   className?: string
 }
 
@@ -437,6 +439,7 @@ export function OpsWorkspace({
   onMobileDetailClose,
   onListResize,
   fullHeightAside = false,
+  fullHeightDetail = false,
   className,
 }: OpsWorkspaceProps) {
   const tier = useWorkspaceTier()
@@ -548,13 +551,22 @@ export function OpsWorkspace({
     <div
       className={cn(
         "relative grid h-full min-h-0 overflow-hidden bg-canvas",
-        fullHeightAside && asideInline
+        (fullHeightAside && asideInline) || (fullHeightDetail && detailShown)
           ? "grid-rows-[minmax(0,1fr)]"
           : "grid-rows-[auto_minmax(0,1fr)]",
         className,
       )}
     >
-      {fullHeightAside && asideInline ? (
+      {fullHeightDetail && detailShown ? (
+        <div
+          className="absolute left-0 top-0 z-20"
+          style={{
+            width: effectiveListWidth + dividersListDetail * DIVIDER_PX,
+          }}
+        >
+          {bar}
+        </div>
+      ) : fullHeightAside && asideInline ? (
         <div
           className="absolute left-0 top-0 z-20"
           style={{
@@ -576,7 +588,7 @@ export function OpsWorkspace({
           listShown ? (
 
             <PaneShell
-              className={cn(fullHeightAside && asideInline && "pt-16", list.className)}
+              className={cn(((fullHeightAside && asideInline) || (fullHeightDetail && detailShown)) && "pt-16", list.className)}
               style={
                 detailShown
                   ? { flex: "none", width: effectiveListWidth }
@@ -608,7 +620,7 @@ export function OpsWorkspace({
         {detail ? (
           detailShown ? (
             <PaneShell
-              className={cn(fullHeightAside && asideInline && "pt-16", detail.className)}
+              className={cn((fullHeightAside && asideInline) && !(fullHeightDetail && detailShown) && "pt-16", detail.className)}
               style={{ flex: "1 1 0%", minWidth: 0 }}
             >
               {detail.node}

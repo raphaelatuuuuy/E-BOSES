@@ -83,7 +83,9 @@ export function SosLocationStep({
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
   const ignoreMove = useRef(false)
+  const manualInteraction = useRef(false)
   const [gpsBusy, setGpsBusy] = useState(false)
+  const [gpsNotice, setGpsNotice] = useState("")
   const isOnlineRef = useRef(true)
   const validationRequestRef = useRef(0)
   const onChangeRef = useRef(onChange)
@@ -105,8 +107,12 @@ export function SosLocationStep({
   }
 
   async function locateCurrentUser() {
-    if (!navigator.geolocation) return
+    if (!navigator.geolocation) {
+      setGpsNotice("Location services are unavailable. Drag the map to place the emergency pin.")
+      return
+    }
     setGpsBusy(true)
+    setGpsNotice("")
     navigator.geolocation.getCurrentPosition(
       async ({ coords }) => {
         const lat = coords.latitude
@@ -116,6 +122,7 @@ export function SosLocationStep({
           describePin(lat, lng),
         ])
         setGpsBusy(false)
+        setGpsNotice("")
         onChangeRef.current({
           lat,
           lng,
@@ -125,10 +132,18 @@ export function SosLocationStep({
           addressPrimary: described.addressPrimary,
           locationCheck,
         })
-        mapRef.current?.setView([lat, lng], Math.max(mapRef.current.getZoom(), 17), { animate: true })
+        const map = mapRef.current
+        if (map) {
+          ignoreMove.current = true
+          map.setView([lat, lng], Math.max(map.getZoom(), 17), { animate: true })
+          window.setTimeout(() => {
+            ignoreMove.current = false
+          }, 500)
+        }
       },
       () => {
         setGpsBusy(false)
+        setGpsNotice("We could not get your GPS location. Drag the map to place the emergency pin.")
       },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 },
     )
@@ -161,15 +176,7 @@ export function SosLocationStep({
     const startTimer = window.setTimeout(() => {
       if (cancelled) return
       if (!navigator.geolocation) {
-        onChangeRef.current({
-          lat: DEFAULT_CENTER[0],
-          lng: DEFAULT_CENTER[1],
-          accuracy: null,
-          source: "manual",
-          address: "",
-          addressPrimary: "",
-          locationCheck: null,
-        })
+        setGpsNotice("Location services are unavailable. Drag the map to place the emergency pin.")
         return
       }
       setGpsBusy(true)
@@ -184,6 +191,7 @@ export function SosLocationStep({
           ])
           if (cancelled) return
           setGpsBusy(false)
+          setGpsNotice("")
           onChangeRef.current({
             lat,
             lng,
@@ -205,15 +213,7 @@ export function SosLocationStep({
         () => {
           if (cancelled) return
           setGpsBusy(false)
-          onChangeRef.current({
-            lat: DEFAULT_CENTER[0],
-            lng: DEFAULT_CENTER[1],
-            accuracy: null,
-            source: "manual",
-            address: "",
-            addressPrimary: "",
-            locationCheck: null,
-          })
+          setGpsNotice("We could not get your GPS location. Drag the map to place the emergency pin.")
         },
         { enableHighAccuracy: true, timeout: 12_000 }
       )
@@ -306,8 +306,13 @@ export function SosLocationStep({
         setOutOfScope(!insideCoverage(c.lat, c.lng, coverageRef.current))
       })
 
+      map.on("dragstart", () => {
+        manualInteraction.current = true
+        setGpsNotice("")
+      })
+
       map.on("moveend", () => {
-        if (ignoreMove.current || !map) return
+        if (ignoreMove.current || !manualInteraction.current || !map) return
         const c = map.getCenter()
         if (geocodeTimer) window.clearTimeout(geocodeTimer)
         geocodeTimer = window.setTimeout(() => {
@@ -432,6 +437,11 @@ export function SosLocationStep({
           }
         `}        </style>
       </div>
+      {gpsNotice ? (
+        <p className="text-[13px] font-medium leading-5 text-white/75" role="status" aria-live="polite">
+          {gpsNotice}
+        </p>
+      ) : null}
     </div>
   )
 }

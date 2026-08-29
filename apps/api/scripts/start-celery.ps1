@@ -28,7 +28,7 @@ function Test-CeleryRunning {
 }
 
 function Start-CeleryProc {
-  param([string]$Name, [string]$Role, [string]$PidFile, [string]$LogFile, [string]$Queue = "")
+  param([string]$Name, [string]$Role, [string]$PidFile, [string]$LogFile, [string]$Queue = "", [string]$NodeName = "")
   $already = Test-CeleryRunning -Role $Role -Match $(if ($Queue) { "-Q $Queue" } else { "" })
   if ($already) {
     $ids = ($already | ForEach-Object { $_.ProcessId }) -join ', '
@@ -38,7 +38,7 @@ function Start-CeleryProc {
   Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
   $cmd = '-m celery -A config {0} -l INFO --logfile "{1}" --pidfile "{2}"' -f $Role, $LogFile, $PidFile
   if ($Role -like 'worker*') {
-    $cmd = '-m celery -A config worker -l INFO -Q {0} --pool=solo --logfile "{1}" --pidfile "{2}"' -f $Queue, $LogFile, $PidFile
+    $cmd = '-m celery -A config worker -l INFO -Q {0} --pool=solo --hostname {1}@%h --logfile "{2}" --pidfile "{3}"' -f $Queue, $NodeName, $LogFile, $PidFile
   }
   $p = Start-Process -FilePath 'python' -ArgumentList $cmd -WorkingDirectory $ApiDir -WindowStyle Hidden -PassThru
   Start-Sleep -Seconds 6
@@ -51,8 +51,8 @@ function Start-CeleryProc {
 
 # Two solo workers: the fast queue (OTP/SMS, emergency notifications,
 # dispatch broadcasts) must never queue behind minutes-long vision/AI jobs.
-Start-CeleryProc -Name 'Celery worker (fast)'  -Role 'worker'        -Queue 'eboses' -PidFile $FastWorkerPid  -LogFile $FastWorkerLog
-Start-CeleryProc -Name 'Celery worker (heavy)' -Role 'worker-heavy'  -Queue 'heavy'  -PidFile $HeavyWorkerPid -LogFile $HeavyWorkerLog
+Start-CeleryProc -Name 'Celery worker (fast)'  -Role 'worker'        -Queue 'eboses' -NodeName 'eboses' -PidFile $FastWorkerPid  -LogFile $FastWorkerLog
+Start-CeleryProc -Name 'Celery worker (heavy)' -Role 'worker-heavy'  -Queue 'heavy'  -NodeName 'heavy'  -PidFile $HeavyWorkerPid -LogFile $HeavyWorkerLog
 Start-CeleryProc -Name 'Celery beat'           -Role 'beat'          -PidFile $BeatPid        -LogFile $BeatLog
 
 Write-Host ''

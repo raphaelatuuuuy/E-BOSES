@@ -2,18 +2,12 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } 
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import {
-  ArrowLeftIcon,
   CameraIcon,
-  GlobeIcon,
   ImageIcon,
-  LayoutGridIcon,
-  LockIcon,
   MapPinIcon,
   PlusIcon,
-  TagsIcon,
   XIcon,
 } from "lucide-react"
-import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -24,34 +18,19 @@ import {
   precheckConcern,
   type Concern,
   type ConcernActiveDuplicate,
-  type ConcernEmergencyTriage,
   type ConcernPhotoVerdict,
   type ConcernPrecheckResult,
   type ConcernResolvedMatch,
-  type ConcernVisibility,
 } from "@/features/dashboard/api"
 import { CameraCaptureDialog } from "@/features/dashboard/components/camera-capture-dialog"
 import { Dialog, DialogBody } from "@/features/dashboard/components/dialog"
-import { ReportStatusDialog } from "@/features/dashboard/components/report-status-dialog"
-import { statusModeFromReport } from "@/features/dashboard/components/report-status-mode"
+import { ReportDetailsDialog } from "@/features/dashboard/components/report-details-dialog"
 import { ApiError } from "@/lib/api"
 import { formatNominatimParts, reverseGeocode } from "@/lib/geocode"
-import { useCategoryOptions } from "@/features/dashboard/lib/concern-categories"
-import { listEmergencyCategories, type EmergencyCategory } from "@/features/dashboard/emergency-api"
-import { useBottomSheetSnap } from "@/features/dashboard/lib/use-bottom-sheet-snap"
 import { useCoverageContext } from "@/features/dashboard/lib/use-coverage"
 import { insideCoverage } from "@/features/dashboard/components/map/coverage-layer"
 
 const LocationPickerModal = lazy(() => import("@/features/dashboard/components/location-picker"))
-
-interface ConcernOption {
-  label: string
-  value: string
-  desc: string
-  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>
-  customIconLabel?: string
-  iconImageUrl?: string
-}
 
 const ALLOWED_TYPES = ["image/png", "image/jpeg"]
 const ACCEPT_STRING = ".png,.jpg,.jpeg," + ALLOWED_TYPES.join(",")
@@ -93,11 +72,9 @@ function markDraftCloseAcknowledged() {
 }
 
 interface ReportDraft {
-  concern: string
   title: string
   description: string
   address: string
-  visibility: ConcernVisibility
   locationPin: {
     lat: number
     lng: number
@@ -162,15 +139,6 @@ export function CreateReportDialog({
   const navigate = useNavigate()
   const { user } = useAuthSession()
 
-  const { categories: categoryOptions } = useCategoryOptions()
-  const concernConfig: ConcernOption[] = categoryOptions.map((category) => ({
-    label: category.name,
-    value: category.code,
-    desc: category.description || category.department?.name || "",
-    icon: resolveIconByKey(category.icon_key) ?? TagsIcon,
-    customIconLabel: category.custom_icon_label,
-    iconImageUrl: category.icon_image_url,
-  }))
   const [internalOpen, setInternalOpen] = useState(false)
   const open = controlledOpen ?? internalOpen
   const setOpen = (value: boolean) => {
@@ -178,11 +146,7 @@ export function CreateReportDialog({
     onOpenChange?.(value)
   }
 
-  const [concern, setConcern] = useState("")
   const [description, setDescription] = useState("")
-  const [visibility, setVisibility] = useState<ConcernVisibility>("community")
-  const [visibilityMenuOpen, setVisibilityMenuOpen] = useState(false)
-  const [moreOpen, setMoreOpen] = useState(false)
   const [locationOpen, setLocationOpen] = useState(false)
   const [cameraOpen, setCameraOpen] = useState(false)
   const [address, setAddress] = useState("")
@@ -203,10 +167,7 @@ export function CreateReportDialog({
   const [precheckNotice, setPrecheckNotice] = useState("")
   const [draftRestored, setDraftRestored] = useState(false)
   const [resolvedMatch, setResolvedMatch] = useState<ConcernResolvedMatch | null>(null)
-  const [emergencyConfirm, setEmergencyConfirm] = useState<ConcernEmergencyTriage | null>(null)
-  const [emergencyCategories, setEmergencyCategories] = useState<EmergencyCategory[]>([])
   const [duplicateConfirm, setDuplicateConfirm] = useState<ConcernActiveDuplicate | null>(null)
-  const [categoryConfirm, setCategoryConfirm] = useState<{ code: string; label: string } | null>(null)
   const [photoVerdicts, setPhotoVerdicts] = useState<ConcernPhotoVerdict[]>([])
   const [privacyPreview, setPrivacyPreview] = useState<{ state: string; detected_classes: string[]; protected_image: string } | null>(null)
 
@@ -216,8 +177,7 @@ export function CreateReportDialog({
   const recurrenceOfRef = useRef<number | null>(null)
   const duplicateOfRef = useRef<number | null>(null)
 
-  const categoryOverrideRef = useRef<string | null>(null)
-  const [categoryOverride, setCategoryOverride] = useState<string | null>(null)
+  const inferredCategoryRef = useRef("")
   const resolvedAddressRef = useRef<{ address: string; primary: string; secondary: string } | null>(null)
   const pendingPrecheckRef = useRef<ConcernPrecheckResult | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -228,20 +188,6 @@ export function CreateReportDialog({
   )
   // Coverage rules for the camera's GPS check — loaded once per open.
   const coverageContext = useCoverageContext(open)
-
-  // Bottom sheet for mobile category picker
-  const categorySheet = useBottomSheetSnap({
-    enabled: moreOpen,
-    initialMode: "expanded",
-    onSettle: () => {
-      if (categorySheet.mode === "hidden") setMoreOpen(false)
-    },
-  })
-
-  // Snap to expanded when category opens on mobile
-  useEffect(() => {
-    if (moreOpen) categorySheet.snapTo("expanded")
-  }, [moreOpen])
 
   const displayName = user
     ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "Resident"
@@ -255,19 +201,6 @@ export function CreateReportDialog({
   const rawStreet = (user?.address || "").split(",")[0]?.trim() || ""
   const userStreet =
     !rawStreet || rawStreet.toLowerCase() === "pending" ? "" : rawStreet
-
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
-    void listEmergencyCategories()
-      .then((items) => {
-        if (!cancelled) setEmergencyCategories(items)
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [open])
 
   useEffect(() => () => previewUrls.forEach((url) => URL.revokeObjectURL(url)), [previewUrls])
 
@@ -286,42 +219,36 @@ export function CreateReportDialog({
   useEffect(() => {
     if (!open || draftRestored) return
     void readDraft()
-    void readDraft()
       .then((draft) => {
         if (!draft) return
-        // Category is deliberately NOT restored — the resident must pick it
-        // explicitly every time, never inherit it from an old draft.
+        // Category is inferred at submit time, so drafts only restore the
+        // resident's report content and optional location.
         setDescription(draft.description)
         setAddress(draft.address)
 
         const parts = draft.address.split(",").map((p) => p.trim())
         setAddressPrimary(parts[0] || draft.address)
         setAddressSecondary(parts.slice(1).join(", "))
-        setVisibility(draft.visibility)
         setLocationPin(draft.locationPin)
       })
       .finally(() => setDraftRestored(true))
   }, [open, draftRestored])
 
   useEffect(() => {
-    if (!open || !draftRestored || (!concern && !description && !address && !locationPin)) return
+    if (!open || !draftRestored || (!description && !address && !locationPin)) return
     const timeout = window.setTimeout(() => {
       void writeDraft({
-        concern,
         title: titleFromDescription(description),
         description,
         address,
-        visibility,
         locationPin,
       })
     }, 500)
     return () => window.clearTimeout(timeout)
-  }, [open, draftRestored, concern, description, address, visibility, locationPin])
+  }, [open, draftRestored, description, address, locationPin])
 
   function resetForm() {
-    setConcern("")
     setDescription("")
-    setVisibility("community")
     setAddress("")
     setAddressPrimary("")
     setAddressSecondary("")
@@ -329,22 +256,18 @@ export function CreateReportDialog({
     setMediaFiles([])
     setPreviewUrl(null)
     setFieldErrors({})
-    setMoreOpen(false)
     setLocationOpen(false)
     setCameraOpen(false)
-    setVisibilityMenuOpen(false)
     setCloseConfirmOpen(false)
     setResolvedMatch(null)
-    setEmergencyConfirm(null)
     setDuplicateConfirm(null)
-    setCategoryConfirm(null)
     setPhotoVerdicts([])
     setPrivacyPreview(null)
     setPrecheckNotice("")
     recurrenceOfRef.current = null
     duplicateOfRef.current = null
-    categoryOverrideRef.current = null
-    setCategoryOverride(null)
+    inferredCategoryRef.current = ""
+    pendingPrecheckRef.current = null
     resolvedAddressRef.current = null
     clientRequestIdRef.current = crypto.randomUUID()
     setDraftRestored(false)
@@ -352,7 +275,6 @@ export function CreateReportDialog({
 
   function hasDraftContent() {
     return Boolean(
-      concern.trim() ||
         description.trim() ||
         address.trim() ||
         locationPin ||
@@ -362,11 +284,9 @@ export function CreateReportDialog({
 
   function buildDraftPayload(): ReportDraft {
     return {
-      concern,
       title: titleFromDescription(description),
       description,
       address,
-      visibility,
       locationPin,
     }
   }
@@ -381,9 +301,7 @@ export function CreateReportDialog({
 
   function requestClose() {
     if (isSubmitting) return
-    setMoreOpen(false)
     setLocationOpen(false)
-    setVisibilityMenuOpen(false)
     setCloseConfirmOpen(false)
 
     if (!hasDraftContent()) {
@@ -414,7 +332,6 @@ export function CreateReportDialog({
       toast.error("Could not save draft.")
     }
     setCloseConfirmOpen(false)
-    setMoreOpen(false)
     setLocationOpen(false)
     setOpen(false)
   }
@@ -427,16 +344,8 @@ export function CreateReportDialog({
 
   function validate() {
     const errors: Record<string, string> = {}
-    if (!concern) errors.concern = "Choose a category."
-    const requirements = categoryRequirements(selectedCategoryCode())
-    if (requirements.description_required && !description.trim())
+    if (!description.trim())
       errors.description = "Describe what happened."
-    if (requirements.description_required && description.trim().length < 20)
-      errors.description = "Please provide at least 20 characters for context."
-    if (requirements.location_required && (!locationPin || !address.trim()))
-      errors.address = "Pin a location for this report."
-    if (requirements.photo_required && !mediaFiles.length)
-      errors.media = "Add at least one clear photo as evidence."
     setFieldErrors(errors)
     return Object.keys(errors).length === 0
   }
@@ -641,29 +550,8 @@ export function CreateReportDialog({
     setCameraOpen(true)
   }
 
-  function categoryOverrideFallback() {
-    return concernConfig.find((c) => c.label === concern)?.value ?? ""
-  }
-
   function selectedCategoryCode() {
-    // Ref, not state: advance("duplicate") reaches finalizeSubmit in the same
-    // tick as the override write, before the next render commits.
-    return categoryOverrideRef.current ?? categoryOverrideFallback()
-  }
-
-  function selectedCategoryCodeRendered() {
-    return categoryOverride ?? categoryOverrideFallback()
-  }
-
-  function categoryRequirements(code: string) {
-    return (
-      categoryOptions.find((option) => option.code === code) ?? {
-        photo_required: true,
-        description_required: true,
-        location_required: true,
-        public_feed_allowed: true,
-      }
-    )
+    return inferredCategoryRef.current
   }
 
   function buildSubmitFormData(): FormData | null {
@@ -673,30 +561,27 @@ export function CreateReportDialog({
     formData.append("title", title)
     formData.append("description", description.trim())
     formData.append("category", selectedCategoryCode())
-    formData.append("visibility", visibility)
-    if (!categoryRequirements(selectedCategoryCode()).location_required && !locationPin) {
-      formData.append("address", "")
-      for (const file of mediaFiles) formData.append("media", file)
-      return formData
-    }
     // The address is the street line the server resolved from the pin. The
     // typed text is only a fallback for a pin the geocoder could not place.
     const resolved = resolvedAddressRef.current
     const primary = resolved?.primary || (addressPrimary || address).trim().split(",")[0]?.trim() || address.trim()
     const secondary = resolved?.secondary ?? addressSecondary.trim()
+    const locationRequired = pendingPrecheckRef.current?.location_required ?? true
     const looksLikeCoords =
       !primary ||
       /^lat\b/i.test(primary) ||
       /^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(primary)
-    if (looksLikeCoords) {
+    if (locationRequired && looksLikeCoords) {
       setFieldErrors((prev) => ({
         ...prev,
         address: "Pin a location with a street name before submitting.",
       }))
       return null
     }
-    const storedAddress = resolved?.address || (secondary ? `${primary}, ${secondary}` : primary)
-    formData.append("address", storedAddress.slice(0, 255))
+    if (!looksLikeCoords) {
+      const storedAddress = resolved?.address || (secondary ? `${primary}, ${secondary}` : primary)
+      formData.append("address", storedAddress.slice(0, 255))
+    }
     if (locationPin) {
       formData.append("latitude", locationPin.lat.toFixed(7))
       formData.append("longitude", locationPin.lng.toFixed(7))
@@ -756,7 +641,7 @@ export function CreateReportDialog({
    * pre-check result. Answering one never re-runs the model — the inference
    * happens once per press of Report and is reused for the whole chain.
    */
-  async function advance(stage: "duplicate" | "resolved" | "emergency" | "submit") {
+  async function advance(stage: "duplicate" | "resolved" | "submit") {
     const precheck = pendingPrecheckRef.current
     if (!precheck) return
     if (stage === "duplicate") {
@@ -771,13 +656,11 @@ export function CreateReportDialog({
         setResolvedMatch(precheck.resolved_match)
         return
       }
-      stage = "emergency"
     }
-    if (stage === "emergency" && precheck.emergency_triage?.is_emergency) {
-      setEmergencyConfirm(precheck.emergency_triage)
-      return
-    }
-    await finalizeSubmit()
+    await finalizeSubmit({
+      escalate: Boolean(precheck.auto_escalate),
+      emergencyType: precheck.emergency_type || undefined,
+    })
   }
 
   /**
@@ -794,7 +677,8 @@ export function CreateReportDialog({
       precheckData.append("client_request_id", clientRequestIdRef.current)
       precheckData.append("title", titleFromDescription(description))
       precheckData.append("description", description.trim())
-      precheckData.append("category", selectedCategoryCode())
+      // An empty category tells the server to classify the report. The
+      // inferred category is returned and attached only to the final request.
       if (locationPin) {
         precheckData.append("latitude", locationPin.lat.toFixed(7))
         precheckData.append("longitude", locationPin.lng.toFixed(7))
@@ -825,11 +709,9 @@ export function CreateReportDialog({
       setFieldErrors({})
 
       pendingPrecheckRef.current = precheck
-      if (precheck.category_confirm_required && precheck.suggested_category) {
-        setCategoryConfirm({
-          code: precheck.suggested_category,
-          label: precheck.suggested_category_label || precheck.suggested_category.replace(/_/g, " "),
-        })
+      inferredCategoryRef.current = precheck.category || precheck.suggested_category || ""
+      if (!inferredCategoryRef.current) {
+        setFieldErrors({ description: "We could not determine the type of concern. Add a little more detail and try again." })
         setIsSubmitting(false)
         return
       }
@@ -845,22 +727,12 @@ export function CreateReportDialog({
     }
   }
 
-  const selectedConcern = concernConfig.find((item) => item.label === concern)
   const hasMedia = mediaFiles.length > 0
-  const selectedCategory = categoryOptions.find((item) => item.code === selectedCategoryCodeRendered())
-  const publicFeedAllowed = selectedCategory?.public_feed_allowed !== false
-  const requirements = categoryRequirements(selectedCategoryCodeRendered())
-  const formReady = Boolean(
-    concern &&
-      (!requirements.description_required || description.trim().length >= 20) &&
-      (!requirements.photo_required || hasMedia) &&
-      (!requirements.location_required || Boolean(locationPin && address.trim())) &&
-      (!(!publicFeedAllowed) || visibility === "private")
-  )
+  // Category-specific requirements are checked by the classification precheck
+  // after the model has inferred the category. The only client-side gate is
+  // requiring enough text to ask the model for a classification.
+  const formReady = Boolean(description.trim())
   const isControlled = controlledOpen !== undefined
-  const matchedEmergencyLabel = emergencyConfirm
-    ? emergencyCategories.find((category) => category.code === emergencyConfirm.matched_type)?.label
-    : undefined
 
   return (
     <>
@@ -882,70 +754,15 @@ export function CreateReportDialog({
       <Dialog
         open={open}
         onClose={requestClose}
-        maxW={moreOpen ? "max-w-[820px]" : "max-w-[520px]"}
+        maxW="max-w-[520px]"
         mobileSheet
       >
         <DialogBody className="!flex !h-full !min-h-0 !flex-1 !flex-col !space-y-0 !overflow-hidden !p-0 bg-white">
-          {/* h-full so mobile footer pins to dialog bottom, not under description.
-              Fixed md height so opening the category panel never resizes the
-              dialog (a resize re-centers it and shifts every row downward). */}
+          {/* h-full keeps the composer/footer pinned on mobile. */}
           <div className="relative flex h-full min-h-0 flex-1 flex-col pt-[max(0.75rem,env(safe-area-inset-top))] md:h-[min(560px,88vh)] md:flex-row md:pt-5">
             {/* Main composer */}
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              {/* Mobile: Category is an independent screen — replaces the whole composer while open */}
-              {moreOpen ? (
-                <div className="flex min-h-0 flex-1 flex-col md:hidden">
-                  <div className="relative flex shrink-0 items-center justify-center px-2 py-3.5">
-                    <button
-                      type="button"
-                      onClick={() => setMoreOpen(false)}
-                      className="absolute left-2 flex size-10 items-center justify-center rounded-full text-neutral-700 transition-colors hover:bg-neutral-100"
-                      aria-label="Back"
-                    >
-                      <ArrowLeftIcon className="size-5" strokeWidth={2} />
-                    </button>
-                    <h2 className="text-[16px] font-semibold text-neutral-900">Category</h2>
-                  </div>
-                  <div className="scrollbar-hide min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain px-3 py-2">
-                    {concernConfig.map((item) => {
-                      const Icon = item.icon
-                      const selected = concern === item.label
-                      return (
-                        <button
-                          key={item.label}
-                          type="button"
-                          onClick={() => {
-                            setConcern(item.label)
-                            if (categoryOptions.find((option) => option.code === item.value)?.public_feed_allowed === false) setVisibility("private")
-                            setFieldErrors((prev) => ({ ...prev, concern: "" }))
-                            setMoreOpen(false)
-                          }}
-                          className={cn(
-                            "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-neutral-800 transition-colors",
-                            selected ? "bg-neutral-100" : "bg-transparent hover:bg-neutral-100",
-                          )}
-                        >
-                          {item.iconImageUrl ? (
-                            <img src={item.iconImageUrl} alt="" className="size-8 shrink-0 rounded-lg object-cover" />
-                          ) : item.customIconLabel ? (
-                            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-xs font-semibold text-neutral-700">{item.customIconLabel}</span>
-                          ) : (
-                            <Icon className="size-5 shrink-0 text-neutral-600" strokeWidth={1.75} />
-                          )}
-                          <span className="min-w-0">
-                            <span className="block text-[14px] font-semibold">{item.label}</span>
-                            <span className="mt-0.5 block text-[12px] text-neutral-500">
-                              {item.desc}
-                            </span>
-                          </span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              ) : null}
-
-              <div className={cn("flex min-h-0 flex-1 flex-col", moreOpen && "max-md:hidden")}>
+              <div className="flex min-h-0 flex-1 flex-col">
               <div className="flex shrink-0 items-center gap-2.5 px-4 sm:px-5">
                 <button
                   type="button"
@@ -957,48 +774,6 @@ export function CreateReportDialog({
                 </button>
 
                 <div className="relative ml-auto flex shrink-0 items-center gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (publicFeedAllowed) setVisibilityMenuOpen((v) => !v)
-                    }}
-                    className="inline-flex h-10 items-center gap-2 rounded-full border border-neutral-200 bg-neutral-100/80 px-3.5 text-[14px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-100 sm:h-11 sm:px-4 sm:text-[15px]"
-                  >
-                    {visibility === "community" ? (
-                      <GlobeIcon className="size-4" />
-                    ) : (
-                      <LockIcon className="size-4" />
-                    )}
-                    {visibility === "community" ? "Anyone" : "Private"}
-                    <span className="text-[11px] text-neutral-400">▾</span>
-                  </button>
-                  {visibilityMenuOpen ? (
-                    <div className="absolute right-0 top-full z-20 mt-1.5 w-52 overflow-hidden rounded-xl border border-neutral-200 bg-white py-1 shadow-lg">
-                      {(
-                        [
-                          ...(publicFeedAllowed ? [["community", "Anyone", "Visible in the community feed"] as const] : []),
-                          ["private", "Private", "Only you and officials"],
-                        ] as const
-                      ).map(([value, label, helper]) => (
-                        <button
-                          key={value}
-                          type="button"
-                          onClick={() => {
-                            setVisibility(value)
-                            setVisibilityMenuOpen(false)
-                          }}
-                          className={cn(
-                            "flex w-full flex-col px-3.5 py-2.5 text-left hover:bg-neutral-50",
-                            visibility === value && "bg-neutral-50",
-                          )}
-                        >
-                          <span className="text-[13px] font-semibold text-neutral-900">{label}</span>
-                          <span className="text-[11px] text-neutral-500">{helper}</span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-
                   <button
                     type="button"
                     disabled={isSubmitting || isCheckingMedia || !formReady}
@@ -1026,12 +801,6 @@ export function CreateReportDialog({
                     <p className="truncate text-[13px] leading-tight text-neutral-500">{userStreet}</p>
                   ) : null}
                 </div>
-                {selectedConcern ? (
-                  <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 py-1 text-[12px] font-semibold text-neutral-700">
-                    <selectedConcern.icon className="size-3.5" strokeWidth={1.75} />
-                    {selectedConcern.label}
-                  </span>
-                ) : null}
               </div>
 
               {/* Scrollable body — description / media / location chip only */}
@@ -1040,6 +809,7 @@ export function CreateReportDialog({
                   value={description}
                   maxLength={descriptionMax}
                   rows={3}
+                  aria-label="Report description"
                   onChange={(e) => {
                     setDescription(e.target.value)
                     if (fieldErrors.description)
@@ -1071,7 +841,7 @@ export function CreateReportDialog({
                           )
                           return (
                             <div
-                              key={`${file.name}-${index}`}
+                              key={`${file.name}-${file.lastModified}`}
                               className={cn(
                                 "relative h-[148px] w-[148px] overflow-hidden rounded-2xl bg-neutral-100 shadow-sm sm:h-[168px] sm:w-[168px]",
                                 rejected ? "ring-2 ring-destructive" : "ring-1 ring-black/5",
@@ -1171,30 +941,32 @@ export function CreateReportDialog({
                 ) : null}
               </div>
 
-              {/* Bottom chrome: location row (only once a location is set) always visible, then toolbar; categories expand below it on mobile */}
+              {/* Bottom chrome: optional location row and the attachment/location toolbar. */}
               <div className="shrink-0 border-t border-neutral-100 bg-white">
                 {locationPin && address ? (
                   <div className="px-4 pb-2 pt-3 sm:px-5">
-                    <button
-                      type="button"
-                      onClick={() => setLocationOpen(true)}
-                      className="flex w-full items-center gap-3 rounded-md border border-neutral-300 bg-white px-3.5 py-2.5 text-left transition-colors hover:bg-neutral-50"
-                    >
-                      <MapPinIcon className="size-5 shrink-0 text-neutral-400" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[14px] font-semibold leading-tight text-neutral-900">
-                          {addressPrimary || address}
-                        </span>
-                        {addressSecondary ? (
-                          <span className="mt-0.5 block truncate text-[12px] leading-snug text-neutral-500">
-                            {addressSecondary}
-                          </span>
-                        ) : null}
-                      </span>
+                    <div className="flex w-full items-center gap-3 rounded-md border border-neutral-300 bg-white px-3.5 py-2.5 text-left">
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
+                        onClick={() => setLocationOpen(true)}
+                        className="flex min-w-0 flex-1 items-center gap-3 text-left transition-colors hover:opacity-75"
+                        aria-label="Edit report location"
+                      >
+                        <MapPinIcon className="size-5 shrink-0 text-neutral-400" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[14px] font-semibold leading-tight text-neutral-900">
+                            {addressPrimary || address}
+                          </span>
+                          {addressSecondary ? (
+                            <span className="mt-0.5 block truncate text-[12px] leading-snug text-neutral-500">
+                              {addressSecondary}
+                            </span>
+                          ) : null}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
                           setLocationPin(null)
                           setAddress("")
                           setAddressPrimary("")
@@ -1205,7 +977,7 @@ export function CreateReportDialog({
                       >
                         <XIcon className="size-6" strokeWidth={1.75} />
                       </button>
-                    </button>
+                    </div>
                   </div>
                 ) : null}
 
@@ -1215,6 +987,7 @@ export function CreateReportDialog({
                     type="file"
                     accept={ACCEPT_STRING}
                     multiple
+                    aria-label="Add report photos"
                     className="sr-only"
                     onChange={(e) => {
                       void addFiles(Array.from(e.target.files ?? []))
@@ -1226,6 +999,7 @@ export function CreateReportDialog({
                     type="file"
                     accept="image/jpeg,image/png"
                     capture="environment"
+                    aria-label="Take a report photo"
                     className="sr-only"
                     onChange={(e) => {
                       handleCameraCapture(Array.from(e.target.files ?? []))
@@ -1282,19 +1056,6 @@ export function CreateReportDialog({
                     <CameraIcon className="size-5" strokeWidth={1.75} />
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={() => setMoreOpen((v) => !v)}
-                    className={cn(
-                      "ml-auto inline-flex h-10 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-medium transition-colors hover:bg-neutral-100",
-                      moreOpen || concern
-                        ? "text-neutral-800"
-                        : "text-neutral-500 hover:text-neutral-800",
-                    )}
-                  >
-                    <LayoutGridIcon className="size-4" strokeWidth={1.75} />
-                    Category
-                  </button>
                 </div>
 
                 {/* Mobile safe-area padding under the icon row */}
@@ -1303,61 +1064,6 @@ export function CreateReportDialog({
             </div>
             </div>
           </div>
-
-            {/* Desktop: expandable category panel on the side */}
-            {moreOpen ? (
-              <aside className="hidden min-h-0 w-[260px] shrink-0 flex-col self-stretch bg-white md:flex">
-                <div className="relative flex min-h-0 flex-1 flex-col">
-                  <div
-                    className="pointer-events-none absolute bottom-5 left-0 top-5 w-px bg-neutral-200"
-                    aria-hidden
-                  />
-                  <div className="flex shrink-0 items-center px-4 pb-2 pt-1 pl-5">
-                    <h3 className="text-[15px] font-semibold text-neutral-900">Category</h3>
-                  </div>
-                  <div
-                    className="scrollbar-hide min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain px-2 pb-1 pl-3 pt-1"
-                  >
-                    {concernConfig.map((item) => {
-                      const Icon = item.icon
-                      const selected = concern === item.label
-                      return (
-                        <button
-                          key={item.label}
-                          type="button"
-                          onClick={() => {
-                            setConcern(item.label)
-                              if (categoryOptions.find((option) => option.code === item.value)?.public_feed_allowed === false) setVisibility("private")
-                              setFieldErrors((prev) => ({ ...prev, concern: "" }))
-                              setMoreOpen(false)
-                            }}
-                            className={cn(
-                              "flex w-full shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-neutral-800 transition-colors",
-                              selected ? "bg-neutral-100" : "bg-transparent hover:bg-neutral-100",
-                            )}
-                          >
-                            {item.iconImageUrl ? (
-                              <img src={item.iconImageUrl} alt="" className="size-8 shrink-0 rounded-lg object-cover" />
-                            ) : item.customIconLabel ? (
-                              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-xs font-semibold text-neutral-700">{item.customIconLabel}</span>
-                            ) : (
-                              <Icon className="size-5 shrink-0 text-neutral-600" strokeWidth={1.75} />
-                            )}
-                            <span className="min-w-0">
-                              <span className="block text-[14px] font-semibold">{item.label}</span>
-                              <span className="mt-0.5 block text-[12px] text-neutral-500">
-                                {item.desc}
-                              </span>
-                            </span>
-                          </button>
-                        )
-                      })}
-                    </div>
-
-                </div>
-              </aside>
-            ) : null}
-
           </div>
         </DialogBody>
       </Dialog>
@@ -1391,23 +1097,29 @@ export function CreateReportDialog({
       />
 
       {submittedReport ? (
-        <ReportStatusDialog
-          open={true}
-          onOpenChange={(value) => {
-            if (!value) {
-              resetForm()
-              setSubmittedReport(null)
-              setOpen(false)
-            }
-          }}
+        <ReportDetailsDialog
+          open
           report={submittedReport}
-          mode={statusModeFromReport(submittedReport)}
+          onClose={() => {
+            resetForm()
+            setSubmittedReport(null)
+            setOpen(false)
+          }}
+          canShare={submittedReport.visibility === "community" && !submittedReport.escalated_alert}
           onTrack={() => {
             const reportId = submittedReport.public_id
             resetForm()
             setSubmittedReport(null)
             setOpen(false)
             navigate(`/dashboard/reports/${reportId}`)
+          }}
+          onOpenEmergency={() => {
+            const alertId = submittedReport.escalated_alert?.id
+            const reportId = submittedReport.public_id
+            resetForm()
+            setSubmittedReport(null)
+            setOpen(false)
+            navigate(alertId ? `/dashboard/emergency-history?alert=${alertId}` : `/dashboard/reports/${reportId}`)
           }}
         />
       ) : null}
@@ -1483,7 +1195,7 @@ export function CreateReportDialog({
               onClick={() => {
                 recurrenceOfRef.current = resolvedMatch.concern_id
                 setResolvedMatch(null)
-                void advance("emergency")
+                void advance("submit")
               }}
               className="mt-6 flex h-12 w-full items-center justify-center rounded-full bg-primary text-[16px] font-semibold text-white transition-colors hover:bg-brand-orange-strong active:scale-[0.99]"
             >
@@ -1495,58 +1207,6 @@ export function CreateReportDialog({
               className="mt-3 flex h-11 w-full items-center justify-center rounded-full text-[15px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50"
             >
               Never mind, it&apos;s handled
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {categoryConfirm ? (
-        <div
-          className="fixed inset-0 z-[260] flex items-center justify-center p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="category-confirm-title"
-        >
-          <div className="absolute inset-0 bg-black/45" aria-hidden />
-          <div className="relative z-10 w-full max-w-[360px] rounded-2xl border border-neutral-200 bg-white px-6 pb-6 pt-7 shadow-2xl">
-            <h2
-              id="category-confirm-title"
-              className="text-center text-[20px] font-semibold tracking-tight text-neutral-900"
-            >
-              Is this the right category?
-            </h2>
-            <p className="mt-2 text-center text-[13px] leading-snug text-neutral-500">
-              What you described sounds like <span className="font-semibold capitalize">{categoryConfirm.label}</span>.
-              Choosing the right one sends it to the right barangay unit.
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                categoryOverrideRef.current = categoryConfirm.code
-                setCategoryOverride(categoryConfirm.code)
-                const match = concernConfig.find((item) => item.value === categoryConfirm.code)
-                if (match) {
-                  setConcern(match.label)
-                  if (categoryOptions.find((option) => option.code === categoryConfirm.code)?.public_feed_allowed === false) setVisibility("private")
-                }
-                setCategoryConfirm(null)
-                void advance("duplicate")
-              }}
-              className="mt-6 flex h-12 w-full items-center justify-center rounded-full bg-primary text-[16px] font-semibold capitalize text-white transition-colors hover:bg-brand-orange-strong active:scale-[0.99]"
-            >
-              Use {categoryConfirm.label}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                categoryOverrideRef.current = null
-                setCategoryOverride(null)
-                setCategoryConfirm(null)
-                void advance("duplicate")
-              }}
-              className="mt-3 flex h-11 w-full items-center justify-center rounded-full text-[15px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50"
-            >
-              Keep {concern || "my choice"}
             </button>
           </div>
         </div>
@@ -1600,49 +1260,6 @@ export function CreateReportDialog({
               className="mt-3 flex h-11 w-full items-center justify-center rounded-full text-[15px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50"
             >
               Mine is a different issue
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {emergencyConfirm ? (
-        <div
-          className="fixed inset-0 z-[260] flex items-center justify-center p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="emergency-confirm-title"
-        >
-          <div className="absolute inset-0 bg-black/45" onClick={() => setEmergencyConfirm(null)} aria-hidden />
-          <div className="relative z-10 w-full max-w-[360px] rounded-2xl border border-neutral-200 bg-white px-6 pb-6 pt-7 shadow-2xl">
-            <h2
-              id="emergency-confirm-title"
-              className="text-center text-[20px] font-semibold tracking-tight text-neutral-900"
-            >
-              {matchedEmergencyLabel ? `This looks like a ${matchedEmergencyLabel} emergency` : "This looks like an emergency"}
-            </h2>
-            <p className="mt-2 text-center text-[13px] leading-snug text-neutral-500">
-              {emergencyConfirm.reason || "Send it straight to Emergency Response, or submit it as a normal report."}
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                const type = emergencyConfirm.matched_type || "disaster"
-                setEmergencyConfirm(null)
-                void finalizeSubmit({ escalate: true, emergencyType: type })
-              }}
-              className="mt-6 flex h-12 w-full items-center justify-center rounded-full bg-sos text-[16px] font-semibold text-white transition-colors hover:bg-sos active:scale-[0.99]"
-            >
-              Send to Emergency Response now
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setEmergencyConfirm(null)
-                void finalizeSubmit()
-              }}
-              className="mt-3 flex h-11 w-full items-center justify-center rounded-full text-[15px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50"
-            >
-              Submit as a normal report
             </button>
           </div>
         </div>

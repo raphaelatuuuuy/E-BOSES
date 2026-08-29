@@ -4,7 +4,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 $ApiDir = Split-Path -Parent $PSScriptRoot
 $LogDir = Join-Path $ApiDir 'logs'
 
-foreach ($f in @('celery-worker.pid', 'celery-beat.pid')) {
+foreach ($f in @('celery-worker.pid', 'celery-worker-heavy.pid', 'celery-beat.pid')) {
   $pf = Join-Path $LogDir $f
   if (Test-Path $pf) {
     $pidNum = (Get-Content $pf | Select-Object -First 1).Trim()

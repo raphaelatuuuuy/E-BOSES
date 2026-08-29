@@ -265,6 +265,8 @@ CELERY_TASK_ROUTES = {
     "apps.concerns.tasks.process_concern_media_privacy_task": {"queue": "heavy"},
     "apps.concerns.tasks.run_content_moderation_ai_task": {"queue": "heavy"},
     "apps.emergencies.tasks.generate_emergency_media_preview_task": {"queue": "heavy"},
+    "apps.sms.tasks.sms_ai_assist_task": {"queue": "heavy"},
+    "apps.sms.tasks.reverse_geocode_alert_task": {"queue": "heavy"},
     # OCR.space verification runs (up to a 60s API call each)
     "apps.accounts.ocr_tasks.process_verification_case_task": {"queue": "heavy"},
     "apps.accounts.ocr_tasks.process_test_run_task": {"queue": "heavy"},
@@ -280,6 +282,11 @@ CELERY_TASK_SOFT_TIME_LIMIT = env.int("CELERY_TASK_SOFT_TIME_LIMIT", default=120
 # Task result keys expire after 6 hours instead of the Celery default of 24h.
 CELERY_RESULT_EXPIRES = env.int("CELERY_RESULT_EXPIRES", default=21600)
 CELERY_BEAT_SCHEDULE = {
+    "recover-stuck-inbound-sms": {
+        "task": "apps.sms.tasks.recover_stuck_inbound_sms_task",
+        "schedule": 60.0,
+        "options": {"queue": "eboses"},
+    },
     "service-health-worker-heartbeat": {
         "task": "apps.service_status.record_worker_heartbeat_task",
         "schedule": 60.0,
@@ -923,13 +930,24 @@ OLLAMA_IMAGE_MAX_SIDE = env.int("OLLAMA_IMAGE_MAX_SIDE", default=1024)
 OLLAMA_IMAGE_JPEG_QUALITY = env.int("OLLAMA_IMAGE_JPEG_QUALITY", default=82)
 OLLAMA_IMAGE_MAX_BYTES = env.int("OLLAMA_IMAGE_MAX_BYTES", default=0)
 
-# SMS AI assist — best-effort rescue of messages the fast parser cannot fully
+# SMS AI assist — post-intake rescue of messages the fast parser cannot fully
 # read (typos, natural Filipino, landmark-only locations). Purely additive: if
 # it is off, slow or wrong, SMS behaves exactly as it does without it. The
 # alert is always saved, routed and acknowledged first; this runs afterwards.
 SMS_AI_ASSIST_ENABLED = env.bool("SMS_AI_ASSIST_ENABLED", default=False)
 SMS_AI_TIMEOUT_SECONDS = env.float("SMS_AI_TIMEOUT_SECONDS", default=2.5)
 SMS_AI_MIN_CONFIDENCE = env.float("SMS_AI_MIN_CONFIDENCE", default=0.6)
+if IS_TEST_RUN:
+    # A developer's live .env must never make the deterministic test suite call
+    # the paid/remote model. AI unit tests opt in with override_settings and
+    # mock the client explicitly.
+    SMS_AI_ASSIST_ENABLED = False
+SMS_INBOUND_PENDING_RECOVERY_SECONDS = env.int(
+    "SMS_INBOUND_PENDING_RECOVERY_SECONDS", default=60
+)
+SMS_INBOUND_PENDING_MAX_AGE_HOURS = env.int(
+    "SMS_INBOUND_PENDING_MAX_AGE_HOURS", default=24
+)
 
 # IP intelligence — fail-open gate on login, concern filing and emergency
 # alerts. When IP_INTEL_URL is empty the feature is off entirely. In dev the

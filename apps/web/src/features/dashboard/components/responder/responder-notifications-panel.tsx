@@ -55,6 +55,7 @@ export function ResponderNotificationsPanel({
 
   const config = useMemo<NotificationsConfig>(
     () => ({
+      heading: "Dispatch updates",
       filters: FILTERS,
       dark: true,
       groupOf: (item) => (categoryOf(item) === "dispatch" ? "dispatch" : null),

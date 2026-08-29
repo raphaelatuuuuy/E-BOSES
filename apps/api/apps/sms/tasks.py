@@ -57,6 +57,14 @@ def sms_ai_assist_task(self, alert_id):
     if not alert:
         return None
     try:
-        return run_rescue(alert)
+        return run_rescue(alert, propagate_timeout=True)
     except TimeoutError as exc:
         raise self.retry(exc=exc) from exc
+
+
+@shared_task(time_limit=90, soft_time_limit=75)
+def recover_stuck_inbound_sms_task():
+    """Replay only recent orphaned inbound rows; expire old rows safely."""
+    from .router import recover_stuck_inbound_messages
+
+    return recover_stuck_inbound_messages()

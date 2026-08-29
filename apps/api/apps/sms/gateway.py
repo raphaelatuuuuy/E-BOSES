@@ -306,7 +306,10 @@ class AndroidSmsGatewayDriver(HttpJsonSmsDriver):
     """
 
     name = "android_sms_gateway"
-    default_template = '{"message": "{body}", "phoneNumbers": ["{to}"]}'
+    default_template = (
+        '{"textMessage":{"text":"{body}"},"phoneNumbers":["{to}"],'
+        '"simNumber":"{sim_slot}","withDeliveryReport":true}'
+    )
     cloud_path = "/3rdparty/v1/message"
     local_path = "/message"
 
@@ -432,26 +435,40 @@ def queue_sms(
 def _dispatch(message_id: int, destination: str, body: str) -> None:
     """Send through Celery when a broker is reachable.
 
-    A broker outage must not hang the request thread: delivery args cannot be
-    reconstructed later (destinations are stored hashed, OTP bodies are never
-    persisted), so in production the row simply stays QUEUED for operator
-    visibility while local development — where no worker runs — still delivers
-    inline.
+    Delivery args cannot be reconstructed later (destinations are stored
+    hashed, OTP bodies are never persisted). Emergency-critical messages fall
+    back to an inline bounded attempt when the broker is unavailable; other
+    messages are marked failed instead of remaining invisibly queued forever.
     """
     from .tasks import send_outbound_sms_task
 
     try:
         send_outbound_sms_task.delay(message_id, destination, body)
     except Exception as exc:
-        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
-            logger.warning("Celery unavailable for SMS #%s; sending inline (dev).", message_id)
-            deliver(message_id, destination, body)
+        message = OutboundSmsMessage.objects.filter(pk=message_id).only("purpose").first()
+        critical = bool(message and message.purpose in {
+            SmsPurpose.EMERGENCY,
+            SmsPurpose.EMERGENCY_ACK,
+            SmsPurpose.DISPATCH,
+            SmsPurpose.OFFICIAL_ALERT,
+        })
+        if critical or getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+            logger.warning("Celery unavailable for SMS #%s; using bounded inline delivery.", message_id)
+            try:
+                deliver(
+                    message_id,
+                    destination,
+                    body,
+                    timeout=min(10.0, float(getattr(settings, "OUTBOUND_SMS_TIMEOUT_SECONDS", 15))),
+                )
+            except SmsDeliveryError:
+                pass
             return
-        logger.error(
-            "Celery broker unavailable; SMS #%s stays QUEUED (%s).",
-            message_id,
-            exc.__class__.__name__,
+        OutboundSmsMessage.objects.filter(pk=message_id).update(
+            status=OutboundSmsMessage.Status.FAILED,
+            last_error=f"Celery broker unavailable ({exc.__class__.__name__})."[:255],
         )
+        logger.error("Celery broker unavailable; SMS #%s marked FAILED.", message_id)
 
 
 def deliver(message_id: int, destination: str, body: str, timeout: float | None = None) -> str:
@@ -459,7 +476,7 @@ def deliver(message_id: int, destination: str, body: str, timeout: float | None 
     message = OutboundSmsMessage.objects.filter(pk=message_id).first()
     if not message:
         return OutboundSmsMessage.Status.FAILED
-    if message.status == OutboundSmsMessage.Status.SENT:
+    if message.status in {OutboundSmsMessage.Status.SENT, OutboundSmsMessage.Status.DELIVERED}:
         return message.status
 
     driver = get_driver()
@@ -497,6 +514,51 @@ def deliver(message_id: int, destination: str, body: str, timeout: float | None 
     return message.status
 
 
+def reconcile_delivery_event(payload) -> bool:
+    """Apply an authenticated SMSGate delivery webhook to its outbound row."""
+    event = (getattr(payload, "event", "") or "").strip().lower()
+    if event not in {"sms:sent", "sms:delivered", "sms:failed"}:
+        return False
+    provider_id = (getattr(payload, "gateway_message_id", "") or "").strip()
+    if not provider_id:
+        return False
+    message = OutboundSmsMessage.objects.filter(provider_message_id=provider_id[:64]).first()
+    if not message:
+        logger.warning("Delivery event %s did not match an outbound SMS provider id.", event)
+        return False
+
+    now = timezone.now()
+    raw = getattr(payload, "raw", {}) or {}
+    lowered = {str(key).lower(): value for key, value in raw.items()}
+    provider_state = str(lowered.get("state") or lowered.get("status") or event.split(":", 1)[1])[:24]
+
+    if event == "sms:delivered":
+        message.status = OutboundSmsMessage.Status.DELIVERED
+        message.sent_at = message.sent_at or now
+        message.delivered_at = now
+        message.last_error = ""
+        message.provider_state = provider_state
+        message.save(update_fields=["status", "sent_at", "delivered_at", "last_error", "provider_state"])
+        return True
+    if message.status == OutboundSmsMessage.Status.DELIVERED:
+        # Webhooks can arrive out of order. Delivery is terminal and must not be
+        # regressed by a late sent/failed event.
+        return True
+    if event == "sms:failed":
+        message.status = OutboundSmsMessage.Status.FAILED
+        message.last_error = "Gateway reported that the SMS could not be delivered."
+        message.provider_state = provider_state
+        message.save(update_fields=["status", "last_error", "provider_state"])
+        return True
+
+    message.status = OutboundSmsMessage.Status.SENT
+    message.sent_at = message.sent_at or now
+    message.last_error = ""
+    message.provider_state = provider_state
+    message.save(update_fields=["status", "sent_at", "last_error", "provider_state"])
+    return True
+
+
 def send_sms(destination: str, body: str, **kwargs) -> OutboundSmsMessage | None:
     """Alias kept for readability at call sites."""
     return queue_sms(destination, body, **kwargs)
@@ -522,4 +584,10 @@ def gateway_is_available() -> bool:
         return False
     if driver in {"sms_forwarder", "http_generic"}:
         return bool(getattr(settings, "OUTBOUND_SMS_URL", ""))
+    if driver == "android_sms_gateway":
+        return bool(
+            getattr(settings, "OUTBOUND_SMS_URL", "")
+            and getattr(settings, "OUTBOUND_SMS_USERNAME", "")
+            and getattr(settings, "OUTBOUND_SMS_PASSWORD", "")
+        )
     return True

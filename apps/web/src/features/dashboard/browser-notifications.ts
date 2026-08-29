@@ -43,7 +43,7 @@ function buffersMatch(left: ArrayBuffer | null, right: Uint8Array) {
 }
 
 export function browserNotificationsSupported() {
-  return "Notification" in window && "serviceWorker" in navigator && "PushManager" in window
+  return window.isSecureContext && "Notification" in window && "serviceWorker" in navigator && "PushManager" in window
 }
 
 export interface BrowserNotificationState {
@@ -52,6 +52,7 @@ export interface BrowserNotificationState {
   serverConfigured: boolean
   subscribed: boolean
   config?: {
+    configured?: boolean
     public_key_length?: number
     public_key_decoded_length?: number | null
     public_key_first_byte?: number | null
@@ -62,14 +63,72 @@ export interface BrowserNotificationState {
   }
 }
 
+function browserClockGreeting(lastName?: string) {
+  const hour = Number(
+    new Intl.DateTimeFormat("en-PH", {
+      hour: "numeric",
+      hour12: false,
+      timeZone: "Asia/Manila",
+    }).format(new Date()),
+  ) % 24
+  const salutation = hour < 12
+    ? "Good morning"
+    : hour < 18
+      ? "Good afternoon"
+      : "Good evening"
+  const name = lastName?.trim()
+  return name ? `${salutation}, ${name}.` : `${salutation}.`
+}
+
+export function browserNotificationErrorMessage(error: unknown, action = "enable") {
+  const detail = error instanceof Error ? error.message.trim() : ""
+  const lower = detail.toLowerCase()
+  const permission = typeof Notification === "undefined" ? "unknown" : Notification.permission
+  const pushFailure =
+    lower.includes("push service") ||
+    lower.includes("push subscription") ||
+    lower.includes("pushmanager") ||
+    lower.includes("subscription") ||
+    (permission === "granted" && lower.includes("notallowed"))
+  if (pushFailure) {
+    if (typeof window !== "undefined" && !window.isSecureContext) {
+      return "Browser push requires a trusted HTTPS E-Boses address. Open the secure site, then try again."
+    }
+    if (permission !== "granted") {
+      return "This browser has not granted notification permission for this E-Boses address. Open the browser site settings, choose Allow for notifications, reload, and try again."
+    }
+    if (lower.includes("after one recovery attempt")) {
+      return "Browser notifications are allowed, but this browser's Push service could not create a subscription. This can happen even with one tab when browser push is restricted by a privacy setting, extension, or browser policy. Try a normal Chrome or Edge window, allow notifications for this exact address, reload, and try again."
+    }
+    return detail
+      ? `Browser notifications are allowed, but this browser's Push service rejected registration: ${detail}`
+      : "Browser notifications are allowed, but this browser's Push service rejected registration. Try a normal Chrome or Edge window, allow notifications for this exact address, reload, and try again."
+  }
+  if (permission === "denied" || lower.includes("blocked") || lower.includes("permission denied")) {
+    return "Browser notifications are blocked for this site. Open the browser site settings, choose Allow for E-Boses, reload, and try again."
+  }
+  if (permission === "default" && lower.includes("permission")) {
+    return "The browser did not grant notification permission. Click Enable again and choose Allow when prompted."
+  }
+  if (lower.includes("vapid") || lower.includes("public key") || lower.includes("key pair")) {
+    return "Browser notifications are not configured correctly on the server. Please contact the administrator."
+  }
+  if (lower.includes("not configured") || lower.includes("server push")) {
+    return "Browser notifications are not configured on the server yet. In-app notifications will still work."
+  }
+  if (lower.includes("service worker")) {
+    return "E-Boses could not start its notification worker. Reload the page and try again."
+  }
+  if (lower.includes("push service") || lower.includes("push subscription") || lower.includes("subscription")) {
+    return "The browser rejected push registration. Close duplicate E-Boses tabs, reload, and try again."
+  }
+  if (detail) return detail
+  return `Could not ${action} browser notifications. Reload the page and try again.`
+}
+
 export async function registerNotificationWorker() {
   if (!browserNotificationsSupported()) return null
   return registerAppServiceWorker()
-}
-
-async function getPublicKey() {
-  const { public_key } = await apiRequest<{ public_key: string }>("/notifications/browser-push/public-key/")
-  return (public_key || "").trim().replace(/^["']|["']$/g, "")
 }
 
 async function getPublicKeyResponse() {
@@ -117,6 +176,9 @@ export async function getBrowserNotificationState(): Promise<BrowserNotification
 }
 
 export async function enableBrowserNotifications() {
+  if (typeof window !== "undefined" && !window.isSecureContext) {
+    throw new Error("Browser push requires a trusted HTTPS E-Boses address.")
+  }
   if (!browserNotificationsSupported()) {
     throw new Error("Browser notifications are not supported on this device.")
   }
@@ -137,9 +199,19 @@ export async function enableBrowserNotifications() {
     throw new Error("PushManager is not available in this browser.")
   }
 
-  const public_key = await getPublicKey()
+  const keyResponse = await getPublicKeyResponse()
+  const public_key = keyResponse.publicKey
   if (!public_key) {
     throw new Error("Server push is not configured yet. In-app notifications will still work.")
+  }
+  const keyConfig = keyResponse.config
+  if (
+    keyConfig?.configured === false ||
+    keyConfig?.public_key_format_valid === false ||
+    keyConfig?.key_pair_valid === false ||
+    keyConfig?.subject_valid === false
+  ) {
+    throw new Error("VAPID browser push configuration is invalid. Please contact the administrator.")
   }
 
   const applicationServerKey = urlBase64ToUint8Array(public_key)
@@ -157,7 +229,10 @@ export async function enableBrowserNotifications() {
 
   const subscribe = async (serviceWorker: ServiceWorkerRegistration) => serviceWorker.pushManager.subscribe({
     userVisibleOnly: true,
-    applicationServerKey,
+    // Edge is more reliable when the VAPID key is passed as an ArrayBuffer
+    // instead of a typed-array view, even though both are valid BufferSource
+    // values according to the Push API.
+    applicationServerKey: applicationServerKey.buffer,
   })
 
   const recoverPushState = async () => {
@@ -165,6 +240,9 @@ export async function enableBrowserNotifications() {
     await unregisterStaleServiceWorker().catch(() => undefined)
     const freshRegistration = await registerNotificationWorker()
     if (!freshRegistration) return null
+    await freshRegistration.update().catch(() => undefined)
+    const activeWorker = freshRegistration.active ?? (await ensureServiceWorkerActive())?.active
+    if (!activeWorker) return null
     return subscribe(freshRegistration)
   }
 
@@ -176,7 +254,11 @@ export async function enableBrowserNotifications() {
         return await subscribe(serviceWorker)
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
-        const isPushServiceError = detail.toLowerCase().includes("push service") || (error instanceof DOMException && error.name === "AbortError")
+        const isPushServiceError =
+          detail.toLowerCase().includes("push service") ||
+          (error instanceof DOMException &&
+            ["AbortError", "InvalidStateError", "NotAllowedError"].includes(error.name) &&
+            Notification.permission === "granted")
         if (isPushServiceError) {
           try {
             const recovered = await recoverPushState()
@@ -185,12 +267,12 @@ export async function enableBrowserNotifications() {
             // Fall through to the original browser-facing error below.
           }
           throw new Error(
-            "Browser push service registration failed. The app tried to recover stale push state, but the browser still rejected push registration. On this machine, check Edge notification permission, disable adblock/VPN/privacy tools temporarily, and retry on a fresh tab.",
+            "Browser push service registration failed after one recovery attempt. Close duplicate E-Boses tabs, reload, and retry. If it continues, check browser notification permission and privacy extensions.",
             { cause: error },
           )
         }
         throw new Error(
-          `Browser push subscription failed: ${detail || "unknown error"}. Reload the page and try again on a trusted HTTPS origin.`,
+          `Browser push subscription failed (${error instanceof DOMException ? error.name : "browser error"}): ${detail || "unknown error"}. Reload the page and try again on a trusted HTTPS origin.`,
           { cause: error },
         )
       }
@@ -203,6 +285,29 @@ export async function enableBrowserNotifications() {
     body: JSON.stringify(subscription.toJSON()),
   })
   return permission
+}
+
+export async function showBrowserNotificationFeedback(lastName: string | undefined, enabled: boolean) {
+  if (!browserNotificationsSupported() || Notification.permission !== "granted") return false
+  const registration = await registerNotificationWorker()
+  if (!registration?.active) return false
+  const state = enabled ? "enabled" : "disabled"
+  registration.active.postMessage({
+    type: "eboses.show-notification",
+    payload: {
+      title: enabled ? "Browser notifications enabled" : "Browser notifications disabled",
+      body: `${browserClockGreeting(lastName)} Browser notifications are now ${state} on this device.`,
+      url: "/dashboard/notifications",
+      tag: `eboses-browser-notifications-${state}`,
+      category: "system",
+      priority: "important",
+      icon: "/contents/logo.webp",
+      badge: "/contents/logo.webp",
+      timestamp: new Date().toISOString(),
+      data: { settings_confirmation: true },
+    },
+  })
+  return true
 }
 
 export async function disableBrowserNotifications() {

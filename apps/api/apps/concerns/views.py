@@ -148,6 +148,81 @@ ACTIVE_STATUSES = {
     Concern.Status.APPEALED,
 }
 
+
+def _auto_escalate_concern(concern, request, *, emergency_type: str, auto_escalate: bool, ip_meta: dict):
+    """Create and route the emergency companion selected by the resident
+    precheck.
+
+    The resident never chooses an emergency type. The precheck supplies the
+    model's configured, ongoing-emergency result. The normal emergency router
+    remains authoritative: if no responder map exists, it leaves the alert in
+    its escalation-required state for an official.
+    """
+    if not auto_escalate or not emergency_type:
+        return None
+
+    from apps.emergencies.models import EmergencyAlert, EmergencyCategory
+    from apps.emergencies.views import (
+        auto_route_alert,
+        create_status_event,
+        create_witness_notifications,
+        send_app_emergency_sms,
+        serialize_alert,
+    )
+    from apps.emergencies.location_services import classify_location_confidence, schedule_location_resolution
+    from apps.notifications.services import notify_emergency_status
+
+    if not EmergencyCategory.objects.filter(code=emergency_type, is_active=True).exists():
+        return None
+    if EmergencyAlert.objects.filter(
+        reporter=concern.reporter,
+        source_concern=concern,
+        status__in={
+            EmergencyAlert.Status.SUBMITTED,
+            EmergencyAlert.Status.ROUTING,
+            EmergencyAlert.Status.ROUTED,
+            EmergencyAlert.Status.AWAITING_ACKNOWLEDGMENT,
+            EmergencyAlert.Status.ACKNOWLEDGED,
+            EmergencyAlert.Status.EN_ROUTE,
+            EmergencyAlert.Status.NEARBY,
+            EmergencyAlert.Status.ARRIVED,
+            EmergencyAlert.Status.IN_PROGRESS,
+            EmergencyAlert.Status.ESCALATION_REQUIRED,
+        },
+    ).exists():
+        existing = EmergencyAlert.objects.filter(reporter=concern.reporter, source_concern=concern).order_by("-created_at").first()
+        return serialize_alert(existing, request) if existing else None
+
+    alert = EmergencyAlert.objects.create(
+        reporter=concern.reporter,
+        type=emergency_type,
+        note=concern.description,
+        community=concern.community,
+        barangay=concern.barangay,
+        latitude=concern.latitude,
+        longitude=concern.longitude,
+        location_source=concern.location_source or "manual_pin",
+        location_accuracy=concern.location_accuracy,
+        address=concern.address,
+        reported_area=concern.address,
+        source_concern=concern,
+        ip_asn=ip_meta.get("asn", ""),
+        ip_country=ip_meta.get("country", ""),
+        ip_org=ip_meta.get("org", ""),
+        ip_verdict=ip_meta.get("verdict", ""),
+        ip_score=ip_meta.get("score"),
+    )
+    alert.location_confidence = classify_location_confidence(alert)
+    alert.save(update_fields=["location_confidence"])
+    create_status_event(alert, EmergencyAlert.Status.SUBMITTED, concern.reporter, event_key="received_app")
+    notify_emergency_status(alert, type=EmergencyAlert.Status.SUBMITTED, body="Your emergency alert was submitted.")
+    auto_route_alert(alert, request)
+    create_witness_notifications(alert)
+    if alert.latitude is not None and alert.longitude is not None:
+        schedule_location_resolution(alert)
+    transaction.on_commit(lambda alert_id=alert.pk: send_app_emergency_sms(EmergencyAlert.objects.get(pk=alert_id)))
+    return serialize_alert(alert, request)
+
 def create_timeline_entry(*, concern, event_type, message, actor=None, status="", visible_to_resident=True, is_custom=False, metadata=None):
     return ConcernTimelineEntry.objects.create(
         concern=concern,
@@ -595,7 +670,13 @@ class ConcernListCreateView(APIView):
             ).first()
             if existing:
                 decorated = decorate_concerns(Concern.objects.filter(pk=existing.pk), request.user)[0]
-                return Response(ConcernSerializer(decorated, context={"request": request}).data)
+                response_payload = ConcernSerializer(decorated, context={"request": request}).data
+                from apps.emergencies.models import EmergencyAlert
+                existing_alert = EmergencyAlert.objects.filter(source_concern=existing).order_by("-created_at").first()
+                if existing_alert:
+                    from apps.emergencies.views import serialize_alert
+                    response_payload["escalated_alert"] = serialize_alert(existing_alert, request)
+                return Response(response_payload)
         category_ref = None
         assigned_department = None
         community = getattr(getattr(request.user, "resident_profile", None), "community", None)
@@ -617,7 +698,12 @@ class ConcernListCreateView(APIView):
             configuration = ConcernClassificationConfiguration.current()
             enabled_categories = configuration.enabled_categories or list(Concern.Category.values)
             selected_category = serializer.validated_data["category"]
-            category_ref = ConcernCategory.objects.filter(code=selected_category, community=community, is_active=True).select_related("department").first()
+            category_ref = (
+                ConcernCategory.objects.filter(code=selected_category, is_active=True)
+                .filter(Q(community=community) | Q(community__isnull=True))
+                .select_related("department")
+                .first()
+            )
             if not category_ref and selected_category not in enabled_categories:
                 return Response(
                     {"category": ["This concern category is temporarily unavailable. Choose another category."]},
@@ -639,8 +725,6 @@ class ConcernListCreateView(APIView):
         if category_ref and category_ref.location_required:
             if serializer.validated_data.get("latitude") is None or serializer.validated_data.get("longitude") is None or not serializer.validated_data.get("address", "").strip():
                 return Response({"address": ["Pin where the issue is located."]}, status=status.HTTP_400_BAD_REQUEST)
-        if category_ref and not category_ref.public_feed_allowed and serializer.validated_data.get("visibility") == Concern.Visibility.COMMUNITY:
-            return Response({"visibility": ["Public sharing is not available for this concern type."]}, status=status.HTTP_400_BAD_REQUEST)
         location_review = serializer.validated_data.get("_location_review") or {}
         pending_location_review = location_review.get("action") == "review"
         validation_summary = location_review.get("summary") or "Required report checks passed. Advanced analysis is pending."
@@ -710,6 +794,14 @@ class ConcernListCreateView(APIView):
                     {"description": ["A similar report already exists near this location. Add new details only if this is a different issue."]},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+        # Feed visibility is a category policy, not a resident-controlled
+        # setting. Public-capable categories publish to the community feed;
+        # restricted categories always remain private.
+        effective_visibility = (
+            Concern.Visibility.COMMUNITY
+            if not category_ref or category_ref.public_feed_allowed
+            else Concern.Visibility.PRIVATE
+        )
         concern = Concern.objects.create(
             community=community,
             client_request_id=client_request_id,
@@ -719,7 +811,7 @@ class ConcernListCreateView(APIView):
             category=selected_category,
             category_ref=category_ref,
             assigned_department=assigned_department,
-            visibility=Concern.Visibility.PRIVATE if category_ref and not category_ref.public_feed_allowed else serializer.validated_data["visibility"],
+            visibility=effective_visibility,
             address=serializer.validated_data.get("address", ""),
             latitude=serializer.validated_data.get("latitude"),
             longitude=serializer.validated_data.get("longitude"),
@@ -784,7 +876,17 @@ class ConcernListCreateView(APIView):
         transaction.on_commit(lambda: broadcast_live_map_event("concern.created", {"concern": concern_payload(decorated)}))
         transaction.on_commit(lambda: enqueue_concern_ai(concern.pk))
         transaction.on_commit(lambda: _schedule_concern_location(concern.pk))
-        return Response(ConcernSerializer(decorated, context={"request": request}).data, status=status.HTTP_201_CREATED)
+        response_payload = ConcernSerializer(decorated, context={"request": request}).data
+        escalated_alert = _auto_escalate_concern(
+            concern,
+            request,
+            emergency_type=serializer.validated_data.get("emergency_type", "").strip(),
+            auto_escalate=bool(serializer.validated_data.get("auto_escalate")),
+            ip_meta=ip_meta,
+        )
+        if escalated_alert is not None:
+            response_payload["escalated_alert"] = escalated_alert
+        return Response(response_payload, status=status.HTTP_201_CREATED)
 
 
 class MyConcernListView(APIView):

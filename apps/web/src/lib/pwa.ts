@@ -10,7 +10,14 @@ export async function unregisterStaleServiceWorker() {
   if (!("serviceWorker" in navigator)) return
   try {
     const registrations = await navigator.serviceWorker.getRegistrations()
-    await Promise.all(registrations.map((r) => r.unregister()))
+    await Promise.all(
+      registrations
+        .filter((registration) => {
+          const scriptUrl = registration.active?.scriptURL || registration.waiting?.scriptURL || registration.installing?.scriptURL || ""
+          return scriptUrl === new URL("/eboses-sw.js", window.location.origin).href
+        })
+        .map((registration) => registration.unregister()),
+    )
   } catch {
     // best-effort
   }
@@ -25,7 +32,12 @@ export async function registerAppServiceWorker() {
     return null
   }
   try {
-    return await navigator.serviceWorker.register("/eboses-sw.js", { scope: "/" })
+    const registration = await navigator.serviceWorker.register("/eboses-sw.js", { scope: "/" })
+    // Ask the browser to check for a changed worker immediately. This prevents
+    // an old cached worker from keeping the previous notification bundle alive
+    // after a local rebuild or deployment.
+    await registration.update().catch(() => undefined)
+    return registration
   } catch (error) {
     lastServiceWorkerError = error instanceof Error ? error.message : String(error)
     return null

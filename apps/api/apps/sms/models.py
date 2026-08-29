@@ -167,6 +167,7 @@ class OutboundSmsMessage(models.Model):
         QUEUED = "queued", "Queued"
         SENDING = "sending", "Sending"
         SENT = "sent", "Sent"
+        DELIVERED = "delivered", "Delivered"
         FAILED = "failed", "Failed"
         SKIPPED = "skipped", "Skipped (gateway disabled)"
 
@@ -211,6 +212,7 @@ class OutboundSmsMessage(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     sent_at = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at", "-id"]

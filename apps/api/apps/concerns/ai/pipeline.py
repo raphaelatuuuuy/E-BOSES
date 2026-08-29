@@ -34,6 +34,7 @@ from apps.concerns.models import (
     ConcernStatusEvent,
     ConcernTimelineEntry,
 )
+from apps.concerns.notification_subject import build_notification_subject
 
 from .classification import BASE_TEXT_MODEL
 from .duplicate_detector import find_duplicate_concern
@@ -353,6 +354,15 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
     )
     gemma_duration_ms = int((time.monotonic() - started) * 1000)
     details = gemma_result.details or {}
+    # The subject is generated as part of the existing asynchronous Gemma run.
+    # Validate it here and always keep a concrete local fallback for model
+    # outages, malformed output, or reports that predate this field.
+    details["notification_subject"] = build_notification_subject(
+        details.get("notification_subject"),
+        title=concern.title,
+        description=concern.description,
+        category=concern.category,
+    )
 
     image_review_succeeded = details.get("image_review_succeeded")
     if prepare_failed:
@@ -519,6 +529,7 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
             concern,
             details=details,
             integrity_check=integrity_check,
+            street_check=street_check,
             model_version=gemma_result.model_version,
             duration_ms=gemma_duration_ms,
         )
@@ -534,11 +545,18 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
 
 
 def _apply_formatted_summary(concern, *, details, run_status) -> None:
-    if run_status != ConcernAiAssessment.Status.COMPLETED:
-        return
+    subject = (details.get("notification_subject") or "").strip()[:80]
     title = (details.get("report_title") or "").strip()[:140]
     summary = (details.get("text_assessment") or "").strip()[:300]
     updates = {}
+    if subject and concern.notification_subject != subject:
+        updates["notification_subject"] = subject
+    if run_status != ConcernAiAssessment.Status.COMPLETED:
+        if updates:
+            for field, value in updates.items():
+                setattr(concern, field, value)
+            concern.save(update_fields=list(updates))
+        return
     if title and concern.official_title != title:
         updates["official_title"] = title
     if summary and concern.summary != summary:
@@ -550,7 +568,7 @@ def _apply_formatted_summary(concern, *, details, run_status) -> None:
     concern.save(update_fields=list(updates))
 
 
-def _record_decision_log(concern, *, details, integrity_check, model_version, duration_ms) -> None:
+def _record_decision_log(concern, *, details, integrity_check, street_check, model_version, duration_ms) -> None:
     """Append one audit row for this run.
 
     The concern pipeline is the highest-volume model path in the system and
@@ -565,6 +583,28 @@ def _record_decision_log(concern, *, details, integrity_check, model_version, du
     """
     from apps.concerns.models import LlmDecisionLog
 
+    rejection_source = {
+        "automated_street_imagery": "Street-view location check",
+        "automated_street_imagery_resubmit": "Street-view location check",
+        "automated_media_integrity": "Photo authenticity check",
+        "automated_media_integrity_resubmit": "Photo authenticity check",
+        "automated_category_mismatch": "Category check",
+        "automated_category_mismatch_resubmit": "Category check",
+        "automated_irrelevant": "Relevance check",
+        "automated_incomplete": "Required information check",
+    }
+    output_snapshot = {
+        "model_recommended_action": details.get("recommended_action"),
+        "street_imagery": street_check or {},
+        "media_integrity": (integrity_check or {}).get("findings") or [],
+        "media_integrity_overall": (integrity_check or {}).get("overall"),
+        "media_integrity_status": (integrity_check or {}).get("status"),
+        "final_decision": {
+            "status": concern.validation_status,
+            "reason": concern.validation_summary,
+            "source": rejection_source.get(concern.rejection_code, "Automated validation"),
+        },
+    }
     try:
         LlmDecisionLog.objects.create(
             run_kind=LlmDecisionLog.RunKind.PRODUCTION,
@@ -579,13 +619,12 @@ def _record_decision_log(concern, *, details, integrity_check, model_version, du
                 "location": (concern.address or "")[:255],
             },
             output_snapshot={
+                **output_snapshot,
                 "relevance": details.get("relevance"),
                 "primary_category": details.get("primary_category"),
+                "notification_subject": details.get("notification_subject"),
                 "severity": details.get("severity"),
                 "evidence_relationship": details.get("evidence_relationship"),
-                "media_integrity": (integrity_check or {}).get("findings") or [],
-                "media_integrity_overall": (integrity_check or {}).get("overall"),
-                "media_integrity_status": (integrity_check or {}).get("status"),
             },
             resident_message=details.get("short_explanation") or "",
             recommended_action=details.get("recommended_action") or "",

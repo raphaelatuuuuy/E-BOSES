@@ -35,9 +35,11 @@ export function EmergencyTimeline({
 
   if (entries.length === 0) {
     return (
-      <p className="text-body text-muted-foreground">
-        No timeline events have been recorded for this emergency yet.
-      </p>
+      <div className="rounded-[16px] bg-neutral-50 p-4 text-center">
+        <p className="text-[11px] font-normal text-neutral-400">
+          No timeline events have been recorded for this emergency yet.
+        </p>
+      </div>
     )
   }
 

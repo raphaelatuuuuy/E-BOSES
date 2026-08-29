@@ -26,6 +26,7 @@ from dataclasses import asdict
 from django.conf import settings
 
 from apps.concerns.models import Concern, ConcernCategory
+from apps.concerns.notification_subject import normalise_notification_subject
 from apps.emergencies.models import EmergencyCategory
 from apps.emergencies.temporal import NON_CURRENT, infer_incident_timing, normalise_incident_timing
 
@@ -188,6 +189,7 @@ def empty_details() -> dict:
         "selected_category_match": None,
         "detected_objects": [],
         "report_title": "",
+        "notification_subject": "",
         "severity_reason": "",
         "text_assessment": "",
         "photo_assessment": "",
@@ -558,6 +560,14 @@ def build_prompt(
         "in Filipino or Taglish. State only what the report and image support, never a cause or blame. "
         "Good: 'Stray dogs gathering outside the day-care on Dao Street'. "
         "Bad: 'Urgent!!! ang daming askal!!!', 'Negligent owners letting dogs roam'.\n"
+        "11c. notification_subject is the short subject shown in a resident notification: exactly one, "
+        "two, or three words only. It must name the concrete issue, not the category, location, report "
+        "status, urgency, or a generic phrase. Write it in clear English, without punctuation, quotes, "
+        "a sentence, or an explanation. Prefer specific phrases such as 'Roadside Pothole', "
+        "'Blocked Drainage', 'Fallen Powerline', 'Accumulated Garbage', or 'Broken Streetlight'. "
+        "Do not use 'Community Concern', 'General Issue', 'Report Update', or 'Public Safety' unless "
+        "the report truly gives no more specific clue. Never invent a detail that is not supported by "
+        "the report or image.\n"
         "12. Privacy: set privacy_scan_required true when the image may show something that should not "
         "be public. In suspected_sensitive_classes, name each one as a SHORT CONCRETE OBJECT of one or "
         "two words — the words a person would use to point at it in the photo. These are passed to an "
@@ -631,6 +641,7 @@ def build_prompt(
         '  "selected_category_match": null,\n'
         '  "detected_objects": [],\n'
         '  "report_title": null,\n'
+        '  "notification_subject": null,\n'
         '  "text_assessment": null,\n'
         '  "photo_assessment": null,\n'
         '  "evidence_relationship": null,\n'
@@ -818,6 +829,7 @@ def parse_gemma_result(
         "selected_category_match": selected_match,
         "detected_objects": detected_objects,
         "report_title": _clean_text(data.get("report_title"))[:140],
+        "notification_subject": normalise_notification_subject(data.get("notification_subject")),
         "severity_reason": _clean_text(data.get("severity_reason"))[:300],
         "text_assessment": _clean_text(data.get("text_assessment")),
         "photo_assessment": _clean_text(data.get("photo_assessment")),

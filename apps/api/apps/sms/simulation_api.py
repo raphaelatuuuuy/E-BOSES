@@ -379,7 +379,14 @@ def _ai_assist_section(parsed, alert) -> dict:
 
     from . import ai_assist
 
-    section = {"applicable": False, "reason": "", "ran": False, "model": "", "applied": {}}
+    section = {
+        "applicable": False,
+        "reason": "",
+        "ran": False,
+        "model": "",
+        "applied": {},
+        "map_resolution": None,
+    }
     if not ai_assist.enabled():
         section["reason"] = "AI assist is switched off (SMS_AI_ASSIST_ENABLED / OLLAMA_API_KEY)."
         return section
@@ -416,6 +423,11 @@ def _ai_assist_section(parsed, alert) -> dict:
         applied["street"] = {"value": assist.street, "confidence": round(assist.street_confidence, 2)}
     if assist.area:
         applied["area"] = {"value": assist.area, "confidence": round(ai_assist.min_confidence(), 2)}
+    map_query = assist.street or assist.area
+    if map_query:
+        from apps.emergencies.location_resolution import geocode_reported_place
+
+        section["map_resolution"] = geocode_reported_place(map_query).payload()
     section["ran"] = True
     section["applied"] = applied
     if not applied:

@@ -342,6 +342,8 @@ class EmergencyAssignmentStatusSerializer(serializers.Serializer):
 
 class EmergencyResponderAssignmentSerializer(serializers.ModelSerializer):
     responder = PublicUserSerializer(read_only=True)
+    responding_community = serializers.SerializerMethodField()
+    is_cross_community = serializers.BooleanField(read_only=True)
     last_location = serializers.SerializerMethodField()
     location_history = serializers.SerializerMethodField()
     route = serializers.SerializerMethodField()
@@ -354,6 +356,8 @@ class EmergencyResponderAssignmentSerializer(serializers.ModelSerializer):
             "status",
             "source",
             "role_map",
+            "responding_community",
+            "is_cross_community",
             "status_note",
             "assigned_at",
             "acknowledged_at",
@@ -362,6 +366,16 @@ class EmergencyResponderAssignmentSerializer(serializers.ModelSerializer):
             "location_history",
             "route",
         )
+
+    def get_responding_community(self, obj):
+        community = getattr(obj, "responding_community", None)
+        if not community:
+            return None
+        return {
+            "id": community.pk,
+            "name": community.name,
+            "code": community.code,
+        }
 
     def get_last_location(self, obj):
         pings = list(obj.location_pings.all())

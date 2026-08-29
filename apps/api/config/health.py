@@ -28,7 +28,7 @@ DEEP_PROBE_TIMEOUT_SECONDS = 2.5
                 "database": drf_serializers.CharField(),
                 "dependencies": drf_serializers.DictField(
                     required=False,
-                    help_text="Deep mode only: cache, redis, email, ai, sms_gateway -> ok | error | not_configured",
+                    help_text="Deep mode only: cache, redis, email, ai, sms_gateway -> ok | error | unknown | not_configured",
                 ),
             },
         ),
@@ -127,9 +127,18 @@ def _probe_dependencies() -> dict:
     results["email"] = _probe_url_ok("https://api.resend.com") if getattr(settings, "RESEND_API_KEY", "") else "not_configured"
     results["ai"] = _probe_url_ok(getattr(settings, "OLLAMA_HOST", "")) if getattr(settings, "OLLAMA_API_KEY", "") else "not_configured"
 
-    sms_url = getattr(settings, "OUTBOUND_SMS_URL", "") or ""
     if getattr(settings, "OUTBOUND_SMS_DRIVER", "console") == "console":
         results["sms_gateway"] = "not_configured"
     else:
-        results["sms_gateway"] = _probe_url_ok(sms_url)
+        # This is deliberately read-only. For SMSGate it authenticates against
+        # GET /webhooks and verifies inbound registration/device evidence;
+        # merely receiving a 401/404 from the host is not a healthy gateway.
+        from apps.service_status import DOWN, NOT_CONFIGURED, OPERATIONAL, _sms
+
+        sms_status, _detail = _sms()
+        results["sms_gateway"] = {
+            OPERATIONAL: "ok",
+            NOT_CONFIGURED: "not_configured",
+            DOWN: "error",
+        }.get(sms_status, "unknown")
     return results

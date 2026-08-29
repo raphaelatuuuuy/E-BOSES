@@ -14,7 +14,6 @@ import {
   FileTextIcon,
   LoaderCircleIcon,
   MegaphoneIcon,
-  SendIcon,
   Trash2Icon,
   XIcon,
   type LucideIcon,
@@ -32,11 +31,14 @@ import {
   type MediaPreviewItem,
 } from "@/features/dashboard/lib/authenticated-media"
 import {
+  browserNotificationErrorMessage,
+  disableBrowserNotifications,
   enableBrowserNotifications,
   getBrowserNotificationState,
-  showBrowserNotification,
+  showBrowserNotificationFeedback,
   type BrowserNotificationState,
 } from "@/features/dashboard/browser-notifications"
+import { useAuthSession } from "@/features/auth/auth-session"
 import {
   notificationsPageFilter,
   openNotificationsPop,
@@ -142,6 +144,8 @@ export function NotificationViewActions({ initialView = "inbox", dark = false }:
  */
 
 export type NotificationsConfig = {
+  /** Contextual heading for the role using this shared surface. */
+  heading?: string
   /** The available read-state filters for the notification list. */
   filters: Array<{ value: string; label: string }>
   /** Buckets an item into one of the role's group filters (null → the neutral bucket). */
@@ -176,6 +180,16 @@ function snippet(text: string | null | undefined, max = 90): string {
   const atWord = slice.replace(/\s+\S*$/, "").trim()
   const base = atWord.length >= 32 ? atWord : slice.trim()
   return `${base}...`
+}
+
+function contextSnippet(item: NotificationItem) {
+  const context = item.context
+  if (!context) return ""
+  const unit = context.department?.name || context.department?.short_name
+  const community = context.community?.name
+  const response = context.response
+  const crossCommunity = response?.is_cross_community ? "Cross-community response" : ""
+  return [community, unit, crossCommunity].filter(Boolean).join(" · ")
 }
 
 function isEmergencyNotification(item: NotificationItem) {
@@ -248,6 +262,7 @@ export function NotificationsPanel({
     archiveAllRead,
     refresh,
   } = useNotifications()
+  const { user } = useAuthSession()
 
   const [view, setView] = useState<"inbox" | "archived">(
     () =>
@@ -255,8 +270,7 @@ export function NotificationsPanel({
   )
   const [browserNotificationState, setBrowserNotificationState] =
     useState<BrowserNotificationState | null>(null)
-  const [enablingBrowserNotifications, setEnablingBrowserNotifications] = useState(false)
-  const [sendingTestNotification, setSendingTestNotification] = useState(false)
+  const [changingBrowserNotifications, setChangingBrowserNotifications] = useState(false)
   const [mediaPreview, setMediaPreview] = useState<MediaPreviewItem[] | null>(null)
 
   useEffect(() => {
@@ -367,59 +381,32 @@ export function NotificationsPanel({
   }
 
   async function enableNotifications() {
-    setEnablingBrowserNotifications(true)
+    setChangingBrowserNotifications(true)
     try {
       await enableBrowserNotifications()
       const nextState = await getBrowserNotificationState()
       setBrowserNotificationState(nextState)
-      toast.success("Notifications are enabled on this device.")
+      await showBrowserNotificationFeedback(user?.lastName, true).catch(() => false)
+      toast.success("Browser notifications enabled on this device.")
     } catch (error) {
-      const detail = error instanceof Error ? error.message.toLowerCase() : ""
-      if (detail.includes("blocked") || browserNotificationState?.permission === "denied") {
-        toast.error("Allow notifications in your browser settings, then try again.")
-      } else if (detail.includes("not configured") || detail.includes("public key")) {
-        toast.error("Notifications are not available right now.")
-      } else {
-        toast.error("Could not enable notifications. Please try again.")
-      }
+      toast.error(browserNotificationErrorMessage(error, "enable"))
     } finally {
-      setEnablingBrowserNotifications(false)
+      setChangingBrowserNotifications(false)
     }
   }
 
-  async function sendTestNotification() {
-    setSendingTestNotification(true)
+  async function disableNotifications() {
+    setChangingBrowserNotifications(true)
     try {
-      const result = await apiRequest<{
-        notification: NotificationItem
-        push_result: { status: string }
-        active_subscriptions: number
-      }>("/notifications/browser-push/test/", {
-        method: "POST",
-        body: JSON.stringify({}),
-      })
-      await refresh()
-      // The server send verifies closed-browser delivery. Showing the same
-      // fixed-tag payload through the active worker also verifies this tab's
-      // permission/display path; matching tags prevent duplicate test alerts.
-      await showBrowserNotification(result.notification)
-      if (result.push_result.status === "delivered") {
-        toast.success("Test browser notification sent.")
-      } else if (result.push_result.status === "partial") {
-        toast.warning("Test displayed, but some saved devices need notifications re-enabled.")
-      } else if (result.active_subscriptions === 0) {
-        toast.error("Enable notifications on this device first.")
-      } else if (result.push_result.status === "not_configured") {
-        toast.error("Background notifications are not configured on the server.")
-      } else if (result.push_result.status === "disabled") {
-        toast.error("Notifications are disabled in your account settings.")
-      } else {
-        toast.warning("The browser test opened, but background delivery failed.")
-      }
-    } catch {
-      toast.error("Could not send a test notification. Please try again.")
+      await showBrowserNotificationFeedback(user?.lastName, false).catch(() => false)
+      await disableBrowserNotifications()
+      const nextState = await getBrowserNotificationState()
+      setBrowserNotificationState(nextState)
+      toast.success("Browser notifications disabled on this device.")
+    } catch (error) {
+      toast.error(browserNotificationErrorMessage(error, "disable"))
     } finally {
-      setSendingTestNotification(false)
+      setChangingBrowserNotifications(false)
     }
   }
 
@@ -434,8 +421,11 @@ export function NotificationsPanel({
     browserNotificationState &&
       (!browserNotificationState.supported || !browserNotificationState.serverConfigured),
   )
+  const browserNotificationsBlocked = browserNotificationState?.permission === "denied"
   const browserNotificationButtonLabel = browserNotificationsEnabled
-    ? "Notifications enabled"
+    ? "Disable notifications"
+    : browserNotificationsBlocked
+      ? "Allow in browser settings"
     : browserNotificationsUnavailable
       ? "Notifications unavailable"
       : browserNotificationState
@@ -482,7 +472,7 @@ export function NotificationsPanel({
             <ArrowLeftIcon className="size-5" />
           </button>
         ) : null}
-        <span className="text-heading font-semibold text-foreground">Notifications</span>
+        <span className="text-heading font-semibold text-foreground">{config.heading ?? "Updates"}</span>
         {unreadCount > 0 ? (
           <span className="shrink-0 text-[11px] font-semibold leading-none text-current tabular-nums">
             {unreadCount > 99 ? "99+" : unreadCount}
@@ -582,6 +572,8 @@ export function NotificationsPanel({
                   ? "You will receive alerts on this device."
                   : browserNotificationState?.permission === "denied"
                     ? "Allow notifications in your browser settings."
+                    : browserNotificationState?.permission === "granted"
+                      ? "Permission is allowed, but this device is not subscribed yet. Enable again to finish setup."
                     : browserNotificationsUnavailable
                       ? "Browser alerts are not available on this device."
                       : "Receive updates even when E-Boses is closed."}
@@ -589,41 +581,27 @@ export function NotificationsPanel({
             </span>
             <span className="flex shrink-0 flex-col items-stretch gap-1.5 sm:flex-row sm:items-center">
               <button
-                type="button"
-                onClick={() => void enableNotifications()}
+              type="button"
+                onClick={() => void (browserNotificationsEnabled ? disableNotifications() : enableNotifications())}
                 disabled={
-                  enablingBrowserNotifications ||
-                  browserNotificationsEnabled ||
-                  browserNotificationsUnavailable ||
-                  !browserNotificationState
+                  changingBrowserNotifications ||
+                  (!browserNotificationsEnabled &&
+                    (browserNotificationsUnavailable || browserNotificationsBlocked || !browserNotificationState))
                 }
                 className={cn(
-                  "flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full border border-neutral-200 px-3 text-[12px] font-semibold text-neutral-900 transition-colors hover:bg-neutral-50 disabled:cursor-default disabled:opacity-60",
-                  browserNotificationsEnabled && "border-emerald-500/30 text-emerald-700",
+                  "flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full px-3 text-[12px] font-semibold transition-colors disabled:cursor-default disabled:opacity-60",
+                  browserNotificationsEnabled
+                    ? "text-emerald-700 hover:bg-emerald-50"
+                    : "border border-neutral-200 text-neutral-900 hover:bg-neutral-50",
                 )}
               >
-                {enablingBrowserNotifications || !browserNotificationState ? (
+                {changingBrowserNotifications || !browserNotificationState ? (
                   <LoaderCircleIcon className="size-3.5 animate-spin" />
                 ) : browserNotificationsEnabled ? (
                   <CheckCircle2Icon className="size-3.5" />
                 ) : null}
                 {browserNotificationButtonLabel}
               </button>
-              {browserNotificationsEnabled ? (
-                <button
-                  type="button"
-                  onClick={() => void sendTestNotification()}
-                  disabled={sendingTestNotification}
-                  className="flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full border border-neutral-200 px-3 text-[12px] font-semibold text-neutral-900 transition-colors hover:bg-neutral-50 disabled:opacity-60"
-                >
-                  {sendingTestNotification ? (
-                    <LoaderCircleIcon className="size-3.5 animate-spin" />
-                  ) : (
-                    <SendIcon className="size-3.5" />
-                  )}
-                  Send test
-                </button>
-              ) : null}
             </span>
           </div>
 
@@ -698,6 +676,7 @@ export function NotificationsPanel({
                   ? "bg-sos/10 text-sos"
                   : configuredIcon.chipClass
                 const body = snippet(item.display_body || item.body)
+                const contextLine = contextSnippet(item)
                 const hasMedia = Boolean(item.images?.length || item.image_url)
                 return (
                   <li
@@ -832,6 +811,11 @@ export function NotificationsPanel({
                         {body ? (
                            <span className="mt-0.5 block line-clamp-2 text-[13.5px] leading-5 text-neutral-700">
                             {body}
+                          </span>
+                        ) : null}
+                        {contextLine ? (
+                          <span className="mt-1 block text-[11px] font-medium text-neutral-500">
+                            {contextLine}
                           </span>
                         ) : null}
                          {item.safety_limited ? (

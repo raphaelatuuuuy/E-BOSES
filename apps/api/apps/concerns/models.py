@@ -58,6 +58,7 @@ class Concern(models.Model):
         related_name="concerns",
     )
     title = models.CharField(max_length=160)
+    notification_subject = models.CharField(max_length=80, blank=True, editable=False)
     description = models.TextField(blank=True)
     category = models.CharField(max_length=32, choices=Category.choices, default=Category.OTHERS)
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.SUBMITTED)

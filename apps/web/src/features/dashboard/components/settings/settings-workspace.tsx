@@ -39,6 +39,8 @@ import {
   disableBrowserNotifications,
   enableBrowserNotifications,
   getBrowserNotificationState,
+  browserNotificationErrorMessage,
+  showBrowserNotificationFeedback,
   type BrowserNotificationState,
 } from "@/features/dashboard/browser-notifications"
 import { AccountLifecycleFlow } from "@/features/dashboard/components/account-lifecycle-flow"
@@ -175,7 +177,15 @@ export function SettingsWorkspace({
   }, [])
 
   async function refreshBrowserState() {
-    setBrowserState(await getBrowserNotificationState())
+    try {
+      setBrowserState(await getBrowserNotificationState())
+    } catch {
+      setBrowserState((previous) => ({
+        ...previous,
+        serverConfigured: false,
+        subscribed: false,
+      }))
+    }
   }
 
   async function handleSettingChange(key: SettingKey, value: boolean) {
@@ -204,10 +214,11 @@ export function SettingsWorkspace({
       if (settings && !settings.push_alerts) {
         setSettings(await updateResidentSettings({ push_alerts: true }))
       }
-      toast.success("Browser notifications enabled")
+      await showBrowserNotificationFeedback(user?.lastName, true).catch(() => false)
+      toast.success("Browser notifications enabled on this device.")
     } catch (error) {
       await refreshBrowserState()
-      toast.error(error instanceof Error ? error.message : "Could not enable browser notifications.")
+      toast.error(browserNotificationErrorMessage(error, "enable"))
     } finally {
       setBrowserBusy(false)
     }
@@ -216,11 +227,12 @@ export function SettingsWorkspace({
   async function handleDisableBrowserNotifications() {
     setBrowserBusy(true)
     try {
+      await showBrowserNotificationFeedback(user?.lastName, false).catch(() => false)
       await disableBrowserNotifications()
       await refreshBrowserState()
-      toast.success("Browser notifications disabled")
+      toast.success("Browser notifications disabled on this device.")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not disable browser notifications.")
+      toast.error(browserNotificationErrorMessage(error, "disable"))
     } finally {
       setBrowserBusy(false)
     }

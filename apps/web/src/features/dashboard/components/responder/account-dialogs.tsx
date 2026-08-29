@@ -56,7 +56,7 @@ export function ResponderNotificationsButton() {
         ) : null}
       </button>
       {open ? (
-        <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => setOpen(false)} title="Notifications" size="wide" actions={<NotificationViewActions dark />}>
+        <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => setOpen(false)} title="Dispatch updates" size="wide" actions={<NotificationViewActions dark />}>
           <ResponderNotificationsPanel
             variant="sheet"
             onClose={() => setOpen(false)}
@@ -87,7 +87,7 @@ export function ResponderNotificationsDialog({
   if (!open) return null
 
   return (
-    <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => onOpenChange(false)} title="Notifications" size="wide" actions={<NotificationViewActions dark initialView={initialFilter === "archived" ? "archived" : "inbox"} />}>
+    <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => onOpenChange(false)} title="Dispatch updates" size="wide" actions={<NotificationViewActions dark initialView={initialFilter === "archived" ? "archived" : "inbox"} />}>
       <ResponderNotificationsPanel
         variant="sheet"
         onClose={() => onOpenChange(false)}

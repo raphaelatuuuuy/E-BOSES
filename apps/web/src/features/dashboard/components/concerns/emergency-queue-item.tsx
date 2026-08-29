@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { toast } from "sonner"
-import { ArrowUpIcon, MapPinIcon, MessageCircleIcon, SignalIcon, TriangleAlert } from "lucide-react"
+import { ArrowUpIcon, ImageIcon, MapPinIcon, MessageCircleIcon, SignalIcon, TriangleAlert } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -156,7 +156,7 @@ export function EmergencyQueueItem({
           </span>
         </span>
         <span
-          className="mr-1.5 flex shrink-0 items-center gap-1 text-[11px] font-medium text-[#d62018]"
+          className="mr-1.5 flex shrink-0 items-center gap-1 text-[11px] font-medium text-sos"
           title="Critical priority"
         >
           <SignalIcon className="size-3.5 shrink-0" strokeWidth={2} />
@@ -189,6 +189,36 @@ export function EmergencyQueueItem({
             ? `${typeLabelOf(alert.type)} reported at ${location || alert.barangay}, routed to ${unit ? unit.short_name || unit.name : "dispatch"}.`
             : `${typeLabelOf(alert.type)} reported at ${location || alert.barangay}, no longer active.`)}
       </p>
+      {alert.media && alert.media.length > 0 ? (
+        <div className="mt-2 flex gap-1.5">
+          {alert.media.slice(0, 3).map((item) =>
+            item.mime_type.startsWith("image/") ? (
+              <div
+                key={item.id}
+                className="h-12 w-12 shrink-0 overflow-hidden rounded-lg border border-neutral-100"
+              >
+                <img
+                  src={item.preview_url}
+                  alt={item.original_filename}
+                  className="h-full w-full object-cover"
+                />
+              </div>
+            ) : (
+              <div
+                key={item.id}
+                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-neutral-100 bg-neutral-50 text-neutral-400"
+              >
+                <ImageIcon className="size-4" />
+              </div>
+            )
+          )}
+          {alert.media.length > 3 ? (
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-neutral-100 bg-neutral-50 text-[11px] font-medium text-neutral-500">
+              +{alert.media.length - 3}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {location ? (
         <span className="mt-1.5 flex min-w-0 items-center gap-1 text-[11px] text-faint-foreground">
           <MapPinIcon className="size-3.5 shrink-0" strokeWidth={1.8} />

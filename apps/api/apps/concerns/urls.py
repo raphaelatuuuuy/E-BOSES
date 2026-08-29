@@ -63,6 +63,7 @@ from .views import (
 from .classification_api import (
     CommunityModerationSimulationView,
     LlmDecisionLogListView,
+    LlmDecisionLogStreetImageryView,
     OfficialClassificationActivityView,
     OfficialClassificationResetView,
     OfficialClassificationSampleGeneratorView,
@@ -104,6 +105,7 @@ urlpatterns = [
     path("classification/test-sms/", SmsSimulationView.as_view(), name="classification-test-sms"),
     path("classification/test-community/", CommunityModerationSimulationView.as_view(), name="classification-test-community"),
     path("classification/log/", LlmDecisionLogListView.as_view(), name="classification-log"),
+    path("classification/log/<int:pk>/street-view/", LlmDecisionLogStreetImageryView.as_view(), name="classification-log-street-view"),
     path("", ConcernListCreateView.as_view(), name="concern-create"),
     path("media/check/", ConcernMediaCheckView.as_view(), name="concern-media-check"),
     path("mine/", MyConcernListView.as_view(), name="concern-mine"),

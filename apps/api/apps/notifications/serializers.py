@@ -24,6 +24,7 @@ class NotificationSerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
     actions = serializers.SerializerMethodField()
+    context = serializers.SerializerMethodField()
 
     def _display_payload(self, obj):
         cached = getattr(obj, "_notification_display_payload", None)
@@ -103,6 +104,9 @@ class NotificationSerializer(serializers.ModelSerializer):
     def get_actions(self, obj):
         return self._display_payload(obj).get("actions") or []
 
+    def get_context(self, obj):
+        return self._display_payload(obj).get("context") or {}
+
     def get_concern_public_id(self, obj):
         return str(obj.concern.public_id) if obj.concern_id else None
 
@@ -159,6 +163,7 @@ class NotificationSerializer(serializers.ModelSerializer):
             "image_url",
             "images",
             "actions",
+            "context",
         ]
 
 

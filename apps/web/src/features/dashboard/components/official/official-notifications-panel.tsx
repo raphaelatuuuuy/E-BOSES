@@ -54,6 +54,7 @@ export function OfficialNotificationsPanel({
 
   const config = useMemo<NotificationsConfig>(
     () => ({
+      heading: "Operations updates",
       filters: FILTERS,
       groupOf: typeGroup,
       iconFor: (item) => {

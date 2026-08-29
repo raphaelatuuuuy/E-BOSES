@@ -13,8 +13,12 @@ going" for one and "what am I assigned to" for the other).
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
+from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
+from django.utils import timezone
 
 from . import templates
 from .gateway import queue_sms
@@ -29,6 +33,7 @@ ROLE_RESIDENT = "resident"
 ROLE_RESPONDER = "responder"
 ROLE_OFFICIAL = "official"
 ROLE_UNKNOWN = "unknown"
+PENDING_RECOVERY_LOCK_SECONDS = 120
 
 # Commands a resident may use. Anything else from a resident number is answered
 # with the guide rather than executed.
@@ -82,10 +87,21 @@ def handle_inbound(payload) -> InboundSmsMessage:
     # outcome of the original delivery so the operations log stays truthful.
     inbound.was_redelivered = False
     if not created:
-        # A gateway retry. Do not act twice; the original reply already went out.
-        logger.info("Duplicate inbound SMS ignored (inbound #%s).", inbound.pk)
         inbound.was_redelivered = True
-        return inbound
+        stale_after = max(15, int(getattr(settings, "SMS_INBOUND_PENDING_RECOVERY_SECONDS", 60)))
+        stale = inbound.outcome == InboundSmsMessage.Outcome.PENDING and (
+            inbound.server_received_at <= timezone.now() - timedelta(seconds=stale_after)
+        )
+        lock_key = f"sms-inbound:processing:{inbound.pk}"
+        if not stale or not cache.add(lock_key, "1", PENDING_RECOVERY_LOCK_SECONDS):
+            # A normal gateway retry. Do not act twice; the original reply
+            # already went out, or another worker is still processing it.
+            logger.info("Duplicate inbound SMS ignored (inbound #%s).", inbound.pk)
+            return inbound
+        inbound.refresh_from_db()
+        if inbound.outcome != InboundSmsMessage.Outcome.PENDING:
+            return inbound
+        logger.warning("Recovering stale pending inbound SMS #%s.", inbound.pk)
 
     # An OTP from a bank, an e-wallet, or E-Boses itself must never be stored in
     # full, echoed, or forwarded. Drop it before anything else looks at it.
@@ -124,6 +140,52 @@ def handle_inbound(payload) -> InboundSmsMessage:
     if reply and reply.body:
         _send(inbound, sender, reply)
     return inbound
+
+
+def recover_stuck_inbound_messages(*, limit: int = 100) -> dict[str, int]:
+    """Recover recent PENDING rows and expire unsafe, very old ones.
+
+    Recent rows are replayed through the same idempotent router. Rows older
+    than the configured maximum are not replayed because doing so could create
+    a stale emergency and send a delayed reply hours or days later.
+    """
+    from .payload import InboundPayload
+
+    now = timezone.now()
+    stale_seconds = max(15, int(getattr(settings, "SMS_INBOUND_PENDING_RECOVERY_SECONDS", 60)))
+    max_age_hours = max(1, int(getattr(settings, "SMS_INBOUND_PENDING_MAX_AGE_HOURS", 24)))
+    stale_cutoff = now - timedelta(seconds=stale_seconds)
+    expiry_cutoff = now - timedelta(hours=max_age_hours)
+
+    expired = InboundSmsMessage.objects.filter(
+        outcome=InboundSmsMessage.Outcome.PENDING,
+        server_received_at__lt=expiry_cutoff,
+    ).update(
+        outcome=InboundSmsMessage.Outcome.ERROR,
+        detail="Pending inbound expired before safe recovery; no delayed reply was sent.",
+    )
+
+    rows = list(
+        InboundSmsMessage.objects.filter(
+            outcome=InboundSmsMessage.Outcome.PENDING,
+            server_received_at__gte=expiry_cutoff,
+            server_received_at__lte=stale_cutoff,
+        ).order_by("server_received_at", "id")[: max(1, limit)]
+    )
+    recovered = 0
+    for row in rows:
+        payload = InboundPayload(
+            body=row.body,
+            sender=row.sender_number,
+            gateway_timestamp=row.gateway_received_at,
+            gateway_message_id=row.gateway_message_id,
+            raw=row.raw_payload,
+            event="sms:received",
+        )
+        handled = handle_inbound(payload)
+        if handled.outcome != InboundSmsMessage.Outcome.PENDING:
+            recovered += 1
+    return {"recovered": recovered, "expired": expired, "remaining": len(rows) - recovered}
 
 
 def _dispatch(inbound, payload, match: SenderMatch, role: str) -> Reply | None:

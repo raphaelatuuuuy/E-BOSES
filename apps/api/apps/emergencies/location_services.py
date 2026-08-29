@@ -33,6 +33,21 @@ def classify_location_confidence(alert) -> str:
             if (alert.reported_area or "").strip()
             else EmergencyAlert.LocationConfidence.UNKNOWN
         )
+    # A forward-geocoded street/landmark is useful for routing and map display,
+    # but it is an inferred point (often a road or POI centroid), not the
+    # resident phone's GPS position. Keep that distinction visible.
+    if alert.location_source == "sms_geocoded":
+        community = getattr(alert, "community", None)
+        boundary = getattr(community, "boundary", None)
+        if boundary and boundary.geometry:
+            from apps.geo_services import point_in_geojson_inclusive
+
+            return (
+                EmergencyAlert.LocationConfidence.REPORTED
+                if point_in_geojson_inclusive(alert.longitude, alert.latitude, boundary.geometry)
+                else EmergencyAlert.LocationConfidence.OUTSIDE_AREA
+            )
+        return EmergencyAlert.LocationConfidence.REPORTED
     community = getattr(alert, "community", None)
     boundary = getattr(community, "boundary", None)
     if community is None:

@@ -57,7 +57,7 @@ export function OfficialNotificationsButton() {
         ) : null}
       </button>
       {open ? (
-        <SheetDialog open onClose={() => setOpen(false)} title="Notifications" size="wide" actions={<NotificationViewActions />}>
+        <SheetDialog open onClose={() => setOpen(false)} title="Operations updates" size="wide" actions={<NotificationViewActions />}>
           <OfficialNotificationsPanel variant="sheet" onClose={() => setOpen(false)} />
         </SheetDialog>
       ) : null}
@@ -83,7 +83,7 @@ export function OfficialNotificationsDialog({
   if (!open) return null
 
   return (
-    <SheetDialog open onClose={() => onOpenChange(false)} title="Notifications" size="wide" actions={<NotificationViewActions initialView={initialFilter === "archived" ? "archived" : "inbox"} />}>
+    <SheetDialog open onClose={() => onOpenChange(false)} title="Operations updates" size="wide" actions={<NotificationViewActions initialView={initialFilter === "archived" ? "archived" : "inbox"} />}>
       <OfficialNotificationsPanel
         variant="sheet"
         onClose={() => onOpenChange(false)}

@@ -7,6 +7,7 @@ import {
   SheetSectionLabel,
   SheetToggleRow,
 } from "@/features/dashboard/components/sheet-dialog"
+import { cn } from "@workspace/ui/lib/utils"
 
 export function NotificationsPanel({
   settings,
@@ -67,7 +68,12 @@ export function NotificationsPanel({
                   : onEnableBrowserNotifications
               }
               // Same pill as the notifications pop-up, both directions.
-              className="shrink-0 rounded-full border border-brand-orange px-4 py-1.5 text-[14px] font-semibold text-brand-orange transition-colors hover:bg-brand-orange hover:text-brand-orange-ink disabled:cursor-not-allowed disabled:opacity-50"
+              className={cn(
+                "shrink-0 rounded-full px-4 py-1.5 text-[14px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+                browserState.subscribed
+                  ? "text-emerald-700 hover:bg-emerald-50"
+                  : "border border-brand-orange text-brand-orange hover:bg-brand-orange hover:text-brand-orange-ink",
+              )}
             >
               {browserBusy ? "Working…" : browserState.subscribed ? "Disable" : "Enable"}
             </button>

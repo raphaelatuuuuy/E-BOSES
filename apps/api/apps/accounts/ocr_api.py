@@ -1206,6 +1206,16 @@ def _test_payload(run):
                 extraction_json[key] = item
     overall = float(run.ocr_confidence) if run.ocr_confidence is not None else None
     metadata = run.metadata or {}
+    reference_images = [
+        {
+            "side": sample.get("side", "single"),
+            "label": sample.get("label") or _sample_side_label(sample.get("side", "single")),
+            "url": sample.get("url"),
+            "filename": sample.get("filename") or "",
+        }
+        for sample in _document_samples_payload(run.document_type)
+        if sample.get("url")
+    ]
     return {
         "id": run.pk,
         "status": run.status,
@@ -1234,6 +1244,7 @@ def _test_payload(run):
         "simulated_profile": metadata.get("simulated_profile") or {},
         "profile_source": metadata.get("profile_source") or "empty",
         "image_url": f"/api/auth/ocr/tests/{run.pk}/file/" if run.file else None,
+        "reference_images": reference_images,
         "created_at": run.created_at,
         "completed_at": run.completed_at,
     }

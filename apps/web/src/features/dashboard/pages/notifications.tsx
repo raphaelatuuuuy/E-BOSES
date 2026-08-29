@@ -21,7 +21,7 @@ function initialNotificationState(): { view?: "inbox" | "archived"; filter?: str
 }
 
 export default function NotificationsPage() {
-  usePageTitle("Notifications")
+  usePageTitle("Your updates")
   const navigate = useNavigate()
   const [olderNotifications, setOlderNotifications] = useState<NotificationItem[]>([])
   const [nextPage, setNextPage] = useState(2)

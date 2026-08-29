@@ -4,7 +4,7 @@ from datetime import timedelta
 from difflib import SequenceMatcher
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -38,6 +38,7 @@ from apps.concerns.models import (
 )
 from apps.capabilities import CONFIGURE_CLASSIFICATION, HasCapability
 from apps.geo_services import validate_report_location
+from apps.media_urls import concern_media_preview_url
 
 logger = logging.getLogger(__name__)
 
@@ -775,8 +776,12 @@ class ResidentConcernPrecheckView(APIView):
         if not user_has_role_permission(request.user, "concerns.create"):
             return Response({"detail": "Only residents can check reports."}, status=status.HTTP_403_FORBIDDEN)
         selected_category = str(request.data.get("category", ""))
-        category_ref = ConcernCategory.objects.filter(code=selected_category, is_active=True).first()
-        if not category_ref and selected_category not in Concern.Category.values:
+        resident_community = getattr(getattr(request.user, "resident_profile", None), "community", None)
+        category_queryset = ConcernCategory.objects.filter(code=selected_category, is_active=True)
+        if resident_community is not None:
+            category_queryset = category_queryset.filter(Q(community=resident_community) | Q(community__isnull=True))
+        category_ref = category_queryset.first()
+        if selected_category and not category_ref and selected_category not in Concern.Category.values:
             return Response({"category": ["Choose a valid concern category."]}, status=status.HTTP_400_BAD_REQUEST)
         title = str(request.data.get("title", ""))[:160]
         description = str(request.data.get("description", ""))[:5000]
@@ -806,28 +811,77 @@ class ResidentConcernPrecheckView(APIView):
             image_uploaded=bool(uploaded_files),
             text_timeout=getattr(settings, "OLLAMA_PRECHECK_TEXT_TIMEOUT_SECONDS", 8),
         )
-        duplicate_feedback = _report_duplicate_feedback(config, request=request, selected_category=selected_category, title=title, description=description)
+        details = result.get("details") or {}
+        enabled_categories = config.enabled_categories or list(Concern.Category.values)
+        fallback_category = (
+            Concern.Category.OTHERS
+            if Concern.Category.OTHERS in enabled_categories
+            else str(enabled_categories[0] if enabled_categories else Concern.Category.OTHERS)
+        )
+        inferred_category = str(details.get("primary_category") or selected_category or fallback_category)
+        inferred_category_queryset = ConcernCategory.objects.filter(code=inferred_category, is_active=True)
+        if resident_community is not None:
+            inferred_category_queryset = inferred_category_queryset.filter(Q(community=resident_community) | Q(community__isnull=True))
+        inferred_category_ref = inferred_category_queryset.select_related("department").first() or category_ref
+        # Category-specific requirements are evaluated after the model has
+        # selected the category. This is what allows the resident form to omit
+        # the category picker while preserving the configured safeguards.
+        inferred_errors = {}
+        if inferred_category_ref and inferred_category_ref.description_required and len(description.strip()) < 20:
+            inferred_errors["description"] = "Describe the issue in at least 20 characters."
+        if inferred_category_ref and inferred_category_ref.photo_required and not uploaded_files:
+            inferred_errors["media"] = "Add at least one clear photo as evidence."
+        if inferred_category_ref and inferred_category_ref.location_required and (
+            request.data.get("latitude") is None or request.data.get("longitude") is None
+        ):
+            inferred_errors["address"] = "Pin where the issue is located."
+        duplicate_feedback = _report_duplicate_feedback(
+            config,
+            request=request,
+            selected_category=inferred_category,
+            title=title,
+            description=description,
+        )
         payload = _resident_feedback(
             result,
-            selected_category=selected_category,
+            selected_category=inferred_category,
             image_uploaded=bool(uploaded_files),
             photo_count=len(uploaded_files),
             image_errors=image_errors,
             prepared_indices=prepared_indices,
             duplicate_feedback=duplicate_feedback,
         )
+        if inferred_errors:
+            payload["field_errors"] = {**payload.get("field_errors", {}), **inferred_errors}
+            payload["can_submit"] = False
+            payload["needs_revision"] = True
         payload.update(
             _precheck_extras(
                 request,
                 result,
-                selected_category=selected_category,
-                category_ref=category_ref,
+                selected_category=inferred_category,
+                category_ref=inferred_category_ref,
                 config=config,
                 uploaded_files=uploaded_files,
                 image_errors=image_errors,
                 duplicate_feedback=duplicate_feedback,
             )
         )
+        payload["category"] = inferred_category
+        payload["category_label"] = (
+            inferred_category_ref.name
+            if inferred_category_ref
+            else dict(Concern.Category.choices).get(inferred_category, inferred_category.replace("_", " ").title())
+        )
+        payload["public_feed_allowed"] = bool(
+            not inferred_category_ref or inferred_category_ref.public_feed_allowed
+        )
+        payload["auto_escalate"] = bool(
+            details.get("recommended_action") == "escalate_as_emergency"
+            and details.get("matched_emergency_type")
+            and details.get("incident_timing") == "ongoing"
+        )
+        payload["emergency_type"] = details.get("matched_emergency_type") or ""
         return Response(payload)
 
 
@@ -1194,12 +1248,16 @@ def _assigned_unit_for_category(category_ref: ConcernCategory | None) -> dict | 
 
 
 def _precheck_extras(request, result, *, selected_category, category_ref, config, uploaded_files, image_errors, duplicate_feedback) -> dict:
-    """The fields the frontend dialogs read: category confirm, duplicate,
-    resolved match, emergency triage, resolved address, privacy preview,
-    assigned unit and photo requirement. Each has a safe None/false default so
-    the chain simply skips when there is nothing to show."""
+    """The fields the frontend reads: inferred routing, duplicate/resolved
+    checks, emergency triage, resolved address, privacy preview, assigned unit,
+    and category requirements. Each has a safe None/false default so the chain
+    simply skips when there is nothing to show."""
     details = result.get("details") or {}
-    payload = {"photo_required": bool(category_ref and category_ref.photo_required)}
+    payload = {
+        "description_required": bool(category_ref and category_ref.description_required),
+        "location_required": bool(category_ref and category_ref.location_required),
+        "photo_required": bool(category_ref and category_ref.photo_required),
+    }
 
     primary = details.get("primary_category") or ""
     if primary and primary != selected_category:
@@ -1412,17 +1470,49 @@ class LlmDecisionLogListView(APIView):
     required_capability = CONFIGURE_CLASSIFICATION
 
     def get(self, request):
-        qs = LlmDecisionLog.objects.select_related("assigned_department", "concern")
+        qs = LlmDecisionLog.objects.select_related("assigned_department", "concern").prefetch_related(
+            "concern__media",
+            "concern__ai_assessment",
+            "concern__escalated_emergencies",
+        )
 
         domain = request.query_params.get("domain", "")
         if domain == LlmDecisionLog.Domain.CONCERN:
             qs = qs.filter(domain__in=[LlmDecisionLog.Domain.CONCERN, LlmDecisionLog.Domain.COMMUNITY])
+        elif domain == LlmDecisionLog.Domain.EMERGENCY:
+            # Escalated concerns are the same report at a higher priority. Keep
+            # them visible in the emergency view without creating a duplicate
+            # audit row for the companion EmergencyAlert.
+            qs = qs.filter(
+                Q(domain=LlmDecisionLog.Domain.EMERGENCY)
+                | Q(concern__escalated_emergencies__isnull=False)
+            ).distinct()
         elif domain in LlmDecisionLog.Domain.values:
             qs = qs.filter(domain=domain)
 
         run_kind = request.query_params.get("run_kind", "")
         if run_kind in LlmDecisionLog.RunKind.values:
             qs = qs.filter(run_kind=run_kind)
+
+        search = request.query_params.get("search", "").strip()
+        if search:
+            qs = qs.filter(
+                Q(resident_message__icontains=search)
+                | Q(routing_reason__icontains=search)
+                | Q(assigned_department__name__icontains=search)
+                | Q(input_snapshot__description__icontains=search)
+                | Q(input_snapshot__title__icontains=search)
+                | Q(input_snapshot__location__icontains=search)
+                | Q(input_snapshot__document_type__icontains=search)
+            )
+
+        days = request.query_params.get("days", "")
+        if days and days != "all":
+            try:
+                days_value = max(1, min(3650, int(days)))
+            except (TypeError, ValueError):
+                days_value = 30
+            qs = qs.filter(created_at__gte=timezone.now() - timedelta(days=days_value))
 
         try:
             page = max(1, int(request.query_params.get("page", 1)))
@@ -1438,33 +1528,174 @@ class LlmDecisionLogListView(APIView):
         rows = qs[start:start + page_size]
 
         results = [
-            {
-                "id": row.pk,
-                "run_kind": row.run_kind,
-                "domain": row.domain,
-                "created_at": row.created_at.isoformat(),
-                "recommended_action": row.recommended_action,
-                "resident_message": row.resident_message,
-                "assigned_department": (
-                    {"id": row.assigned_department_id, "name": row.assigned_department.name}
-                    if row.assigned_department_id
-                    else None
-                ),
-                "routing_reason": row.routing_reason,
-                "model_version": row.model_version,
-                "duration_ms": row.duration_ms,
-                "location": (
-                    (row.input_snapshot or {}).get("location")
-                    or (row.concern.address if row.concern_id and row.concern else "")
-                ),
-                "input_snapshot": row.input_snapshot,
-                "output_snapshot": row.output_snapshot,
-                "content_flag_id": row.content_flag_id,
-                "concern_id": row.concern_id,
-            }
+            _decision_log_payload(row)
             for row in rows
         ]
         return Response({"results": results, "count": count})
+
+
+def _decision_source(rejection_code: str, *, has_emergency: bool = False) -> str:
+    if has_emergency:
+        return "Emergency escalation"
+    return {
+        "automated_street_imagery": "Street-view location check",
+        "automated_street_imagery_resubmit": "Street-view location check",
+        "automated_media_integrity": "Photo authenticity check",
+        "automated_media_integrity_resubmit": "Photo authenticity check",
+        "automated_category_mismatch": "Category check",
+        "automated_category_mismatch_resubmit": "Category check",
+        "automated_irrelevant": "Relevance check",
+        "automated_incomplete": "Required information check",
+    }.get(rejection_code, "Automated validation")
+
+
+def _concern_media_payload(concern) -> list[dict]:
+    if not concern:
+        return []
+    media = []
+    for index, item in enumerate(concern.media.all()):
+        media.append({
+            "id": item.pk,
+            "label": item.original_filename or f"Submitted photo {index + 1}",
+            "preview_url": concern_media_preview_url(item.pk),
+            "raw_url": f"/api/concerns/media/{item.pk}/raw/",
+            "privacy_state": item.privacy_state,
+        })
+    return media
+
+
+def _decision_log_payload(row: LlmDecisionLog) -> dict:
+    """Build a readable, current-state audit row without losing raw snapshots."""
+    concern = row.concern
+    output = row.output_snapshot if isinstance(row.output_snapshot, dict) else {}
+    final_snapshot = output.get("final_decision") if isinstance(output.get("final_decision"), dict) else {}
+    has_emergency = bool(concern and list(concern.escalated_emergencies.all()))
+
+    if concern and concern.validation_status == Concern.ValidationStatus.REJECTED:
+        effective_action = "rejected"
+        decision_label = "Rejected"
+        decision_reason = concern.validation_summary or "The report did not pass automated validation."
+        decision_source = _decision_source(concern.rejection_code, has_emergency=has_emergency)
+    elif has_emergency:
+        effective_action = "escalated"
+        decision_label = "Escalated"
+        decision_reason = concern.validation_summary or "The report was routed to emergency response."
+        decision_source = "Emergency escalation"
+    elif concern and concern.validation_status == Concern.ValidationStatus.PENDING:
+        effective_action = "held"
+        decision_label = "Held for review"
+        decision_reason = concern.validation_summary or "An official needs to review this report."
+        decision_source = "Automated validation"
+    elif concern and concern.validation_status == Concern.ValidationStatus.ACCEPTED:
+        effective_action = "accepted"
+        decision_label = "Accepted"
+        decision_reason = concern.validation_summary or row.resident_message or "Automated validation passed."
+        decision_source = "Automated validation"
+    else:
+        # Simulation and legacy rows without a linked concern retain the model
+        # action, but are clearly marked as a model result rather than a filed
+        # concern status.
+        effective_action = row.recommended_action or "unknown"
+        decision_label = row.recommended_action or "No decision recorded"
+        decision_reason = row.resident_message or "No final concern status is linked to this run."
+        decision_source = "Model simulation" if row.run_kind == LlmDecisionLog.RunKind.SIMULATION else "Automated validation"
+
+    street_imagery = output.get("street_imagery")
+    if not isinstance(street_imagery, dict) or not street_imagery:
+        street_imagery = None
+    if street_imagery:
+        street_imagery = {key: value for key, value in street_imagery.items() if key != "image_b64"}
+
+    return {
+        "id": row.pk,
+        "run_kind": row.run_kind,
+        "domain": row.domain,
+        "record_type": "emergency" if (has_emergency or row.domain == LlmDecisionLog.Domain.EMERGENCY) else ("verification" if row.domain == LlmDecisionLog.Domain.VERIFICATION else "concern"),
+        "created_at": row.created_at.isoformat(),
+        "recommended_action": row.recommended_action,
+        "resident_message": row.resident_message,
+        "assigned_department": (
+            {"id": row.assigned_department_id, "name": row.assigned_department.name}
+            if row.assigned_department_id
+            else None
+        ),
+        "routing_reason": row.routing_reason,
+        "model_version": row.model_version,
+        "duration_ms": row.duration_ms,
+        "location": (
+            (row.input_snapshot or {}).get("location")
+            or (concern.address if concern else "")
+        ),
+        "input_snapshot": row.input_snapshot,
+        "output_snapshot": row.output_snapshot,
+        "content_flag_id": row.content_flag_id,
+        "concern_id": row.concern_id,
+        # An emergency-domain audit row is already the critical path even
+        # when the companion Concern record is no longer available. Keep the
+        # one priority vocabulary in the UI instead of adding an Emergency
+        # badge beside it.
+        "priority": _concern_priority(concern) or ("critical" if row.domain == LlmDecisionLog.Domain.EMERGENCY else None),
+        "final_decision": {
+            "action": effective_action,
+            "label": decision_label,
+            "reason": decision_reason,
+            "source": decision_source,
+            "legacy": not bool(final_snapshot),
+        },
+        "submitted_media": _concern_media_payload(concern),
+        "street_imagery": street_imagery,
+    }
+
+
+def _concern_priority(concern) -> str | None:
+    if not concern:
+        return None
+    from apps.concerns.severity import severity_label
+
+    return severity_label(concern)
+
+
+class LlmDecisionLogStreetImageryView(APIView):
+    """Retry a street-view comparison when an audit row lacks its image."""
+
+    permission_classes = [IsAuthenticated, HasRolePermission, HasCapability]
+    required_permission = "concerns.manage"
+    required_capability = CONFIGURE_CLASSIFICATION
+
+    def post(self, request, pk):
+        row = (
+            LlmDecisionLog.objects.select_related("concern")
+            .prefetch_related("concern__media")
+            .filter(pk=pk)
+            .first()
+        )
+        if not row or not row.concern_id or not row.concern:
+            return Response({"detail": "This log entry has no concern evidence to retry."}, status=status.HTTP_404_NOT_FOUND)
+
+        concern = row.concern
+        media = [item for item in concern.media.all() if item.mime_type.startswith("image/")]
+        prepared_images = []
+        for item in media:
+            try:
+                with item.file.open("rb") as handle:
+                    raw = handle.read()
+            except (OSError, ValueError, NotImplementedError):
+                continue
+            prepared = prepare_image_for_gemma(raw, filename=item.original_filename, mime_type=item.mime_type)
+            if prepared is not None:
+                prepared_images.append(prepared)
+
+        config = ConcernClassificationConfiguration.current()
+        result = _street_imagery_preview(
+            config,
+            category=concern.category,
+            latitude=concern.latitude,
+            longitude=concern.longitude,
+            images=prepared_images,
+        )
+        if result is None:
+            result = {"status": "disabled", "reason": "street_imagery_not_configured"}
+        return Response(result)
 
 
 class CommunityModerationSimulationView(APIView):

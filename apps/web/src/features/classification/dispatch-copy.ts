@@ -12,6 +12,7 @@ export function locationSourceLabel(source: LocationResolution["source"]) {
   const labels: Record<LocationResolution["source"], string> = {
     web_gps: "Location from pinned map",
     sms_gps: "Location sent by SMS",
+    sms_geocoded: "Reported place matched on map",
     message_area: "Area named in the message",
     recent_account_location: "Recent shared location",
     profile_community: "Registered community only",

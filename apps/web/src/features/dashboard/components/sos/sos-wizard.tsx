@@ -338,7 +338,6 @@ export function SosWizard({
     if (!navigator.onLine) return
     const queued = await listQueuedSosEmergencies().catch(() => [])
     for (const item of queued) {
-      if (item.smsFallbackOpenedAt) continue
       try {
         const alert = await createEmergency(
           buildEmergencyFormData({
@@ -475,7 +474,8 @@ export function SosWizard({
       }
       if (
         isOnline &&
-        (!selectedLocation.locationCheck?.accepted || !selectedLocation.locationCheck.acceptance_zone?.within)
+        selectedLocation.locationCheck &&
+        (!selectedLocation.locationCheck.accepted || !selectedLocation.locationCheck.acceptance_zone?.within)
       ) {
         setFieldErrors({
           location:
@@ -648,7 +648,7 @@ export function SosWizard({
   const locationCanContinue = Boolean(
     location &&
       isSosLocationReady(location) &&
-      (!isOnline || (location.locationCheck?.accepted && location.locationCheck.acceptance_zone?.within)),
+      (!isOnline || !location.locationCheck || (location.locationCheck.accepted && location.locationCheck.acceptance_zone?.within)),
   )
 
   const wizardFooter =
@@ -722,7 +722,7 @@ export function SosWizard({
       <div
         className="sr-only"
         role="status"
-        aria-live="assertive"
+        aria-live="polite"
         aria-atomic="true"
       >
         {countdownAnnouncement}

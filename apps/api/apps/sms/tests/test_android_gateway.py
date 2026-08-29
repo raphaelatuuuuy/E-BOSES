@@ -13,7 +13,7 @@ from rest_framework.test import APITestCase
 from apps.accounts.models import ResidentProfile
 from apps.emergencies.models import EmergencyAlert
 from apps.sms.gateway import AndroidSmsGatewayDriver
-from apps.sms.models import InboundSmsMessage
+from apps.sms.models import InboundSmsMessage, OutboundSmsMessage
 
 SIGNING_KEY = "eboses"
 TOKEN = "test-inbound-token"
@@ -43,12 +43,20 @@ def webhook_body(message, phone=RESIDENT, event="sms:received", message_id="msg-
     OUTBOUND_SMS_URL="http://10.118.12.5:8080/message",
     OUTBOUND_SMS_USERNAME="sms",
     OUTBOUND_SMS_PASSWORD="oJkay91V",
-    OUTBOUND_SMS_PAYLOAD_TEMPLATE='{"message": "{body}", "phoneNumbers": ["{to}"]}',
+    OUTBOUND_SMS_PAYLOAD_TEMPLATE="",
 )
 class AndroidGatewayDriverTests(SimpleTestCase):
     def test_send_payload_uses_a_phone_numbers_array(self):
         payload = AndroidSmsGatewayDriver().build_payload("+639171234821", "hello")
-        self.assertEqual(payload, {"message": "hello", "phoneNumbers": ["+639171234821"]})
+        self.assertEqual(
+            payload,
+            {
+                "textMessage": {"text": "hello"},
+                "phoneNumbers": ["+639171234821"],
+                "simNumber": 1,
+                "withDeliveryReport": True,
+            },
+        )
 
     def test_basic_auth_header_is_built_from_the_app_credentials(self):
         headers = AndroidSmsGatewayDriver()._headers()
@@ -145,6 +153,45 @@ class AndroidGatewayWebhookTests(APITestCase):
                 self.assertTrue(response.data["ignored"])
         self.assertEqual(InboundSmsMessage.objects.count(), 0)
         self.assertEqual(EmergencyAlert.objects.count(), 0)
+
+    def test_delivery_events_update_the_matching_outbound_message(self):
+        outbound = OutboundSmsMessage.objects.create(
+            destination_hash="a" * 64,
+            destination_last_four="0777",
+            body="Emergency acknowledgement",
+            idempotency_key="delivery-reconcile-1",
+            provider_message_id="provider-msg-1",
+            status=OutboundSmsMessage.Status.SENT,
+        )
+        payload = webhook_body("", event="sms:delivered")
+        payload["payload"].pop("id")
+        payload["payload"]["messageId"] = "provider-msg-1"
+
+        response = self.post_token(payload)
+
+        outbound.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(outbound.status, OutboundSmsMessage.Status.DELIVERED)
+        self.assertIsNotNone(outbound.delivered_at)
+
+    def test_failed_delivery_event_marks_the_outbound_failed(self):
+        outbound = OutboundSmsMessage.objects.create(
+            destination_hash="b" * 64,
+            destination_last_four="0777",
+            body="Emergency acknowledgement",
+            idempotency_key="delivery-reconcile-2",
+            provider_message_id="provider-msg-2",
+            status=OutboundSmsMessage.Status.SENT,
+        )
+        payload = webhook_body("", event="sms:failed")
+        payload["payload"].pop("id")
+        payload["payload"]["messageId"] = "provider-msg-2"
+
+        self.post_token(payload)
+
+        outbound.refresh_from_db()
+        self.assertEqual(outbound.status, OutboundSmsMessage.Status.FAILED)
+        self.assertIn("could not be delivered", outbound.last_error)
 
     # -- signature auth --------------------------------------------------
 

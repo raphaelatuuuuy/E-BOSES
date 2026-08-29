@@ -207,7 +207,7 @@ function DashboardContent() {
                <div
                 className={cn(
                   "flex h-full min-h-0 min-w-0 flex-col overflow-visible",
-                  isResident ? "bg-white" : "bg-transparent",
+                  isResident ? "bg-white" : isResponder ? "bg-nav-bg" : "bg-transparent",
                 )}
               >
                  <ResidentLogoBar homeTo={shellHome} tone={isResident ? "light" : "dark"} compact={isResident || isResponder} />

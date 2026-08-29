@@ -1,7 +1,6 @@
 import time
 
 from django.conf import settings
-from django.core.cache import cache
 from rest_framework import status
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework.permissions import AllowAny
@@ -13,7 +12,7 @@ from apps.emergencies.services import mark_witness_notifications_read
 
 from .models import BrowserPushSubscription, Notification
 from .serializers import BrowserPushSubscriptionSerializer, NotificationSerializer
-from .services import broadcast_notification, send_browser_push, web_push_config_health
+from .services import web_push_config_health
 from .tickets import issue_websocket_ticket
 
 
@@ -46,8 +45,27 @@ class NotificationListView(APIView):
         include_archived = request.query_params.get("include_archived", "").lower() in ("true", "1")
         qs = (
             Notification.objects.filter(recipient=request.user)
-            .select_related("recipient", "concern", "emergency")
-            .prefetch_related("concern__media", "emergency__media")
+            .select_related(
+                "recipient",
+                "concern",
+                "concern__community",
+                "concern__assigned_department",
+                "emergency",
+                "emergency__community",
+                "community",
+                "department",
+            )
+            .prefetch_related(
+                "concern__media",
+                "concern__assignments__department",
+                "concern__assignments__assignee",
+                "concern__assignments__assignee__resident_profile",
+                "emergency__media",
+                "emergency__assignments__role_map__department",
+                "emergency__assignments__responding_community",
+                "emergency__assignments__responder",
+                "emergency__assignments__responder__resident_profile",
+            )
         )
         if not include_archived:
             qs = qs.filter(is_archived=False)
@@ -135,45 +153,6 @@ class NotificationArchiveAllView(APIView):
         count = Notification.objects.filter(recipient=request.user, is_read=True, is_archived=False).update(is_archived=True)
         return Response({"detail": f"{count} notifications archived."})
 
-
-class BrowserPushTestView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        subscriptions = request.user.browser_push_subscriptions.filter(is_active=True)
-        notification = Notification.objects.create(
-            recipient=request.user,
-            type=Notification.Type.ANNOUNCEMENT,
-            title="E-Boses test notification",
-            body="If you can see this, browser push is working on this device.",
-            metadata={
-                "display_title": "E-Boses test notification",
-                "display_body": "Browser push is connected. Closed-browser notifications should work after this device is subscribed.",
-                "tag_key": "test",  # fixed tag so new test notifications replace old ones
-                "urgency": "important",
-                "icon_url": "/contents/notification-bell.png",
-                "action_url": "/dashboard/notifications",
-                "actions": [
-                    {
-                        "action": "open",
-                        "title": "Open notifications",
-                        "url": "/dashboard/notifications",
-                    }
-                ],
-            },
-        )
-        # Only push — skip WebSocket broadcast so the test doesn't ping the in-app toast too.
-        push_result = send_browser_push(notification)
-        if push_result["status"] in {"delivered", "partial"}:
-            cache.set("service-status:push-delivered", time.time(), 172800)
-        return Response(
-            {
-                "notification": NotificationSerializer(notification).data,
-                "push_result": push_result,
-                "active_subscriptions": subscriptions.count(),
-            },
-            status=status.HTTP_201_CREATED,
-        )
 
 class BrowserPushPublicKeyView(APIView):
     permission_classes = [AllowAny]  # Public — VAPID key is not sensitive.

@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import {
-  ChevronLeftIcon,
   CircleCheck,
   CircleX,
   ClockIcon,
   MapPinIcon,
-  MegaphoneIcon,
   PlusIcon,
   ScaleIcon,
   SearchIcon,
@@ -51,8 +49,8 @@ import {
 } from "@/features/dashboard/components/authenticated-media"
 import type { MediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
 import { EmergencyQueueItem } from "@/features/dashboard/components/concerns/emergency-queue-item"
-import { IncidentBoard } from "@/features/dashboard/components/emergencies/incident-board"
-import { DispatchPanel } from "@/features/dashboard/components/emergencies/dispatch-panel"
+import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
+import { EmergencyInfoPane } from "@/features/dashboard/components/emergencies/emergency-info-pane"
 import { listEmergencyQueue, type EmergencyAlert } from "@/features/dashboard/emergency-api"
 import { listActiveResponders, type ActiveResponder } from "@/features/dashboard/api"
 import { hasCapability } from "@/features/dashboard/lib/capabilities"
@@ -64,6 +62,7 @@ import {
   type OpsPaneSpec,
 } from "@/features/dashboard/components/workspace/ops-workspace"
 import { concernSeverityOf } from "@/features/dashboard/components/record/concern-adapter"
+import { useIsDesktop } from "@/features/dashboard/lib/shell"
 
 function ActionPane({ report, draft, viewer, onUpdated, onRefresh, onOpenProof }: { report: Concern; draft: ReturnType<typeof useDecisionDraft>; viewer?: PublicUser | null; onUpdated: (r: Concern) => void; onRefresh: () => Promise<void>; onOpenProof: (items: MediaPreviewItem[], index: number) => void }) {
   const [formOpen, setFormOpen] = useState(false)
@@ -71,7 +70,7 @@ function ActionPane({ report, draft, viewer, onUpdated, onRefresh, onOpenProof }
   const timeline = buildConcernTimelineEntries(report, onOpenProof, viewer)
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 bg-white px-4 pb-4 pt-4">
+    <div className="flex h-full min-h-0 flex-col gap-4 px-4 pb-4 pt-4">
       <section className="flex min-h-0 flex-col rounded-[24px] bg-white p-4 ring-1 ring-neutral-200">
         <div className="mb-1 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -89,7 +88,6 @@ function ActionPane({ report, draft, viewer, onUpdated, onRefresh, onOpenProof }
             </button>
           </div>
         </div>
-        <p className="text-[11px] text-neutral-400">Every status change and resident-facing update.</p>
         <div className="scrollbar-hide mt-3 max-h-[clamp(12rem,42vh,32rem)] overflow-y-auto overscroll-contain pr-1">
           <ConcernTimeline key={report.id} items={timeline} collapsibleHistory />
         </div>
@@ -257,7 +255,6 @@ function OfficialConcernDashboard({
   onSelectAlert: (alert: EmergencyAlert | null) => void
   onAlertUpdated: (alert: EmergencyAlert) => void
 }) {
-  const navigate = useNavigate()
   const filtered = filterOfficialReports(reports, activeFilter, search)
   const current = selected ?? filtered[0]
 
@@ -281,6 +278,7 @@ function OfficialConcernDashboard({
   const ranked = useMemo(() => rankConcerns(filtered, now), [filtered, now])
 
   const draft = useDecisionDraft(current)
+  const isLgUp = useIsDesktop()
   const [actionPaneOpen, setActionPaneOpen] = useState(false)
   const [filterOpen, setFilterOpen] = useState(false)
   const [filterMode, setFilterMode] = useState<"Status" | "Priority">("Status")
@@ -485,43 +483,61 @@ function OfficialConcernDashboard({
 
   const alertRecordPane = selectedAlert ? (
     <div className="flex h-full min-h-0 flex-col">
-      <button
-        type="button"
-        onClick={() => onSelectAlert(null)}
-        className="flex shrink-0 items-center gap-1 px-4 py-2 text-label text-brand-orange"
-      >
-        <ChevronLeftIcon className="size-4" /> Back to queue
-      </button>
-      <div className="min-h-0 flex-1 px-4 pb-4 pt-1">
-        <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] bg-white ring-1 ring-neutral-200">
-          <div className="shrink-0 px-6 pt-5">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-[13px] font-normal text-subtle-foreground">
-                {statusLabelOf(selectedAlert.status, "official", "emergency")}
-              </span>
-              <span className="text-[13px] font-normal text-faint-foreground">
-                {new Intl.DateTimeFormat("en", {
-                  month: "short",
-                  day: "numeric",
-                  year: "numeric",
-                  hour: "numeric",
-                  minute: "2-digit",
-                }).format(new Date(selectedAlert.created_at))}
-              </span>
-            </div>
+      <div className="min-h-0 flex-1 px-0 pb-0 pt-0 lg:px-4 lg:pb-4 lg:pt-3">
+        <div className="flex h-full min-h-0 flex-col overflow-hidden bg-transparent lg:rounded-[24px] lg:bg-white lg:ring-1 lg:ring-neutral-200">
+          {(() => {
+            const reporterName = selectedAlert.reporter_display || selectedAlert.reporter?.full_name || "Unknown reporter"
+            const initials = reporterName.charAt(0).toUpperCase()
+            const submitted = new Date(selectedAlert.created_at)
+            return (
+              <div className="shrink-0 px-0 pt-0 lg:px-6 lg:pt-5">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[13px] font-normal text-subtle-foreground">
+                    {statusLabelOf(selectedAlert.status, "official", "emergency")}
+                  </span>
+                  <span className="text-[13px] font-normal text-faint-foreground">
+                    {Number.isNaN(submitted.getTime())
+                      ? ""
+                      : new Intl.DateTimeFormat("en", {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                          hour: "numeric",
+                          minute: "2-digit",
+                        }).format(submitted)}
+                  </span>
+                </div>
 
-            <div className="mt-4 flex flex-col items-center text-center">
-              <span className={cn("flex size-14 items-center justify-center rounded-full text-[18px] font-bold", avatarTone)}>
-                {(selectedAlert.reporter_display || selectedAlert.reporter?.full_name || "R").charAt(0).toUpperCase()}
-              </span>
-              <p className="mt-2 text-[17px] font-bold leading-tight text-foreground">
-                {selectedAlert.reporter_display || selectedAlert.reporter?.full_name || "Unknown reporter"}
-              </p>
-              <p className="text-[12px] text-faint-foreground">Resident</p>
-            </div>
-          </div>
-          <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-3">
-            <IncidentBoard alert={selectedAlert} />
+                <div className="mt-4 flex flex-col items-center text-center">
+                  <span
+                    className={cn(
+                      "flex size-14 items-center justify-center rounded-full text-[18px] font-bold",
+                      avatarTone,
+                    )}
+                  >
+                    {initials}
+                  </span>
+                  <p className="mt-2 text-[17px] font-bold leading-tight text-foreground">
+                    {reporterName}
+                  </p>
+                  <p className="text-[12px] text-faint-foreground">
+                    Resident
+                  </p>
+                </div>
+              </div>
+            )
+          })()}
+
+          <div className="min-h-0 flex-1 px-0 pb-0 pt-3 lg:px-4 lg:pb-4">
+            <EmergencyChatPanel
+              alertId={selectedAlert.id}
+              open
+              theme="light"
+              variant="modern"
+              bare
+              disabled={selectedAlert.status === "cancelled" || selectedAlert.status === "resolved"}
+              className="h-full"
+            />
           </div>
         </div>
       </div>
@@ -542,7 +558,7 @@ function OfficialConcernDashboard({
       id: "record",
       role: "detail",
       min: 460,
-      label: selectedAlert ? "Incident" : "Concern information",
+      label: selectedAlert ? "Emergency chat" : "Concern information",
       node: selectedAlert ? alertRecordPane : recordPane,
     },
   ]
@@ -554,11 +570,14 @@ function OfficialConcernDashboard({
       initial: 380,
       min: 300,
       max: 720,
-      label: "Dispatch",
+      label: "Emergency info",
+      className: "overflow-hidden",
       node: (
-        <div className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-4 pb-4 pt-0">
-          <DispatchPanel alert={selectedAlert} responders={responders} onChanged={onAlertUpdated} />
-        </div>
+        <EmergencyInfoPane
+          alert={selectedAlert}
+          responders={responders}
+          onChanged={onAlertUpdated}
+        />
       ),
     })
   } else if (current) {
@@ -569,7 +588,7 @@ function OfficialConcernDashboard({
       min: 300,
       max: 720,
       label: "Update report",
-      className: "overflow-hidden bg-white",
+      className: "overflow-hidden",
       node: (
         <ActionPane report={current} draft={draft} viewer={viewer} onUpdated={onUpdated} onRefresh={onRefresh} onOpenProof={(items, index) => setEvidencePreview({ items, index })} />
       ),
@@ -592,14 +611,15 @@ function OfficialConcernDashboard({
       onAsideOpenChange={setActionPaneOpen}
       onMobileDetailClose={onBack}
       panes={panes}
-      fullHeightAside={!selectedAlert}
+      fullHeightAside
+      fullHeightDetail={Boolean(selectedAlert || (current && !selectedAlert))}
       className="ops-plain bg-transparent"
       onListResize={setQueueWidth}
       bar={
         <header className="relative flex h-16 shrink-0 items-center justify-between gap-4 px-4">
           <label
-            className="hidden h-12 items-center gap-2 rounded-full bg-white pl-4 pr-1.5 ring-1 ring-neutral-200 md:flex"
-            style={{ width: queueWidth ? Math.max(queueWidth - 32, 240) : 300 }}
+            className="flex h-12 flex-1 items-center gap-2 rounded-full bg-white pl-4 pr-1.5 ring-1 ring-neutral-200 md:flex-none"
+            style={{ width: isLgUp ? (queueWidth ? Math.max(queueWidth - 32, 240) : 300) : undefined }}
           >
             <SearchIcon className="size-5 shrink-0 text-faint-foreground" />
             <input
@@ -623,16 +643,6 @@ function OfficialConcernDashboard({
               <SlidersHorizontalIcon className="size-5" />
             </button>
           </label>
-          <button
-            type="button"
-            onClick={() => navigate("/dashboard/community-content")}
-            title="Community"
-            aria-label="Community"
-            className="absolute top-1/2 hidden size-12 -translate-y-1/2 items-center justify-center rounded-full bg-white text-neutral-400 ring-1 ring-neutral-200 transition-colors duration-[--duration-micro] hover:text-neutral-600 md:flex"
-            style={{ left: (queueWidth || 380) + 21 }}
-          >
-            <MegaphoneIcon className="size-4" />
-          </button>
           {filterOpen ? filterDropdown : null}
 
         </header>
@@ -857,6 +867,7 @@ export default function ReportsPage() {
 
   function selectReport(report: Concern) {
     setSelectedReport(report.public_id)
+    setSelectedAlertId(null)
     void getConcern(report.public_id)
       .then((full) => setDetailCache((current) => ({ ...current, [report.public_id]: full })))
       .catch(() => {

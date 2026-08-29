@@ -342,6 +342,13 @@ export interface OcrTestResult {
   provider_job_id?: string
   /** Protected URL for the uploaded image used in this test run. */
   image_url?: string | null
+  /** Configured per-side reference samples used by the image comparison. */
+  reference_images?: Array<{
+    side: ProofSide | "front" | "back" | "single"
+    label?: string
+    url: string
+    filename?: string
+  }>
 }
 
 /** Normalize backend extracted_fields (object or array) into a UI list. */

@@ -43,7 +43,10 @@ TIMESTAMP_KEYS = (
     "time", "timestamp", "received_at", "date", "datetime", "sent_at",
     "receivedat",
 )
-MESSAGE_ID_KEYS = ("id", "message_id", "messageid", "msg_id", "sms_id", "uuid")
+# Prefer the message's nested messageId over the webhook delivery envelope's
+# own id. SMSGate uses both in the same payload and delivery reconciliation
+# must match the former to the id returned by the send API.
+MESSAGE_ID_KEYS = ("message_id", "messageid", "msg_id", "sms_id", "uuid", "id")
 
 # Gateways that wrap the message in an envelope. android-sms-gateway sends
 # {"event": "sms:received", "deviceId": ..., "payload": {"message": ...,

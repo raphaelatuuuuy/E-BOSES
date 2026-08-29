@@ -4,6 +4,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import timedelta
+from math import asin, cos, radians, sin, sqrt
 
 from django.utils import timezone
 
@@ -12,6 +13,26 @@ from apps.geo_services import active_communities_for_point, point_in_geojson_inc
 from .models import Community, MapGeometry, MapServicePoi
 
 RECENT_LOCATION_MINUTES = 15
+
+_GEOCODE_SENTINELS = {
+    "community pending confirmation",
+    "location needs confirmation",
+    "unknown",
+    "none",
+}
+_GEOCODE_NOISE_WORDS = {
+    "at",
+    "city",
+    "dito",
+    "near",
+    "malapit",
+    "metro",
+    "philippines",
+    "sa",
+    "street",
+    "st",
+    "the",
+}
 
 
 def _key(value: str) -> str:
@@ -106,6 +127,8 @@ class LocationResolution:
     canonical_street: str = ""
     candidates: tuple = field(default_factory=tuple)
     reason: str = ""
+    provider: str = ""
+    provider_id: str = ""
 
     @property
     def has_destination(self):
@@ -126,7 +149,153 @@ class LocationResolution:
             "boundary": _boundary_payload(self.community),
             "has_destination": self.has_destination,
             "reason": self.reason,
+            "provider": self.provider,
+            "provider_id": self.provider_id,
         }
+
+
+def _meaningful_location_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in _key(value).split()
+        if len(token) >= 3 and token not in _GEOCODE_NOISE_WORDS
+    }
+
+
+def _result_is_in_marikina(item: dict) -> bool:
+    """Reject same-named map results from another city before boundary checks."""
+    address = item.get("address") or {}
+    locality = " ".join(
+        str(address.get(key) or "")
+        for key in ("city", "town", "municipality", "city_district", "county")
+    )
+    if "marikina" in _key(locality):
+        return True
+    # Some OSM records omit a structured city but retain it in display_name.
+    return "marikina" in _key(item.get("display_name") or "")
+
+
+def _distance_meters(first: tuple[float, float], second: tuple[float, float]) -> float:
+    lat1, lng1 = map(radians, first)
+    lat2, lng2 = map(radians, second)
+    dlat, dlng = lat2 - lat1, lng2 - lng1
+    value = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlng / 2) ** 2
+    return 2 * 6_371_000 * asin(sqrt(value))
+
+
+def geocode_reported_place(text: str) -> LocationResolution:
+    """Resolve a resident-named place using the real map and active boundaries.
+
+    The geocoder result is never treated as GPS. It is accepted only when the
+    result says Marikina, its coordinates fall inside exactly one active
+    community polygon, and its label still matches meaningful words supplied by
+    the resident/LLM. Equally plausible results far apart are left unresolved.
+    """
+    normalized = " ".join(str(text or "").split()).strip(" ,")[:180]
+    if len(normalized) < 3 or _key(normalized) in _GEOCODE_SENTINELS:
+        return LocationResolution(reason="empty_or_placeholder_map_query")
+
+    query_tokens = _meaningful_location_tokens(normalized)
+    if not query_tokens:
+        return LocationResolution(area_label=normalized, reason="map_query_too_vague")
+
+    from apps.geo_services import nominatim_search
+
+    try:
+        payload = nominatim_search(
+            f"{normalized}, Marikina, Metro Manila, Philippines",
+            limit=8,
+        ) or []
+    except Exception:
+        return LocationResolution(area_label=normalized, reason="map_provider_unavailable")
+
+    candidates = []
+    seen = set()
+    for rank, item in enumerate(payload):
+        try:
+            latitude = float(item["lat"])
+            longitude = float(item["lon"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not _result_is_in_marikina(item):
+            continue
+        communities = active_communities_for_point(latitude, longitude)
+        if len(communities) != 1:
+            continue
+
+        address = item.get("address") or {}
+        label = str(item.get("display_name") or "").strip()
+        searchable = " ".join([label, *(str(value) for value in address.values())])
+        overlap = query_tokens & _meaningful_location_tokens(searchable)
+        if not overlap:
+            continue
+
+        key = (round(latitude, 5), round(longitude, 5))
+        if key in seen:
+            continue
+        seen.add(key)
+        road = (
+            address.get("road")
+            or address.get("pedestrian")
+            or address.get("residential")
+            or address.get("footway")
+            or ""
+        )
+        score = len(overlap) / len(query_tokens)
+        candidates.append(
+            {
+                "rank": rank,
+                "score": score,
+                "latitude": latitude,
+                "longitude": longitude,
+                "community": communities[0],
+                "label": label or normalized,
+                "street": str(road).strip(),
+                "provider_id": f"{item.get('osm_type') or ''}:{item.get('osm_id') or item.get('place_id') or ''}".strip(":"),
+            }
+        )
+
+    if not candidates:
+        return LocationResolution(area_label=normalized, reason="no_in_boundary_marikina_map_match")
+
+    candidates.sort(key=lambda row: (-row["score"], row["rank"]))
+    best = candidates[0]
+    if len(candidates) > 1:
+        second = candidates[1]
+        equally_plausible = abs(best["score"] - second["score"]) < 0.001
+        far_apart = _distance_meters(
+            (best["latitude"], best["longitude"]),
+            (second["latitude"], second["longitude"]),
+        ) > 150
+        # OSM commonly stores one real road as several separate way segments.
+        # Those are one usable street match, not competing places. Two POIs (or
+        # differently named roads) with the same rank are genuinely ambiguous.
+        same_street = bool(best["street"] and second["street"]) and (
+            _key(best["street"]) == _key(second["street"])
+            and best["community"].pk == second["community"].pk
+        )
+        if equally_plausible and far_apart and not same_street:
+            return LocationResolution(
+                state="ambiguous",
+                area_label=normalized,
+                candidates=tuple(dict.fromkeys(row["community"] for row in candidates)),
+                reason="multiple_map_matches",
+                provider="nominatim",
+            )
+
+    return LocationResolution(
+        source="sms_geocoded",
+        freshness="not_available",
+        state="reported",
+        community=best["community"],
+        area_label=best["label"][:255],
+        latitude=best["latitude"],
+        longitude=best["longitude"],
+        canonical_street=best["street"][:255],
+        reason="city_and_active_boundary_match",
+        provider="nominatim",
+        provider_id=best["provider_id"][:80],
+    )
 
 
 def resolve_incident_location(*, latitude=None, longitude=None, message_area="", match=None, user=None):

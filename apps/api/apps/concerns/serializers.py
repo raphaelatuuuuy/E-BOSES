@@ -974,6 +974,7 @@ class ConcernSerializer(serializers.ModelSerializer):
             "reporter_full_name",
             "title",
             "description",
+            "notification_subject",
             "category",
             "category_ref",
             "assigned_department",
@@ -1364,6 +1365,11 @@ class ConcernCreateSerializer(serializers.Serializer):
     location_accuracy = serializers.FloatField(required=False, allow_null=True)
     duplicate_of = serializers.IntegerField(required=False, allow_null=True)
     recurrence_of = serializers.IntegerField(required=False, allow_null=True)
+    # These values are populated by the resident precheck. They are not shown
+    # as resident choices: the server validates the emergency type and routes
+    # it only when the precheck marked the report for automatic escalation.
+    emergency_type = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    auto_escalate = serializers.BooleanField(required=False, default=False)
 
     def validate_duplicate_of(self, value):
         if value and not Concern.objects.filter(pk=value).exists():
@@ -1514,6 +1520,7 @@ class ConcernListSerializer(serializers.ModelSerializer):
             "tracking_id",
             "title",
             "description",
+            "notification_subject",
             "category",
             "status",
             "validation_status",

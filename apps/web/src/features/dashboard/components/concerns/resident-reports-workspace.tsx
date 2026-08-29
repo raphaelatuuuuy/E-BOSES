@@ -502,8 +502,9 @@ export function ResidentReportsWorkspace({
         onAsideOpenChange={setAsideOpen}
         onMobileDetailClose={onBack}
         panes={panes}
-        fullHeightAside
-        className="ops-plain bg-transparent"
+      fullHeightAside
+      fullHeightDetail={Boolean(current)}
+      className="ops-plain bg-transparent"
         onListResize={setQueueWidth}
         bar={
           <header className="relative flex h-16 shrink-0 items-center justify-between gap-4 px-4">

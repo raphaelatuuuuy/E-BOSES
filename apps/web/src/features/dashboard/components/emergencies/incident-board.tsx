@@ -5,9 +5,9 @@ import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-ch
 import { fullTimestamp } from "@/features/dashboard/components/record/emergency-adapter"
 import { isActiveEmergency } from "@/features/dashboard/components/alerts-map/lib"
 import { dotPinHtml, MAP_COLORS } from "@/features/dashboard/components/map/markers"
-import { drawCoverage } from "@/features/dashboard/components/map/coverage-layer"
+import { glyphPinHtml, glyphPinSize } from "@/features/dashboard/components/map/markers"
+import { lucideIconPaths } from "@/features/dashboard/components/map/lucide-glyphs"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
-import { loadCoverageContext } from "@/features/dashboard/lib/use-coverage"
 import { drawRoute, routeRenderGeometry } from "@/features/dashboard/lib/route-line"
 import {
   AuthenticatedMediaImage,
@@ -35,18 +35,7 @@ function coord(lat?: string | number | null, lng?: string | number | null) {
   return [latitude, longitude] as leaflet.LatLngTuple
 }
 
-function formatEta(seconds: number | null) {
-  if (seconds == null) return null
-  const minutes = Math.round(seconds / 60)
-  return minutes < 1 ? "<1 min" : `${minutes} min`
-}
-
-function formatDistance(meters: number | null) {
-  if (meters == null) return null
-  return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`
-}
-
-function IncidentMap({ alert }: { alert: EmergencyAlert }) {
+export function IncidentMap({ alert }: { alert: EmergencyAlert }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const resizeRef = useRef<ResizeObserver | null>(null)
   const assignment = alert.current_assignment
@@ -54,8 +43,6 @@ function IncidentMap({ alert }: { alert: EmergencyAlert }) {
   const incident = coord(alert.latitude, alert.longitude)
   const responder = coord(assignment?.last_location?.latitude, assignment?.last_location?.longitude)
 
-  const eta = formatEta(route?.eta_seconds ?? null)
-  const distance = formatDistance(route?.distance_meters ?? null)
   const routeIsLive = isActiveEmergency(alert)
 
   const locationLabel = streetOnly(
@@ -90,17 +77,20 @@ function IncidentMap({ alert }: { alert: EmergencyAlert }) {
 
       map = L.map(containerRef.current, {
         center: incident,
-        zoom: 16,
+        zoom: 18,
         zoomControl: false,
         attributionControl: false,
         scrollWheelZoom: false,
+        dragging: false,
+        doubleClickZoom: false,
+        boxZoom: false,
+        keyboard: false,
       })
-      containerRef.current.classList.add("eboses-map-dark")
+      containerRef.current.classList.add("eboses-emergency-map")
 
-      L.control.zoom({ position: "topright" }).addTo(map)
-
-      addBaseTiles(L, map, "voyager", {
-        maxZoom: 20,
+      addBaseTiles(L, map, "light", {
+        maxZoom: 19,
+        className: "eboses-emergency-map-tiles",
       })
 
       const history = (assignment?.location_history ?? [])
@@ -123,20 +113,28 @@ function IncidentMap({ alert }: { alert: EmergencyAlert }) {
         drawRoute(L, map, { road, approach, connectors, live: routeIsLive })
       }
 
+      const BASE_SIZE = 26
+      const pinSize = glyphPinSize(BASE_SIZE, true)
+      const emergencyPaths = lucideIconPaths("triangle-alert") ?? [
+        "M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z",
+        "M12 9v4",
+        "M12 17h.01",
+      ]
       L.marker(incident, {
         icon: L.divIcon({
-          className: "eboses-map-pin-wrap",
-          iconSize: [16, 16],
-          iconAnchor: [8, 8],
-          html: `<div style="position:relative;width:16px;height:16px">
-                   <span style="position:absolute;left:50%;bottom:calc(100% + 10px);transform:translateX(-50%);
-                                max-width:220px;overflow:hidden;text-overflow:ellipsis;
-                                white-space:nowrap;background:rgba(15,23,42,.92);color:#fff;
-                                font-size:11px;font-weight:600;line-height:1.3;
-                                padding:3px 9px;border-radius:7px;
-                                box-shadow:0 3px 10px rgba(0,0,0,.3);pointer-events:none;">${escapedHtml(locationLabel)}</span>
-                   ${dotPinHtml({ color: MAP_COLORS.emergency, size: 16 })}
-                 </div>`,
+          className: "eboses-emergency-pin",
+          html: `<div style="position:relative;width:${pinSize}px;height:${pinSize}px">${glyphPinHtml({
+            paths: emergencyPaths,
+            content: undefined,
+            color: "#dc2626",
+            size: BASE_SIZE,
+            selected: true,
+            tone: "light",
+            tint: false,
+            idleNeutral: false,
+          })}</div>`,
+          iconSize: [pinSize, pinSize],
+          iconAnchor: [pinSize / 2, pinSize / 2],
         }),
         title: locationLabel,
         zIndexOffset: 900,
@@ -145,7 +143,7 @@ function IncidentMap({ alert }: { alert: EmergencyAlert }) {
       if (responder) {
         L.marker(responder, {
           icon: L.divIcon({
-            className: "eboses-map-pin-wrap",
+            className: "eboses-emergency-pin",
             iconSize: [13, 13],
             iconAnchor: [6.5, 6.5],
             html: dotPinHtml({ color: MAP_COLORS.responder, size: 13, live: false }),
@@ -154,24 +152,8 @@ function IncidentMap({ alert }: { alert: EmergencyAlert }) {
         }).addTo(map)
       }
 
-      const coverageGroup = L.layerGroup().addTo(map)
-      void loadCoverageContext()
-        .then((context) => {
-          if (cancelled) return
-          drawCoverage(L, coverageGroup, {
-            boundary: context.boundary?.geometry ?? null,
-            policy: context.dispatch_policy,
-          })
-        })
-        .catch(() => {
-          // Without the outline the incident pin is still the point of this map.
-        })
+      map.setView(incident, 18)
 
-      map.setView(incident, 16)
-
-      // A single frame was not always enough: this map lives inside a sheet
-      // that is still animating open, so it measured a container mid-transition
-      // and painted nothing.
       const observer = new ResizeObserver(() => {
         const box = containerRef.current?.getBoundingClientRect()
         if (!box?.width || !box.height) return
@@ -203,34 +185,48 @@ function IncidentMap({ alert }: { alert: EmergencyAlert }) {
 
   if (!incident) {
     return (
-      <div className="flex min-h-[240px] items-center justify-center rounded-panel border border-card-line bg-card text-body text-muted-foreground">
+      <div className="flex h-full min-h-[200px] items-center justify-center rounded-[16px] bg-neutral-100 text-[13px] text-neutral-400">
         No coordinates on this alert.
       </div>
     )
   }
 
-  const caption = responder
-    ? [responderName(assignment?.responder), distance, eta ? `ETA ${eta}` : null]
-        .filter(Boolean)
-        .join(" · ")
-    : "Awaiting responder GPS"
-
   return (
-    <div className="relative overflow-hidden rounded-control border border-card-line">
-      <div ref={containerRef} className="h-[300px] w-full" />
-      <p className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-3 pb-2.5 pt-6 text-[12px] font-medium text-white">
-        {caption}
-      </p>
+    <div className="relative h-full w-full overflow-hidden rounded-[16px] bg-tint">
+      <div ref={containerRef} className="eboses-emergency-map pointer-events-none absolute inset-0 z-0 h-full w-full" />
+      <style>{`
+        .eboses-emergency-map.leaflet-container {
+          width: 100%;
+          height: 100%;
+          background: #e8eef5;
+          font: inherit;
+        }
+        .eboses-emergency-map .leaflet-tile-pane {
+          filter: saturate(0.85);
+        }
+        .eboses-emergency-map .leaflet-tile {
+          outline: none;
+          transition: filter 150ms ease;
+        }
+        .eboses-emergency-pin {
+          background: transparent !important;
+          border: none !important;
+        }
+        .eboses-emergency-map .eboses-pin__disc {
+          background: color-mix(in srgb, var(--pin) 16%, white) !important;
+          color: var(--pin) !important;
+          border: 2px solid #fff !important;
+          box-shadow: 0 2px 8px rgba(15, 23, 42, 0.15) !important;
+        }
+        .eboses-emergency-map .eboses-pin__disc svg {
+          display: block;
+        }
+        .eboses-emergency-map .eboses-pin__core {
+          border: none !important;
+        }
+      `}</style>
     </div>
   )
-}
-
-function escapedHtml(text: string) {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
 }
 
 function formatDuration(seconds: number | null) {

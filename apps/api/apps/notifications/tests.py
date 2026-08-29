@@ -1,11 +1,15 @@
 from django.contrib.auth import get_user_model
+from datetime import datetime
+
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from unittest.mock import patch
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentSettings
 from apps.concerns.models import Announcement, Concern, ConcernMedia, Department
+from apps.concerns.notification_subject import build_notification_subject, normalise_notification_subject
 from apps.concerns.test_helpers import active_test_community, ensure_test_profile
 from apps.emergencies.models import EmergencyAlert, EmergencyMedia, WitnessNotification
 
@@ -281,6 +285,157 @@ class NotificationPreferenceAPITests(APITestCase):
         by_type = {item["type"]: item for item in response.data}
         self.assertEqual(by_type[Notification.Type.SUBMITTED]["concern_public_id"], str(concern.public_id))
         self.assertEqual(by_type[Notification.Type.EMERGENCY_SUBMITTED]["emergency_public_id"], str(emergency.public_id))
+
+    def test_notification_greeting_uses_manila_send_time_and_last_name(self):
+        user = self.create_verified_user("greeting")
+        ensure_test_profile(user, first_name="Ana", last_name="Santos")
+
+        cases = [
+            (9, "Good morning, Santos."),
+            (14, "Good afternoon, Santos."),
+            (20, "Good evening, Santos."),
+        ]
+        for hour, expected in cases:
+            notification = Notification.objects.create(
+                recipient=user,
+                type=Notification.Type.ANNOUNCEMENT,
+                title="Community update",
+                body="Water service resumes after inspection.",
+            )
+            notification.created_at = timezone.make_aware(datetime(2026, 8, 28, hour, 0))
+            notification.save(update_fields=["created_at"])
+
+            payload = notification_display_payload(notification)
+
+            self.assertTrue(payload["body"].startswith(expected))
+
+    def test_report_notification_includes_assigned_unit_and_community_context(self):
+        user = self.create_verified_user("assigned-context")
+        ensure_test_profile(user, last_name="Santos")
+        community = active_test_community()
+        department = Department.objects.filter(community=community).first()
+        self.assertIsNotNone(department)
+        concern = Concern.objects.create(
+            reporter=user,
+            community=community,
+            assigned_department=department,
+            title="Blocked drainage",
+            status=Concern.Status.ASSIGNED,
+        )
+        notification = Notification.objects.create(
+            recipient=user,
+            concern=concern,
+            type=Notification.Type.ASSIGNED,
+            title="Concern report assigned",
+            body="The report is now assigned.",
+        )
+
+        payload = notification_display_payload(notification)
+
+        self.assertEqual(payload["context"]["community"]["id"], community.pk)
+        self.assertEqual(payload["context"]["department"]["id"], department.pk)
+        self.assertEqual(payload["context"]["response"]["assigned_unit"]["id"], department.pk)
+        self.assertIn(department.name, payload["body"])
+
+    def test_responder_dispatch_uses_dynamic_address_without_internal_sos_id(self):
+        User = get_user_model()
+        reporter = self.create_verified_user("dispatch-address-reporter")
+        responder = User.objects.create_user(
+            email="dispatch-address-responder@example.com",
+            phone_number="+639353333388",
+            password="Str0ng!Pass123",
+            role=User.Role.FIRST_RESPONDER,
+            status=User.Status.VERIFIED,
+        )
+        ensure_test_profile(responder, last_name="Salazar")
+        community = active_test_community()
+        department = Department.objects.filter(community=community).first()
+        self.assertIsNotNone(department)
+        emergency = EmergencyAlert.objects.create(
+            reporter=reporter,
+            type=EmergencyAlert.Type.FIRE,
+            community=community,
+            barangay=community.name,
+            address="Champaca Street",
+            reported_area="near Champaca Street",
+            resolved_location="Champaca Street, Marikina Heights",
+        )
+        notification = Notification.objects.create(
+            recipient=responder,
+            emergency=emergency,
+            community=community,
+            department=department,
+            type=Notification.Type.EMERGENCY_ROUTED,
+            title="Emergency routed",
+        )
+
+        payload = notification_display_payload(notification)
+
+        self.assertIn("Dispatch assignment", payload["title"])
+        self.assertIn("Champaca Street", payload["title"])
+        self.assertNotIn("SOS #", payload["title"])
+        self.assertNotIn(f"#{emergency.pk}", payload["title"])
+        self.assertIsNone(payload["context"]["reference"])
+        self.assertIn("reported around Champaca Street, Marikina Heights", payload["body"])
+        self.assertIn(department.short_name or department.name, payload["body"])
+
+    def test_report_notification_uses_specific_one_to_three_word_subject(self):
+        user = self.create_verified_user("subject-specific")
+        concern = Concern.objects.create(
+            reporter=user,
+            title="Sobrang laki at lalim na ng pothole sa kalsada",
+            description="A deep pothole is affecting vehicles.",
+            category=Concern.Category.INFRASTRUCTURE,
+            notification_subject="Roadside Pothole",
+        )
+        notification = Notification.objects.create(
+            recipient=user,
+            concern=concern,
+            type=Notification.Type.SUBMITTED,
+            title="Report received",
+        )
+
+        payload = notification_display_payload(notification)
+
+        self.assertIn("Roadside Pothole", payload["context"]["subject"])
+        self.assertIn("Roadside Pothole", payload["body"])
+        self.assertLessEqual(len(payload["context"]["subject"].split()), 3)
+
+    def test_report_notification_subject_rejects_vague_or_long_model_output(self):
+        self.assertEqual(normalise_notification_subject("Community Concern"), "")
+        self.assertEqual(normalise_notification_subject("This is a long explanation"), "")
+        self.assertEqual(
+            build_notification_subject(
+                "Community Concern",
+                title="Sobrang laki at lalim na ng pothole sa kalsada",
+                category=Concern.Category.INFRASTRUCTURE,
+            ),
+            "Roadside Pothole",
+        )
+
+    def test_notification_without_last_name_uses_time_greeting_without_none(self):
+        user = self.create_verified_user("greeting-no-name")
+        notification = Notification.objects.create(
+            recipient=user,
+            type=Notification.Type.ANNOUNCEMENT,
+            title="Community update",
+            body="A new announcement is available.",
+        )
+        notification.created_at = timezone.make_aware(datetime(2026, 8, 28, 20, 0))
+        notification.save(update_fields=["created_at"])
+
+        payload = notification_display_payload(notification)
+
+        self.assertTrue(payload["body"].startswith("Good evening."))
+        self.assertNotIn("None", payload["body"])
+
+    def test_browser_push_test_endpoint_is_removed(self):
+        user = self.create_verified_user("no-test-endpoint")
+        self.client.force_authenticate(user)
+
+        response = self.client.post("/api/notifications/browser-push/test/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_notification_inbox_only_returns_the_authenticated_users_rows(self):
         user = self.create_verified_user("recipient-isolation")

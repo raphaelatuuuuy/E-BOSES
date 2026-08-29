@@ -35,6 +35,21 @@ export interface NotificationItem {
     mime_type?: string | null
   }>
   actions?: Array<{ action: string; title: string; url: string; icon?: string }>
+  context?: {
+    community?: { id: number | null; name: string; code?: string | null } | null
+    department?: { id: number | null; name: string; short_name?: string | null; code?: string | null } | null
+    reference?: string | null
+    subject?: string | null
+    status?: string | null
+    location?: { barangay?: string | null; address?: string | null; confidence?: string | null } | null
+    response?: {
+      assignment_status?: string | null
+      assigned_unit?: { id: number | null; name: string; short_name?: string | null; code?: string | null } | null
+      responding_community?: { id: number | null; name: string; code?: string | null } | null
+      is_cross_community?: boolean
+      assignee_name?: string | null
+    } | null
+  }
 }
 
 interface NotificationContextValue {

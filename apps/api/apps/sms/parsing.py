@@ -103,6 +103,25 @@ CATEGORY_ALIASES: dict[str, str] = {
 # safety" is not shadowed by "safety".
 _ALIAS_KEYS_BY_LENGTH = sorted(CATEGORY_ALIASES, key=len, reverse=True)
 
+# These words occur routinely in non-emergency messages (promotions are a
+# common example: "all other sites", "child account", "safety reminder").
+# They may still identify a category when the message also contains an urgency
+# phrase or the explicit "This is a ... emergency" sentence, but never by
+# themselves.
+WEAK_STANDALONE_CATEGORY_ALIASES = {
+    "other",
+    "medical",
+    "sakit",
+    "safety",
+    "away",
+    "child",
+    "bata",
+    "animal",
+    "aso",
+    "dog",
+    "drug",
+}
+
 # ---------------------------------------------------------------------------
 # Patterns
 # ---------------------------------------------------------------------------
@@ -445,11 +464,19 @@ def parse_emergency_sms(body: str | None, *, sender_is_known: bool = False) -> P
         area = re.split(r"\s+please\s+send\b", area, flags=re.IGNORECASE)[0].strip(" .,;")
         parsed.reported_area = area[:255]
 
-    # A message counts as an emergency when it names a category, sounds urgent,
-    # or carries a coordinate footer — the app only ever emits that footer for
-    # an SOS. A known sender needs only one weak signal.
+    explicit_category_clause = bool(CATEGORY_CLAUSE_PATTERN.search(prose))
+    strong_category_signal = bool(
+        code and alias not in WEAK_STANDALONE_CATEGORY_ALIASES
+    )
+    # Ambiguous category words are not sufficient by themselves. This prevents
+    # ordinary carrier/promotional SMS (for example, "all other sites") from
+    # being attached to a resident's active emergency. Clear incident words,
+    # an explicit emergency sentence, urgency, or the SOS coordinate footer
+    # remain sufficient so a real cry for help is never dependent on perfect
+    # wording.
     parsed.is_emergency = bool(
-        code
+        strong_category_signal
+        or (code and explicit_category_clause)
         or urgency
         or coordinate_status == COORDINATE_OK
         or (sender_is_known and coordinate_status == COORDINATE_INVALID)
