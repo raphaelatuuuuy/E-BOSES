@@ -1,6 +1,14 @@
 import { useState } from "react"
 import { toast } from "sonner"
-import { ArrowUpIcon, ImageIcon, MapPinIcon, MessageCircleIcon, SignalIcon, TriangleAlert } from "lucide-react"
+import {
+  CircleCheckIcon,
+  ImageIcon,
+  MapPinIcon,
+  MessageCircleIcon,
+  NavigationIcon,
+  SignalIcon,
+  TriangleAlert,
+} from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -10,9 +18,32 @@ import {
   type EmergencyAlert,
   type EmergencyCommunityComment,
 } from "@/features/dashboard/emergency-api"
-import { avatarTone } from "@/features/dashboard/components/concerns/concern-queue-item"
-import { readableLocation, streetOnly } from "@/features/dashboard/lib/location-text"
+import {
+  avatarTone,
+  initialsOf,
+  severityTintStyle,
+  statusTintStyle,
+} from "@/features/dashboard/components/concerns/concern-queue-item"
+import {
+  readableLocation,
+  streetOnly,
+} from "@/features/dashboard/lib/location-text"
+import type { PublicUser } from "@/features/dashboard/api"
 import { isEmergencyActive } from "@/features/dashboard/lib/status-vocabulary"
+import { emergencyDescription } from "@/features/dashboard/lib/emergency-description"
+import {
+  emergencyResponderAssignments,
+  emergencyRouteSummary,
+  historicalRouteSummary,
+  responderName,
+  responderStatusLabel,
+} from "@/features/dashboard/components/emergencies/lib"
+import { EmergencyResolutionBanner } from "@/features/dashboard/components/emergencies/emergency-resolution-banner"
+import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
+import {
+  CommentAttachment,
+  CommentComposer,
+} from "@/features/dashboard/components/comments"
 
 const TYPE_LABEL: Record<string, string> = {
   medical: "Medical",
@@ -21,7 +52,8 @@ const TYPE_LABEL: Record<string, string> = {
 }
 
 function typeLabelOf(type: string) {
-  return TYPE_LABEL[type] ?? (type || "Emergency").replace(/_/g, " ")
+  const label = TYPE_LABEL[type] ?? (type || "Emergency").replace(/_/g, " ")
+  return label.charAt(0).toUpperCase() + label.slice(1)
 }
 
 function alertTime(iso: string) {
@@ -34,51 +66,166 @@ function alertTime(iso: string) {
     minute: "2-digit",
   })
   const now = new Date()
-  if (date.toDateString() === now.toDateString()) return `Today at ${formatter.format(date)}`
-  if (new Date(now.getTime() - 86_400_000).toDateString() === date.toDateString())
+  if (date.toDateString() === now.toDateString())
+    return `Today at ${formatter.format(date)}`
+  if (
+    new Date(now.getTime() - 86_400_000).toDateString() === date.toDateString()
+  )
     return `Yesterday at ${formatter.format(date)}`
   return formatter.format(date)
+}
+
+/** Public emergency footer: responder avatars take the place of concern upvotes. */
+export function EmergencyEngagementFooter({
+  alert,
+  commentCount = alert.comment_count ?? 0,
+  commentsOpen = false,
+  onCommentsClick,
+}: {
+  alert: EmergencyAlert
+  commentCount?: number
+  commentsOpen?: boolean
+  onCommentsClick?: () => void
+}) {
+  if (!alert.is_public) return null
+
+  const responders = Array.from(
+    new Map(
+      emergencyResponderAssignments(alert).map((assignment) => [
+        assignment.responder.id,
+        assignment.responder,
+      ])
+    ).values()
+  )
+  const settled = ["resolved", "closed"].includes(alert.status)
+  const visibleResponders = responders.slice(0, 3)
+  const extraResponders = Math.max(
+    responders.length - visibleResponders.length,
+    0
+  )
+  const safeCommentCount = Math.max(commentCount, 0)
+  const commentContent = (
+    <>
+      <MessageCircleIcon className="size-3.5" strokeWidth={2} />
+      <span>{safeCommentCount} comments</span>
+    </>
+  )
+
+  return (
+    <div className="mt-3 border-t border-neutral-100 pt-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <div className="flex -space-x-1.5" aria-label="Responders responding">
+            {visibleResponders.map((responder) => (
+              <span
+                key={responder.id}
+                title={responder.full_name}
+                className="flex size-5 items-center justify-center rounded-full bg-slate-soft text-[8px] font-semibold text-navy-muted ring-1 ring-white"
+              >
+                {initialsOf(responder.full_name).charAt(0)}
+              </span>
+            ))}
+            {extraResponders > 0 ? (
+              <span className="flex size-5 items-center justify-center rounded-full bg-neutral-100 text-[8px] font-semibold text-neutral-500 ring-1 ring-white">
+                +{extraResponders}
+              </span>
+            ) : null}
+          </div>
+          <span className="truncate text-[10px] font-medium text-neutral-500">
+            {settled && responders.length
+              ? "Responded"
+              : responders.length
+                ? `${responders.length} responder${responders.length === 1 ? "" : "s"} responding`
+                : "No responder yet"}
+          </span>
+        </div>
+
+        {onCommentsClick ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              onCommentsClick()
+            }}
+            aria-label={commentsOpen ? "Hide comments" : "See comments"}
+            className={cn(
+              "flex shrink-0 items-center gap-1 text-[11px] font-medium transition-colors",
+              commentsOpen
+                ? "text-neutral-800"
+                : "text-neutral-500 hover:text-neutral-800"
+            )}
+          >
+            {commentContent}
+          </button>
+        ) : (
+          <span className="flex shrink-0 items-center gap-1 text-[11px] font-medium text-neutral-500">
+            {commentContent}
+          </span>
+        )}
+      </div>
+    </div>
+  )
 }
 
 export function EmergencyQueueItem({
   alert,
   active,
   onSelect,
+  sessionUser,
 }: {
   alert: EmergencyAlert
   active: boolean
   onSelect: () => void
+  sessionUser?: PublicUser | null
 }) {
   const live = isEmergencyActive(alert.status)
-  const assignments = alert.assignments ?? []
-  const unit =
-    alert.responding_unit ??
-    alert.current_assignment?.assigned_unit ??
-    assignments.find((assignment) => assignment.assigned_unit)?.assigned_unit ??
-    null
+  const resolved = ["resolved", "closed"].includes(alert.status)
+  // A settled emergency gets the same green wash as resolved concerns so
+  // closed cases read at a glance — critical red while live, neutral red when
+  // cancelled or invalid.
+  const rowTint = live
+    ? severityTintStyle("critical", true)
+    : resolved
+      ? statusTintStyle("resolved")
+      : statusTintStyle("rejected")
   const reporterName =
-    alert.reporter_display?.trim() || alert.reporter?.full_name?.trim() || "Unknown reporter"
-  const onScene = Array.from(
+    alert.reporter_display?.trim() ||
+    alert.reporter?.full_name?.trim() ||
+    "Unknown reporter"
+  const responderAssignments = emergencyResponderAssignments(alert)
+  const routeResponders = Array.from(
     new Map(
-      assignments
-        .filter((assignment) =>
-          ["acknowledged", "en_route", "arrived", "assisting"].includes(assignment.status),
-        )
-        .map((assignment) => [assignment.responder.id, assignment.responder]),
-    ).values(),
+      responderAssignments.map((assignment) => [
+        assignment.responder.id,
+        assignment.responder,
+      ])
+    ).values()
   )
+  // Routes are attached to the active assignment once dispatch starts, and
+  // fall back to the alert-level route before an assignment is created.
+  const route = alert.current_assignment?.route ?? alert.route
+  const routeResponder =
+    alert.current_assignment?.responder ?? routeResponders[0]
+  const historicalRoutes = resolved
+    ? responderAssignments.filter(
+        (assignment) =>
+          assignment.route || (assignment.location_history?.length ?? 0) > 1
+      )
+    : []
   const location = readableLocation(
     alert.display_location,
     alert.resolved_location,
     alert.address,
     alert.reported_area,
-    alert.barangay,
+    alert.barangay
   )
 
   const street = streetOnly(location)
 
   const [showComments, setShowComments] = useState(false)
-  const [comments, setComments] = useState<EmergencyCommunityComment[] | null>(null)
+  const [comments, setComments] = useState<EmergencyCommunityComment[] | null>(
+    null
+  )
   const [commentsLoading, setCommentsLoading] = useState(false)
   const [draft, setDraft] = useState("")
   const [posting, setPosting] = useState(false)
@@ -102,73 +249,77 @@ export function EmergencyQueueItem({
     if (next && comments == null) await loadComments()
   }
 
-  async function submitComment() {
+  async function submitComment(media?: File | null): Promise<boolean> {
     const body = draft.trim()
-    if (!body || posting) return
+    if ((!body && !media) || posting) return false
     setPosting(true)
     try {
-      await addEmergencyCommunityComment(alert.id, body)
+      await addEmergencyCommunityComment(alert.id, body, null, media)
       setDraft("")
       await loadComments()
+      return true
     } catch {
       toast.error("Could not post the comment.")
+      return false
     } finally {
       setPosting(false)
     }
   }
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
+    <article
       aria-label={typeLabelOf(alert.type)}
       onClick={onSelect}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          onSelect()
-        }
-      }}
       className={cn(
         "flex w-full cursor-pointer flex-col rounded-[24px] bg-white p-4 text-left ring-1 transition duration-150",
-        active ? "ring-neutral-300" : "ring-neutral-200 hover:ring-neutral-300",
-
+        active ? "ring-neutral-300" : "ring-neutral-200 hover:ring-neutral-300"
       )}
-      style={
-        live
-          ? {
-              backgroundImage:
-                "radial-gradient(115% 130% at 100% 0%, var(--color-severity-critical-surface), #ffffff 68%)",
-            }
-          : undefined
-      }
+      style={rowTint}
     >
       <div className="flex items-center gap-2.5">
-        <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-full text-[14px] font-bold", avatarTone)}>
+        <span
+          className={cn(
+            "flex size-9 shrink-0 items-center justify-center rounded-full text-[14px] font-bold",
+            avatarTone
+          )}
+        >
           {reporterName.charAt(0).toUpperCase()}
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-normal leading-tight text-subtle-foreground">
+          <span className="block truncate text-[13px] leading-tight font-normal text-subtle-foreground">
             {reporterName}
           </span>
-          <span className="mt-0.5 block truncate text-[11px] font-normal leading-tight text-faint-foreground">
+          <span className="mt-0.5 block truncate text-[11px] leading-tight font-normal text-faint-foreground">
             {typeLabelOf(alert.type)}
           </span>
         </span>
-        <span
-          className="mr-1.5 flex shrink-0 items-center gap-1 text-[11px] font-medium text-sos"
-          title="Critical priority"
-        >
-          <SignalIcon className="size-3.5 shrink-0" strokeWidth={2} />
-          Critical
-          <TriangleAlert
-            className={cn("size-5 shrink-0", live ? "text-sos" : "text-navy-muted/90")}
-            strokeWidth={live ? 2 : 1.8}
-          />
-        </span>
+        {resolved ? (
+          <span
+            className="mr-1.5 flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-700"
+            title="Resolved"
+          >
+            Resolved
+            <CircleCheckIcon className="size-5 shrink-0" strokeWidth={1.9} />
+          </span>
+        ) : (
+          <span
+            className="mr-1.5 flex shrink-0 items-center gap-1 text-[11px] font-medium text-sos"
+            title="Critical priority"
+          >
+            <SignalIcon className="size-3.5 shrink-0" strokeWidth={2} />
+            Critical
+            <TriangleAlert
+              className={cn(
+                "size-5 shrink-0",
+                live ? "text-sos" : "text-navy-muted/90"
+              )}
+              strokeWidth={live ? 2 : 1.8}
+            />
+          </span>
+        )}
       </div>
 
-      <p className="mt-2.5 text-[16px] font-medium leading-snug text-foreground">
+      <p className="mt-2.5 text-[16px] leading-snug font-medium text-foreground">
         {street
           ? `${typeLabelOf(alert.type)} emergency around ${street}`
           : `${typeLabelOf(alert.type)} emergency`}
@@ -176,19 +327,14 @@ export function EmergencyQueueItem({
 
       <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11.5px] text-faint-foreground">
         <span className="shrink-0">{alertTime(alert.created_at)}</span>
-        <span aria-hidden className="text-neutral-300">·</span>
-        <span className="min-w-0 truncate">
-          {unit ? `Assigned to ${unit.short_name || unit.name}` : "Awaiting dispatch"}
-        </span>
       </div>
 
       <div className="mt-1.5 border-t border-neutral-100" />
-      <p className="mt-1.5 line-clamp-2 text-[12px] leading-relaxed text-subtle-foreground">
-        {alert.note?.trim() ||
-          (live
-            ? `${typeLabelOf(alert.type)} reported at ${location || alert.barangay}, routed to ${unit ? unit.short_name || unit.name : "dispatch"}.`
-            : `${typeLabelOf(alert.type)} reported at ${location || alert.barangay}, no longer active.`)}
-      </p>
+      <div className="mt-1.5">
+        <p className="line-clamp-3 text-[12px] leading-relaxed text-subtle-foreground">
+          {emergencyDescription(alert)}
+        </p>
+      </div>
       {alert.media && alert.media.length > 0 ? (
         <div className="mt-2 flex gap-1.5">
           {alert.media.slice(0, 3).map((item) =>
@@ -197,7 +343,7 @@ export function EmergencyQueueItem({
                 key={item.id}
                 className="h-12 w-12 shrink-0 overflow-hidden rounded-lg border border-neutral-100"
               >
-                <img
+                <AuthenticatedMediaImage
                   src={item.preview_url}
                   alt={item.original_filename}
                   className="h-full w-full object-cover"
@@ -226,103 +372,111 @@ export function EmergencyQueueItem({
         </span>
       ) : null}
 
-      <div className="mt-3 border-t border-neutral-100 pt-2.5">
-        <div className="flex items-center justify-between gap-3">
-          {onScene.length ? (
-            <span className="flex min-w-0 items-center gap-1.5">
-              <span className="flex -space-x-1.5">
-                {onScene.slice(0, 3).map((responder) => (
-                  <span
-                    key={responder.id}
-                    title={responder.full_name}
-                    className="flex size-5 items-center justify-center rounded-full bg-slate-soft text-[8px] font-semibold text-navy-muted ring-1 ring-white"
-                  >
-                    {(responder.initials || responder.full_name || "R").charAt(0).toUpperCase()}
-                  </span>
-                ))}
-                {onScene.length > 3 ? (
-                  <span className="flex size-5 items-center justify-center rounded-full bg-neutral-100 text-[8px] font-semibold text-neutral-500 ring-1 ring-white">
-                    +{onScene.length - 3}
-                  </span>
-                ) : null}
-              </span>
-              <span className="truncate text-[10px] font-normal text-faint-foreground">
-                Responder on scene
-              </span>
-            </span>
-          ) : (
-            <span className="text-[10px] font-normal text-faint-foreground">No responder yet</span>
-          )}
-          {alert.is_public ? (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation()
-                void toggleComments()
-              }}
-              aria-label={showComments ? "Hide comments" : "See comments"}
-              className={cn(
-                "flex shrink-0 items-center gap-1 text-[11px] font-medium transition-colors",
-                showComments ? "text-neutral-800" : "text-neutral-500 hover:text-neutral-800",
-              )}
-            >
-              <MessageCircleIcon className="size-3.5" strokeWidth={2} />
-              <span>{commentCount}</span>
-            </button>
-          ) : null}
-        </div>
-
-        {showComments ? (
-          <div className="mt-3 space-y-2.5" onClick={(event) => event.stopPropagation()}>
-            {commentsLoading ? (
-              <p className="text-[11px] text-faint-foreground">Loading comments…</p>
-            ) : (comments?.length ?? 0) === 0 ? (
-              <p className="text-[11px] text-faint-foreground">No comments yet.</p>
-            ) : (
-              comments?.map((comment) => (
-                <div key={comment.id} className="flex items-start gap-2">
-                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[10px] font-bold text-navy-muted">
-                    {(comment.author_label || comment.author?.full_name || "R").charAt(0).toUpperCase()}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[11px] font-medium text-neutral-800">
-                      {comment.author_label || comment.author?.full_name || "Resident"}
-                    </p>
-                    <p className="mt-0.5 text-[12px] leading-relaxed text-neutral-700">{comment.body}</p>
-                  </div>
-                </div>
-              ))
-            )}
-
-            <div className="flex items-center gap-2 rounded-full bg-neutral-100 py-1 pl-3 pr-1">
-              <input
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault()
-                    void submitComment()
-                  }
-                }}
-                placeholder="Add a comment"
-                className="h-8 min-w-0 flex-1 bg-transparent text-[12px] text-neutral-900 outline-none placeholder:text-neutral-400"
-              />
-              <button
-                type="button"
-                onClick={() => void submitComment()}
-                disabled={posting || !draft.trim()}
-                aria-label="Post comment"
-                className={cn(
-                  "flex size-7 shrink-0 items-center justify-center rounded-full transition-colors",
-                  draft.trim() ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-400",
-                )}
+      {resolved ? (
+        historicalRoutes.length ? (
+          <div className="mt-1.5 space-y-1 text-[11px] text-faint-foreground">
+            {historicalRoutes.map((assignment) => (
+              <span
+                key={`past-route-${assignment.id}`}
+                className="flex min-w-0 items-start gap-1"
               >
-                <ArrowUpIcon className="size-3.5" strokeWidth={2.5} />
-              </button>
-            </div>
+                <NavigationIcon
+                  className="mt-0.5 size-3.5 shrink-0 text-neutral-400"
+                  strokeWidth={1.8}
+                />
+                <span className="min-w-0 truncate">
+                  {responderName(assignment.responder)} responded. Route taken:{" "}
+                  {historicalRouteSummary(assignment.route)}.
+                </span>
+              </span>
+            ))}
           </div>
-        ) : null}
-      </div>
-    </div>
+        ) : null
+      ) : routeResponder ||
+        route?.distance_meters != null ||
+        route?.eta_seconds != null ? (
+        <span className="mt-1.5 flex min-w-0 items-center gap-1 text-[11px] text-faint-foreground">
+          {routeResponders.length ? (
+            <span
+              className="flex shrink-0 -space-x-1"
+              aria-label="Responders on this route"
+            >
+              {routeResponders.slice(0, 3).map((responder) => (
+                <span
+                  key={responder.id}
+                  title={responder.full_name}
+                  className="flex size-5 items-center justify-center rounded-full bg-slate-soft text-[8px] font-semibold text-navy-muted ring-1 ring-white"
+                >
+                  {(responder.initials || responder.full_name || "R")
+                    .charAt(0)
+                    .toUpperCase()}
+                </span>
+              ))}
+            </span>
+          ) : null}
+          <NavigationIcon className="size-3.5 shrink-0" strokeWidth={1.8} />
+          <span className="min-w-0 truncate">
+            {routeResponder
+              ? `${responderStatusLabel(routeResponder, sessionUser?.id)}. `
+              : ""}
+            Route: {emergencyRouteSummary(alert)}.
+          </span>
+        </span>
+      ) : null}
+
+      <EmergencyEngagementFooter
+        alert={alert}
+        commentCount={commentCount}
+        commentsOpen={showComments}
+        onCommentsClick={() => void toggleComments()}
+      />
+      {showComments ? (
+        <div
+          className="mt-3 space-y-2.5 border-t border-neutral-100 pt-3"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {resolved ? <EmergencyResolutionBanner alert={alert} /> : null}
+          {commentsLoading ? (
+            <p className="text-[11px] text-faint-foreground">
+              Loading comments…
+            </p>
+          ) : (comments?.length ?? 0) === 0 ? (
+            <p className="text-[11px] text-faint-foreground">
+              No comments yet.
+            </p>
+          ) : (
+            comments?.map((comment) => (
+              <div key={comment.id} className="flex items-start gap-2">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[10px] font-bold text-navy-muted">
+                  {(comment.author_label || comment.author?.full_name || "R")
+                    .charAt(0)
+                    .toUpperCase()}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-medium text-neutral-800">
+                    {comment.author_label ||
+                      comment.author?.full_name ||
+                      "Resident"}
+                  </p>
+                  <p className="mt-0.5 text-[12px] leading-relaxed text-neutral-700">
+                    {comment.body}
+                  </p>
+                  <CommentAttachment attachment={comment.attachment ?? null} />
+                </div>
+              </div>
+            ))
+          )}
+
+          <CommentComposer
+            compact
+            value={draft}
+            onChange={setDraft}
+            onSubmit={submitComment}
+            sessionUser={sessionUser}
+            disabled={posting}
+          />
+        </div>
+      ) : null}
+    </article>
   )
 }

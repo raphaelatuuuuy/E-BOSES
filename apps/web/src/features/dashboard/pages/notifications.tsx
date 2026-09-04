@@ -62,7 +62,7 @@ export default function NotificationsPage() {
           }
         }
       `}</style>
-      <ResidentContentGrid className="notif-layout min-w-0 flex-1 pb-[calc(7.5rem+env(safe-area-inset-bottom))] pt-2 md:pb-12 md:pt-4 lg:px-0">
+      <ResidentContentGrid className="notif-layout min-w-0 flex-1 pb-6 pt-2 md:pb-12 md:pt-4 lg:px-0">
         <div className="min-w-0 w-full">
           <NotificationsPanel
             config={config}

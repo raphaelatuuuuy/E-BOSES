@@ -7,7 +7,12 @@ import {
   type Severity,
 } from "./severity"
 import { toStatusView } from "./status"
-import type { RecordAction, RecordFact, RecordSection, RecordView } from "./types"
+import type {
+  RecordAction,
+  RecordFact,
+  RecordSection,
+  RecordView,
+} from "./types"
 
 const LEGACY_CATEGORY_LABEL: Record<string, string> = {
   infrastructure: "Infrastructure",
@@ -25,27 +30,59 @@ function categoryLabelOf(concern: Concern): string {
 }
 
 const TRACK: { key: string; label: string; reached: string[] }[] = [
-  { key: "submitted", label: "Submitted", reached: ["submitted", "under_review", "assigned", "in_progress", "resolved"] },
-  { key: "under_review", label: "Reviewed", reached: ["under_review", "assigned", "in_progress", "resolved"] },
-  { key: "assigned", label: "Assigned", reached: ["assigned", "in_progress", "resolved"] },
-  { key: "in_progress", label: "In progress", reached: ["in_progress", "resolved"] },
+  {
+    key: "submitted",
+    label: "Submitted",
+    reached: [
+      "submitted",
+      "under_review",
+      "assigned",
+      "in_progress",
+      "resolved",
+    ],
+  },
+  {
+    key: "under_review",
+    label: "Reviewed",
+    reached: ["under_review", "assigned", "in_progress", "resolved"],
+  },
+  {
+    key: "assigned",
+    label: "Assigned",
+    reached: ["assigned", "in_progress", "resolved"],
+  },
+  {
+    key: "in_progress",
+    label: "In progress",
+    reached: ["in_progress", "resolved"],
+  },
   { key: "resolved", label: "Resolved", reached: ["resolved"] },
 ]
 
 function shortDate(iso: string | null | undefined): string | undefined {
   if (!iso) return undefined
-  return new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" })
+  return new Date(iso).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  })
 }
 
-export function concernSeverityOf(concern: Concern): { severity: Severity; assessed: boolean } {
+export function concernSeverityOf(concern: Concern): {
+  severity: Severity
+  assessed: boolean
+} {
   const assessment = concern.ai_assessment
   const completed = assessment?.status === "completed"
 
   return deriveConcernSeverity({
     category: concern.category,
 
-    severityEstimate: completed ? (assessment?.severity_estimate ?? null) : null,
-    urgentAttention: completed ? (assessment?.urgent_attention ?? false) : false,
+    severityEstimate: completed
+      ? (assessment?.severity_estimate ?? null)
+      : null,
+    urgentAttention: completed
+      ? (assessment?.urgent_attention ?? false)
+      : false,
     relevance: completed ? (assessment?.nlp_confidence ?? null) : null,
   })
 }
@@ -57,7 +94,10 @@ export interface RankedConcern {
   priority: number
 }
 
-export function rankConcerns(concerns: readonly Concern[], now: number): RankedConcern[] {
+export function rankConcerns(
+  concerns: readonly Concern[],
+  now: number
+): RankedConcern[] {
   return concerns
     .map((concern) => {
       const { severity, assessed } = concernSeverityOf(concern)
@@ -67,13 +107,15 @@ export function rankConcerns(concerns: readonly Concern[], now: number): RankedC
         assessed,
         priority: derivePriority({
           severity,
-          hoursSinceStatusChange: (now - new Date(concern.updated_at).getTime()) / 3_600_000,
+          hoursSinceStatusChange:
+            (now - new Date(concern.updated_at).getTime()) / 3_600_000,
           voteCount: concern.vote_count,
         }),
       }
     })
     .sort((a, b) => {
-      const settled = settledRank(a.concern.status) - settledRank(b.concern.status)
+      const settled =
+        settledRank(a.concern.status) - settledRank(b.concern.status)
       if (settled !== 0) return settled
       const band = severityLevel(b.severity) - severityLevel(a.severity)
       return band !== 0 ? band : b.priority - a.priority
@@ -92,15 +134,22 @@ export interface ConcernAdapterOptions {
   sections?: RecordSection[]
 }
 
-export function toConcernRecordView(concern: Concern, options: ConcernAdapterOptions): RecordView {
+export function toConcernRecordView(
+  concern: Concern,
+  options: ConcernAdapterOptions
+): RecordView {
   const { severity, assessed } = concernSeverityOf(concern)
   const status = toStatusView(concern.status)
   const assessment = concern.ai_assessment
+  const assignedDepartment =
+    concern.validation_status === "accepted"
+      ? concern.assigned_department
+      : null
 
   const facts: RecordFact[] = [
     {
       label: "Assigned unit",
-      value: concern.assigned_department?.short_name || concern.assigned_department?.name || null,
+      value: assignedDepartment?.short_name || assignedDepartment?.name || null,
 
       emptyHint: "Not routed to a unit yet",
     },
@@ -127,10 +176,11 @@ export function toConcernRecordView(concern: Concern, options: ConcernAdapterOpt
     return {
       key: step.key,
       label: step.label,
-      state: (step.key === concern.status ? "current" : reached ? "done" : "pending") as
-        | "current"
-        | "done"
-        | "pending",
+      state: (step.key === concern.status
+        ? "current"
+        : reached
+          ? "done"
+          : "pending") as "current" | "done" | "pending",
       at:
         step.key === "submitted"
           ? shortDate(concern.created_at)
@@ -149,7 +199,8 @@ export function toConcernRecordView(concern: Concern, options: ConcernAdapterOpt
     status,
     priority: derivePriority({
       severity,
-      hoursSinceStatusChange: (options.now - new Date(concern.updated_at).getTime()) / 3_600_000,
+      hoursSinceStatusChange:
+        (options.now - new Date(concern.updated_at).getTime()) / 3_600_000,
       voteCount: concern.vote_count,
     }),
     title: concern.official_title || concern.title,
@@ -158,14 +209,19 @@ export function toConcernRecordView(concern: Concern, options: ConcernAdapterOpt
     facts,
     track:
       concern.status === "rejected" || concern.status === "appealed"
-        ? [{ key: concern.status, label: status.label, state: "current" as const }]
+        ? [
+            {
+              key: concern.status,
+              label: status.label,
+              state: "current" as const,
+            },
+          ]
         : track,
-    assigneeLabel: concern.assigned_department
-      ? concern.assigned_department.name
-      : null,
-    assigneeDetail: concern.assignments?.length
-      ? `${concern.assignments.length} assignment${concern.assignments.length === 1 ? "" : "s"}`
-      : null,
+    assigneeLabel: assignedDepartment ? assignedDepartment.name : null,
+    assigneeDetail:
+      assignedDepartment && concern.assignments?.length
+        ? `${concern.assignments.length} assignment${concern.assignments.length === 1 ? "" : "s"}`
+        : null,
     actions: options.actions ?? [],
     sections: options.sections ?? [],
   }

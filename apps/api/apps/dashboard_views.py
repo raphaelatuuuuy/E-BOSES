@@ -67,15 +67,17 @@ def common_counts(user):
     today = timezone.localdate()
     from django.core.cache import cache
 
-    shared_key = f"dashboard:shared-counts:v1:{today.isoformat()}"
+    communities = community_ids_for_user(user)
+    community_key = "-".join(str(item) for item in sorted(communities)) or "none"
+    shared_key = f"dashboard:shared-counts:v2:{community_key}:{today.isoformat()}"
     try:
         shared = cache.get(shared_key)
     except Exception:
         shared = None
     if shared is None:
         shared = {
-            "published_announcements": Announcement.objects.filter(is_published=True).count(),
-            "events_today": BarangayEvent.objects.filter(is_published=True, starts_at__date=today).count(),
+            "published_announcements": Announcement.objects.filter(is_published=True, community_id__in=communities).count(),
+            "events_today": BarangayEvent.objects.filter(is_published=True, community_id__in=communities, starts_at__date=today).count(),
         }
         try:
             cache.set(shared_key, shared, 10)
@@ -94,7 +96,21 @@ class ResidentDashboardSummaryView(APIView):
         mine = Concern.objects.filter(reporter=request.user)
         emergencies = EmergencyAlert.objects.filter(reporter=request.user)
         # Barangay-wide active emergencies (for home rail red state + feed banner)
-        barangay_active = EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE).count()
+        home_community = getattr(getattr(request.user, "resident_profile", None), "community_id", None)
+        if home_community:
+            home_name = getattr(
+                getattr(getattr(request.user, "resident_profile", None), "community", None),
+                "name",
+                "",
+            )
+            barangay_active = EmergencyAlert.objects.filter(
+                status__in=EMERGENCY_ACTIVE,
+            ).filter(
+                Q(community_id=home_community)
+                | Q(community_id__isnull=True, barangay__iexact=home_name)
+            ).count()
+        else:
+            barangay_active = EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE).count()
         return Response({
             **common_counts(request.user),
             "reports_total": mine.count(),
@@ -113,7 +129,7 @@ class ResidentDashboardSummaryView(APIView):
 
 def is_official(user):
     User = get_user_model()
-    return bool(user.is_staff or user.is_superuser or user.role == User.Role.BARANGAY_OFFICIAL)
+    return bool(user.is_superuser or user.role == User.Role.BARANGAY_OFFICIAL)
 
 
 def median(values):
@@ -149,21 +165,40 @@ class OfficialDashboardSummaryView(APIView):
         if not is_official(request.user):
             return Response({"detail": "You do not have permission to view official summaries."}, status=status.HTTP_403_FORBIDDEN)
         User = get_user_model()
+        communities = community_ids_for_user(request.user)
+        from apps.emergencies.models import Community
+
+        community_names = Community.objects.filter(pk__in=communities).values_list("name", flat=True)
+        emergency_scope = Q(community_id__in=communities) | Q(
+            community_id__isnull=True,
+            barangay__in=community_names,
+        )
+        users = User.objects.filter(
+            Q(resident_profile__community_id__in=communities)
+            | Q(designations__is_active=True, designations__department__community_id__in=communities)
+        ).distinct()
         return Response({
             **common_counts(request.user),
             "new_concerns": Concern.objects.filter(
+                community_id__in=communities,
                 status=Concern.Status.SUBMITTED,
                 validation_status=Concern.ValidationStatus.ACCEPTED,
             ).count(),
-            "active_reports": Concern.objects.filter(status__in=CONCERN_ACTIVE).count(),
-            "appealed_reports": Concern.objects.filter(status=Concern.Status.APPEALED).count(),
-            "pending_appeals": ConcernAppeal.objects.filter(status=ConcernAppeal.Status.SUBMITTED).count(),
-            "active_emergencies": EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE).count(),
-            "pending_emergency_appeals": EmergencyAppeal.objects.filter(status=EmergencyAppeal.Status.SUBMITTED).count(),
-            "responders_on_duty": User.objects.filter(role=User.Role.FIRST_RESPONDER, status=User.Status.VERIFIED, is_on_duty=True).count(),
-            "pending_resident_verifications": User.objects.filter(role=User.Role.RESIDENT, status=User.Status.PENDING_VERIFICATION).count(),
-            "pending_content_flags": ContentFlag.objects.filter(status=ContentFlag.Status.SUBMITTED).count(),
-            "pending_account_requests": AccountRequest.objects.filter(status=AccountRequest.Status.SUBMITTED).count(),
+            "active_reports": Concern.objects.filter(community_id__in=communities, status__in=CONCERN_ACTIVE).count(),
+            "appealed_reports": Concern.objects.filter(community_id__in=communities, status=Concern.Status.APPEALED).count(),
+            "pending_appeals": ConcernAppeal.objects.filter(concern__community_id__in=communities, status=ConcernAppeal.Status.SUBMITTED).count(),
+            "active_emergencies": EmergencyAlert.objects.filter(emergency_scope, status__in=EMERGENCY_ACTIVE).count(),
+            "pending_emergency_appeals": EmergencyAppeal.objects.filter(alert__community_id__in=communities, status=EmergencyAppeal.Status.SUBMITTED).count(),
+            "responders_on_duty": users.filter(role=User.Role.FIRST_RESPONDER, status=User.Status.VERIFIED, is_on_duty=True).count(),
+            "pending_resident_verifications": users.filter(role=User.Role.RESIDENT, status=User.Status.PENDING_VERIFICATION).count(),
+            "pending_content_flags": ContentFlag.objects.filter(
+                Q(concern__community_id__in=communities)
+                | Q(comment__concern__community_id__in=communities)
+                | Q(announcement_comment__announcement__community_id__in=communities)
+                | Q(emergency_comment__alert__community_id__in=communities),
+                status=ContentFlag.Status.SUBMITTED,
+            ).distinct().count(),
+            "pending_account_requests": AccountRequest.objects.filter(user__in=users, status=AccountRequest.Status.SUBMITTED).count(),
         })
 
 class OfficialAnalyticsView(APIView):
@@ -401,7 +436,7 @@ class ResponderDashboardSummaryView(APIView):
     def get(self, request):
         touch_last_seen(request.user)
         User = get_user_model()
-        if not (request.user.is_staff or request.user.is_superuser or request.user.role == User.Role.FIRST_RESPONDER):
+        if not (request.user.is_superuser or request.user.role == User.Role.FIRST_RESPONDER):
             return Response({"detail": "You do not have permission to view responder summaries."}, status=status.HTTP_403_FORBIDDEN)
         assigned = EmergencyResponderAssignment.objects.filter(responder=request.user)
         newly_routed = assigned.filter(

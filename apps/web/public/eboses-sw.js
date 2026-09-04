@@ -1,4 +1,4 @@
-self.__EBOSES_CACHE = "eboses-shell-v6"
+self.__EBOSES_CACHE = "eboses-shell-v10"
 self.__EBOSES_SHELL = ["/", "/dashboard", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"]
 
 self.addEventListener("install", (event) => {
@@ -55,7 +55,7 @@ self.addEventListener("fetch", (event) => {
     return
   }
 
-  if (url.pathname.startsWith("/contents/") || url.pathname.startsWith("/assets/")) {
+  if (url.pathname.startsWith("/contents/") || url.pathname.startsWith("/assets/") || url.pathname.startsWith("/icons/")) {
     const revalidate = (async () => {
       try {
         const response = await fetch(request)
@@ -113,32 +113,46 @@ function notificationActions(rawActions, fallbackUrl) {
 
 function buildNotificationOptions(data) {
   const url = safeNotificationUrl(data.url)
-  const { actions, actionUrls } = notificationActions(data.actions, url)
-  const options = {
+  return {
     body: cleanNotificationText(data.body, "Open E-Boses for details."),
-    icon: data.icon || "/icons/icon-192.png",
-    badge: data.badge || "/icons/icon-192.png",
     tag: data.tag || `eboses-${data.category || "update"}`,
     data: {
       url,
-      actionUrls,
+      actionUrls: {},
       notification: data.notification || null,
       meta: data.data || null,
     },
-    actions,
     renotify: Boolean(data.renotify),
-    requireInteraction: Boolean(data.requireInteraction || data.require_interaction),
     timestamp: Number.isFinite(Date.parse(data.timestamp)) ? Date.parse(data.timestamp) : Date.now(),
     silent: false,
   }
-  if (data.image) options.image = data.image
-  if (data.priority === "urgent" || data.category === "emergency") options.vibrate = [220, 90, 220]
-  return options
 }
 
-function showEbosesNotification(data) {
+async function showEbosesNotification(data) {
   const title = cleanNotificationText(data.title, "E-Boses update")
-  return self.registration.showNotification(title, buildNotificationOptions(data || {}))
+  const payload = data || {}
+  try {
+    await self.registration.showNotification(title, buildNotificationOptions(payload))
+  } catch {
+    // Some Windows/browser combinations reject an otherwise valid rich option
+    // (most often image, actions, or vibration). A push event must still result
+    // in a visible notification while no E-Boses window is open, so retry with
+    // the smallest universally supported option set.
+    const url = safeNotificationUrl(payload.url)
+    await self.registration.showNotification(title, {
+      body: cleanNotificationText(payload.body, "Open E-Boses for details."),
+      tag: payload.tag || `eboses-background-${Date.now()}`,
+      data: {
+        url,
+        actionUrls: {},
+        notification: null,
+        meta: payload.data || null,
+      },
+      renotify: true,
+      timestamp: Number.isFinite(Date.parse(payload.timestamp)) ? Date.parse(payload.timestamp) : Date.now(),
+      silent: false,
+    })
+  }
 }
 
 self.addEventListener("push", (event) => {

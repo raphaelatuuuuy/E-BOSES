@@ -28,7 +28,7 @@ export function UserAvatar({
   const letter = (
     user?.full_name?.[0] ||
     user?.initials?.[0] ||
-    "?"
+    "U"
   ).toUpperCase()
 
   return (
@@ -37,7 +37,7 @@ export function UserAvatar({
         "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-soft font-bold text-navy-muted",
         // sizeClass first so callers can override size; never strip the bg unless explicit
         sizeClass,
-        className,
+        className
       )}
     >
       {letter}

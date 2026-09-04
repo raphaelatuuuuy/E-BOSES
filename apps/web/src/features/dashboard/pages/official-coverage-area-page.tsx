@@ -56,7 +56,7 @@ const SNAP_PX = 14
 /** The policy columns are decimal(10, 7), so coordinates ship rounded. */
 const COORD_PLACES = 7
 /**
- * An imported barangay outline runs to hundreds of points — Marikina Heights
+ * An imported barangay outline runs to hundreds of points — a large community
  * alone is 524 — and a draggable marker per point makes the map crawl. Handles
  * are drawn for the part of the edge on screen instead, so zooming in is what
  * gives you the vertex you want to move.
@@ -76,7 +76,9 @@ function metersBetween(a: [number, number], b: [number, number]): number {
   const lat2 = (b[0] * Math.PI) / 180
   const dLat = lat2 - lat1
   const dLng = ((b[1] - a[1]) * Math.PI) / 180
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2
   return 2 * R * Math.asin(Math.sqrt(h))
 }
 
@@ -107,7 +109,7 @@ function polygonToRing(geometry: GeoJsonPolygon | null): [number, number][] {
  * would drop the rest, so those stay read-only rather than lose geography.
  */
 function editableBoundaryRing(
-  geometry: LiveMapGeometry | GeoJsonPolygon | null | undefined,
+  geometry: LiveMapGeometry | GeoJsonPolygon | null | undefined
 ): [number, number][] {
   if (!geometry || geometry.type !== "Polygon") return []
   const rings = geometry.coordinates as [number, number][][] | undefined
@@ -132,7 +134,7 @@ function dragBody(
   map: leaflet.Map,
   path: leaflet.Path,
   onMove: (dLat: number, dLng: number) => void,
-  onDrop: (dLat: number, dLng: number) => void,
+  onDrop: (dLat: number, dLng: number) => void
 ) {
   path.on("mousedown", (event: leaflet.LeafletMouseEvent) => {
     const start = event.latlng
@@ -159,7 +161,9 @@ function dragBody(
 
 function hintFor(tool: Tool, draftLength: number): string {
   if (tool === "rect") {
-    return draftLength === 0 ? "Click one corner of the zone." : "Click the opposite corner."
+    return draftLength === 0
+      ? "Click one corner of the zone."
+      : "Click the opposite corner."
   }
   if (tool === "polygon") {
     if (draftLength === 0) return "Click to place the first point."
@@ -238,13 +242,16 @@ export default function OfficialCoverageAreaPage() {
   const source = picked ?? home
   const serverBoundary = useMemo(
     () => source?.geometry ?? context?.boundary?.geometry ?? null,
-    [source, context],
+    [source, context]
   )
-  const serverEdge = useMemo(() => editableBoundaryRing(serverBoundary), [serverBoundary])
+  const serverEdge = useMemo(
+    () => editableBoundaryRing(serverBoundary),
+    [serverBoundary]
+  )
   const editableEdgeId = source?.id ?? null
   const boundary = useMemo<LiveMapGeometry | GeoJsonPolygon | null>(
     () => (edge && edge.length >= 3 ? ringToPolygon(edge) : serverBoundary),
-    [edge, serverBoundary],
+    [edge, serverBoundary]
   )
   const barangayName = picked?.name ?? policy?.barangay ?? "—"
 
@@ -254,7 +261,8 @@ export default function OfficialCoverageAreaPage() {
     // row carries the id the boundary edit is saved against.
     void searchBarangayBoundaries("")
       .then((found) => {
-        if (!cancelled) setHome(found.find((hit) => hit.is_home) ?? found[0] ?? null)
+        if (!cancelled)
+          setHome(found.find((hit) => hit.is_home) ?? found[0] ?? null)
       })
       .catch(() => {
         if (!cancelled) setHome(null)
@@ -266,7 +274,10 @@ export default function OfficialCoverageAreaPage() {
       .catch(() => {
         if (!cancelled) setCommunities([])
       })
-    void Promise.all([getMapDispatchPolicy(), getAnnouncementAreaContext().catch(() => null)])
+    void Promise.all([
+      getMapDispatchPolicy(),
+      getAnnouncementAreaContext().catch(() => null),
+    ])
       .then(([loaded, areaContext]) => {
         if (cancelled) return
         setPolicy(loaded)
@@ -280,7 +291,10 @@ export default function OfficialCoverageAreaPage() {
         setShape(ring.length >= 3 ? ring : null)
       })
       .catch((error) => {
-        if (!cancelled) toast.error(describeApiError(error, "Could not load the coverage area."))
+        if (!cancelled)
+          toast.error(
+            describeApiError(error, "Could not load the coverage area.")
+          )
       })
     return () => {
       cancelled = true
@@ -435,11 +449,16 @@ export default function OfficialCoverageAreaPage() {
       document.head.appendChild(styleEl)
 
       const map = L.map(containerRef.current, {
-        center: [14.6507, 121.1133],
+        center: [14.5995, 120.9842],
         zoom: 14,
         zoomControl: false,
         attributionControl: false,
-        doubleClickZoom: false,
+        dragging: true,
+        scrollWheelZoom: true,
+        touchZoom: true,
+        doubleClickZoom: true,
+        boxZoom: true,
+        keyboard: true,
       })
 
       addBaseTiles(L, map, "dark", {
@@ -701,12 +720,16 @@ export default function OfficialCoverageAreaPage() {
           drawnEdge,
           (dLat, dLng) =>
             drawnEdge.setLatLngs(
-              edgeRing.map(([lat, lng]) => [lat + dLat, lng + dLng] as [number, number]),
+              edgeRing.map(
+                ([lat, lng]) => [lat + dLat, lng + dLng] as [number, number]
+              )
             ),
           (dLat, dLng) =>
             commitEdge(
-              edgeRing.map(([lat, lng]) => [lat + dLat, lng + dLng] as [number, number]),
-            ),
+              edgeRing.map(
+                ([lat, lng]) => [lat + dLat, lng + dLng] as [number, number]
+              )
+            )
         )
 
         // Only the vertices on screen get a handle; an imported outline holds
@@ -716,8 +739,13 @@ export default function OfficialCoverageAreaPage() {
           .map((point, index) => ({ point, index }))
           .filter(({ point }) => view.contains(point))
         const step = Math.ceil(onScreen.length / MAX_EDGE_HANDLES)
-        for (const { point, index } of onScreen.filter((_, at) => at % step === 0)) {
-          const handle = L.marker(point, { icon: dot(L, 9, EDGE_COLOR), draggable: true })
+        for (const { point, index } of onScreen.filter(
+          (_, at) => at % step === 0
+        )) {
+          const handle = L.marker(point, {
+            icon: dot(L, 9, EDGE_COLOR),
+            draggable: true,
+          })
           const moved = (): [number, number][] => {
             const position = handle.getLatLng()
             const next = [...edgeRing]
@@ -735,7 +763,9 @@ export default function OfficialCoverageAreaPage() {
       // reads on the map without needing the pencil first. A multi-part
       // barangay cannot be edited a ring at a time, so it is drawn as it came
       // from the server.
-      L.geoJSON(boundary as never, { style: { ...edgeStyle, interactive: false } }).addTo(layer)
+      L.geoJSON(boundary as never, {
+        style: { ...edgeStyle, interactive: false },
+      }).addTo(layer)
     }
 
     const zoneStyle = {
@@ -754,20 +784,28 @@ export default function OfficialCoverageAreaPage() {
       const drawn = L.polygon(shape, zoneStyle).addTo(layer)
       const vertices: leaflet.Marker[] = []
       if (adjustable) {
-        drawn.bindTooltip("Drag to move the zone", { sticky: true, direction: "top", opacity: 1 })
+        drawn.bindTooltip("Drag to move the zone", {
+          sticky: true,
+          direction: "top",
+          opacity: 1,
+        })
         dragBody(
           map,
           drawn,
           (dLat, dLng) => {
             const moved = shape.map(
-              ([lat, lng]) => [lat + dLat, lng + dLng] as [number, number],
+              ([lat, lng]) => [lat + dLat, lng + dLng] as [number, number]
             )
             drawn.setLatLngs(moved)
             moved.forEach((point, index) => vertices[index]?.setLatLng(point))
           },
           (dLat, dLng) => {
-            setShape(shape.map(([lat, lng]) => [lat + dLat, lng + dLng] as [number, number]))
-          },
+            setShape(
+              shape.map(
+                ([lat, lng]) => [lat + dLat, lng + dLng] as [number, number]
+              )
+            )
+          }
         )
         shape.forEach((point, index) => {
           const handle = L.marker(point, { icon: dot(L, 13), draggable: true })
@@ -791,14 +829,23 @@ export default function OfficialCoverageAreaPage() {
       const zone = L.circle(center, { ...zoneStyle, radius }).addTo(layer)
       const handlePos = (at: [number, number]): [number, number] => [
         at[0],
-        L.latLng(at).toBounds(radius * 2).getEast(),
+        L.latLng(at)
+          .toBounds(radius * 2)
+          .getEast(),
       ]
 
       if (adjustable) {
         // No centre dot — the circle body itself is the drag target.
-        const grip = L.marker(handlePos(center), { icon: dot(L, 13), draggable: true })
+        const grip = L.marker(handlePos(center), {
+          icon: dot(L, 13),
+          draggable: true,
+        })
 
-        zone.bindTooltip("Drag to move the zone", { sticky: true, direction: "top", opacity: 1 })
+        zone.bindTooltip("Drag to move the zone", {
+          sticky: true,
+          direction: "top",
+          opacity: 1,
+        })
         dragBody(
           map,
           zone,
@@ -808,7 +855,7 @@ export default function OfficialCoverageAreaPage() {
             // The resize handle rides along instead of being left behind.
             grip.setLatLng(handlePos(moved))
           },
-          (dLat, dLng) => setCenter([center[0] + dLat, center[1] + dLng]),
+          (dLat, dLng) => setCenter([center[0] + dLat, center[1] + dLng])
         )
 
         grip.on("drag", () => {
@@ -817,10 +864,15 @@ export default function OfficialCoverageAreaPage() {
         })
         grip.on("dragend", () => {
           const position = grip.getLatLng()
-          const next = Math.round(metersBetween(center, [position.lat, position.lng]))
+          const next = Math.round(
+            metersBetween(center, [position.lat, position.lng])
+          )
           setRadius(Math.min(Math.max(next, MIN_RADIUS), MAX_RADIUS))
         })
-        grip.bindTooltip("Drag to resize the zone", { direction: "top", opacity: 1 })
+        grip.bindTooltip("Drag to resize the zone", {
+          direction: "top",
+          opacity: 1,
+        })
         grip.addTo(layer)
       }
     }
@@ -880,7 +932,10 @@ export default function OfficialCoverageAreaPage() {
       // only when it was actually moved.
       const edgeGeometry = edgeDirty && edge ? ringToPolygon(edge) : null
       if (edgeGeometry && editableEdgeId != null) {
-        const savedEdge = await updateBarangayBoundary(editableEdgeId, edgeGeometry)
+        const savedEdge = await updateBarangayBoundary(
+          editableEdgeId,
+          edgeGeometry
+        )
         if (picked) setPicked(savedEdge)
         else setHome(savedEdge)
         setEdge(null)
@@ -888,7 +943,9 @@ export default function OfficialCoverageAreaPage() {
         toast.success("Coverage area and barangay edge saved")
       } else {
         if (edgeGeometry) {
-          toast.warning("That barangay has no saved outline to write the edge back to.")
+          toast.warning(
+            "That barangay has no saved outline to write the edge back to."
+          )
         }
         toast.success("Coverage area saved")
       }
@@ -900,7 +957,11 @@ export default function OfficialCoverageAreaPage() {
   }
 
   const hint = hintFor(tool, draft.length)
-  const tools: Array<{ id: Exclude<Tool, null>; label: string; icon: typeof Circle }> = [
+  const tools: Array<{
+    id: Exclude<Tool, null>
+    label: string
+    icon: typeof Circle
+  }> = [
     { id: "circle", label: "Circle zone", icon: Circle },
     { id: "rect", label: "Square zone", icon: Square },
     { id: "polygon", label: "Draw a shape", icon: Pentagon },
@@ -912,10 +973,13 @@ export default function OfficialCoverageAreaPage() {
       icon={MapIcon}
       eyebrow="Operations"
       title="Coverage area"
-      className="!pb-10 sm:!pb-10"
+      className="!pb-6 sm:!pb-10"
       description="Set the area where your station accepts reports"
       stats={[
-        { label: "Coverage zone", value: shape ? "Drawn shape" : `${radius} m radius` },
+        {
+          label: "Coverage zone",
+          value: shape ? "Drawn shape" : `${radius} m radius`,
+        },
         { label: "Area", value: barangayName },
         {
           label: "Neighbouring communities",
@@ -933,14 +997,17 @@ export default function OfficialCoverageAreaPage() {
         hint="Define where reports are accepted. Draw a zone, trace the barangay edge with the pencil, then turn on edit to drag either one into place."
       >
         <div className="relative h-[460px] overflow-hidden rounded-2xl border-[1.5px] border-neutral-300 bg-ink">
-          <div ref={containerRef} className="eboses-coverage-map h-full w-full" />
+          <div
+            ref={containerRef}
+            className="eboses-coverage-map h-full w-full"
+          />
 
           <div
             className={cn(
-              "absolute left-3 top-1/2 z-[1000] flex -translate-y-1/2 flex-col gap-1 transition-all duration-300 ease-out",
+              "absolute top-1/2 left-3 z-[1000] flex -translate-y-1/2 flex-col gap-1 transition-all duration-300 ease-out",
               searchOpen
                 ? "pointer-events-none -translate-x-6 opacity-0"
-                : "translate-x-0 opacity-100",
+                : "translate-x-0 opacity-100"
             )}
           >
             <button
@@ -964,7 +1031,7 @@ export default function OfficialCoverageAreaPage() {
                   "flex h-9 w-9 items-center justify-center rounded-xl transition-colors",
                   tool === id
                     ? "bg-white text-neutral-900"
-                    : "text-white/70 hover:bg-white/10 hover:text-white",
+                    : "text-white/70 hover:bg-white/10 hover:text-white"
                 )}
               >
                 <Icon className="size-[18px]" strokeWidth={1.8} />
@@ -972,8 +1039,16 @@ export default function OfficialCoverageAreaPage() {
             ))}
             <button
               type="button"
-              title={editing ? "Hide the adjust handles" : "Adjust what is on the map"}
-              aria-label={editing ? "Hide the adjust handles" : "Adjust what is on the map"}
+              title={
+                editing
+                  ? "Hide the adjust handles"
+                  : "Adjust what is on the map"
+              }
+              aria-label={
+                editing
+                  ? "Hide the adjust handles"
+                  : "Adjust what is on the map"
+              }
               aria-pressed={editing}
               onClick={() => {
                 // Arming a tool and adjusting handles fight for the same
@@ -986,7 +1061,7 @@ export default function OfficialCoverageAreaPage() {
                 "flex h-9 w-9 items-center justify-center rounded-xl transition-colors",
                 editing
                   ? "bg-white text-neutral-900"
-                  : "text-white/70 hover:bg-white/10 hover:text-white",
+                  : "text-white/70 hover:bg-white/10 hover:text-white"
               )}
             >
               <SquarePen className="size-[18px]" strokeWidth={1.8} />
@@ -1022,14 +1097,17 @@ export default function OfficialCoverageAreaPage() {
 
           <div
             className={cn(
-              "absolute left-3 top-3 bottom-3 z-[1000] flex w-[min(320px,calc(100%-24px))] flex-col overflow-hidden rounded-2xl bg-white shadow-[0_10px_30px_rgba(0,0,0,.45)] transition-all duration-300 ease-out",
+              "absolute top-3 bottom-3 left-3 z-[1000] flex w-[min(320px,calc(100%-24px))] flex-col overflow-hidden rounded-2xl bg-white shadow-[0_10px_30px_rgba(0,0,0,.45)] transition-all duration-300 ease-out",
               searchOpen
                 ? "translate-x-0 opacity-100"
-                : "pointer-events-none -translate-x-4 opacity-0",
+                : "pointer-events-none -translate-x-4 opacity-0"
             )}
           >
             <div className="flex items-center gap-2 border-b border-neutral-200 p-3">
-              <SearchIcon className="size-4 shrink-0 text-neutral-400" strokeWidth={2} />
+              <SearchIcon
+                className="size-4 shrink-0 text-neutral-400"
+                strokeWidth={2}
+              />
               <input
                 type="text"
                 value={query}
@@ -1051,7 +1129,9 @@ export default function OfficialCoverageAreaPage() {
 
             <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto py-1">
               {searching ? (
-                <p className="px-4 py-3 text-[13px] text-neutral-500">Searching…</p>
+                <p className="px-4 py-3 text-[13px] text-neutral-500">
+                  Searching…
+                </p>
               ) : results.length === 0 ? (
                 <p className="px-4 py-3 text-[13px] text-neutral-500">
                   {query.trim().length < 3
@@ -1068,14 +1148,16 @@ export default function OfficialCoverageAreaPage() {
                       onClick={() => pickBoundary(hit)}
                       className={cn(
                         "flex w-full items-center gap-2 px-4 py-2.5 text-left text-[14px] transition-colors hover:bg-neutral-100",
-                        on ? "font-semibold text-brand-navy" : "text-neutral-900",
+                        on
+                          ? "font-semibold text-brand-navy"
+                          : "text-neutral-900"
                       )}
                     >
                       <span className="min-w-0 flex-1 truncate">
                         {hit.name}
                       </span>
-                      <span className="shrink-0 text-[11px] uppercase tracking-wide text-neutral-400">
-                        {hit.is_home ? "Current" : hit.locality ?? ""}
+                      <span className="shrink-0 text-[11px] tracking-wide text-neutral-400 uppercase">
+                        {hit.is_home ? "Current" : (hit.locality ?? "")}
                       </span>
                     </button>
                   )
@@ -1105,7 +1187,7 @@ export default function OfficialCoverageAreaPage() {
                       className="w-full rounded-lg border-[1.5px] border-neutral-200 px-3 py-2 text-[14px] text-neutral-900 outline-none focus:border-neutral-400"
                     />
                     {cityDropdownOpen && filteredCities.length > 0 && (
-                      <ul className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded-lg border border-neutral-200 bg-white shadow-lg">
+                      <ul className="absolute top-full right-0 left-0 z-10 mt-1 max-h-40 overflow-y-auto rounded-lg border border-neutral-200 bg-white shadow-lg">
                         {filteredCities.map((city) => (
                           <li key={city}>
                             <button
@@ -1137,7 +1219,7 @@ export default function OfficialCoverageAreaPage() {
                       disabled={!customName.trim()}
                       className={cn(
                         "flex-1 rounded-lg bg-brand-navy px-3 py-2 text-[13px] font-semibold text-white transition-colors",
-                        customName.trim() ? "hover:bg-accent" : "opacity-40",
+                        customName.trim() ? "hover:bg-accent" : "opacity-40"
                       )}
                     >
                       Create area
@@ -1163,8 +1245,8 @@ export default function OfficialCoverageAreaPage() {
           <div
             ref={tooltipRef}
             className={cn(
-              "pointer-events-none absolute left-0 top-0 z-[1000] whitespace-nowrap rounded-lg bg-white px-3 py-2 text-[13px] font-semibold text-neutral-900 shadow-[0_6px_20px_rgba(0,0,0,.35)]",
-              hint && pointerOnMap ? "opacity-100" : "opacity-0",
+              "pointer-events-none absolute top-0 left-0 z-[1000] rounded-lg bg-white px-3 py-2 text-[13px] font-semibold whitespace-nowrap text-neutral-900 shadow-[0_6px_20px_rgba(0,0,0,.35)]",
+              hint && pointerOnMap ? "opacity-100" : "opacity-0"
             )}
           >
             {hint}

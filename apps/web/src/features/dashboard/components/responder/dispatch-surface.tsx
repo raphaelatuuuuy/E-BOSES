@@ -13,8 +13,8 @@ import { dotClass, toneClass, type StateTone } from "@/features/dashboard/lib/re
  * (Dispatch, Map, Shift, Profile) draws from this file; nothing in those pages
  * should reinvent a card border, a title size or a tile.
  *
- * Elevation is lightness plus a hairline, never a shadow: the shell runs on the
- * dark ops palette, where a drop shadow is invisible and a border is not.
+ * Elevation is lightness plus a hairline, never a heavy shadow: the shared
+ * operations shell stays calm and readable on a light surface.
  */
 
 export function DispatchCard({

@@ -6,6 +6,7 @@ import {
   ClockIcon,
   LoaderCircleIcon,
   MapPinIcon,
+  PencilLineIcon,
   RadioIcon,
   ShieldAlertIcon,
   ShieldCheckIcon,
@@ -63,6 +64,9 @@ const HOLDING: Record<string, { label: string; icon: LucideIcon }> = {
 }
 
 function resolveAction(actions: Actions): Resolved {
+  if (!actions.hasOwnAssignment) {
+    return quiet("Awaiting assignment", ClockIcon)
+  }
   if (actions.isCancelled) {
     return { label: "Dispatch cancelled", icon: BanIcon, disabled: true, spinning: false, quiet: true }
   }
@@ -91,8 +95,8 @@ function resolveAction(actions: Actions): Resolved {
   }
   if (actions.canResolve) {
     return {
-      label: "Resolve incident",
-      icon: ShieldCheckIcon,
+      label: "Update the status",
+      icon: PencilLineIcon,
       onClick: () => void actions.handleResolve(),
       disabled: Boolean(actions.busy),
       spinning: actions.busy === "resolve",
@@ -163,7 +167,7 @@ export function DispatchActionBar({
           role="status"
           className="flex items-center justify-center gap-1.5 text-body font-medium text-subtle-foreground"
         >
-          <CheckIcon className="size-3.5 text-white/70" aria-hidden />
+          <CheckIcon className="size-3.5 text-orange-600" aria-hidden />
           {actions.lastConfirmed.label}
         </p>
       ) : null}

@@ -4,6 +4,7 @@ import { Link } from "react-router-dom"
 import { cn } from "@workspace/ui/lib/utils"
 import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { isResponderUser } from "@/features/auth/roles"
 import { OfficialMobileChrome } from "@/features/dashboard/components/official/official-account-dialogs"
 import {
   ResponderNotificationsButton,
@@ -15,16 +16,7 @@ import {
  * avatar. Residents use their own mobile chrome (search lives in the page
  * body).
  *
- * `tone="dark"` is the responder's. The header previously hardcoded
- * `bg-white`, so inside the `.staff-dark` shell it painted a white slab across
- * the top of every otherwise-dark screen — the bar the user reported. It is
- * tone-switched rather than tokenised because the official shell is still on
- * the light palette and shares this component; once officials migrate, this
- * prop collapses to the dark branch.
- *
- * Both tones open their own dialogs instead of navigating to separate
- * pages: the dark tone uses the responder's (account-dialogs.tsx), the light
- * tone uses the official's (official-account-dialogs.tsx).
+ * Both staff roles use light chrome and their own account dialogs.
  */
 
 function ResponderMobileChrome() {
@@ -40,7 +32,7 @@ function ResponderMobileChrome() {
           type="button"
           onClick={() => setProfileOpen(true)}
           aria-label="Open profile"
-          className="ml-1.5 flex size-11 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-nav-raised"
+          className="ml-1.5 flex size-11 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-neutral-100"
         >
           <span className="flex size-9 items-center justify-center rounded-full bg-slate-soft text-[15px] font-bold text-navy-muted">
             {avatarInitials}
@@ -54,24 +46,24 @@ function ResponderMobileChrome() {
 
 export function StaffMobileHeader({
   homeTo,
-  tone = "light",
 }: {
   homeTo: string
-  tone?: "light" | "dark"
 }) {
-  const dark = tone === "dark"
+  const { user } = useAuthSession()
+  const communityName = user?.barangay || "E-Boses community"
+  const responder = isResponderUser(user)
 
   return (
     <header
       className={cn(
         "sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between gap-2 border-b px-3",
-        dark ? "border-nav-border bg-nav-bg" : "border-shell-border bg-white",
+        "border-shell-border bg-white",
       )}
     >
       <Link to={homeTo} className="flex min-w-0 items-center gap-2 no-underline">
         <img
           src="/contents/logo.webp"
-          alt="Boses Marikina Heights"
+          alt={`Boses ${communityName}`}
           className="size-8 shrink-0 object-contain"
         />
         <div className="flex flex-col">
@@ -79,17 +71,14 @@ export function StaffMobileHeader({
             Boses
           </span>
           <span
-            className={cn(
-              "mt-0.5 text-[11px] font-bold leading-tight tracking-wide",
-              dark ? "text-nav-muted" : "text-brand-navy",
-            )}
+            className="mt-0.5 text-[11px] font-bold leading-tight tracking-wide text-brand-navy"
           >
-            Marikina Heights
+            {communityName}
           </span>
         </div>
       </Link>
       <div className="flex items-center gap-0.5">
-        {dark ? (
+        {responder ? (
           <ResponderMobileChrome />
         ) : (
           <OfficialMobileChrome />

@@ -1,5 +1,3 @@
-import { matchMarikinaHeightsStreet } from "@/features/auth/lib/marikina-heights-streets"
-
 export interface ReverseGeocodeResult {
   ok: boolean
   street: string | null
@@ -31,7 +29,7 @@ interface NominatimResponse {
 
 /**
  * Reverse-geocode lat/lng via OpenStreetMap Nominatim and match to
- * curated Marikina Heights streets.
+ * a community-owned street catalog when available.
  */
 export async function reverseGeocodeToMarikinaStreet(
   latitude: number,
@@ -94,11 +92,10 @@ export async function reverseGeocodeToMarikinaStreet(
   ].filter((value): value is string => Boolean(value?.trim()))
 
   for (const candidate of roadCandidates) {
-    const matched = matchMarikinaHeightsStreet(candidate)
-    if (matched || candidate.trim()) {
+    if (candidate.trim()) {
       return {
         ok: true,
-        street: matched || candidate.trim(),
+        street: candidate.trim(),
         displayName,
         houseNumber: address?.house_number,
         message: "",
@@ -107,17 +104,15 @@ export async function reverseGeocodeToMarikinaStreet(
   }
 
   // Fallback: only match display-name segments that look like roads
-  // (skip "Eastern Manila District", "Marikina Heights", etc. — those
-  // used to false-match short cores like "east" → East Drive Street).
+  // Skip administrative labels that are not roads.
   for (const part of displayName.split(",").map((p) => p.trim())) {
     if (!/\b(street|st\.?|avenue|ave\.?|road|rd\.?|drive|dr\.?|lane|ln\.?|extension|ext\.?|boulevard|blvd\.?)\b/i.test(part)) {
       continue
     }
-    const matched = matchMarikinaHeightsStreet(part)
-    if (matched) {
+    if (part) {
       return {
         ok: true,
-        street: matched,
+        street: part,
         displayName,
         houseNumber: address?.house_number,
         message: "",

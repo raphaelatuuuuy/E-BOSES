@@ -21,6 +21,7 @@ class NotificationSerializer(serializers.ModelSerializer):
     action_label = serializers.SerializerMethodField()
     tag = serializers.SerializerMethodField()
     icon_url = serializers.SerializerMethodField()
+    badge_url = serializers.SerializerMethodField()
     image_url = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
     actions = serializers.SerializerMethodField()
@@ -61,6 +62,9 @@ class NotificationSerializer(serializers.ModelSerializer):
 
     def get_icon_url(self, obj):
         return self._display_payload(obj).get("icon")
+
+    def get_badge_url(self, obj):
+        return self._display_payload(obj).get("badge")
 
     def get_images(self, obj):
         if obj.type == Notification.Type.WITNESS_ALERT:
@@ -160,6 +164,7 @@ class NotificationSerializer(serializers.ModelSerializer):
             "action_label",
             "tag",
             "icon_url",
+            "badge_url",
             "image_url",
             "images",
             "actions",

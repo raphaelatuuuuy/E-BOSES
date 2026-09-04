@@ -1,4 +1,4 @@
-import { ClockIcon, RouteIcon, TimerIcon, WifiOffIcon } from "lucide-react"
+import { ClockIcon, RouteIcon, TimerIcon } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -47,7 +47,8 @@ export function MetricTiles({
   // we can always compute from the responder's own GPS. `stale` is the last
   // good route — the router is down but the planned leg is still real.
   const roadKm =
-    (route?.status === "ok" || route?.status === "stale") && route.distance_meters != null
+    (route?.status === "ok" || route?.status === "stale") &&
+    route.distance_meters != null
       ? route.distance_meters / 1000
       : null
 
@@ -55,7 +56,7 @@ export function MetricTiles({
   // worth flagging in the readout rather than leaving it to arithmetic.
   const openSeconds = Math.max(
     0,
-    Math.floor((now - new Date(alert.created_at).getTime()) / 1000),
+    Math.floor((now - new Date(alert.created_at).getTime()) / 1000)
   )
   const overdue = alert.resolved_at == null && openSeconds > 3600
 
@@ -71,8 +72,20 @@ export function MetricTiles({
     label: string
     alarm?: boolean
   }> = [
-    { key: "distance", icon: RouteIcon, value: km.value, unit: km.unit, label: "Distance" },
-    { key: "eta", icon: ClockIcon, value: eta.value, unit: eta.unit, label: "ETA" },
+    {
+      key: "distance",
+      icon: RouteIcon,
+      value: km.value,
+      unit: km.unit,
+      label: "Distance",
+    },
+    {
+      key: "eta",
+      icon: ClockIcon,
+      value: eta.value,
+      unit: eta.unit,
+      label: "ETA",
+    },
     {
       key: "elapsed",
       icon: TimerIcon,
@@ -90,18 +103,21 @@ export function MetricTiles({
           bare
             ? "grid grid-cols-3 border-t border-card-line"
             : "grid grid-cols-3 overflow-hidden rounded-2xl border border-card-line bg-card-raised",
-          className,
+          className
         )}
       >
         {cells.map((cell, index) => (
           <div
             key={cell.key}
-            className={cn("min-w-0 px-3.5 py-3", index > 0 && "border-l border-card-line")}
+            className={cn(
+              "min-w-0 px-3.5 py-3",
+              index > 0 && "border-l border-card-line"
+            )}
           >
             <span
               className={cn(
                 "flex size-6 items-center justify-center rounded-lg",
-                cell.alarm ? "bg-sos/15 text-sos" : "bg-ice/10 text-ice",
+                cell.alarm ? "bg-sos/15 text-sos" : "bg-ice/10 text-ice"
               )}
             >
               <cell.icon className="size-3.5" />
@@ -109,14 +125,14 @@ export function MetricTiles({
             <p className="mt-2 flex min-w-0 items-baseline gap-1">
               <span
                 className={cn(
-                  "truncate text-[20px] font-bold leading-none tabular-nums",
-                  cell.alarm ? "text-sos" : "text-foreground",
+                  "truncate text-[20px] leading-none font-bold tabular-nums",
+                  cell.alarm ? "text-sos" : "text-foreground"
                 )}
               >
                 {cell.value}
               </span>
               {cell.unit ? (
-                <span className="shrink-0 text-[12px] font-semibold leading-none text-subtle-foreground">
+                <span className="shrink-0 text-[12px] leading-none font-semibold text-subtle-foreground">
                   {cell.unit}
                 </span>
               ) : null}
@@ -127,15 +143,6 @@ export function MetricTiles({
           </div>
         ))}
       </div>
-      {/* `stale` is the last route the router computed before it went quiet —
-          the numbers above are still real, so say so instead of pretending the
-          router is answering. */}
-      {route?.status === "stale" ? (
-        <p className="flex items-center gap-1.5 border-t border-card-line px-3.5 py-2 text-micro text-subtle-foreground">
-          <WifiOffIcon className="size-3 shrink-0" />
-          Router offline — this is the route computed before it went quiet.
-        </p>
-      ) : null}
     </>
   )
 }

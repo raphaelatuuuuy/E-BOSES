@@ -56,7 +56,7 @@ def resolve_role(user) -> str:
     if not user:
         return ROLE_UNKNOWN
     role = getattr(user, "role", "")
-    if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
+    if getattr(user, "is_superuser", False):
         return ROLE_OFFICIAL
     if role == "barangay_official":
         return ROLE_OFFICIAL

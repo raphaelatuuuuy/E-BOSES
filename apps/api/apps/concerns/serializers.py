@@ -67,6 +67,7 @@ def public_street_address(address, barangay):
     Marikina Heights".
     """
     barangay = (barangay or "").strip()
+    area_segments = AREA_ADDRESS_SEGMENTS | ({barangay.casefold()} if barangay else set())
     value = (address or "").strip()
     lowered = value.lower()
     if (
@@ -79,7 +80,7 @@ def public_street_address(address, barangay):
     street = ""
     for part in value.split(","):
         segment = part.strip().strip(",").strip()
-        if not segment or segment.lower() in AREA_ADDRESS_SEGMENTS:
+        if not segment or segment.casefold() in area_segments:
             continue
         street = HOUSE_NUMBER_RE.sub("", segment).strip()
         break
@@ -108,6 +109,7 @@ class PublicUserSerializer(serializers.ModelSerializer):
     # Street line only (first segment of residence address) for feed identity
     street = serializers.SerializerMethodField()
     barangay = serializers.SerializerMethodField()
+    position = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -122,6 +124,7 @@ class PublicUserSerializer(serializers.ModelSerializer):
             "is_on_duty",
             "street",
             "barangay",
+            "position",
         )
 
     def get_full_name(self, obj):
@@ -130,13 +133,16 @@ class PublicUserSerializer(serializers.ModelSerializer):
             first_name = profile.first_name.strip()
             last_name = profile.last_name.strip()
             return f"{first_name} {last_name}".strip() if last_name else first_name
+        account_name = obj.get_full_name().strip()
+        if account_name:
+            return account_name
         return (obj.email.split("@", 1)[0] or "E-Boses user").replace(".", " ")
 
     def get_initials(self, obj):
-        profile = getattr(obj, "resident_profile", None)
-        if profile:
-            return f"{profile.first_name[:1]}{profile.last_name[:1]}".upper() or "?"
-        return obj.email[:2].upper()
+        parts = self.get_full_name(obj).split()
+        if not parts:
+            return "U"
+        return f"{parts[0][:1]}{parts[-1][:1] if len(parts) > 1 else ''}".upper()
 
     def get_street(self, obj):
         if self.context.get("privacy_safe"):
@@ -158,8 +164,36 @@ class PublicUserSerializer(serializers.ModelSerializer):
         value = (profile.barangay or "").strip()
         # Model default is "Pending" until verification fills a real barangay
         if not value or value.lower() == "pending":
-            return "Marikina Heights"
+            return getattr(getattr(profile, "community", None), "name", "")
         return value
+
+    def get_position(self, obj):
+        """Return the configured staff position when it is available."""
+        # Staff updates are shown in public timelines and feeds.  Officials
+        # can have a configured designation too (for example, "Operations
+        # Officer"), so do not drop their position while only checking the
+        # legacy responder role.
+        if getattr(obj, "role", None) not in {
+            User.Role.FIRST_RESPONDER,
+            User.Role.BARANGAY_OFFICIAL,
+        }:
+            return ""
+        cache = getattr(obj, "_prefetched_objects_cache", {})
+        designations = cache.get("designations")
+        if designations is None:
+            return ""
+        active = [item for item in designations if getattr(item, "is_active", False)]
+        active.sort(key=lambda item: (getattr(getattr(item, "department", None), "sort_order", 0), item.pk))
+        if not active:
+            return ""
+        designation = active[0]
+        position = getattr(designation, "position", None)
+        if position and getattr(position, "name", ""):
+            return position.name
+        if getattr(designation, "title", ""):
+            return designation.title
+        department = getattr(designation, "department", None)
+        return (department.short_name or department.name) if department else ""
 
     def get_avatar(self, obj):
         profile = getattr(obj, "resident_profile", None)
@@ -184,6 +218,14 @@ class PublicUserSerializer(serializers.ModelSerializer):
 
 class DepartmentSerializer(serializers.ModelSerializer):
     member_count = serializers.SerializerMethodField()
+    # Communities share unit names ("Environmental and Sanitation Committee"
+    # exists in every barangay), so the Users screen needs the owning
+    # community on each row to tell the duplicates apart.
+    community_name = serializers.SerializerMethodField()
+
+    def get_community_name(self, obj):
+        community = getattr(obj, "community", None)
+        return community.name if community else ""
 
     def get_member_count(self, obj):
         # Count over the prefetched relation when available; a chained
@@ -197,6 +239,8 @@ class DepartmentSerializer(serializers.ModelSerializer):
         model = Department
         fields = (
             "id",
+            "community",
+            "community_name",
             "name",
             "code",
             "short_name",
@@ -212,12 +256,16 @@ class DepartmentSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("id", "member_count", "created_at", "updated_at")
+        read_only_fields = ("id", "community", "community_name", "member_count", "created_at", "updated_at")
 
     def validate_emergency_types(self, value):
         from apps.emergencies.models import EmergencyCategory
 
-        allowed = set(EmergencyCategory.objects.filter(is_active=True).values_list("code", flat=True))
+        queryset = EmergencyCategory.objects.filter(is_active=True)
+        community = getattr(self.instance, "community", None) or self.context.get("community")
+        if community:
+            queryset = queryset.filter(community=community)
+        allowed = set(queryset.values_list("code", flat=True))
         invalid = [item for item in value if item not in allowed]
         if invalid:
             raise serializers.ValidationError(
@@ -481,7 +529,9 @@ class ConcernMediaSerializer(serializers.ModelSerializer):
         user = getattr(request, "user", None)
         if not user or not user.is_authenticated:
             return []
-        if not (getattr(user, "is_staff", False) or getattr(user, "role", "") == "barangay_official"):
+        from apps.community_access import concern_access_mode
+
+        if concern_access_mode(user, obj.concern) != "operational":
             return []
         return [
             {
@@ -535,17 +585,10 @@ class ConcernStatusEventSerializer(serializers.ModelSerializer):
         model = ConcernStatusEvent
         fields = ("id", "status", "note", "actor", "created_at")
 
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        if instance.status in {Concern.Status.UNDER_REVIEW, Concern.Status.IN_PROGRESS} and not instance.note.strip():
-            data["note"] = "An official has viewed your report."
-            data["actor"] = None
-        return data
-
-
 class ConcernCommentSerializer(serializers.ModelSerializer):
     author = PublicUserSerializer(read_only=True)
     replies = serializers.SerializerMethodField()
+    attachment = serializers.SerializerMethodField()
 
     class Meta:
         model = ConcernComment
@@ -558,6 +601,7 @@ class ConcernCommentSerializer(serializers.ModelSerializer):
             "is_edited",
             "created_at",
             "updated_at",
+            "attachment",
             "replies",
         )
 
@@ -568,6 +612,11 @@ class ConcernCommentSerializer(serializers.ModelSerializer):
         # .all() over the prefetched relation; chaining select_related here
         # would bypass the cache with one query per comment.
         return ConcernCommentSerializer(obj.replies.all(), many=True, context=self.context).data
+
+    def get_attachment(self, obj):
+        from .comment_media import serialize_public_comment_attachment
+
+        return serialize_public_comment_attachment(getattr(obj, "attachment", None), self.context.get("request"))
 
 class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
     possible_duplicate = serializers.SerializerMethodField()
@@ -645,9 +694,16 @@ class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
     def get_duplicate_match(self, obj):
         request = self.context.get("request")
         user = getattr(request, "user", None)
-        if not user or not user.is_authenticated or not (
-            getattr(user, "is_staff", False) or getattr(user, "role", "") == "barangay_official"
-        ):
+        if not user or not user.is_authenticated:
+            return None
+        from apps.community_access import concern_access_mode
+
+        # This serializer is nested under ConcernSerializer, so ``obj`` is
+        # the AI assessment rather than the concern itself.  Passing the
+        # assessment to the access helper crashes the resident feed as soon
+        # as a concern has an AI result.
+        concern = obj.concern
+        if concern_access_mode(user, concern) != "operational":
             return None
         payload = self._duplicate_payload(obj)
         matched_id = payload.get("matched_concern_id")
@@ -903,13 +959,19 @@ class ConcernChatCreateSerializer(serializers.Serializer):
 
 
 class ConcernSerializer(serializers.ModelSerializer):
+    community = serializers.SerializerMethodField()
+    reporter_community = serializers.SerializerMethodField()
+    is_cross_community = serializers.SerializerMethodField()
+    access_mode = serializers.SerializerMethodField()
+    can_interact = serializers.SerializerMethodField()
     tracking_id = serializers.SerializerMethodField()
     address = serializers.SerializerMethodField()
     latitude = serializers.SerializerMethodField()
     longitude = serializers.SerializerMethodField()
     location_source = serializers.SerializerMethodField()
     location_accuracy = serializers.SerializerMethodField()
-    reporter = PublicUserSerializer(read_only=True)
+    reporter = serializers.SerializerMethodField()
+    is_anonymous = serializers.BooleanField(read_only=True)
     # Unmasked reporter name for officials reviewing flagged content; the
     # public `reporter.full_name` stays first-name + last-initial for privacy.
     reporter_full_name = serializers.SerializerMethodField()
@@ -930,11 +992,17 @@ class ConcernSerializer(serializers.ModelSerializer):
     conversation = serializers.SerializerMethodField()
     vote_count = serializers.IntegerField(read_only=True, default=0)
     comment_count = serializers.IntegerField(read_only=True, default=0)
+    upvoters = serializers.SerializerMethodField()
     priority_score = serializers.IntegerField(read_only=True, default=0)
     # Severity band, derived from the AI assessment. Exposed so clients can
     # show it without recomputing, and so API ordering and UI ordering agree.
     severity = serializers.CharField(read_only=True, default="low")
-    user_vote = serializers.IntegerField(read_only=True, default=0)
+    # Coarse distance (meters) from the requesting viewer's own position to
+    # this concern. Set by the feed view when the client passes its lat/lng;
+    # it lets "nearby" ranking work without exposing the concern's exact
+    # coordinates (which privacy_safe deliberately hides in feed responses).
+    distance_meters = serializers.SerializerMethodField()
+    user_vote = serializers.SerializerMethodField()
     community_incident = serializers.SerializerMethodField()
     recurrence_of = serializers.SerializerMethodField()
     also_reported_count = serializers.SerializerMethodField()
@@ -960,6 +1028,16 @@ class ConcernSerializer(serializers.ModelSerializer):
         _, duplicates = group_members(obj)
         return len(duplicates)
 
+    def get_upvoters(self, obj) -> list[str]:
+        names = []
+        for vote in obj.votes.all().order_by("-created_at", "-id")[:3]:
+            profile = getattr(vote.user, "resident_profile", None)
+            if profile:
+                names.append(f"{profile.first_name.strip()} {profile.last_name.strip()}".strip())
+            else:
+                names.append(vote.user.get_full_name() or vote.user.email.split("@", 1)[0])
+        return names
+
     class Meta:
         model = Concern
         fields = (
@@ -970,6 +1048,12 @@ class ConcernSerializer(serializers.ModelSerializer):
             "validation_summary",
             "rejection_code",
             "status_version",
+            "community",
+            "reporter_community",
+            "is_cross_community",
+            "access_mode",
+            "can_interact",
+            "is_anonymous",
             "reporter",
             "reporter_full_name",
             "title",
@@ -1009,9 +1093,11 @@ class ConcernSerializer(serializers.ModelSerializer):
             "conversation",
             "vote_count",
             "comment_count",
+            "upvoters",
             "priority_score",
             "severity",
             "user_vote",
+            "distance_meters",
             "created_at",
             "updated_at",
         )
@@ -1023,14 +1109,50 @@ class ConcernSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         return getattr(request, "user", None)
 
+    def get_community(self, obj):
+        from apps.community_access import community_summary
+
+        return community_summary(obj.community)
+
+    def get_reporter_community(self, obj):
+        from apps.community_access import community_summary
+
+        return community_summary(obj.reporter_community)
+
+    def get_is_cross_community(self, obj):
+        return bool(
+            obj.community_id
+            and obj.reporter_community_id
+            and obj.community_id != obj.reporter_community_id
+        )
+
+    def get_access_mode(self, obj):
+        from apps.community_access import concern_access_mode
+
+        return concern_access_mode(self._viewer(), obj)
+
+    def get_can_interact(self, obj):
+        # Accepted community reports are public discussion threads, including
+        # reports routed to a neighbouring community. Keep the access mode
+        # metadata for operational decisions, but do not make cross-community
+        # residents read-only in the feed.
+        return self.get_access_mode(obj) is not None
+
+    def get_user_vote(self, obj):
+        return getattr(obj, "user_vote", 0)
+
     def _viewer_roles(self, obj):
         user = self._viewer()
         if not user or not user.is_authenticated:
             return False, False, False
+        from apps.community_scope import community_ids_for_user
+
         is_official = bool(
-            user.is_staff
-            or user.is_superuser
-            or user.role == User.Role.BARANGAY_OFFICIAL
+            user.is_superuser
+            or (
+                user.role == User.Role.BARANGAY_OFFICIAL
+                and obj.community_id in community_ids_for_user(user)
+            )
         )
         is_owner = user.pk == obj.reporter_id
         # Iterate the prefetched relation — .filter().exists() would bypass
@@ -1059,15 +1181,53 @@ class ConcernSerializer(serializers.ModelSerializer):
         return obj.tracking_id
 
     def get_reporter_full_name(self, obj):
+        if obj.is_anonymous:
+            return "Anonymous"
+        if self.is_privacy_safe():
+            return PublicUserSerializer(obj.reporter, context=self.context).data.get("full_name", "")
         profile = getattr(obj.reporter, "resident_profile", None)
         if profile:
             return f"{profile.first_name.strip()} {profile.last_name.strip()}".strip()
         return obj.reporter.email.split("@", 1)[0].replace(".", " ")
 
+    def get_reporter(self, obj):
+        if obj.is_anonymous:
+            return {
+                "id": 0,
+                "full_name": "Anonymous",
+                "initials": "A",
+                "role": User.Role.RESIDENT,
+                "last_seen_at": None,
+                "avatar": "",
+                "responder_unit": "",
+                "is_on_duty": False,
+                "street": "",
+                "barangay": "",
+                "phone_number": "",
+            }
+        # The detail view is fetched by the officials handling the report and
+        # by the reporter themselves, so the callback number is safe to include
+        # here — but not in PublicUserSerializer, which also serializes feed
+        # identity where other residents would see it.
+        data = PublicUserSerializer(obj.reporter, context=self.context).data
+        # Public/community serializers must not expose a resident's callback
+        # number. Detail views for the owner or authorized staff still receive
+        # it, while privacy-safe feed responses stay limited to the public
+        # identity fields above.
+        if not self.is_privacy_safe():
+            data["phone_number"] = obj.reporter.phone_number
+        return data
+
     def get_address(self, obj):
         if self.is_privacy_safe():
             return public_street_address(obj.address, obj.barangay)
         return obj.address
+
+    def get_distance_meters(self, obj):
+        # Attached by ConcernFeedView when the request includes lat/lng.
+        # Rounded to 10 m so it cannot be used to triangulate a precise pin.
+        value = getattr(obj, "distance_meters", None)
+        return None if value is None else int(round(value / 10.0) * 10)
 
     def get_latitude(self, obj):
         if self.is_privacy_safe() or obj.latitude is None:
@@ -1410,10 +1570,61 @@ class ConcernCreateSerializer(serializers.Serializer):
             try:
                 attrs["_location_review"] = validate_report_location(attrs["latitude"], attrs["longitude"])
             except DjangoValidationError as exc:
+                request = self.context.get("request")
+                profile = getattr(getattr(request, "user", None), "resident_profile", None)
+                community_name = getattr(getattr(profile, "community", None), "name", "") or getattr(
+                    profile, "barangay", ""
+                )
+                if community_name:
+                    raise serializers.ValidationError(
+                        f"Location is too far from Barangay {community_name}. Choose a place inside an active community."
+                    ) from exc
                 raise serializers.ValidationError(exc) from exc
         else:
             attrs["_location_review"] = {}
         return attrs
+
+
+class GuestConcernCreateSerializer(serializers.Serializer):
+    """The intentionally small public contract for an anonymous report."""
+
+    description = serializers.CharField(max_length=4000, trim_whitespace=True)
+    latitude = serializers.DecimalField(max_digits=10, decimal_places=7)
+    longitude = serializers.DecimalField(max_digits=10, decimal_places=7)
+    address = serializers.CharField(max_length=255, trim_whitespace=True)
+    location_source = serializers.ChoiceField(
+        choices=("gps", "manual_pin"), required=False, allow_blank=True, default="manual_pin"
+    )
+    client_request_id = serializers.UUIDField(required=False)
+
+    def validate_description(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Describe what happened.")
+        return value
+
+    def validate_address(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Pin a location with a street name.")
+        lower = value.casefold()
+        if (
+            lower in {"pending", "selected location", "finding street…", "finding street..."}
+            or lower.startswith(("lat ", "lat:", "lat,"))
+            or re.match(r"^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$", value)
+        ):
+            raise serializers.ValidationError("Pin a location with a street name.")
+        return value[:255]
+
+    def validate_latitude(self, value):
+        if not -90 <= value <= 90:
+            raise serializers.ValidationError("Enter a valid latitude.")
+        return value
+
+    def validate_longitude(self, value):
+        if not -180 <= value <= 180:
+            raise serializers.ValidationError("Enter a valid longitude.")
+        return value
 
 
 class ConcernVoteSerializer(serializers.Serializer):
@@ -1421,8 +1632,15 @@ class ConcernVoteSerializer(serializers.Serializer):
 
 
 class ConcernCommentCreateSerializer(serializers.Serializer):
-    body = serializers.CharField(max_length=1000)
+    body = serializers.CharField(max_length=1000, required=False, allow_blank=True, default="")
     parent = serializers.IntegerField(required=False, allow_null=True)
+    media = serializers.FileField(required=False, write_only=True, allow_empty_file=False)
+
+    def validate(self, attrs):
+        attrs["body"] = (attrs.get("body") or "").strip()
+        if not attrs["body"] and not attrs.get("media"):
+            raise serializers.ValidationError("Comment text or an image/video attachment is required.")
+        return attrs
 
 
 class ConcernStatusUpdateSerializer(serializers.Serializer):
@@ -1461,7 +1679,13 @@ class ConcernStatusUpdateSerializer(serializers.Serializer):
     def validate_category(self, value):
         if not value:
             return ""
-        if not ConcernCategory.objects.filter(code=value, is_active=True).exists() and value not in Concern.Category.values:
+        category_queryset = ConcernCategory.objects.filter(code=value, is_active=True)
+        community = self.context.get("community")
+        if community is None and getattr(self, "instance", None) is not None:
+            community = getattr(self.instance, "community", None)
+        if community is not None:
+            category_queryset = category_queryset.filter(community=community)
+        if not category_queryset.exists() and value not in Concern.Category.values:
             raise serializers.ValidationError("Choose a category the barangay currently uses.")
         return value
 
@@ -1496,7 +1720,8 @@ class ConcernListSerializer(serializers.ModelSerializer):
     fields below. The web app fetches /api/concerns/{id}/ when a row is opened.
     """
 
-    reporter = ConcernListReporterSerializer(read_only=True)
+    reporter = serializers.SerializerMethodField()
+    is_anonymous = serializers.BooleanField(read_only=True)
     category_ref = ConcernCategoryMiniSerializer(read_only=True)
     assigned_department = DepartmentMiniSerializer(read_only=True)
     tracking_id = serializers.CharField(read_only=True)
@@ -1511,6 +1736,7 @@ class ConcernListSerializer(serializers.ModelSerializer):
     priority_score = serializers.IntegerField(read_only=True, default=0)
     urgent_attention = serializers.SerializerMethodField()
     severity_reason = serializers.SerializerMethodField()
+    resolution_actor = serializers.SerializerMethodField()
 
     class Meta:
         model = Concern
@@ -1523,7 +1749,9 @@ class ConcernListSerializer(serializers.ModelSerializer):
             "notification_subject",
             "category",
             "status",
+            "update_text",
             "validation_status",
+            "is_anonymous",
             "visibility",
             "barangay",
             "address",
@@ -1545,7 +1773,13 @@ class ConcernListSerializer(serializers.ModelSerializer):
             "priority_score",
             "urgent_attention",
             "severity_reason",
+            "resolution_actor",
         )
+
+    def get_reporter(self, obj):
+        if obj.is_anonymous:
+            return {"full_name": "Anonymous"}
+        return ConcernListReporterSerializer(obj.reporter, context=self.context).data
 
     def get_severity_reason(self, obj) -> str:
         assessment = getattr(obj, "ai_assessment", None)
@@ -1558,6 +1792,32 @@ class ConcernListSerializer(serializers.ModelSerializer):
         if not assessment or assessment.status != ConcernAiAssessment.Status.COMPLETED:
             return False
         return bool(assessment.urgent_attention)
+
+    def get_resolution_actor(self, obj):
+        """Expose the staff member who closed a resolved row.
+
+        List responses intentionally stay slim, but a resolved concern still
+        needs the same attribution as its feed card. ``decorate_concerns``
+        prefetches status events, evidence uploaders, and their designations,
+        so this reads the cached relations without adding one query per row.
+        """
+        if obj.status != Concern.Status.RESOLVED:
+            return None
+        events = [
+            event
+            for event in obj.status_events.all()
+            if event.status == Concern.Status.RESOLVED and event.actor_id
+        ]
+        event = max(events, key=lambda item: (item.created_at, item.pk), default=None)
+        actor = event.actor if event else None
+        if actor is None:
+            evidence = sorted(
+                [item for item in obj.resolution_evidence.all() if item.uploaded_by_id],
+                key=lambda item: (item.created_at, item.pk),
+                reverse=True,
+            )
+            actor = evidence[0].uploaded_by if evidence else None
+        return PublicUserSerializer(actor, context=self.context).data if actor else None
 
     def get_first_photo(self, obj) -> str | None:
         media = next((m for m in obj.media.all()), None)

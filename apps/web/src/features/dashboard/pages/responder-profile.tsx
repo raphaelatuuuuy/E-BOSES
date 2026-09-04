@@ -1,4 +1,3 @@
-import { MOBILE_BAR_CLEARANCE } from "@/features/dashboard/lib/shell"
 import { ResponderProfilePanel } from "@/features/dashboard/components/responder/responder-profile-panel"
 import { usePageTitle } from "@/hooks/use-page-title"
 
@@ -13,8 +12,7 @@ export default function ResponderProfilePage() {
 
   return (
     <main
-      className="min-h-full flex-1 bg-canvas p-4 md:p-6"
-      style={{ paddingBottom: `calc(${MOBILE_BAR_CLEARANCE} + 1.5rem)` }}
+      className="min-h-full flex-1 bg-canvas p-4 pb-6 md:p-6 md:pb-8"
     >
       <div className="mx-auto max-w-3xl">
         <ResponderProfilePanel />

@@ -45,19 +45,18 @@ export interface CommunityBoundary {
   name: string
   locality: string
   geometry: {
-    type: "Polygon"
-    coordinates: number[][][]
+    type: "Polygon" | "MultiPolygon"
+    coordinates: number[][][] | number[][][][]
   }
 }
 
 export interface CommunityRequest {
-  kind: "community" | "demo"
+  kind: "community"
   name: string
   email: string
   organization: string
   role: string
   message: string
-  preferred_date?: string
 }
 
 const PUBLIC = { auth: false, refreshOnUnauthorized: false } as const

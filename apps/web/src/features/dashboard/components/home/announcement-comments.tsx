@@ -14,7 +14,10 @@ import {
   fromAnnouncementComment,
   mentionUsersOf,
 } from "@/features/dashboard/components/comments"
-import { ReportPostDialog, type ReportTarget } from "@/features/dashboard/components/report-post-dialog"
+import {
+  ReportPostDialog,
+  type ReportTarget,
+} from "@/features/dashboard/components/report-post-dialog"
 
 export function AnnouncementComments({
   announcementId,
@@ -23,7 +26,6 @@ export function AnnouncementComments({
 }: {
   announcementId: number
   canModerate?: boolean
-  /** Opened straight from "Write about this alert" — start expanded and focused. */
   autoFocusComposer?: boolean
 }) {
   const { user } = useAuthSession()
@@ -53,14 +55,24 @@ export function AnnouncementComments({
     }
   }
 
-  async function submit(body: string, parentId: number | null) {
+  async function submit(
+    body: string,
+    parentId: number | null,
+    media?: File | null
+  ): Promise<boolean> {
     try {
-      await addAnnouncementComment(announcementId, body, parentId)
+      await addAnnouncementComment(announcementId, body, parentId, media)
       // Replies arrive nested under their root, so refetch rather than append.
       await reload()
       setOpen(true)
+      return true
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "That comment could not be posted.")
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "That comment could not be posted."
+      )
+      return false
     }
   }
 
@@ -69,13 +81,20 @@ export function AnnouncementComments({
       await removeAnnouncementComment(announcementId, commentId)
       await reload()
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "That comment could not be removed.")
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "That comment could not be removed."
+      )
     }
   }
 
   const visible = comments.filter((comment) => comment.status === "visible")
   const unified = visible.map(fromAnnouncementComment)
-  const commentCount = unified.reduce((total, item) => total + 1 + item.replies.length, 0)
+  const commentCount = unified.reduce(
+    (total, item) => total + 1 + item.replies.length,
+    0
+  )
 
   return (
     <div className="border-t border-neutral-200 pt-2.5">
@@ -97,7 +116,9 @@ export function AnnouncementComments({
           onSubmit={submit}
           onDelete={remove}
           onRemove={canModerate ? remove : undefined}
-          onReport={(commentId) => setReportTarget({ kind: "announcement_comment", commentId })}
+          onReport={(commentId) =>
+            setReportTarget({ kind: "announcement_comment", commentId })
+          }
           emptyState="No comments yet. Be the first to reply."
         />
       ) : null}

@@ -1,8 +1,15 @@
 import { useEffect, useRef } from "react"
 import type leaflet from "leaflet"
 
-import { StepContinueButton, StepTitle } from "@/features/auth/components/sign-up-shell"
-import { MapWeatherIcon, useMapWeather, weatherLabel } from "@/features/dashboard/components/map-weather"
+import {
+  StepContinueButton,
+  StepTitle,
+} from "@/features/auth/components/sign-up-shell"
+import {
+  MapWeatherIcon,
+  useMapWeather,
+  weatherLabel,
+} from "@/features/dashboard/components/map-weather"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 
 const PIN_HOUSE_HTML =
@@ -69,12 +76,12 @@ export function CommunityPeekStep({
         zoom: 16,
         zoomControl: false,
         attributionControl: false,
-        dragging: false,
-        scrollWheelZoom: false,
-        doubleClickZoom: false,
-        touchZoom: false,
-        boxZoom: false,
-        keyboard: false,
+        dragging: true,
+        scrollWheelZoom: true,
+        doubleClickZoom: true,
+        touchZoom: true,
+        boxZoom: true,
+        keyboard: true,
       })
 
       addBaseTiles(L, map, "light", {
@@ -115,24 +122,36 @@ export function CommunityPeekStep({
       </StepTitle>
 
       <div className="mt-6 flex gap-8">
-        <div className="relative h-56 w-1/2 shrink-0 overflow-hidden rounded-2xl bg-[#e5e3df] shadow-sm ring-1 ring-neutral-200">
-          <div ref={containerRef} className="eboses-peek-map absolute inset-0" />
+        <div className="relative h-56 w-1/2 shrink-0 overflow-hidden rounded-2xl bg-neutral-100 shadow-sm ring-1 ring-neutral-200">
+          <div
+            ref={containerRef}
+            className="eboses-peek-map absolute inset-0"
+          />
         </div>
 
         <div className="flex w-1/2 flex-col justify-between">
           <div>
-            <MapWeatherIcon code={weather.code} className="size-8 shrink-0 text-neutral-500" />
-            <p className="mt-2 text-[36px] font-bold leading-none tabular-nums text-neutral-900">
-              {weather.temperature != null ? `${Math.round(weather.temperature)}°C` : "—"}
+            <MapWeatherIcon
+              code={weather.code}
+              className="size-8 shrink-0 text-neutral-500"
+            />
+            <p className="mt-2 text-[36px] leading-none font-bold text-neutral-900 tabular-nums">
+              {weather.temperature != null
+                ? `${Math.round(weather.temperature)}°C`
+                : "—"}
             </p>
-            <p className="mt-1.5 text-[15px] font-medium text-neutral-500">{weatherLabel(weather.code)}</p>
+            <p className="mt-1.5 text-[15px] font-medium text-neutral-500">
+              {weatherLabel(weather.code)}
+            </p>
           </div>
 
           <div>
-            <p className="text-[64px] font-bold leading-none tracking-tight tabular-nums text-neutral-900">
+            <p className="text-[64px] leading-none font-bold tracking-tight text-neutral-900 tabular-nums">
               {neighbors}+
             </p>
-            <p className="mt-1.5 text-[14px] font-medium text-neutral-500">verified residents nearby</p>
+            <p className="mt-1.5 text-[14px] font-medium text-neutral-500">
+              verified residents nearby
+            </p>
           </div>
         </div>
       </div>

@@ -169,7 +169,7 @@ export function PhilippinesMap({ figures, loading = false }: Props) {
             aria-hidden
             className="pointer-events-none absolute z-10 w-max max-w-[15rem] rounded-xl border border-white/12 bg-black/85 px-3 py-2 shadow-xl backdrop-blur-sm"
             style={{
-              left: Math.min(Math.max(pointer.x + 14, 8), (frame.current?.clientWidth ?? 0) - 200),
+              left: Math.max(pointer.x + 14, 8),
               top: Math.max(pointer.y - 12, 8),
             }}
           >

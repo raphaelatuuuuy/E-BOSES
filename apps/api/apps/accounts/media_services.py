@@ -12,7 +12,7 @@ def _redaction_settings():
         "enabled": True,
         "faces": True,
         "profile_faces": True,
-        "license_plates": False,
+        "license_plates": True,
         "strength": 14,
         "padding": 0.15,
         "fallback": "blur_full_image",
@@ -231,7 +231,7 @@ def user_can_access_residence_proof_raw(user, proof):
         return True
     if user.status != user.Status.VERIFIED:
         return False
-    if user.is_staff or user.pk == proof.user_id:
+    if user.is_superuser or user.pk == proof.user_id:
         return True
     from apps.capabilities import MANAGE_USERS, user_has_capability
 

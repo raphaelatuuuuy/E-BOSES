@@ -286,20 +286,22 @@ class CommunityLocationResolutionTests(TestCase):
             coordinate_status="ok" if latitude is not None else "missing",
         )
 
-    def test_real_sms_persists_resolution_before_manual_dispatch(self):
+    def test_real_sms_persists_resolution_before_automatic_routing(self):
         result = create_alert_from_sms(
             self.parsed(latitude=14.65, longitude=121.15),
             sender_number=self.user.phone_number,
             match=self.match,
         )
         alert = result.alert
+        alert.refresh_from_db()
         self.assertEqual(alert.community, self.first)
         self.assertEqual(alert.location_source, "sms_gps")
         self.assertEqual(alert.location_freshness, "fresh")
         self.assertEqual(alert.location_evidence["community"]["id"], self.first.pk)
-        self.assertTrue(alert.escalations.exists())
+        self.assertEqual(alert.status, EmergencyAlert.Status.ROUTING)
+        self.assertFalse(alert.escalations.exists())
 
-    def test_unknown_without_location_stays_active_for_manual_dispatch(self):
+    def test_unknown_without_location_stays_in_automatic_routing(self):
         result = create_alert_from_sms(
             self.parsed(),
             sender_number="+639188887777",
@@ -308,8 +310,8 @@ class CommunityLocationResolutionTests(TestCase):
         alert = result.alert
         self.assertIsNone(alert.community)
         self.assertEqual(alert.location_source, "none")
-        self.assertEqual(alert.status, EmergencyAlert.Status.ESCALATION_REQUIRED)
-        self.assertTrue(alert.escalations.exists())
+        self.assertEqual(alert.status, EmergencyAlert.Status.ROUTING)
+        self.assertFalse(alert.escalations.exists())
 
     def test_sms_simulation_and_real_sms_share_location_resolution(self):
         message = "HELP FIRE LOC:14.6500,121.1500"

@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from "react-router-dom"
-import { ArrowRightIcon, MailIcon, PhoneIcon } from "lucide-react"
+import { MailIcon, PhoneIcon } from "lucide-react"
 
 type PlatformLink = { label: string; href?: string; to?: string }
 
@@ -65,7 +65,10 @@ export function Footer() {
         className="pointer-events-none absolute bottom-24 right-0 z-0 hidden h-40 w-auto object-contain md:block lg:h-48"
       />
   
-      <div className="container mx-auto px-4 pt-16 pb-12 sm:px-6 lg:px-8">
+      {/* Matches the navbar / page sections (max-w-7xl + px-5 md:px-10 lg:px-16)
+          so the footer's left edge aligns with the page content instead of the
+          default `container` padding, which sat at a different x-offset. */}
+      <div className="mx-auto max-w-7xl px-5 pt-16 pb-12 md:px-10 lg:px-16 min-[1600px]:max-w-[92rem]">
         <div className="relative z-10 mb-16 grid grid-cols-1 gap-12 md:grid-cols-3">
           <div className="space-y-6">
             <div>
@@ -131,20 +134,6 @@ export function Footer() {
                 </a>
               </li>
             </ul>
-            <div className="mt-6 flex flex-col items-start gap-3">
-              <Link
-                to="/communities/new"
-                className="inline-flex min-h-10 w-60 items-center justify-center rounded-none border border-white/20 px-5 text-sm font-medium text-white/85 transition-colors hover:border-white/40 hover:bg-white/5 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-              >
-                Make your Own Community
-              </Link>
-              <Link
-                to="/book-demo"
-                className="inline-flex min-h-10 w-60 items-center justify-center gap-2 rounded-none border border-accent bg-accent px-5 text-sm font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-              >
-                Book a Demo <ArrowRightIcon className="size-4" strokeWidth={2} aria-hidden />
-              </Link>
-            </div>
           </div>
         </div>
 

@@ -3,11 +3,13 @@ import { createPortal } from "react-dom"
 import {
   CheckIcon,
   CircleDotIcon,
+  CircleCheckIcon,
   InfoIcon,
   MessageCircleIcon,
   PhoneIcon,
   PlayIcon,
   RadioIcon,
+  RouteIcon,
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -16,9 +18,12 @@ import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
+import {
+  GLYPHS,
+  glyphPinHtml,
+} from "@/features/dashboard/components/map/markers"
 import { websocketTicket, websocketUrl } from "@/lib/api"
 import {
-  cancelEmergency,
   createEmergencyAppeal,
   getEmergency,
   isNewerEmergencyAlert,
@@ -48,12 +53,10 @@ import { initialsFor, roleLabel } from "@/features/dashboard/lib/people"
 
 import type leaflet from "leaflet"
 
-
-
 /**
  * Resident-facing pipeline.
  * No “barangay desk / manual review” step — after send, system auto-routes
- * to the nearest on-duty responder for this emergency type.
+ * to the nearest available responder for this emergency type.
  */
 type TimelineRow = {
   key: string
@@ -85,17 +88,34 @@ const ASSIGNMENT_STATUS_LABELS: Record<string, string> = {
 }
 
 function hasActiveResponder(alert: EmergencyAlert) {
-  if (alert.current_assignment && ACTIVE_ASSIGNMENT_STATUSES.has(alert.current_assignment.status)) {
+  if (
+    alert.current_assignment &&
+    ACTIVE_ASSIGNMENT_STATUSES.has(alert.current_assignment.status)
+  ) {
     return true
   }
   return (alert.assignments ?? []).some((assignment) =>
-    ACTIVE_ASSIGNMENT_STATUSES.has(assignment.status),
+    ACTIVE_ASSIGNMENT_STATUSES.has(assignment.status)
   )
 }
 
 function hadResponderAssignment(alert: EmergencyAlert) {
-  return (alert.assignments?.length ?? 0) > 0 ||
+  return (
+    (alert.assignments?.length ?? 0) > 0 ||
     (alert.escalations ?? []).some((item) => item.previous_assignment != null)
+  )
+}
+
+function assignedUnitName(alert: EmergencyAlert) {
+  return (
+    alert.responding_unit?.short_name ||
+    alert.responding_unit?.name ||
+    "Response unit"
+  )
+}
+
+function assignedUnitWaitingText(alert: EmergencyAlert) {
+  return `${assignedUnitName(alert)} is assigned. Waiting for a responder to accept.`
 }
 
 const PIPELINE: Array<{
@@ -106,7 +126,12 @@ const PIPELINE: Array<{
 }> = [
   {
     status: "submitted",
-    eventKeys: ["received_app", "received_sms", "received_call", "escalated_from_concern"],
+    eventKeys: [
+      "received_app",
+      "received_sms",
+      "received_call",
+      "escalated_from_concern",
+    ],
     label: "Emergency Received",
     pendingHint: () => "Waiting to send",
   },
@@ -114,8 +139,7 @@ const PIPELINE: Array<{
     status: "routed",
     eventKeys: ["responder_assigned", "responder_reassigned"],
     label: "Responder Assigned",
-    pendingHint: (alert) =>
-      `Finding the nearest on-duty responder from the configured response unit for this ${alert.type.replace(/_/g, " ")} case...`,
+    pendingHint: assignedUnitWaitingText,
   },
   {
     status: "en_route",
@@ -152,7 +176,10 @@ function buildStatusTimeline(alert: EmergencyAlert): TimelineRow[] {
         description: event.note,
         at: event.created_at,
       }))
-  const byKey = new Map<string, { title: string; description: string; at: string }>()
+  const byKey = new Map<
+    string,
+    { title: string; description: string; at: string }
+  >()
   for (const entry of timeline) {
     if (!byKey.has(entry.event_key)) {
       byKey.set(entry.event_key, {
@@ -173,7 +200,7 @@ function buildStatusTimeline(alert: EmergencyAlert): TimelineRow[] {
 
   const reachedIndex = PIPELINE.reduce(
     (highest, step, index) => (hitFor(step.eventKeys) ? index : highest),
-    -1,
+    -1
   )
 
   const rows: TimelineRow[] = PIPELINE.map((step, index) => {
@@ -196,26 +223,30 @@ function buildStatusTimeline(alert: EmergencyAlert): TimelineRow[] {
       key: step.status,
       status: step.status,
       label: hit?.title || step.label,
-      note: hit?.description || (state === "pending" ? step.pendingHint(alert) : step.label),
-      time: hit?.at ?? (index === 0 && state !== "pending" ? alert.created_at : null),
+      note:
+        hit?.description ||
+        (state === "pending" ? step.pendingHint(alert) : step.label),
+      time:
+        hit?.at ??
+        (index === 0 && state !== "pending" ? alert.created_at : null),
       state,
     }
   })
 
+  // Legacy records may still carry escalation_required. Treat them as the
+  // automated responder-search state; the server retries these records without
+  // handing them back to an official.
   if (alert.status === "escalation_required") {
-    const previousResponder = hadResponderAssignment(alert)
-    const escalationEvent = byKey.get("no_responder")
-    for (const row of rows) row.state = row.status === "submitted" ? "done" : "pending"
-    rows.splice(1, 0, {
-      key: "manual_dispatch",
-      status: "escalation_required",
-      label: previousResponder ? "Finding a new responder" : "Manual dispatch",
-      note: previousResponder
-        ? "An official is assigning another response team."
-        : "An official is finding an available response team.",
-      time: escalationEvent?.at ?? alert.updated_at,
-      state: "current",
-    })
+    for (const row of rows) {
+      row.state = row.status === "submitted" ? "done" : "pending"
+    }
+    const routingRow = rows.find((row) => row.status === "routed")
+    if (routingRow) {
+      routingRow.label = "Response unit assigned"
+      routingRow.note = assignedUnitWaitingText(alert)
+      routingRow.time = alert.updated_at
+      routingRow.state = "current"
+    }
   }
 
   const cancelHit = byKey.get("cancelled") ?? byKey.get("false_alarm")
@@ -234,12 +265,11 @@ function buildStatusTimeline(alert: EmergencyAlert): TimelineRow[] {
 }
 
 function statusText(alert: EmergencyAlert) {
-  const caseName = `this ${alert.type.replace(/_/g, " ")} case`
   switch (alert.status) {
     case "submitted":
-      return `Finding the nearest responder for ${caseName}.`
+      return assignedUnitWaitingText(alert)
     case "routing":
-      return `Finding the nearest responder for ${caseName}.`
+      return assignedUnitWaitingText(alert)
     case "routed":
       return "A responder has been assigned to your location."
     case "awaiting_acknowledgment":
@@ -263,9 +293,7 @@ function statusText(alert: EmergencyAlert) {
     case "transfer_required":
       return "Your case is being handed to a different response unit."
     case "escalation_required":
-      return hadResponderAssignment(alert)
-        ? "Your earlier responder is no longer assigned. An official is finding another response team."
-        : "No responder is assigned yet. An official is finding an available response team."
+      return assignedUnitWaitingText(alert)
     case "resolved":
       return "Emergency has been resolved."
     case "closed":
@@ -282,24 +310,36 @@ function statusText(alert: EmergencyAlert) {
 }
 
 function headline(alert: EmergencyAlert) {
-  if (["en_route", "nearby", "arrived"].includes(alert.status)) return "Help is on the way"
-  if (alert.status === "submitted" || alert.status === "routing") return "Finding your responder"
-  if (alert.status === "awaiting_acknowledgment" || alert.status === "acknowledged") return "Responder assigned"
-  if (alert.status === "backup_requested" || alert.status === "backup_assigned") return "Extra help on the way"
+  if (["en_route", "nearby", "arrived"].includes(alert.status))
+    return "Help is on the way"
+  if (alert.status === "submitted" || alert.status === "routing")
+    return "Response unit assigned"
+  if (
+    alert.status === "routed" ||
+    alert.status === "awaiting_acknowledgment" ||
+    alert.status === "acknowledged"
+  )
+    return "Responder assigned"
+  if (alert.status === "backup_requested" || alert.status === "backup_assigned")
+    return "Extra help on the way"
   if (alert.status === "in_progress") return "Response in progress"
   if (alert.status === "transfer_required") return "Transferring response"
   if (alert.status === "escalation_required") {
-    return hadResponderAssignment(alert) ? "Finding a new responder" : "Manual dispatch in progress"
+    return "Response unit assigned"
   }
   if (alert.status === "resident_safe") return "You reported safe"
   if (alert.status === "resolved") return "Emergency resolved"
-  if (alert.status === "closed" || alert.status === "cancelled") return "Alert closed"
+  if (alert.status === "closed" || alert.status === "cancelled")
+    return "Alert closed"
   if (alert.status === "false_alarm") return "False alarm"
   if (alert.status === "invalid") return "Invalid alert"
   return "Emergency active"
 }
 
-function distanceMeters(from: { lat: number; lng: number }, to: { lat: number; lng: number }) {
+function distanceMeters(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number }
+) {
   const earth = 6371000
   const toRad = (value: number) => (value * Math.PI) / 180
   const dLat = toRad(to.lat - from.lat)
@@ -307,12 +347,14 @@ function distanceMeters(from: { lat: number; lng: number }, to: { lat: number; l
   const lat1 = toRad(from.lat)
   const lat2 = toRad(to.lat)
   const a =
-    Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2
   return earth * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
 function formatDistance(meters: number) {
-  if (meters < 1000) return `${Math.max(20, Math.round(meters / 10) * 10)} m away`
+  if (meters < 1000)
+    return `${Math.max(20, Math.round(meters / 10) * 10)} m away`
   return `${(meters / 1000).toFixed(1)} km away`
 }
 
@@ -321,16 +363,18 @@ function formatEta(meters: number) {
   return `ETA ${minutes} min`
 }
 
-
 function pinIcon(L: typeof leaflet, color: string, size = 34) {
-  const d =
-    "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zM12 5.2a2.1 2.1 0 100 4.2 2.1 2.1 0 100-4.2zM12 10.5c-2.4 0-4.3 1.1-4.3 2.4 0 1.5 2.1 2.5 4.3 2.5s4.3-1 4.3-2.5c0-1.3-1.9-2.4-4.3-2.4z"
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="${size}" height="${size}"><path fill="${color}" fill-rule="evenodd" d="${d}"/></svg>`
   return L.divIcon({
-    className: "",
-    html: `<span style="display:block;line-height:0;filter:drop-shadow(0 3px 5px rgba(15,23,42,0.45))">${svg}</span>`,
+    className: "eboses-emergency-pin",
+    html: glyphPinHtml({
+      paths: GLYPHS.userResponder,
+      color,
+      size,
+      label: "You",
+      className: "is-you",
+    }),
     iconSize: [size, size],
-    iconAnchor: [size / 2, Math.round(size * 22 / 24)],
+    iconAnchor: [size / 2, size / 2],
   })
 }
 
@@ -358,6 +402,7 @@ function EmergencyTrackingMap({
   const leafletRef = useRef<typeof leaflet | null>(null)
   const responderMarkerRefs = useRef<Map<number, leaflet.Marker>>(new Map())
   const routeRef = useRef<RouteLayers | null>(null)
+  const routePointsRef = useRef<leaflet.LatLngTuple[]>([])
   const routeSigRef = useRef("")
   const fittedRef = useRef(false)
   const [mapReady, setMapReady] = useState(0)
@@ -378,6 +423,10 @@ function EmergencyTrackingMap({
         attributionControl: false,
         dragging: true,
         scrollWheelZoom: true,
+        touchZoom: true,
+        doubleClickZoom: true,
+        boxZoom: true,
+        keyboard: true,
       })
       mapRef.current = map
 
@@ -428,7 +477,13 @@ function EmergencyTrackingMap({
         : assignments
     const activeAssignments = isLive
       ? locatedAssignments.filter((a) =>
-          ["assigned", "acknowledged", "en_route", "arrived", "assisting"].includes(a.status),
+          [
+            "assigned",
+            "acknowledged",
+            "en_route",
+            "arrived",
+            "assisting",
+          ].includes(a.status)
         )
       : locatedAssignments
 
@@ -451,42 +506,104 @@ function EmergencyTrackingMap({
     }
 
     const signature = `${isLive ? "live" : "done"}|${activeAssignments
-      .map((a) => `${a.id}:${a.last_location?.latitude ?? ""},${a.last_location?.longitude ?? ""}`)
+      .map(
+        (a) =>
+          `${a.id}:${a.last_location?.latitude ?? ""},${a.last_location?.longitude ?? ""}`
+      )
       .join("|")}|${alert.route ? JSON.stringify(alert.route.geometry) : ""}`
     if (signature === routeSigRef.current) return
     routeSigRef.current = signature
 
     routeRef.current?.remove()
-    const destination: leaflet.LatLngTuple = [Number(alert.latitude), Number(alert.longitude)]
-    const primary = activeAssignments.find((item) => item.last_location)?.last_location ?? null
+    const destination: leaflet.LatLngTuple = [
+      Number(alert.latitude),
+      Number(alert.longitude),
+    ]
+    const primary =
+      activeAssignments.find((item) => item.last_location)?.last_location ??
+      null
     const { road, approach, connectors } = routeRenderGeometry(alert.route, {
       origin: primary
         ? [Number(primary.latitude), Number(primary.longitude)]
         : null,
       destination,
     })
-    routeRef.current = drawRoute(L, map, { road, approach, connectors, live: isLive })
+    routeRef.current = drawRoute(L, map, {
+      road,
+      approach,
+      connectors,
+      live: isLive,
+    })
+    routePointsRef.current = [
+      destination,
+      ...(primary
+        ? [
+            [
+              Number(primary.latitude),
+              Number(primary.longitude),
+            ] as leaflet.LatLngTuple,
+          ]
+        : []),
+      ...(routeRef.current?.points ?? []),
+    ]
 
     if (fittedRef.current) return
     fittedRef.current = true
     if (routeRef.current) {
-      map.fitBounds(L.latLngBounds(routeRef.current.points), { padding: [44, 44], maxZoom: 17 })
+      map.fitBounds(L.latLngBounds(routeRef.current.points), {
+        padding: [44, 44],
+        maxZoom: 17,
+      })
     } else if (!isLive && activeAssignments.length === 0) {
-      map.fitBounds(L.latLngBounds([destination]), { padding: [44, 44], maxZoom: 17 })
+      map.fitBounds(L.latLngBounds([destination]), {
+        padding: [44, 44],
+        maxZoom: 17,
+      })
     }
   }, [
     alert.id,
     alert.latitude,
     alert.longitude,
     alert.assignments,
+    alert.current_assignment,
     alert.route,
     isLive,
     mapReady,
   ])
 
+  function reroute() {
+    const map = mapRef.current
+    const L = leafletRef.current
+    if (!map || !L) return
+    const points = routePointsRef.current
+    if (points.length > 1) {
+      map.fitBounds(L.latLngBounds(points), {
+        padding: [44, 44],
+        maxZoom: 17,
+        animate: true,
+      })
+    } else {
+      map.setView(
+        [Number(alert.latitude), Number(alert.longitude)],
+        Math.max(map.getZoom(), 16),
+        { animate: true }
+      )
+    }
+  }
+
   return (
     <div className={cn("relative h-full w-full", className)}>
       <div ref={containerRef} className="h-full w-full bg-tint" />
+      <button
+        type="button"
+        onClick={reroute}
+        disabled={!mapReady}
+        aria-label="Reroute"
+        title="Reroute"
+        className="absolute top-3 right-3 z-10 flex size-10 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-700 shadow-md transition-colors hover:bg-neutral-50 disabled:opacity-60"
+      >
+        <RouteIcon className="size-5" strokeWidth={1.9} />
+      </button>
     </div>
   )
 }
@@ -515,13 +632,16 @@ function Section({
       {label ? (
         <p className="text-[12px] font-semibold text-neutral-500">{label}</p>
       ) : null}
-      <div className={cn("flex min-h-0 flex-col", label ? "mt-3" : undefined)}>{children}</div>
+      <div className={cn("flex min-h-0 flex-col", label ? "mt-3" : undefined)}>
+        {children}
+      </div>
     </section>
   )
 }
 
 function StatusTimeline({ alert }: { alert: EmergencyAlert }) {
   const rows = buildStatusTimeline(alert)
+  const settled = ["resolved", "closed"].includes(alert.status)
   return (
     <ol className="sos-timeline relative">
       {rows.map((row, index) => {
@@ -533,27 +653,41 @@ function StatusTimeline({ alert }: { alert: EmergencyAlert }) {
         // and dotted from there on.
         const filled = next ? next.state !== "pending" : false
         return (
-          <li key={row.key} className="sos-timeline__row relative flex gap-3 pb-4 last:pb-0">
+          <li
+            key={row.key}
+            className="sos-timeline__row relative flex gap-3 pb-4 last:pb-0"
+          >
             {!isLast ? (
               <span
                 aria-hidden
                 className={cn(
-                  "absolute bottom-0 left-[11px] top-7 w-px",
-                  filled ? "bg-brand-orange/55" : "sos-timeline__ahead",
+                  "absolute top-7 bottom-0 left-[11px] w-px",
+                  filled
+                    ? settled
+                      ? "bg-neutral-400/55"
+                      : "bg-brand-orange/55"
+                    : "sos-timeline__ahead"
                 )}
               />
             ) : null}
             <span
               className={cn(
                 "relative z-[1] mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-[10px]",
-                row.state === "done" && "bg-brand-navy text-white",
-                row.state === "current" && "sos-timeline__now bg-brand-orange text-white",
-                row.state === "pending" && "border-2 border-neutral-200 bg-white text-neutral-300",
-                row.state === "cancelled" && "bg-sos text-white",
+                row.state === "done" &&
+                  (settled && row.status === "resolved"
+                    ? "bg-neutral-500 text-white"
+                    : "bg-brand-navy text-white"),
+                row.state === "current" &&
+                  "sos-timeline__now bg-brand-orange text-white",
+                row.state === "pending" &&
+                  "border-2 border-neutral-200 bg-white text-neutral-300",
+                row.state === "cancelled" && "bg-sos text-white"
               )}
               aria-hidden
             >
-              {row.state === "done" ? (
+              {settled && row.status === "resolved" ? (
+                <CircleCheckIcon className="size-3.5" strokeWidth={3} />
+              ) : row.state === "done" ? (
                 <CheckIcon className="size-3.5" strokeWidth={3} />
               ) : row.state === "current" ? (
                 <RadioIcon className="size-3.5" strokeWidth={2.5} />
@@ -568,7 +702,9 @@ function StatusTimeline({ alert }: { alert: EmergencyAlert }) {
                 <p
                   className={cn(
                     "text-[13px] font-semibold",
-                    row.state === "pending" ? "text-neutral-400" : "text-neutral-900",
+                    row.state === "pending"
+                      ? "text-neutral-400"
+                      : "text-neutral-900"
                   )}
                 >
                   {row.label}
@@ -579,17 +715,21 @@ function StatusTimeline({ alert }: { alert: EmergencyAlert }) {
                   ) : null}
                 </p>
                 {row.time ? (
-                  <time className="shrink-0 text-[11px] tabular-nums text-neutral-400">
+                  <time className="shrink-0 text-[11px] text-neutral-400 tabular-nums">
                     {formatClock(row.time)}
                   </time>
                 ) : row.state === "pending" ? (
-                  <span className="shrink-0 text-[11px] text-neutral-300">Pending</span>
+                  <span className="shrink-0 text-[11px] text-neutral-300">
+                    Pending
+                  </span>
                 ) : null}
               </div>
               <p
                 className={cn(
                   "mt-0.5 text-[12px] leading-5",
-                  row.state === "pending" ? "text-neutral-400" : "text-neutral-500",
+                  row.state === "pending"
+                    ? "text-neutral-400"
+                    : "text-neutral-500"
                 )}
               >
                 {row.note}
@@ -621,15 +761,19 @@ function MilestoneStepper({ alert }: { alert: EmergencyAlert }) {
     const row = rows.find((row) => row.status === status)
     return row ? { ...row, short } : null
   }).filter((row): row is TimelineRow & { short: string } => Boolean(row))
-  const reachedCount = milestones.filter((row) => row.state !== "pending").length
+  const reachedCount = milestones.filter(
+    (row) => row.state !== "pending"
+  ).length
 
   return (
     <div>
       <div className="relative">
-        <div className="absolute left-[10%] right-[10%] top-[9px] h-0.5 rounded-full bg-neutral-200" />
+        <div className="absolute top-[9px] right-[10%] left-[10%] h-0.5 rounded-full bg-neutral-200" />
         <div
-          className="absolute left-[10%] top-[9px] h-0.5 rounded-full bg-brand-navy transition-all duration-500"
-          style={{ width: `calc(80% * ${Math.max(0, reachedCount - 1) / Math.max(1, milestones.length - 1)})` }}
+          className="absolute top-[9px] left-[10%] h-0.5 rounded-full bg-brand-navy transition-all duration-500"
+          style={{
+            width: `calc(80% * ${Math.max(0, reachedCount - 1) / Math.max(1, milestones.length - 1)})`,
+          }}
         />
         <div className="relative z-[1] flex w-full">
           {milestones.map((row) => (
@@ -638,9 +782,11 @@ function MilestoneStepper({ alert }: { alert: EmergencyAlert }) {
                 className={cn(
                   "flex size-5 items-center justify-center rounded-full",
                   row.state === "done" && "bg-brand-navy text-white",
-                  row.state === "current" && "sos-timeline__now bg-brand-orange",
-                  row.state === "pending" && "border-2 border-neutral-200 bg-white",
-                  row.state === "cancelled" && "bg-sos text-white",
+                  row.state === "current" &&
+                    "sos-timeline__now bg-brand-orange",
+                  row.state === "pending" &&
+                    "border-2 border-neutral-200 bg-white",
+                  row.state === "cancelled" && "bg-sos text-white"
                 )}
                 aria-hidden
               >
@@ -658,20 +804,23 @@ function MilestoneStepper({ alert }: { alert: EmergencyAlert }) {
       </div>
       <div className="mt-2.5 flex w-full justify-between">
         {milestones.map((row) => (
-          <span key={row.key} className="flex flex-1 flex-col items-center gap-0.5 text-center">
+          <span
+            key={row.key}
+            className="flex flex-1 flex-col items-center gap-0.5 text-center"
+          >
             <span
               className={cn(
-                "text-[10px] font-medium leading-4",
+                "text-[10px] leading-4 font-medium",
                 row.state === "current"
                   ? "font-semibold text-neutral-900"
                   : row.state === "pending"
                     ? "text-neutral-400"
-                    : "text-neutral-600",
+                    : "text-neutral-600"
               )}
             >
               {row.short}
             </span>
-            <span className="block h-3 text-[9px] leading-3 tabular-nums text-neutral-400">
+            <span className="block h-3 text-[9px] leading-3 text-neutral-400 tabular-nums">
               {row.time && row.state !== "pending" ? formatClock(row.time) : ""}
             </span>
           </span>
@@ -710,8 +859,10 @@ function DetailsColumn({
   milestoneMode?: boolean
 }) {
   const live = ACTIVE_EMERGENCY_STATUSES.has(alert.status)
+  const settled = ["resolved", "closed"].includes(alert.status)
   const address = alert.address?.trim() || alert.barangay || "Pinned location"
-  const responderAssignment = alert.current_assignment ?? (alert.assignments ?? [])[0] ?? null
+  const responderAssignment =
+    alert.current_assignment ?? alert.active_assignments?.[0] ?? null
   const reach =
     distance !== null
       ? live
@@ -725,28 +876,41 @@ function DetailsColumn({
         ? "Connecting…"
         : "Polling for updates"
     : "Final status"
-  const [lightbox, setLightbox] = useState<{ items: MediaPreviewItem[]; index: number } | null>(null)
+  const [lightbox, setLightbox] = useState<{
+    items: MediaPreviewItem[]
+    index: number
+  } | null>(null)
   const mediaItems: MediaPreviewItem[] = (alert.media ?? []).map((media) =>
-    toMediaPreviewItem(media.raw_url, media.original_filename, media.mime_type),
+    toMediaPreviewItem(media.raw_url, media.original_filename, media.mime_type)
   )
 
   return (
     <div className="flex flex-1 flex-col pb-2">
       <div className="pb-4">
-        <p className="line-clamp-2 min-h-6 text-base font-semibold leading-6 text-neutral-900">{statusText(alert)}</p>
-        <p className="mt-1 truncate text-[13px] leading-5 text-neutral-500">{address}</p>
-        <div className="mt-2 flex min-h-5 flex-nowrap items-center whitespace-nowrap text-[13px]">
-          {reach ? <span className="shrink-0 tabular-nums text-neutral-600">{reach}</span> : null}
+        <p className="line-clamp-2 min-h-6 text-base leading-6 font-semibold text-neutral-900">
+          {statusText(alert)}
+        </p>
+        <p className="mt-1 truncate text-[13px] leading-5 text-neutral-500">
+          {address}
+        </p>
+        <div className="mt-2 flex min-h-5 flex-nowrap items-center text-[13px] whitespace-nowrap">
+          {reach ? (
+            <span className="shrink-0 text-neutral-600 tabular-nums">
+              {reach}
+            </span>
+          ) : null}
           {reach ? (
             <span aria-hidden className="mx-2 text-neutral-300">
               ·
             </span>
           ) : null}
-          <span className="min-w-0 truncate text-neutral-500">{connection}</span>
+          <span className="min-w-0 truncate text-neutral-500">
+            {connection}
+          </span>
         </div>
       </div>
 
-      {milestoneMode && alert.status !== "escalation_required" ? (
+      {milestoneMode && !settled ? (
         <Section label="Status">
           <MilestoneStepper alert={alert} />
         </Section>
@@ -760,20 +924,23 @@ function DetailsColumn({
         <Section label="Responder" className="mt-auto pt-6">
           <div className="flex items-center gap-3">
             <Avatar>
-              <AvatarFallback>{initialsFor(responderAssignment.responder)}</AvatarFallback>
+              <AvatarFallback>
+                {initialsFor(responderAssignment.responder)}
+              </AvatarFallback>
             </Avatar>
             <div className="min-w-0 flex-1">
               <p className="truncate text-[13px] font-semibold text-neutral-900">
                 {responderAssignment.responder.full_name}
               </p>
               <p className="mt-0.5 truncate text-[12px] text-neutral-500">
-                {responderAssignment.assigned_unit?.short_name || roleLabel(responderAssignment.responder)}
+                {responderAssignment.assigned_unit?.short_name ||
+                  roleLabel(responderAssignment.responder)}
                 {" · "}
                 {ASSIGNMENT_STATUS_LABELS[responderAssignment.status] ??
                   responderAssignment.status.replace(/_/g, " ")}
               </p>
             </div>
-            <time className="shrink-0 text-[11px] tabular-nums text-neutral-400">
+            <time className="shrink-0 text-[11px] text-neutral-400 tabular-nums">
               {formatClock(responderAssignment.assigned_at)}
             </time>
             {live ? (
@@ -801,7 +968,9 @@ function DetailsColumn({
                   key={media.id}
                   type="button"
                   className="overflow-hidden rounded-[18px] border border-neutral-200 text-left"
-                  onClick={() => setLightbox({ items: mediaItems, index: mediaIndex })}
+                  onClick={() =>
+                    setLightbox({ items: mediaItems, index: mediaIndex })
+                  }
                 >
                   <AuthenticatedMediaImage
                     src={media.preview_url}
@@ -814,12 +983,14 @@ function DetailsColumn({
                   key={media.id}
                   type="button"
                   className="flex h-24 items-center justify-center gap-2 rounded-[18px] border border-neutral-200 bg-neutral-100 text-[12px] font-semibold text-neutral-700 transition-colors hover:border-neutral-300"
-                  onClick={() => setLightbox({ items: mediaItems, index: mediaIndex })}
+                  onClick={() =>
+                    setLightbox({ items: mediaItems, index: mediaIndex })
+                  }
                 >
                   <PlayIcon className="size-4" />
                   Video evidence
                 </button>
-              ),
+              )
             )}
           </div>
         </Section>
@@ -831,7 +1002,9 @@ function DetailsColumn({
             {appealHistory.map((appeal) => (
               <div key={appeal.id} className="text-[12px] leading-5">
                 <div className="flex justify-between gap-2">
-                  <span className="font-semibold text-neutral-900">Review {appeal.status}</span>
+                  <span className="font-semibold text-neutral-900">
+                    Review {appeal.status}
+                  </span>
                   <span className="text-neutral-400">
                     {formatClock(appeal.decided_at || appeal.created_at)}
                   </span>
@@ -893,23 +1066,29 @@ export function EmergencyTrackingSheet({
   const alertRef = useRef<EmergencyAlert | null>(initialAlert)
   const [appealReason, setAppealReason] = useState("")
   const [appealBusy, setAppealBusy] = useState(false)
-  const [cancelOpen, setCancelOpen] = useState(false)
-  const [cancelReason, setCancelReason] = useState("")
-  const [cancelBusy, setCancelBusy] = useState(false)
-  const [connectionState, setConnectionState] = useState<"connecting" | "live" | "degraded">(
-    initialAlert && ACTIVE_EMERGENCY_STATUSES.has(initialAlert.status) ? "connecting" : "live"
+  const [connectionState, setConnectionState] = useState<
+    "connecting" | "live" | "degraded"
+  >(
+    initialAlert && ACTIVE_EMERGENCY_STATUSES.has(initialAlert.status)
+      ? "connecting"
+      : "live"
   )
-  const [chatMessage, setChatMessage] = useState<EmergencyChatMessage | null>(null)
+  const [chatMessage, setChatMessage] = useState<EmergencyChatMessage | null>(
+    null
+  )
   const [chatView, setChatView] = useState(false)
   const [callingResponder, setCallingResponder] = useState(false)
 
-  const adoptAlert = useCallback((nextAlert: EmergencyAlert) => {
-    if (!isNewerEmergencyAlert(alertRef.current, nextAlert)) return
-    const normalized = normalizeEmergencyAlert(nextAlert)
-    alertRef.current = normalized
-    setAlert(normalized)
-    onAlertChange?.(normalized)
-  }, [onAlertChange])
+  const adoptAlert = useCallback(
+    (nextAlert: EmergencyAlert) => {
+      if (!isNewerEmergencyAlert(alertRef.current, nextAlert)) return
+      const normalized = normalizeEmergencyAlert(nextAlert)
+      alertRef.current = normalized
+      setAlert(normalized)
+      onAlertChange?.(normalized)
+    },
+    [onAlertChange]
+  )
 
   // Reset transient sheet state when the sheet closes, and adopt a newly
   // selected alert — render-adjust instead of sync setStates inside effects.
@@ -928,8 +1107,6 @@ export function EmergencyTrackingSheet({
       setWide(false)
       setChatMessage(null)
       setChatView(false)
-      setCancelOpen(false)
-      setCancelReason("")
     }
   }
 
@@ -961,7 +1138,13 @@ export function EmergencyTrackingSheet({
   }, [open])
 
   useEffect(() => {
-    if (!open || !alertId || !alertStatus || !ACTIVE_EMERGENCY_STATUSES.has(alertStatus)) return
+    if (
+      !open ||
+      !alertId ||
+      !alertStatus ||
+      !ACTIVE_EMERGENCY_STATUSES.has(alertStatus)
+    )
+      return
     const refreshAlert = async () => {
       try {
         const nextAlert = await getEmergency(alertId)
@@ -973,7 +1156,7 @@ export function EmergencyTrackingSheet({
     void refreshAlert()
     const interval = window.setInterval(
       () => void refreshAlert(),
-      connectionState === "live" ? 15000 : 5000,
+      connectionState === "live" ? 15000 : 5000
     )
     window.addEventListener("focus", refreshAlert)
     return () => {
@@ -983,7 +1166,13 @@ export function EmergencyTrackingSheet({
   }, [open, alertId, alertStatus, adoptAlert, connectionState])
 
   useEffect(() => {
-    if (!open || !alertId || !alertStatus || !ACTIVE_EMERGENCY_STATUSES.has(alertStatus)) return
+    if (
+      !open ||
+      !alertId ||
+      !alertStatus ||
+      !ACTIVE_EMERGENCY_STATUSES.has(alertStatus)
+    )
+      return
     let socket: WebSocket | null = null
     let reconnectTimer: number | undefined
     let closedByComponent = false
@@ -996,14 +1185,16 @@ export function EmergencyTrackingSheet({
         const ticket = await websocketTicket()
         if (closedByComponent) return
         socket = new WebSocket(
-          websocketUrl(`/ws/emergencies/${alertId}/tracking/?ticket=${encodeURIComponent(ticket)}`),
+          websocketUrl(
+            `/ws/emergencies/${alertId}/tracking/?ticket=${encodeURIComponent(ticket)}`
+          )
         )
       } catch {
         setConnectionState("degraded")
         reconnectAttempts += 1
         reconnectTimer = window.setTimeout(
           () => void connect(),
-          Math.min(30_000, 1500 * 2 ** reconnectAttempts),
+          Math.min(30_000, 1500 * 2 ** reconnectAttempts)
         )
         return
       }
@@ -1033,7 +1224,7 @@ export function EmergencyTrackingSheet({
           reconnectAttempts += 1
           reconnectTimer = window.setTimeout(
             () => void connect(),
-            Math.min(30_000, 1500 * 2 ** reconnectAttempts),
+            Math.min(30_000, 1500 * 2 ** reconnectAttempts)
           )
         }
       }
@@ -1051,37 +1242,24 @@ export function EmergencyTrackingSheet({
   if (!open || !alert || typeof document === "undefined") return null
 
   const isLive = ACTIVE_EMERGENCY_STATUSES.has(alert.status)
+  const settled = ["resolved", "closed"].includes(alert.status)
   const lastLocation = isLive
-    ? alert.current_assignment?.last_location ?? null
-    : alert.assignments?.[0]?.last_location ?? null
-  const distance =
-    lastLocation
-      ? distanceMeters(
-          { lat: Number(lastLocation.latitude), lng: Number(lastLocation.longitude) },
-          { lat: Number(alert.latitude), lng: Number(alert.longitude) },
-        )
-      : null
+    ? (alert.current_assignment?.last_location ?? null)
+    : (alert.assignments?.[0]?.last_location ?? null)
+  const distance = lastLocation
+    ? distanceMeters(
+        {
+          lat: Number(lastLocation.latitude),
+          lng: Number(lastLocation.longitude),
+        },
+        { lat: Number(alert.latitude), lng: Number(alert.longitude) }
+      )
+    : null
   const pendingAppeal = alert.appeals?.find((a) => a.status === "submitted")
-  const canAppeal = Boolean(alert && ["resolved", "cancelled"].includes(alert.status) && !pendingAppeal)
+  const canAppeal = Boolean(
+    alert && ["resolved", "cancelled"].includes(alert.status) && !pendingAppeal
+  )
   const appealHistory = alert.appeals ?? []
-  const canCancel = ["submitted", "routing", "routed", "awaiting_acknowledgment"].includes(alert.status)
-
-  async function submitCancellation() {
-    const reason = cancelReason.trim()
-    if (!alert || reason.length < 10) return
-    setCancelBusy(true)
-    try {
-      const nextAlert = await cancelEmergency(alert.id, reason)
-      adoptAlert(nextAlert)
-      setCancelOpen(false)
-      setCancelReason("")
-      toast.success("Emergency alert cancelled")
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not cancel this emergency alert.")
-    } finally {
-      setCancelBusy(false)
-    }
-  }
 
   async function submitAppeal() {
     if (!alert || !appealReason.trim()) return
@@ -1093,7 +1271,11 @@ export function EmergencyTrackingSheet({
       setAppealReason("")
       toast.success("Review request submitted")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not submit review request.")
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not submit review request."
+      )
     } finally {
       setAppealBusy(false)
     }
@@ -1106,7 +1288,11 @@ export function EmergencyTrackingSheet({
       const { phone_number } = await revealResponderContact(alert.id)
       window.location.href = `tel:${phone_number}`
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not get the responder's number.")
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not get the responder's number."
+      )
     } finally {
       setCallingResponder(false)
     }
@@ -1129,9 +1315,12 @@ export function EmergencyTrackingSheet({
     />
   )
 
-  const chatAvailable = hasActiveResponder(alert) && alert.status !== "submitted"
+  const chatAvailable =
+    hasActiveResponder(alert) && alert.status !== "submitted"
   const chatPaneLabel = (
-    <p className="pb-3 text-[15px] font-bold leading-5 text-neutral-900">Chat</p>
+    <p className="pb-3 text-[15px] leading-5 font-bold text-neutral-900">
+      Chat
+    </p>
   )
   const chatPanel = (
     <EmergencyChatPanel
@@ -1152,7 +1341,7 @@ export function EmergencyTrackingSheet({
         type="button"
         aria-label="Close tracking"
         onClick={() => onOpenChange(false)}
-        className="absolute inset-0 bg-black/50 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200"
+        className="motion-safe:animate-in motion-safe:fade-in absolute inset-0 bg-black/50 motion-safe:duration-200"
       />
 
       <div
@@ -1163,19 +1352,32 @@ export function EmergencyTrackingSheet({
         className={cn(
           "relative z-10 flex flex-col overflow-hidden bg-white text-neutral-900 shadow-2xl",
           "max-lg:fixed max-lg:inset-0 max-lg:h-full max-lg:w-full max-lg:rounded-none",
-          "lg:absolute lg:left-1/2 lg:top-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2",
-          "lg:h-[min(88dvh,820px)] lg:w-[min(920px,92vw)] lg:max-h-[92dvh] lg:max-w-[94vw]",
+          "lg:absolute lg:top-1/2 lg:left-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2",
+          "lg:h-[min(88dvh,820px)] lg:max-h-[92dvh] lg:w-[min(920px,92vw)] lg:max-w-[94vw]",
           "lg:min-h-[380px] lg:min-w-[420px] lg:rounded-[28px] lg:border lg:border-neutral-200",
-          "lg:resize lg:overflow-auto dialog-resize-grip",
+          "dialog-resize-grip lg:resize lg:overflow-auto",
           "motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-200"
         )}
       >
-        <div className="flex shrink-0 items-start gap-2 px-5 pb-3 pt-5 max-lg:pt-[max(1.25rem,env(safe-area-inset-top))]">
+        <div className="flex shrink-0 items-start gap-2 px-5 pt-5 pb-3 max-lg:pt-[max(1.25rem,env(safe-area-inset-top))]">
           <div className="min-w-0 flex-1 pt-0.5">
-            <p className={cn("text-[11px] font-bold uppercase tracking-wide", isLive ? "text-sos" : "text-neutral-500")}>
-              {isLive ? "Live · Alert" : alert.status === "resolved" ? "Resolved" : "Closed"}
+            <p
+              className={cn(
+                "text-[11px] font-bold tracking-wide uppercase",
+                isLive
+                  ? "text-sos"
+                  : settled
+                    ? "text-neutral-500"
+                    : "text-neutral-500"
+              )}
+            >
+              {isLive
+                ? "Live · Alert"
+                : alert.status === "resolved"
+                  ? "Resolved"
+                  : "Closed"}
             </p>
-            <h2 className="mt-0.5 truncate text-[22px] font-bold leading-[1.2] tracking-tight text-neutral-900">
+            <h2 className="mt-0.5 truncate text-[22px] leading-[1.2] font-bold tracking-tight text-neutral-900">
               {headline(alert)}
             </h2>
           </div>
@@ -1238,53 +1440,7 @@ export function EmergencyTrackingSheet({
         )}
 
         <div className="shrink-0 border-t border-neutral-200 bg-white px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-          {cancelOpen && canCancel ? (
-            <div className="mb-3 rounded-[18px] border border-sos/30 bg-sos/10 p-3">
-              <label htmlFor="emergency-cancel-reason" className="text-[13px] font-semibold text-neutral-900">
-                Why are you cancelling?
-              </label>
-              <p className="mt-1 text-[11px] leading-4 text-neutral-500">
-                Assigned responders will see this reason. Enter at least 10 characters.
-              </p>
-              <textarea
-                id="emergency-cancel-reason"
-                value={cancelReason}
-                onChange={(event) => setCancelReason(event.target.value.slice(0, 500))}
-                placeholder="Example: Sent by accident; everyone here is safe."
-                className="mt-2 min-h-20 w-full resize-none rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-3 py-2 text-[13px] text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-sos"
-              />
-              <div className="mt-2 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCancelOpen(false)
-                    setCancelReason("")
-                  }}
-                  className="h-11 flex-1 rounded-full border border-neutral-200 text-[13px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-50"
-                >
-                  Keep alert
-                </button>
-                <button
-                  type="button"
-                  disabled={cancelBusy || cancelReason.trim().length < 10}
-                  onClick={() => void submitCancellation()}
-                  className="h-11 flex-1 rounded-full bg-sos text-[13px] font-semibold text-white transition-all hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45"
-                >
-                  {cancelBusy ? "Cancelling…" : "Confirm cancel"}
-                </button>
-              </div>
-            </div>
-          ) : null}
           <div className="flex gap-2">
-            {canCancel && !cancelOpen ? (
-              <button
-                type="button"
-                onClick={() => setCancelOpen(true)}
-                className="h-12 flex-1 rounded-full border border-sos/40 text-[15px] font-semibold text-sos transition-colors hover:bg-sos/10"
-              >
-                Cancel alert
-              </button>
-            ) : null}
             <button
               type="button"
               onClick={() => onOpenChange(false)}
@@ -1295,9 +1451,11 @@ export function EmergencyTrackingSheet({
           </div>
           {isLive && hasActiveResponder(alert) ? (
             <p className="mt-2 text-center text-[11px] text-neutral-400">
-              A responder is already handling this alert. Contact them in chat if circumstances change.
+              A responder is already handling this alert. Contact them in chat
+              if circumstances change.
             </p>
-          ) : isLive && alert.status === "escalation_required" ? (
+          ) : isLive &&
+            ["routing", "escalation_required"].includes(alert.status) ? (
             <p className="mt-2 text-center text-[11px] text-neutral-500">
               {hadResponderAssignment(alert)
                 ? "Keep this page open. Chat will reopen when a new responder is assigned."
@@ -1307,6 +1465,6 @@ export function EmergencyTrackingSheet({
         </div>
       </div>
     </div>,
-    document.body,
+    document.body
   )
 }

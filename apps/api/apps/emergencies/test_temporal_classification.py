@@ -16,6 +16,11 @@ class TemporalClassificationTests(TestCase):
             code="fire",
             defaults={"label": "Fire", "is_active": True},
         )
+        EmergencyCategory.objects.get_or_create(
+            community=None,
+            code="disaster",
+            defaults={"label": "Disaster", "is_active": True},
+        )
 
     def _result(self, text, **changes):
         payload = {
@@ -72,6 +77,18 @@ class TemporalClassificationTests(TestCase):
         self.assertIn(result.details["incident_timing"], {"planned", "hypothetical"})
         self.assertFalse(result.details["urgent_attention"])
         self.assertEqual(result.details["matched_emergency_type"], "")
+
+    def test_civic_hazard_does_not_become_generic_disaster(self):
+        result = self._result(
+            "Ongoing disaster around Narra Street. May nakalaylay na wire galing sa poste, "
+            "paki-alis agad to baka may madisgrasya pa.",
+            matched_emergency_type="disaster",
+            emergency_routing_reason="The report sounds dangerous.",
+        )
+
+        self.assertEqual(result.details["matched_emergency_type"], "")
+        self.assertFalse(result.details["urgent_attention"])
+        self.assertEqual(result.details["recommended_action"], "accept")
 
     def test_filipino_current_and_ended_phrases(self):
         self.assertEqual(infer_incident_timing("May sunog ngayon, nasusunog pa ang bahay.")[0], "ongoing")

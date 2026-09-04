@@ -6,6 +6,7 @@ export interface QueuedGpsPing {
   longitude: number
   /** Absent when the fix was restored from storage without one. */
   accuracy?: number
+  at?: number
 }
 
 const STORAGE_KEY = "eboses:offline-gps-pings"

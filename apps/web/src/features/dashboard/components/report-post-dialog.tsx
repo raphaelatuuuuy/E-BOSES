@@ -145,7 +145,7 @@ const REPORT_CATEGORIES: ReportCategory[] = [
     children: [
       {
         id: "outside_area",
-        title: "Outside Marikina Heights",
+        title: "Outside the supported community area",
         description: "Issue is not in our barangay service area",
       },
       {

@@ -1,3 +1,5 @@
+import json
+
 from django.contrib.auth import get_user_model
 from datetime import datetime
 
@@ -16,12 +18,27 @@ from apps.emergencies.models import EmergencyAlert, EmergencyMedia, WitnessNotif
 from .models import BrowserPushSubscription, Notification
 from .selectors import notification_queryset
 from .services import (
+    browser_push_extra_headers,
     broadcast_notification,
     create_user_notification,
     notification_display_payload,
     notify_status_change,
     send_browser_push,
 )
+
+
+class BrowserPushHeaderTests(TestCase):
+    def test_android_chromium_push_requests_wake_background_worker(self):
+        self.assertEqual(
+            browser_push_extra_headers("https://fcm.googleapis.com/wp/example"),
+            {"Urgency": "high"},
+        )
+
+    def test_windows_push_keeps_wns_header_and_high_urgency(self):
+        self.assertEqual(
+            browser_push_extra_headers("https://wns2-bl2p.notify.windows.com/w/example"),
+            {"Urgency": "high", "X-WNS-Type": "wns/raw"},
+        )
 from .tickets import consume_websocket_ticket, issue_websocket_ticket
 
 
@@ -87,6 +104,21 @@ class NotificationRealtimeTests(TestCase):
             )
 
         deliver.assert_called_once_with(notification.pk)
+
+    @override_settings(IS_LOCAL_DEVELOPMENT=True, IS_TEST_RUN=False)
+    @patch("apps.notifications.tasks.deliver_notification_task.delay")
+    @patch("apps.notifications.tasks.deliver_notification_task.run")
+    def test_local_notification_delivery_does_not_wait_for_default_worker(self, run, delay):
+        with self.captureOnCommitCallbacks(execute=True):
+            notification = create_user_notification(
+                recipient=self.user,
+                type=Notification.Type.CHAT_MESSAGE,
+                title="New message on your report",
+                body="An official replied.",
+            )
+
+        run.assert_called_once_with(notification.pk)
+        delay.assert_not_called()
 
     @patch("apps.notifications.services.send_browser_push")
     @patch("apps.notifications.services._broadcast")
@@ -336,6 +368,58 @@ class NotificationPreferenceAPITests(APITestCase):
         self.assertEqual(payload["context"]["department"]["id"], department.pk)
         self.assertEqual(payload["context"]["response"]["assigned_unit"]["id"], department.pk)
         self.assertIn(department.name, payload["body"])
+
+    def test_browser_push_payload_stays_below_provider_size_limit(self):
+        user = self.create_verified_user("compact-push")
+        ensure_test_profile(user, first_name="Milagros", last_name="Dizon")
+        concern = Concern.objects.create(
+            reporter=user,
+            community=active_test_community(),
+            title="A community report with a message update",
+        )
+        notification = Notification.objects.create(
+            recipient=user,
+            concern=concern,
+            type=Notification.Type.CHAT_MESSAGE,
+            title="New message on your report",
+            body="Nag-padala na po ako ng tao, para inspeksyunin yung lugar.",
+        )
+
+        payload = notification_display_payload(
+            notification,
+            serialized={"unused_full_notification": "x" * 5000},
+        )
+
+        self.assertLess(len(json.dumps(payload, default=str).encode("utf-8")), 3500)
+        self.assertNotIn("notification", payload)
+        self.assertNotIn("context", payload["data"])
+
+    def test_each_browser_notification_has_a_unique_visible_tag(self):
+        user = self.create_verified_user("unique-push-tags")
+        concern = Concern.objects.create(
+            reporter=user,
+            community=active_test_community(),
+            title="Report conversation",
+        )
+        first = Notification.objects.create(
+            recipient=user,
+            concern=concern,
+            type=Notification.Type.CHAT_MESSAGE,
+            title="First message",
+        )
+        second = Notification.objects.create(
+            recipient=user,
+            concern=concern,
+            type=Notification.Type.CHAT_MESSAGE,
+            title="Second message",
+        )
+
+        first_payload = notification_display_payload(first)
+        second_payload = notification_display_payload(second)
+
+        self.assertNotEqual(first_payload["tag"], second_payload["tag"])
+        self.assertTrue(first_payload["renotify"])
+        self.assertTrue(second_payload["renotify"])
 
     def test_responder_dispatch_uses_dynamic_address_without_internal_sos_id(self):
         User = get_user_model()
@@ -626,6 +710,37 @@ class NotificationPreferenceAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data[0]["action_url"], "/dashboard/responders/map")
+
+    def test_responder_emergency_notification_targets_dispatch_tracker(self):
+        User = get_user_model()
+        reporter = self.create_verified_user("responder-emergency-reporter")
+        responder = User.objects.create_user(
+            email="emergency-notification-responder@example.com",
+            phone_number="+639353333391",
+            password="Str0ng!Pass123",
+            role=User.Role.FIRST_RESPONDER,
+            status=User.Status.VERIFIED,
+        )
+        emergency = EmergencyAlert.objects.create(
+            reporter=reporter,
+            type=EmergencyAlert.Type.FIRE,
+            barangay="Marikina Heights",
+        )
+        Notification.objects.create(
+            recipient=responder,
+            emergency=emergency,
+            type=Notification.Type.EMERGENCY_ROUTED,
+            title="Emergency assigned",
+        )
+        self.client.force_authenticate(responder)
+
+        response = self.client.get("/api/notifications/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data[0]["action_url"],
+            f"/dashboard/responders/dispatch?alert={emergency.pk}",
+        )
 
     def test_realtime_ticket_is_single_use(self):
         user = self.create_verified_user("ticket")

@@ -33,6 +33,7 @@ User = get_user_model()
 FACE_BOX = {"class": "face", "x": 400, "y": 300, "width": 120, "height": 140}
 PLATE_BOX = {"class": "license plate", "x": 200, "y": 460, "width": 160, "height": 60}
 BLOOD_BOX = {"class": "blood", "x": 600, "y": 200, "width": 100, "height": 90}
+STREET_SIGN_BOX = {"class": "street sign", "x": 600, "y": 200, "width": 150, "height": 90}
 
 
 def sam3_payload(*boxes):
@@ -68,6 +69,11 @@ class Sam3GateTests(TestCase):
 
     def test_no_suspicion_means_no_scan(self):
         details = gemma_result(category="environment", image_review_succeeded=True).details
+        self.assertEqual(sam3_classes_for(details), [])
+        self.assertFalse(should_run_sam3(image_uploaded=True, gemma_image_review_succeeded=True, gemma_result=details))
+
+    def test_non_blurrable_object_never_reaches_sam3(self):
+        details = privacy_scan_result(classes=["street sign"]).details
         self.assertEqual(sam3_classes_for(details), [])
         self.assertFalse(should_run_sam3(image_uploaded=True, gemma_image_review_succeeded=True, gemma_result=details))
 
@@ -167,6 +173,7 @@ class PipelineQueuesPrivacyWorkTests(TransactionTestCase):
         media.refresh_from_db()
         self.assertEqual(media.privacy_state, ConcernMedia.PrivacyState.NOT_REQUIRED)
         self.assertTrue(media.public_visible)
+        self.assertTrue(media.preview_file.name)
         enqueue.assert_not_called()
 
     def test_a_failed_image_review_still_scans_for_faces_and_plates(self):
@@ -252,6 +259,54 @@ class PrivacyProcessingTests(TestCase):
         self.assertEqual(sorted(media.privacy_detected_classes), ["face", "license plate"])
         self.assertEqual(media.redactions.filter(source=ConcernMediaRedaction.Source.SAM3).count(), 2)
 
+    def test_public_street_sign_is_not_blurred_with_private_regions(self):
+        media, _ = self._run(
+            sam3_payload(FACE_BOX, STREET_SIGN_BOX),
+            classes=("face", "street sign"),
+        )
+
+        self.assertEqual(media.privacy_state, ConcernMedia.PrivacyState.PROTECTED)
+        self.assertEqual(media.privacy_detected_classes, ["face"])
+        self.assertEqual(len(media.privacy_regions), 1)
+        self.assertEqual(media.privacy_regions[0]["label"], "face")
+        self.assertEqual(media.redactions.filter(source=ConcernMediaRedaction.Source.SAM3).count(), 1)
+
+    def test_a_legacy_street_sign_request_is_published_without_blurring(self):
+        from apps.concerns.ai.privacy.service import process_media_privacy
+
+        with patch("apps.concerns.ai.privacy.service.run_segmentation") as segment:
+            media = process_media_privacy(self.media, requested_classes=["street sign"])
+
+        self.assertEqual(media.privacy_state, ConcernMedia.PrivacyState.NOT_REQUIRED)
+        self.assertTrue(media.public_visible)
+        self.assertEqual(media.privacy_regions, [])
+        self.assertEqual(media.redactions.count(), 0)
+        segment.assert_not_called()
+
+    def test_rerender_removes_stale_street_sign_redactions(self):
+        from apps.concerns.ai.privacy import rerender_protected_copy
+
+        stale = ConcernMediaRedaction.objects.create(
+            media=self.media,
+            x=0.2,
+            y=0.2,
+            width=0.2,
+            height=0.2,
+            label="street sign",
+            source=ConcernMediaRedaction.Source.SAM3,
+        )
+        self.media.privacy_requested_classes = ["street sign"]
+        self.media.privacy_detected_classes = ["street sign"]
+        self.media.save(update_fields=["privacy_requested_classes", "privacy_detected_classes"])
+
+        rerender_protected_copy(self.media)
+        self.media.refresh_from_db()
+
+        self.assertFalse(ConcernMediaRedaction.objects.filter(pk=stale.pk).exists())
+        self.assertEqual(self.media.privacy_requested_classes, [])
+        self.assertEqual(self.media.privacy_detected_classes, [])
+        self.assertEqual(self.media.privacy_regions, [])
+
     def test_the_protected_copy_is_never_the_original_bytes(self):
         media, _ = self._run(sam3_payload(FACE_BOX))
 
@@ -271,7 +326,7 @@ class PrivacyProcessingTests(TestCase):
         media, _ = self._run(sam3_payload())
 
         self.assertEqual(media.privacy_state, ConcernMedia.PrivacyState.NO_MATCH_FOUND)
-        self.assertFalse(media.public_visible)
+        self.assertTrue(media.public_visible)
 
     def test_unusable_masks_are_discarded_rather_than_approximated(self):
         """A mask covering most of the photo, or a sliver, is not a face."""
@@ -283,7 +338,7 @@ class PrivacyProcessingTests(TestCase):
         )
 
         self.assertEqual(media.privacy_state, ConcernMedia.PrivacyState.NO_MATCH_FOUND)
-        self.assertFalse(media.public_visible)
+        self.assertTrue(media.public_visible)
         self.assertEqual(media.privacy_regions, [])
 
     def test_a_sam3_outage_leaves_the_original_restricted(self):
@@ -445,6 +500,38 @@ class MaskValidationTests(TestCase):
 
         self.assertEqual(len(regions), 1)
         self.assertEqual(detected_classes(regions), ["license plate"])
+
+    def test_only_privacy_sensitive_labels_are_blurrable(self):
+        from apps.concerns.ai.privacy.masks import is_privacy_sensitive_label
+
+        self.assertTrue(is_privacy_sensitive_label("face"))
+        self.assertTrue(is_privacy_sensitive_label("license_plate"))
+        self.assertFalse(is_privacy_sensitive_label("id card"))
+        self.assertFalse(is_privacy_sensitive_label("street sign"))
+        self.assertFalse(is_privacy_sensitive_label("person"))
+
+    def test_automatic_blur_ignores_old_non_private_regions(self):
+        from apps.concerns.ai.privacy.masks import Region, blur_regions
+
+        image = Image.new("RGB", (160, 100), "white")
+        draw = ImageDraw.Draw(image)
+        for y in range(10, 45, 3):
+            for x in range(10, 65, 3):
+                draw.point((x, y), fill="black")
+        for y in range(55, 90, 3):
+            for x in range(95, 150, 3):
+                draw.point((x, y), fill="black")
+
+        redacted = blur_regions(
+            image,
+            [
+                Region(x=0.05, y=0.10, width=0.40, height=0.35, label="street sign", source="sam3"),
+                Region(x=0.58, y=0.55, width=0.35, height=0.35, label="face", source="sam3"),
+            ],
+        )
+
+        self.assertEqual(redacted.crop((8, 8, 72, 48)).tobytes(), image.crop((8, 8, 72, 48)).tobytes())
+        self.assertNotEqual(redacted.crop((92, 52, 152, 94)).tobytes(), image.crop((92, 52, 152, 94)).tobytes())
 
 
 class Sam3ClientTests(TestCase):

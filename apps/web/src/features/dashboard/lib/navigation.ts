@@ -4,11 +4,9 @@ import {
   BoltIcon,
   ClipboardListIcon,
   ChartColumn,
-  ClockIcon,
   HomeIcon,
   MapPinnedIcon,
   MoreHorizontalIcon,
-  TriangleAlert,
   UserCircleIcon,
   UsersIcon,
 } from "lucide-react"
@@ -129,8 +127,9 @@ const residentNav: RoleNavConfig = {
 }
 
 // ---------------------------------------------------------------------------
-// Official — gains Emergencies + Community (routes already exist in App.tsx
-// but were unreachable from any nav); Configuration keeps its 5 children.
+// Official — Concerns owns both routine reports and emergency reports. The
+// sidebar promotes that same row to the emergency icon while live emergencies
+// are present; Configuration keeps its 5 children.
 // ---------------------------------------------------------------------------
 
 // Configuration is one destination now. It previously carried five children in
@@ -162,7 +161,8 @@ const officialConcerns: NavItemConfig = {
   label: "Concerns",
   to: "/dashboard/reports",
   icon: ClipboardListIcon,
-  isActive: (pathname) => matches(pathname, "/dashboard/reports") || matches(pathname, "/dashboard/emergencies"),
+  isActive: (pathname) =>
+    matches(pathname, "/dashboard/reports") || matches(pathname, "/dashboard/emergencies"),
   section: "Operations",
   capability: "resolve_concerns",
 }
@@ -221,9 +221,9 @@ const officialMoreItems: NavItemConfig[] = [
 
 const officialNav: RoleNavConfig = {
   items: [
-    officialConcerns,
     officialOverview,
     officialOperationsMap,
+    officialConcerns,
     officialCommunity,
     officialConfiguration,
   ],
@@ -234,9 +234,9 @@ const officialNav: RoleNavConfig = {
     officialNotifications,
   ],
   mobileItems: [
-    officialConcerns,
     officialOverview,
     officialOperationsMapMobile,
+    officialConcerns,
   ],
   more: {
     label: "More",
@@ -247,25 +247,33 @@ const officialNav: RoleNavConfig = {
 }
 
 // ---------------------------------------------------------------------------
-// Responder — Dispatch is the job; Map answers "where is everything"; Shift is
-// the record of the day. Profile and Notifications are personal, so they sit
-// behind the account block like the official's do, not in the nav.
+// Responder — responders work from the same light map and concern queue as
+// officials. Presence and nearest-responder dispatch are automatic; there is
+// no dispatch or shift destination in the navigation.
 // ---------------------------------------------------------------------------
 
-export const responderDispatch: NavItemConfig = {
-  key: "dispatch",
-  label: "Dispatch",
-  to: "/dashboard/responders/dispatch",
-  icon: TriangleAlert,
-  isActive: (pathname) => matches(pathname, "/dashboard/responders/dispatch"),
+const responderAlerts: NavItemConfig = {
+  key: "alerts-map",
+  label: "Alert map",
+  to: "/dashboard/alerts-map",
+  icon: MapPinnedIcon,
+  isActive: (pathname) => matches(pathname, "/dashboard/alerts-map"),
 }
 
-const responderShift: NavItemConfig = {
-  key: "shift",
-  label: "Shift",
-  to: "/dashboard/responders/shift",
-  icon: ClockIcon,
-  isActive: (pathname) => matches(pathname, "/dashboard/responders/shift"),
+const responderOverview: NavItemConfig = {
+  key: "overview",
+  label: "Overview",
+  to: "/dashboard/overview",
+  icon: ChartColumn,
+  isActive: (pathname) => matches(pathname, "/dashboard/overview"),
+}
+
+const responderConcerns: NavItemConfig = {
+  key: "concerns",
+  label: "Concerns",
+  to: "/dashboard/reports",
+  icon: ClipboardListIcon,
+  isActive: (pathname) => matches(pathname, "/dashboard/reports"),
 }
 
 const responderProfile: NavItemConfig = {
@@ -285,7 +293,7 @@ const responderNotifications: NavItemConfig = {
 }
 
 const responderNav: RoleNavConfig = {
-  items: [responderDispatch, responderShift],
+  items: [responderAlerts, responderConcerns],
   footer: [],
   // Personal destinations, revealed by the account block: Profile first,
   // Notifications below it (both open as dialogs on desktop).
@@ -293,10 +301,11 @@ const responderNav: RoleNavConfig = {
     { ...responderProfile, label: "View profile" },
     responderNotifications,
   ],
-  // The mobile pill carries exactly the job tabs — Shift | Dispatch — each a
-  // circle at rest, an oblong when its page is open, and Dispatch turns
-  // SOS-red while a dispatch is assigned.
-  mobileItems: [responderShift, responderDispatch],
+  mobileItems: [
+    responderOverview,
+    { ...responderAlerts, label: "Alerts" },
+    responderConcerns,
+  ],
 }
 
 export const navigationByRole: Record<Role, RoleNavConfig> = {

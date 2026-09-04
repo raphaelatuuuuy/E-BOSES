@@ -19,7 +19,7 @@ const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1
 
 const OUTLINE_CTA = "min-h-10 items-center rounded-none border border-white/20 px-5 text-sm font-medium text-white/85 transition-colors hover:border-white/40 hover:bg-white/5 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
 const SOLID_CTA = "min-h-10 items-center gap-2 rounded-none bg-accent px-3 text-sm font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground sm:px-5"
-const NAV_DEMO_CTA = "min-h-9 items-center rounded-none bg-accent px-4 text-xs font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+const NAV_REPORT_CTA = "min-h-9 items-center rounded-none bg-accent px-4 text-xs font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
 
 export function Navbar() {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -50,6 +50,10 @@ export function Navbar() {
       if (frame) window.cancelAnimationFrame(frame)
     }
   }, [])
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("eb:nav-menu", { detail: { open: menuOpen } }))
+  }, [menuOpen])
 
   useEffect(() => {
     if (!menuOpen) return
@@ -113,11 +117,11 @@ export function Navbar() {
 
           <div className="ml-auto flex shrink-0 items-center gap-3">
             <Link
-              to="/book-demo"
+              to="/report-issue"
               onClick={closeMenu}
-              className={`${NAV_DEMO_CTA} ${menuOpen ? "hidden" : "inline-flex"}`}
+              className={`${NAV_REPORT_CTA} ${menuOpen ? "hidden" : "inline-flex"}`}
             >
-              Book a Demo
+              Report an Issue
             </Link>
             <button
               ref={menuButtonRef}
@@ -166,8 +170,8 @@ export function Navbar() {
                 <Link to="/communities/new" onClick={closeMenu} tabIndex={tab} className={`${OUTLINE_CTA} flex min-h-12 w-full justify-center`}>
                   Make your Own Community
                 </Link>
-                <Link to="/book-demo" onClick={closeMenu} tabIndex={tab} className={`${SOLID_CTA} flex min-h-12 w-full justify-center`}>
-                  Book a Demo <ArrowRightIcon className="size-4" strokeWidth={2} aria-hidden="true" />
+                <Link to="/report-issue" onClick={closeMenu} tabIndex={tab} className={`${SOLID_CTA} flex min-h-12 w-full justify-center`}>
+                  Report an Issue <ArrowRightIcon className="size-4" strokeWidth={2} aria-hidden="true" />
                 </Link>
               </div>
             </div>

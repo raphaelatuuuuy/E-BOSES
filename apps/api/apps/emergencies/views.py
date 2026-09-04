@@ -1,6 +1,7 @@
 from datetime import timedelta
 from io import BytesIO
 import logging
+from importlib import import_module
 from math import asin, cos, radians, sin, sqrt
 import re
 
@@ -35,6 +36,7 @@ from apps.notifications.services import (
     broadcast_emergency_update,
     create_emergency_notification,
     notify_emergency_status,
+    replay_emergency_notifications,
 )
 
 from apps.capabilities import (
@@ -63,6 +65,7 @@ from .models import (
     MapDispatchPolicy,
     MapGeometry,
     EmergencyMedia,
+    EmergencyResolutionEvidence,
     EmergencyResponderAssignment,
     EmergencyStatusEvent,
     EmergencyTypeRoleMap,
@@ -187,8 +190,7 @@ def can_access_emergency_management(user):
         user
         and user.is_authenticated
         and (
-            user.is_staff
-            or user.is_superuser
+            user.is_superuser
             or user_has_role_permission(user, "emergencies.manage")
         )
     )
@@ -229,24 +231,38 @@ def can_manage_responder_shift(user):
 
 def responder_is_available(user):
     User = get_user_model()
-    # is_on_duty is the persisted availability flag maintained by the shift
-    # endpoints.  Never bypass it for a unit: an off-shift BDRRMO must not be
-    # routed an emergency simply because of its role.
     return bool(
-        user.role == User.Role.FIRST_RESPONDER
+        user
+        and user.role == User.Role.FIRST_RESPONDER
         and user.status == User.Status.VERIFIED
         and user.is_active
         and user.is_on_duty
     )
 
 
-def responder_is_eligible(user, alert, *, require_on_duty=True):
+def responder_account_is_active(user):
+    User = get_user_model()
+    return bool(
+        user
+        and user.role == User.Role.FIRST_RESPONDER
+        and user.status == User.Status.VERIFIED
+        and user.is_active
+    )
+
+
+def responder_is_eligible(user, alert, *, require_on_duty=None):
+    """Return whether a responder may claim or receive this incident.
+
+    The keyword is retained for callers from the previous shift workflow.
+    """
     profile = getattr(user, "resident_profile", None)
     return bool(
         can_manage_responder_shift(user)
-        and (not require_on_duty or responder_is_available(user))
+        and responder_is_available(user)
         and profile
-        and responder_department_ids(user) & {d.pk for d in preferred_departments_for(alert.type)}
+        and responder_department_ids(user) & {
+            d.pk for d in preferred_departments_for(alert.type, alert.community)
+        }
         and normalize_barangay(profile.barangay) == normalize_barangay(alert.barangay)
     )
 
@@ -264,12 +280,32 @@ def responder_is_manually_assignable(user):
 def can_view_alert(user, alert):
     if not user or not user.is_authenticated:
         return False
-    return user_can_view_emergency(user, alert)
+    from apps.community_access import emergency_access_mode
+
+    return emergency_access_mode(user, alert) is not None
 
 
 def scoped_alert_or_404(user, pk, *, lock=False):
-    queryset = EmergencyAlert.objects.select_for_update() if lock else EmergencyAlert.objects.all()
-    return get_object_or_404(scope_emergency_queryset(queryset, user), pk=pk)
+    from apps.community_access import ForeignCommunityReadOnly, emergency_access_mode
+
+    candidate = EmergencyAlert.objects.filter(pk=pk).prefetch_related("assignments").first()
+    if candidate and emergency_access_mode(user, candidate) == "foreign_read_only":
+        raise ForeignCommunityReadOnly()
+    if not lock:
+        return get_object_or_404(scope_emergency_queryset(EmergencyAlert.objects.all(), user), pk=pk)
+    # PostgreSQL rejects SELECT ... FOR UPDATE on a DISTINCT query, and
+    # scope_emergency_queryset ends in .distinct() for most roles. Resolve
+    # visibility first (DISTINCT without a lock is fine), then lock the row
+    # with a plain pk-only filter. The visibility test runs inside the
+    # locking statement as a subquery, so the check and the row lock are
+    # evaluated atomically and cannot race.
+    visible_ids = scope_emergency_queryset(
+        EmergencyAlert.objects.filter(pk=pk), user
+    ).values("pk")
+    return get_object_or_404(
+        EmergencyAlert.objects.select_for_update().filter(pk__in=visible_ids),
+        pk=pk,
+    )
 
 
 def create_status_event(alert, status_value, actor=None, note="", event_key=""):
@@ -321,7 +357,7 @@ def post_responder_chat(alert, sender, body: str):
 
 def location_distance_score(alert, responder):
     # An SMS emergency can arrive with a readable area but no GPS fix. Ranking
-    # then falls back to workload and duty status; distance simply drops out
+    # then falls back to presence and workload; distance simply drops out
     # rather than the whole assignment failing.
     if alert.latitude is None or alert.longitude is None:
         return None
@@ -434,10 +470,10 @@ def normalize_barangay(value: str) -> str:
     return text
 
 
-def _on_duty_unit_candidates(alert, *, community=None, departments=None, exclude_ids=None):
+def _unit_candidates(alert, *, community=None, departments=None, exclude_ids=None):
     """
-    Available on-duty first responders belonging to a unit that answers this
-    emergency type.
+    Verified responders belonging to a unit that answers this emergency type.
+    GPS is only a ranking signal.
 
     Membership is resolved through Designation rather than the legacy
     `User.responder_unit` enum, which is what allows a unit created in the Units
@@ -466,12 +502,9 @@ def _on_duty_unit_candidates(alert, *, community=None, departments=None, exclude
             role=User.Role.FIRST_RESPONDER,
             status=User.Status.VERIFIED,
             is_active=True,
+            is_on_duty=True,
         )
         .filter(membership)
-        .filter(is_on_duty=True)
-        .filter(designations__department__community=community)
-        .filter(location_updated_at__gte=timezone.now() - timedelta(minutes=RESPONDER_LOCATION_FRESH_MINUTES))
-        .filter(current_latitude__isnull=False, current_longitude__isnull=False)
         .exclude(
             emergency_assignments__alert__status__in=ACTIVE_STATUSES,
             emergency_assignments__status__in=[
@@ -501,12 +534,13 @@ def _rank_responders(alert, responders):
             and responder.location_updated_at
             and responder.location_updated_at >= fresh_after
         )
-        # 0 = fresh GPS nearest, 1 = GPS but stale, 2 = on-duty no GPS
+        # 0 = fresh GPS nearest, 1 = GPS but stale, 2 = online with no GPS.
+        last_seen = responder.last_seen_at.timestamp() if responder.last_seen_at else 0
         if fresh:
-            return (0, dist)
+            return (0, dist, -last_seen, responder.pk)
         if has_coords:
-            return (1, dist)
-        return (2, float("inf"))
+            return (1, dist, -last_seen, responder.pk)
+        return (2, float("inf"), -last_seen, responder.pk)
 
     return sorted(responders, key=sort_key)
 
@@ -536,7 +570,7 @@ def role_map_for_responder(alert, responder, *, department=None):
 
 def find_auto_responders(alert, *, limit=5, exclude_ids=None, department=None):
     local_departments = [department] if department else None
-    candidates = _on_duty_unit_candidates(alert, community=alert.community, departments=local_departments, exclude_ids=exclude_ids)
+    candidates = _unit_candidates(alert, community=alert.community, departments=local_departments, exclude_ids=exclude_ids)
     if not candidates:
         maps = EmergencyTypeRoleMap.objects.filter(
             emergency_type=alert.type,
@@ -551,7 +585,7 @@ def find_auto_responders(alert, *, limit=5, exclude_ids=None, department=None):
             by_community.setdefault(role_map.community, []).append(role_map.department)
         candidates = []
         for community, departments in by_community.items():
-            candidates.extend(_on_duty_unit_candidates(alert, community=community, departments=departments, exclude_ids=exclude_ids))
+            candidates.extend(_unit_candidates(alert, community=community, departments=departments, exclude_ids=exclude_ids))
     if not candidates:
         return []
     ranked = _rank_responders(alert, candidates)
@@ -564,7 +598,7 @@ def find_auto_responders_by_unit(alert, *, exclude_ids=None):
         return []
     selected = []
     covered_departments = set()
-    local = _on_duty_unit_candidates(alert, community=alert.community, exclude_ids=exclude_ids)
+    local = _unit_candidates(alert, community=alert.community, exclude_ids=exclude_ids)
     responders = _rank_responders(alert, local)
     if not responders:
         responders = find_auto_responders(alert, limit=1, exclude_ids=exclude_ids)
@@ -602,13 +636,13 @@ def acknowledgment_timeout_for(alert):
 
 
 def escalate_overdue_assignments(*, minutes=None, seconds=None, triggered_by=None, audit_request_meta=None):
-    """Reassign or escalate assignments nobody has acknowledged.
+    """Reassign assignments nobody has acknowledged.
 
     Previously this only bolted a backup responder onto the alert and left the
     silent responder assigned, so an emergency could sit with someone who was
     never coming. Now the unacknowledged assignment is closed out, the next
-    eligible responder is assigned, and only when nobody is left does the alert
-    move to ESCALATION_REQUIRED for an official to pick up.
+    eligible responder is assigned. When nobody is free yet, the alert returns
+    to automated routing and the scheduled sweep keeps looking.
 
     The per-category timeout from EmergencyTypeRoleMap wins; `minutes`/`seconds`
     act as a floor for callers that want to force a sweep.
@@ -661,40 +695,38 @@ def escalate_overdue_assignments(*, minutes=None, seconds=None, triggered_by=Non
 
 def _reassign_unacknowledged(alert, assignment, *, waited, triggered_by, audit_request_meta):
     original = assignment.responder
-    assignment.status = EmergencyResponderAssignment.Status.ESCALATED
-    assignment.status_note = f"No acknowledgement after {int(waited)}s."
-    assignment.save(update_fields=["status", "status_note"])
-    log_assignment_action(
-        alert=alert,
-        assignment=assignment,
-        responder=original,
-        actor=triggered_by,
-        action="acknowledgment_timeout",
-        new_status=assignment.status,
-        note=assignment.status_note,
-        metadata={"waited_seconds": int(waited)},
-    )
-
     assigned_ids = list(alert.assignments.values_list("responder_id", flat=True))
     replacements = find_auto_responders(alert, limit=1, exclude_ids=assigned_ids)
     replacement = replacements[0] if replacements else None
 
     reason = f"Responder did not acknowledge within {int(waited)} seconds."
-    escalation = EmergencyEscalation.objects.create(
-        alert=alert,
-        previous_assignment=assignment,
-        escalated_to=replacement,
-        triggered_by=triggered_by,
-        reason=reason,
-    )
-
     if replacement:
+        assignment.status = EmergencyResponderAssignment.Status.ESCALATED
+        assignment.status_note = f"No acknowledgement after {int(waited)}s."
+        assignment.save(update_fields=["status", "status_note"])
+        log_assignment_action(
+            alert=alert,
+            assignment=assignment,
+            responder=original,
+            actor=triggered_by,
+            action="acknowledgment_timeout",
+            new_status=assignment.status,
+            note=assignment.status_note,
+            metadata={"waited_seconds": int(waited)},
+        )
+        escalation = EmergencyEscalation.objects.create(
+            alert=alert,
+            previous_assignment=assignment,
+            escalated_to=replacement,
+            triggered_by=triggered_by,
+            reason=reason,
+        )
         role_map = role_map_for_responder(alert, replacement)
         new_assignment = EmergencyResponderAssignment.objects.create(
             alert=alert,
             responder=replacement,
             role_map=role_map,
-            responding_community=role_map.community if role_map else None,
+            responding_community=role_map.community if role_map else alert.community,
             is_cross_community=bool(role_map and role_map.community_id != alert.community_id),
             source=EmergencyResponderAssignment.Source.ESCALATION,
             status=EmergencyResponderAssignment.Status.ASSIGNED,
@@ -709,28 +741,39 @@ def _reassign_unacknowledged(alert, assignment, *, waited, triggered_by, audit_r
             note=reason,
         )
         apply_routing_effects(alert, replacement, None, actor=triggered_by, audit_action="emergency.reassigned")
-    elif not alert.assignments.filter(status__in=[
-        EmergencyResponderAssignment.Status.ASSIGNED,
-        EmergencyResponderAssignment.Status.ACKNOWLEDGED,
-        EmergencyResponderAssignment.Status.EN_ROUTE,
-        EmergencyResponderAssignment.Status.ARRIVED,
-        EmergencyResponderAssignment.Status.ASSISTING,
-    ]).exists():
-        # Nobody left to try. Keep the alert active and visible rather than
-        # letting it sit silently against a responder who never replied.
-        alert.status = EmergencyAlert.Status.ESCALATION_REQUIRED
-        alert.status_version += 1
-        alert.save(update_fields=["status", "status_version", "updated_at"])
-        create_status_event(alert, alert.status, triggered_by, note=reason, event_key="no_responder")
-        notify_officials_no_responder(alert)
+    else:
+        # Never make an active emergency disappear from the only responder who
+        # can currently handle it. Keep the assignment open, reset its reminder
+        # clock, and let the responder acknowledge it from their dispatch queue.
+        assignment.assigned_at = timezone.now()
+        assignment.status_note = "Acknowledgment reminder sent; assignment remains active."
+        assignment.save(update_fields=["assigned_at", "status_note"])
+        log_assignment_action(
+            alert=alert,
+            assignment=assignment,
+            responder=original,
+            actor=triggered_by,
+            action="acknowledgment_reminder",
+            new_status=assignment.status,
+            note=assignment.status_note,
+            metadata={"waited_seconds": int(waited)},
+        )
+        create_emergency_notification(
+            alert=alert,
+            recipient=original,
+            type="emergency_routed",
+            title="Emergency still assigned to you",
+            body="Please acknowledge this dispatch. You remain the assigned responder.",
+        )
 
-    create_emergency_notification(
-        alert=alert,
-        recipient=alert.reporter,
-        type="emergency_escalated",
-        title="Still arranging your responder",
-        body="The barangay is assigning another responder to your emergency.",
-    )
+    if replacement:
+        create_emergency_notification(
+            alert=alert,
+            recipient=alert.reporter,
+            type="emergency_escalated",
+            title="Responder changed",
+            body="A different responder was automatically assigned to your emergency.",
+        )
     create_audit_log(
         "emergency.acknowledgment_timeout",
         actor=triggered_by,
@@ -745,7 +788,7 @@ def _reassign_unacknowledged(alert, assignment, *, waited, triggered_by, audit_r
         },
         request_meta=audit_request_meta or {},
     )
-    return escalation
+    return escalation if replacement else None
 
 
 def send_app_emergency_sms(alert):
@@ -785,7 +828,7 @@ def notify_officials_no_responder(alert):
             type="emergency_escalated",
             title="Emergency needs manual dispatch",
             body=(
-                f"No on-duty {unit_names} available for this {alert.get_type_display()} "
+                f"No online {unit_names} responder is available for this {alert.get_type_display()} "
                 f"emergency in {barangay}."
             ),
         )
@@ -799,7 +842,7 @@ def notify_officials_no_responder(alert):
 
 def notify_standby_responders(alert, *, assigned_ids=None):
     assigned = set(assigned_ids or alert.assignments.values_list("responder_id", flat=True))
-    standby = _on_duty_unit_candidates(alert, exclude_ids=assigned)
+    standby = _unit_candidates(alert, exclude_ids=assigned)
     if not standby:
         return []
     for responder in standby:
@@ -817,7 +860,7 @@ def notify_standby_responders(alert, *, assigned_ids=None):
     log_assignment_action(
         alert=alert,
         action="standby_notified",
-        note=f"{len(standby)} on-duty responder(s) notified for standby.",
+        note=f"{len(standby)} online responder(s) notified for standby.",
         metadata={"responder_ids": [responder.pk for responder in standby]},
     )
     return standby
@@ -845,7 +888,7 @@ def apply_routing_effects(alert, responder, request, *, actor=None, audit_action
         recipient=responder,
         type="emergency_routed",
         title="Responder routed",
-        body=f"You are the nearest eligible on-duty {unit} responder.",
+        body=f"You are the nearest eligible online {unit} responder.",
     )
     post_responder_chat(
         alert,
@@ -867,7 +910,7 @@ def apply_routing_effects(alert, responder, request, *, actor=None, audit_action
         pass
 
 
-def auto_route_alert(alert, request, *, retry_escalated=False):
+def auto_route_alert(alert, request, *, retry_escalated=False, preferred_responder=None):
     with transaction.atomic():
         locked_alert = EmergencyAlert.objects.select_for_update().get(pk=alert.pk)
         active_assignment = (
@@ -882,31 +925,115 @@ def auto_route_alert(alert, request, *, retry_escalated=False):
             .order_by("assigned_at", "id")
             .first()
         )
-        routable_statuses = {EmergencyAlert.Status.SUBMITTED}
+        routable_statuses = {
+            EmergencyAlert.Status.SUBMITTED,
+            EmergencyAlert.Status.ROUTING,
+        }
         if retry_escalated:
             routable_statuses.add(EmergencyAlert.Status.ESCALATION_REQUIRED)
         if locked_alert.status not in routable_statuses or active_assignment:
             return active_assignment.responder if active_assignment else None
 
-        responders = find_auto_responders_by_unit(locked_alert)
+        # A critical alert has one primary owner. The candidate list is ranked
+        # by nearest fresh GPS first, then by stable fallback criteria.
+        responders = []
+        assignment_to_reactivate = None
+        previously_assigned_ids = list(
+            locked_alert.assignments.values_list("responder_id", flat=True)
+        )
+        preferred_previous_assignment = (
+            locked_alert.assignments.filter(
+                responder=preferred_responder,
+                status=EmergencyResponderAssignment.Status.ESCALATED,
+            )
+            .order_by("-assigned_at", "-id")
+            .first()
+            if preferred_responder
+            else None
+        )
+        if (
+            preferred_responder
+            and responder_is_available(preferred_responder)
+            and role_map_for_responder(locked_alert, preferred_responder)
+            and (
+                preferred_responder.pk not in previously_assigned_ids
+                or preferred_previous_assignment is not None
+            )
+        ):
+            responders = [preferred_responder]
+            assignment_to_reactivate = preferred_previous_assignment
         if not responders:
-            preferred = preferred_departments_for(locked_alert.type, locked_alert.community)
-            unit_names = ", ".join(sorted(department_label(d) for d in preferred)) or "responder"
-            reason = f"No eligible on-duty {unit_names} in {normalize_barangay(locked_alert.barangay)}."
-            EmergencyEscalation.objects.get_or_create(alert=locked_alert, reason=reason)
-            locked_alert.status = EmergencyAlert.Status.ESCALATION_REQUIRED
-            locked_alert.status_version += 1
-            locked_alert.save(update_fields=["status", "status_version", "updated_at"])
-            create_status_event(locked_alert, locked_alert.status, None, note=reason, event_key="no_responder")
-            notify_officials_no_responder(locked_alert)
+            responders = find_auto_responders(
+                locked_alert,
+                limit=1,
+                exclude_ids=previously_assigned_ids,
+            )
+        if not responders and previously_assigned_ids:
+            # Every fresh candidate may already have been tried. A responder
+            # who merely timed out is still safer than an emergency visible to
+            # nobody, so recover the best eligible escalated assignment. Never
+            # recover an explicit decline or cancellation.
+            previous_candidates = find_auto_responders(
+                locked_alert,
+                limit=max(5, len(previously_assigned_ids)),
+            )
+            for candidate in previous_candidates:
+                previous_assignment = (
+                    locked_alert.assignments.filter(
+                        responder=candidate,
+                        status=EmergencyResponderAssignment.Status.ESCALATED,
+                    )
+                    .order_by("-assigned_at", "-id")
+                    .first()
+                )
+                if previous_assignment:
+                    responders = [candidate]
+                    assignment_to_reactivate = previous_assignment
+                    break
+        if not responders:
+            if locked_alert.status != EmergencyAlert.Status.ROUTING:
+                locked_alert.status = EmergencyAlert.Status.ROUTING
+                locked_alert.status_version += 1
+                locked_alert.save(update_fields=["status", "status_version", "updated_at"])
+                create_status_event(
+                    locked_alert,
+                    locked_alert.status,
+                    None,
+                    note="Automatically checking available response units.",
+                    event_key="responder_searching",
+                )
             return None
 
-        first = None
-        for responder in responders:
-            role_map = role_map_for_responder(locked_alert, responder)
-            if not role_map:
-                continue
-            responding_community = role_map.community
+        responder = responders[0]
+        role_map = role_map_for_responder(locked_alert, responder)
+        # Role maps enrich the audit trail when configured, but a verified
+        # responder with an eligible designation remains routable during a
+        # configuration transition.
+        responding_community = role_map.community if role_map else locked_alert.community
+        if assignment_to_reactivate:
+            assignment = assignment_to_reactivate
+            assignment.role_map = role_map
+            assignment.responding_community = responding_community
+            assignment.is_cross_community = bool(
+                responding_community and responding_community.pk != locked_alert.community_id
+            )
+            assignment.source = EmergencyResponderAssignment.Source.ESCALATION
+            assignment.status = EmergencyResponderAssignment.Status.ASSIGNED
+            assignment.status_note = "Automatically reactivated; no other responder was available."
+            assignment.assigned_at = timezone.now()
+            assignment.save(
+                update_fields=[
+                    "role_map",
+                    "responding_community",
+                    "is_cross_community",
+                    "source",
+                    "status",
+                    "status_note",
+                    "assigned_at",
+                ]
+            )
+            assignment_action = "auto_reactivated"
+        else:
             assignment = EmergencyResponderAssignment.objects.create(
                 alert=locked_alert,
                 responder=responder,
@@ -914,31 +1041,70 @@ def auto_route_alert(alert, request, *, retry_escalated=False):
                 source=EmergencyResponderAssignment.Source.AUTO,
                 status=EmergencyResponderAssignment.Status.ASSIGNED,
                 responding_community=responding_community,
-                is_cross_community=bool(responding_community and responding_community.pk != locked_alert.community_id),
+                is_cross_community=bool(
+                    responding_community and responding_community.pk != locked_alert.community_id
+                ),
             )
-            log_assignment_action(alert=locked_alert, assignment=assignment, responder=responder, action="auto_assigned", new_status=assignment.status, metadata={"role_map_id": role_map.pk if role_map else None})
-            apply_routing_effects(locked_alert, responder, request)
-            first = first or responder
-        notify_standby_responders(locked_alert, assigned_ids=[responder.pk for responder in responders])
-        return first
+            assignment_action = "auto_assigned"
+        log_assignment_action(
+            alert=locked_alert,
+            assignment=assignment,
+            responder=responder,
+            action=assignment_action,
+            new_status=assignment.status,
+            metadata={"role_map_id": role_map.pk if role_map else None},
+        )
+        apply_routing_effects(locked_alert, responder, request)
+        return responder
 
 
 def retry_waiting_alerts_for_responder(responder):
-    if not responder.is_on_duty:
+    if not responder_account_is_active(responder):
         return []
     routed = []
     alerts = (
-        EmergencyAlert.objects.filter(status=EmergencyAlert.Status.ESCALATION_REQUIRED)
+        EmergencyAlert.objects.filter(
+            status__in=[
+                EmergencyAlert.Status.SUBMITTED,
+                EmergencyAlert.Status.ROUTING,
+                EmergencyAlert.Status.ESCALATION_REQUIRED,
+            ]
+        )
         .select_related("community")
         .order_by("created_at", "id")
     )
     for alert in alerts:
         if not role_map_for_responder(alert, responder):
             continue
-        if responder not in find_auto_responders(alert, limit=5):
-            continue
-        assigned = auto_route_alert(alert, None, retry_escalated=True)
+        assigned = auto_route_alert(
+            alert,
+            None,
+            retry_escalated=True,
+            preferred_responder=responder,
+        )
         if assigned:
+            routed.append(alert.pk)
+    return routed
+
+
+def retry_waiting_alerts():
+    """Retry every alert still waiting for automated responder assignment."""
+    routed = []
+    alerts = (
+        EmergencyAlert.objects.filter(
+            status__in=[
+                EmergencyAlert.Status.SUBMITTED,
+                EmergencyAlert.Status.ROUTING,
+                # Recover records created before dispatch became fully automatic.
+                EmergencyAlert.Status.ESCALATION_REQUIRED,
+            ]
+        )
+        .select_related("community")
+        .order_by("created_at", "id")
+    )
+    for alert in alerts:
+        responder = auto_route_alert(alert, None, retry_escalated=True)
+        if responder:
             routed.append(alert.pk)
     return routed
 
@@ -953,7 +1119,7 @@ def create_witness_notifications(alert):
     User = get_user_model()
     fresh_after = timezone.now() - timedelta(minutes=WITNESS_LOCATION_FRESH_MINUTES)
     try:
-        radius_meters = int(MapDispatchPolicy.current().witness_radius_meters)
+        radius_meters = int(MapDispatchPolicy.current(alert.community).witness_radius_meters)
     except Exception:
         radius_meters = int(getattr(settings, "EMERGENCY_WITNESS_RADIUS_METERS", 250))
     witnesses = (
@@ -1013,6 +1179,8 @@ ALERT_SERIALIZATION_PREFETCH = (
 
     "status_events__actor",
     "status_events__actor__resident_profile",
+    "status_events__actor__designations__position",
+    "status_events__actor__designations__department",
     "appeals__appellant",
     "appeals__appellant__resident_profile",
     "appeals__reviewed_by",
@@ -1023,9 +1191,20 @@ ALERT_SERIALIZATION_PREFETCH = (
     "escalations__triggered_by__resident_profile",
     "assignments__responder",
     "assignments__responder__resident_profile",
+    "assignments__responder__designations__position",
+    "assignments__responder__designations__department",
     "assignments__location_pings",
+    "assignments__stored_route",
     "witness_notifications",
     "assignment_logs",
+    "assignment_logs__actor",
+    "assignment_logs__actor__resident_profile",
+    "assignment_logs__actor__designations__position",
+    "assignment_logs__actor__designations__department",
+    "assignment_logs__responder",
+    "assignment_logs__responder__resident_profile",
+    "assignment_logs__responder__designations__position",
+    "assignment_logs__responder__designations__department",
 )
 
 
@@ -1038,7 +1217,7 @@ def alert_serialization_queryset():
     """
     return (
         EmergencyAlert.objects
-        .select_related("reporter", "reporter__resident_profile")
+        .select_related("reporter", "reporter__resident_profile", "community")
         .annotate(
             visible_comment_count=models.Count(
                 "community_comments",
@@ -1149,6 +1328,53 @@ class EmergencyMediaRawView(APIView):
         return FileResponse(media.file.open("rb"), content_type=media.mime_type or "application/octet-stream")
 
 
+def user_can_access_resolution_evidence(user, evidence):
+    if not user or not user.is_authenticated or not user.is_active:
+        return False
+    if user.is_superuser or user.role == user.Role.BARANGAY_OFFICIAL:
+        return True
+    if evidence.alert.reporter_id == user.pk or evidence.uploaded_by_id == user.pk:
+        return True
+    return evidence.alert.assignments.filter(responder=user).exists()
+
+
+class EmergencyResolutionEvidencePreviewView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        evidence = get_object_or_404(EmergencyResolutionEvidence.objects.select_related("alert", "uploaded_by"), pk=pk)
+        if not user_can_access_resolution_evidence(request.user, evidence):
+            return Response({"detail": "You do not have permission to access this resolution evidence."}, status=status.HTTP_403_FORBIDDEN)
+        if _preview_is_ready(evidence.preview_file):
+            return FileResponse(evidence.preview_file.open("rb"), content_type="image/jpeg")
+        try:
+            from .media_services import ensure_emergency_media_preview
+
+            ensure_emergency_media_preview(evidence)
+            if evidence.preview_file:
+                return FileResponse(evidence.preview_file.open("rb"), content_type="image/jpeg")
+        except Exception:
+            logger.info("Resolution evidence preview unavailable for %s", evidence.pk, exc_info=True)
+        return FileResponse(BytesIO(placeholder_preview_jpeg()), content_type="image/jpeg")
+
+
+class EmergencyResolutionEvidenceRawView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        evidence = get_object_or_404(EmergencyResolutionEvidence.objects.select_related("alert", "uploaded_by"), pk=pk)
+        if not user_can_access_resolution_evidence(request.user, evidence):
+            return Response({"detail": "You do not have permission to access this resolution evidence."}, status=status.HTTP_403_FORBIDDEN)
+        log_raw_media_access(
+            actor=request.user,
+            target_user=evidence.alert.reporter,
+            media_type="emergency_resolution_evidence",
+            object_id=evidence.pk,
+            request_meta=request_meta(request),
+        )
+        return FileResponse(evidence.file.open("rb"), content_type=evidence.mime_type or "application/octet-stream")
+
+
 class EmergencyChatAttachmentView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1228,6 +1454,24 @@ class EmergencyCreateView(APIView):
                 return Response({"location": ["The point is outside an active community or is inside overlapping boundaries."]}, status=status.HTTP_400_BAD_REQUEST)
         if incident_community is None:
             return Response({"location": ["We could not determine the emergency community."]}, status=status.HTTP_400_BAD_REQUEST)
+        emergency_type = serializer.validated_data["type"]
+        category = EmergencyCategory.objects.filter(
+            community=incident_community,
+            code=emergency_type,
+            is_active=True,
+        ).first()
+        if not category:
+            return Response(
+                {"type": ["Choose an active emergency category for the incident community."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        from .serializers import emergency_category_is_covered
+
+        if not emergency_category_is_covered(category.code, incident_community):
+            return Response(
+                {"type": ["This emergency category has no responding unit in the incident community."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         media_files = []
         media_hashes = set()
         media_warnings = []
@@ -1315,6 +1559,7 @@ class EmergencyCreateView(APIView):
         )
         from apps.emergencies.tasks import (
             enqueue_emergency_created_broadcast,
+            enqueue_emergency_description,
             enqueue_emergency_media_integrity,
         )
 
@@ -1322,6 +1567,7 @@ class EmergencyCreateView(APIView):
         # Queued after the broadcast on purpose: responders are notified first,
         # and the photo check only ever adds a note to what they already have.
         transaction.on_commit(lambda: enqueue_emergency_media_integrity(alert.pk))
+        transaction.on_commit(lambda: enqueue_emergency_description(alert.pk))
         # An emergency raised in the app gets the same SMS acknowledgement as
         # one texted in, so a resident who loses data still knows it landed.
         transaction.on_commit(lambda: send_app_emergency_sms(alert))
@@ -1455,6 +1701,12 @@ class ActiveCommunityBoundariesView(APIView):
         seen = set()
         results = []
         for boundary in rows.order_by("-is_home", "name", "pk")[:50]:
+            community = Community.objects.filter(
+                boundary=boundary,
+                status=Community.Status.ACTIVE,
+            ).first()
+            if not community:
+                continue
             key = (boundary.name.strip().lower(), normalize_locality(boundary.locality))
             if key in seen:
                 continue
@@ -1462,6 +1714,8 @@ class ActiveCommunityBoundariesView(APIView):
             results.append(
                 {
                     "id": boundary.pk,
+                    "community_id": str(community.public_id),
+                    "code": community.code,
                     "name": boundary.name,
                     "locality": boundary.locality,
                     "is_home": boundary.is_home,
@@ -1554,6 +1808,7 @@ class BoundaryDetailView(APIView):
                 "points": len(geometry["coordinates"][0]),
             },
             request_meta=request_meta(request),
+            community=community,
         )
         return Response(
             {
@@ -1575,13 +1830,23 @@ class MapDispatchPolicyView(APIView):
         touch_last_seen(request.user)
         if not can_configure_emergencies(request.user, CONFIGURE_GEOGRAPHY):
             return capability_denied(CONFIGURE_GEOGRAPHY)
-        return Response(MapDispatchPolicySerializer(MapDispatchPolicy.current()).data)
+        from apps.community_scope import selected_community
+
+        community = selected_community(request.user, request.query_params.get("community_id"))
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
+        return Response(MapDispatchPolicySerializer(MapDispatchPolicy.current(community)).data)
 
     def patch(self, request):
         touch_last_seen(request.user)
         if not can_configure_emergencies(request.user, CONFIGURE_GEOGRAPHY):
             return capability_denied(CONFIGURE_GEOGRAPHY)
-        policy = MapDispatchPolicy.current()
+        from apps.community_scope import selected_community
+
+        community = selected_community(request.user, request.data.get("community_id"))
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
+        policy = MapDispatchPolicy.current(community)
         serializer = MapDispatchPolicySerializer(policy, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         policy = serializer.save(updated_by=request.user)
@@ -1679,8 +1944,8 @@ class ClaimableEmergencyView(APIView):
 
     def get(self, request):
         profile = getattr(request.user, "resident_profile", None)
-        if not can_manage_responder_shift(request.user) or not request.user.is_on_duty or not profile:
-            return Response({"detail": "An eligible on-duty responder account is required."}, status=status.HTTP_403_FORBIDDEN)
+        if not can_respond_to_emergencies(request.user) or not profile:
+            return Response({"detail": "An eligible online responder account is required."}, status=status.HTTP_403_FORBIDDEN)
         candidates = (
             scope_emergency_queryset(alert_serialization_queryset(), request.user)
             .filter(
@@ -1707,12 +1972,35 @@ class MyAssignedEmergencyView(APIView):
         touch_last_seen(request.user)
         if not can_respond_to_emergencies(request.user):
             return Response({"detail": "You do not have permission to view assigned emergencies."}, status=status.HTTP_403_FORBIDDEN)
-        alerts = (
-            alert_serialization_queryset()
-            .filter(
-                assignments__responder=request.user,
-                assignments__status__in=["assigned", "acknowledged", "en_route", "arrived"],
+        department_ids = responder_department_ids(request.user)
+        unit_scope = models.Q(pk__in=[])
+        for community_id, emergency_type in EmergencyTypeRoleMap.objects.filter(
+            department_id__in=department_ids,
+            is_active=True,
+        ).values_list("community_id", "emergency_type"):
+            unit_scope |= models.Q(
+                community_id=community_id,
+                type=emergency_type,
                 status__in=ACTIVE_STATUSES,
+            )
+        alerts = (
+            scope_emergency_queryset(alert_serialization_queryset(), request.user)
+            .filter(
+                models.Q(
+                    assignments__status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting"],
+                    status__in=ACTIVE_STATUSES,
+                )
+                | models.Q(
+                    assignments__role_map__department_id__in=department_ids,
+                    assignments__status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting"],
+                    status__in=ACTIVE_STATUSES,
+                )
+                | unit_scope
+                | models.Q(
+                    assignments__status="resolved",
+                    status=EmergencyAlert.Status.RESOLVED,
+                    updated_at__gte=timezone.now() - timedelta(days=30),
+                )
             )
             .distinct()
             .order_by("-created_at", "-id")
@@ -1895,6 +2183,8 @@ class ResponderShiftStartView(APIView):
                 "updated_at",
             ])
 
+        retry_waiting_alerts_for_responder(request.user)
+
         from apps.live_map import person_payload
         from apps.notifications.services import broadcast_live_map_event
         transaction.on_commit(lambda: broadcast_live_map_event("location.updated", {"person": person_payload(request.user)}))
@@ -1964,7 +2254,7 @@ class EmergencyCategoryListCreateView(APIView):
         qs = EmergencyCategory.objects.filter(community=community)
         if not can_configure_emergencies(request.user, CONFIGURE_DISPATCH):
             qs = qs.filter(is_active=True)
-            qs = [category for category in qs.order_by("sort_order", "label") if emergency_category_is_covered(category.code)]
+            qs = [category for category in qs.order_by("sort_order", "label") if emergency_category_is_covered(category.code, community)]
             return Response(EmergencyCategorySerializer(qs, many=True, context={"request": request}).data)
         return Response(EmergencyCategorySerializer(qs.order_by("sort_order", "label"), many=True, context={"request": request}).data)
 
@@ -2015,13 +2305,13 @@ class EmergencyCategoryDetailView(APIView):
         if not self._allowed(request.user):
             return capability_denied(CONFIGURE_DISPATCH)
         category = get_object_or_404(EmergencyCategory, pk=pk, community_id__in=community_ids_for_user(request.user))
-        in_use = EmergencyAlert.objects.filter(type=category.code).count()
+        in_use = EmergencyAlert.objects.filter(community=category.community, type=category.code).count()
         if in_use:
             category.is_active = False
             category.save(update_fields=["is_active", "updated_at"])
             return Response({"deleted": False, "in_use": in_use})
         category.delete()
-        EmergencyTypeRoleMap.objects.filter(emergency_type=category.code).delete()
+        EmergencyTypeRoleMap.objects.filter(community=category.community, emergency_type=category.code).delete()
         return Response({"deleted": True, "in_use": 0})
 
 
@@ -2046,11 +2336,14 @@ class EmergencyTypeRoleMapListCreateView(APIView):
         touch_last_seen(request.user)
         if not can_configure_emergencies(request.user, CONFIGURE_DISPATCH):
             return capability_denied(CONFIGURE_DISPATCH)
-        serializer = EmergencyTypeRoleMapSerializer(data=request.data, context={"request": request})
-        serializer.is_valid(raise_exception=True)
         community = selected_community(request.user, request.data.get("community_id"))
         if not community:
             return Response({"detail": "Choose one active community."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = EmergencyTypeRoleMapSerializer(
+            data=request.data,
+            context={"request": request, "community": community},
+        )
+        serializer.is_valid(raise_exception=True)
         departments = [serializer.validated_data.get(key) for key in ("department", "supporting_department", "escalation_department")]
         if any(item and item.community_id != community.pk for item in departments):
             return Response({"department": ["All dispatch units must belong to the selected community."]}, status=status.HTTP_400_BAD_REQUEST)
@@ -2102,9 +2395,15 @@ class EmergencyTypeRoleMapDetailView(APIView):
             return self._denied()
         role_map = get_object_or_404(EmergencyTypeRoleMap, pk=pk, community_id__in=community_ids_for_user(request.user))
         serializer = EmergencyTypeRoleMapSerializer(
-            role_map, data=request.data, partial=True, context={"request": request}
+            role_map,
+            data=request.data,
+            partial=True,
+            context={"request": request, "community": role_map.community},
         )
         serializer.is_valid(raise_exception=True)
+        departments = [serializer.validated_data.get(key) for key in ("department", "supporting_department", "escalation_department")]
+        if any(item and item.community_id != role_map.community_id for item in departments):
+            return Response({"department": ["All dispatch units must belong to this community."]}, status=status.HTTP_400_BAD_REQUEST)
         serializer.save()
         return Response(serializer.data)
 
@@ -2176,10 +2475,49 @@ class EmergencyDetailView(APIView):
 
     def get(self, request, pk):
         touch_last_seen(request.user)
-        alert = scoped_alert_or_404(request.user, pk)
+        alert = get_object_or_404(alert_serialization_queryset(), pk=pk)
         if not can_view_alert(request.user, alert):
             return Response({"detail": "You do not have permission to view this emergency."}, status=status.HTTP_403_FORBIDDEN)
         return Response(serialize_alert(alert, request))
+
+
+class EmergencyNotificationReplayView(APIView):
+    """Replay an emergency's status history to subscribed participants.
+
+    This is an official-only repair endpoint for alerts whose worker was
+    offline when they were resolved.  It is idempotent and respects each
+    account's push setting/subscriptions through the normal delivery service.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        if not can_manage_emergencies(request.user):
+            return Response(
+                {"detail": "Only emergency officials can replay notifications."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        alert = scoped_alert_or_404(request.user, pk)
+        raw_ids = request.data.get("recipient_ids") if isinstance(request.data, dict) else None
+        recipient_ids = None
+        if raw_ids is not None:
+            if not isinstance(raw_ids, list) or any(str(value).strip() == "" for value in raw_ids):
+                return Response(
+                    {"recipient_ids": ["Send a list of account IDs, or omit it for all participants."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                recipient_ids = [int(value) for value in raw_ids]
+            except (TypeError, ValueError):
+                return Response(
+                    {"recipient_ids": ["Account IDs must be integers."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        return Response(
+            replay_emergency_notifications(alert, recipient_ids=recipient_ids),
+            status=status.HTTP_200_OK,
+        )
 
 
 class EmergencyReporterContactView(APIView):
@@ -2340,6 +2678,10 @@ class EmergencyChatView(APIView):
         qs = (
             EmergencyChatMessage.objects.filter(alert=alert)
             .select_related("sender", "sender__resident_profile", "attachment")
+            .prefetch_related(
+                "sender__designations__position",
+                "sender__designations__department",
+            )
             .order_by("created_at", "id")
         )
         if after_id and str(after_id).isdigit():
@@ -2404,6 +2746,10 @@ class EmergencyChatView(APIView):
                     )
         message = (
             EmergencyChatMessage.objects.select_related("sender", "sender__resident_profile")
+            .prefetch_related(
+                "sender__designations__position",
+                "sender__designations__department",
+            )
             .get(pk=message.pk)
         )
         payload = EmergencyChatMessageSerializer(message, context={"request": request}).data
@@ -2708,7 +3054,7 @@ class EmergencyAssignmentRemoveView(APIView):
                 )
 
             active_assignments = list(
-                alert.assignments.select_for_update()
+                alert.assignments.select_for_update(of=("self",))
                 .filter(status__in=ACTIVE_ASSIGNMENT_STATUSES)
                 .select_related("responder", "responder__resident_profile")
                 .order_by("assigned_at", "id")
@@ -2798,7 +3144,16 @@ class EmergencyClaimView(APIView):
                     return Response({"detail": "This emergency is no longer claimable."}, status=status.HTTP_409_CONFLICT)
                 if not responder_is_eligible(request.user, alert):
                     return Response({"detail": "You are not eligible for this emergency."}, status=status.HTTP_403_FORBIDDEN)
-                EmergencyResponderAssignment.objects.create(alert=alert, responder=request.user)
+                role_map = role_map_for_responder(alert, request.user)
+                EmergencyResponderAssignment.objects.create(
+                    alert=alert,
+                    responder=request.user,
+                    role_map=role_map,
+                    responding_community=role_map.community if role_map else alert.community,
+                    is_cross_community=bool(
+                        role_map and role_map.community_id != alert.community_id
+                    ),
+                )
                 apply_routing_effects(alert, request.user, request, actor=request.user, audit_action="emergency.claimed")
         except (EmergencyAlert.DoesNotExist, IntegrityError):
             return Response({"detail": "This emergency is no longer claimable."}, status=status.HTTP_409_CONFLICT)
@@ -2925,7 +3280,7 @@ class EmergencyBackupView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
-        from apps.concerns.models import Department
+        Department = import_module("apps.concerns.models").Department
 
         alert = scoped_alert_or_404(request.user, pk)
         if not (responder_actions.open_assignment_for(alert, request.user) or can_manage_emergencies(request.user)):
@@ -2939,7 +3294,7 @@ class EmergencyBackupView(APIView):
         return Response([{"id": item.pk, "code": item.code, "name": department_label(item)} for item in rows])
 
     def post(self, request, pk):
-        from apps.concerns.models import Department
+        Department = import_module("apps.concerns.models").Department
 
         touch_last_seen(request.user)
         alert = scoped_alert_or_404(request.user, pk)
@@ -3062,7 +3417,7 @@ class EmergencyBackupView(APIView):
                     recipient=official,
                     type="emergency_escalated",
                     title="Backup needs manual dispatch",
-                    body=f"No on-duty {department_label(department)} responder is available: {reason[:150]}",
+                    body=f"No online {department_label(department)} responder is available: {reason[:150]}",
                 )
         transaction.on_commit(lambda: broadcast_emergency_update(alert))
         payload = serialize_alert(alert, request)
@@ -3178,7 +3533,7 @@ class EmergencyTransferView(APIView):
                     alert,
                     [
                         user
-                        for user in _on_duty_unit_candidates(alert, exclude_ids=transferred_out_ids)
+                        for user in _unit_candidates(alert, exclude_ids=transferred_out_ids)
                         if department.pk in responder_department_ids(user)
                     ],
                 )
@@ -3322,10 +3677,12 @@ class AssignmentActionMixin:
     timestamp_field = None
     default_note = ""
     allowed_statuses = set()
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
+    @transaction.atomic
     def post(self, request, pk):
         touch_last_seen(request.user)
-        alert = scoped_alert_or_404(request.user, pk)
+        alert = scoped_alert_or_404(request.user, pk, lock=True)
         if self.allowed_statuses and alert.status not in self.allowed_statuses:
             return Response(
                 {"status": [f"This emergency cannot move from {alert.status} to {self.target_status}."]},
@@ -3333,13 +3690,13 @@ class AssignmentActionMixin:
             )
         assignment = alert.assignments.filter(
             responder=request.user,
-            status__in=["assigned", "acknowledged", "en_route", "arrived"],
+            status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting"],
         ).first()
         if not assignment and not can_manage_emergencies(request.user):
             return Response({"detail": "You are not assigned to this emergency."}, status=status.HTTP_403_FORBIDDEN)
         if not assignment:
             assignment = alert.assignments.filter(
-                status__in=["assigned", "acknowledged", "en_route", "arrived"],
+                status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting"],
             ).order_by("assigned_at", "id").first()
         if not assignment and not can_manage_emergencies(request.user):
             return Response({"detail": "No responder has been assigned yet."}, status=status.HTTP_400_BAD_REQUEST)
@@ -3353,6 +3710,26 @@ class AssignmentActionMixin:
                 status=status.HTTP_409_CONFLICT,
             )
         note = serializer.validated_data.get("note", "").strip() or self.default_note
+        internal_note = serializer.validated_data.get("internal_note", "").strip()
+
+        resolution_files = []
+        if self.target_status == EmergencyAlert.Status.RESOLVED:
+            resolution_files = request.FILES.getlist("resolution_evidence")
+            if len(resolution_files) > 5:
+                return Response({"resolution_evidence": ["Upload no more than 5 resolution photos."]}, status=status.HTTP_400_BAD_REQUEST)
+            if not serializer.validated_data.get("note", "").strip() and not resolution_files:
+                return Response({"note": ["Add a resolution note or at least one photo."]}, status=status.HTTP_400_BAD_REQUEST)
+
+            validated_files = []
+            for uploaded_file in resolution_files:
+                if not (getattr(uploaded_file, "content_type", "") or "").lower().startswith("image/"):
+                    return Response({"resolution_evidence": ["Resolution evidence must be an image."]}, status=status.HTTP_400_BAD_REQUEST)
+                try:
+                    validated_files.append((uploaded_file, validate_emergency_media_file(uploaded_file)))
+                except ValidationError as exc:
+                    messages = getattr(exc, "messages", None) or [str(exc)]
+                    return Response({"resolution_evidence": messages}, status=status.HTTP_400_BAD_REQUEST)
+            resolution_files = validated_files
 
         if assignment:
             assignment.status = self.assignment_status
@@ -3366,13 +3743,40 @@ class AssignmentActionMixin:
         alert.status_version += 1
         if self.target_status == EmergencyAlert.Status.RESOLVED:
             alert.resolved_at = timezone.now()
+            alert.resolution_report = note
+            if internal_note:
+                # Keep the operational-only note out of status events and the
+                # resident-facing resolution report. ai_assist is intentionally
+                # not included in the public emergency serializer.
+                assist = dict(alert.ai_assist or {})
+                assist["resolution_internal_note"] = internal_note
+                alert.ai_assist = assist
             from apps.live_map import route_for_assignment
 
             alert.route = route_for_assignment(alert)
-            alert.save(update_fields=["status", "status_version", "resolved_at", "updated_at", "route"])
+            update_fields = ["status", "status_version", "resolved_at", "resolution_report", "updated_at", "route"]
+            if internal_note:
+                update_fields.append("ai_assist")
+            alert.save(update_fields=update_fields)
             alert.assignments.filter(
-                status__in=["assigned", "acknowledged", "en_route", "arrived"]
+                status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting"]
             ).exclude(pk=assignment.pk if assignment else None).update(status=EmergencyResponderAssignment.Status.RESOLVED)
+            for uploaded_file, validated_file in resolution_files:
+                evidence = EmergencyResolutionEvidence.objects.create(
+                    alert=alert,
+                    file=validated_file,
+                    uploaded_by=request.user,
+                    original_filename=uploaded_file.name,
+                    mime_type=getattr(validated_file, "content_type", "") or "",
+                    file_size=validated_file.size,
+                    note=note[:255],
+                )
+                try:
+                    from .media_services import ensure_emergency_media_preview
+
+                    ensure_emergency_media_preview(evidence)
+                except Exception:
+                    logger.info("Resolution evidence preview unavailable for %s", evidence.pk, exc_info=True)
         else:
             alert.save(update_fields=["status", "status_version", "updated_at"])
         create_status_event(alert, self.target_status, request.user, note)
@@ -3504,7 +3908,7 @@ class EmergencyLocationPingView(APIView):
             )
         else:
             try:
-                nearby_distance = int(MapDispatchPolicy.current().responder_nearby_radius_meters)
+                nearby_distance = int(MapDispatchPolicy.current(alert.community).responder_nearby_radius_meters)
             except Exception:
                 nearby_distance = int(getattr(settings, "EMERGENCY_NEARBY_DISTANCE_METERS", 100))
             # With no incident pin there is no "nearby" to detect; the ping is

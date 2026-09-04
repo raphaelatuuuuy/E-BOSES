@@ -85,7 +85,7 @@ export default function ActiveCommunitiesPage() {
   const [data, setData] = useState<ActiveCommunities | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [period, setPeriod] = useState("all")
-  const [boundary, setBoundary] = useState<CommunityBoundary | null>(null)
+  const [boundaries, setBoundaries] = useState<Record<number, CommunityBoundary>>({})
 
   useEffect(() => {
     const controller = new AbortController()
@@ -140,23 +140,40 @@ export default function ActiveCommunitiesPage() {
     return map
   }, [communities])
 
-  const selected = useMemo(() => {
-    if (communities.length === 0) return null
-    return communities.find((item) => item.is_home) ?? communities[0]
+  useEffect(() => {
+    if (communities.length === 0) {
+      return
+    }
+    const controller = new AbortController()
+    void Promise.all(
+      communities.map(async (community) => {
+        try {
+          return await fetchCommunityBoundary(community.id, controller.signal)
+        } catch {
+          return null
+        }
+      }),
+    ).then((results) => {
+      if (controller.signal.aborted) return
+      setBoundaries(
+        Object.fromEntries(
+          results.filter((item): item is CommunityBoundary => item !== null).map((item) => [item.id, item]),
+        ),
+      )
+    })
+    return () => controller.abort()
   }, [communities])
 
-  useEffect(() => {
-    if (!selected) return
-    const controller = new AbortController()
-    fetchCommunityBoundary(selected.id, controller.signal)
-      .then((result) => setBoundary(result))
-      .catch((_cause: unknown) => {
-        if (!controller.signal.aborted) setBoundary(null)
-      })
-    return () => controller.abort()
-  }, [selected])
-
-  const boundaryLoading = !!selected && (!boundary || boundary.id !== selected.id)
+  const cities = useMemo(() => {
+    const groups = new Map<string, Community[]>()
+    for (const community of communities) {
+      const label = community.city || community.locality || ""
+      const rows = groups.get(label) ?? []
+      rows.push(community)
+      groups.set(label, rows)
+    }
+    return [...groups.entries()]
+  }, [communities])
 
   return (
     <div className="landing-fonts flex min-h-screen flex-col overflow-x-hidden bg-landing-bg text-landing-cream">
@@ -249,40 +266,46 @@ export default function ActiveCommunitiesPage() {
             </h2>
           </div>
 
-          {selected ? (
-            <div key={selected.id} className="animate-fade-slide-up mt-10 text-center">
-              <p className="text-xs font-semibold tracking-[0.18em] text-landing-cream/40 uppercase">
-                {selected.city || selected.locality}
-              </p>
-              <h3 className="font-heading mt-2 text-2xl tracking-tight text-landing-cream sm:text-3xl">
-                {selected.name}
-              </h3>
-              <div className="mt-6">
-                <BarangayBoundary
-                  name={selected.name}
-                  geometry={boundaryLoading ? null : (boundary?.geometry ?? null)}
-                  loading={boundaryLoading}
-                />
-              </div>
-
-              <dl className="mx-auto mt-8 flex w-fit divide-x divide-white/10">
-                <div className="px-8">
-                  <dt className="text-xs font-medium tracking-[0.14em] text-landing-cream/40 uppercase">
-                    Residents
-                  </dt>
-                  <dd className="font-heading mt-2 text-3xl text-landing-cream">
-                    {numbers.format(selected.residents)}
-                  </dd>
-                </div>
-                {selected.since ? (
-                  <div className="px-8">
-                    <dt className="text-xs font-medium tracking-[0.14em] text-landing-cream/40 uppercase">
-                      Live since
-                    </dt>
-                    <dd className="font-heading mt-2 text-3xl text-landing-cream">{selected.since}</dd>
+          {cities.length > 0 ? (
+            <div className="mt-10 space-y-12">
+              {cities.map(([city, rows]) => (
+                <div key={city || "unknown"} className="animate-fade-slide-up">
+                  <p className="text-center text-xs font-semibold tracking-[0.18em] text-landing-cream/40 uppercase">
+                    {city || "Location pending"}
+                  </p>
+                  <div className="mt-6 grid gap-8 md:grid-cols-2">
+                    {rows.map((community) => {
+                      const boundary = boundaries[community.id]
+                      return (
+                        <article key={community.id} className="px-2 py-2 text-center">
+                          <h3 className="font-heading text-2xl tracking-tight text-landing-cream sm:text-3xl">
+                            {community.name}
+                          </h3>
+                          <div className="mt-4">
+                            <BarangayBoundary
+                              name={community.name}
+                              geometry={boundary?.geometry ?? null}
+                              loading={!boundary}
+                            />
+                          </div>
+                          <dl className="mx-auto mt-4 flex w-fit divide-x divide-white/10">
+                            <div className="px-5">
+                              <dt className="text-xs font-medium tracking-[0.14em] text-landing-cream/40 uppercase">Residents</dt>
+                              <dd className="font-heading mt-2 text-2xl text-landing-cream">{numbers.format(community.residents)}</dd>
+                            </div>
+                            {community.since ? (
+                              <div className="px-5">
+                                <dt className="text-xs font-medium tracking-[0.14em] text-landing-cream/40 uppercase">Live since</dt>
+                                <dd className="font-heading mt-2 text-2xl text-landing-cream">{community.since}</dd>
+                              </div>
+                            ) : null}
+                          </dl>
+                        </article>
+                      )
+                    })}
                   </div>
-                ) : null}
-              </dl>
+                </div>
+              ))}
             </div>
           ) : loading ? (
             <div className="mt-10 flex justify-center">

@@ -291,15 +291,38 @@ interface ApiRequestOptions {
 }
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}, options: ApiRequestOptions = {}) {
-  const method = (init.method ?? "GET").toUpperCase()
+  const communityId = typeof window === "undefined" ? "" : window.sessionStorage.getItem("eboses:selected-community") ?? ""
+  let requestPath = path
+  let requestInit = init
+  if (communityId) {
+    if (!/[?&]community_id=/.test(requestPath)) {
+      requestPath += `${requestPath.includes("?") ? "&" : "?"}community_id=${encodeURIComponent(communityId)}`
+    }
+    if (init.body instanceof FormData && !init.body.has("community_id")) {
+      init.body.append("community_id", communityId)
+    } else if (typeof init.body === "string") {
+      try {
+        const parsed = JSON.parse(init.body) as unknown
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          requestInit = {
+            ...init,
+            body: JSON.stringify({ ...(parsed as Record<string, unknown>), community_id: communityId }),
+          }
+        }
+      } catch {
+        requestInit = init
+      }
+    }
+  }
+  const method = (requestInit.method ?? "GET").toUpperCase()
   const dedupeKey = method === "GET" && options.dedupe !== false
-    ? `${method}:${apiBaseUrl()}${path}:${getAccessToken() ?? "anonymous"}`
+    ? `${method}:${apiBaseUrl()}${requestPath}:${getAccessToken() ?? "anonymous"}`
     : null
   if (dedupeKey) {
     const existing = inflightGets.get(dedupeKey)
     if (existing) return existing as Promise<T>
   }
-  const pending = requestWithRefresh<T>(path, init, options)
+  const pending = requestWithRefresh<T>(requestPath, requestInit, options)
   if (dedupeKey) {
     inflightGets.set(dedupeKey, pending)
     pending.finally(() => inflightGets.delete(dedupeKey)).catch(() => undefined)

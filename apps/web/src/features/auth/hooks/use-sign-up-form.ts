@@ -169,6 +169,10 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
   const [proofOptionsLoading, setProofOptionsLoading] = useState(false)
 
   async function resolveCommunity(input: { latitude: number; longitude: number; accuracy?: number | null; source: "gps" | "search" | "manual"; address?: string }) {
+    // Clear the previous community's catalog before resolving the new pin.
+    // Otherwise a failed/unconfigured resolution can leave Marikina's ID
+    // choices visible while the user is already looking at another area.
+    setProofOptions([])
     setProofOptionsLoading(true)
     try {
       // AddressStep fires this in the same tick as the onChange calls that
@@ -212,8 +216,8 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
   async function refreshProofOptions() {
     const current = valuesRef.current
     if (current.homeLatitude == null || current.homeLongitude == null) return []
-    await resolveCommunity({ latitude: current.homeLatitude, longitude: current.homeLongitude, accuracy: current.homeAccuracyMeters, source: current.homeLocationSource ?? "manual" })
-    return proofOptions
+    const result = await resolveCommunity({ latitude: current.homeLatitude, longitude: current.homeLongitude, accuracy: current.homeAccuracyMeters, source: current.homeLocationSource ?? "manual" })
+    return normalizeResidenceProofOptions(result.proof_options).filter((item) => item.enabled !== false)
   }
 
   // Reset the phone cooldown display whenever the resend window closes —
@@ -270,6 +274,9 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
     field: K,
     value: SignUpValues[K],
   ) {
+    if (field === "street" || field === "houseNumber" || field === "email") {
+      setProofOptions([])
+    }
     setValues((currentValues) => {
       const next = {
         ...currentValues,

@@ -26,7 +26,14 @@ from PIL import Image, ImageOps
 
 from apps.concerns.models import ConcernMedia, ConcernMediaRedaction
 
-from .masks import Region, blur_regions, detected_classes, parse_regions
+from .masks import (
+    Region,
+    blur_regions,
+    detected_classes,
+    is_privacy_sensitive_label,
+    parse_regions,
+    privacy_sensitive_regions,
+)
 from .sam3_client import Sam3NotConfigured, Sam3Unavailable, run_segmentation
 
 
@@ -34,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the blur, padding or encoding changes so cached results are
 # recomputed rather than trusted.
-PROCESSOR_VERSION = "sam3-v1"
+PROCESSOR_VERSION = "sam3-v2"
 
 PREVIEW_MAX_SIDE = 1600
 PREVIEW_QUALITY = 84
@@ -157,7 +164,15 @@ def _restrict(media, *, state, reason: str) -> ConcernMedia:
 
 def process_media_privacy(media, *, requested_classes: list[str], force: bool = False) -> ConcernMedia:
     """Run SAM3 for `requested_classes` and write the protected copy."""
-    classes = list(requested_classes or [])
+    requested = list(requested_classes or [])
+    # SAM3 is open-vocabulary, but this public pipeline is not. Only faces and
+    # plates can trigger an automatic blur; blood remains a review-only signal.
+    # Filtering here also neutralises legacy queued rows such as `street sign`.
+    classes = [
+        value
+        for value in requested
+        if is_privacy_sensitive_label(value) or BLOOD_CLASS in str(value or "").casefold()
+    ]
     cache_key = privacy_cache_key(media, classes)
 
     terminal_success = {
@@ -181,6 +196,26 @@ def process_media_privacy(media, *, requested_classes: list[str], force: bool = 
         logger.warning("Concern media %s could not be decoded for privacy processing: %s", media.pk, exc.__class__.__name__)
         return _restrict(media, state=ConcernMedia.PrivacyState.FAILED_RESTRICTED, reason="image_unreadable")
 
+    if not classes:
+        # A stale/non-blurrable request must not hide or blur ordinary civic
+        # evidence. Re-encode it, preserve any official manual regions, and
+        # publish the sanitized copy.
+        official_regions = _official_regions(media)
+        _sync_sam3_redaction_rows(media, [])
+        try:
+            _write_preview(media, blur_regions(image, official_regions))
+        except Exception as exc:
+            logger.warning("Blur failed for media=%s error=%s", media.pk, exc.__class__.__name__)
+            return _restrict(media, state=ConcernMedia.PrivacyState.FAILED_RESTRICTED, reason="blur_failed")
+        return _finish(
+            media,
+            state=ConcernMedia.PrivacyState.NOT_REQUIRED,
+            public=True,
+            regions=official_regions,
+            detected=[],
+            cache_key=cache_key,
+        )
+
     try:
         payload = _run_segmentation_from_storage(media, classes)
     except Sam3NotConfigured:
@@ -190,18 +225,24 @@ def process_media_privacy(media, *, requested_classes: list[str], force: bool = 
 
     width, height = image.size
     sam3_regions = parse_regions(payload, image_width=width, image_height=height)
-    found = detected_classes(sam3_regions)
+    sensitive_regions = privacy_sensitive_regions(sam3_regions)
+    found = detected_classes(sensitive_regions)
 
     # Blood-like content is never treated as confirmed. It is a reason to keep
     # the image away from the public feed until a person looks at it, not a
     # finding to act on.
     blood_suspected = any(BLOOD_CLASS in name for name in classes)
     blood_found = any(BLOOD_CLASS in (region.label or "") or "blood" in (region.label or "") for region in sam3_regions)
+    if blood_found:
+        found = sorted(set(found + [BLOOD_CLASS]))
 
-    # Only face and plate masks are blurred. A blood region is not something we
-    # can responsibly decide to hide or to show, so it gates visibility instead.
-    blurrable = [region for region in sam3_regions if "blood" not in (region.label or "")]
+    blurrable = sensitive_regions
     regions = blurrable + _official_regions(media)
+
+    # Clear automatic rows from an older processor before storing the current
+    # result. This matters when a reprocess finds only a non-blurrable object
+    # such as a street sign.
+    _sync_sam3_redaction_rows(media, blurrable)
 
     try:
         protected = blur_regions(image, regions)
@@ -210,7 +251,7 @@ def process_media_privacy(media, *, requested_classes: list[str], force: bool = 
         logger.warning("Blur failed for media=%s error=%s", media.pk, exc.__class__.__name__)
         return _restrict(media, state=ConcernMedia.PrivacyState.FAILED_RESTRICTED, reason="blur_failed")
 
-    if blood_found or (blood_suspected and not sam3_regions):
+    if blood_found or (blood_suspected and not sensitive_regions):
         # Suspected blood with nothing else confirmed still gets held: "we
         # looked and found nothing" is not a claim we can make about an image
         # flagged for possible injury.
@@ -227,13 +268,12 @@ def process_media_privacy(media, *, requested_classes: list[str], force: bool = 
         return _finish(
             media,
             state=ConcernMedia.PrivacyState.NO_MATCH_FOUND,
-            public=False,
+            public=True,
             regions=regions,
             detected=found,
             cache_key=cache_key,
         )
 
-    _sync_sam3_redaction_rows(media, blurrable)
     return _finish(
         media,
         state=ConcernMedia.PrivacyState.PROTECTED,
@@ -270,9 +310,34 @@ def rerender_protected_copy(media) -> ConcernMedia:
     automatic regions are already on the row, so adding a box an official spotted
     costs nothing and cannot be blocked by Roboflow being down.
     """
+    rows = list(media.redactions.all())
+    stale_automatic_ids = [
+        row.pk
+        for row in rows
+        if row.source == ConcernMediaRedaction.Source.SAM3
+        and not is_privacy_sensitive_label(row.label)
+    ]
+    if stale_automatic_ids:
+        ConcernMediaRedaction.objects.filter(pk__in=stale_automatic_ids).delete()
+        rows = [row for row in rows if row.pk not in stale_automatic_ids]
+
+    allowed_requested = [
+        value
+        for value in (media.privacy_requested_classes or [])
+        if is_privacy_sensitive_label(value) or BLOOD_CLASS in str(value or "").casefold()
+    ]
+    allowed_detected = [
+        value
+        for value in (media.privacy_detected_classes or [])
+        if is_privacy_sensitive_label(value) or BLOOD_CLASS in str(value or "").casefold()
+    ]
+    if allowed_requested != list(media.privacy_requested_classes or []):
+        media.privacy_requested_classes = allowed_requested
+        media.save(update_fields=["privacy_requested_classes"])
+
     regions = [
         Region(x=row.x, y=row.y, width=row.width, height=row.height, label=row.label, source=row.source)
-        for row in media.redactions.all()
+        for row in rows
     ]
     try:
         image = _load_image(media)
@@ -286,6 +351,6 @@ def rerender_protected_copy(media) -> ConcernMedia:
         state=ConcernMedia.PrivacyState.PROTECTED,
         public=True,
         regions=regions,
-        detected=list(media.privacy_detected_classes or []),
+        detected=allowed_detected,
         cache_key=media.privacy_cache_key,
     )

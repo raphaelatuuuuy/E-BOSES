@@ -1,5 +1,7 @@
 import { apiRequest, unwrapList } from "@/lib/api"
 import type {
+  CommunityAccessMode,
+  CommunitySummary,
   PublicUser,
   RouteApproach,
   RouteSnap,
@@ -46,7 +48,11 @@ export function unableToRespond(id: number, reason: string) {
   })
 }
 
-export function transferEmergency(id: number, departmentCode: string, reason: string) {
+export function transferEmergency(
+  id: number,
+  departmentCode: string,
+  reason: string
+) {
   return alertRequest(`/emergencies/${id}/transfer/`, {
     method: "POST",
     body: JSON.stringify({ department_code: departmentCode, reason }),
@@ -55,7 +61,12 @@ export function transferEmergency(id: number, departmentCode: string, reason: st
 
 export function requestEmergencyBackup(
   id: number,
-  payload: { target_department_id: number; reason: string; urgency: string; idempotency_key: string },
+  payload: {
+    target_department_id: number
+    reason: string
+    urgency: string
+    idempotency_key: string
+  }
 ) {
   return alertRequest(`/emergencies/${id}/request-backup/`, {
     method: "POST",
@@ -63,7 +74,11 @@ export function requestEmergencyBackup(
   })
 }
 
-export interface EmergencyBackupUnit { id: number; code: string; name: string }
+export interface EmergencyBackupUnit {
+  id: number
+  code: string
+  name: string
+}
 
 export function getEmergencyBackupUnits(id: number) {
   return apiRequest<EmergencyBackupUnit[]>(`/emergencies/${id}/request-backup/`)
@@ -71,13 +86,13 @@ export function getEmergencyBackupUnits(id: number) {
 
 export function revealReporterContact(id: number) {
   return apiRequest<{ phone_number: string; alert_id: number }>(
-    `/emergencies/${id}/reporter-contact/`,
+    `/emergencies/${id}/reporter-contact/`
   )
 }
 
 export function revealResponderContact(id: number) {
   return apiRequest<{ phone_number: string; alert_id: number }>(
-    `/emergencies/${id}/responder-contact/`,
+    `/emergencies/${id}/responder-contact/`
   )
 }
 
@@ -108,6 +123,10 @@ export interface EmergencyLocationPing {
   longitude: string
   accuracy: number | null
   created_at: string
+  /** Seconds since the server received this point. */
+  age_seconds?: number
+  /** False means this is historical context, not a live GPS fix. */
+  is_fresh?: boolean
 }
 
 export interface EmergencyMedia {
@@ -118,6 +137,18 @@ export interface EmergencyMedia {
   preview_url: string
   raw_url: string
   uploaded_at: string
+}
+
+export interface EmergencyResolutionEvidence {
+  id: number
+  uploaded_by: PublicUser | null
+  original_filename: string
+  mime_type: string
+  file_size: number
+  note: string
+  raw_url: string
+  preview_url: string
+  created_at: string
 }
 
 export interface EmergencyAssignment {
@@ -238,7 +269,10 @@ export interface EmergencyStatusEvent {
 export interface EmergencyAlert {
   id: number
   public_id: string
-  reporter: PublicUser
+  community: CommunitySummary
+  access_mode: CommunityAccessMode
+  can_interact: boolean
+  reporter: PublicUser | null
   reporter_phone: string
   /**
    * The caller's name, or "" when there is genuinely none to show — an SMS from
@@ -250,6 +284,8 @@ export interface EmergencyAlert {
   reporter_is_anonymous_intake: boolean
   type: EmergencyType
   note: string
+  /** A concise factual description composed from the emergency report. */
+  display_description?: string
   status: EmergencyStatus
   barangay: string
   latitude: string
@@ -262,20 +298,31 @@ export interface EmergencyAlert {
   display_location: string
   reverse_geocoding_status: "success" | "failed" | "skipped" | "pending"
   location_confidence: "confirmed" | "reported" | "unknown" | "outside_area"
-  reporter_verification: "account" | "registered" | "unverified" | "needs_review"
+  reporter_verification:
+    | "account"
+    | "registered"
+    | "unverified"
+    | "needs_review"
   triage: Record<string, string>
   category_needs_confirmation: boolean
   unresolved_fields?: string[]
   media_warnings?: string[]
   resolution_report: string
+  resolution_evidence?: EmergencyResolutionEvidence[]
   response_duration_seconds: number | null
   disposition_reason: string
   media?: EmergencyMedia[]
   status_version: number
   route: EmergencyRoute | null
   current_assignment: EmergencyAssignment | null
+  active_assignments?: EmergencyAssignment[]
   /** The unit that answers this emergency type — known before anyone is assigned. */
-  responding_unit: { id: number; code: string; name: string; short_name: string } | null
+  responding_unit: {
+    id: number
+    code: string
+    name: string
+    short_name: string
+  } | null
   is_public?: boolean
   comment_count?: number
   assignments?: EmergencyAssignment[]
@@ -304,7 +351,10 @@ export interface EmergencyAlert {
   resolved_at: string | null
 }
 
-export function isNewerEmergencyAlert(current: EmergencyAlert | null, next: EmergencyAlert) {
+export function isNewerEmergencyAlert(
+  current: EmergencyAlert | null,
+  next: EmergencyAlert
+) {
   if (!current || current.id !== next.id) return true
   if (next.status_version !== current.status_version) {
     return next.status_version > current.status_version
@@ -325,16 +375,22 @@ function normalizeAssignment<T extends EmergencyAssignment>(assignment: T): T {
  */
 export function normalizeEmergencyAlert<T extends EmergencyAlert>(alert: T): T {
   if (!alert || typeof alert !== "object") return alert
-  const route = alert.route ? { ...alert.route, steps: alert.route.steps ?? [] } : alert.route
+  const route = alert.route
+    ? { ...alert.route, steps: alert.route.steps ?? [] }
+    : alert.route
   return {
     ...alert,
     unresolved_fields: alert.unresolved_fields ?? [],
     media_warnings: alert.media_warnings ?? [],
     media: alert.media ?? [],
+    resolution_evidence: alert.resolution_evidence ?? [],
     route,
     current_assignment: alert.current_assignment
       ? normalizeAssignment(alert.current_assignment)
       : alert.current_assignment,
+    active_assignments: (alert.active_assignments ?? []).map(
+      normalizeAssignment
+    ),
     assignments: (alert.assignments ?? []).map(normalizeAssignment),
     status_events: alert.status_events ?? [],
     timeline: alert.timeline ?? [],
@@ -385,14 +441,14 @@ export function listEmergencyCategories() {
 }
 
 export function getActiveEmergency() {
-  return apiRequest<EmergencyAlert | undefined>("/emergencies/mine/active/").then((alert) =>
-    alert ? normalizeEmergencyAlert(alert) : alert,
-  )
+  return apiRequest<EmergencyAlert | undefined>(
+    "/emergencies/mine/active/"
+  ).then((alert) => (alert ? normalizeEmergencyAlert(alert) : alert))
 }
 
 export function listMyEmergencies() {
   return alertListPromise(
-    apiRequest<EmergencyAlert[]>("/emergencies/mine/").then(unwrapList),
+    apiRequest<EmergencyAlert[]>("/emergencies/mine/").then(unwrapList)
   )
 }
 
@@ -404,18 +460,18 @@ export function listMyEmergencies() {
 export function listEmergencyQueue(scope?: "active" | "all") {
   return alertListPromise(
     apiRequest<EmergencyAlert[]>(
-      scope === "all" ? "/emergencies/queue/?scope=all" : "/emergencies/queue/",
-    ).then(unwrapList),
+      scope === "all" ? "/emergencies/queue/?scope=all" : "/emergencies/queue/"
+    ).then(unwrapList)
   )
 }
 
 export function listAssignedEmergencies() {
   return alertListPromise(
-    apiRequest<EmergencyAlert[]>("/emergencies/assigned/").then(unwrapList),
+    apiRequest<EmergencyAlert[]>("/emergencies/assigned/").then(unwrapList)
   )
 }
 
-/** Availability toggle. The unit is server-side only, same as shift start. */
+/** Legacy duty endpoint retained for responder shift controls. */
 export function updateEmergencyDuty(payload: {
   is_on_duty: boolean
   latitude?: number
@@ -465,10 +521,12 @@ export function startResponderShift(payload: {
   })
 }
 
-export function endResponderShift(payload: {
-  latitude?: number
-  longitude?: number
-} = {}) {
+export function endResponderShift(
+  payload: {
+    latitude?: number
+    longitude?: number
+  } = {}
+) {
   return apiRequest<ResponderShift>("/emergencies/shifts/end/", {
     method: "POST",
     body: JSON.stringify({
@@ -483,17 +541,35 @@ export function getEmergency(id: number) {
   return alertRequest(`/emergencies/${id}/`)
 }
 
+/** Official repair action: replay the alert's persisted lifecycle to participants. */
+export function replayEmergencyNotifications(id: number, recipientIds?: number[]) {
+  return apiRequest<{ events: number; created: number; queued: number; skipped: number }>(
+    `/emergencies/${id}/notifications/replay/`,
+    {
+      method: "POST",
+      body: JSON.stringify(
+        recipientIds?.length ? { recipient_ids: recipientIds } : {}
+      ),
+    }
+  )
+}
+
 /**
  * `steps` is the only way to get turn-by-turn; bulk payloads never carry it.
  * `refresh` bypasses the server's route cache — assigned responder only, and
  * throttled, so it is for deviation re-routing, not for polling.
  */
-export function getEmergencyRoute(id: number, { steps = false, refresh = false } = {}) {
+export function getEmergencyRoute(
+  id: number,
+  { steps = false, refresh = false } = {}
+) {
   const query = new URLSearchParams()
   if (steps) query.set("steps", "1")
   if (refresh) query.set("refresh", "1")
   const suffix = query.toString()
-  return apiRequest<EmergencyRoute>(`/emergencies/${id}/route/${suffix ? `?${suffix}` : ""}`)
+  return apiRequest<EmergencyRoute>(
+    `/emergencies/${id}/route/${suffix ? `?${suffix}` : ""}`
+  )
 }
 
 /** Sets the profile on the caller's own assignment, and returns the new leg. */
@@ -524,7 +600,10 @@ export interface EmergencyChatMessage {
   is_mine: boolean
 }
 
-export function listEmergencyChat(alertId: number, options: { afterId?: number; beforeId?: number; limit?: number } = {}) {
+export function listEmergencyChat(
+  alertId: number,
+  options: { afterId?: number; beforeId?: number; limit?: number } = {}
+) {
   const params = new URLSearchParams()
   if (options.afterId) params.set("after", String(options.afterId))
   if (options.beforeId) params.set("before", String(options.beforeId))
@@ -533,7 +612,11 @@ export function listEmergencyChat(alertId: number, options: { afterId?: number; 
   return apiRequest<EmergencyChatMessage[]>(`/emergencies/${alertId}/chat/${q}`)
 }
 
-export function sendEmergencyChat(alertId: number, body: string, file?: File | null) {
+export function sendEmergencyChat(
+  alertId: number,
+  body: string,
+  file?: File | null
+) {
   const payload = file ? new FormData() : JSON.stringify({ body })
   if (file && payload instanceof FormData) {
     payload.append("body", body)
@@ -559,22 +642,34 @@ export function assignEmergency(id: number, responderId: number) {
   })
 }
 
-export function reassignEmergency(id: number, responderId: number, note: string, statusVersion: number) {
+export function reassignEmergency(
+  id: number,
+  responderId: number,
+  note: string,
+  statusVersion: number
+) {
   return alertRequest(`/emergencies/${id}/reassign/`, {
     method: "POST",
-    body: JSON.stringify({ responder_id: responderId, note, status_version: statusVersion }),
+    body: JSON.stringify({
+      responder_id: responderId,
+      note,
+      status_version: statusVersion,
+    }),
   })
 }
 
 export function removeEmergencyAssignment(
   id: number,
   assignmentId: number,
-  payload: { reason: string; status_version: number },
+  payload: { reason: string; status_version: number }
 ) {
-  return alertRequest(`/emergencies/${id}/assignments/${assignmentId}/remove/`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  })
+  return alertRequest(
+    `/emergencies/${id}/assignments/${assignmentId}/remove/`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  )
 }
 
 export function createEmergencyAppeal(id: number, reason: string) {
@@ -591,11 +686,17 @@ export function listEmergencyAppeals(status?: string) {
   return apiRequest<EmergencyAppeal[]>(`/emergencies/appeals/${query}`)
 }
 
-export function reviewEmergencyAppeal(appealId: number, payload: { status: "approved" | "denied"; decision_note?: string }) {
-  return apiRequest<EmergencyAppeal>(`/emergencies/appeals/${appealId}/review/`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  })
+export function reviewEmergencyAppeal(
+  appealId: number,
+  payload: { status: "approved" | "denied"; decision_note?: string }
+) {
+  return apiRequest<EmergencyAppeal>(
+    `/emergencies/appeals/${appealId}/review/`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  )
 }
 
 /**
@@ -607,7 +708,7 @@ export function setEmergencyDisposition(
   id: number,
   status: "false_alarm" | "invalid",
   note: string,
-  statusVersion?: number,
+  statusVersion?: number
 ) {
   return alertRequest(`/emergencies/${id}/disposition/`, {
     method: "POST",
@@ -621,7 +722,12 @@ export function setEmergencyDisposition(
 
 export function sendEmergencyLocationPing(
   id: number,
-  payload: { latitude: number; longitude: number; accuracy?: number | null },
+  payload: {
+    latitude: number
+    longitude: number
+    accuracy?: number | null
+    timestamp?: number
+  }
 ) {
   return alertRequest(`/emergencies/${id}/location-pings/`, {
     method: "POST",
@@ -629,7 +735,10 @@ export function sendEmergencyLocationPing(
       ...payload,
       latitude: normalizeCoordinate(payload.latitude),
       longitude: normalizeCoordinate(payload.longitude),
-      accuracy: payload.accuracy == null ? payload.accuracy : Number(payload.accuracy.toFixed(2)),
+      accuracy:
+        payload.accuracy == null
+          ? payload.accuracy
+          : Number(payload.accuracy.toFixed(2)),
     }),
   })
 }
@@ -648,10 +757,17 @@ export function markEmergencyArrived(id: number, note = "") {
   })
 }
 
-export function resolveEmergency(id: number, note = "") {
+export function resolveEmergency(
+  id: number,
+  noteOrFormData: string | FormData = ""
+) {
+  const body =
+    typeof noteOrFormData === "string"
+      ? JSON.stringify({ note: noteOrFormData })
+      : noteOrFormData
   return alertRequest(`/emergencies/${id}/resolve/`, {
     method: "POST",
-    body: JSON.stringify({ note }),
+    body,
   })
 }
 
@@ -665,12 +781,13 @@ export interface EmergencyCommunityComment {
   author: { id: number; full_name: string }
   is_mine: boolean
   created_at: string
+  attachment?: import("./api").PublicCommentAttachment | null
   replies?: EmergencyCommunityComment[]
 }
 
 export function listEmergencyCommunityComments(alertId: number) {
   return apiRequest<EmergencyCommunityComment[]>(
-    `/emergencies/${alertId}/community-comments/`,
+    `/emergencies/${alertId}/community-comments/`
   )
 }
 
@@ -678,20 +795,34 @@ export function addEmergencyCommunityComment(
   alertId: number,
   body: string,
   parent: number | null = null,
+  media?: File | null
 ) {
+  if (media) {
+    const form = new FormData()
+    if (body.trim()) form.append("body", body)
+    if (parent != null) form.append("parent", String(parent))
+    form.append("media", media)
+    return apiRequest<EmergencyCommunityComment>(
+      `/emergencies/${alertId}/community-comments/`,
+      { method: "POST", body: form }
+    )
+  }
   return apiRequest<EmergencyCommunityComment>(
     `/emergencies/${alertId}/community-comments/`,
-    { method: "POST", body: JSON.stringify({ body, parent }) },
+    { method: "POST", body: JSON.stringify({ body, parent }) }
   )
 }
 
 export function removeEmergencyCommunityComment(
   alertId: number,
   commentId: number,
-  reason = "",
+  reason = ""
 ) {
-  return apiRequest<void>(`/emergencies/${alertId}/community-comments/${commentId}/`, {
-    method: "DELETE",
-    body: JSON.stringify({ reason }),
-  })
+  return apiRequest<void>(
+    `/emergencies/${alertId}/community-comments/${commentId}/`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({ reason }),
+    }
+  )
 }

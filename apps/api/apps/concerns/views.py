@@ -2,7 +2,9 @@ from datetime import timedelta
 from io import BytesIO
 
 import logging
+import math
 import re
+from importlib import import_module
 
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 
@@ -19,6 +21,7 @@ from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
 from apps.accounts.media_services import build_redacted_preview_bytes, log_raw_media_access, placeholder_preview_jpeg
@@ -51,6 +54,7 @@ from apps.accounts.views import request_meta, touch_last_seen
 from apps.notifications.services import create_user_notification, notify_status_change
 from apps.pagination import paginate_response
 from apps.concerns.ai.duplicate_detector import report_fingerprints
+from apps.concerns.ai.gemma_analyzer import low_information_reason
 
 from .models import (
     Announcement,
@@ -72,6 +76,7 @@ from .models import (
     ConcernMedia,
     ConcernMediaRedaction,
     ConcernOfficialRemark,
+    PublicCommentAttachment,
     ConcernResolutionEvidence,
     ConcernTimelineEntry,
     ConcernStatusEvent,
@@ -105,6 +110,7 @@ from .serializers import (
     ConcernCommentCreateSerializer,
     ConcernCommentSerializer,
     ConcernCreateSerializer,
+    GuestConcernCreateSerializer,
     ConcernClarificationSerializer,
     ContentFlagSerializer,
     ContentFlagReviewSerializer,
@@ -133,9 +139,10 @@ from .serializers import (
 )
 from .services import (
     concern_media_is_publicly_displayable,
+    ensure_concern_media_preview,
     user_can_access_concern_media_raw,
 )
-from .tasks import enqueue_concern_ai, enqueue_concern_media_privacy, enqueue_content_moderation_ai
+from .tasks import enqueue_concern_media_privacy, enqueue_content_moderation_ai
 from .moderation import execute_takedown, restore_automated_takedown
 
 logger = logging.getLogger(__name__)
@@ -149,19 +156,112 @@ ACTIVE_STATUSES = {
 }
 
 
+def _discard_unaccepted_concern(concern):
+    """Remove the temporary concern and every validation artifact it created."""
+    from .models import LlmDecisionLog
+
+    # LLM logs intentionally use SET_NULL for normal historical audit rows,
+    # but a pre-commit rejection must not leave an orphaned decision behind.
+    LlmDecisionLog.objects.filter(concern_id=concern.pk).delete()
+    concern.delete()
+
+
+def _validation_photo_verdicts(concern):
+    """Return the per-upload photo feedback before a rejected row is deleted.
+
+    The intake pipeline keeps the image review in the AI assessment's raw
+    result.  A rejected concern is intentionally removed, so the only safe
+    time to copy that result into the resident response is immediately before
+    cleanup.  This keeps the upload in the composer, marks the exact photo,
+    and still guarantees that no rejected concern or media row is persisted.
+    """
+    assessment = ConcernAiAssessment.objects.filter(concern_id=concern.pk).first()
+    raw_result = getattr(assessment, "raw_result", None) or {}
+    review = raw_result.get("review") if isinstance(raw_result, dict) else {}
+    details = dict(review) if isinstance(review, dict) else {}
+    integrity = raw_result.get("media_integrity") if isinstance(raw_result, dict) else {}
+    if isinstance(integrity, dict):
+        details["media_integrity"] = integrity.get("findings") or []
+
+    photo = raw_result.get("photo") if isinstance(raw_result, dict) else {}
+    if "image_review_succeeded" not in details and isinstance(photo, dict):
+        details["image_review_succeeded"] = photo.get("image_review_succeeded")
+
+    image_count = concern.media.filter(mime_type__startswith="image/").count()
+    if not image_count:
+        return []
+
+    from apps.concerns.classification_api import _photo_verdict_payload
+
+    return _photo_verdict_payload(
+        details,
+        photo_count=image_count,
+        image_errors={},
+        prepared_indices=list(range(image_count)),
+    )
+
+
+def _validate_concern_before_commit(concern):
+    """Run automated validation before a concern is allowed to persist.
+
+    A rejected report is feedback for the resident, not an operational record.
+    Keep the row inside the request transaction while the existing AI pipeline
+    evaluates it, then remove it before commit when validation does not pass.
+    This also removes the uploaded media, so a rejected photo can be corrected
+    and uploaded again instead of being treated as a duplicate forever.
+    """
+    from apps.concerns.ai.pipeline import process_concern_ai
+
+    try:
+        process_concern_ai(concern.pk)
+    except Exception:
+        logger.exception("Concern validation failed before commit for concern_id=%s", concern.pk)
+        _discard_unaccepted_concern(concern)
+        return Response(
+            {
+                "description": [
+                    "We could not validate this report right now. Please check the details and try again."
+                ]
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    concern.refresh_from_db()
+    if concern.validation_status == Concern.ValidationStatus.ACCEPTED:
+        return None
+
+    message = (
+        concern.validation_summary.strip()
+        or "This report could not be accepted. Please check the details and try again."
+    )
+    rejection_code = concern.rejection_code
+    photo_verdicts = _validation_photo_verdicts(concern)
+    _discard_unaccepted_concern(concern)
+    return Response(
+        {
+            "code": rejection_code or "automated_validation_rejected",
+            "description": [message],
+            "photo_verdicts": photo_verdicts,
+        },
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
 def _auto_escalate_concern(concern, request, *, emergency_type: str, auto_escalate: bool, ip_meta: dict):
     """Create and route the emergency companion selected by the resident
     precheck.
 
     The resident never chooses an emergency type. The precheck supplies the
     model's configured, ongoing-emergency result. The normal emergency router
-    remains authoritative: if no responder map exists, it leaves the alert in
-    its escalation-required state for an official.
+    remains authoritative: the configured unit owns the incident immediately,
+    while automatic dispatch waits for an eligible responder from that unit.
     """
     if not auto_escalate or not emergency_type:
         return None
 
-    from apps.emergencies.models import EmergencyAlert, EmergencyCategory
+    emergency_models = import_module("apps.emergencies.models")
+    EmergencyAlert = emergency_models.EmergencyAlert
+    EmergencyCategory = emergency_models.EmergencyCategory
     from apps.emergencies.views import (
         auto_route_alert,
         create_status_event,
@@ -171,8 +271,15 @@ def _auto_escalate_concern(concern, request, *, emergency_type: str, auto_escala
     )
     from apps.emergencies.location_services import classify_location_confidence, schedule_location_resolution
     from apps.notifications.services import notify_emergency_status
+    from apps.concerns.ai.gemma_analyzer import has_concrete_emergency_evidence
 
-    if not EmergencyCategory.objects.filter(code=emergency_type, is_active=True).exists():
+    if not EmergencyCategory.objects.filter(
+        community=concern.community, code=emergency_type, is_active=True
+    ).exists():
+        return None
+    if not has_concrete_emergency_evidence(emergency_type, f"{concern.title} {concern.description}"):
+        # `auto_escalate` comes from the resident precheck, but the submit
+        # endpoint must still reject a stale or fabricated emergency match.
         return None
     if EmergencyAlert.objects.filter(
         reporter=concern.reporter,
@@ -283,7 +390,7 @@ def _schedule_concern_location(concern_id: int) -> None:
 def user_is_department_member(user, department):
     if not user or not user.is_authenticated or not department:
         return False
-    if user.is_staff or user.is_superuser or user.role == user.Role.BARANGAY_OFFICIAL:
+    if user.is_superuser:
         return True
     return Designation.objects.filter(user=user, department=department, is_active=True).exists()
 
@@ -318,7 +425,10 @@ def notify_comment_mentions(comment, mention_ids):
         pk__in=mention_ids,
         is_active=True,
         status=User.Status.VERIFIED,
-    ).exclude(pk=comment.author_id)
+    ).filter(
+        Q(resident_profile__community_id=comment.concern.community_id)
+        | Q(designations__is_active=True, designations__department__community_id=comment.concern.community_id)
+    ).exclude(pk=comment.author_id).distinct()
     notified = set()
     for recipient in recipients:
         create_user_notification(
@@ -406,10 +516,26 @@ def operational_concerns(user, queryset=None):
 
 
 def operational_concern_or_404(user, pk, *, lock=False):
-    queryset = Concern.objects.all()
-    if lock:
-        queryset = queryset.select_for_update()
-    return get_object_or_404(operational_concerns(user, queryset), pk=pk)
+    from apps.community_access import ForeignCommunityReadOnly, concern_access_mode
+
+    candidate = Concern.objects.filter(pk=pk).first()
+    if candidate and concern_access_mode(user, candidate) == "foreign_read_only":
+        raise ForeignCommunityReadOnly()
+    if not lock:
+        return get_object_or_404(operational_concerns(user), pk=pk)
+
+    # `scope_concern_queryset()` ends in `.distinct()` for staff because the
+    # authorization rule joins assignments and department memberships.  That
+    # is valid for a visibility query, but PostgreSQL rejects
+    # `SELECT DISTINCT ... FOR UPDATE`.  Keep the distinct authorization check
+    # in a subquery, then lock the concern row with a plain primary-key query.
+    # The visibility predicate remains part of the locking SQL, so an
+    # unauthorized concern cannot be locked by this path.
+    visible_ids = operational_concerns(user, Concern.objects.filter(pk=pk)).values("pk")
+    return get_object_or_404(
+        Concern.objects.select_for_update().filter(pk__in=visible_ids),
+        pk=pk,
+    )
 
 
 def can_manage_concern_operations(user):
@@ -417,8 +543,7 @@ def can_manage_concern_operations(user):
         user
         and user.is_authenticated
         and (
-            user.is_staff
-            or user.is_superuser
+            user.is_superuser
             or user_has_role_permission(user, "concerns.manage")
         )
     )
@@ -448,16 +573,20 @@ def can_chat_on_concern(user, concern):
     """Private operational thread: reporter, assigned responder, and authorized officials."""
     if not user or not user.is_authenticated:
         return False
+    from apps.community_scope import community_ids_for_user
+
     return (
         user.is_superuser
-        or user.is_staff
-        or user.role == user.Role.BARANGAY_OFFICIAL
         or user.pk == concern.reporter_id
         or concern.assignments.filter(
             assignee=user,
             status=ConcernAssignment.Status.ACTIVE,
         ).exists()
-        or user_has_role_permission(user, "concerns.manage")
+        or concern.community_id in community_ids_for_user(user)
+        and (
+            user.role == user.Role.BARANGAY_OFFICIAL
+            or user_has_role_permission(user, "concerns.manage")
+        )
     )
 
 
@@ -467,6 +596,8 @@ def decorate_concerns(queryset, user):
         .select_related(
             "reporter",
             "reporter__resident_profile",
+            "community",
+            "reporter_community",
             # The duplicate-group walk and the nested category serializer both
             # run per row; without these they issue one query per concern.
             "duplicate_of",
@@ -487,9 +618,13 @@ def decorate_concerns(queryset, user):
             "status_events",
             "status_events__actor",
             "status_events__actor__resident_profile",
+            "status_events__actor__designations__position",
+            "status_events__actor__designations__department",
             "resolution_evidence",
             "resolution_evidence__uploaded_by",
             "resolution_evidence__uploaded_by__resident_profile",
+            "resolution_evidence__uploaded_by__designations__position",
+            "resolution_evidence__uploaded_by__designations__department",
             "assignments",
             "assignments__assignee",
             "assignments__assignee__resident_profile",
@@ -498,6 +633,8 @@ def decorate_concerns(queryset, user):
             "timeline_entries",
             "timeline_entries__actor",
             "timeline_entries__actor__resident_profile",
+            "timeline_entries__actor__designations__position",
+            "timeline_entries__actor__designations__department",
             "form_values",
             "form_values__field",
             "clarifications",
@@ -516,6 +653,8 @@ def decorate_concerns(queryset, user):
             "chat_messages",
             "chat_messages__sender",
             "chat_messages__sender__resident_profile",
+            "chat_messages__sender__designations__position",
+            "chat_messages__sender__designations__department",
             "chat_messages__attachment",
             "category_ref__form_fields",
             "category_ref__department__designations",
@@ -527,8 +666,10 @@ def decorate_concerns(queryset, user):
             "duplicates__media",
             "comments__author",
             "comments__author__resident_profile",
+            "comments__attachment",
             "comments__replies__author",
             "comments__replies__author__resident_profile",
+            "comments__replies__attachment",
         )
         .annotate(
             vote_count=Count("votes", distinct=True),
@@ -629,6 +770,298 @@ class ConcernMediaCheckView(APIView):
         return Response({"files": checked})
 
 
+class GuestConcernThrottle(AnonRateThrottle):
+    """Keep the public intake bounded even when settings are changed."""
+
+    scope = "public_guest_concern"
+    rate = "5/hour"
+
+
+def _notify_anonymous_concern_staff(concern):
+    """Notify only verified staff designated to the incident community."""
+    if (
+        concern.validation_status != Concern.ValidationStatus.ACCEPTED
+        or not concern.assigned_department_id
+    ):
+        return
+    from apps.notifications.models import Notification
+
+    User = get_user_model()
+    recipients = (
+        User.objects.filter(
+            is_active=True,
+            status=User.Status.VERIFIED,
+            role__in=[User.Role.BARANGAY_OFFICIAL, User.Role.FIRST_RESPONDER],
+            designations__is_active=True,
+            designations__department__community=concern.community,
+        )
+        .distinct()
+    )
+    for recipient in recipients:
+        create_user_notification(
+            recipient=recipient,
+            concern=concern,
+            type=Notification.Type.SUBMITTED,
+            title="New anonymous report",
+            body=f"A new issue report was submitted in {concern.community.name}.",
+            community=concern.community,
+            department=concern.assigned_department,
+            event_key=f"anonymous-concern:{concern.pk}",
+        )
+
+
+class GuestConcernCreateView(APIView):
+    """Public submit-only concern intake.
+
+    Guests use the same validation pipeline as residents, but receive only a
+    generic acknowledgement and never a case identifier or reporter profile.
+    A report is not stored when validation rejects it.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [GuestConcernThrottle]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    @transaction.atomic
+    def post(self, request):
+        from apps.accounts.ip_intel import evaluate_request, ip_blocked_response
+        from apps.geo_services import active_communities_for_point
+        from .anonymous_intake import get_anonymous_intake_user
+
+        _, ip_meta, ip_reason = evaluate_request(request)
+        if ip_reason:
+            return ip_blocked_response(ip_reason)
+
+        serializer = GuestConcernCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        latitude = serializer.validated_data["latitude"]
+        longitude = serializer.validated_data["longitude"]
+        matches = active_communities_for_point(latitude, longitude)
+        if len(matches) != 1:
+            return Response(
+                {
+                    "code": "location_outside_active_community",
+                    "detail": "Choose a location inside an active community.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        community = matches[0]
+        reporter = get_anonymous_intake_user(community)
+        client_request_id = serializer.validated_data.get("client_request_id")
+        if client_request_id:
+            existing = Concern.objects.filter(
+                reporter=reporter,
+                client_request_id=client_request_id,
+            ).select_related("community").first()
+            if existing:
+                if existing.validation_status != Concern.ValidationStatus.ACCEPTED:
+                    _discard_unaccepted_concern(existing)
+                else:
+                    return Response(
+                        {
+                            "submitted": True,
+                            "community": {
+                                "public_id": str(existing.community.public_id),
+                                "code": existing.community.code,
+                                "name": existing.community.name,
+                            },
+                            "status": "submitted",
+                        }
+                    )
+
+        # Resolve incident-community configuration before applying category,
+        # dynamic-form, duplicate, or routing rules.
+        configuration = ConcernClassificationConfiguration.current(community)
+        enabled_categories = configuration.enabled_categories or list(Concern.Category.values)
+        category_queryset = list(
+            ConcernCategory.objects.filter(
+                Q(community=community) | Q(community__isnull=True),
+                is_active=True,
+            )
+            .select_related("department")
+            .order_by("community_id", "name")
+        )
+        category_ref = next(
+            (
+                row
+                for row in category_queryset
+                if row.community_id == community.pk
+                and row.code == Concern.Category.OTHERS
+                and row.code in enabled_categories
+            ),
+            None,
+        ) or next(
+            (
+                row
+                for row in category_queryset
+                if row.code == Concern.Category.OTHERS and row.code in enabled_categories
+            ),
+            None,
+        ) or next(
+            (row for row in category_queryset if row.community_id == community.pk and row.code in enabled_categories),
+            None,
+        ) or next((row for row in category_queryset if row.code in enabled_categories), None)
+        selected_category = (
+            category_ref.code
+            if category_ref and category_ref.code in Concern.Category.values
+            else Concern.Category.OTHERS
+        )
+        description = serializer.validated_data["description"]
+        minimum_description_length = max(20, int(configuration.minimum_description_length or 0))
+        if len(description) < minimum_description_length:
+            return Response(
+                {"description": [f"Describe the issue in at least {minimum_description_length} characters."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if low_information_reason(description):
+            return Response(
+                {"description": ["Add a clearer description of the issue."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        validated_media = []
+        media_hashes = set()
+        current_phashes = []
+        media_files = request.FILES.getlist("media")
+        if len(media_files) > 5:
+            return Response({"media": ["You can attach up to 5 photos."]}, status=status.HTTP_400_BAD_REQUEST)
+        for uploaded_file in media_files:
+            try:
+                validated_file = validate_concern_media_file(uploaded_file)
+            except ValidationError as exc:
+                messages = [str(message) for message in getattr(exc, "messages", [])] or [str(exc)]
+                return Response({"media": messages}, status=status.HTTP_400_BAD_REQUEST)
+            media_hash = sha256_file(validated_file)
+            raw_content = validated_file.read()
+            validated_file.seek(0)
+            media_phash = phash_file(raw_content)
+            media_phash_blocks = phash_blocks_file(raw_content)
+            if media_hash in media_hashes or ConcernMedia.objects.filter(sha256_hash=media_hash).exists():
+                return Response({"media": ["This photo was already uploaded before."]}, status=status.HTTP_400_BAD_REQUEST)
+            candidate_ids = phash_candidate_ids(
+                SCOPE_CONCERN_MEDIA,
+                phashes=[media_phash],
+                blocks=media_phash_blocks,
+            )
+            existing_phashes = (
+                list(ConcernMedia.objects.filter(pk__in=candidate_ids).exclude(phash="").values_list("phash", "phash_blocks"))
+                if candidate_ids
+                else []
+            )
+            if media_looks_duplicate(media_phash, media_phash_blocks, [*existing_phashes, *current_phashes]):
+                return Response({"media": ["This image appears to have been uploaded before."]}, status=status.HTTP_400_BAD_REQUEST)
+            media_hashes.add(media_hash)
+            current_phashes.append((media_phash, media_phash_blocks))
+            validated_media.append((uploaded_file, validated_file, media_hash, media_phash, media_phash_blocks))
+
+        title = description.splitlines()[0].strip()[:160] or "Anonymous report"
+        fingerprints = report_fingerprints(
+            barangay=community.name,
+            category=selected_category,
+            title=title,
+            description=description,
+            latitude=latitude,
+            longitude=longitude,
+            precision=configuration.report_duplicate_location_precision,
+        )
+        if (
+            configuration.report_duplicate_detection_enabled
+            and configuration.report_duplicate_action == ConcernClassificationConfiguration.ReportDuplicateAction.BLOCK
+            and fingerprints["report_fingerprint"]
+            and Concern.objects.filter(
+                community=community,
+                report_fingerprint=fingerprints["report_fingerprint"],
+            )
+            .exclude(status=Concern.Status.REJECTED)
+            .exists()
+        ):
+            return Response(
+                {"code": "duplicate_report", "detail": "A similar report already exists near this location."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        concern = Concern.objects.create(
+            client_request_id=client_request_id,
+            reporter=reporter,
+            is_anonymous=True,
+            community=community,
+            reporter_community=None,
+            category_ref=category_ref,
+            title=title,
+            description=description,
+            category=selected_category,
+            status=Concern.Status.SUBMITTED,
+            validation_status=Concern.ValidationStatus.PENDING,
+            validation_summary="Required report checks passed. Advanced analysis is pending.",
+            update_text="Report submitted for automated validation.",
+            address=serializer.validated_data["address"],
+            latitude=latitude,
+            longitude=longitude,
+            location_source=serializer.validated_data.get("location_source", "manual_pin"),
+            barangay=community.name,
+            visibility=(
+                Concern.Visibility.COMMUNITY
+                if not category_ref or category_ref.public_feed_allowed
+                else Concern.Visibility.PRIVATE
+            ),
+            report_fingerprint=fingerprints["report_fingerprint"],
+            report_text_fingerprint=fingerprints["report_text_fingerprint"],
+            report_location_bucket=fingerprints["report_location_bucket"],
+            ip_asn=ip_meta.get("asn", ""),
+            ip_country=ip_meta.get("country", ""),
+            ip_org=ip_meta.get("org", ""),
+            ip_verdict=ip_meta.get("verdict", ""),
+            ip_score=ip_meta.get("score"),
+        )
+        concern.tracking_number = f"RPT-{concern.created_at.year}-{concern.pk:06d}"
+        concern.save(update_fields=["tracking_number"])
+        ConcernStatusEvent.objects.create(
+            concern=concern,
+            status=Concern.Status.SUBMITTED,
+            note="Anonymous report submitted.",
+            actor=None,
+        )
+        create_timeline_entry(
+            concern=concern,
+            event_type=ConcernTimelineEntry.EventType.SUBMITTED,
+            status=Concern.Status.SUBMITTED,
+            message="Anonymous report submitted.",
+            actor=None,
+        )
+        if category_ref:
+            description_field = category_ref.form_fields.filter(field_key="description", is_active=True).first()
+            if description_field:
+                ConcernFormValue.objects.create(concern=concern, field=description_field, value=description)
+        ConcernAiAssessment.objects.create(concern=concern, status=ConcernAiAssessment.Status.PENDING)
+        for uploaded_file, validated_file, media_hash, media_phash, media_phash_blocks in validated_media:
+            ConcernMedia.objects.create(
+                concern=concern,
+                file=validated_file,
+                original_filename=uploaded_file.name,
+                mime_type=getattr(validated_file, "content_type", "") or "",
+                file_size=validated_file.size,
+                sha256_hash=media_hash,
+                phash=media_phash,
+                phash_blocks=media_phash_blocks,
+            )
+        validation_error = _validate_concern_before_commit(concern)
+        if validation_error is not None:
+            return validation_error
+        return Response(
+            {
+                "submitted": True,
+                "community": {
+                    "public_id": str(community.public_id),
+                    "code": community.code,
+                    "name": community.name,
+                },
+                "status": "submitted",
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class ConcernListCreateView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
@@ -639,8 +1072,9 @@ class ConcernListCreateView(APIView):
             "Submit a new concern. Multipart form-data: `title`, `description`, "
             "`category`, location fields, optional `media` photos (up to 5). Every "
             "photo passes signature + pixel validation; duplicates by hash or "
-            "perceptual similarity are rejected with 400. AI triage runs in the "
-            "background after creation."
+            "perceptual similarity are rejected with 400. Automated validation "
+            "finishes before an accepted report is committed; rejected reports "
+            "are returned as feedback and are not stored."
         ),
         request=ConcernCreateSerializer,
         responses={
@@ -669,33 +1103,46 @@ class ConcernListCreateView(APIView):
                 client_request_id=client_request_id,
             ).first()
             if existing:
-                decorated = decorate_concerns(Concern.objects.filter(pk=existing.pk), request.user)[0]
-                response_payload = ConcernSerializer(decorated, context={"request": request}).data
-                from apps.emergencies.models import EmergencyAlert
-                existing_alert = EmergencyAlert.objects.filter(source_concern=existing).order_by("-created_at").first()
-                if existing_alert:
-                    from apps.emergencies.views import serialize_alert
-                    response_payload["escalated_alert"] = serialize_alert(existing_alert, request)
-                return Response(response_payload)
+                if existing.validation_status != Concern.ValidationStatus.ACCEPTED:
+                    _discard_unaccepted_concern(existing)
+                else:
+                    decorated = decorate_concerns(Concern.objects.filter(pk=existing.pk), request.user)[0]
+                    response_payload = ConcernSerializer(decorated, context={"request": request}).data
+                    emergency_models = import_module("apps.emergencies.models")
+                    existing_alert = emergency_models.EmergencyAlert.objects.filter(source_concern=existing).order_by("-created_at").first()
+                    if existing_alert:
+                        from apps.emergencies.views import serialize_alert
+                        response_payload["escalated_alert"] = serialize_alert(existing_alert, request)
+                    return Response(response_payload)
         category_ref = None
-        assigned_department = None
-        community = getattr(getattr(request.user, "resident_profile", None), "community", None)
-        if not community:
+        reporter_community = getattr(getattr(request.user, "resident_profile", None), "community", None)
+        if not reporter_community:
             return Response({"detail": "Your account is not assigned to an active community."}, status=status.HTTP_409_CONFLICT)
         located_community_id = (serializer.validated_data.get("_location_review") or {}).get("community_id")
-        if located_community_id and located_community_id != community.pk:
-            return Response(
-                {"location": ["The pinned location must be inside your assigned community."]},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        community_model = import_module("apps.emergencies.models").Community
+
+        community = community_model.objects.filter(
+            pk=located_community_id or reporter_community.pk,
+            status=community_model.Status.ACTIVE,
+        ).first()
+        if not community:
+            return Response({"location": ["The pinned location is outside every active community."]}, status=status.HTTP_400_BAD_REQUEST)
         category_id = serializer.validated_data.get("category_id")
         if category_id:
-            category_ref = get_object_or_404(ConcernCategory, pk=category_id, community=community, is_active=True)
-            rule = category_ref.routing_rules.filter(is_active=True).select_related("department").first()
-            assigned_department = rule.department if rule else category_ref.department
+            selected_row = get_object_or_404(ConcernCategory, pk=category_id, is_active=True)
+            category_ref = ConcernCategory.objects.filter(
+                community=community,
+                code=selected_row.code,
+                is_active=True,
+            ).first()
+            if not category_ref:
+                return Response(
+                    {"category": ["Choose a category available in the incident community."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             selected_category = Concern.Category.OTHERS
         else:
-            configuration = ConcernClassificationConfiguration.current()
+            configuration = ConcernClassificationConfiguration.current(community)
             enabled_categories = configuration.enabled_categories or list(Concern.Category.values)
             selected_category = serializer.validated_data["category"]
             category_ref = (
@@ -712,16 +1159,14 @@ class ConcernListCreateView(APIView):
             # Resolve the legacy string to a real category row so every concern
             # carries a FK, not just those filed through the newer path. Without
             # this, routing and the category breakdown silently skip them.
-            if category_ref:
-                rule = (
-                    category_ref.routing_rules.filter(is_active=True)
-                    .select_related("department")
-                    .first()
-                )
-                assigned_department = rule.department if rule else category_ref.department
         description = serializer.validated_data.get("description", "").strip()
         if category_ref and category_ref.description_required and len(description) < 20:
             return Response({"description": ["Describe the issue in at least 20 characters."]}, status=status.HTTP_400_BAD_REQUEST)
+        if low_information_reason(description):
+            return Response(
+                {"description": ["Add a clearer description of the issue."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if category_ref and category_ref.location_required:
             if serializer.validated_data.get("latitude") is None or serializer.validated_data.get("longitude") is None or not serializer.validated_data.get("address", "").strip():
                 return Response({"address": ["Pin where the issue is located."]}, status=status.HTTP_400_BAD_REQUEST)
@@ -774,9 +1219,9 @@ class ConcernListCreateView(APIView):
             media_hashes.add(media_hash)
             current_phashes.append((media_phash, media_phash_blocks))
             validated_media.append((uploaded_file, validated_file, media_hash, media_phash, media_phash_blocks))
-        duplicate_config = ConcernClassificationConfiguration.current()
+        duplicate_config = ConcernClassificationConfiguration.current(community)
         fingerprints = report_fingerprints(
-            barangay=getattr(getattr(request.user, "resident_profile", None), "barangay", "") or "Marikina Heights",
+            barangay=community.name,
             category=selected_category,
             title=serializer.validated_data["title"],
             description=description,
@@ -787,7 +1232,10 @@ class ConcernListCreateView(APIView):
         if duplicate_config.report_duplicate_detection_enabled and duplicate_config.report_duplicate_action == ConcernClassificationConfiguration.ReportDuplicateAction.BLOCK:
             duplicate_exists = bool(
                 fingerprints["report_fingerprint"]
-                and Concern.objects.filter(report_fingerprint=fingerprints["report_fingerprint"]).exclude(status=Concern.Status.REJECTED).exists()
+                and Concern.objects.filter(
+                    community=community,
+                    report_fingerprint=fingerprints["report_fingerprint"],
+                ).exclude(status=Concern.Status.REJECTED).exists()
             )
             if duplicate_exists:
                 return Response(
@@ -804,13 +1252,13 @@ class ConcernListCreateView(APIView):
         )
         concern = Concern.objects.create(
             community=community,
+            reporter_community=reporter_community,
             client_request_id=client_request_id,
             reporter=request.user,
             title=serializer.validated_data["title"],
             description=serializer.validated_data.get("description", ""),
             category=selected_category,
             category_ref=category_ref,
-            assigned_department=assigned_department,
             visibility=effective_visibility,
             address=serializer.validated_data.get("address", ""),
             latitude=serializer.validated_data.get("latitude"),
@@ -820,7 +1268,7 @@ class ConcernListCreateView(APIView):
             report_location_bucket=fingerprints["report_location_bucket"],
             location_source=serializer.validated_data.get("location_source", ""),
             location_accuracy=serializer.validated_data.get("location_accuracy"),
-            barangay=getattr(getattr(request.user, "resident_profile", None), "barangay", "") or "Marikina Heights",
+            barangay=community.name,
             validation_status=Concern.ValidationStatus.PENDING,
             validation_summary=validation_summary,
             update_text="Report submitted for location review." if pending_location_review else "Report submitted for automated validation.",
@@ -857,7 +1305,6 @@ class ConcernListCreateView(APIView):
                     raise ValidationError({field.field_key: "This field is required."})
                 if value not in (None, "", []):
                     ConcernFormValue.objects.create(concern=concern, field=field, value=str(value))
-        notify_status_change(concern)
         ConcernAiAssessment.objects.create(concern=concern, status=ConcernAiAssessment.Status.PENDING)
         for uploaded_file, validated_file, media_hash, media_phash, media_phash_blocks in validated_media:
             ConcernMedia.objects.create(
@@ -870,11 +1317,13 @@ class ConcernListCreateView(APIView):
                 phash=media_phash,
                 phash_blocks=media_phash_blocks,
             )
+        validation_error = _validate_concern_before_commit(concern)
+        if validation_error is not None:
+            return validation_error
         decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
         from apps.live_map import concern_payload
         from apps.notifications.services import broadcast_live_map_event
         transaction.on_commit(lambda: broadcast_live_map_event("concern.created", {"concern": concern_payload(decorated)}))
-        transaction.on_commit(lambda: enqueue_concern_ai(concern.pk))
         transaction.on_commit(lambda: _schedule_concern_location(concern.pk))
         response_payload = ConcernSerializer(decorated, context={"request": request}).data
         escalated_alert = _auto_escalate_concern(
@@ -907,7 +1356,10 @@ class MyConcernListView(APIView):
     )
     def get(self, request):
         touch_last_seen(request.user)
-        queryset = Concern.objects.filter(reporter=request.user)
+        queryset = Concern.objects.filter(
+            reporter=request.user,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
         status_filter = request.query_params.get("status")
         if status_filter and status_filter != "all":
             if status_filter == "active":
@@ -948,25 +1400,29 @@ class AssignedConcernListView(APIView):
         touch_last_seen(request.user)
         User = get_user_model()
         if not (
-            request.user.is_staff
-            or request.user.is_superuser
+            request.user.is_superuser
             or request.user.role in {User.Role.FIRST_RESPONDER, User.Role.BARANGAY_OFFICIAL}
         ):
             return Response(
                 {"detail": "You do not have permission to view assigned concerns."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        queryset = Concern.objects.filter(
-            Q(
-                assignments__assignee=request.user,
-                assignments__status=ConcernAssignment.Status.ACTIVE,
-            )
-            | Q(
+        assigned_filter = Q(
+            assignments__assignee=request.user,
+            assignments__status=ConcernAssignment.Status.ACTIVE,
+        )
+        # Responders see only work explicitly assigned to their account. The
+        # department-wide unassigned fallback remains for officials managing
+        # a queue, never for a responder's personal workspace.
+        if request.user.role == User.Role.BARANGAY_OFFICIAL or request.user.is_superuser:
+            assigned_filter |= Q(
                 assignments__status=ConcernAssignment.Status.ACTIVE,
                 assignments__assignee__isnull=True,
                 assignments__department__designations__user=request.user,
                 assignments__department__designations__is_active=True,
-            ),
+            )
+        queryset = Concern.objects.filter(
+            assigned_filter,
             validation_status=Concern.ValidationStatus.ACCEPTED,
         ).exclude(status__in=[Concern.Status.RESOLVED, Concern.Status.REJECTED]).distinct().order_by("-created_at", "-id")
         queryset = queryset.select_related("assigned_department", "category_ref")
@@ -1037,7 +1493,7 @@ def _record_official_view(user, concern):
     """
     if concern.reporter_id == user.pk:
         return
-    is_official = bool(user.is_staff or user.is_superuser or user.role == user.Role.BARANGAY_OFFICIAL)
+    is_official = bool(user.is_superuser or user.role == user.Role.BARANGAY_OFFICIAL)
     if not is_official:
         return
     view, created = ConcernView.objects.get_or_create(concern=concern, viewer=user)
@@ -1070,7 +1526,13 @@ class ConcernDetailView(APIView):
             return Response({"detail": "You do not have permission to view this report."}, status=status.HTTP_403_FORBIDDEN)
         _record_official_view(request.user, concern)
         decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
-        return Response(ConcernSerializer(decorated, context={"request": request}).data)
+        from apps.community_access import concern_access_mode
+
+        access_mode = concern_access_mode(request.user, decorated)
+        return Response(ConcernSerializer(
+            decorated,
+            context={"request": request, "privacy_safe": access_mode not in {"owner", "operational"}},
+        ).data)
 
 
 class ConcernPublicDetailView(APIView):
@@ -1083,16 +1545,10 @@ class ConcernPublicDetailView(APIView):
             return Response({"detail": "You do not have permission to view this report."}, status=status.HTTP_403_FORBIDDEN)
         _record_official_view(request.user, concern)
         decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
-        can_view_private_case = bool(
-            request.user.is_superuser
-            or request.user.is_staff
-            or request.user.role == request.user.Role.BARANGAY_OFFICIAL
-            or request.user.pk == concern.reporter_id
-            or concern.assignments.filter(
-                assignee=request.user,
-                status=ConcernAssignment.Status.ACTIVE,
-            ).exists()
-        )
+        from apps.community_access import concern_access_mode
+
+        access_mode = concern_access_mode(request.user, decorated)
+        can_view_private_case = access_mode in {"owner", "operational"}
         return Response(
             ConcernSerializer(
                 decorated,
@@ -1101,17 +1557,92 @@ class ConcernPublicDetailView(APIView):
         )
 
 
+class ConcernPublishView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        concern = get_object_or_404(
+            Concern.objects.select_for_update(),
+            pk=pk,
+            reporter=request.user,
+        )
+        if concern.validation_status != Concern.ValidationStatus.ACCEPTED:
+            return Response(
+                {"validation_status": ["This report must be accepted before it can be shared publicly."]},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if concern.status == Concern.Status.REJECTED:
+            return Response(
+                {"status": ["Rejected reports cannot be shared publicly."]},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if concern.visibility != Concern.Visibility.COMMUNITY:
+            concern.visibility = Concern.Visibility.COMMUNITY
+            concern.publication_block_reason = ""
+            concern.update_text = "Report shared with the community."
+            concern.status_version += 1
+            concern.save(
+                update_fields=[
+                    "visibility",
+                    "publication_block_reason",
+                    "update_text",
+                    "status_version",
+                    "updated_at",
+                ]
+            )
+            create_timeline_entry(
+                concern=concern,
+                event_type=ConcernTimelineEntry.EventType.CUSTOM,
+                status=concern.status,
+                message="Report shared with the community.",
+                actor=request.user,
+                metadata={"visibility": Concern.Visibility.COMMUNITY},
+            )
+            create_audit_log(
+                "concern.published",
+                actor=request.user,
+                target_user=concern.reporter,
+                metadata={"concern_id": concern.pk},
+                request_meta=request_meta(request),
+            )
+
+            from apps.live_map import concern_payload
+            from apps.notifications.services import broadcast_live_map_event
+
+            decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
+            transaction.on_commit(
+                lambda: broadcast_live_map_event(
+                    "concern.updated",
+                    {"concern": concern_payload(decorated)},
+                )
+            )
+        else:
+            decorated = decorate_concerns(Concern.objects.filter(pk=concern.pk), request.user)[0]
+
+        return Response(ConcernSerializer(decorated, context={"request": request}).data)
+
+
 class ConcernFeedView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         touch_last_seen(request.user)
-        from apps.community_scope import scope_concern_queryset
-        queryset = scope_concern_queryset(Concern.objects.filter(
+        from apps.community_scope import community_ids_for_user
+        queryset = Concern.objects.filter(
             visibility=Concern.Visibility.COMMUNITY,
             validation_status=Concern.ValidationStatus.ACCEPTED,
             status__in=FEED_VISIBLE_STATUSES,
-        ), request.user)
+        )
+        home_ids = community_ids_for_user(request.user)
+        scope = (request.query_params.get("scope") or "home").strip().lower()
+        if scope == "home":
+            queryset = queryset.filter(community_id__in=home_ids)
+        elif scope == "other":
+            queryset = queryset.exclude(community_id__in=home_ids)
+        elif scope != "all":
+            return Response({"scope": ["Use home, other, or all."]}, status=status.HTTP_400_BAD_REQUEST)
         category = request.query_params.get("category")
         if category and category != "all":
             queryset = queryset.filter(category=category)
@@ -1130,6 +1661,30 @@ class ConcernFeedView(APIView):
         if date_to:
             queryset = queryset.filter(created_at__date__lte=date_to)
         concerns = decorate_concerns(queryset, request.user)
+
+        # Server-side "nearby" support: the client passes its own position and
+        # we attach a coarse distance per concern. The concern's exact
+        # coordinates stay hidden (privacy_safe below), but distance-from-viewer
+        # is safe — the viewer already knows where they are.
+        try:
+            viewer_lat = float(request.query_params.get("lat", "").strip() or "nan")
+            viewer_lng = float(request.query_params.get("lng", "").strip() or "nan")
+        except (TypeError, ValueError):
+            viewer_lat = viewer_lng = float("nan")
+        if math.isfinite(viewer_lat) and math.isfinite(viewer_lng):
+            from apps.geo_services import haversine_meters
+
+            for concern in concerns:
+                if concern.latitude is None or concern.longitude is None:
+                    concern.distance_meters = None
+                else:
+                    concern.distance_meters = haversine_meters(
+                        viewer_lat,
+                        viewer_lng,
+                        float(concern.latitude),
+                        float(concern.longitude),
+                    )
+
         concerns.sort(key=lambda item: (item.priority_score, item.updated_at, item.pk), reverse=True)
         return Response(ConcernSerializer(concerns, many=True, context={"request": request, "privacy_safe": True}).data)
 
@@ -1145,6 +1700,11 @@ class ConcernVoteView(APIView):
             visibility=Concern.Visibility.COMMUNITY,
             validation_status=Concern.ValidationStatus.ACCEPTED,
         )
+        from apps.community_access import concern_access_mode
+
+        access_mode = concern_access_mode(request.user, concern)
+        if access_mode is None:
+            return Response({"detail": "You cannot interact with this concern."}, status=status.HTTP_404_NOT_FOUND)
         serializer = ConcernVoteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         value = serializer.validated_data["value"]
@@ -1165,6 +1725,7 @@ class ConcernVoteView(APIView):
 
 class ConcernCommentCreateView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request, pk):
         touch_last_seen(request.user)
@@ -1174,6 +1735,11 @@ class ConcernCommentCreateView(APIView):
             visibility=Concern.Visibility.COMMUNITY,
             validation_status=Concern.ValidationStatus.ACCEPTED,
         )
+        from apps.community_access import concern_access_mode
+
+        access_mode = concern_access_mode(request.user, concern)
+        if access_mode is None:
+            return Response({"detail": "You cannot interact with this concern."}, status=status.HTTP_404_NOT_FOUND)
         serializer = ConcernCommentCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         parent = None
@@ -1183,12 +1749,27 @@ class ConcernCommentCreateView(APIView):
             # One-level replies only — always hang off the top-level comment
             if parent.parent_id is not None:
                 parent = parent.parent
-        comment = ConcernComment.objects.create(
-            concern=concern,
-            author=request.user,
-            parent=parent,
-            body=serializer.validated_data["body"],
-        )
+        try:
+            with transaction.atomic():
+                comment = ConcernComment.objects.create(
+                    concern=concern,
+                    author=request.user,
+                    parent=parent,
+                    body=serializer.validated_data["body"],
+                )
+                uploaded_file = serializer.validated_data.get("media")
+                if uploaded_file:
+                    from .comment_media import create_public_comment_attachment
+
+                    create_public_comment_attachment(
+                        uploaded_file=uploaded_file,
+                        parent_field="concern_comment",
+                        parent=comment,
+                        concern=concern,
+                    )
+        except ValidationError as exc:
+            detail = getattr(exc, "message_dict", None) or getattr(exc, "messages", [str(exc)])
+            return Response({"media": detail}, status=status.HTTP_400_BAD_REQUEST)
         notify_comment_participants(comment)
         return Response(
             ConcernCommentSerializer(comment, context={"request": request}).data,
@@ -1204,6 +1785,13 @@ class ConcernCommentDetailView(APIView):
     def patch(self, request, pk, comment_id):
         touch_last_seen(request.user)
         concern = get_object_or_404(Concern, pk=pk)
+        from apps.community_access import concern_access_mode, foreign_read_only_response
+
+        access_mode = concern_access_mode(request.user, concern)
+        if access_mode == "foreign_read_only":
+            return foreign_read_only_response()
+        if access_mode is None:
+            return Response({"detail": "You cannot interact with this concern."}, status=status.HTTP_404_NOT_FOUND)
         comment = get_object_or_404(ConcernComment, pk=comment_id, concern=concern)
         if comment.author_id != request.user.id:
             return Response({"detail": "You can only edit your own comments."}, status=status.HTTP_403_FORBIDDEN)
@@ -1228,6 +1816,13 @@ class ConcernCommentDetailView(APIView):
     def delete(self, request, pk, comment_id):
         touch_last_seen(request.user)
         concern = get_object_or_404(Concern, pk=pk)
+        from apps.community_access import concern_access_mode, foreign_read_only_response
+
+        access_mode = concern_access_mode(request.user, concern)
+        if access_mode == "foreign_read_only":
+            return foreign_read_only_response()
+        if access_mode is None:
+            return Response({"detail": "You cannot interact with this concern."}, status=status.HTTP_404_NOT_FOUND)
         comment = get_object_or_404(ConcernComment, pk=comment_id, concern=concern)
         if comment.author_id != request.user.id:
             return Response({"detail": "You can only delete your own comments."}, status=status.HTTP_403_FORBIDDEN)
@@ -1239,6 +1834,14 @@ class ContentFlagCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
+        concern = get_object_or_404(Concern, pk=pk)
+        from apps.community_access import concern_access_mode, foreign_read_only_response
+
+        access_mode = concern_access_mode(request.user, concern)
+        if access_mode == "foreign_read_only":
+            return foreign_read_only_response()
+        if access_mode is None:
+            return Response({"detail": "You cannot interact with this concern."}, status=status.HTTP_404_NOT_FOUND)
         touch_last_seen(request.user)
         concern = get_object_or_404(Concern, pk=pk, visibility=Concern.Visibility.COMMUNITY)
         serializer = ContentFlagSerializer(data=request.data)
@@ -1289,10 +1892,56 @@ class ContentFlagListView(APIView):
             "reporter",
             "reporter__resident_profile",
         )
+        if not request.user.is_superuser:
+            from apps.community_scope import community_ids_for_user
+
+            community_ids = community_ids_for_user(request.user)
+            flags = flags.filter(
+                Q(concern__community_id__in=community_ids)
+                | Q(announcement_comment__announcement__community_id__in=community_ids)
+                | Q(emergency_comment__alert__community_id__in=community_ids)
+            )
         status_filter = request.query_params.get("status")
         if status_filter and status_filter != "all":
             flags = flags.filter(status=status_filter)
         return Response(ContentFlagSerializer(flags, many=True, context={"request": request}).data)
+
+
+class PublicCommentAttachmentView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk, preview=False):
+        attachment = get_object_or_404(
+            PublicCommentAttachment.objects.select_related(
+                "concern_comment__concern",
+                "announcement_comment__announcement",
+                "emergency_comment__alert",
+            ),
+            pk=pk,
+        )
+        allowed = False
+        if attachment.concern_comment_id:
+            from apps.community_access import concern_access_mode
+
+            allowed = concern_access_mode(request.user, attachment.concern_comment.concern) is not None
+        elif attachment.announcement_comment_id:
+            from .community_api import community_content_allowed
+
+            allowed = community_content_allowed(
+                request.user, attachment.announcement_comment.announcement.community_id
+            )
+        elif attachment.emergency_comment_id:
+            from apps.community_access import emergency_access_mode
+
+            allowed = emergency_access_mode(request.user, attachment.emergency_comment.alert) not in {None, "foreign_read_only"}
+        if not allowed:
+            return Response({"detail": "You cannot access this attachment."}, status=status.HTTP_404_NOT_FOUND)
+        field = attachment.preview_file if preview else attachment.file
+        if not field:
+            return Response({"detail": "Attachment unavailable."}, status=status.HTTP_404_NOT_FOUND)
+        response = FileResponse(field.open("rb"), content_type="image/jpeg" if preview else attachment.mime_type)
+        response["Content-Disposition"] = f'inline; filename="{attachment.original_filename}"'
+        return response
 
 
 def _can_take_down(concern):
@@ -1328,7 +1977,7 @@ class ContentFlagReviewView(APIView):
         decision = serializer.validated_data["status"]
         staff_note = serializer.validated_data["staff_note"]
         flag = get_object_or_404(
-            ContentFlag.objects.select_related(
+            self._scoped_flags(request.user).select_related(
                 "concern",
                 "concern__reporter",
                 "comment",
@@ -1381,6 +2030,20 @@ class ContentFlagReviewView(APIView):
             request_meta=request_meta(request),
         )
         return Response(ContentFlagSerializer(flag, context={"request": request}).data)
+
+    @staticmethod
+    def _scoped_flags(user):
+        queryset = ContentFlag.objects.all()
+        if user.is_superuser:
+            return queryset
+        from apps.community_scope import community_ids_for_user
+
+        community_ids = community_ids_for_user(user)
+        return queryset.filter(
+            Q(concern__community_id__in=community_ids)
+            | Q(announcement_comment__announcement__community_id__in=community_ids)
+            | Q(emergency_comment__alert__community_id__in=community_ids)
+        )
 
     @staticmethod
     def _notify_flag_reporter_dismissed(flag, staff_note):
@@ -1459,7 +2122,7 @@ class ConcernAssignView(APIView):
         office = serializer.validated_data.get("office", "").strip()
         assignment_note = serializer.validated_data.get("note", "").strip()
         active_assignments = list(
-            ConcernAssignment.objects.select_for_update()
+            ConcernAssignment.objects.select_for_update(of=("self",))
             .filter(concern=concern, status=ConcernAssignment.Status.ACTIVE)
             .select_related("assignee")
         )
@@ -1596,7 +2259,7 @@ class ConcernAppealCreateView(APIView):
         concern.save(update_fields=["status", "update_text", "updated_at"])
         ConcernStatusEvent.objects.create(concern=concern, status=Concern.Status.APPEALED, note=appeal.reason[:255], actor=request.user)
         User = get_user_model()
-        department_id = concern.assigned_department_id or getattr(concern.configured_category, "department_id", None)
+        department_id = concern.assigned_department_id or getattr(concern.category_ref, "department_id", None)
         officials = User.objects.filter(
             role=User.Role.BARANGAY_OFFICIAL,
             status=User.Status.VERIFIED,
@@ -1851,11 +2514,13 @@ class ConcernCategoryOptionsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from apps.community_scope import selected_community
+
+        community = selected_community(request.user, request.query_params.get("community_id"))
         categories = (
             ConcernCategory.objects.filter(is_active=True)
-            .select_related("department")
-            .order_by("name")
-        )
+            .filter(community=community) if community else ConcernCategory.objects.none()
+        ).select_related("department").order_by("name")
         return Response(
             [
                 {
@@ -1932,6 +2597,25 @@ class AdminModelListCreateView(APIView):
     required_capabilities = None
     read_capabilities = None
 
+    def _queryset(self, user):
+        from apps.community_scope import community_ids_for_user
+
+        ids = community_ids_for_user(user)
+        queryset = self.model.objects.all()
+        if self.model in {Department, ConcernCategory}:
+            return queryset.filter(community_id__in=ids).select_related("community")
+        if self.model is Designation:
+            return queryset.filter(department__community_id__in=ids).select_related("department__community", "position", "user")
+        if self.model is RoutingRule:
+            return queryset.filter(category__community_id__in=ids, department__community_id__in=ids)
+        if self.model is Position:
+            return queryset.filter(
+                Q(department__isnull=True)
+                | Q(department__community_id__in=ids)
+                | Q(designations__department__community_id__in=ids)
+            ).distinct()
+        return queryset if user.is_superuser else queryset.none()
+
     def _caps(self, *, read=False):
         if read and self.read_capabilities:
             return self.read_capabilities
@@ -1952,18 +2636,33 @@ class AdminModelListCreateView(APIView):
         touch_last_seen(request.user)
         if not self._allowed(request.user, read=True):
             return self._denied()
-        queryset = self.model.objects.all()
-        if self.model in {Department, ConcernCategory}:
-            from apps.community_scope import community_ids_for_user
-            queryset = queryset.filter(community_id__in=community_ids_for_user(request.user))
+        queryset = self._queryset(request.user)
         return Response(self.serializer_class(queryset, many=True, context={"request": request}).data)
 
     def post(self, request):
         touch_last_seen(request.user)
         if not self._allowed(request.user):
             return self._denied()
-        serializer = self.serializer_class(data=request.data, context={"request": request})
+        from apps.community_scope import selected_community
+
+        serializer_community = selected_community(request.user, request.data.get("community_id"))
+        serializer = self.serializer_class(
+            data=request.data,
+            context={"request": request, "community": serializer_community},
+        )
         serializer.is_valid(raise_exception=True)
+        from apps.community_scope import community_ids_for_user, scope_user_queryset
+
+        ids = community_ids_for_user(request.user)
+        department = serializer.validated_data.get("department")
+        category = serializer.validated_data.get("category")
+        target_user = serializer.validated_data.get("user")
+        if department and department.community_id not in ids:
+            return Response({"department": ["Choose a unit in the selected community."]}, status=status.HTTP_400_BAD_REQUEST)
+        if category and category.community_id not in ids:
+            return Response({"category": ["Choose a category in the selected community."]}, status=status.HTTP_400_BAD_REQUEST)
+        if target_user and not scope_user_queryset(type(target_user).objects.filter(pk=target_user.pk), request.user).exists():
+            return Response({"user": ["Choose an account in the selected community."]}, status=status.HTTP_400_BAD_REQUEST)
         if self.model in {Department, ConcernCategory}:
             from apps.community_scope import selected_community
             community = selected_community(request.user, request.data.get("community_id"))
@@ -1992,6 +2691,9 @@ class AdminModelDetailView(APIView):
     required_capability = None
     required_capabilities = None
 
+    def _queryset(self, user):
+        return AdminModelListCreateView._queryset(self, user)
+
     def _caps(self):
         return self.required_capabilities or (self.required_capability,)
 
@@ -2010,15 +2712,24 @@ class AdminModelDetailView(APIView):
         touch_last_seen(request.user)
         if not self._allowed(request.user):
             return self._denied()
-        queryset = self.model.objects.all()
-        if self.model in {Department, ConcernCategory}:
-            from apps.community_scope import community_ids_for_user
-            queryset = queryset.filter(community_id__in=community_ids_for_user(request.user))
+        queryset = self._queryset(request.user)
         obj = get_object_or_404(queryset, pk=pk)
         serializer = self.serializer_class(
             obj, data=request.data, partial=True, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
+        from apps.community_scope import community_ids_for_user, scope_user_queryset
+
+        ids = community_ids_for_user(request.user)
+        department = serializer.validated_data.get("department")
+        category = serializer.validated_data.get("category")
+        target_user = serializer.validated_data.get("user")
+        if department and department.community_id not in ids:
+            return Response({"department": ["Choose a unit in the selected community."]}, status=status.HTTP_400_BAD_REQUEST)
+        if category and category.community_id not in ids:
+            return Response({"category": ["Choose a category in the selected community."]}, status=status.HTTP_400_BAD_REQUEST)
+        if target_user and not scope_user_queryset(type(target_user).objects.filter(pk=target_user.pk), request.user).exists():
+            return Response({"user": ["Choose an account in the selected community."]}, status=status.HTTP_400_BAD_REQUEST)
         serializer.save()
         return Response(serializer.data)
 
@@ -2026,10 +2737,7 @@ class AdminModelDetailView(APIView):
         touch_last_seen(request.user)
         if not self._allowed(request.user):
             return self._denied()
-        queryset = self.model.objects.all()
-        if self.model in {Department, ConcernCategory}:
-            from apps.community_scope import community_ids_for_user
-            queryset = queryset.filter(community_id__in=community_ids_for_user(request.user))
+        queryset = self._queryset(request.user)
         obj = get_object_or_404(queryset, pk=pk)
 
         in_use = 0
@@ -2222,7 +2930,13 @@ class ConcernFormFieldListCreateView(APIView):
         touch_last_seen(request.user)
         if not can_manage_concern_operations(request.user) or not user_has_capability(request.user, MANAGE_CATEGORIES):
             return Response({"detail": "You do not have permission to manage forms."}, status=status.HTTP_403_FORBIDDEN)
-        category = get_object_or_404(ConcernCategory, pk=category_id)
+        from apps.community_scope import community_ids_for_user
+
+        category = get_object_or_404(
+            ConcernCategory,
+            pk=category_id,
+            community_id__in=community_ids_for_user(request.user),
+        )
         data = request.data.copy()
         data["category"] = category.pk
         serializer = ConcernFormFieldSerializer(data=data, context={"request": request})
@@ -2335,7 +3049,10 @@ class ConcernStatusUpdateView(APIView):
     def post(self, request, pk):
         touch_last_seen(request.user)
         concern = operational_concern_or_404(request.user, pk, lock=True)
-        serializer = ConcernStatusUpdateSerializer(data=request.data)
+        serializer = ConcernStatusUpdateSerializer(
+            data=request.data,
+            context={"request": request, "community": concern.community},
+        )
         serializer.is_valid(raise_exception=True)
         next_status = serializer.validated_data["status"]
         if not (
@@ -2411,7 +3128,13 @@ class ConcernStatusUpdateView(APIView):
         category_changed = bool(new_category) and new_category != concern.category
         if category_changed:
             concern.category = new_category
-            concern.category_ref = ConcernCategory.objects.filter(code=new_category, is_active=True).first()
+            concern.category_ref = ConcernCategory.objects.filter(
+                code=new_category,
+                community=concern.community,
+                is_active=True,
+            ).first()
+            if concern.category_ref is None and new_category not in Concern.Category.values:
+                return Response({"category": ["Choose a category available in the incident community."]}, status=status.HTTP_400_BAD_REQUEST)
             changed_fields.extend(["category", "category_ref"])
 
         new_department_id = serializer.validated_data.get("department_id")
@@ -2419,6 +3142,8 @@ class ConcernStatusUpdateView(APIView):
         department = None
         if department_changed:
             department = get_object_or_404(Department, pk=new_department_id, is_active=True)
+            if department.community_id != concern.community_id:
+                return Response({"department_id": ["Choose a unit in the incident community."]}, status=status.HTTP_400_BAD_REQUEST)
             concern.assigned_department = department
             changed_fields.append("assigned_department")
 
@@ -2734,11 +3459,11 @@ class AnnouncementManageListCreateView(APIView):
             return Response({"detail": "You do not have permission to create announcements."}, status=status.HTTP_403_FORBIDDEN)
         serializer = AnnouncementSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        from apps.community_scope import community_ids_for_user
-        community_id = next(iter(community_ids_for_user(request.user)), None)
-        if not community_id:
+        from apps.community_scope import selected_community
+        community = selected_community(request.user, request.data.get("community_id"))
+        if not community:
             return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
-        announcement = serializer.save(community_id=community_id)
+        announcement = serializer.save(community=community, barangay=community.name)
         if announcement.is_published:
             mark_announcement_published(announcement)
             dispatch_due_announcements()
@@ -2822,11 +3547,11 @@ class BarangayEventManageListCreateView(APIView):
             return Response({"detail": "You do not have permission to create events."}, status=status.HTTP_403_FORBIDDEN)
         serializer = BarangayEventSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        from apps.community_scope import community_ids_for_user
-        community_id = next(iter(community_ids_for_user(request.user)), None)
-        if not community_id:
+        from apps.community_scope import selected_community
+        community = selected_community(request.user, request.data.get("community_id"))
+        if not community:
             return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
-        event = serializer.save(community_id=community_id)
+        event = serializer.save(community=community, barangay=community.name)
         create_audit_log("event.created", actor=request.user, metadata={"event_id": event.pk, "is_published": event.is_published}, request_meta=request_meta(request))
         return Response(BarangayEventSerializer(event).data, status=status.HTTP_201_CREATED)
 
@@ -2837,7 +3562,12 @@ class BarangayEventManageDetailView(APIView):
         touch_last_seen(request.user)
         if not can_publish_announcements(request.user):
             return Response({"detail": "You do not have permission to update events."}, status=status.HTTP_403_FORBIDDEN)
-        event = get_object_or_404(BarangayEvent, pk=pk)
+        from apps.community_scope import community_ids_for_user
+        event = get_object_or_404(
+            BarangayEvent,
+            pk=pk,
+            community_id__in=community_ids_for_user(request.user),
+        )
         serializer = BarangayEventSerializer(event, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         event = serializer.save()
@@ -2848,7 +3578,12 @@ class BarangayEventManageDetailView(APIView):
         touch_last_seen(request.user)
         if not can_publish_announcements(request.user):
             return Response({"detail": "You do not have permission to delete events."}, status=status.HTTP_403_FORBIDDEN)
-        event = get_object_or_404(BarangayEvent, pk=pk)
+        from apps.community_scope import community_ids_for_user
+        event = get_object_or_404(
+            BarangayEvent,
+            pk=pk,
+            community_id__in=community_ids_for_user(request.user),
+        )
         create_audit_log("event.deleted", actor=request.user, metadata={"event_id": event.pk}, request_meta=request_meta(request))
         event.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -2860,16 +3595,13 @@ class ActiveResponderListView(APIView):
     def get(self, request):
         touch_last_seen(request.user)
         User = get_user_model()
-        responders = User.objects.filter(
+        from apps.community_scope import scope_user_queryset
+
+        responders = scope_user_queryset(User.objects.all(), request.user).filter(
             role__in=[User.Role.FIRST_RESPONDER, User.Role.BARANGAY_OFFICIAL],
             status=User.Status.VERIFIED,
-            is_on_duty=True,
             last_seen_at__gte=timezone.now() - timedelta(minutes=5),
         ).select_related("resident_profile")
-        resident_profile = getattr(request.user, "resident_profile", None)
-        resident_barangay = getattr(resident_profile, "barangay", "").strip()
-        if resident_barangay:
-            responders = responders.filter(resident_profile__barangay__iexact=resident_barangay)
         responders = responders.order_by("-last_seen_at", "-id")
         include_location = can_update_concern_status(request.user)
         return paginate_response(
@@ -2928,12 +3660,43 @@ class ConcernMediaPreviewView(APIView):
         if not is_publicly_displayable and not user_can_access_concern_media_raw(request.user, media):
             return Response({"detail": "You do not have permission to access this media."}, status=status.HTTP_403_FORBIDDEN)
         if media.preview_file:
-            return FileResponse(media.preview_file.open("rb"), content_type="image/jpeg")
+            response = FileResponse(media.preview_file.open("rb"), content_type="image/jpeg")
+            response["X-EBOSES-Preview-Status"] = "ready"
+            response["Cache-Control"] = "no-store"
+            return response
+
+        # A completed no-scan decision is safe to render immediately. The old
+        # code returned a placeholder here and queued a task, but completed
+        # NOT_REQUIRED/NO_MATCH_FOUND rows cannot be claimed by that task, so
+        # the placeholder lasted forever.
+        if (
+            media.privacy_state in {
+                ConcernMedia.PrivacyState.NOT_REQUIRED,
+                ConcernMedia.PrivacyState.NO_MATCH_FOUND,
+            }
+            and media.public_visible
+        ):
+            try:
+                preview = ensure_concern_media_preview(media)
+            except Exception:
+                logger.warning("Could not render missing preview for media=%s", media.pk, exc_info=True)
+            else:
+                response = FileResponse(preview.open("rb"), content_type="image/jpeg")
+                response["X-EBOSES-Preview-Status"] = "ready"
+                response["Cache-Control"] = "no-store"
+                return response
+
         # No preview yet: hand the work to the privacy pipeline instead of
-        # decoding/re-encoding on the request thread. A placeholder keeps the
-        # feed layout intact until the worker lands the real preview.
-        transaction.on_commit(lambda media_id=media.pk: enqueue_concern_media_privacy(media_id))
-        return FileResponse(BytesIO(placeholder_preview_jpeg()), content_type="image/jpeg")
+        # decoding/re-encoding on the request thread. The frontend treats this
+        # response as pending and polls without caching the placeholder.
+        if media.privacy_state == ConcernMedia.PrivacyState.QUEUED:
+            transaction.on_commit(lambda media_id=media.pk: enqueue_concern_media_privacy(media_id))
+        elif media.privacy_state == ConcernMedia.PrivacyState.PROTECTED:
+            transaction.on_commit(lambda media_id=media.pk: enqueue_concern_media_privacy(media_id, force=True))
+        response = FileResponse(BytesIO(placeholder_preview_jpeg()), content_type="image/jpeg")
+        response["X-EBOSES-Preview-Status"] = "pending"
+        response["Cache-Control"] = "no-store"
+        return response
 
 
 class ConcernMediaRedactionView(APIView):
@@ -3054,7 +3817,12 @@ class ConcernMediaPrivacyReprocessView(APIView):
         touch_last_seen(request.user)
         if not can_update_concern_status(request.user):
             return Response({"detail": "You do not have permission to reprocess media."}, status=status.HTTP_403_FORBIDDEN)
-        media = get_object_or_404(ConcernMedia.objects.select_related("concern__reporter"), pk=pk)
+        media = get_object_or_404(
+            ConcernMedia.objects.filter(concern__in=operational_concerns(request.user)).select_related(
+                "concern__reporter"
+            ),
+            pk=pk,
+        )
         if not media.privacy_requested_classes:
             return Response(
                 {"detail": "The automatic review did not ask for a privacy scan on this photo."},

@@ -38,9 +38,10 @@
   font-weight: 300 700;
   font-style: normal;
   font-display: swap;
-  unicode-range: U+00-FF, U+131, U+152-153, U+2BB-2BC, U+2C6, U+2DA, U+2DC,
-    U+304, U+308, U+329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
-    U+2215, U+FEFF, U+FFFD;
+  unicode-range:
+    U+00-FF, U+131, U+152-153, U+2BB-2BC, U+2C6, U+2DA, U+2DC, U+304, U+308,
+    U+329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF,
+    U+FFFD;
 }
 
 @font-face {
@@ -49,9 +50,10 @@
   font-weight: 300 700;
   font-style: normal;
   font-display: swap;
-  unicode-range: U+100-2BA, U+2BD-2C5, U+2C7-2CC, U+2CE-2D7, U+2DD-2FF, U+304,
-    U+308, U+329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
-    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  unicode-range:
+    U+100-2BA, U+2BD-2C5, U+2C7-2CC, U+2CE-2D7, U+2DD-2FF, U+304, U+308, U+329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0,
+    U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
 @font-face {
@@ -60,9 +62,9 @@
   font-weight: 300 700;
   font-style: normal;
   font-display: swap;
-  unicode-range: U+102-103, U+110-111, U+128-129, U+168-169, U+1A0-1A1,
-    U+1AF-1B0, U+300-301, U+303-304, U+308-309, U+323, U+329, U+1EA0-1EF9,
-    U+20AB;
+  unicode-range:
+    U+102-103, U+110-111, U+128-129, U+168-169, U+1A0-1A1, U+1AF-1B0, U+300-301,
+    U+303-304, U+308-309, U+323, U+329, U+1EA0-1EF9, U+20AB;
 }
 
 .landing-fonts {
@@ -185,17 +187,15 @@
   --color-landing-cream: #f5f2ec;
   --color-landing-sky: #4da3ff;
 
-  --shadow-overlay: 0 20px 40px -12px rgba(2, 12, 78, 0.18),
-    0 2px 8px rgba(2, 12, 78, 0.06);
+  --shadow-overlay:
+    0 20px 40px -12px rgba(2, 12, 78, 0.18), 0 2px 8px rgba(2, 12, 78, 0.06);
 
   --color-map-incident: #ff5a52;
   --color-map-responder: #4dc4ff;
   --color-map-trail: #2f7fa6;
-  --color-map-route-idle: #78849f;
+  --color-map-route-idle: #9ca3af;
   --color-map-route-casing: #0a1024;
 
-  --color-portal-from: #e2f1f6;
-  --color-portal-to: #f9f4f1;
   --shadow-float: 0 10px 18px rgba(27, 27, 58, 0.08);
 }
 
@@ -298,7 +298,8 @@
   --color-shell-border: rgba(255, 255, 255, 0.07);
   --civic-panel: #151c2e;
 
-  --shadow-overlay: 0 24px 48px -12px rgba(0, 0, 0, 0.7),
+  --shadow-overlay:
+    0 24px 48px -12px rgba(0, 0, 0, 0.7),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
 
   color-scheme: dark;
@@ -468,19 +469,20 @@
   --shadow-overlay: var(--shadow-overlay);
   --shadow-float: var(--shadow-float);
   --font-sans:
-    "Saans", "Mulish", -apple-system, BlinkMacSystemFont, "Segoe UI",
-    Roboto, "Helvetica Neue", Arial, sans-serif;
+    "Saans", "Mulish", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
   --font-heading:
-    "Saans", "Epilogue", "Clash Display", -apple-system,
-    BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    "Saans", "Epilogue", "Clash Display", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono:
-    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
-    "Liberation Mono", monospace;
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
+    monospace;
   --animate-fade-in: fadeIn 0.7s ease-out both;
   --animate-fade-slide-up: fadeSlideUp 0.5s ease-out both;
   --animate-sos-drop: sosDrop 0.6s ease-out both;
   --animate-sos-ping: sosPing 2s cubic-bezier(0, 0, 0.2, 1) infinite;
-  --animate-sos-ping-delayed: sosPing 2s cubic-bezier(0, 0, 0.2, 1) infinite 0.5s;
+  --animate-sos-ping-delayed: sosPing 2s cubic-bezier(0, 0, 0.2, 1) infinite
+    0.5s;
   --animate-marquee: marquee 20s linear infinite;
   --animate-blink: blink 1s ease-in-out infinite;
   --animate-gradient-shift: gradientShift 8s ease infinite;
@@ -490,18 +492,31 @@
 }
 
 @keyframes gradientShift {
-  0% { background-position: 0% 50%; }
-  100% { background-position: 100% 50%; }
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 100% 50%;
+  }
 }
 
 @keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 
 @keyframes marquee {
-  0% { transform: translateX(0); }
-  100% { transform: translateX(-50%); }
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
 }
 
 @keyframes sosPing {
@@ -528,22 +543,43 @@
 }
 
 @keyframes kenBurns {
-  from { transform: scale(1) translateX(0); }
-  to { transform: scale(1.08) translateX(-1%); }
+  from {
+    transform: scale(1) translateX(0);
+  }
+  to {
+    transform: scale(1.08) translateX(-1%);
+  }
 }
 
 @keyframes sosFabBlink {
-  0%, 100% { box-shadow: 0 6px 20px rgba(242, 59, 53, 0.38); transform: scale(1); }
-  50% { box-shadow: 0 8px 26px rgba(242, 59, 53, 0.5), 0 0 0 10px rgba(242, 59, 53, 0.1); transform: scale(1.04); }
+  0%,
+  100% {
+    box-shadow: 0 6px 20px rgba(242, 59, 53, 0.38);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow:
+      0 8px 26px rgba(242, 59, 53, 0.5),
+      0 0 0 10px rgba(242, 59, 53, 0.1);
+    transform: scale(1.04);
+  }
 }
 
 @keyframes sosGlowBlink {
-  0%, 100% { box-shadow: 0 2px 10px rgba(242, 59, 53, 0.35); }
-  50% { box-shadow: 0 2px 18px rgba(242, 59, 53, 0.6), 0 0 0 8px rgba(242, 59, 53, 0.08); }
+  0%,
+  100% {
+    box-shadow: 0 2px 10px rgba(242, 59, 53, 0.35);
+  }
+  50% {
+    box-shadow:
+      0 2px 18px rgba(242, 59, 53, 0.6),
+      0 0 0 8px rgba(242, 59, 53, 0.08);
+  }
 }
 
 @keyframes sosIconBlink {
-  0%, 100% {
+  0%,
+  100% {
     filter: drop-shadow(0 2px 5px rgba(242, 59, 53, 0.35));
     transform: scale(1);
   }
@@ -581,7 +617,7 @@
   }
 
   body {
-    @apply bg-background text-foreground font-sans;
+    @apply bg-background font-sans text-foreground;
   }
 
   input[type="password"]::-ms-reveal,
@@ -594,7 +630,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
@@ -769,6 +807,27 @@ img.leaflet-tile,
   width: 54%;
   height: 54%;
 }
+.eboses-pin__disc--labeled {
+  flex-direction: column;
+  gap: 1px;
+}
+.eboses-pin__label-icon {
+  display: flex;
+  width: 58%;
+  height: 58%;
+  align-items: center;
+  justify-content: center;
+}
+.eboses-pin__label-icon svg {
+  width: 100%;
+  height: 100%;
+}
+.eboses-pin__label {
+  font-size: 7px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
 .eboses-pin__core {
   position: absolute;
   inset: 0;
@@ -843,7 +902,10 @@ img.leaflet-tile,
 .eboses-map-light.eboses-sv-pick,
 .eboses-map-dark.eboses-sv-pick,
 .eboses-alerts-map.eboses-sv-pick {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="%23111827" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 3.11-2 5.66-2 8.68V16a2 2 0 1 1-4 0Z"/><path d="M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 3.11 2 5.66 2 8.68V20a2 2 0 1 0 4 0Z"/><path d="M16 17h4"/><path d="M4 13h4"/></svg>') 14 14, crosshair !important;
+  cursor:
+    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="%23111827" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 3.11-2 5.66-2 8.68V16a2 2 0 1 1-4 0Z"/><path d="M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 3.11 2 5.66 2 8.68V20a2 2 0 1 0 4 0Z"/><path d="M16 17h4"/><path d="M4 13h4"/></svg>')
+      14 14,
+    crosshair !important;
 }
 body.eboses-sv-open .eboses-pin__halo,
 body.eboses-sv-open .eboses-pin__core {
@@ -860,8 +922,15 @@ body.eboses-sv-open .eboses-pin__core {
 .eboses-sv-pop .leaflet-popup-content-wrapper {
   border-radius: 10px;
   box-shadow: 0 6px 18px rgba(15, 23, 42, 0.16);
-  font-family: var(--font-sans, ui-sans-serif), ui-sans-serif, system-ui, -apple-system,
-    "Segoe UI", Roboto, Arial, sans-serif;
+  font-family:
+    var(--font-sans, ui-sans-serif),
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    Arial,
+    sans-serif;
 }
 .eboses-sv-pop .leaflet-popup-content {
   margin: 8px 10px;
@@ -872,13 +941,8 @@ body.eboses-sv-open .eboses-pin__core {
   display: flex;
   flex-direction: column;
   gap: 5px;
-}
-.eboses-sv-pop__body--centered {
-  text-align: center;
-  align-items: center;
-}
-.eboses-sv-pop__body--centered .eboses-sv-pop__title {
-  font-weight: 500;
+  align-items: flex-start;
+  text-align: left;
 }
 /* Outranks Leaflet's own `.leaflet-popup-content p { margin: 18px 0 }`, which
    otherwise pries the title and the description apart. */
@@ -900,6 +964,22 @@ body.eboses-sv-open .eboses-pin__core {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+.eboses-sv-pop__date {
+  font-size: 10.5px;
+  color: #737373;
+  font-variant-numeric: tabular-nums;
+}
+.eboses-sv-pop__meta {
+  font-size: 10.5px;
+  color: #525252;
+}
+.eboses-sv-pop__label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #a3a3a3;
 }
 .eboses-sv-pop__desc {
   font-size: 11.5px;
@@ -1064,12 +1144,6 @@ body[data-ops-sheet="open"] [data-mobile-nav] {
   display: none;
 }
 
-.portal-gradient {
-  background-color: var(--color-portal-to);
-  background-image: linear-gradient(135deg, var(--color-portal-from) 0%, var(--color-portal-to) 100%);
-  background-attachment: fixed;
-}
-
 .ops-plain {
   --foreground: #0b1020;
   --card-foreground: #0b1020;
@@ -1113,7 +1187,10 @@ body[data-ops-sheet="open"] [data-mobile-nav] {
   margin: auto;
   border-radius: 999px;
   background: var(--color-card-line);
-  transition: background-color 140ms ease, width 140ms ease, height 140ms ease;
+  transition:
+    background-color 140ms ease,
+    width 140ms ease,
+    height 140ms ease;
 }
 .ops-resizer[data-orientation="vertical"] {
   width: 12px;
@@ -1167,7 +1244,11 @@ body[data-ops-sheet="open"] [data-mobile-nav] {
   box-shadow: 0 2px 6px rgba(15, 23, 42, 0.16);
 }
 .ops-resizer[data-dragging="true"]::after {
-  background-image: radial-gradient(circle, var(--color-brand-orange) 1px, transparent 1.35px);
+  background-image: radial-gradient(
+    circle,
+    var(--color-brand-orange) 1px,
+    transparent 1.35px
+  );
 }
 .ops-resizer:hover::before,
 .ops-resizer[data-dragging="true"]::before,
@@ -1218,7 +1299,8 @@ body[data-ops-resizing="horizontal"] * {
   left: 4px;
   width: 1px;
   background: var(--color-card-line-strong);
-  transition: width var(--duration-micro) var(--ease-out-expo),
+  transition:
+    width var(--duration-micro) var(--ease-out-expo),
     background-color var(--duration-micro) var(--ease-out-expo),
     opacity var(--duration-micro) var(--ease-out-expo);
 }
@@ -1233,7 +1315,10 @@ body[data-ops-resizing="horizontal"] * {
   outline: none;
 }
 .ops-plain .ops-divider {
-  cursor: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Crect x='4.5' y='4.5' width='5' height='15' rx='2.5' fill='%23ffffff' fill-opacity='0.85'/%3E%3Crect x='14.5' y='4.5' width='5' height='15' rx='2.5' fill='%23ffffff' fill-opacity='0.85'/%3E%3Crect x='6' y='6' width='2' height='12' rx='1' fill='%2364748b'/%3E%3Crect x='16' y='6' width='2' height='12' rx='1' fill='%2364748b'/%3E%3C/svg%3E") 12 12, col-resize;
+  cursor:
+    url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Crect x='4.5' y='4.5' width='5' height='15' rx='2.5' fill='%23ffffff' fill-opacity='0.85'/%3E%3Crect x='14.5' y='4.5' width='5' height='15' rx='2.5' fill='%23ffffff' fill-opacity='0.85'/%3E%3Crect x='6' y='6' width='2' height='12' rx='1' fill='%2364748b'/%3E%3Crect x='16' y='6' width='2' height='12' rx='1' fill='%2364748b'/%3E%3C/svg%3E")
+      12 12,
+    col-resize;
 }
 .ops-plain .ops-divider::after {
   opacity: 0;
@@ -1276,8 +1361,13 @@ body[data-ops-resizing="true"] .leaflet-container {
 }
 
 @keyframes glowPulse {
-  0%, 100% { box-shadow: 0 0 12px rgba(242, 59, 53, 0.25); }
-  50% { box-shadow: 0 0 22px rgba(242, 59, 53, 0.45); }
+  0%,
+  100% {
+    box-shadow: 0 0 12px rgba(242, 59, 53, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 22px rgba(242, 59, 53, 0.45);
+  }
 }
 .staff-dark .ops-glow-pulse {
   animation: glowPulse 2.2s ease-in-out infinite;

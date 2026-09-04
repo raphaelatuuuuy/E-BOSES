@@ -52,13 +52,15 @@ export function EmergencyCommunityComments({
     }
   }
 
-  async function submit(body: string, parentId: number | null) {
+  async function submit(body: string, parentId: number | null, media?: File | null): Promise<boolean> {
     try {
-      await addEmergencyCommunityComment(alertId, body, parentId)
+      await addEmergencyCommunityComment(alertId, body, parentId, media)
       // Replies arrive nested under their root, so refetch rather than append.
       await reload()
+      return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "That update could not be posted.")
+      return false
     }
   }
 

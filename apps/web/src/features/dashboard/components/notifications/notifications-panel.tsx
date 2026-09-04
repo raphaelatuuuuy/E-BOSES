@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import {
-  TriangleAlertIcon,
   ArchiveIcon,
   ArchiveRestoreIcon,
   ArrowLeftIcon,
@@ -11,9 +10,7 @@ import {
   CheckCircle2Icon,
   InboxIcon,
   CheckCheckIcon,
-  FileTextIcon,
   LoaderCircleIcon,
-  MegaphoneIcon,
   Trash2Icon,
   XIcon,
   type LucideIcon,
@@ -43,6 +40,7 @@ import {
   notificationsPageFilter,
   openNotificationsPop,
 } from "@/features/dashboard/components/notifications/notifications-event"
+import { notificationIconFor } from "@/features/dashboard/components/notifications/notification-visuals"
 
 type NotificationView = "inbox" | "archived"
 const notificationViewEvent = "eboses:notification-view"
@@ -139,8 +137,8 @@ export function NotificationViewActions({ initialView = "inbox", dark = false }:
  * this same panel — identical structure, filter chips, push card, rows and
  * empty states — differing only in WHAT each role sees (the filter list, the
  * group mapping, the landing copy and where a row opens). Everything is
- * token-based, so it renders correctly on the light resident shell, the light
- * official shell and the dark responder console.
+ * token-based, so it renders correctly on the light resident, official and
+ * responder shells.
  */
 
 export type NotificationsConfig = {
@@ -152,7 +150,7 @@ export type NotificationsConfig = {
   groupOf: (item: NotificationItem) => string | null
   /** Defaults to group chips (emergency red, announcement amber, rest neutral). */
   iconFor?: (item: NotificationItem) => { Icon: LucideIcon; chipClass: string }
-  /** Uses the responder dark surface and contrast ladder. */
+  /** Legacy compatibility switch; responder notifications now stay light. */
   dark?: boolean
   filterStorageKey: string
   /** Shown when the Inbox All filter is empty and on the push card. */
@@ -190,27 +188,6 @@ function contextSnippet(item: NotificationItem) {
   const response = context.response
   const crossCommunity = response?.is_cross_community ? "Cross-community response" : ""
   return [community, unit, crossCommunity].filter(Boolean).join(" · ")
-}
-
-function isEmergencyNotification(item: NotificationItem) {
-  const type = (item.type ?? "").toLowerCase()
-  const category = item.category ?? ""
-  return (
-    category === "emergency" ||
-    !!item.emergency_id ||
-    type.startsWith("emergency") ||
-    type === "witness_alert"
-  )
-}
-
-function defaultIconFor(item: NotificationItem): { Icon: LucideIcon; chipClass: string } {
-  const type = (item.type ?? "").toLowerCase()
-  const category = item.category ?? ""
-  const isEmergency = isEmergencyNotification(item)
-  const isAnnouncement = category === "announcement" || type === "announcement"
-  if (isEmergency) return { Icon: TriangleAlertIcon, chipClass: "bg-sos/10 text-sos" }
-  if (isAnnouncement) return { Icon: MegaphoneIcon, chipClass: "bg-neutral-100 text-neutral-600" }
-  return { Icon: FileTextIcon, chipClass: "bg-neutral-100 text-neutral-700" }
 }
 
 /**
@@ -410,7 +387,7 @@ export function NotificationsPanel({
     }
   }
 
-  const iconFor = config.iconFor ?? defaultIconFor
+  const iconFor = config.iconFor ?? notificationIconFor
   const darkTheme = Boolean(config.dark)
   const browserNotificationsEnabled = Boolean(
     browserNotificationState?.supported &&
@@ -670,11 +647,9 @@ export function NotificationsPanel({
             <ul className="space-y-3">
               {visible.map((item) => {
                 const configuredIcon = iconFor(item)
-                const emergency = isEmergencyNotification(item)
+                const urgent = item.priority === "urgent"
                 const Icon = configuredIcon.Icon
-                const iconClass = emergency
-                  ? "bg-sos/10 text-sos"
-                  : configuredIcon.chipClass
+                const iconClass = configuredIcon.chipClass
                 const body = snippet(item.display_body || item.body)
                 const contextLine = contextSnippet(item)
                 const hasMedia = Boolean(item.images?.length || item.image_url)
@@ -683,7 +658,7 @@ export function NotificationsPanel({
                     key={item.id}
                     className={cn(
                       "relative touch-pan-y overflow-hidden rounded-2xl border border-neutral-200 bg-white",
-                      !item.is_read && (emergency ? "border-sos/30 bg-sos/5" : "bg-neutral-50"),
+                       !item.is_read && (urgent ? "border-sos/30 bg-sos/5" : "bg-neutral-50"),
                     )}
                   >
                     <button
@@ -699,8 +674,8 @@ export function NotificationsPanel({
                        className={cn(
                          "flex w-full items-start gap-3.5 px-3.5 pt-3.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-neutral-400",
                          hasMedia ? "pb-1" : "pb-3.5",
-                         emergency && !item.is_read
-                           ? "hover:bg-sos/10"
+                          urgent && !item.is_read
+                            ? "hover:bg-sos/10"
                            : darkTheme
                              ? "hover:bg-brand-orange/10"
                              : "hover:bg-neutral-100",
@@ -788,18 +763,14 @@ export function NotificationsPanel({
                           iconClass,
                         )}
                       >
-                         {emergency ? (
-                           <TriangleAlertIcon className="size-5" strokeWidth={2} aria-hidden="true" />
-                         ) : (
                            <Icon className="size-5" aria-hidden="true" />
-                         )}
                       </span>
                       <span className="min-w-0 flex-1 pr-8">
                         <span className="flex items-start justify-between gap-3">
                            <span
                              className={cn(
                                "text-[15px] font-semibold text-neutral-950",
-                               emergency && !item.is_read && "text-sos",
+                                urgent && !item.is_read && "text-sos",
                              )}
                            >
                             {item.display_title || item.title}

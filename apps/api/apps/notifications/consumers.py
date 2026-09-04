@@ -126,6 +126,7 @@ class OfficialLiveMapConsumer(AuthenticatedJsonConsumer):
         from apps.community_scope import community_ids_for_user, department_ids_for_user
         department_ids = await database_sync_to_async(department_ids_for_user)(self.user)
         self.group_names = [f"official_live_map_department_{item}" for item in department_ids]
+        self.group_names.append("network_public_live_map")
         if self.user.is_superuser:
             community_ids = await database_sync_to_async(community_ids_for_user)(self.user)
             self.group_names.extend(f"official_live_map_community_{item}" for item in community_ids)
@@ -143,6 +144,9 @@ class OfficialLiveMapConsumer(AuthenticatedJsonConsumer):
     async def live_map_update(self, event):
         await self.send_json(event["payload"])
 
+    async def network_public_update(self, event):
+        await self.send_json(event["payload"])
+
 
 @database_sync_to_async
 def resident_live_map_groups(user):
@@ -151,7 +155,11 @@ def resident_live_map_groups(user):
     profile = getattr(user, "resident_profile", None)
     community = getattr(profile, "community_id", None) if profile else None
     barangay = str(community or (getattr(profile, "barangay", "") if profile else ""))
-    return [_resident_group_for_barangay(barangay), f"resident_emergency_{user.pk}"]
+    return [
+        _resident_group_for_barangay(barangay),
+        "network_public_live_map",
+        f"resident_emergency_{user.pk}",
+    ]
 
 
 class ResidentLiveMapConsumer(AuthenticatedJsonConsumer):
@@ -170,13 +178,16 @@ class ResidentLiveMapConsumer(AuthenticatedJsonConsumer):
     async def resident_live_map_update(self, event):
         await self.send_json(event["payload"])
 
+    async def network_public_update(self, event):
+        await self.send_json(event["payload"])
+
 
 @database_sync_to_async
 def user_is_verified_official(user) -> bool:
     User = get_user_model()
 
     return user.is_authenticated and user.status == User.Status.VERIFIED and (
-        user.is_staff or user.is_superuser or user.role == User.Role.BARANGAY_OFFICIAL
+        user.is_superuser or user.role == User.Role.BARANGAY_OFFICIAL
     )
 
 

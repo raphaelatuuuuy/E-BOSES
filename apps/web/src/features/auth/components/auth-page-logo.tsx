@@ -3,17 +3,14 @@ import { Link } from "react-router-dom"
 import { cn } from "@workspace/ui/lib/utils"
 
 /**
- * Logo + wordmark on the form column, above the page heading.
+ * Logo + wordmark on the form column, directly above the page heading.
  * Clicking it returns to the landing page.
  */
 export function AuthPageLogo({ className }: { className?: string }) {
   return (
     <Link
       to="/"
-      className={cn(
-        "flex shrink-0 items-center gap-2 px-6 py-4 md:px-12",
-        className,
-      )}
+      className={cn("flex shrink-0 items-center gap-2 py-4", className)}
       aria-label="Boses — back to landing page"
     >
       <img src="/contents/logo.webp" alt="E-Boses" className="h-9 w-auto md:h-10" />

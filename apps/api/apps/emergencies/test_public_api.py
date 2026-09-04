@@ -145,7 +145,7 @@ class PublicCommunityRequestTests(APITestCase):
         cache.clear()
         self.url = reverse("public-community-requests")
         self.payload = {
-            "kind": "demo",
+            "kind": "community",
             "name": "Juan Dela Cruz",
             "email": "juan@example.com",
             "organization": "Barangay Concepcion Uno",

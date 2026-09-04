@@ -53,6 +53,39 @@ def enqueue_emergency_media_integrity(alert_id: int):
         pass
 
 
+def enqueue_emergency_description(alert_id: int):
+    """Generate the responder-facing description after routing/media save."""
+    try:
+        generate_emergency_description_task.delay(alert_id)
+    except Exception:
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+            generate_emergency_description_task.run(alert_id)
+
+
+@shared_task(time_limit=180, soft_time_limit=150)
+def generate_emergency_description_task(alert_id: int):
+    from .description import generate_description
+    from .models import EmergencyAlert
+
+    alert = EmergencyAlert.objects.filter(pk=alert_id).prefetch_related("media").first()
+    if alert is None:
+        return {"alert_id": alert_id, "status": "missing"}
+    description = generate_description(alert)
+    assist = dict(alert.ai_assist or {})
+    assist.update({"description": description, "description_status": "ready"})
+    alert.ai_assist = assist
+    alert.save(update_fields=["ai_assist", "updated_at"])
+    try:
+        from apps.notifications.services import broadcast_emergency_update
+
+        broadcast_emergency_update(alert)
+    except Exception:
+        # The queue refresh still picks up the saved description if realtime
+        # delivery is unavailable.
+        pass
+    return {"alert_id": alert_id, "status": "ready"}
+
+
 @shared_task(time_limit=180, soft_time_limit=150)
 def check_emergency_media_integrity_task(alert_id: int):
     from apps.concerns.ai.gemma_analyzer import confirm_media_integrity
@@ -65,7 +98,7 @@ def check_emergency_media_integrity_task(alert_id: int):
     if alert is None:
         return {"alert_id": alert_id, "status": "missing"}
 
-    config = ConcernClassificationConfiguration.current()
+    config = ConcernClassificationConfiguration.current(alert.community)
     if not config.media_integrity_enabled:
         return {"alert_id": alert_id, "status": "disabled"}
 
@@ -194,15 +227,16 @@ def broadcast_emergency_created_task(alert_id):
 
 @shared_task(time_limit=60, soft_time_limit=45)
 def escalate_overdue_emergencies_task(minutes=None):
-    """Sweep for unacknowledged assignments.
+    """Sweep for unacknowledged assignments and retry waiting alerts.
 
     The deadline comes from each emergency's routing rule; `minutes` is only a
     floor for callers that want a coarser sweep.
     """
-    from .views import escalate_overdue_assignments
+    from .views import escalate_overdue_assignments, retry_waiting_alerts
 
     escalations = escalate_overdue_assignments(minutes=minutes)
-    return {"escalated": len(escalations), "minutes": minutes}
+    routed = retry_waiting_alerts()
+    return {"escalated": len(escalations), "routed": len(routed), "minutes": minutes}
 
 
 @shared_task(time_limit=120, soft_time_limit=90)

@@ -10,7 +10,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentProfile
-from apps.concerns.models import Department
+from apps.concerns.models import Concern, Department
 from apps.concerns.test_helpers import active_test_community, grant_position
 from apps.concerns.units import sync_responder_designation
 
@@ -21,7 +21,7 @@ from .models import (
     EmergencyTypeRoleMap,
     ResponderShift,
 )
-from .views import escalate_overdue_assignments
+from .views import escalate_overdue_assignments, retry_waiting_alerts
 
 TEST_CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
 
@@ -164,16 +164,86 @@ class DispatchLifecycleTests(APITestCase):
         )
         self.assertTrue(alert.assignment_logs.filter(action="reassigned_after_timeout").exists())
 
-    def test_timeout_with_nobody_left_marks_escalation_required_not_resolved(self):
+    def test_timeout_with_nobody_left_keeps_the_responder_assigned(self):
         self.second.is_on_duty = False
         self.second.save(update_fields=["is_on_duty"])
-        alert, _ = self.alert_with_assignment(assigned_ago_seconds=600)
+        alert, assignment = self.alert_with_assignment(assigned_ago_seconds=600)
 
         escalate_overdue_assignments()
 
         alert.refresh_from_db()
-        self.assertEqual(alert.status, EmergencyAlert.Status.ESCALATION_REQUIRED)
+        assignment.refresh_from_db()
+        self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
+        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ASSIGNED)
+        self.assertTrue(alert.assignment_logs.filter(action="acknowledgment_reminder").exists())
+        self.assertFalse(alert.escalations.exists())
         self.assertIn(alert.status, __import__("apps.emergencies.views", fromlist=["x"]).ACTIVE_STATUSES)
+
+    def test_waiting_alert_reactivates_an_eligible_timed_out_responder(self):
+        self.second.is_on_duty = False
+        self.second.save(update_fields=["is_on_duty"])
+        alert, assignment = self.alert_with_assignment()
+        assignment.status = EmergencyResponderAssignment.Status.ESCALATED
+        assignment.save(update_fields=["status"])
+        alert.status = EmergencyAlert.Status.ROUTING
+        alert.save(update_fields=["status", "updated_at"])
+
+        self.assertEqual(retry_waiting_alerts(), [alert.pk])
+
+        alert.refresh_from_db()
+        assignment.refresh_from_db()
+        self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
+        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ASSIGNED)
+        self.assertTrue(alert.assignment_logs.filter(action="auto_reactivated").exists())
+
+    def test_responder_sees_every_active_incident_assigned_to_their_unit(self):
+        alert, _assignment = self.alert_with_assignment(responder=self.first)
+        self.client.force_authenticate(self.second)
+
+        response = self.client.get("/api/emergencies/assigned/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rows = response.data.get("results", response.data)
+        self.assertIn(alert.pk, [row["id"] for row in rows])
+
+    def test_responder_sees_unit_incident_while_waiting_for_an_individual(self):
+        alert = EmergencyAlert.objects.create(
+            reporter=self.resident,
+            type="fire",
+            community=self.community,
+            barangay="Marikina Heights",
+            status=EmergencyAlert.Status.ROUTING,
+        )
+        self.client.force_authenticate(self.second)
+
+        response = self.client.get("/api/emergencies/assigned/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rows = response.data.get("results", response.data)
+        self.assertIn(alert.pk, [row["id"] for row in rows])
+
+    def test_resolving_emergency_resolves_its_critical_concern(self):
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            community=self.community,
+            title="Critical flood report",
+            description="Water is rising quickly.",
+            status=Concern.Status.IN_PROGRESS,
+        )
+        alert = EmergencyAlert.objects.create(
+            reporter=self.resident,
+            source_concern=concern,
+            type="flood",
+            community=self.community,
+            barangay="Marikina Heights",
+            status=EmergencyAlert.Status.ROUTED,
+        )
+
+        alert.status = EmergencyAlert.Status.RESOLVED
+        alert.save(update_fields=["status", "updated_at"])
+
+        concern.refresh_from_db()
+        self.assertEqual(concern.status, Concern.Status.RESOLVED)
 
     def test_the_original_assignment_stays_in_the_audit_history(self):
         alert, assignment = self.alert_with_assignment(assigned_ago_seconds=600)

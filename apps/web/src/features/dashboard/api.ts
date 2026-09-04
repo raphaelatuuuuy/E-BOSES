@@ -1,7 +1,11 @@
 import { apiRequest, unwrapList, type ListEnvelope } from "@/lib/api"
 import type { EmergencyAlert } from "./emergency-api"
 
-export type ConcernCategory = "infrastructure" | "environment" | "public_safety" | "others"
+export type ConcernCategory =
+  | "infrastructure"
+  | "environment"
+  | "public_safety"
+  | "others"
 export type ConcernStatus =
   | "submitted"
   | "under_review"
@@ -13,6 +17,18 @@ export type ConcernStatus =
   | (string & {})
 export type ConcernVisibility = "private" | "community"
 export type ConcernValidationStatus = "pending" | "accepted" | "rejected"
+export type CommunityAccessMode =
+  | "owner"
+  | "operational"
+  | "local_public"
+  | "foreign_read_only"
+
+export interface CommunitySummary {
+  id: string
+  public_id: string
+  code: string
+  name: string
+}
 
 export interface PublicUser {
   id: number
@@ -23,9 +39,13 @@ export interface PublicUser {
   responder_unit?: "tanod" | "bhw" | "bdrrmo" | ""
   is_on_duty?: boolean
   avatar?: string
+  /** Configured staff position (for example, “Responder” or “Barangay Tanod”). */
+  position?: string
 
   street?: string
   barangay?: string
+  /** Only present on concern detail payloads — the callback number for officials. */
+  phone_number?: string
 }
 
 export interface ActiveResponder extends PublicUser {
@@ -65,7 +85,12 @@ export interface ConcernMedia {
 
   privacy_detected_classes: string[]
 
-  relevance_state: "relevant" | "unrelated" | "unclear" | "unsupported" | "unverified"
+  relevance_state:
+    | "relevant"
+    | "unrelated"
+    | "unclear"
+    | "unsupported"
+    | "unverified"
   relevance_reason: string
 
   redactions: ConcernMediaRedaction[]
@@ -165,7 +190,11 @@ export interface ConcernAiAssessment {
 }
 
 export interface ContentFlagTarget {
-  kind: "concern" | "concern_comment" | "announcement_comment" | "emergency_comment"
+  kind:
+    | "concern"
+    | "concern_comment"
+    | "announcement_comment"
+    | "emergency_comment"
   excerpt: string
   author_name: string
   post_title: string | null
@@ -252,7 +281,22 @@ export interface ConcernComment {
   is_edited?: boolean
   created_at: string
   updated_at: string
+  attachment?: PublicCommentAttachment | null
   replies: ConcernComment[]
+}
+
+export interface PublicCommentAttachment {
+  id: number
+  kind: "image" | "video"
+  mime_type: string
+  original_filename: string
+  file_size: number
+  analysis_status: "complete" | "review_required" | "unavailable"
+  authenticity_detail: string
+  street_imagery_status: string
+  street_imagery_verdict: string
+  preview_url: string
+  raw_url: string
 }
 
 export type ConcernConversationKind =
@@ -299,12 +343,19 @@ export interface Concern {
   summary: string
   rejection_code: string
   status_version: number
+  community: CommunitySummary
+  reporter_community: CommunitySummary | null
+  is_cross_community: boolean
+  access_mode: CommunityAccessMode
+  can_interact: boolean
+  is_anonymous?: boolean
   reporter: PublicUser
   reporter_full_name?: string
   first_photo?: string | null
   photo_count?: number
   upvoters?: string[]
   title: string
+  notification_subject?: string
   description: string
 
   category: ConcernCategory
@@ -327,6 +378,8 @@ export interface Concern {
   location_accuracy: number | null
   barangay: string
   update_text: string
+  /** Staff member who recorded the resolved update, when available on list rows. */
+  resolution_actor?: PublicUser | null
   visibility: ConcernVisibility
   media: ConcernMedia[]
   status_events: ConcernStatusEvent[]
@@ -350,9 +403,17 @@ export interface Concern {
   comment_count: number
   priority_score: number
   user_vote: 0 | 1
+  /** Coarse distance (m) from the requesting viewer, set by the feed API when
+      the client passes its position — powers the "nearby" tab without
+      exposing the concern's exact coordinates. */
+  distance_meters?: number | null
   also_reported_count: number
   also_reported_by: string[] | null
-  recurrence_of: { id: number; tracking_id: string; status: ConcernStatus } | null
+  recurrence_of: {
+    id: number
+    tracking_id: string
+    status: ConcernStatus
+  } | null
   official_title: string
   community_incident: CommunityIncident
   archived_at: string | null
@@ -533,15 +594,29 @@ export interface AnnouncementAreaContext {
   }
 }
 
-export function createConcern(formData: FormData, options?: { escalate?: boolean; emergencyType?: string; recurrenceOf?: number; duplicateOf?: number }) {
+export function createConcern(
+  formData: FormData,
+  options?: {
+    escalate?: boolean
+    emergencyType?: string
+    recurrenceOf?: number
+    duplicateOf?: number
+  }
+) {
   if (options?.escalate) formData.append("auto_escalate", "true")
-  if (options?.escalate && options.emergencyType) formData.append("emergency_type", options.emergencyType)
-  if (options?.recurrenceOf) formData.append("recurrence_of", String(options.recurrenceOf))
-  if (options?.duplicateOf) formData.append("duplicate_of", String(options.duplicateOf))
-  return apiRequest<Concern & { escalated_alert?: EmergencyAlert }>("/concerns/", {
-    method: "POST",
-    body: formData,
-  })
+  if (options?.escalate && options.emergencyType)
+    formData.append("emergency_type", options.emergencyType)
+  if (options?.recurrenceOf)
+    formData.append("recurrence_of", String(options.recurrenceOf))
+  if (options?.duplicateOf)
+    formData.append("duplicate_of", String(options.duplicateOf))
+  return apiRequest<Concern & { escalated_alert?: EmergencyAlert }>(
+    "/concerns/",
+    {
+      method: "POST",
+      body: formData,
+    }
+  )
 }
 
 export interface ConcernResolvedMatch {
@@ -620,24 +695,30 @@ export interface ConcernPrecheckResult {
 }
 
 export function precheckConcern(formData: FormData) {
-  return apiRequest<ConcernPrecheckResult>("/concerns/classification/precheck/", {
-    method: "POST",
-    body: formData,
-  })
+  return apiRequest<ConcernPrecheckResult>(
+    "/concerns/classification/precheck/",
+    {
+      method: "POST",
+      body: formData,
+    }
+  )
 }
 
 export function checkConcernMedia(formData: FormData) {
-  return apiRequest<{ files: Array<{ name: string; status: "accepted" }> }>("/concerns/media/check/", {
-    method: "POST",
-    body: formData,
-  })
+  return apiRequest<{ files: Array<{ name: string; status: "accepted" }> }>(
+    "/concerns/media/check/",
+    {
+      method: "POST",
+      body: formData,
+    }
+  )
 }
 
 export function listMyConcernsPage(
   status?: string,
   dateFrom?: string,
   dateTo?: string,
-  page = 1,
+  page = 1
 ): Promise<ListEnvelope<Concern>> {
   const params = new URLSearchParams()
   if (status && status !== "all") params.set("status", status)
@@ -648,7 +729,11 @@ export function listMyConcernsPage(
   return apiRequest<ListEnvelope<Concern>>(`/concerns/mine/${query}`)
 }
 
-export function listMyConcerns(status?: string, dateFrom?: string, dateTo?: string) {
+export function listMyConcerns(
+  status?: string,
+  dateFrom?: string,
+  dateTo?: string
+) {
   return listMyConcernsPage(status, dateFrom, dateTo).then(unwrapList)
 }
 
@@ -660,7 +745,7 @@ export function listManagedConcernsPage(
   status?: string,
   category?: string,
   search?: string,
-  page = 1,
+  page = 1
 ): Promise<ListEnvelope<Concern>> {
   const params = new URLSearchParams()
   if (status && status !== "all") params.set("status", status)
@@ -674,7 +759,7 @@ export function listManagedConcernsPage(
 export function listManagedConcerns(
   status?: string,
   category?: string,
-  search?: string,
+  search?: string
 ) {
   return listManagedConcernsPage(status, category, search).then(unwrapList)
 }
@@ -684,25 +769,39 @@ export function listFeedConcerns(
   dateFrom?: string,
   dateTo?: string,
   search?: string,
+  scope?: "home" | "other" | "all",
+  origin?: { lat: number; lng: number } | null
 ) {
   const params = new URLSearchParams()
   if (category && category !== "all") params.set("category", category)
   if (dateFrom) params.set("date_from", dateFrom)
   if (dateTo) params.set("date_to", dateTo)
   if (search?.trim()) params.set("search", search.trim())
+  if (scope) params.set("scope", scope)
+  if (origin) {
+    params.set("lat", String(origin.lat))
+    params.set("lng", String(origin.lng))
+  }
   const query = params.toString() ? `?${params.toString()}` : ""
   return apiRequest<Concern[]>(`/concerns/feed/${query}`)
 }
 
 export function getConcern(id: number | string) {
-  const path = typeof id === "number" || /^\d+$/.test(id)
-    ? `/concerns/${id}/`
-    : `/concerns/by-public-id/${id}/`
+  const path =
+    typeof id === "number" || /^\d+$/.test(id)
+      ? `/concerns/${id}/`
+      : `/concerns/by-public-id/${id}/`
   return apiRequest<Concern>(path)
 }
 
-export interface ConcernStatusUpdatePayload {
+export function publishConcern(id: number) {
+  return apiRequest<Concern>(`/concerns/${id}/publish/`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  })
+}
 
+export interface ConcernStatusUpdatePayload {
   status: string
   note?: string
   status_version?: number
@@ -714,20 +813,29 @@ export interface ConcernStatusUpdatePayload {
   applied_ai_suggestion?: boolean
 }
 
-export function updateConcernStatus(id: number, payload: ConcernStatusUpdatePayload) {
+export function updateConcernStatus(
+  id: number,
+  payload: ConcernStatusUpdatePayload
+) {
   if (payload.resolution_evidence?.length) {
     const body = new FormData()
     body.append("status", payload.status)
     if (payload.note != null) body.append("note", payload.note)
-    if (payload.status_version != null) body.append("status_version", String(payload.status_version))
+    if (payload.status_version != null)
+      body.append("status_version", String(payload.status_version))
     if (payload.category) body.append("category", payload.category)
-    if (payload.department_id != null) body.append("department_id", String(payload.department_id))
+    if (payload.department_id != null)
+      body.append("department_id", String(payload.department_id))
     if (payload.assignee_ids) {
-      for (const assigneeId of payload.assignee_ids) body.append("assignee_ids", String(assigneeId))
+      for (const assigneeId of payload.assignee_ids)
+        body.append("assignee_ids", String(assigneeId))
     }
-    if (payload.internal_note) body.append("internal_note", payload.internal_note)
-    if (payload.applied_ai_suggestion) body.append("applied_ai_suggestion", "true")
-    for (const file of payload.resolution_evidence) body.append("resolution_evidence", file)
+    if (payload.internal_note)
+      body.append("internal_note", payload.internal_note)
+    if (payload.applied_ai_suggestion)
+      body.append("applied_ai_suggestion", "true")
+    for (const file of payload.resolution_evidence)
+      body.append("resolution_evidence", file)
     return apiRequest<Concern>(`/concerns/${id}/status/`, {
       method: "POST",
       body,
@@ -750,7 +858,13 @@ export function updateConcernStatus(id: number, payload: ConcernStatusUpdatePayl
 
 export function addConcernMediaRedactions(
   mediaId: number,
-  regions: Array<{ x: number; y: number; width: number; height: number; label?: string }>,
+  regions: Array<{
+    x: number
+    y: number
+    width: number
+    height: number
+    label?: string
+  }>
 ) {
   return apiRequest<ConcernMedia>(`/concerns/media/${mediaId}/redactions/`, {
     method: "POST",
@@ -758,21 +872,35 @@ export function addConcernMediaRedactions(
   })
 }
 
-export function removeConcernMediaRedaction(mediaId: number, redactionId: number) {
-  return apiRequest<ConcernMedia>(`/concerns/media/${mediaId}/redactions/${redactionId}/`, {
-    method: "DELETE",
-  })
+export function removeConcernMediaRedaction(
+  mediaId: number,
+  redactionId: number
+) {
+  return apiRequest<ConcernMedia>(
+    `/concerns/media/${mediaId}/redactions/${redactionId}/`,
+    {
+      method: "DELETE",
+    }
+  )
 }
 
 export function reprocessConcernMediaPrivacy(mediaId: number) {
-  return apiRequest<ConcernMedia>(`/concerns/media/${mediaId}/privacy/reprocess/`, {
-    method: "POST",
-  })
+  return apiRequest<ConcernMedia>(
+    `/concerns/media/${mediaId}/privacy/reprocess/`,
+    {
+      method: "POST",
+    }
+  )
 }
 
 export function assignConcern(
   id: number,
-  payload: { department_id?: number | null; assignee_id?: number | null; office?: string; note?: string },
+  payload: {
+    department_id?: number | null
+    assignee_id?: number | null
+    office?: string
+    note?: string
+  }
 ) {
   return apiRequest<ConcernAssignment>(`/concerns/${id}/assign/`, {
     method: "POST",
@@ -787,11 +915,18 @@ export function requestConcernClarification(id: number, request_text: string) {
   })
 }
 
-export function replyConcernClarification(id: number, clarificationId: number, response_text: string) {
-  return apiRequest<ConcernClarification>(`/concerns/${id}/clarifications/${clarificationId}/reply/`, {
-    method: "POST",
-    body: JSON.stringify({ response_text }),
-  })
+export function replyConcernClarification(
+  id: number,
+  clarificationId: number,
+  response_text: string
+) {
+  return apiRequest<ConcernClarification>(
+    `/concerns/${id}/clarifications/${clarificationId}/reply/`,
+    {
+      method: "POST",
+      body: JSON.stringify({ response_text }),
+    }
+  )
 }
 
 export function createConcernAppeal(id: number, reason: string) {
@@ -808,14 +943,20 @@ export function listConcernAppeals(status?: string) {
   return apiRequest<ConcernAppeal[]>(`/concerns/appeals/${query}`)
 }
 
-export function reviewConcernAppeal(appealId: number, payload: { status: "approved" | "denied"; decision_note?: string }) {
+export function reviewConcernAppeal(
+  appealId: number,
+  payload: { status: "approved" | "denied"; decision_note?: string }
+) {
   return apiRequest<ConcernAppeal>(`/concerns/appeals/${appealId}/review/`, {
     method: "POST",
     body: JSON.stringify(payload),
   })
 }
 
-export function createConcernRemark(id: number, payload: { body: string; visible_to_resident?: boolean }) {
+export function createConcernRemark(
+  id: number,
+  payload: { body: string; visible_to_resident?: boolean }
+) {
   return apiRequest<ConcernOfficialRemark>(`/concerns/${id}/remarks/`, {
     method: "POST",
     body: JSON.stringify(payload),
@@ -832,7 +973,10 @@ export interface ConcernChatMessage {
   is_mine: boolean
 }
 
-export function listConcernChat(concernId: number, options: { afterId?: number; beforeId?: number; limit?: number } = {}) {
+export function listConcernChat(
+  concernId: number,
+  options: { afterId?: number; beforeId?: number; limit?: number } = {}
+) {
   const params = new URLSearchParams()
   if (options.afterId) params.set("after", String(options.afterId))
   if (options.beforeId) params.set("before", String(options.beforeId))
@@ -841,7 +985,11 @@ export function listConcernChat(concernId: number, options: { afterId?: number; 
   return apiRequest<ConcernChatMessage[]>(`/concerns/${concernId}/chat/${q}`)
 }
 
-export function sendConcernChat(concernId: number, body: string, media?: File | null) {
+export function sendConcernChat(
+  concernId: number,
+  body: string,
+  media?: File | null
+) {
   if (media) {
     const form = new FormData()
     if (body.trim()) form.append("body", body)
@@ -857,29 +1005,41 @@ export function sendConcernChat(concernId: number, body: string, media?: File | 
   })
 }
 
-export function flagConcern(id: number, payload: { reason: string; note?: string; comment?: number | null }) {
+export function flagConcern(
+  id: number,
+  payload: { reason: string; note?: string; comment?: number | null }
+) {
   return apiRequest<ContentFlag>(`/concerns/${id}/flags/`, {
     method: "POST",
     body: JSON.stringify(payload),
   })
 }
 
-export function flagAnnouncementComment(commentId: number, payload: { reason: string; note?: string }) {
-  return apiRequest<ContentFlag>(`/announcements/comments/${commentId}/flags/`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  })
+export function flagAnnouncementComment(
+  commentId: number,
+  payload: { reason: string; note?: string }
+) {
+  return apiRequest<ContentFlag>(
+    `/announcements/comments/${commentId}/flags/`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  )
 }
 
 export function flagEmergencyComment(
   alertId: number,
   commentId: number,
-  payload: { reason: string; note?: string },
+  payload: { reason: string; note?: string }
 ) {
-  return apiRequest<ContentFlag>(`/emergencies/${alertId}/community-comments/${commentId}/flags/`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  })
+  return apiRequest<ContentFlag>(
+    `/emergencies/${alertId}/community-comments/${commentId}/flags/`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  )
 }
 
 export function listContentFlags(status?: string) {
@@ -890,13 +1050,29 @@ export function listContentFlags(status?: string) {
 }
 
 export function voteConcern(id: number, value: 0 | 1) {
-  return apiRequest<{ vote_count: number; user_vote: 0 | 1 }>(`/concerns/${id}/vote/`, {
-    method: "POST",
-    body: JSON.stringify({ value }),
-  })
+  return apiRequest<{ vote_count: number; user_vote: 0 | 1 }>(
+    `/concerns/${id}/vote/`,
+    {
+      method: "POST",
+      body: JSON.stringify({ value }),
+    }
+  )
 }
 
-export function commentOnConcern(id: number, payload: { body: string; parent?: number | null }) {
+export function commentOnConcern(
+  id: number,
+  payload: { body: string; parent?: number | null; media?: File | null }
+) {
+  if (payload.media) {
+    const form = new FormData()
+    if (payload.body.trim()) form.append("body", payload.body)
+    if (payload.parent != null) form.append("parent", String(payload.parent))
+    form.append("media", payload.media)
+    return apiRequest<ConcernComment>(`/concerns/${id}/comments/`, {
+      method: "POST",
+      body: form,
+    })
+  }
   return apiRequest<ConcernComment>(`/concerns/${id}/comments/`, {
     method: "POST",
     body: JSON.stringify(payload),
@@ -906,12 +1082,15 @@ export function commentOnConcern(id: number, payload: { body: string; parent?: n
 export function updateConcernComment(
   concernId: number,
   commentId: number,
-  payload: { body: string },
+  payload: { body: string }
 ) {
-  return apiRequest<ConcernComment>(`/concerns/${concernId}/comments/${commentId}/`, {
-    method: "PATCH",
-    body: JSON.stringify(payload),
-  })
+  return apiRequest<ConcernComment>(
+    `/concerns/${concernId}/comments/${commentId}/`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }
+  )
 }
 
 export function deleteConcernComment(concernId: number, commentId: number) {
@@ -1015,7 +1194,13 @@ export interface BarangayUnit {
 export type BarangayUnitDraft = Partial<
   Pick<
     BarangayUnit,
-    "name" | "code" | "short_name" | "description" | "emergency_role" | "sort_order" | "is_active"
+    | "name"
+    | "code"
+    | "short_name"
+    | "description"
+    | "emergency_role"
+    | "sort_order"
+    | "is_active"
   >
 >
 
@@ -1031,7 +1216,9 @@ export function listBarangayUnits() {
 }
 
 export function listBarangayUnitMembers(departmentId: number) {
-  return apiRequest<PublicUser[]>(`/concerns/admin/departments/${departmentId}/members/`)
+  return apiRequest<PublicUser[]>(
+    `/concerns/admin/departments/${departmentId}/members/`
+  )
 }
 
 export function createBarangayUnit(draft: BarangayUnitDraft) {
@@ -1049,9 +1236,12 @@ export function updateBarangayUnit(id: number, draft: BarangayUnitDraft) {
 }
 
 export function deleteBarangayUnit(id: number) {
-  return apiRequest<BarangayUnitDeleteResult>(`/concerns/admin/departments/${id}/`, {
-    method: "DELETE",
-  })
+  return apiRequest<BarangayUnitDeleteResult>(
+    `/concerns/admin/departments/${id}/`,
+    {
+      method: "DELETE",
+    }
+  )
 }
 
 export function getResponderDashboardSummary() {
@@ -1059,7 +1249,9 @@ export function getResponderDashboardSummary() {
 }
 
 export function listAnnouncements() {
-  return apiRequest<ListEnvelope<Announcement> | Announcement[]>("/announcements/").then(unwrapList)
+  return apiRequest<ListEnvelope<Announcement> | Announcement[]>(
+    "/announcements/"
+  ).then(unwrapList)
 }
 
 export function getAnnouncementAreaContext() {
@@ -1070,14 +1262,19 @@ export function listManagedAnnouncements() {
   return apiRequest<Announcement[]>("/announcements/manage/").then(unwrapList)
 }
 
-export function createManagedAnnouncement(payload: Partial<Announcement> | FormData) {
+export function createManagedAnnouncement(
+  payload: Partial<Announcement> | FormData
+) {
   return apiRequest<Announcement>("/announcements/manage/", {
     method: "POST",
     body: payload instanceof FormData ? payload : JSON.stringify(payload),
   })
 }
 
-export function updateManagedAnnouncement(id: number, payload: Partial<Announcement> | FormData) {
+export function updateManagedAnnouncement(
+  id: number,
+  payload: Partial<Announcement> | FormData
+) {
   return apiRequest<Announcement>(`/announcements/manage/${id}/`, {
     method: "PATCH",
     body: payload instanceof FormData ? payload : JSON.stringify(payload),
@@ -1111,6 +1308,8 @@ export function searchBarangayBoundaries(query: string) {
 
 export interface ActiveCommunity {
   id: number
+  community_id: string
+  code: string
   name: string
   locality: string
   is_home: boolean
@@ -1137,7 +1336,13 @@ export function updateMapDispatchPolicy(payload: Partial<MapDispatchPolicy>) {
   })
 }
 
-export function reviewContentFlag(id: number, payload: { status: Exclude<ContentFlag["status"], "submitted">; staff_note: string }) {
+export function reviewContentFlag(
+  id: number,
+  payload: {
+    status: Exclude<ContentFlag["status"], "submitted">
+    staff_note: string
+  }
+) {
   return apiRequest<ContentFlag>(`/concerns/flags/${id}/review/`, {
     method: "PATCH",
     body: JSON.stringify(payload),
@@ -1153,7 +1358,9 @@ export function listBarangayEventCalendar(days = 60) {
 }
 
 export function listManagedBarangayEvents() {
-  return apiRequest<BarangayEvent[]>("/barangay-events/manage/").then(unwrapList)
+  return apiRequest<BarangayEvent[]>("/barangay-events/manage/").then(
+    unwrapList
+  )
 }
 
 export function createManagedBarangayEvent(payload: Partial<BarangayEvent>) {
@@ -1163,7 +1370,10 @@ export function createManagedBarangayEvent(payload: Partial<BarangayEvent>) {
   })
 }
 
-export function updateManagedBarangayEvent(id: number, payload: Partial<BarangayEvent>) {
+export function updateManagedBarangayEvent(
+  id: number,
+  payload: Partial<BarangayEvent>
+) {
   return apiRequest<BarangayEvent>(`/barangay-events/manage/${id}/`, {
     method: "PATCH",
     body: JSON.stringify(payload),
@@ -1171,7 +1381,9 @@ export function updateManagedBarangayEvent(id: number, payload: Partial<Barangay
 }
 
 export function deleteManagedBarangayEvent(id: number) {
-  return apiRequest<void>(`/barangay-events/manage/${id}/`, { method: "DELETE" })
+  return apiRequest<void>(`/barangay-events/manage/${id}/`, {
+    method: "DELETE",
+  })
 }
 
 export function listActiveResponders() {
@@ -1199,6 +1411,7 @@ export interface LiveMapPerson {
   address: string
   responder_unit: PublicUser["responder_unit"]
   is_on_duty: boolean
+  is_online?: boolean
   latitude: string | null
   longitude: string | null
   location_updated_at: string | null
@@ -1206,9 +1419,13 @@ export interface LiveMapPerson {
 
 export interface LiveMapConcern {
   id: number
+  community?: CommunitySummary | null
   tracking_id: string
   title: string
+  notification_subject?: string
   description: string
+  /** LLM-generated plain-language summary; description remains the submission. */
+  summary?: string
   category: ConcernCategory
   category_ref: {
     code: string
@@ -1225,15 +1442,23 @@ export interface LiveMapConcern {
   reporter: LiveMapPerson
   created_at: string
   updated_at: string
-  priority: "high" | "normal"
+  priority: "low" | "moderate" | "high" | "critical" | "normal"
+  severity?: "low" | "moderate" | "high" | "critical"
+  severity_assessed?: boolean
   preview_url: string
   media_count: number
 }
 
 export interface LiveMapEmergency {
   id: number
+  community?: CommunitySummary | null
   type: string
   note: string
+  /** Concise factual description composed from the resident report and SOS answers. */
+  display_description?: string
+  /** @deprecated retained for older payloads; do not label this as AI in UI. */
+  ai_summary?: string
+  ai_assist_status?: string
   status: string
   address: string
   barangay: string
@@ -1244,7 +1469,12 @@ export interface LiveMapEmergency {
     id: number
     responder: LiveMapPerson
     status: string
-    last_location: { latitude: string; longitude: string; accuracy: number | null; created_at: string | null } | null
+    last_location: {
+      latitude: string
+      longitude: string
+      accuracy: number | null
+      created_at: string | null
+    } | null
   } | null
   created_at: string
   updated_at: string
@@ -1275,6 +1505,7 @@ export interface LiveMapRoute {
   alert_id: number
   assignment_id: number
   responder_id: number
+  responder?: LiveMapPerson
   status: "ok" | "stale" | "unavailable"
   profile: TravelProfile
   distance_meters: number | null
@@ -1289,8 +1520,8 @@ export interface LiveMapRoute {
 export interface MapDispatchPolicy {
   id: number | null
   barangay: string
-  acceptance_center_latitude: number | string
-  acceptance_center_longitude: number | string
+  acceptance_center_latitude: number | string | null
+  acceptance_center_longitude: number | string | null
   acceptance_radius_meters: number
   /** Drawn acceptance zone. When present it replaces the circle. */
   acceptance_geometry: GeoJsonPolygon | null
@@ -1319,16 +1550,43 @@ export interface LiveMapAdvisory {
 }
 
 export interface LiveMapSnapshot {
+  home_community_id: string | null
+  communities: Array<
+    CommunitySummary & {
+      center: { latitude: number; longitude: number }
+      bbox: Record<string, number | string | null>
+      boundary: {
+        osm_relation_id: number | null
+        name: string
+        geometry?: LiveMapGeometry | null
+      }
+    }
+  >
   map: {
     provider: "OpenStreetMap"
     center: { latitude: number; longitude: number; zoom: number }
-    boundary: { osm_relation_id: number; name: string; geometry?: LiveMapGeometry | null }
-    streets: { streets: LiveMapStreet[]; groups: Record<string, LiveMapStreet[]> }
+    boundary: {
+      osm_relation_id: number | null
+      name: string
+      geometry?: LiveMapGeometry | null
+    }
+    streets: {
+      streets: LiveMapStreet[]
+      groups: Record<string, LiveMapStreet[]>
+    }
     dispatch_policy: MapDispatchPolicy
   }
   people: LiveMapPerson[]
   concerns: LiveMapConcern[]
   emergencies: LiveMapEmergency[]
+  public_concerns: ResidentMapConcern[]
+  public_emergencies: ResidentMapEmergency[]
+  operational: {
+    community_id: string | null
+    concerns: LiveMapConcern[]
+    emergencies: LiveMapEmergency[]
+    routes: LiveMapRoute[]
+  }
   routes: LiveMapRoute[]
   advisories: LiveMapAdvisory[]
   summary: {
@@ -1344,7 +1602,10 @@ export interface LiveMapSnapshot {
 
 export type LiveMapUpdate =
   | { type: "location.updated"; payload: { person: LiveMapPerson } }
-  | { type: "concern.created" | "concern.updated"; payload: { concern: LiveMapConcern } }
+  | {
+      type: "concern.created" | "concern.updated"
+      payload: { concern: LiveMapConcern }
+    }
   | {
       type: "concern.ai_assessment.updated"
       payload: {
@@ -1359,19 +1620,35 @@ export type LiveMapUpdate =
         }
       }
     }
-  | { type: "emergency.created" | "emergency.updated"; payload: { emergency: LiveMapEmergency; route: LiveMapRoute | null; routes?: LiveMapRoute[] } }
+  | {
+      type: "emergency.created" | "emergency.updated"
+      payload: {
+        emergency: LiveMapEmergency
+        route: LiveMapRoute | null
+        routes?: LiveMapRoute[]
+      }
+    }
   | { type: "route.updated"; payload: { route: LiveMapRoute } }
-  | { type: "route.removed"; payload: { alert_id: number; assignment_id?: number } }
+  | {
+      type: "route.removed"
+      payload: { alert_id: number; assignment_id?: number }
+    }
 
-export function getOfficialLiveMap() {
-  return apiRequest<LiveMapSnapshot>("/dashboard/official/live-map/")
+export function getOfficialLiveMap(communityId?: string) {
+  const query = communityId
+    ? `?community_id=${encodeURIComponent(communityId)}`
+    : ""
+  return apiRequest<LiveMapSnapshot>(`/dashboard/official/live-map/${query}`)
 }
 
 export interface ResidentMapConcern {
   id: number
+  community: CommunitySummary
   tracking_id: string
   title: string
+  notification_subject?: string
   description: string
+  summary?: string
   category: ConcernCategory
   category_ref: {
     code: string
@@ -1389,15 +1666,21 @@ export interface ResidentMapConcern {
   reporter: { id: number; full_name: string; role: string; barangay: string }
   created_at: string
   updated_at: string
-  priority: "high" | "normal"
+  priority: "low" | "moderate" | "high" | "critical" | "normal"
+  severity?: "low" | "moderate" | "high" | "critical"
+  severity_assessed?: boolean
   kind: "concern"
 }
 
 export interface ResidentMapEmergency {
   id: number
+  community: CommunitySummary
   type: string
   type_label: string
   note: string
+  display_description?: string
+  ai_summary?: string
+  ai_assist_status?: string
   status: string
   address: string
   barangay: string
@@ -1420,13 +1703,30 @@ export interface ResidentMapService {
   longitude: number
   source: string
   kind: "service"
+  community: CommunitySummary
 }
 
 export interface ResidentAlertsMapSnapshot {
+  home_community_id: string | null
+  communities: Array<
+    CommunitySummary & {
+      center: { latitude: number; longitude: number }
+      bbox: Record<string, number | string | null>
+      boundary: {
+        osm_relation_id: number | null
+        name: string
+        geometry?: LiveMapGeometry | null
+      }
+    }
+  >
   map: {
     provider: "OpenStreetMap"
     center: { latitude: number; longitude: number; zoom: number }
-    boundary: { osm_relation_id: number; name: string; geometry?: LiveMapGeometry | null }
+    boundary: {
+      osm_relation_id: number | null
+      name: string
+      geometry?: LiveMapGeometry | null
+    }
     /** The acceptance zone, so a resident sees the same limit an official set. */
     dispatch_policy?: MapDispatchPolicy | null
   }
@@ -1444,11 +1744,118 @@ export interface ResidentAlertsMapSnapshot {
   generated_at: string
 }
 
-export function getResidentAlertsMap() {
-  return apiRequest<ResidentAlertsMapSnapshot>("/locations/resident-alerts-map/")
+export function getResidentAlertsMap(communityId?: string) {
+  const query = communityId
+    ? `?community_id=${encodeURIComponent(communityId)}`
+    : ""
+  return apiRequest<ResidentAlertsMapSnapshot>(
+    `/locations/resident-alerts-map/${query}`
+  )
 }
 
-export function sendLocationPing(payload: { latitude: number; longitude: number; accuracy?: number | null; source?: "active_session" | "pwa_background" | "manual" | "incident" }) {
+export interface PublicReportMapCommunity {
+  id: string
+  public_id: string
+  code: string
+  name: string
+  center: { latitude: number; longitude: number }
+  bbox: {
+    min_latitude: number | null
+    max_latitude: number | null
+    min_longitude: number | null
+    max_longitude: number | null
+  }
+  boundary: {
+    osm_relation_id: number | null
+    name: string
+    geometry: GeoJsonPolygon | null
+  }
+}
+
+export interface PublicReportMapConcern {
+  id: number
+  community: CommunitySummary
+  title: string
+  summary: string
+  category: string
+  category_label: string
+  status: string
+  address: string
+  latitude: number
+  longitude: number
+  reporter_label: string
+  preview_url: string | null
+  created_at: string
+  updated_at: string
+  kind: "concern"
+}
+
+export interface PublicReportMapEmergency {
+  id: number
+  community: CommunitySummary
+  type: string
+  type_label: string
+  /** Concise, resident-safe description composed from the emergency report. */
+  display_description?: string
+  address: string
+  latitude: number
+  longitude: number
+  status: string
+  created_at: string
+  updated_at: string
+  kind: "emergency"
+}
+
+export interface PublicReportMapSnapshot {
+  communities: PublicReportMapCommunity[]
+  map: {
+    provider: "OpenStreetMap"
+    center: { latitude: number; longitude: number; zoom: number }
+    bounds: {
+      min_latitude: number
+      max_latitude: number
+      min_longitude: number
+      max_longitude: number
+    } | null
+  }
+  concerns: PublicReportMapConcern[]
+  emergencies: PublicReportMapEmergency[]
+  summary: {
+    public_concerns: number
+    public_emergencies: number
+    alerts: number
+    communities: number
+  }
+  generated_at: string
+}
+
+export function getPublicReportMap() {
+  return apiRequest<PublicReportMapSnapshot>(
+    "/public/report-map/",
+    { method: "GET" },
+    { auth: false, refreshOnUnauthorized: false }
+  )
+}
+
+export function submitGuestConcern(formData: FormData) {
+  return apiRequest<{
+    submitted: true
+    community: { public_id: string; code: string; name: string }
+    status: "submitted"
+  }>(
+    "/public/concerns/guest/",
+    { method: "POST", body: formData },
+    { auth: false, csrf: true, refreshOnUnauthorized: false }
+  )
+}
+
+export function sendLocationPing(payload: {
+  latitude: number
+  longitude: number
+  accuracy?: number | null
+  source?: "active_session" | "pwa_background" | "manual" | "incident"
+  timestamp?: number
+}) {
   return apiRequest<
     | { accepted: true; person: LiveMapPerson; source: string }
     | { accepted: false; errors: Record<string, unknown> }
@@ -1499,12 +1906,19 @@ export function listMergeSuggestions() {
   return apiRequest<MergeSuggestion[]>("/concerns/merge-suggestions/")
 }
 
-export function decideMergeSuggestion(id: number, decision: "approve" | "reject", note?: string) {
-  return apiRequest<MergeSuggestion>(`/concerns/merge-suggestions/${id}/decide/`, {
-    method: "POST",
-    body: JSON.stringify({ decision, note: note ?? "" }),
-    headers: { "Content-Type": "application/json" },
-  })
+export function decideMergeSuggestion(
+  id: number,
+  decision: "approve" | "reject",
+  note?: string
+) {
+  return apiRequest<MergeSuggestion>(
+    `/concerns/merge-suggestions/${id}/decide/`,
+    {
+      method: "POST",
+      body: JSON.stringify({ decision, note: note ?? "" }),
+      headers: { "Content-Type": "application/json" },
+    }
+  )
 }
 
 export function mergeConcern(id: number, primaryId: number, reason: string) {
@@ -1562,32 +1976,52 @@ export interface AnnouncementComment {
   author: { id: number; full_name: string }
   is_mine: boolean
   created_at: string
+  attachment?: PublicCommentAttachment | null
   replies?: AnnouncementComment[]
   announcement_title?: string
 }
 
 export function listAnnouncementComments(announcementId: number) {
-  return apiRequest<AnnouncementComment[]>(`/announcements/${announcementId}/comments/`)
+  return apiRequest<AnnouncementComment[]>(
+    `/announcements/${announcementId}/comments/`
+  )
 }
 
 export function addAnnouncementComment(
   announcementId: number,
   body: string,
   parent: number | null = null,
+  media?: File | null
 ) {
-  return apiRequest<AnnouncementComment>(`/announcements/${announcementId}/comments/`, {
-    method: "POST",
-    body: JSON.stringify({ body, parent }),
-  })
+  if (media) {
+    const form = new FormData()
+    if (body.trim()) form.append("body", body)
+    if (parent != null) form.append("parent", String(parent))
+    form.append("media", media)
+    return apiRequest<AnnouncementComment>(
+      `/announcements/${announcementId}/comments/`,
+      { method: "POST", body: form }
+    )
+  }
+  return apiRequest<AnnouncementComment>(
+    `/announcements/${announcementId}/comments/`,
+    {
+      method: "POST",
+      body: JSON.stringify({ body, parent }),
+    }
+  )
 }
 
 export function removeAnnouncementComment(
   announcementId: number,
   commentId: number,
-  reason = "",
+  reason = ""
 ) {
-  return apiRequest<void>(`/announcements/${announcementId}/comments/${commentId}/`, {
-    method: "DELETE",
-    body: JSON.stringify({ reason }),
-  })
+  return apiRequest<void>(
+    `/announcements/${announcementId}/comments/${commentId}/`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({ reason }),
+    }
+  )
 }

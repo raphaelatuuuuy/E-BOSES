@@ -2,13 +2,13 @@
 
 import { useMemo } from "react"
 import { useNavigate } from "react-router-dom"
-import { AlertTriangleIcon, FileTextIcon, MegaphoneIcon } from "lucide-react"
 
 import { type NotificationItem } from "@/features/dashboard/components/notification-context"
 import {
   NotificationsPanel,
   type NotificationsConfig,
 } from "@/features/dashboard/components/notifications/notifications-panel"
+import { notificationIconFor } from "@/features/dashboard/components/notifications/notification-visuals"
 
 /**
  * The official's notifications — the shared panel with read-state filters and
@@ -24,6 +24,7 @@ const FILTERS = [
 
 function typeGroup(item: NotificationItem): string | null {
   if (item.category === "announcement" || item.type === "announcement") return "announcements"
+  if (item.category === "chat" || item.type === "chat_message") return "reports"
   if (
     item.category === "emergency" ||
     item.emergency_id ||
@@ -57,14 +58,7 @@ export function OfficialNotificationsPanel({
       heading: "Operations updates",
       filters: FILTERS,
       groupOf: typeGroup,
-      iconFor: (item) => {
-        const group = typeGroup(item)
-        if (group === "emergencies")
-          return { Icon: AlertTriangleIcon, chipClass: "bg-neutral-100 text-sos" }
-        if (group === "announcements")
-          return { Icon: MegaphoneIcon, chipClass: "bg-neutral-100 text-neutral-600" }
-        return { Icon: FileTextIcon, chipClass: "bg-neutral-100 text-neutral-700" }
-      },
+      iconFor: notificationIconFor,
       filterStorageKey: "eboses:official-notifications-filter",
       landingCopy: "Report, emergency and announcement updates will land here.",
       onOpen: (item) => {

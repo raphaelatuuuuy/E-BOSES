@@ -44,8 +44,21 @@ class ActionError(Exception):
     """Raised when an action cannot be applied; message is user-facing."""
 
 
-def open_assignment_for(alert, responder):
-    return alert.assignments.filter(responder=responder, status__in=OPEN_ASSIGNMENT_STATUSES).first()
+def open_assignment_for(alert, responder, *, lock=False):
+    """Return the responder's current assignment.
+
+    Acknowledge and timeout escalation can arrive at the same time.  Callers
+    that are about to transition the assignment must lock this row so a
+    timeout worker cannot read ``assigned`` and replace it while the responder
+    is acknowledging it.
+    """
+    queryset = alert.assignments.filter(
+        responder=responder,
+        status__in=OPEN_ASSIGNMENT_STATUSES,
+    )
+    if lock:
+        queryset = queryset.select_for_update()
+    return queryset.select_related("alert").first()
 
 
 def active_assignment_for(responder):
@@ -80,9 +93,24 @@ def _advance_alert(alert, new_status, actor, note):
 def acknowledge(alert, responder, *, note="", source="api"):
     from .views import log_assignment_action
 
-    assignment = open_assignment_for(alert, responder)
+    # Keep the lock order identical to ``escalate_overdue_assignments``:
+    # assignment first, then alert.  This makes acknowledgement win cleanly
+    # over a stale timeout candidate instead of producing a second assignment.
+    assignment = open_assignment_for(alert, responder, lock=True)
     if not assignment:
         raise ActionError("You are not assigned to this emergency.")
+    alert = EmergencyAlert.objects.select_for_update().get(pk=alert.pk)
+    # The assignment may have changed while the caller was building the
+    # request.  Re-read it under the same lock before applying a transition.
+    assignment = (
+        EmergencyResponderAssignment.objects
+        .select_for_update()
+        .select_related("alert", "responder")
+        .filter(pk=assignment.pk)
+        .first()
+    )
+    if not assignment or assignment.status not in OPEN_ASSIGNMENT_STATUSES:
+        raise ActionError("This dispatch is no longer active.")
     if assignment.status in {
         EmergencyResponderAssignment.Status.EN_ROUTE,
         EmergencyResponderAssignment.Status.ARRIVED,
@@ -117,7 +145,7 @@ def acknowledge(alert, responder, *, note="", source="api"):
 @transaction.atomic
 def decline(alert, responder, *, reason, source="api"):
     """Remove a responder and immediately look for the next eligible one."""
-    from .views import apply_routing_effects, find_auto_responders, log_assignment_action, role_map_for_departments, responder_department_ids
+    from .views import apply_routing_effects, find_auto_responders, log_assignment_action, role_map_for_responder
 
     reason = (reason or "").strip()
     if len(reason) < 3:
@@ -146,13 +174,15 @@ def decline(alert, responder, *, reason, source="api"):
     replacement = replacements[0] if replacements else None
 
     if replacement:
-        role_map = role_map_for_departments(alert.type, responder_department_ids(replacement))
+        role_map = role_map_for_responder(alert, replacement)
         new_assignment = EmergencyResponderAssignment.objects.create(
             alert=alert,
             responder=replacement,
             role_map=role_map,
             source=EmergencyResponderAssignment.Source.ESCALATION,
             status=EmergencyResponderAssignment.Status.ASSIGNED,
+            responding_community=role_map.community if role_map else alert.community,
+            is_cross_community=bool(role_map and role_map.community_id != alert.community_id),
         )
         log_assignment_action(
             alert=alert,
@@ -164,11 +194,20 @@ def decline(alert, responder, *, reason, source="api"):
         )
         apply_routing_effects(alert, replacement, None, audit_action="emergency.reassigned")
     elif not alert.assignments.filter(status__in=OPEN_ASSIGNMENT_STATUSES).exists():
-        EmergencyEscalation.objects.get_or_create(
-            alert=alert,
-            reason=f"Responder unavailable and no replacement on duty: {reason[:150]}",
+        # Availability can change at any moment. Return the case to the
+        # automatic routing queue instead of making an official dispatch it.
+        from .views import create_status_event
+
+        alert.status = EmergencyAlert.Status.ROUTING
+        alert.status_version += 1
+        alert.save(update_fields=["status", "status_version", "updated_at"])
+        create_status_event(
+            alert,
+            alert.status,
+            None,
+            "Automatically checking the next available response unit.",
+            event_key="responder_searching",
         )
-        _notify_officials(alert, "Responder declined and no replacement is on duty.")
 
     create_audit_log(
         "emergency.declined",

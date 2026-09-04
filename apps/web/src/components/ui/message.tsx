@@ -33,7 +33,7 @@ export function MessageFooter({ className, ...props }: React.ComponentProps<"div
   return (
     <div
       data-slot="message-footer"
-      className={cn("px-0.5 text-[10px] font-medium leading-4 text-neutral-400", className)}
+      className={cn("px-0.5 text-[11px] font-medium leading-4 text-neutral-500", className)}
       {...props}
     />
   )

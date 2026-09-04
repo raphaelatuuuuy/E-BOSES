@@ -25,9 +25,8 @@ const CONFIRM_WINDOW_MS = 4000
  * Two problems with what this was:
  *
  * 1. It rendered as `variant="outline"`, which resolves to `bg-background`.
- *    Inside `.staff-dark` that is #070b18 — *darker* than the #0e1424 card it
- *    sits on — so the primary control on the Shift screen read as a hole
- *    punched in the card. Its hover state was worse: `hover:bg-accent` is
+ *    On the old dark card it read as a hole punched in the surface. Its hover
+ *    state was worse: `hover:bg-accent` is
  *    solid brand orange, which in this console's token vocabulary means
  *    "press me to act", the exact opposite of a stop action.
  *
@@ -35,7 +34,7 @@ const CONFIRM_WINDOW_MS = 4000
  *    GPS-stamped session dispatch routes against, and there is no undo — a
  *    responder who fat-fingers it on a phone goes off duty silently.
  *
- * So: a red-tinted rest state that belongs to the dark card, and a press that
+ * So: a red-tinted rest state that belongs to the incident workflow, and a press that
  * arms rather than fires. The armed state times out on its own, because a
  * confirm that stays armed forever is just a slower single press.
  */

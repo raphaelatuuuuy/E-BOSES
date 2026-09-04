@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import {
   CircleCheck,
@@ -96,7 +96,7 @@ function IconDropdown({
         className="flex w-full items-center gap-3 rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-left text-[16px] text-neutral-900 transition-colors outline-none hover:border-neutral-400"
       >
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-navy text-white">
-          <CurrentIcon className="size-4" strokeWidth={1.7} />
+          {createElement(CurrentIcon, { className: "size-4", strokeWidth: 1.7 })}
         </span>
         <span className="flex-1 truncate font-medium">{isCustomImage ? "Custom image" : value || "Siren"}</span>
         {open ? (

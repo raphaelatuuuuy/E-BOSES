@@ -214,7 +214,7 @@ export function DispatchPanel({
           <div className="mt-4 rounded-[14px] border-[1.5px] border-neutral-200 bg-neutral-50 p-4">
             <p className="text-[13px] font-normal text-neutral-600">
               {quickAction.kind === "escalate"
-                ? "Escalate this incident — the next available on-duty responder is routed in as backup support."
+                ? "Escalate this incident — the next available responder is routed in as backup support."
                 : "Record this as a false alarm — the response team is stood down and the disposition is written to the record."}
             </p>
 

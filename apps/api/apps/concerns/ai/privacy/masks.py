@@ -13,6 +13,7 @@ survives all three.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 from django.conf import settings
@@ -33,6 +34,40 @@ logger = logging.getLogger(__name__)
 MIN_AREA_RATIO = 0.0005
 MAX_AREA_RATIO = 0.92
 MIN_SIDE_PIXELS = 8
+
+# Public automatic redaction is deliberately narrow. Street signs, house
+# numbers, documents, and other readable civic evidence must remain legible.
+# Other privacy classes may still be used for review/holding decisions, but
+# they must never become an automatic blur region.
+PRIVACY_BLUR_LABELS = frozenset({"face", "license plate"})
+
+PRIVACY_BLUR_LABEL_ALIASES = {
+    "human face": "face",
+    "human faces": "face",
+    "faces": "face",
+    "profile face": "face",
+    "facial features": "face",
+    "licence plate": "license plate",
+    "number plate": "license plate",
+    "plate number": "license plate",
+    "car plate": "license plate",
+    "vehicle plate": "license plate",
+    "license plates": "license plate",
+    "vehicle registration plate": "license plate",
+}
+
+
+def _normalise_region_label(label) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(label or "").casefold()).split())
+
+
+def is_privacy_sensitive_label(label) -> bool:
+    normalised = _normalise_region_label(label)
+    return PRIVACY_BLUR_LABEL_ALIASES.get(normalised, normalised) in PRIVACY_BLUR_LABELS
+
+
+def privacy_sensitive_regions(regions: list[Region]) -> list[Region]:
+    return [region for region in regions if is_privacy_sensitive_label(region.label)]
 
 
 @dataclass(frozen=True)
@@ -324,6 +359,14 @@ def blur_regions(image, regions: list[Region]):
     import cv2
     import numpy as np
 
+    # Automatic SAM3 rows are historical data, so filter them here as well as
+    # when they are first created. This prevents an old "street sign" row from
+    # being replayed by a protected-copy re-render.
+    regions = [
+        region
+        for region in regions
+        if region.source != "sam3" or is_privacy_sensitive_label(region.label)
+    ]
     if not regions:
         return image
 

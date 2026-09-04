@@ -90,7 +90,7 @@ def severity_level(concern) -> tuple[int, bool]:
     if relevance is not None:
         from .models import ConcernClassificationConfiguration
 
-        threshold = ConcernClassificationConfiguration.current().relevance_threshold
+        threshold = ConcernClassificationConfiguration.current(concern.community).relevance_threshold
         if float(relevance) < threshold:
             level -= 1
 

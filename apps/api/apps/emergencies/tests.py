@@ -17,8 +17,8 @@ from rest_framework.test import APITestCase
 from apps.accounts.models import AuditLog, ResidentProfile
 from apps.notifications.models import Notification
 
-from .models import BackupRequest, EmergencyAlert, EmergencyAppeal, EmergencyAssignmentRoute, EmergencyChatAttachment, EmergencyChatMessage, EmergencyEscalation, EmergencyLocationPing, EmergencyMedia, EmergencyResponderAssignment, EmergencyStatusEvent, EmergencyTypeRoleMap, MapGeometry, ResponderShift, WitnessNotification
-from apps.concerns.models import Department
+from .models import BackupRequest, Community, EmergencyAlert, EmergencyAppeal, EmergencyAssignmentRoute, EmergencyChatAttachment, EmergencyChatMessage, EmergencyEscalation, EmergencyLocationPing, EmergencyMedia, EmergencyResponderAssignment, EmergencyStatusEvent, EmergencyTypeRoleMap, MapGeometry, ResponderShift, WitnessNotification
+from apps.concerns.models import Announcement, Department, Designation, Position
 from apps.concerns.test_helpers import grant_position
 from apps.concerns.units import sync_responder_designation
 from .views import auto_route_alert
@@ -1339,6 +1339,86 @@ class EmergencyAPITests(APITestCase):
         self.assertTrue(any(item["id"] == alert.pk for item in allowed.data["emergencies"]))
         self.assertTrue(any(item["id"] == self.responder.pk for item in allowed.data["people"]))
 
+    def test_official_live_map_defaults_to_the_officials_residence_community(self):
+        other_community = Community.objects.create(
+            code="concepcion-dos",
+            name="Concepcion Dos",
+            status=Community.Status.ACTIVE,
+            center_latitude="14.6500000",
+            center_longitude="121.1000000",
+        )
+        other_department = Department.objects.create(
+            community=other_community,
+            name="Other Community Desk",
+            code="other-community-desk",
+        )
+        Designation.objects.create(
+            user=self.official,
+            department=other_department,
+            position=Position.objects.get(code="barangay-captain"),
+        )
+        ResidentProfile.objects.create(
+            user=self.official,
+            first_name="Emergency",
+            last_name="Official",
+            date_of_birth="1990-01-01",
+            address=self.community.name,
+            barangay=self.community.name,
+            community=self.community,
+        )
+
+        self.client.force_authenticate(self.official)
+        response = self.client.get("/api/dashboard/official/live-map/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["home_community_id"], str(self.community.public_id))
+        self.assertEqual(response.data["map"]["boundary"]["name"], self.community.boundary.name)
+
+    def test_official_live_map_advisories_follow_the_selected_community(self):
+        other_community = Community.objects.create(
+            code="concepcion-dos",
+            name="Concepcion Dos",
+            status=Community.Status.ACTIVE,
+            center_latitude="14.6500000",
+            center_longitude="121.1000000",
+        )
+        other_department = Department.objects.create(
+            community=other_community,
+            name="Other Community Desk",
+            code="other-community-desk",
+        )
+        Designation.objects.create(
+            user=self.official,
+            department=other_department,
+            position=Position.objects.get(code="barangay-captain"),
+        )
+        selected = Announcement.objects.create(
+            community=self.community,
+            title="Marikina Heights notice",
+            body="For this community.",
+            barangay=self.community.name,
+            is_published=True,
+            published_at=timezone.now(),
+        )
+        foreign = Announcement.objects.create(
+            community=other_community,
+            title="Concepcion Dos notice",
+            body="For the other community.",
+            barangay=other_community.name,
+            is_published=True,
+            published_at=timezone.now(),
+        )
+
+        self.client.force_authenticate(self.official)
+        response = self.client.get(
+            f"/api/dashboard/official/live-map/?community_id={self.community.public_id}"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        advisory_ids = {item["id"] for item in response.data["advisories"]}
+        self.assertIn(selected.pk, advisory_ids)
+        self.assertNotIn(foreign.pk, advisory_ids)
+
     @patch("apps.geo_services.collect_service_pois", return_value=[])
     def test_resident_alerts_map_is_public_safe(self, _collect_service_pois):
         from apps.concerns.models import Concern
@@ -1593,6 +1673,49 @@ class EmergencyAPITests(APITestCase):
         with self.assertRaises(asyncio.TimeoutError):
             async_to_sync(asyncio.wait_for)(channel_layer.receive(channel_name), timeout=0.05)
 
+    def test_location_ping_rejects_stale_client_fix_timestamp(self):
+        self.make_on_duty_responder(self.responder)
+        previous_latitude = str(self.responder.current_latitude)
+        previous_longitude = str(self.responder.current_longitude)
+        self.client.force_authenticate(self.responder)
+
+        response = self.client.post(
+            "/api/locations/ping/",
+            {
+                "latitude": "14.6516000",
+                "longitude": "121.1208000",
+                "accuracy": 8,
+                "source": "active_session",
+                "timestamp": int((timezone.now() - timedelta(minutes=2)).timestamp() * 1000),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["accepted"])
+        self.assertIn("timestamp", response.data["errors"])
+        self.responder.refresh_from_db()
+        self.assertEqual(str(self.responder.current_latitude), previous_latitude)
+        self.assertEqual(str(self.responder.current_longitude), previous_longitude)
+
+    @patch("apps.live_map.route_for_responder_assignment", return_value=None)
+    def test_active_assignment_serialization_uses_responder_session_location(self, _route):
+        from .serializers import EmergencyResponderAssignmentSerializer
+
+        self.make_on_duty_responder(self.responder)
+        alert = self.direct_alert(status=EmergencyAlert.Status.ROUTED)
+        assignment = EmergencyResponderAssignment.objects.create(
+            alert=alert,
+            responder=self.responder,
+            status=EmergencyResponderAssignment.Status.ASSIGNED,
+        )
+
+        payload = EmergencyResponderAssignmentSerializer(assignment).data
+
+        self.assertEqual(payload["last_location"]["latitude"], "14.6516000")
+        self.assertEqual(payload["last_location"]["longitude"], "121.1208000")
+        self.assertTrue(payload["last_location"]["is_fresh"])
+
     def test_fresh_responder_ping_retries_waiting_emergency_once(self):
         self.make_on_duty_responder(self.responder)
         self.responder.location_updated_at = timezone.now() - timedelta(hours=1)
@@ -1739,6 +1862,33 @@ class EmergencyAPITests(APITestCase):
         stored = EmergencyAssignmentRoute.objects.get(assignment=assignment)
         self.assertEqual(stored.status, "stale")
         self.assertEqual(stored.error_code, "provider_unavailable")
+
+    def test_resolved_assignment_keeps_saved_route_for_map_history(self):
+        from apps.live_map import routes_for_alert
+
+        self.make_on_duty_responder(self.responder)
+        alert = self.direct_alert(status=EmergencyAlert.Status.RESOLVED)
+        assignment = EmergencyResponderAssignment.objects.create(
+            alert=alert,
+            responder=self.responder,
+            status=EmergencyResponderAssignment.Status.RESOLVED,
+        )
+        EmergencyAssignmentRoute.objects.create(
+            assignment=assignment,
+            status=EmergencyAssignmentRoute.Status.OK,
+            profile="car",
+            geometry={
+                "type": "LineString",
+                "coordinates": [[121.1208, 14.6516], [121.12069, 14.65149]],
+            },
+            summary="Narra Street",
+        )
+
+        routes = routes_for_alert(alert)
+
+        self.assertEqual(len(routes), 1)
+        self.assertEqual(routes[0]["geometry"]["type"], "LineString")
+        self.assertEqual(routes[0]["responder"]["id"], self.responder.id)
 
     def make_on_duty_responder(self, user, *, unit=None, first_name="Ready"):
         User = get_user_model()

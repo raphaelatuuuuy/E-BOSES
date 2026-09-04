@@ -73,7 +73,6 @@ export function EmergencyTestWorkspace({ onUseSms }: { onUseSms?: () => void }) 
     const latitude = result && "location" in result ? result.location.latitude : null
     const longitude = result && "location" in result ? result.location.longitude : null
     if (latitude == null || longitude == null) {
-      setPinStreet("")
       return
     }
     let cancelled = false

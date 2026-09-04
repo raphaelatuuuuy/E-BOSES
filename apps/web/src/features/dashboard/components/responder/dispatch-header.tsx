@@ -168,12 +168,12 @@ export function DispatchOverviewCard({
   )
   // Old rows may carry "Pending" as a legacy default on both the reporter's
   // full_name and their barangay; treat that literal as empty so the UI reads
-  // "Resident" / "Marikina Heights" instead of exposing the placeholder.
-  const rawName = alert.reporter.full_name?.trim() ?? ""
+  // "Resident" / the incident community instead of exposing the placeholder.
+  const rawName = alert.reporter?.full_name?.trim() ?? ""
   const reporterName = rawName && rawName !== "Pending" ? rawName : "Resident"
   const rawBarangay = alert.barangay?.trim() ?? ""
   const reporterBarangay =
-    rawBarangay && rawBarangay !== "Pending" ? rawBarangay : "Marikina Heights"
+    rawBarangay && rawBarangay !== "Pending" ? rawBarangay : alert.community?.name || "Your community"
 
 
   return (
@@ -297,7 +297,7 @@ export function DispatchOverviewCard({
           <EmergencyChatPanel
             alertId={alert.id}
             open
-            theme="dark"
+            theme="light"
             bare
             disabled={["resolved", "cancelled"].includes(alert.status)}
             className="h-[400px] lg:h-[min(52svh,500px)]"

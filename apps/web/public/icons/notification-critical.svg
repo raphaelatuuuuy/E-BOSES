@@ -1,0 +1,9 @@
+<!-- Lucide icon: TriangleAlert. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <circle cx="12" cy="12" r="11" fill="#dc2626"/>
+  <g transform="translate(3 3) scale(.75)" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.25">
+    <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/>
+    <path d="M12 9v4"/>
+    <path d="M12 17h.01"/>
+  </g>
+</svg>

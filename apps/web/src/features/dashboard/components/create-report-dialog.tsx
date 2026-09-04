@@ -1,8 +1,18 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import {
   CameraIcon,
+  CircleXIcon,
   ImageIcon,
   MapPinIcon,
   PlusIcon,
@@ -15,7 +25,9 @@ import { useAuthSession } from "@/features/auth/auth-session"
 import {
   checkConcernMedia,
   createConcern,
+  getConcern,
   precheckConcern,
+  submitGuestConcern,
   type Concern,
   type ConcernActiveDuplicate,
   type ConcernPhotoVerdict,
@@ -26,16 +38,18 @@ import { CameraCaptureDialog } from "@/features/dashboard/components/camera-capt
 import { Dialog, DialogBody } from "@/features/dashboard/components/dialog"
 import { ReportDetailsDialog } from "@/features/dashboard/components/report-details-dialog"
 import { ApiError } from "@/lib/api"
-import { formatNominatimParts, reverseGeocode } from "@/lib/geocode"
-import { useCoverageContext } from "@/features/dashboard/lib/use-coverage"
-import { insideCoverage } from "@/features/dashboard/components/map/coverage-layer"
+import { lookupRegistrationPinAddress } from "@/features/auth/api"
+import { looksLikeCoordinates } from "@/features/dashboard/lib/location-text"
 
-const LocationPickerModal = lazy(() => import("@/features/dashboard/components/location-picker"))
+const LocationPickerModal = lazy(
+  () => import("@/features/dashboard/components/location-picker")
+)
 
 const ALLOWED_TYPES = ["image/png", "image/jpeg"]
 const ACCEPT_STRING = ".png,.jpg,.jpeg," + ALLOWED_TYPES.join(",")
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const MAX_FILES = 5
+const descriptionMin = 40
 const descriptionMax = 1500
 
 function titleFromDescription(text: string, max = 80): string {
@@ -49,6 +63,29 @@ function titleFromDescription(text: string, max = 80): string {
   return (atWord.length >= 24 ? atWord : slice).trim()
 }
 
+function validationFeedbackFor(report: Concern) {
+  if (report.rejection_code === "automated_photo_mismatch") {
+    return "The photo contradicts the issue described. Please submit a photo that shows the reported issue."
+  }
+  if (report.rejection_code.startsWith("automated_street_imagery")) {
+    return "Please pin the exact area where the issue is found and upload a matching photo."
+  }
+  const summary = report.validation_summary?.trim()
+  if (summary) return summary
+  if (report.ai_assessment?.status === "failed") {
+    return "Automated review could not be completed. Your report was not assigned to a unit."
+  }
+  return "This report was not accepted."
+}
+
+function hasValidationError(report: Concern) {
+  return (
+    report.ai_assessment?.status === "failed" ||
+    report.validation_status === "rejected" ||
+    report.status === "rejected"
+  )
+}
+
 const DRAFT_DB = "eboses-resident-drafts"
 const DRAFT_STORE = "report-drafts"
 const DRAFT_KEY = "current-report"
@@ -57,7 +94,10 @@ const DRAFT_CLOSE_ACK_KEY = "eboses-draft-close-ack"
 
 function hasAcknowledgedDraftClose() {
   try {
-    return typeof sessionStorage !== "undefined" && sessionStorage.getItem(DRAFT_CLOSE_ACK_KEY) === "1"
+    return (
+      typeof sessionStorage !== "undefined" &&
+      sessionStorage.getItem(DRAFT_CLOSE_ACK_KEY) === "1"
+    )
   } catch {
     return false
   }
@@ -86,7 +126,8 @@ interface ReportDraft {
 function openDraftDatabase() {
   return new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DRAFT_DB, 1)
-    request.onupgradeneeded = () => request.result.createObjectStore(DRAFT_STORE)
+    request.onupgradeneeded = () =>
+      request.result.createObjectStore(DRAFT_STORE)
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error)
   })
@@ -95,7 +136,10 @@ function openDraftDatabase() {
 async function readDraft() {
   const database = await openDraftDatabase()
   return new Promise<ReportDraft | undefined>((resolve, reject) => {
-    const request = database.transaction(DRAFT_STORE).objectStore(DRAFT_STORE).get(DRAFT_KEY)
+    const request = database
+      .transaction(DRAFT_STORE)
+      .objectStore(DRAFT_STORE)
+      .get(DRAFT_KEY)
     request.onsuccess = () => resolve(request.result as ReportDraft | undefined)
     request.onerror = () => reject(request.error)
   }).finally(() => database.close())
@@ -131,20 +175,36 @@ export function CreateReportDialog({
   open: controlledOpen,
   onOpenChange,
   trigger,
+  guest = false,
+  initialLocation,
+  onGuestSubmitted,
 }: {
   open?: boolean
   onOpenChange?: (open: boolean) => void
   trigger?: (open: () => void) => ReactNode
+  guest?: boolean
+  initialLocation?: {
+    lat: number
+    lng: number
+    address: string
+    addressPrimary?: string
+    addressSecondary?: string
+    source?: "gps" | "manual_pin"
+  } | null
+  onGuestSubmitted?: () => void
 } = {}) {
   const navigate = useNavigate()
   const { user } = useAuthSession()
 
   const [internalOpen, setInternalOpen] = useState(false)
   const open = controlledOpen ?? internalOpen
-  const setOpen = (value: boolean) => {
-    setInternalOpen(value)
-    onOpenChange?.(value)
-  }
+  const setOpen = useCallback(
+    (value: boolean) => {
+      setInternalOpen(value)
+      onOpenChange?.(value)
+    },
+    [onOpenChange]
+  )
 
   const [description, setDescription] = useState("")
   const [locationOpen, setLocationOpen] = useState(false)
@@ -161,15 +221,21 @@ export function CreateReportDialog({
   const [mediaFiles, setMediaFiles] = useState<File[]>([])
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [awaitingValidation, setAwaitingValidation] = useState(false)
   const [isCheckingMedia, setIsCheckingMedia] = useState(false)
   const [submittedReport, setSubmittedReport] = useState<Concern | null>(null)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
-  const [precheckNotice, setPrecheckNotice] = useState("")
   const [draftRestored, setDraftRestored] = useState(false)
-  const [resolvedMatch, setResolvedMatch] = useState<ConcernResolvedMatch | null>(null)
-  const [duplicateConfirm, setDuplicateConfirm] = useState<ConcernActiveDuplicate | null>(null)
+  const [resolvedMatch, setResolvedMatch] =
+    useState<ConcernResolvedMatch | null>(null)
+  const [duplicateConfirm, setDuplicateConfirm] =
+    useState<ConcernActiveDuplicate | null>(null)
   const [photoVerdicts, setPhotoVerdicts] = useState<ConcernPhotoVerdict[]>([])
-  const [privacyPreview, setPrivacyPreview] = useState<{ state: string; detected_classes: string[]; protected_image: string } | null>(null)
+  const [privacyPreview, setPrivacyPreview] = useState<{
+    state: string
+    detected_classes: string[]
+    protected_image: string
+  } | null>(null)
 
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false)
 
@@ -178,31 +244,92 @@ export function CreateReportDialog({
   const duplicateOfRef = useRef<number | null>(null)
 
   const inferredCategoryRef = useRef("")
-  const resolvedAddressRef = useRef<{ address: string; primary: string; secondary: string } | null>(null)
+  const resolvedAddressRef = useRef<{
+    address: string
+    primary: string
+    secondary: string
+  } | null>(null)
   const pendingPrecheckRef = useRef<ConcernPrecheckResult | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
   const previewUrls = useMemo(
     () => mediaFiles.map((file) => URL.createObjectURL(file)),
-    [mediaFiles],
+    [mediaFiles]
   )
-  // Coverage rules for the camera's GPS check — loaded once per open.
-  const coverageContext = useCoverageContext(open)
-
-  const displayName = user
-    ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "Resident"
-    : "Resident"
+  const displayName = guest
+    ? "Anonymous"
+    : user
+      ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "Resident"
+      : "Resident"
   const letter = (
-    user?.firstName?.[0] ||
-    user?.lastName?.[0] ||
-    displayName[0] ||
-    "?"
+    guest
+      ? "A"
+      : user?.firstName?.[0] || user?.lastName?.[0] || displayName[0] || "U"
   ).toUpperCase()
   const rawStreet = (user?.address || "").split(",")[0]?.trim() || ""
   const userStreet =
     !rawStreet || rawStreet.toLowerCase() === "pending" ? "" : rawStreet
+  const submittedReportId = submittedReport?.public_id
+  const submittedReportIsProcessing =
+    submittedReport?.validation_status === "pending" &&
+    submittedReport.ai_assessment?.status !== "failed"
 
-  useEffect(() => () => previewUrls.forEach((url) => URL.revokeObjectURL(url)), [previewUrls])
+  useEffect(
+    () => () => previewUrls.forEach((url) => URL.revokeObjectURL(url)),
+    [previewUrls]
+  )
+
+  useEffect(() => {
+    if (!submittedReportId || !submittedReportIsProcessing) return
+    const reportId = submittedReportId
+
+    let cancelled = false
+    let timer: number | undefined
+    let attempts = 0
+
+    async function refreshSubmittedReport() {
+      try {
+        const latest = await getConcern(reportId)
+        if (cancelled) return
+        if (latest.validation_status === "accepted") {
+          setAwaitingValidation(false)
+          setSubmittedReport(latest)
+          setOpen(false)
+        } else if (hasValidationError(latest)) {
+          setAwaitingValidation(false)
+          setFieldErrors((previous) => ({
+            ...previous,
+            description: validationFeedbackFor(latest),
+          }))
+          setSubmittedReport(null)
+          setOpen(true)
+        } else {
+          setAwaitingValidation(true)
+          setSubmittedReport(latest)
+          setOpen(true)
+        }
+        attempts += 1
+        if (
+          latest.validation_status === "pending" &&
+          latest.ai_assessment?.status !== "failed" &&
+          attempts < 15
+        ) {
+          timer = window.setTimeout(() => void refreshSubmittedReport(), 1000)
+        }
+      } catch {
+        attempts += 1
+        if (!cancelled && attempts < 15) {
+          timer = window.setTimeout(() => void refreshSubmittedReport(), 1000)
+        }
+      }
+    }
+
+    timer = window.setTimeout(() => void refreshSubmittedReport(), 500)
+    return () => {
+      cancelled = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [setOpen, submittedReportId, submittedReportIsProcessing])
 
   useEffect(() => {
     if (!closeConfirmOpen) return
@@ -217,7 +344,7 @@ export function CreateReportDialog({
   }, [closeConfirmOpen])
 
   useEffect(() => {
-    if (!open || draftRestored) return
+    if (!open || draftRestored || guest) return
     void readDraft()
       .then((draft) => {
         if (!draft) return
@@ -232,10 +359,40 @@ export function CreateReportDialog({
         setLocationPin(draft.locationPin)
       })
       .finally(() => setDraftRestored(true))
-  }, [open, draftRestored])
+  }, [open, draftRestored, guest])
 
   useEffect(() => {
-    if (!open || !draftRestored || (!description && !address && !locationPin)) return
+    if (!open || !initialLocation) return
+    const frame = window.requestAnimationFrame(() => {
+      setAddress(initialLocation.address)
+      setAddressPrimary(
+        initialLocation.addressPrimary ||
+          initialLocation.address.split(",")[0]?.trim() ||
+          initialLocation.address
+      )
+      setAddressSecondary(
+        initialLocation.addressSecondary ||
+          initialLocation.address.split(",").slice(1).join(", ").trim()
+      )
+      setLocationPin({
+        lat: initialLocation.lat,
+        lng: initialLocation.lng,
+        accuracy: null,
+        source: initialLocation.source || "manual_pin",
+      })
+      setDraftRestored(true)
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [open, initialLocation])
+
+  useEffect(() => {
+    if (
+      guest ||
+      !open ||
+      !draftRestored ||
+      (!description && !address && !locationPin)
+    )
+      return
     const timeout = window.setTimeout(() => {
       void writeDraft({
         title: titleFromDescription(description),
@@ -245,7 +402,7 @@ export function CreateReportDialog({
       })
     }, 500)
     return () => window.clearTimeout(timeout)
-  }, [open, draftRestored, description, address, locationPin])
+  }, [open, draftRestored, description, address, locationPin, guest])
 
   function resetForm() {
     setDescription("")
@@ -263,7 +420,7 @@ export function CreateReportDialog({
     setDuplicateConfirm(null)
     setPhotoVerdicts([])
     setPrivacyPreview(null)
-    setPrecheckNotice("")
+    setAwaitingValidation(false)
     recurrenceOfRef.current = null
     duplicateOfRef.current = null
     inferredCategoryRef.current = ""
@@ -275,10 +432,10 @@ export function CreateReportDialog({
 
   function hasDraftContent() {
     return Boolean(
-        description.trim() ||
-        address.trim() ||
-        locationPin ||
-        mediaFiles.length > 0,
+      description.trim() ||
+      address.trim() ||
+      locationPin ||
+      mediaFiles.length > 0
     )
   }
 
@@ -295,14 +452,22 @@ export function CreateReportDialog({
     if (hasDraftContent()) {
       await writeDraft(buildDraftPayload())
     } else {
-      await deleteDraft()
+      // The report has already been created at this point. Draft cleanup is
+      // best-effort, so an IndexedDB failure must not turn a successful report
+      // into a misleading submission error.
+      await deleteDraft().catch(() => undefined)
     }
   }
 
   function requestClose() {
-    if (isSubmitting) return
+    if (isSubmitting || awaitingValidation) return
     setLocationOpen(false)
     setCloseConfirmOpen(false)
+
+    if (guest) {
+      setOpen(false)
+      return
+    }
 
     if (!hasDraftContent()) {
       void deleteDraft().catch(() => undefined)
@@ -344,8 +509,13 @@ export function CreateReportDialog({
 
   function validate() {
     const errors: Record<string, string> = {}
-    if (!description.trim())
+    const descriptionLength = description.trim().length
+    if (!descriptionLength) {
       errors.description = "Describe what happened."
+    } else if (descriptionLength < descriptionMin) {
+      errors.description = `Describe the issue in at least ${descriptionMin} characters.`
+    }
+    if (!mediaFiles.length) errors.media = "Attach at least one image."
     setFieldErrors(errors)
     return Object.keys(errors).length === 0
   }
@@ -353,7 +523,9 @@ export function CreateReportDialog({
   function cleanMediaErrorMessage(raw: string): string {
     let text = raw.trim()
 
-    const afterColon = text.includes(":") ? text.slice(text.lastIndexOf(":") + 1).trim() : text
+    const afterColon = text.includes(":")
+      ? text.slice(text.lastIndexOf(":") + 1).trim()
+      : text
     text = afterColon || text
 
     if (
@@ -367,7 +539,11 @@ export function CreateReportDialog({
   }
 
   function mediaErrorFromUnknown(error: unknown): string {
-    if (error instanceof ApiError && error.data && typeof error.data === "object") {
+    if (
+      error instanceof ApiError &&
+      error.data &&
+      typeof error.data === "object"
+    ) {
       const data = error.data as Record<string, unknown>
       const media = data.media
       if (Array.isArray(media) && media.length > 0) {
@@ -388,6 +564,10 @@ export function CreateReportDialog({
   async function addFiles(files: File[]): Promise<File[]> {
     const errors: string[] = []
     const valid: File[] = []
+    // A new attachment set needs a fresh precheck; never carry a verdict from
+    // an earlier photo into the new preview.
+    setPhotoVerdicts([])
+    setPrivacyPreview(null)
     setIsCheckingMedia(true)
     for (const file of files) {
       if (!ALLOWED_TYPES.includes(file.type)) {
@@ -403,7 +583,7 @@ export function CreateReportDialog({
           (existing) =>
             existing.name === file.name &&
             existing.size === file.size &&
-            existing.lastModified === file.lastModified,
+            existing.lastModified === file.lastModified
         )
       ) {
         errors.push("This file is already selected.")
@@ -412,7 +592,7 @@ export function CreateReportDialog({
       try {
         const checkData = new FormData()
         checkData.append("media", file)
-        await checkConcernMedia(checkData)
+        if (!guest) await checkConcernMedia(checkData)
         valid.push(file)
       } catch (error) {
         errors.push(mediaErrorFromUnknown(error))
@@ -443,16 +623,11 @@ export function CreateReportDialog({
       })
       const lat = pos.coords.latitude
       const lng = pos.coords.longitude
-      // Same rule the location picker enforces: a GPS fix outside the covered
-      // boundary (or dispatch radius) is refused, never shown as the pin.
-      if (
-        coverageContext &&
-        !insideCoverage(lat, lng, {
-          boundary: coverageContext.boundary.geometry,
-          policy: coverageContext.dispatch_policy,
-        })
-      ) {
-        toast.error("Your location is outside our covered area. Pin it manually on the map instead.")
+      const resolved = await lookupRegistrationPinAddress(lat, lng)
+      if (!resolved.inside_community) {
+        toast.error(
+          "No active E-Boses community covers your current location. Pin another location on the map."
+        )
         return false
       }
       setLocationPin({
@@ -462,9 +637,7 @@ export function CreateReportDialog({
         source: "gps",
       })
 
-      const data = await reverseGeocode(lat, lng)
-      const parts = data ? formatNominatimParts(data) : null
-      const primary = (parts?.primary ?? "").trim()
+      const primary = (resolved.label || resolved.street).trim()
       const usable =
         primary &&
         primary !== "Finding street…" &&
@@ -472,28 +645,35 @@ export function CreateReportDialog({
         !/^lat\b/i.test(primary) &&
         !/^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(primary)
       if (!usable) {
-        toast.error("Location saved, but no street name was found. Check the pin before posting.")
+        toast.error(
+          "Location saved, but no street name was found. Check the pin before posting."
+        )
         return true
       }
-      const secondary = (parts?.secondary ?? "").trim() || "Marikina Heights"
-      setAddress(parts!.full?.trim() || `${primary}, ${secondary}`)
+      const secondary = resolved.community.trim()
+      setAddress([primary, secondary].filter(Boolean).join(", "))
       setAddressPrimary(primary)
       setAddressSecondary(secondary)
       setFieldErrors((prev) => ({ ...prev, address: "" }))
       return true
     } catch (err) {
-      const code = typeof err === "object" && err !== null ? (err as GeolocationPositionError).code : 0
+      const code =
+        typeof err === "object" && err !== null
+          ? (err as GeolocationPositionError).code
+          : 0
       toast.error(
         code === 1
           ? "Location is blocked. Allow it via the lock icon in your address bar, then take the photo again."
-          : "Couldn't read your location. Make sure location services are on.",
+          : "Couldn't read your location. Make sure location services are on."
       )
       return false
     }
   }
 
   /** Permission state without side effects: "granted" | "denied" | "prompt" | null. */
-  async function geoPermissionState(): Promise<"granted" | "denied" | "prompt" | null> {
+  async function geoPermissionState(): Promise<
+    "granted" | "denied" | "prompt" | null
+  > {
     try {
       if (!("permissions" in navigator)) return null
       const status = await navigator.permissions.query({ name: "geolocation" })
@@ -507,17 +687,22 @@ export function CreateReportDialog({
     void addFiles(files).then((added) => {
       // Location is fetched once — and only when a photo actually landed.
       if (!added.length) return
-      if (!locationPin || locationPin.source !== "gps") void resolveGpsLocation()
+      if (!locationPin || locationPin.source !== "gps")
+        void resolveGpsLocation()
     })
   }
 
   /** Same as geoPermissionState, for the camera — checked before opening the
    * live capture dialog so an already-denied permission never flashes the
    * camera modal open just to immediately close it. */
-  async function cameraPermissionState(): Promise<"granted" | "denied" | "prompt" | null> {
+  async function cameraPermissionState(): Promise<
+    "granted" | "denied" | "prompt" | null
+  > {
     try {
       if (!("permissions" in navigator)) return null
-      const status = await navigator.permissions.query({ name: "camera" as PermissionName })
+      const status = await navigator.permissions.query({
+        name: "camera" as PermissionName,
+      })
       return status.state as "granted" | "denied" | "prompt"
     } catch {
       return null
@@ -531,7 +716,9 @@ export function CreateReportDialog({
     }
     const camState = await cameraPermissionState()
     if (camState === "denied") {
-      toast.error("Camera is blocked. Allow it via the lock icon in your address bar, then try again.")
+      toast.error(
+        "Camera is blocked. Allow it via the lock icon in your address bar, then try again."
+      )
       return
     }
     // Location is asked for while this dialog is still on screen: once the
@@ -539,7 +726,7 @@ export function CreateReportDialog({
     const state = await geoPermissionState()
     if (state === "denied") {
       toast.error(
-        "Location is blocked. Allow it via the lock icon in your address bar, then take the photo again.",
+        "Location is blocked. Allow it via the lock icon in your address bar, then take the photo again."
       )
       return
     }
@@ -558,19 +745,55 @@ export function CreateReportDialog({
     const title = titleFromDescription(description)
     const formData = new FormData()
     formData.append("client_request_id", clientRequestIdRef.current)
+
+    const resolved = resolvedAddressRef.current
+    const primary =
+      resolved?.primary ||
+      (addressPrimary || address).trim().split(",")[0]?.trim() ||
+      address.trim()
+    const secondary = resolved?.secondary ?? addressSecondary.trim()
+    const looksLikeCoords =
+      !primary ||
+      /^lat\b/i.test(primary) ||
+      /^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(primary)
+
+    if (guest) {
+      if (!locationPin) {
+        setFieldErrors((prev) => ({
+          ...prev,
+          address: "Choose the report location before submitting.",
+        }))
+        return null
+      }
+      if (looksLikeCoords) {
+        setFieldErrors((prev) => ({
+          ...prev,
+          address: "Pin a location with a street name before submitting.",
+        }))
+        return null
+      }
+      formData.append("description", description.trim())
+      formData.append(
+        "address",
+        (
+          resolved?.address ||
+          (secondary ? `${primary}, ${secondary}` : primary)
+        ).slice(0, 255)
+      )
+      formData.append("latitude", locationPin.lat.toFixed(7))
+      formData.append("longitude", locationPin.lng.toFixed(7))
+      formData.append("location_source", locationPin.source ?? "manual_pin")
+      for (const file of mediaFiles) formData.append("media", file)
+      return formData
+    }
+
     formData.append("title", title)
     formData.append("description", description.trim())
     formData.append("category", selectedCategoryCode())
     // The address is the street line the server resolved from the pin. The
     // typed text is only a fallback for a pin the geocoder could not place.
-    const resolved = resolvedAddressRef.current
-    const primary = resolved?.primary || (addressPrimary || address).trim().split(",")[0]?.trim() || address.trim()
-    const secondary = resolved?.secondary ?? addressSecondary.trim()
-    const locationRequired = pendingPrecheckRef.current?.location_required ?? true
-    const looksLikeCoords =
-      !primary ||
-      /^lat\b/i.test(primary) ||
-      /^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(primary)
+    const locationRequired =
+      pendingPrecheckRef.current?.location_required ?? true
     if (locationRequired && looksLikeCoords) {
       setFieldErrors((prev) => ({
         ...prev,
@@ -579,7 +802,8 @@ export function CreateReportDialog({
       return null
     }
     if (!looksLikeCoords) {
-      const storedAddress = resolved?.address || (secondary ? `${primary}, ${secondary}` : primary)
+      const storedAddress =
+        resolved?.address || (secondary ? `${primary}, ${secondary}` : primary)
       formData.append("address", storedAddress.slice(0, 255))
     }
     if (locationPin) {
@@ -594,11 +818,22 @@ export function CreateReportDialog({
     return formData
   }
 
-  async function finalizeSubmit(options?: { escalate?: boolean; emergencyType?: string }) {
+  async function finalizeSubmit(options?: {
+    escalate?: boolean
+    emergencyType?: string
+  }) {
     const formData = buildSubmitFormData()
     if (!formData) return
     setIsSubmitting(true)
     try {
+      if (guest) {
+        await submitGuestConcern(formData)
+        setOpen(false)
+        resetForm()
+        onGuestSubmitted?.()
+        toast.success("Report submitted.")
+        return
+      }
       const report = await createConcern(formData, {
         escalate: options?.escalate,
         emergencyType: options?.emergencyType,
@@ -606,8 +841,29 @@ export function CreateReportDialog({
         duplicateOf: duplicateOfRef.current ?? undefined,
       })
       await deleteDraft()
-      setSubmittedReport(report)
-      setOpen(false)
+      // A previous precheck may have displayed a local validation message.
+      // Do not carry that transient feedback into the successful submission
+      // state, especially when the vision review was deferred to the backend.
+      setPhotoVerdicts([])
+      setPrivacyPreview(null)
+      setFieldErrors({})
+      if (report.validation_status === "accepted") {
+        setAwaitingValidation(false)
+        setSubmittedReport(report)
+        setOpen(false)
+      } else if (hasValidationError(report)) {
+        setAwaitingValidation(false)
+        setFieldErrors((previous) => ({
+          ...previous,
+          description: validationFeedbackFor(report),
+        }))
+        setSubmittedReport(null)
+        setOpen(true)
+      } else {
+        setAwaitingValidation(true)
+        setSubmittedReport(report)
+        setOpen(true)
+      }
       window.dispatchEvent(new Event("eboses:report-created"))
     } catch (submitError) {
       if (submitError instanceof ApiError && submitError.status === 409) {
@@ -618,18 +874,70 @@ export function CreateReportDialog({
         toast.error(detail)
         return
       }
-      if (submitError instanceof ApiError && submitError.data && typeof submitError.data === "object") {
+      if (
+        submitError instanceof ApiError &&
+        submitError.data &&
+        typeof submitError.data === "object"
+      ) {
+        const responseData = submitError.data as Record<string, unknown>
+        const responsePhotoVerdicts = Array.isArray(responseData.photo_verdicts)
+          ? responseData.photo_verdicts.flatMap((item) => {
+              if (!item || typeof item !== "object") return []
+              const verdict = item as Record<string, unknown>
+              const index = verdict.index
+              const state = verdict.state
+              const message = verdict.message
+              if (
+                typeof index !== "number" ||
+                !Number.isInteger(index) ||
+                typeof message !== "string" ||
+                ![
+                  "relevant",
+                  "unrelated",
+                  "unclear",
+                  "unsupported",
+                  "flagged",
+                ].includes(String(state))
+              ) {
+                return []
+              }
+              return [
+                {
+                  index,
+                  state: state as ConcernPhotoVerdict["state"],
+                  message,
+                },
+              ]
+            })
+          : []
+        setPhotoVerdicts(responsePhotoVerdicts)
+
         const nextErrors: Record<string, string> = {}
-        for (const [key, value] of Object.entries(submitError.data)) {
+        const userFacingFields = new Set([
+          "title",
+          "description",
+          "category",
+          "media",
+          "address",
+          "location",
+        ])
+        for (const [key, value] of Object.entries(responseData)) {
+          if (!userFacingFields.has(key)) continue
           const first = Array.isArray(value) ? value[0] : value
           if (typeof first === "string") nextErrors[key] = first
         }
-        setFieldErrors(nextErrors)
+        if (Object.keys(nextErrors).length > 0) {
+          setAwaitingValidation(false)
+          setSubmittedReport(null)
+          setOpen(true)
+          setFieldErrors(nextErrors)
+          return
+        }
       }
       toast.error(
         submitError instanceof ApiError
           ? submitError.message
-          : "Could not submit report. Try again.",
+          : "Could not submit report. Try again."
       )
     } finally {
       setIsSubmitting(false)
@@ -671,6 +979,16 @@ export function CreateReportDialog({
     if (!validate()) return
     recurrenceOfRef.current = null
     duplicateOfRef.current = null
+    // Clear feedback from an earlier blocked attempt before starting a new
+    // precheck. Otherwise a successful retry can briefly retain its old red
+    // photo ring while the request is in flight.
+    setPhotoVerdicts([])
+    setPrivacyPreview(null)
+    setFieldErrors({})
+    if (guest) {
+      await finalizeSubmit()
+      return
+    }
     setIsSubmitting(true)
     try {
       const precheckData = new FormData()
@@ -686,19 +1004,34 @@ export function CreateReportDialog({
       for (const file of mediaFiles) precheckData.append("media", file)
 
       const precheck = await precheckConcern(precheckData)
-      setPrecheckNotice(precheck.message || "")
       setPhotoVerdicts(precheck.photo_verdicts || [])
       setPrivacyPreview(precheck.privacy_preview ?? null)
 
       if (precheck.resolved_address) {
-        resolvedAddressRef.current = {
-          address: precheck.resolved_address.address,
-          primary: precheck.resolved_address.address_primary,
-          secondary: precheck.resolved_address.address_secondary,
+        // The precheck answer is catalog-only (no Nominatim round trip), so a
+        // pin outside the street catalog — a different community, a new
+        // subdivision — degrades to the "Pinned location" placeholder. That
+        // must never overwrite the real street the map picker already
+        // reverse-geocoded for the resident: adopt the server answer only
+        // when it is a usable street or the picker had nothing better.
+        const currentPrimary = (addressPrimary || address).trim()
+        const currentUsable =
+          Boolean(currentPrimary) && !looksLikeCoordinates(currentPrimary)
+        const precheckPrimary = (
+          precheck.resolved_address.address_primary || ""
+        ).trim()
+        const precheckUsable =
+          Boolean(precheckPrimary) && !looksLikeCoordinates(precheckPrimary)
+        if (!currentUsable || precheckUsable) {
+          resolvedAddressRef.current = {
+            address: precheck.resolved_address.address,
+            primary: precheck.resolved_address.address_primary,
+            secondary: precheck.resolved_address.address_secondary,
+          }
+          setAddress(precheck.resolved_address.address)
+          setAddressPrimary(precheck.resolved_address.address_primary)
+          setAddressSecondary(precheck.resolved_address.address_secondary)
         }
-        setAddress(precheck.resolved_address.address)
-        setAddressPrimary(precheck.resolved_address.address_primary)
-        setAddressSecondary(precheck.resolved_address.address_secondary)
       }
 
       if (!precheck.can_submit) {
@@ -709,9 +1042,13 @@ export function CreateReportDialog({
       setFieldErrors({})
 
       pendingPrecheckRef.current = precheck
-      inferredCategoryRef.current = precheck.category || precheck.suggested_category || ""
+      inferredCategoryRef.current =
+        precheck.category || precheck.suggested_category || ""
       if (!inferredCategoryRef.current) {
-        setFieldErrors({ description: "We could not determine the type of concern. Add a little more detail and try again." })
+        setFieldErrors({
+          description:
+            "We could not determine the type of concern. Add a little more detail and try again.",
+        })
         setIsSubmitting(false)
         return
       }
@@ -720,7 +1057,7 @@ export function CreateReportDialog({
       toast.error(
         submitError instanceof ApiError
           ? submitError.message
-          : "Could not submit report. Try again.",
+          : "Could not submit report. Try again."
       )
     } finally {
       setIsSubmitting(false)
@@ -728,28 +1065,28 @@ export function CreateReportDialog({
   }
 
   const hasMedia = mediaFiles.length > 0
+  const descriptionLength = description.trim().length
   // Category-specific requirements are checked by the classification precheck
-  // after the model has inferred the category. The only client-side gate is
-  // requiring enough text to ask the model for a classification.
-  const formReady = Boolean(description.trim())
+  // after the model has inferred the category. The client-side gates are:
+  // at least 40 characters, one photo, and a set location pin.
+  const formReady =
+    descriptionLength >= descriptionMin && hasMedia && Boolean(locationPin)
   const isControlled = controlledOpen !== undefined
 
   return (
     <>
-      {trigger
-        ? trigger(() => setOpen(true))
-        : !isControlled
-          ? (
-              <button
-                type="button"
-                onClick={() => setOpen(true)}
-                className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
-              >
-                <PlusIcon className="size-5" />
-                Create Report
-              </button>
-            )
-          : null}
+      {trigger ? (
+        trigger(() => setOpen(true))
+      ) : !isControlled ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+        >
+          <PlusIcon className="size-5" />
+          Create Report
+        </button>
+      ) : null}
 
       <Dialog
         open={open}
@@ -757,313 +1094,399 @@ export function CreateReportDialog({
         maxW="max-w-[520px]"
         mobileSheet
       >
-        <DialogBody className="!flex !h-full !min-h-0 !flex-1 !flex-col !space-y-0 !overflow-hidden !p-0 bg-white">
+        <DialogBody className="!flex !h-full !min-h-0 !flex-1 !flex-col !space-y-0 !overflow-hidden bg-white !p-0">
           {/* h-full keeps the composer/footer pinned on mobile. */}
           <div className="relative flex h-full min-h-0 flex-1 flex-col pt-[max(0.75rem,env(safe-area-inset-top))] md:h-[min(560px,88vh)] md:flex-row md:pt-5">
             {/* Main composer */}
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
               <div className="flex min-h-0 flex-1 flex-col">
-              <div className="flex shrink-0 items-center gap-2.5 px-4 sm:px-5">
-                <button
-                  type="button"
-                  onClick={requestClose}
-                  className="flex size-11 shrink-0 items-center justify-center rounded-full text-neutral-600 transition-colors hover:bg-neutral-100 sm:size-12"
-                  aria-label="Close"
-                >
-                  <XIcon className="size-6" strokeWidth={2} />
-                </button>
-
-                <div className="relative ml-auto flex shrink-0 items-center gap-2.5">
+                <div className="flex shrink-0 items-center gap-2.5 px-4 sm:px-5">
                   <button
                     type="button"
-                    disabled={isSubmitting || isCheckingMedia || !formReady}
-                    onClick={() => void handleSubmit()}
-                    className="inline-flex h-10 items-center justify-center rounded-full bg-primary px-5 text-[14px] font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:opacity-100 sm:h-11 sm:px-6 sm:text-[15px]"
+                    onClick={requestClose}
+                    className="flex size-11 shrink-0 items-center justify-center rounded-full text-neutral-600 transition-colors hover:bg-neutral-100 sm:size-12"
+                    aria-label="Close"
                   >
-                    {isSubmitting ? "Reporting…" : "Report"}
+                    <XIcon className="size-6" strokeWidth={2} />
                   </button>
-                </div>
-              </div>
 
-              {/* Report form body */}
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-
-              {/* Identity */}
-              <div className="flex items-center gap-3 px-4 pt-4 sm:px-5">
-                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[17px] font-semibold text-navy-muted sm:size-12 sm:text-[18px]">
-                  {letter}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[16px] font-semibold leading-tight text-neutral-900">
-                    {displayName}
-                  </p>
-                  {userStreet ? (
-                    <p className="truncate text-[13px] leading-tight text-neutral-500">{userStreet}</p>
-                  ) : null}
-                </div>
-              </div>
-
-              {/* Scrollable body — description / media / location chip only */}
-              <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-4 sm:px-5">
-                <textarea
-                  value={description}
-                  maxLength={descriptionMax}
-                  rows={3}
-                  aria-label="Report description"
-                  onChange={(e) => {
-                    setDescription(e.target.value)
-                    if (fieldErrors.description)
-                      setFieldErrors((prev) => ({ ...prev, description: "" }))
-                    const el = e.currentTarget
-                    el.style.height = "auto"
-                    el.style.height = `${Math.min(el.scrollHeight, 220)}px`
-                  }}
-                  onInput={(e) => {
-                    const el = e.currentTarget
-                    el.style.height = "auto"
-                    el.style.height = `${Math.min(el.scrollHeight, 220)}px`
-                  }}
-                  ref={(el) => {
-                    if (!el) return
-                    el.style.height = "auto"
-                    el.style.height = `${Math.min(Math.max(el.scrollHeight, 72), 220)}px`
-                  }}
-                   placeholder="Share the issue you're experiencing..."
-                   className="max-h-[220px] min-h-[72px] w-full resize-none overflow-y-auto border-0 bg-transparent text-[17px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400"
-                  />
-
-                  <div className={cn("mt-3 flex flex-wrap gap-2.5", hasMedia ? "min-h-[168px]" : "min-h-0")}>
-                    {hasMedia
-                      ? mediaFiles.map((file, index) => {
-                          const url = previewUrls[index]
-                          const rejected = Boolean(
-                            photoVerdicts.find((verdict) => verdict.index === index)?.message,
-                          )
-                          return (
-                            <div
-                              key={`${file.name}-${file.lastModified}`}
-                              className={cn(
-                                "relative h-[148px] w-[148px] overflow-hidden rounded-2xl bg-neutral-100 shadow-sm sm:h-[168px] sm:w-[168px]",
-                                rejected ? "ring-2 ring-destructive" : "ring-1 ring-black/5",
-                              )}
-                            >
-                              <button
-                                type="button"
-                                className="block h-full w-full"
-                                onClick={() => setPreviewUrl(url)}
-                              >
-                                <img src={url} alt="" className="h-full w-full object-cover" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setMediaFiles((prev) => prev.filter((_, i) => i !== index))
-                                }
-                                className="absolute right-2 top-2 flex size-8 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-[2px] transition-colors hover:bg-black/75"
-                                aria-label="Remove photo"
-                              >
-                                <XIcon className="size-4" strokeWidth={2.25} />
-                              </button>
-                            </div>
-                          )
-                        })
-                      : null}
-                  </div>
-
-                  {(() => {
-                    // The ring alone says a photo has a problem but never which
-                    // one. A resident asked to fix something has to be told what.
-                    const notes = photoVerdicts
-                      .filter((verdict) => verdict.message && verdict.state !== "relevant")
-                      .map((verdict) => ({
-                        key: `${verdict.index}-${verdict.state}`,
-                        label: mediaFiles.length > 1 ? `Photo ${verdict.index + 1}` : "",
-                        message: verdict.message,
-                      }))
-                    if (notes.length === 0) return null
-                    return (
-                      <ul className="mt-2 list-none space-y-1 text-xs font-medium text-destructive" role="alert">
-                        {notes.map((note) => (
-                          <li key={note.key}>
-                            {note.label ? `${note.label}: ` : ""}
-                            {note.message}
-                          </li>
-                        ))}
-                      </ul>
-                    )
-                  })()}
-
-                  {(() => {
-                  const messages = [
-                    fieldErrors.description,
-                    fieldErrors.concern,
-                    ...(fieldErrors.media
-                      ? fieldErrors.media.split("\n").map((m) => m.trim()).filter(Boolean)
-                      : []),
-                    fieldErrors.address,
-                    fieldErrors.precheck,
-                  ].filter((msg): msg is string => Boolean(msg && msg.trim()))
-                  if (messages.length === 0) return null
-                  return (
-                    <ul
-                      className="mt-2 list-none space-y-1 text-xs font-medium text-destructive"
-                      role="alert"
+                  <div className="relative ml-auto flex shrink-0 items-center gap-2.5">
+                    <button
+                      type="button"
+                      disabled={
+                        isSubmitting ||
+                        awaitingValidation ||
+                        isCheckingMedia ||
+                        !formReady
+                      }
+                      onClick={() => void handleSubmit()}
+                      className="inline-flex h-10 items-center justify-center rounded-full bg-primary px-5 text-[14px] font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:opacity-100 sm:h-11 sm:px-6 sm:text-[15px]"
                     >
-                      {messages.map((msg) => (
-                        <li key={msg}>{msg}</li>
-                      ))}
-                    </ul>
-                  )
-                })()}
-                {precheckNotice ? (
-                  <p className="mt-2 rounded-lg bg-neutral-100 px-3 py-2 text-xs font-medium leading-relaxed text-neutral-700">
-                    {precheckNotice}
-                  </p>
-                ) : null}
-                {privacyPreview?.protected_image ? (
-                  <div className="mt-2 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
-                    <p className="text-xs font-semibold text-neutral-800">
-                      Private details will be blurred
-                    </p>
-                    <p className="mt-1 text-[11px] leading-relaxed text-neutral-500">
-                      This is the version the community will see
-                      {privacyPreview.detected_classes.length
-                        ? ` — ${privacyPreview.detected_classes.join(", ")} hidden`
-                        : ""}
-                      . Officials still see the original.
-                    </p>
-                    <img
-                      src={privacyPreview.protected_image}
-                      alt=""
-                      className="mt-2 h-32 w-full rounded-lg object-cover"
-                    />
+                      {isSubmitting || awaitingValidation
+                        ? "Reporting…"
+                        : guest
+                          ? "Submit"
+                          : "Report"}
+                    </button>
                   </div>
-                ) : null}
-              </div>
+                </div>
 
-              {/* Bottom chrome: optional location row and the attachment/location toolbar. */}
-              <div className="shrink-0 border-t border-neutral-100 bg-white">
-                {locationPin && address ? (
-                  <div className="px-4 pb-2 pt-3 sm:px-5">
-                    <div className="flex w-full items-center gap-3 rounded-md border border-neutral-300 bg-white px-3.5 py-2.5 text-left">
+                {/* Report form body */}
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                  {/* Identity */}
+                  <div className="flex items-center gap-3 px-4 pt-4 sm:px-5">
+                    <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[17px] font-semibold text-navy-muted sm:size-12 sm:text-[18px]">
+                      {letter}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[16px] leading-tight font-semibold text-neutral-900">
+                        {displayName}
+                      </p>
+                      {guest ? (
+                        <p className="truncate text-[13px] leading-tight text-neutral-500">
+                          No account details shared
+                        </p>
+                      ) : userStreet ? (
+                        <p className="truncate text-[13px] leading-tight text-neutral-500">
+                          {userStreet}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {/* Scrollable body — description / media / location chip only */}
+                  <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-4 sm:px-5">
+                    <textarea
+                      value={description}
+                      maxLength={descriptionMax}
+                      rows={3}
+                      aria-label="Report description"
+                      onChange={(e) => {
+                        setDescription(e.target.value)
+                        setPhotoVerdicts([])
+                        setPrivacyPreview(null)
+                        if (fieldErrors.description)
+                          setFieldErrors((prev) => ({
+                            ...prev,
+                            description: "",
+                          }))
+                        const el = e.currentTarget
+                        el.style.height = "auto"
+                        el.style.height = `${Math.min(el.scrollHeight, 220)}px`
+                      }}
+                      onInput={(e) => {
+                        const el = e.currentTarget
+                        el.style.height = "auto"
+                        el.style.height = `${Math.min(el.scrollHeight, 220)}px`
+                      }}
+                      ref={(el) => {
+                        if (!el) return
+                        el.style.height = "auto"
+                        el.style.height = `${Math.min(Math.max(el.scrollHeight, 72), 220)}px`
+                      }}
+                      placeholder="Share the issue you're experiencing..."
+                      minLength={descriptionMin}
+                      className="max-h-[220px] min-h-[72px] w-full resize-none overflow-y-auto border-0 bg-transparent text-[17px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400"
+                    />
+
+                    <div
+                      className={cn(
+                        "mt-3 flex flex-wrap gap-2.5",
+                        hasMedia ? "min-h-[168px]" : "min-h-0"
+                      )}
+                    >
+                      {hasMedia
+                        ? mediaFiles.map((file, index) => {
+                            const url = previewUrls[index]
+                            const rejected = Boolean(
+                              photoVerdicts.find(
+                                (verdict) => verdict.index === index
+                              )?.message
+                            )
+                            return (
+                              <div
+                                key={`${file.name}-${file.lastModified}`}
+                                className={cn(
+                                  "relative h-[148px] w-[148px] overflow-hidden rounded-2xl bg-neutral-100 shadow-sm sm:h-[168px] sm:w-[168px]",
+                                  rejected
+                                    ? "ring-2 ring-destructive"
+                                    : "ring-1 ring-black/5"
+                                )}
+                              >
+                                <button
+                                  type="button"
+                                  className="block h-full w-full"
+                                  onClick={() => setPreviewUrl(url)}
+                                >
+                                  <img
+                                    src={url}
+                                    alt=""
+                                    className="h-full w-full object-cover"
+                                  />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPhotoVerdicts([])
+                                    setPrivacyPreview(null)
+                                    setMediaFiles((prev) =>
+                                      prev.filter((_, i) => i !== index)
+                                    )
+                                  }}
+                                  className="absolute top-2 right-2 flex size-8 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-[2px] transition-colors hover:bg-black/75"
+                                  aria-label="Remove photo"
+                                >
+                                  <XIcon
+                                    className="size-4"
+                                    strokeWidth={2.25}
+                                  />
+                                </button>
+                              </div>
+                            )
+                          })
+                        : null}
+                    </div>
+
+                    {fieldErrors.description ? (
+                      <p
+                        className="mt-2 flex items-start gap-1.5 text-xs font-medium text-destructive"
+                        role="alert"
+                      >
+                        <CircleXIcon
+                          className="mt-0.5 size-3.5 shrink-0"
+                          strokeWidth={2}
+                          aria-hidden
+                        />
+                        <span>{fieldErrors.description}</span>
+                      </p>
+                    ) : null}
+
+                    {(() => {
+                      // The ring alone says a photo has a problem but never which
+                      // one. A resident asked to fix something has to be told what.
+                      const notes = photoVerdicts
+                        .filter(
+                          (verdict) =>
+                            verdict.message && verdict.state !== "relevant"
+                        )
+                        .map((verdict) => ({
+                          key: `${verdict.index}-${verdict.state}`,
+                          label:
+                            mediaFiles.length > 1
+                              ? `Photo ${verdict.index + 1}`
+                              : "",
+                          message: verdict.message,
+                        }))
+                      if (notes.length === 0) return null
+                      return (
+                        <ul
+                          className="mt-2 list-none space-y-1 text-xs font-medium text-destructive"
+                          role="alert"
+                        >
+                          {notes.map((note) => (
+                            <li
+                              key={note.key}
+                              className="flex items-start gap-1.5"
+                            >
+                              <CircleXIcon
+                                className="mt-0.5 size-3.5 shrink-0"
+                                strokeWidth={2}
+                                aria-hidden
+                              />
+                              <span>
+                                {note.label ? `${note.label}: ` : ""}
+                                {note.message}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )
+                    })()}
+
+                    {(() => {
+                      const messages = [
+                        fieldErrors.concern,
+                        ...(fieldErrors.media
+                          ? fieldErrors.media
+                              .split("\n")
+                              .map((m) => m.trim())
+                              .filter(Boolean)
+                          : []),
+                        fieldErrors.address,
+                        fieldErrors.precheck,
+                      ].filter((msg): msg is string =>
+                        Boolean(msg && msg.trim())
+                      )
+                      if (messages.length === 0) return null
+                      return (
+                        <ul
+                          className="mt-2 list-none space-y-1 text-xs font-medium text-destructive"
+                          role="alert"
+                        >
+                          {messages.map((msg) => (
+                            <li key={msg} className="flex items-start gap-1.5">
+                              <CircleXIcon
+                                className="mt-0.5 size-3.5 shrink-0"
+                                strokeWidth={2}
+                                aria-hidden
+                              />
+                              <span>{msg}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )
+                    })()}
+                    {privacyPreview?.protected_image ? (
+                      <div className="mt-2 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+                        <p className="text-xs font-semibold text-neutral-800">
+                          Private details will be blurred
+                        </p>
+                        <p className="mt-1 text-[11px] leading-relaxed text-neutral-500">
+                          This is the version the community will see
+                          {privacyPreview.detected_classes.length
+                            ? ` — ${privacyPreview.detected_classes.join(", ")} hidden`
+                            : ""}
+                          . Officials still see the original.
+                        </p>
+                        <img
+                          src={privacyPreview.protected_image}
+                          alt=""
+                          className="mt-2 h-32 w-full rounded-lg object-cover"
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* Bottom chrome: optional location row and the attachment/location toolbar. */}
+                  <div className="shrink-0 border-t border-neutral-100 bg-white">
+                    {locationPin && address ? (
+                      <div className="px-4 pt-3 pb-2 sm:px-5">
+                        <div className="flex w-full items-center gap-3 rounded-md border border-neutral-300 bg-white px-3.5 py-2.5 text-left">
+                          <button
+                            type="button"
+                            onClick={() => setLocationOpen(true)}
+                            className="flex min-w-0 flex-1 items-center gap-3 text-left transition-colors hover:opacity-75"
+                            aria-label="Edit report location"
+                          >
+                            <MapPinIcon className="size-5 shrink-0 text-neutral-400" />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[14px] leading-tight font-semibold text-neutral-900">
+                                {addressPrimary || address}
+                              </span>
+                              {addressSecondary ? (
+                                <span className="mt-0.5 block truncate text-[12px] leading-snug text-neutral-500">
+                                  {addressSecondary}
+                                </span>
+                              ) : null}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPhotoVerdicts([])
+                              setPrivacyPreview(null)
+                              setLocationPin(null)
+                              setAddress("")
+                              setAddressPrimary("")
+                              setAddressSecondary("")
+                            }}
+                            className="flex size-10 shrink-0 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800"
+                            aria-label="Remove location"
+                          >
+                            <XIcon className="size-6" strokeWidth={1.75} />
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="flex items-center gap-1 px-3 pt-1.5 sm:px-4">
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept={ACCEPT_STRING}
+                        multiple
+                        aria-label="Add report photos"
+                        className="sr-only"
+                        onChange={(e) => {
+                          void addFiles(Array.from(e.target.files ?? []))
+                          e.target.value = ""
+                        }}
+                      />
+                      <input
+                        ref={cameraInputRef}
+                        type="file"
+                        accept="image/jpeg,image/png"
+                        capture="environment"
+                        aria-label="Take a report photo"
+                        className="sr-only"
+                        onChange={(e) => {
+                          handleCameraCapture(Array.from(e.target.files ?? []))
+                          e.target.value = ""
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={
+                          isCheckingMedia || mediaFiles.length >= MAX_FILES
+                        }
+                        className={cn(
+                          "flex size-10 items-center justify-center rounded-full transition-colors hover:bg-neutral-100 disabled:opacity-50",
+                          hasMedia
+                            ? "text-neutral-800"
+                            : "text-neutral-500 hover:text-neutral-800"
+                        )}
+                        aria-label="Add photo"
+                      >
+                        <ImageIcon className="size-5" strokeWidth={1.75} />
+                      </button>
                       <button
                         type="button"
                         onClick={() => setLocationOpen(true)}
-                        className="flex min-w-0 flex-1 items-center gap-3 text-left transition-colors hover:opacity-75"
-                        aria-label="Edit report location"
+                        className={cn(
+                          "flex size-10 items-center justify-center rounded-full transition-colors hover:bg-neutral-100",
+                          locationPin
+                            ? "text-neutral-800"
+                            : "text-neutral-500 hover:text-neutral-800"
+                        )}
+                        aria-label="Add location"
                       >
-                        <MapPinIcon className="size-5 shrink-0 text-neutral-400" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[14px] font-semibold leading-tight text-neutral-900">
-                            {addressPrimary || address}
-                          </span>
-                          {addressSecondary ? (
-                            <span className="mt-0.5 block truncate text-[12px] leading-snug text-neutral-500">
-                              {addressSecondary}
-                            </span>
-                          ) : null}
-                        </span>
+                        <MapPinIcon className="size-5" strokeWidth={1.75} />
                       </button>
                       <button
                         type="button"
                         onClick={() => {
-                          setLocationPin(null)
-                          setAddress("")
-                          setAddressPrimary("")
-                          setAddressSecondary("")
+                          // Live camera where getUserMedia exists; native capture
+                          // input (phones without it / insecure contexts) otherwise.
+                          const mediaDevices: MediaDevices | undefined =
+                            navigator.mediaDevices
+                          const live = Boolean(
+                            mediaDevices &&
+                            typeof mediaDevices.getUserMedia === "function"
+                          )
+                          void handleCameraButtonClick(live)
                         }}
-                        className="flex size-10 shrink-0 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800"
-                        aria-label="Remove location"
+                        disabled={
+                          isCheckingMedia || mediaFiles.length >= MAX_FILES
+                        }
+                        className={cn(
+                          "flex size-10 items-center justify-center rounded-full transition-colors hover:bg-neutral-100 disabled:opacity-50",
+                          hasMedia
+                            ? "text-neutral-800"
+                            : "text-neutral-500 hover:text-neutral-800"
+                        )}
+                        aria-label="Take photo"
                       >
-                        <XIcon className="size-6" strokeWidth={1.75} />
+                        <CameraIcon className="size-5" strokeWidth={1.75} />
                       </button>
                     </div>
+
+                    {/* Mobile safe-area padding under the icon row */}
+                    <div className="pb-[max(0.75rem,env(safe-area-inset-bottom))] md:pb-[max(0.75rem,env(safe-area-inset-bottom))]" />
                   </div>
-                ) : null}
-
-                <div className="flex items-center gap-1 px-3 pt-1.5 sm:px-4">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept={ACCEPT_STRING}
-                    multiple
-                    aria-label="Add report photos"
-                    className="sr-only"
-                    onChange={(e) => {
-                      void addFiles(Array.from(e.target.files ?? []))
-                      e.target.value = ""
-                    }}
-                  />
-                  <input
-                    ref={cameraInputRef}
-                    type="file"
-                    accept="image/jpeg,image/png"
-                    capture="environment"
-                    aria-label="Take a report photo"
-                    className="sr-only"
-                    onChange={(e) => {
-                      handleCameraCapture(Array.from(e.target.files ?? []))
-                      e.target.value = ""
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isCheckingMedia || mediaFiles.length >= MAX_FILES}
-                    className={cn(
-                      "flex size-10 items-center justify-center rounded-full transition-colors hover:bg-neutral-100 disabled:opacity-50",
-                      hasMedia
-                        ? "text-neutral-800"
-                        : "text-neutral-500 hover:text-neutral-800",
-                    )}
-                    aria-label="Add photo"
-                  >
-                    <ImageIcon className="size-5" strokeWidth={1.75} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setLocationOpen(true)}
-                    className={cn(
-                      "flex size-10 items-center justify-center rounded-full transition-colors hover:bg-neutral-100",
-                      locationPin
-                        ? "text-neutral-800"
-                        : "text-neutral-500 hover:text-neutral-800",
-                    )}
-                    aria-label="Add location"
-                  >
-                    <MapPinIcon className="size-5" strokeWidth={1.75} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      // Live camera where getUserMedia exists; native capture
-                      // input (phones without it / insecure contexts) otherwise.
-                      const mediaDevices: MediaDevices | undefined = navigator.mediaDevices
-                      const live = Boolean(
-                        mediaDevices && typeof mediaDevices.getUserMedia === "function",
-                      )
-                      void handleCameraButtonClick(live)
-                    }}
-                    disabled={isCheckingMedia || mediaFiles.length >= MAX_FILES}
-                    className={cn(
-                      "flex size-10 items-center justify-center rounded-full transition-colors hover:bg-neutral-100 disabled:opacity-50",
-                      hasMedia
-                        ? "text-neutral-800"
-                        : "text-neutral-500 hover:text-neutral-800",
-                    )}
-                    aria-label="Take photo"
-                  >
-                    <CameraIcon className="size-5" strokeWidth={1.75} />
-                  </button>
-
                 </div>
-
-                {/* Mobile safe-area padding under the icon row */}
-                <div className="pb-[max(0.75rem,env(safe-area-inset-bottom))] md:pb-[max(0.75rem,env(safe-area-inset-bottom))]" />
               </div>
             </div>
-            </div>
-          </div>
           </div>
         </DialogBody>
       </Dialog>
@@ -1075,7 +1498,11 @@ export function CreateReportDialog({
           initialLat={locationPin?.lat}
           initialLng={locationPin?.lng}
           initialAddress={address}
+          signup={guest}
+          coverageScope="served"
           onConfirm={(payload) => {
+            setPhotoVerdicts([])
+            setPrivacyPreview(null)
             setLocationPin({
               lat: payload.lat,
               lng: payload.lng,
@@ -1096,7 +1523,9 @@ export function CreateReportDialog({
         onCapture={(file) => handleCameraCapture([file])}
       />
 
-      {submittedReport ? (
+      {submittedReport &&
+      (submittedReport.validation_status !== "pending" ||
+        submittedReport.ai_assessment?.status === "failed") ? (
         <ReportDetailsDialog
           open
           report={submittedReport}
@@ -1105,21 +1534,17 @@ export function CreateReportDialog({
             setSubmittedReport(null)
             setOpen(false)
           }}
-          canShare={submittedReport.visibility === "community" && !submittedReport.escalated_alert}
+          canShare={
+            submittedReport.validation_status === "accepted" &&
+            submittedReport.visibility === "community" &&
+            !submittedReport.escalated_alert
+          }
           onTrack={() => {
             const reportId = submittedReport.public_id
             resetForm()
             setSubmittedReport(null)
             setOpen(false)
             navigate(`/dashboard/reports/${reportId}`)
-          }}
-          onOpenEmergency={() => {
-            const alertId = submittedReport.escalated_alert?.id
-            const reportId = submittedReport.public_id
-            resetForm()
-            setSubmittedReport(null)
-            setOpen(false)
-            navigate(alertId ? `/dashboard/emergency-history?alert=${alertId}` : `/dashboard/reports/${reportId}`)
           }}
         />
       ) : null}
@@ -1137,7 +1562,7 @@ export function CreateReportDialog({
             onClick={keepPosting}
             aria-hidden
           />
-          <div className="relative z-10 w-full max-w-[340px] rounded-2xl border border-neutral-200 bg-white px-6 pb-6 pt-7 shadow-2xl">
+          <div className="relative z-10 w-full max-w-[340px] rounded-2xl border border-neutral-200 bg-white px-6 pt-7 pb-6 shadow-2xl">
             <h2
               id="close-without-reporting-title"
               className="text-center text-[20px] font-semibold tracking-tight text-neutral-900"
@@ -1169,8 +1594,12 @@ export function CreateReportDialog({
           aria-modal="true"
           aria-labelledby="resolved-match-title"
         >
-          <div className="absolute inset-0 bg-black/45" onClick={() => setResolvedMatch(null)} aria-hidden />
-          <div className="relative z-10 w-full max-w-[360px] rounded-2xl border border-neutral-200 bg-white px-6 pb-6 pt-7 shadow-2xl">
+          <div
+            className="absolute inset-0 bg-black/45"
+            onClick={() => setResolvedMatch(null)}
+            aria-hidden
+          />
+          <div className="relative z-10 w-full max-w-[360px] rounded-2xl border border-neutral-200 bg-white px-6 pt-7 pb-6 shadow-2xl">
             <h2
               id="resolved-match-title"
               className="text-center text-[20px] font-semibold tracking-tight text-neutral-900"
@@ -1179,11 +1608,17 @@ export function CreateReportDialog({
             </h2>
             <p className="mt-2 text-center text-[13px] leading-snug text-neutral-500">
               A similar report
-              {resolvedMatch.resolved_at ? ` from ${new Date(resolvedMatch.resolved_at).toLocaleDateString()}` : ""} was
-              already marked resolved.
+              {resolvedMatch.resolved_at
+                ? ` from ${new Date(resolvedMatch.resolved_at).toLocaleDateString()}`
+                : ""}{" "}
+              was already marked resolved.
             </p>
             {resolvedMatch.preview_url ? (
-              <img src={resolvedMatch.preview_url} alt="" className="mt-4 h-40 w-full rounded-xl object-cover" />
+              <img
+                src={resolvedMatch.preview_url}
+                alt=""
+                className="mt-4 h-40 w-full rounded-xl object-cover"
+              />
             ) : null}
             {resolvedMatch.summary ? (
               <p className="mt-3 rounded-xl bg-neutral-50 px-3 py-2 text-[13px] leading-snug text-neutral-700">
@@ -1219,8 +1654,12 @@ export function CreateReportDialog({
           aria-modal="true"
           aria-labelledby="duplicate-confirm-title"
         >
-          <div className="absolute inset-0 bg-black/45" onClick={() => setDuplicateConfirm(null)} aria-hidden />
-          <div className="relative z-10 w-full max-w-[360px] rounded-2xl border border-neutral-200 bg-white px-6 pb-6 pt-7 shadow-2xl">
+          <div
+            className="absolute inset-0 bg-black/45"
+            onClick={() => setDuplicateConfirm(null)}
+            aria-hidden
+          />
+          <div className="relative z-10 w-full max-w-[360px] rounded-2xl border border-neutral-200 bg-white px-6 pt-7 pb-6 shadow-2xl">
             <h2
               id="duplicate-confirm-title"
               className="text-center text-[20px] font-semibold tracking-tight text-neutral-900"
@@ -1231,8 +1670,8 @@ export function CreateReportDialog({
               {duplicateConfirm.reporter_count === 1
                 ? "1 resident has"
                 : `${duplicateConfirm.reporter_count} residents have`}{" "}
-              reported the same issue nearby. Adding yours to the same incident helps the
-              barangay see how many people it affects.
+              reported the same issue nearby. Adding yours to the same incident
+              helps the barangay see how many people it affects.
             </p>
             {duplicateConfirm.summary ? (
               <p className="mt-3 rounded-xl bg-neutral-50 px-3 py-2 text-[13px] leading-snug text-neutral-700">
@@ -1273,7 +1712,7 @@ export function CreateReportDialog({
           <button
             type="button"
             onClick={() => setPreviewUrl(null)}
-            className="absolute right-4 top-4 flex size-10 items-center justify-center rounded-full bg-white/10 text-white"
+            className="absolute top-4 right-4 flex size-10 items-center justify-center rounded-full bg-white/10 text-white"
             aria-label="Close preview"
           >
             <XIcon className="size-5" />

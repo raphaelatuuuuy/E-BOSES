@@ -1,62 +1,22 @@
-from django.core.cache import cache
-from django.db.models import F
-from django.db.models.signals import post_delete, post_save, pre_delete
+"""Keep a critical concern and its emergency companion in one lifecycle."""
+
+from django.db.models.signals import post_save
 from django.dispatch import receiver
+from django.utils import timezone
 
-from .models import Community, MapGeometry, MapServicePoi
+from apps.concerns.models import Concern
 
-
-def _bust_map_poi_caches() -> None:
-    """Admin edits should show on the next map-context request."""
-    try:
-        from apps.geo_services import MAP_CONTEXT_CACHE_KEY, OSM_POI_CACHE_KEY
-
-        cache.delete(MAP_CONTEXT_CACHE_KEY)
-        # Keep OSM cache; only admin merge changes. Clear map-context is enough.
-        # Also clear legacy keys if any process still used them.
-        cache.delete("locations-map-context:v1")
-        cache.delete("locations-map-context:v2")
-        _ = OSM_POI_CACHE_KEY  # documented companion key
-    except Exception:
-        pass
+from .models import EmergencyAlert
 
 
-def _bust_map_geometry_caches() -> None:
-    """An edited barangay outline should reach every map on the next request.
-
-    The outline is cached twice over: the live-map static payload holds it, and
-    the map context is built from that payload. Dropping only one leaves the
-    resident Home map drawing the old edge.
-    """
-    try:
-        from apps.geo_services import MAP_CONTEXT_CACHE_KEY
-        from apps.live_map import STATIC_MAP_CACHE_KEY
-
-        cache.delete(STATIC_MAP_CACHE_KEY)
-        cache.delete(MAP_CONTEXT_CACHE_KEY)
-    except Exception:
-        pass
-
-
-@receiver(post_save, sender=MapServicePoi)
-@receiver(post_delete, sender=MapServicePoi)
-def map_service_poi_changed(sender, **kwargs):  # noqa: ARG001
-    _bust_map_poi_caches()
-
-
-@receiver(post_save, sender=MapGeometry)
-def map_geometry_changed(sender, instance, **kwargs):  # noqa: ARG001
-    if instance.kind == MapGeometry.Kind.BOUNDARY:
-        Community.objects.filter(boundary=instance).update(boundary_revision=F("boundary_revision") + 1)
-    _bust_map_geometry_caches()
-
-
-@receiver(pre_delete, sender=MapGeometry)
-def map_geometry_deleting(sender, instance, **kwargs):  # noqa: ARG001
-    if instance.kind == MapGeometry.Kind.BOUNDARY:
-        Community.objects.filter(boundary=instance).update(boundary_revision=F("boundary_revision") + 1)
-
-
-@receiver(post_delete, sender=MapGeometry)
-def map_geometry_deleted(sender, **kwargs):  # noqa: ARG001
-    _bust_map_geometry_caches()
+@receiver(post_save, sender=EmergencyAlert)
+def resolve_linked_critical_concern(sender, instance, **kwargs):
+    """Resolving the response also resolves the report that created it."""
+    if (
+        instance.status != EmergencyAlert.Status.RESOLVED
+        or not instance.source_concern_id
+    ):
+        return
+    Concern.objects.filter(pk=instance.source_concern_id).exclude(
+        status=Concern.Status.RESOLVED
+    ).update(status=Concern.Status.RESOLVED, updated_at=timezone.now())

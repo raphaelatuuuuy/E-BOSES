@@ -10,8 +10,8 @@ export const COVERAGE_COLORS = {
 } as const
 
 export interface CoveragePolicy {
-  acceptance_center_latitude: number | string
-  acceptance_center_longitude: number | string
+  acceptance_center_latitude: number | string | null
+  acceptance_center_longitude: number | string | null
   acceptance_radius_meters: number | string
   acceptance_geometry?: GeoJsonPolygon | null
 }
@@ -25,6 +25,7 @@ export interface DrawCoverageOptions extends CoverageInput {
   tone?: MarkerTone
   showBoundary?: boolean
   showZone?: boolean
+  boundaryStyle?: "outline" | "quiet"
 }
 
 function number(value: number | string | null | undefined, fallback: number) {
@@ -32,7 +33,9 @@ function number(value: number | string | null | undefined, fallback: number) {
   return Number.isFinite(next) ? next : fallback
 }
 
-function rings(geometry: LiveMapGeometry | GeoJsonPolygon | null | undefined): [number, number][][] {
+function rings(
+  geometry: LiveMapGeometry | GeoJsonPolygon | null | undefined
+): [number, number][][] {
   if (!geometry) return []
   if (geometry.type === "Polygon") {
     const ring = geoJsonToRing(geometry as GeoJsonPolygon)
@@ -41,7 +44,9 @@ function rings(geometry: LiveMapGeometry | GeoJsonPolygon | null | undefined): [
   if (geometry.type === "MultiPolygon") {
     const parts = (geometry.coordinates as number[][][][]) ?? []
     return parts
-      .map((part) => geoJsonToRing({ type: "Polygon", coordinates: part } as GeoJsonPolygon))
+      .map((part) =>
+        geoJsonToRing({ type: "Polygon", coordinates: part } as GeoJsonPolygon)
+      )
       .filter((ring) => ring.length >= 3)
   }
   return []
@@ -55,19 +60,26 @@ function rings(geometry: LiveMapGeometry | GeoJsonPolygon | null | undefined): [
 export function drawCoverage(
   L: typeof leaflet,
   group: leaflet.LayerGroup,
-  { boundary, policy, tone = "light", showBoundary = true, showZone = true }: DrawCoverageOptions,
+  {
+    boundary,
+    policy,
+    tone = "light",
+    showBoundary = true,
+    showZone = true,
+    boundaryStyle = "outline",
+  }: DrawCoverageOptions
 ) {
   const edge = tone === "dark" ? COVERAGE_COLORS.boundary : "#64748b"
 
   if (showBoundary) {
     for (const ring of rings(boundary)) {
       L.polygon(ring, {
-        color: edge,
-        weight: 1.5,
-        opacity: tone === "dark" ? 0.5 : 0.7,
-        fillColor: edge,
-        fillOpacity: 0.06,
-        dashArray: "4 5",
+        color: boundaryStyle === "quiet" ? "transparent" : edge,
+        weight: boundaryStyle === "quiet" ? 0 : 1.5,
+        opacity: boundaryStyle === "quiet" ? 0 : tone === "dark" ? 0.5 : 0.7,
+        fillColor: boundaryStyle === "quiet" ? "#f97316" : edge,
+        fillOpacity: boundaryStyle === "quiet" ? 0.12 : 0.06,
+        dashArray: boundaryStyle === "quiet" ? undefined : "4 5",
         interactive: false,
       }).addTo(group)
     }
@@ -140,7 +152,7 @@ function metersBetween(aLat: number, aLng: number, bLat: number, bLng: number) {
 export function insideCoverage(
   lat: number,
   lng: number,
-  { boundary, policy }: CoverageInput,
+  { boundary, policy }: CoverageInput
 ): boolean {
   const zoneRings = rings(policy?.acceptance_geometry)
   if (zoneRings.length > 0) {
@@ -150,7 +162,11 @@ export function insideCoverage(
     const radius = number(policy.acceptance_radius_meters, 0)
     const centerLat = number(policy.acceptance_center_latitude, NaN)
     const centerLng = number(policy.acceptance_center_longitude, NaN)
-    if (radius > 0 && Number.isFinite(centerLat) && Number.isFinite(centerLng)) {
+    if (
+      radius > 0 &&
+      Number.isFinite(centerLat) &&
+      Number.isFinite(centerLng)
+    ) {
       return metersBetween(centerLat, centerLng, lat, lng) <= radius
     }
   }

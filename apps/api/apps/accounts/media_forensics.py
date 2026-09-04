@@ -78,7 +78,19 @@ NOISE_MIN_BLOCKS = 12
 NOISE_MIN_MEAN = 1.5
 NOISE_CV_THRESHOLD = 0.85
 NOISE_MIN_TEXTURE_STDDEV = 8.0
-VISUAL_TAMPER_MESSAGE = "Proof image appears digitally manipulated. Please upload an original photo."
+# ── Resident-facing authenticity messages (formal, actionable) ────────────
+AI_MEDIA_MESSAGE = (
+    "This photo appears to be AI-generated. "
+    "Please upload a genuine photo taken with your camera."
+)
+EDITED_MEDIA_MESSAGE = (
+    "This photo appears to be edited or digitally altered. "
+    "Please upload the original, unedited photo."
+)
+VISUAL_TAMPER_MESSAGE = (
+    "This photo appears digitally manipulated. "
+    "Please upload a genuine, unedited photo taken with your camera."
+)
 C2PA_INCONCLUSIVE_MESSAGE = (
     "Could not verify media authenticity (C2PA). Reinstall forensics dependencies or try another photo."
 )
@@ -124,11 +136,11 @@ def exif_forensics(content: bytes) -> str | None:
 
     for keyword in AI_SOFTWARE:
         if keyword in software:
-            return "AI-generated media is not allowed."
+            return AI_MEDIA_MESSAGE
 
     for keyword in EDITING_SOFTWARE:
         if keyword in software:
-            return "Edited or manipulated media is not allowed."
+            return EDITED_MEDIA_MESSAGE
 
     return None
 
@@ -141,13 +153,13 @@ def _recursive_search(obj, *, _depth=0) -> str | None:
         val = _normalize_name(obj)
         for keyword in AI_SOFTWARE:
             if keyword in val:
-                return "AI-generated media is not allowed."
+                return AI_MEDIA_MESSAGE
         for keyword in EDITING_SOFTWARE:
             if keyword in val:
-                return "Edited or manipulated media is not allowed."
+                return EDITED_MEDIA_MESSAGE
         # Check for trainedAlgorithmicMedia digital source type
         if "trainedalgorithmicmedia" in val.replace(" ", "").lower():
-            return "AI-generated media is not allowed."
+            return AI_MEDIA_MESSAGE
     elif isinstance(obj, dict):
         for v in obj.values():
             msg = _recursive_search(v, _depth=_depth + 1)
@@ -157,7 +169,7 @@ def _recursive_search(obj, *, _depth=0) -> str | None:
         for k in obj.keys():
             val = _normalize_name(k)
             if "trainedalgorithmicmedia" in val.replace(" ", "").lower():
-                return "AI-generated media is not allowed."
+                return AI_MEDIA_MESSAGE
     elif isinstance(obj, list):
         for item in obj:
             msg = _recursive_search(item, _depth=_depth + 1)
@@ -246,18 +258,18 @@ def png_metadata_forensics(content: bytes) -> str | None:
                 for kw in AI_SOFTWARE | EDITING_SOFTWARE:
                     if kw in keyword:
                         return (
-                            "AI-generated media is not allowed."
+                            AI_MEDIA_MESSAGE
                             if kw in AI_SOFTWARE
-                            else "Edited or manipulated media is not allowed."
+                            else EDITED_MEDIA_MESSAGE
                         )
                 if null_idx + 1 < len(chunk_data):
                     value = chunk_data[null_idx + 1 :].decode("latin-1", errors="replace").strip().lower()
                     for kw in AI_SOFTWARE | EDITING_SOFTWARE:
                         if kw in value:
                             return (
-                                "AI-generated media is not allowed."
+                                AI_MEDIA_MESSAGE
                                 if kw in AI_SOFTWARE
-                                else "Edited or manipulated media is not allowed."
+                                else EDITED_MEDIA_MESSAGE
                             )
     except Exception:
         pass

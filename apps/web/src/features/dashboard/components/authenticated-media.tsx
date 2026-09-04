@@ -53,6 +53,12 @@ function cachePut(src: string, url: string) {
   }
 }
 
+function cacheDelete(src: string) {
+  const existing = blobCache.get(src)
+  if (existing) URL.revokeObjectURL(existing)
+  blobCache.delete(src)
+}
+
 function useAuthenticatedBlob(src: string) {
   const [objectUrl, setObjectUrl] = useState("")
   const [failed, setFailed] = useState(false)
@@ -62,7 +68,9 @@ function useAuthenticatedBlob(src: string) {
     function onInvalidate(event: Event) {
       const detail = (event as CustomEvent<{ src?: string }>).detail
       if (!detail?.src || detail.src === src) {
-        blobCache.delete(src)
+        cacheDelete(src)
+        setObjectUrl("")
+        setFailed(false)
         setVersion((value) => value + 1)
       }
     }
@@ -72,6 +80,7 @@ function useAuthenticatedBlob(src: string) {
 
   useEffect(() => {
     let cancelled = false
+    let retryTimer: number | undefined
     const token = getAccessToken()
 
     async function load() {
@@ -84,9 +93,17 @@ function useAuthenticatedBlob(src: string) {
       try {
         const response = await fetch(src, {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          cache: "no-store",
         })
         if (!response.ok) throw new Error("Media request failed")
-        const url = URL.createObjectURL(await response.blob())
+        const blob = await response.blob()
+        if (response.headers.get("X-EBOSES-Preview-Status") === "pending") {
+          // Never cache the server's placeholder JPEG. Keep polling until the
+          // worker has written the real preview.
+          if (!cancelled) retryTimer = window.setTimeout(() => void load(), 1500)
+          return
+        }
+        const url = URL.createObjectURL(blob)
         cachePut(src, url)
         if (!cancelled) setObjectUrl(url)
       } catch {
@@ -97,6 +114,7 @@ function useAuthenticatedBlob(src: string) {
     void load()
     return () => {
       cancelled = true
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer)
     }
   }, [src, version])
 

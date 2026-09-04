@@ -6,7 +6,10 @@
  * responder profile header rendered one ("M"), so the same person appeared to
  * be two different accounts depending on the screen.
  */
-export function initials(name: string | null | undefined, fallback = "?"): string {
+export function initials(
+  name: string | null | undefined,
+  fallback = "U"
+): string {
   const parts = (name ?? "")
     .split(/\s+/)
     .filter(Boolean)
@@ -15,8 +18,9 @@ export function initials(name: string | null | undefined, fallback = "?"): strin
     .filter((part) => !/^(jr|sr|ii|iii|iv|v)\.?$/i.test(part))
 
   const letters = [parts[0], parts[parts.length - 1]]
-    .filter((part, index, all): part is string =>
-      Boolean(part) && (index === 0 || part !== all[0]),
+    .filter(
+      (part, index, all): part is string =>
+        Boolean(part) && (index === 0 || part !== all[0])
     )
     .map((part) => part[0]?.toUpperCase() ?? "")
     .join("")

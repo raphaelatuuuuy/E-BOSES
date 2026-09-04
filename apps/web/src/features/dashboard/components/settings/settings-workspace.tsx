@@ -238,14 +238,16 @@ export function SettingsWorkspace({
     }
   }
 
-  // Profiles card: "Champaca Street, Marikina Heights, Marikina City" (street only + place)
+  const communityName = user?.barangay?.trim() || "Your community"
+
+  // Profiles card: street only + current community
   const displayAddress = (() => {
     const raw = address.trim()
     if (!raw || raw.toLowerCase() === "pending") return ""
     const { street } = parseStoredAddress(raw)
     const streetLine = street.trim() || raw.split(",")[0]?.trim() || raw
     if (!streetLine) return ""
-    return `${streetLine}, Marikina Heights, Marikina City`
+    return `${streetLine}, ${communityName}`
   })()
 
   const pendingDeletion = accountRequests.find(
@@ -283,6 +285,7 @@ export function SettingsWorkspace({
     <>
       <AddressConfirmFlow
         initialAddress={displayAddress}
+        communityName={communityName}
         open={addressFlowOpen}
         onClose={() => setAddressFlowOpen(false)}
         onSaved={(nextAddress) => {
@@ -506,7 +509,7 @@ export function SettingsWorkspace({
           className={
             variant === "popup"
               ? "min-w-0 px-4 pb-10 pt-4 md:px-6 md:pt-5"
-              : "min-w-0 px-4 pb-[calc(7.5rem+env(safe-area-inset-bottom))] pt-4 md:px-6 md:pb-12 md:pt-5 lg:px-8"
+              : "min-w-0 px-4 pb-6 pt-4 md:px-6 md:pb-12 md:pt-5 lg:px-8"
           }
         >
           <div className="w-full max-w-lg md:max-w-xl">

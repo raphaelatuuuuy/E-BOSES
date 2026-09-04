@@ -185,7 +185,7 @@ def _record_completion(claim: _RunClaim, assessment_id: int):
 
 @transaction.atomic
 def _record_failure(claim: _RunClaim, exc: Exception):
-    from .models import ConcernAiAssessment
+    from .models import Concern, ConcernAiAssessment
 
     assessment = ConcernAiAssessment.objects.select_for_update().get(pk=claim.assessment_id)
     raw_result = dict(assessment.raw_result or {})
@@ -210,6 +210,22 @@ def _record_failure(claim: _RunClaim, exc: Exception):
     assessment.status = ConcernAiAssessment.Status.FAILED
     assessment.raw_result = raw_result
     assessment.save(update_fields=["status", "raw_result", "updated_at"])
+    Concern.objects.filter(pk=assessment.concern_id).update(
+        assigned_department=None,
+        validation_status=Concern.ValidationStatus.PENDING,
+        validation_summary=(
+            "Automated review could not be completed. Your report has not been assigned "
+            "to a unit yet and is waiting for review."
+        ),
+        update_text="Waiting for validation before routing.",
+        updated_at=timezone.now(),
+    )
+    from .models import ConcernAssignment
+
+    ConcernAssignment.objects.filter(
+        concern_id=assessment.concern_id,
+        status=ConcernAssignment.Status.ACTIVE,
+    ).update(status=ConcernAssignment.Status.CANCELLED, updated_at=timezone.now())
     transaction.on_commit(lambda assessment_id=assessment.pk: broadcast_concern_ai_update(assessment_id))
     return True
 
@@ -246,15 +262,6 @@ def broadcast_concern_ai_update(assessment_id: int) -> None:
     )
 
 
-def _current_classification_configuration():
-    from .models import ConcernClassificationConfiguration
-
-    try:
-        return ConcernClassificationConfiguration.current()
-    except Exception:
-        return None
-
-
 def enqueue_concern_ai(concern_id):
     """Queue the assessment without ever blocking the request thread.
 
@@ -280,6 +287,24 @@ def enqueue_concern_ai(concern_id):
             concern_id,
             exc.__class__.__name__,
         )
+        from .models import Concern
+
+        Concern.objects.filter(pk=concern_id).update(
+            assigned_department=None,
+            validation_status=Concern.ValidationStatus.PENDING,
+            validation_summary=(
+                "Automated review is temporarily unavailable. Your report has not been "
+                "assigned to a unit yet and is waiting for review."
+            ),
+            update_text="Waiting for validation before routing.",
+            updated_at=timezone.now(),
+        )
+        from .models import ConcernAssignment
+
+        ConcernAssignment.objects.filter(
+            concern_id=concern_id,
+            status=ConcernAssignment.Status.ACTIVE,
+        ).update(status=ConcernAssignment.Status.CANCELLED, updated_at=timezone.now())
         ConcernAiAssessment.objects.filter(concern_id=concern_id).exclude(
             status=ConcernAiAssessment.Status.COMPLETED
         ).update(status=ConcernAiAssessment.Status.PENDING)

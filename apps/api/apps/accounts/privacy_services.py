@@ -148,7 +148,7 @@ def anonymize_resident_account(user):
         profile.last_name = "Resident"
         profile.date_of_birth = date(1900, 1, 1)
         profile.address = ""
-        profile.barangay = "Marikina Heights"
+        profile.barangay = getattr(getattr(profile, "community", None), "name", "")
         profile.gender = ""
         profile.avatar = ""
         profile.save(update_fields=[

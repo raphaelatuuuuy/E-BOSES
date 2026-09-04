@@ -1,9 +1,3 @@
-/** Default center of Barangay Marikina Heights when geocoding fails. */
-export const MARIKINA_HEIGHTS_CENTER = {
-  lat: 14.6525,
-  lng: 121.1168,
-} as const
-
 export interface StreetCoordinates {
   lat: number
   lng: number
@@ -14,28 +8,28 @@ const geocodeCache = new Map<string, StreetCoordinates | null>()
 const GEOCODE_CACHE_MAX = 300
 
 /**
- * Forward-geocode a Marikina Heights street (and optional house number)
+ * Forward-geocode a community street (and optional house number)
  * via OpenStreetMap Nominatim so the map pin sits on the actual road.
  */
-export async function geocodeMarikinaStreet(
+export async function geocodeCommunityStreet(
   street: string,
+  communityName: string,
   houseNumber?: string,
 ): Promise<StreetCoordinates | null> {
   const house = houseNumber?.trim()
   const streetName = street?.trim()
   if (!streetName) return null
 
-  const cacheKey = `${house ?? ""}|${streetName.toLowerCase()}`
+  const cacheKey = `${communityName.toLowerCase()}|${house ?? ""}|${streetName.toLowerCase()}`
   if (geocodeCache.has(cacheKey)) {
     return geocodeCache.get(cacheKey) ?? null
   }
 
   const queries = [
-    [house, streetName, "Marikina Heights", "Marikina City", "Metro Manila", "Philippines"]
+    [house, streetName, communityName, "Metro Manila", "Philippines"]
       .filter(Boolean)
       .join(", "),
-    [streetName, "Marikina Heights", "Marikina", "Philippines"].join(", "),
-    [streetName, "Marikina City", "Philippines"].join(", "),
+    [streetName, communityName, "Philippines"].join(", "),
   ]
 
   for (const q of queries) {
@@ -59,8 +53,6 @@ export async function geocodeMarikinaStreet(
       const lat = Number(hit?.lat)
       const lng = Number(hit?.lon)
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue
-      // Stay roughly in Marikina area
-      if (lat < 14.6 || lat > 14.7 || lng < 121.05 || lng > 121.2) continue
       const result = {
         lat,
         lng,

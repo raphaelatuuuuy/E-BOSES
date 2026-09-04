@@ -17,7 +17,6 @@ import {
 import { ShiftHistoryList } from "@/features/dashboard/components/responder/shift-history"
 import { DutyRhythm, ResponseTrend } from "@/features/dashboard/components/responder/shift-insights"
 import { Pane, State } from "@/features/dashboard/components/responder/dispatch-surface"
-import { MOBILE_BAR_CLEARANCE } from "@/features/dashboard/lib/shell"
 import { dispatchState, formatAgo } from "@/features/dashboard/lib/responder-format"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -78,8 +77,7 @@ export default function ResponderShiftPage() {
 
   return (
     <div
-      className="min-h-full flex-1 bg-canvas p-4 md:p-6 lg:p-8"
-      style={{ paddingBottom: `calc(${MOBILE_BAR_CLEARANCE} + 1.5rem)` }}
+      className="min-h-full flex-1 bg-canvas p-4 pb-6 md:p-6 md:pb-8 lg:p-8"
     >
       <div className="mx-auto flex max-w-5xl flex-col gap-3">
         <ShiftControls

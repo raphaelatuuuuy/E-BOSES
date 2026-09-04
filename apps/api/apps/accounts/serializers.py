@@ -73,7 +73,7 @@ class RegisterSerializer(serializers.Serializer):
     date_of_birth = serializers.DateField()
     address = serializers.CharField(max_length=200)
     barangay = serializers.CharField(max_length=120, required=False, default="")
-    community_resolution_token = serializers.CharField(write_only=True)
+    community_resolution_token = serializers.CharField(write_only=True, required=False, allow_blank=True, default="")
     proof = serializers.FileField(
         allow_empty_file=False,
         # Light check only — C2PA/authenticity already ran at /register/proof/check/
@@ -160,6 +160,7 @@ class UserSummarySerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
     address = serializers.SerializerMethodField()
     barangay = serializers.SerializerMethodField()
+    community = serializers.SerializerMethodField()
     date_of_birth = serializers.SerializerMethodField()
     member_since = serializers.SerializerMethodField()
     gender = serializers.SerializerMethodField()
@@ -195,6 +196,7 @@ class UserSummarySerializer(serializers.ModelSerializer):
             "full_name",
             "address",
             "barangay",
+            "community",
             "date_of_birth",
             "member_since",
             "gender",
@@ -255,6 +257,11 @@ class UserSummarySerializer(serializers.ModelSerializer):
         if not raw or raw.lower() == "pending":
             return getattr(getattr(profile, "community", None), "name", "")
         return raw
+
+    def get_community(self, obj):
+        """Profile community id, so the Users screen can show and move it."""
+        profile = self.profile(obj)
+        return profile.community_id if profile else None
 
     def get_date_of_birth(self, obj):
         profile = self.profile(obj)
@@ -389,6 +396,10 @@ class StaffAccountUpdateSerializer(serializers.Serializer):
 
     role = serializers.ChoiceField(choices=User.Role.choices, required=False)
     status = serializers.ChoiceField(choices=User.Status.choices, required=False)
+    # Community the account belongs to (the Users screen can move a resident
+    # between barangays). Validated to the Community object; applied to the
+    # residence profile by the view.
+    community = serializers.IntegerField(required=False, allow_null=True)
     responder_unit = serializers.ChoiceField(
         choices=User.ResponderUnit.choices, allow_blank=True, required=False
     )
@@ -398,6 +409,18 @@ class StaffAccountUpdateSerializer(serializers.Serializer):
     gender = serializers.ChoiceField(choices=User.Gender.choices, allow_blank=True, required=False)
     email = serializers.EmailField(required=False)
     phone_number = serializers.RegexField(regex=r"^\+63\d{10}$", required=False)
+
+    def validate_community(self, value):
+        if value is None:
+            return None
+        from apps.emergencies.models import Community
+
+        community = Community.objects.filter(
+            pk=value, status=Community.Status.ACTIVE
+        ).first()
+        if not community:
+            raise serializers.ValidationError("Choose an active community.")
+        return community
 
     def validate_first_name(self, value):
         if not NAME_PATTERN.fullmatch(value):

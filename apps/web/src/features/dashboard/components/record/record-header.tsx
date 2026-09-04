@@ -13,6 +13,22 @@ import type { RecordFact, RecordView } from "./types"
 
 function Fact({ fact }: { fact: RecordFact }) {
   const missing = fact.value === null || fact.value === ""
+  const isDescription = fact.label.trim().toLowerCase() === "description"
+  if (isDescription) {
+    return (
+      <div className="col-span-full min-w-0">
+        <dd
+          className={
+            missing
+              ? "text-sm font-medium italic text-muted-foreground"
+              : "text-sm font-semibold leading-relaxed text-foreground"
+          }
+        >
+          {missing ? (fact.emptyHint ?? "Not available") : fact.value}
+        </dd>
+      </div>
+    )
+  }
   return (
     <div className="min-w-0">
       <dt className="text-[11px] font-semibold text-muted-foreground">

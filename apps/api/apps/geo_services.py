@@ -1,5 +1,5 @@
 """
-Marikina Heights geo helpers: boundary checks, soft/hard buffers, POIs, search bias.
+Community geo helpers: boundary checks, soft/hard buffers, POIs, search bias.
 
 Services layer:
   - Live OpenStreetMap amenities via Overpass (real names/coords)
@@ -126,11 +126,17 @@ def meters_outside_bbox(lat: float, lng: float, bounds: dict) -> float:
 
 
 def _point_in_ring(longitude: float, latitude: float, ring: list) -> bool:
+    # Coordinates loaded from Django DecimalFields can be Decimal instances,
+    # while GeoJSON coordinates are normally floats. Keep all polygon math in
+    # one numeric type so Decimal/float subtraction and multiplication do not
+    # raise TypeError.
+    longitude = float(longitude)
+    latitude = float(latitude)
     inside = False
     previous = ring[-1]
     for current in ring:
-        x1, y1 = previous[:2]
-        x2, y2 = current[:2]
+        x1, y1 = (float(value) for value in previous[:2])
+        x2, y2 = (float(value) for value in current[:2])
         crosses = (y1 > latitude) != (y2 > latitude)
         if crosses:
             edge_x = (x2 - x1) * (latitude - y1) / ((y2 - y1) or 1e-12) + x1
@@ -214,6 +220,8 @@ def _distance_to_ring_meters(longitude: float, latitude: float, ring: list) -> f
     """Return the approximate shortest distance from a point to a GeoJSON ring."""
     if not ring or len(ring) < 2:
         return None
+    longitude = float(longitude)
+    latitude = float(latitude)
     # A local equirectangular projection is accurate enough for a barangay-sized
     # boundary and avoids a GIS runtime dependency for the JSON map geometry.
     lat_scale = 110_540.0
@@ -223,8 +231,8 @@ def _distance_to_ring_meters(longitude: float, latitude: float, ring: list) -> f
     for first, second in zip(ring, ring[1:]):
         if len(first) < 2 or len(second) < 2:
             continue
-        ax, ay = first[0] * lng_scale, first[1] * lat_scale
-        bx, by = second[0] * lng_scale, second[1] * lat_scale
+        ax, ay = float(first[0]) * lng_scale, float(first[1]) * lat_scale
+        bx, by = float(second[0]) * lng_scale, float(second[1]) * lat_scale
         dx, dy = bx - ax, by - ay
         length_sq = dx * dx + dy * dy
         if length_sq:
@@ -256,8 +264,21 @@ def distance_to_geojson_boundary_meters(longitude: float, latitude: float, geome
 
 
 def get_active_boundary_geometry() -> dict | None:
+    active_places = set()
     try:
-        from apps.emergencies.models import MapGeometry
+        from apps.emergencies.models import Community, MapGeometry
+
+        community = (
+            Community.objects.filter(
+                status=Community.Status.ACTIVE,
+                boundary__is_active=True,
+            )
+            .select_related("boundary")
+            .order_by("name", "id")
+            .first()
+        )
+        if community and community.boundary and community.boundary.geometry:
+            return community.boundary.geometry
 
         boundary = (
             MapGeometry.objects.filter(kind=MapGeometry.Kind.BOUNDARY, is_active=True)
@@ -271,20 +292,33 @@ def get_active_boundary_geometry() -> dict | None:
     return None
 
 
-def dispatch_policy_payload(community=None) -> dict[str, Any]:
+def dispatch_policy_payload(community) -> dict[str, Any]:
+    if community is None:
+        return {
+            "id": None,
+            "barangay": "",
+            "acceptance_center_latitude": None,
+            "acceptance_center_longitude": None,
+            "acceptance_radius_meters": 0,
+            "acceptance_geometry": None,
+            "out_of_zone_action": "review",
+            "witness_radius_meters": 0,
+            "nearby_distance_meters": 0,
+            "hotlines": [],
+        }
     try:
         from apps.emergencies.models import MapDispatchPolicy
 
-        policy = MapDispatchPolicy.objects.filter(community=community).first() if community else MapDispatchPolicy.current()
+        policy = MapDispatchPolicy.current(community)
         if policy:
             return policy.as_payload()
         raise LookupError("No dispatch policy configured")
     except Exception:
         return {
             "id": None,
-            "barangay": community.name if community else "Community",
-            "acceptance_center_latitude": float(community.center_latitude) if community else MARIKINA_HEIGHTS_CENTER["latitude"],
-            "acceptance_center_longitude": float(community.center_longitude) if community else MARIKINA_HEIGHTS_CENTER["longitude"],
+            "barangay": community.name,
+            "acceptance_center_latitude": float(community.center_latitude),
+            "acceptance_center_longitude": float(community.center_longitude),
             "acceptance_radius_meters": 800,
             "acceptance_geometry": None,
             "out_of_zone_action": "review",
@@ -292,16 +326,16 @@ def dispatch_policy_payload(community=None) -> dict[str, Any]:
             "responder_nearby_radius_meters": 100,
             "duty_hours_start": None,
             "duty_hours_end": None,
-            "hotlines": [
-                {"label": "Marikina Rescue", "number": "161"},
-                {"label": "Emergency", "number": "911"},
-            ],
+            "hotlines": [],
             "updated_at": None,
         }
 
 
 def acceptance_zone_result(latitude: float, longitude: float) -> dict[str, Any]:
-    policy = dispatch_policy_payload()
+    communities = active_communities_for_point(latitude, longitude)
+    if len(communities) != 1:
+        raise ValueError("A location inside one active community is required.")
+    policy = dispatch_policy_payload(communities[0])
     distance = haversine_meters(
         float(latitude),
         float(longitude),
@@ -327,9 +361,7 @@ def is_inside_barangay_boundary(latitude: float, longitude: float) -> bool:
     lng = float(longitude)
     if not (-90 <= lat <= 90 and -180 <= lng <= 180):
         return False
-    geometry = get_active_boundary_geometry()
-    in_poly = point_in_geojson(lng, lat, geometry)
-    return bool(in_poly is True or (in_poly is None and point_in_bbox(lat, lng, MARIKINA_HEIGHTS_BOUNDS)))
+    return len(active_communities_for_point(lat, lng)) == 1
 
 
 def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
@@ -352,30 +384,29 @@ def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
             "distance_meters": None,
         }
 
-    geometry = get_active_boundary_geometry()
-    in_poly = point_in_geojson(lng, lat, geometry)
-    in_heights_bbox = point_in_bbox(lat, lng, MARIKINA_HEIGHTS_BOUNDS)
-    in_city = point_in_bbox(lat, lng, MARIKINA_CITY_BOUNDS)
-    dist_bbox = meters_outside_bbox(lat, lng, MARIKINA_HEIGHTS_BOUNDS)
-    boundary_distance = (
-        distance_to_geojson_boundary_meters(lng, lat, geometry)
-        if in_poly is False
-        else None
-    )
-    distance_outside = boundary_distance if boundary_distance is not None else dist_bbox
-
-    if in_poly is True or (in_poly is None and in_heights_bbox):
+    communities = active_communities_for_point(lat, lng)
+    if len(communities) == 1:
+        community = communities[0]
         result = {
             "status": "inside",
             "zone": "barangay",
             "accepted": True,
             "warning": None,
-            "message": "Location is inside Barangay Marikina Heights.",
+            "message": f"Location is inside {community.name}.",
             "distance_meters": 0,
+            "community": {
+                "id": str(community.public_id),
+                "code": community.code,
+                "name": community.name,
+            },
         }
-        zone = acceptance_zone_result(lat, lng)
-        result["acceptance_zone"] = zone
-        if not zone["within"]:
+        try:
+            zone = acceptance_zone_result(lat, lng)
+        except ValueError:
+            zone = None
+        if zone is not None:
+            result["acceptance_zone"] = zone
+        if zone is not None and not zone["within"]:
             if zone["action"] == "block":
                 result.update({
                     "status": "far",
@@ -388,16 +419,33 @@ def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
                 result["message"] = "Inside barangay; outside configured acceptance zone."
         return result
 
-    # Outside polygon or bbox
-    if not in_city and dist_bbox > HARD_REJECT_METERS:
-        return {
-            "status": "far",
-            "zone": "outside_city",
-            "accepted": False,
-            "warning": None,
-            "message": "Location is too far from Barangay Marikina Heights. Choose a place in or near Marikina.",
-            "distance_meters": round(dist_bbox),
-        }
+    from apps.emergencies.models import Community
+
+    nearest_distance = None
+    nearest_community = None
+    candidates = Community.objects.filter(
+        status=Community.Status.ACTIVE,
+        boundary__is_active=True,
+    ).select_related("boundary")
+    for candidate in candidates:
+        boundary = candidate.boundary
+        distance = distance_to_geojson_boundary_meters(
+            lng, lat, boundary.geometry if boundary else None
+        )
+        if distance is None:
+            bounds = {
+                "min_latitude": float(candidate.bbox_min_latitude or lat),
+                "max_latitude": float(candidate.bbox_max_latitude or lat),
+                "min_longitude": float(candidate.bbox_min_longitude or lng),
+                "max_longitude": float(candidate.bbox_max_longitude or lng),
+            }
+            distance = meters_outside_bbox(lat, lng, bounds)
+        if nearest_distance is None or distance < nearest_distance:
+            nearest_distance = distance
+            nearest_community = candidate
+
+    distance_outside = nearest_distance if nearest_distance is not None else float("inf")
+    community_name = nearest_community.name if nearest_community else "an active community"
 
     if distance_outside <= SOFT_BUFFER_METERS:
         result = {
@@ -405,15 +453,19 @@ def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
             "zone": "edge_buffer",
             "accepted": True,
             "warning": (
-                "This pin is just outside the barangay boundary "
+                f"This pin is just outside the {community_name} boundary "
                 f"(~{round(distance_outside)} m). Continue only if the concern is on the edge."
             ),
-            "message": "Near the barangay boundary.",
+            "message": f"Near the {community_name} boundary.",
             "distance_meters": round(distance_outside),
         }
-        zone = acceptance_zone_result(lat, lng)
-        result["acceptance_zone"] = zone
-        if not zone["within"] and zone["action"] == "block":
+        try:
+            zone = acceptance_zone_result(lat, lng)
+        except ValueError:
+            zone = None
+        if zone is not None:
+            result["acceptance_zone"] = zone
+        if zone is not None and not zone["within"] and zone["action"] == "block":
             result.update({
                 "status": "far",
                 "zone": "outside_acceptance_zone",
@@ -423,35 +475,26 @@ def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
             })
         return result
 
-    if distance_outside <= HARD_REJECT_METERS and in_city:
-        return {
-            "status": "far",
-            "zone": "outside_barangay",
-            "accepted": False,
-            "warning": None,
-            "message": (
-                "Location is outside Barangay Marikina Heights. "
-                "Please pin a place inside the barangay (or within a few hundred meters of the boundary)."
-            ),
-            "distance_meters": round(distance_outside),
-        }
-
     return {
         "status": "far",
-        "zone": "far",
+        "zone": "outside_community",
         "accepted": False,
         "warning": None,
-        "message": "Location is too far from Barangay Marikina Heights.",
-        "distance_meters": round(distance_outside),
+        "message": f"Location is outside an active community. Choose a place inside {community_name}.",
+        "distance_meters": None if math.isinf(distance_outside) else round(distance_outside),
     }
 
 
 def score_search_result(lat: float, lng: float) -> float:
     """Lower is better. Prefer inside Heights, then closer to center."""
     classification = classify_location(lat, lng)
-    dist_center = haversine_meters(
-        lat, lng, MARIKINA_HEIGHTS_CENTER["latitude"], MARIKINA_HEIGHTS_CENTER["longitude"]
+    from apps.emergencies.models import Community
+
+    centers = Community.objects.filter(status=Community.Status.ACTIVE).values_list(
+        "center_latitude", "center_longitude"
     )
+    distances = [haversine_meters(lat, lng, float(c_lat), float(c_lng)) for c_lat, c_lng in centers if c_lat is not None and c_lng is not None]
+    dist_center = min(distances) if distances else float("inf")
     if classification["status"] == "inside":
         return dist_center
     if classification["status"] == "edge":
@@ -467,6 +510,20 @@ def address_looks_outside_marikina(text: str) -> bool:
     (e.g. Katipunan, Quezon City) even if coords/viewbox are noisy.
     """
     t = f" {text.casefold()} "
+    active_places = set()
+    try:
+        from apps.emergencies.models import Community
+
+        active_places = {
+            value.casefold()
+            for row in Community.objects.filter(status=Community.Status.ACTIVE).values("name", "boundary__locality")
+            for value in (row.get("name") or "", row.get("boundary__locality") or "")
+            if value
+        }
+        if any(f" {place} " in t for place in active_places):
+            return False
+    except Exception:
+        pass
     # Explicit foreign LGUs / districts
     hard_foreign = (
         "quezon city",
@@ -505,7 +562,7 @@ def address_looks_outside_marikina(text: str) -> bool:
     if any(m in t for m in hard_foreign):
         return True
     # "Quezon" alone without Marikina is almost always QC noise for PH streets
-    if "quezon" in t and "marikina" not in t:
+    if "quezon" in t and not any(place in t for place in active_places):
         return True
     return False
 
@@ -518,8 +575,18 @@ def search_location_allowed(lat: float, lng: float, text: str = "") -> bool:
     if text and address_looks_outside_marikina(text):
         return False
 
-    dist = haversine_meters(
-        lat, lng, MARIKINA_HEIGHTS_CENTER["latitude"], MARIKINA_HEIGHTS_CENTER["longitude"]
+    from apps.emergencies.models import Community
+
+    centers = Community.objects.filter(status=Community.Status.ACTIVE).values_list(
+        "center_latitude", "center_longitude"
+    )
+    dist = min(
+        (
+            haversine_meters(lat, lng, float(c_lat), float(c_lng))
+            for c_lat, c_lng in centers
+            if c_lat is not None and c_lng is not None
+        ),
+        default=float("inf"),
     )
     if dist > SEARCH_MAX_DISTANCE_M:
         return False
@@ -584,8 +651,13 @@ def search_viewbox_with_buffer() -> str:
     # ~1.6 km ≈ 0.0144° lat; slightly wider lng pad
     half_lat = 0.015
     half_lng = 0.015
-    c_lat = MARIKINA_HEIGHTS_CENTER["latitude"]
-    c_lng = MARIKINA_HEIGHTS_CENTER["longitude"]
+    from apps.emergencies.models import Community
+
+    center = Community.objects.filter(status=Community.Status.ACTIVE).order_by("name").values(
+        "center_latitude", "center_longitude"
+    ).first() or {"center_latitude": 14.5995, "center_longitude": 120.9842}
+    c_lat = float(center["center_latitude"])
+    c_lng = float(center["center_longitude"])
     return (
         f"{c_lng - half_lng},{c_lat + half_lat},"
         f"{c_lng + half_lng},{c_lat - half_lat}"
@@ -594,7 +666,22 @@ def search_viewbox_with_buffer() -> str:
 
 def _overpass_bbox_pad(pad_deg: float = 0.003) -> tuple[float, float, float, float]:
     """south, west, north, east for Overpass (Heights + soft edge pad)."""
-    b = MARIKINA_HEIGHTS_BOUNDS
+    from apps.emergencies.models import Community
+
+    rows = list(
+        Community.objects.filter(status=Community.Status.ACTIVE).values(
+            "bbox_min_latitude", "bbox_min_longitude", "bbox_max_latitude", "bbox_max_longitude"
+        )
+    )
+    if rows:
+        b = {
+            "min_latitude": min(float(row["bbox_min_latitude"]) for row in rows if row["bbox_min_latitude"] is not None),
+            "min_longitude": min(float(row["bbox_min_longitude"]) for row in rows if row["bbox_min_longitude"] is not None),
+            "max_latitude": max(float(row["bbox_max_latitude"]) for row in rows if row["bbox_max_latitude"] is not None),
+            "max_longitude": max(float(row["bbox_max_longitude"]) for row in rows if row["bbox_max_longitude"] is not None),
+        }
+    else:
+        b = MARIKINA_HEIGHTS_BOUNDS
     return (
         b["min_latitude"] - pad_deg,
         b["min_longitude"] - pad_deg,
@@ -880,7 +967,7 @@ def fetch_osm_service_pois(*, force_refresh: bool = False) -> list[dict[str, Any
     return pois
 
 
-def _admin_service_pois() -> tuple[list[dict[str, Any]], set[tuple[str, int]]]:
+def _admin_service_pois(community=None) -> tuple[list[dict[str, Any]], set[tuple[str, int]]]:
     """
     Returns (active admin POIs, suppressed OSM keys).
     Suppressed = inactive admin rows with osm_type + osm_id.
@@ -891,7 +978,10 @@ def _admin_service_pois() -> tuple[list[dict[str, Any]], set[tuple[str, int]]]:
     try:
         from apps.emergencies.models import MapServicePoi
 
-        for row in MapServicePoi.objects.all().only(
+        rows = MapServicePoi.objects.all()
+        if community is not None:
+            rows = rows.filter(community=community)
+        for row in rows.only(
             "id",
             "name",
             "poi_type",
@@ -960,47 +1050,64 @@ def _service_poi_rank(poi: dict[str, Any]) -> tuple:
         "school": 8,
         "other": 6,
     }.get(poi.get("type") or "", 7)
-    dist = haversine_meters(
-        float(poi["latitude"]),
-        float(poi["longitude"]),
-        MARIKINA_HEIGHTS_CENTER["latitude"],
-        MARIKINA_HEIGHTS_CENTER["longitude"],
-    )
+    try:
+        from apps.emergencies.models import Community
+
+        dist = min(
+            (
+                haversine_meters(
+                    float(poi["latitude"]),
+                    float(poi["longitude"]),
+                    float(lat),
+                    float(lng),
+                )
+                for lat, lng in Community.objects.filter(status=Community.Status.ACTIVE).values_list(
+                    "center_latitude", "center_longitude"
+                )
+                if lat is not None and lng is not None
+            ),
+            default=float("inf"),
+        )
+    except Exception:
+        dist = float("inf")
     src_rank = 0 if poi.get("source") in {"admin", "curated"} else 1
     return (src_rank, type_rank, dist, (poi.get("name") or "").casefold())
 
 
-def service_location_allowed(lat: float, lng: float) -> bool:
+def service_location_allowed(lat: float, lng: float, community=None) -> bool:
     """
     Services: inside/edge for pin policy, and within ~2 km of Heights center.
     Prevents the loose city bbox from flooding the map with San Mateo / city-wide schools.
     """
-    classification = classify_location(lat, lng)
-    if classification["status"] not in {"inside", "edge"}:
+    communities = active_communities_for_point(lat, lng)
+    if community is not None and not any(item.pk == community.pk for item in communities):
         return False
+    if community is None and not communities:
+        return False
+    center = community or communities[0]
     dist = haversine_meters(
-        lat, lng, MARIKINA_HEIGHTS_CENTER["latitude"], MARIKINA_HEIGHTS_CENTER["longitude"]
+        lat, lng, float(center.center_latitude), float(center.center_longitude)
     )
     return dist <= SERVICE_POI_MAX_DISTANCE_M
 
 
-def collect_service_pois(*, force_refresh: bool = False) -> list[dict[str, Any]]:
+def collect_service_pois(*, force_refresh: bool = False, community=None) -> list[dict[str, Any]]:
     """Merge real OSM amenities with admin-managed POIs for the Services layer."""
     osm = fetch_osm_service_pois(force_refresh=force_refresh)
-    admin_pois, suppressed = _admin_service_pois()
+    admin_pois, suppressed = _admin_service_pois(community)
 
     merged: list[dict[str, Any]] = []
     for poi in osm:
         key = (str(poi.get("osm_type") or "N").upper()[:1], int(poi.get("osm_id") or 0))
         if key in suppressed:
             continue
-        if not service_location_allowed(poi["latitude"], poi["longitude"]):
+        if not service_location_allowed(poi["latitude"], poi["longitude"], community):
             continue
         merged.append(poi)
 
     for poi in admin_pois:
         # Admin pins: allow slightly looser — same inside/edge + distance policy
-        if not service_location_allowed(poi["latitude"], poi["longitude"]):
+        if not service_location_allowed(poi["latitude"], poi["longitude"], community):
             continue
         clean = {k: v for k, v in poi.items() if k != "priority"}
         merged.append(clean)
@@ -1018,14 +1125,13 @@ def collect_service_pois(*, force_refresh: bool = False) -> list[dict[str, Any]]
 
 def validate_barangay_location(latitude, longitude):
     """
-    Accept pins inside Marikina Heights or within a small edge buffer (~280 m).
-    Reject locations that are far outside the barangay / Marikina City.
+    Accept pins inside an active community or its configured edge buffer.
     """
     if latitude is None or longitude is None:
         raise ValidationError("Latitude and longitude must be provided together.")
     result = classify_location(latitude, longitude)
     if not result.get("accepted"):
-        raise ValidationError("Location must be inside Barangay Marikina Heights.")
+        raise ValidationError(result.get("message") or "Location must be inside an active community.")
 
 
 def validate_emergency_location(latitude, longitude):
@@ -1042,6 +1148,23 @@ def validate_report_location(latitude, longitude):
         raise ValidationError("Latitude and longitude must be provided together.")
     community = active_community_for_point(latitude, longitude)
     if not community:
+        from apps.emergencies.models import Community
+
+        active = list(Community.objects.filter(status=Community.Status.ACTIVE))
+        nearest = min(
+            active,
+            key=lambda item: haversine_meters(
+                float(latitude),
+                float(longitude),
+                float(item.center_latitude),
+                float(item.center_longitude),
+            ),
+            default=None,
+        )
+        if nearest:
+            raise ValidationError(
+                f"Location is too far from Barangay {nearest.name}. Choose a place inside an active community."
+            )
         raise ValidationError("Location must be inside an active community boundary.")
     return {
         "action": "accept",
@@ -1068,7 +1191,7 @@ NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
 # directly from the SOS map gets the whole barangay's public IP rate-limited to
 # 429 - and a 429 carries no CORS headers, which surfaces as a confusing CORS
 # error rather than "you are being throttled". Everything goes through here.
-NOMINATIM_USER_AGENT = "E-Boses/1.0 (Barangay Marikina Heights emergency dispatch)"
+NOMINATIM_USER_AGENT = "E-Boses/1.0 (community emergency dispatch)"
 NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
 NOMINATIM_LOOKUP_URL = "https://nominatim.openstreetmap.org/lookup"
 NOMINATIM_MIN_INTERVAL_SECONDS = 1.1
@@ -1441,7 +1564,7 @@ def reverse_geocode(latitude, longitude) -> dict[str, Any]:
             },
             headers={
                 # Nominatim's usage policy requires a real identifying UA.
-                "User-Agent": "E-Boses/1.0 (Barangay Marikina Heights emergency dispatch)",
+                "User-Agent": NOMINATIM_USER_AGENT,
                 "Accept-Language": "en",
             },
             timeout=REVERSE_GEOCODE_TIMEOUT,
@@ -1466,18 +1589,20 @@ def reverse_geocode(latitude, longitude) -> dict[str, Any]:
     return result
 
 
-def map_context_payload() -> dict[str, Any]:
+def map_context_payload(community) -> dict[str, Any]:
     # v3: real OSM POIs + admin MapServicePoi merge
-    cached = cache.get(MAP_CONTEXT_CACHE_KEY)
+    map_version = cache.get(f"community-map-cache-version:{community.pk}", 1)
+    cache_key = f"{MAP_CONTEXT_CACHE_KEY}:{community.pk}:{community.boundary_revision}:{map_version}"
+    cached = cache.get(cache_key)
     if cached:
         return cached
 
-    geometry = get_active_boundary_geometry()
+    geometry = community.boundary.geometry if community.boundary and community.boundary.is_active else None
     streets = []
     try:
         from apps.live_map import static_map_payload
 
-        static = static_map_payload()
+        static = static_map_payload(community)
         boundary = static.get("boundary") or {}
         if boundary.get("geometry"):
             geometry = boundary["geometry"]
@@ -1486,18 +1611,24 @@ def map_context_payload() -> dict[str, Any]:
     except Exception:
         pass
 
-    pois = collect_service_pois()
+    pois = collect_service_pois(community=community)
 
+    bounds = {
+        "min_latitude": float(community.bbox_min_latitude),
+        "max_latitude": float(community.bbox_max_latitude),
+        "min_longitude": float(community.bbox_min_longitude),
+        "max_longitude": float(community.bbox_max_longitude),
+    }
     payload = {
-        "center": MARIKINA_HEIGHTS_CENTER,
-        "bounds": MARIKINA_HEIGHTS_BOUNDS,
-        "city_bounds": MARIKINA_CITY_BOUNDS,
+        "center": {"latitude": float(community.center_latitude), "longitude": float(community.center_longitude)},
+        "bounds": bounds,
+        "city_bounds": bounds,
         "soft_buffer_meters": SOFT_BUFFER_METERS,
         "hard_reject_meters": HARD_REJECT_METERS,
-        "dispatch_policy": dispatch_policy_payload(),
+        "dispatch_policy": dispatch_policy_payload(community),
         "boundary": {
-            "name": boundary.get("name") or "Marikina Heights",
-            "osm_relation_id": MARIKINA_HEIGHTS_OSM_RELATION_ID,
+            "name": boundary.get("name") or community.name,
+            "osm_relation_id": getattr(community.boundary, "osm_id", None),
             "geometry": geometry,
         },
         "streets": streets[:80],  # keep payload light
@@ -1509,5 +1640,5 @@ def map_context_payload() -> dict[str, Any]:
             "total": len(pois),
         },
     }
-    cache.set(MAP_CONTEXT_CACHE_KEY, payload, MAP_CONTEXT_CACHE_TTL)
+    cache.set(cache_key, payload, MAP_CONTEXT_CACHE_TTL)
     return payload

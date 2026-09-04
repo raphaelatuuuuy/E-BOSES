@@ -215,8 +215,16 @@ def draft_configuration(*, community=None, community_id=None):
     return queryset.first()
 
 
-def document_type_for_registration(code: str, *, configuration=None):
-    configuration = configuration or published_configuration()
+_CONFIGURATION_NOT_PROVIDED = object()
+
+
+def document_type_for_registration(code: str, *, configuration=_CONFIGURATION_NOT_PROVIDED):
+    # An omitted configuration means a caller is asking for the global/default
+    # policy (legacy tooling). Passing None is intentional and means the
+    # selected community has no published policy; never fall through to a
+    # different community in that case.
+    if configuration is _CONFIGURATION_NOT_PROVIDED:
+        configuration = published_configuration()
     if configuration is None:
         raise ValidationError({"proof_type": ["Residence proof verification is not configured."]})
     document_type = configuration.document_types.filter(code=code, enabled=True).first()
@@ -323,7 +331,7 @@ def detect_residence_proof(
     hint_type: str | None = None,
     side: str | None = None,
     submitted_profile: dict | None = None,
-    configuration=None,
+    configuration=_CONFIGURATION_NOT_PROVIDED,
     forensics: dict | None = None,
 ) -> dict:
     """Classify an uploaded/captured proof against published enabled templates.
@@ -331,7 +339,8 @@ def detect_residence_proof(
     Used at sign-up so the ID type dropdown can auto-select. Does not create a case.
     When ``side`` is front/back, only fields for that side are extracted and validated.
     """
-    configuration = configuration or published_configuration()
+    if configuration is _CONFIGURATION_NOT_PROVIDED:
+        configuration = published_configuration()
     if configuration is None:
         return {
             "detected": False,
@@ -1366,7 +1375,10 @@ def queue_user_verification(user, *, trigger=VerificationCheck.Trigger.REGISTRAT
         .first()
     )
     if case is None:
-        configuration = published_configuration()
+        community = getattr(getattr(user, "resident_profile", None), "community", None)
+        # Resident verification must stay inside the resident's community.
+        # A missing community is not permission to use the global catalog.
+        configuration = published_configuration(community=community) if community is not None else None
         proof = user.residence_proofs.order_by("-uploaded_at").first()
         case = ResidenceVerificationCase.objects.create(
             user=user,

@@ -163,16 +163,22 @@ def _meaningful_location_tokens(value: str) -> set[str]:
 
 
 def _result_is_in_marikina(item: dict) -> bool:
-    """Reject same-named map results from another city before boundary checks."""
+    """Reject map results whose locality is outside every active community."""
     address = item.get("address") or {}
     locality = " ".join(
         str(address.get(key) or "")
         for key in ("city", "town", "municipality", "city_district", "county")
     )
-    if "marikina" in _key(locality):
-        return True
-    # Some OSM records omit a structured city but retain it in display_name.
-    return "marikina" in _key(item.get("display_name") or "")
+    searchable = _key(" ".join((locality, str(item.get("display_name") or ""))))
+    if not searchable:
+        return False
+    active_places = {
+        _key(value)
+        for row in Community.objects.filter(status=Community.Status.ACTIVE).values("name", "boundary__locality")
+        for value in (row.get("name") or "", row.get("boundary__locality") or "")
+        if value
+    }
+    return any(place and (place in searchable or searchable in place) for place in active_places)
 
 
 def _distance_meters(first: tuple[float, float], second: tuple[float, float]) -> float:

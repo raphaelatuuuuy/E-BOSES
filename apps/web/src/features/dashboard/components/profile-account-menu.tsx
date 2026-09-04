@@ -36,7 +36,7 @@ function LetterAvatar({
  * - Mobile: avatar only → full-height right sheet (Nextdoor layout, white theme)
  */
 export function ProfileAccountMenu({
-  placeLabel = "Marikina Heights",
+  placeLabel = "Your community",
   className,
   onOpenSettings,
   onOpenProfile,

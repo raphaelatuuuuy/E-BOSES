@@ -16,6 +16,7 @@ export const RESIDENT_NOTIFICATION_FILTERS = [
 
 function typeGroup(item: NotificationItem): string | null {
   if (item.category === "announcement" || item.type === "announcement") return "announcements"
+  if (item.category === "chat" || item.type === "chat_message") return "reports"
   if (
     item.category === "emergency" ||
     item.emergency_id ||

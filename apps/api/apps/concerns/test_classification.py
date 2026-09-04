@@ -23,7 +23,8 @@ from apps.concerns.ai import process_concern_ai
 from apps.concerns.ai.duplicate_detector import report_fingerprints
 from apps.concerns.ai.gemma_analyzer import GemmaAnalyzer, parse_gemma_result, payload_from_result
 from apps.concerns.ai_fixtures import gemma_result
-from apps.concerns.models import Concern, ConcernAiAssessment, ConcernClassificationConfiguration, ContentFlag, Department, Designation, LlmDecisionLog, Position
+from apps.concerns.classification_api import _photo_verdict_payload
+from apps.concerns.models import Concern, ConcernAiAssessment, ConcernClassificationConfiguration, ConcernMedia, ContentFlag, Department, Designation, LlmDecisionLog, Position
 from apps.concerns.test_helpers import ensure_test_profile, grant_position
 
 
@@ -270,19 +271,56 @@ class ConcernClassificationApiTests(APITestCase):
                 "category": "vehicle",
                 "title": "Blocked driveway",
                 "description": "May sasakyang nakaharang sa driveway.",
-                "latitude": "14.6507",
-                "longitude": "121.1029",
+                "latitude": "14.6515000",
+                "longitude": "121.1207000",
             },
             format="multipart",
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertTrue(response.data["can_submit"])
+        self.assertFalse(response.data["can_submit"])
+        self.assertEqual(
+            response.data["field_errors"]["media"],
+            "The photo contradicts the issue described. Upload a matching photo.",
+        )
         self.assertIsNone(classify.call_args.kwargs["images"])
         self.assertTrue(classify.call_args.kwargs["image_uploaded"])
         verdicts = response.data["photo_verdicts"]
         self.assertEqual([item["state"] for item in verdicts], ["relevant", "unrelated"])
         self.assertEqual(verdicts[0]["message"], "")
+
+    def test_deferred_precheck_photo_has_no_false_unclear_verdict(self):
+        for relationship in ("image_unavailable", "no_useful_image_evidence"):
+            with self.subTest(relationship=relationship):
+                self.assertEqual(
+                    _photo_verdict_payload(
+                        {
+                            "evidence_relationship": relationship,
+                            "image_review_succeeded": None,
+                            "photo_verdicts": [],
+                        },
+                        photo_count=1,
+                        image_errors={},
+                        prepared_indices=[],
+                    ),
+                    [],
+                )
+
+        mixed = _photo_verdict_payload(
+            {
+                "evidence_relationship": "image_unavailable",
+                "image_review_succeeded": None,
+                "photo_verdicts": [],
+            },
+            photo_count=2,
+            image_errors={0: "invalid"},
+            prepared_indices=[],
+        )
+        self.assertEqual(mixed, [{
+            "index": 0,
+            "state": "unsupported",
+            "message": "This photo could not be read. An official will review it.",
+        }])
 
     @patch("apps.concerns.classification_api.validate_concern_media_file", side_effect=lambda uploaded: uploaded)
     @patch("apps.concerns.classification_api.classification_payload")
@@ -480,6 +518,64 @@ class ConcernClassificationApiTests(APITestCase):
             response = self.client.post("/api/concerns/classification/generate-sample/", payload, format="multipart")
             self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    @patch("apps.concerns.classification_api._street_imagery_preview")
+    def test_street_imagery_retry_uses_the_concern_community(self, street_preview):
+        """A retry is a new request and must resolve its own incident community."""
+        community = self.resident.resident_profile.community
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            community=community,
+            title="Blocked drainage",
+            description="Water backs up at the blocked drainage beside our homes.",
+            category=Concern.Category.ENVIRONMENT,
+        )
+        row = LlmDecisionLog.objects.create(
+            run_kind=LlmDecisionLog.RunKind.PRODUCTION,
+            domain=LlmDecisionLog.Domain.CONCERN,
+            concern=concern,
+        )
+        street_preview.return_value = {"status": "checked", "verdict": "area_matches"}
+        self.client.force_authenticate(self.official)
+
+        response = self.client.post(
+            f"/api/concerns/classification/log/{row.pk}/street-view/?community_id={community.pk}",
+            {},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "checked")
+        street_preview.assert_called_once()
+
+    @patch("apps.concerns.classification_api._street_imagery_preview")
+    def test_street_imagery_retry_falls_back_to_an_allowed_community(self, street_preview):
+        """Legacy rows without a community use an active scoped community."""
+        community = self.resident.resident_profile.community
+        concern = Concern.objects.create(
+            reporter=self.official,
+            community=None,
+            title="Legacy location report",
+            description="A legacy report without a stored community needs review.",
+            category=Concern.Category.ENVIRONMENT,
+        )
+        row = LlmDecisionLog.objects.create(
+            run_kind=LlmDecisionLog.RunKind.PRODUCTION,
+            domain=LlmDecisionLog.Domain.CONCERN,
+            concern=concern,
+        )
+        street_preview.return_value = {"status": "disabled"}
+        self.client.force_authenticate(self.official)
+
+        response = self.client.post(
+            f"/api/concerns/classification/log/{row.pk}/street-view/",
+            {},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        street_preview.assert_called_once()
+        self.assertEqual(street_preview.call_args.args[0].community_id, community.pk)
+
 
 class ClassificationServiceStatusTests(APITestCase):
     """The config screen reports whether each service is working, in words."""
@@ -643,6 +739,90 @@ class ConcernAiTextProviderPipelineTests(TestCase):
         self.assertNotEqual(concern.status, Concern.Status.REJECTED)
         self.assertEqual(concern.validation_status, Concern.ValidationStatus.ACCEPTED)
         self.assertEqual(concern.category, Concern.Category.INFRASTRUCTURE)
+
+    @override_settings(OLLAMA_API_KEY="test-key")
+    @patch("apps.concerns.ai.pipeline._street_imagery_check")
+    def test_photo_contradiction_rejects_even_when_area_matches(self, street_check):
+        concern = self._make_concern(latitude="14.6500000", longitude="121.1100000")
+        media = png_upload("contradictory-evidence.png")
+        ConcernMedia.objects.create(
+            concern=concern,
+            file=media,
+            original_filename=media.name,
+            mime_type="image/png",
+            file_size=media.size,
+        )
+        config = ConcernClassificationConfiguration.current(concern.community)
+        config.street_imagery_enabled = True
+        config.street_imagery_categories = [Concern.Category.INFRASTRUCTURE]
+        config.save()
+        street_check.return_value = {
+            "status": "checked",
+            "verdict": "area_matches",
+            "explanation": "The pinned surroundings match.",
+        }
+
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.return_value = gemma_result(
+                category=Concern.Category.INFRASTRUCTURE,
+                evidence_relationship="contradicts_report",
+                image_review_succeeded=True,
+                photo_verdicts=[{
+                    "index": 0,
+                    "relevance": "contradicts_report",
+                    "note": "The photo shows a pothole, not the described flooding.",
+                }],
+                recommended_action="accept_with_privacy_review",
+            )
+            assessment = process_concern_ai(concern.id)
+
+        concern.refresh_from_db()
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.REJECTED)
+        self.assertEqual(concern.rejection_code, "automated_photo_mismatch")
+        self.assertIn("contradicts", concern.validation_summary.lower())
+        self.assertEqual(assessment.recommended_action, "request_more_information")
+        self.assertIn("photo_description_mismatch", [item["reason"] for item in assessment.flag_reasons])
+        street_check.assert_called_once()
+
+    @override_settings(OLLAMA_API_KEY="test-key")
+    @patch("apps.concerns.ai.pipeline._street_imagery_check")
+    def test_inconclusive_street_context_requests_a_wider_photo(self, street_check):
+        """A close-up cannot silently enter the queue when resubmission is configured."""
+        concern = self._make_concern(latitude="14.6500000", longitude="121.1100000")
+        config = ConcernClassificationConfiguration.current(concern.community)
+        config.street_imagery_enabled = True
+        config.street_imagery_categories = [Concern.Category.INFRASTRUCTURE]
+        config.street_imagery_action = ConcernClassificationConfiguration.StreetImageryAction.RESUBMIT
+        config.save()
+        street_check.return_value = {
+            "status": "checked",
+            "verdict": "inconclusive",
+            "explanation": "The submitted photo is a close-up without enough surrounding context.",
+            "captured_date": "unknown",
+        }
+
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.return_value = gemma_result(
+                category=Concern.Category.INFRASTRUCTURE,
+                image_review_succeeded=False,
+            )
+            assessment = process_concern_ai(concern.id)
+
+        concern.refresh_from_db()
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.REJECTED)
+        self.assertEqual(concern.status, Concern.Status.REJECTED)
+        self.assertEqual(
+            concern.rejection_code,
+            "automated_street_imagery_inconclusive_resubmit",
+        )
+        self.assertIn("wider photo", concern.validation_summary.lower())
+        self.assertIn("landmarks", concern.validation_summary.lower())
+        self.assertTrue(assessment.flagged)
+        self.assertIn(
+            "street_imagery_inconclusive",
+            [item["reason"] for item in assessment.flag_reasons],
+        )
+        street_check.assert_called_once()
 
 
 class GemmaParserTests(TestCase):

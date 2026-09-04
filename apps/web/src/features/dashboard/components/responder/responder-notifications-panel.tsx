@@ -2,13 +2,13 @@
 
 import { useMemo } from "react"
 import { useNavigate } from "react-router-dom"
-import { InboxIcon, ShieldAlertIcon } from "lucide-react"
 
 import { type NotificationItem } from "@/features/dashboard/components/notification-context"
 import {
   NotificationsPanel,
   type NotificationsConfig,
 } from "@/features/dashboard/components/notifications/notifications-panel"
+import { notificationIconFor } from "@/features/dashboard/components/notifications/notification-visuals"
 
 /**
  * The responder's notifications — the shared panel with the responder's
@@ -57,12 +57,9 @@ export function ResponderNotificationsPanel({
     () => ({
       heading: "Dispatch updates",
       filters: FILTERS,
-      dark: true,
+      dark: false,
       groupOf: (item) => (categoryOf(item) === "dispatch" ? "dispatch" : null),
-      iconFor: (item) =>
-        categoryOf(item) === "dispatch"
-          ? { Icon: ShieldAlertIcon, chipClass: "bg-white/10 text-sos-bright" }
-          : { Icon: InboxIcon, chipClass: "bg-neutral-100 text-neutral-700" },
+      iconFor: notificationIconFor,
       filterStorageKey: "eboses:responder-notifications-filter",
       landingCopy: "Dispatch, backup and assignment updates will land here.",
       onOpen: (item) => {
@@ -76,11 +73,13 @@ export function ResponderNotificationsPanel({
           return
         }
         if (item.concern_id) {
-          navigate(`/dashboard/reports/${item.concern_public_id || item.concern_id}`)
+          navigate(
+            `/dashboard/reports/${item.concern_public_id || item.concern_id}`
+          )
         }
       },
     }),
-    [navigate],
+    [navigate]
   )
 
   return (

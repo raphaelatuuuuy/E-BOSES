@@ -520,7 +520,6 @@ function DecisionDetailsDialog({
         </section>
 
         <section>
-          <p className="mb-2 text-meta font-semibold uppercase tracking-wide text-neutral-400">{same ? "Report description" : "LLM summary"}</p>
           <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-neutral-800">{same ? submitted : generated}</p>
           {!same && entry.source !== "ocr" ? (
             <div className="mt-4 border-t border-neutral-200 pt-3">
@@ -761,7 +760,6 @@ export function DecisionLogTab() {
                       <DecisionIcon className={cn("mt-0.5 size-5 shrink-0", decisionTone)} strokeWidth={2} aria-hidden />
                       <div className="min-w-0">
                         <p className="text-row font-normal text-brand-navy">{decisionLabel}</p>
-                        <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">LLM summary</p>
                         <p className="mt-0.5 line-clamp-2 text-meta leading-relaxed text-neutral-600">{generatedSummaryOf(entry)}</p>
                       </div>
                     </div>

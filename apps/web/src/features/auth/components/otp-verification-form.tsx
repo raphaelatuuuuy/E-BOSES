@@ -54,7 +54,7 @@ export function OtpVerificationForm({
               type="button"
               onClick={onResend}
               disabled={resendDisabled}
-              className="shrink-0 text-sm font-semibold text-foreground underline underline-offset-2 decoration-1 transition-all hover:text-primary hover:decoration-2 disabled:cursor-not-allowed disabled:no-underline disabled:opacity-60"
+              className="shrink-0 text-sm font-semibold text-foreground transition-all hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
             >
               {resendLabel}
             </button>
@@ -102,7 +102,7 @@ export function OtpVerificationForm({
             <button
               type="button"
               onClick={onBack}
-              className="font-semibold text-foreground underline underline-offset-2 decoration-1 transition-all hover:text-primary hover:decoration-2"
+              className="font-semibold text-foreground transition-all hover:text-primary"
             >
               Go back
             </button>

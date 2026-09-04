@@ -108,16 +108,6 @@ export function LoginForm({
           {errors.password ? <FieldError>{errors.password}</FieldError> : null}
         </Field>
 
-        <div className="flex justify-start mt-1.5">
-          <button
-            type="button"
-            onClick={onForgotPassword}
-            className="text-xs font-medium text-foreground underline underline-offset-2 decoration-1 transition-all hover:text-primary hover:decoration-2"
-          >
-            Forgot my password
-          </button>
-        </div>
-
         <Button
           type="submit"
           disabled={isSubmitting}
@@ -134,14 +124,28 @@ export function LoginForm({
           <FieldError className="justify-center text-center">{submitError}</FieldError>
         ) : null}
 
-        <p className="mt-4 text-center text-sm text-muted-foreground">
-          Don&apos;t have an account?{" "}
+        <div className="mt-3 flex items-center gap-3" aria-hidden="true">
+          <span className="h-px flex-1 bg-border" />
+          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">or</span>
+          <span className="h-px flex-1 bg-border" />
+        </div>
+
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onSignUp}
+          className="mt-3 h-12 w-full rounded-full border-foreground bg-white text-base font-semibold text-foreground transition-colors hover:bg-foreground hover:text-white"
+        >
+          Create an account
+        </Button>
+
+        <p className="mt-4 text-center">
           <button
             type="button"
-            onClick={onSignUp}
-            className="font-semibold text-foreground underline underline-offset-2 decoration-1 transition-all hover:text-primary hover:decoration-2"
+            onClick={onForgotPassword}
+            className="text-sm font-semibold text-foreground transition-all hover:text-primary"
           >
-            Sign up
+            Forgot your password?
           </button>
         </p>
       </form>

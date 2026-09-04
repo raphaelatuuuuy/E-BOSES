@@ -70,6 +70,21 @@ function localDateTime(value: string | null | undefined) {
   return new Date(date.getTime() - offset).toISOString().slice(0, 16)
 }
 
+function announcementDraftFrom(initial: Announcement, isPinned: boolean): AnnouncementDraft {
+  return {
+    title: initial.title,
+    body: initial.body,
+    tag: initial.tag,
+    audience: initial.audience,
+    urgency: initial.urgency,
+    is_pinned: isPinned,
+    is_published: initial.is_published,
+    starts_at: localDateTime(initial.starts_at),
+    expires_at: localDateTime(initial.expires_at),
+    image_alt: initial.image_alt || "",
+  }
+}
+
 const inputClass =
   "w-full rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[15px] font-normal text-neutral-900 outline-none transition-colors focus:border-neutral-500"
 
@@ -367,14 +382,14 @@ export function ContentComposer({
   onSaved: () => void
   onClose: () => void
 }) {
-  const [announcement, setAnnouncement] = useState(emptyAnnouncement)
+  const [announcement, setAnnouncement] = useState<AnnouncementDraft>(() => initial ? announcementDraftFrom(initial, isPinned) : emptyAnnouncement)
   const [announcementImage, setAnnouncementImage] = useState<File | null>(null)
-  const [imagePreview, setImagePreview] = useState<string | null>(null)
-  const [area, setArea] = useState<AreaPickerValue>(emptyArea)
-  const [editingAnnouncement, setEditingAnnouncement] = useState<number | null>(null)
+  const [imagePreview, setImagePreview] = useState<string | null>(() => initial?.image_url ?? null)
+  const [area, setArea] = useState<AreaPickerValue>(() => initial ? areaFromAnnouncement(initial.affected_streets, initial.area_geometry) : emptyArea)
+  const [editingAnnouncement] = useState<number | null>(() => initial?.id ?? null)
   const [busy, setBusy] = useState("")
-  const [schedulePreset, setSchedulePreset] = useState<SchedulePreset>("now")
-  const [customOpen, setCustomOpen] = useState(false)
+  const [schedulePreset, setSchedulePreset] = useState<SchedulePreset>(() => initial && (initial.starts_at || initial.expires_at) ? "custom" : "now")
+  const [customOpen, setCustomOpen] = useState(() => Boolean(initial && (initial.starts_at || initial.expires_at)))
   const [tagMenuOpen, setTagMenuOpen] = useState(false)
   const [audienceOpen, setAudienceOpen] = useState(false)
   const tagMenuRef = useRef<HTMLDivElement>(null)
@@ -382,52 +397,21 @@ export function ContentComposer({
 
   const editing = editingAnnouncement != null
 
-  const initialDraftRef = useRef<AnnouncementDraft | null>(null)
-  const initialAreaRef = useRef<AreaPickerValue>(emptyArea)
-
-  useEffect(() => {
-    if (!initial) return
-    setEditingAnnouncement(initial.id)
-    const draft: AnnouncementDraft = {
-      title: initial.title,
-      body: initial.body,
-      tag: initial.tag,
-      audience: initial.audience,
-      urgency: initial.urgency,
-      is_pinned: isPinned,
-      is_published: initial.is_published,
-      starts_at: localDateTime(initial.starts_at),
-      expires_at: localDateTime(initial.expires_at),
-      image_alt: initial.image_alt || "",
-    }
-    setAnnouncement(draft)
-    initialDraftRef.current = draft
-    setAnnouncementImage(null)
-    setImagePreview(initial.image_url)
-    const nextArea = areaFromAnnouncement(initial.affected_streets, initial.area_geometry)
-    setArea(nextArea)
-    initialAreaRef.current = nextArea
-    if (initial.starts_at || initial.expires_at) {
-      setSchedulePreset("custom")
-      setCustomOpen(true)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  const initialDraft = useMemo(() => initial ? announcementDraftFrom(initial, isPinned) : null, [initial, isPinned])
+  const initialArea = useMemo(() => initial ? areaFromAnnouncement(initial.affected_streets, initial.area_geometry) : emptyArea, [initial])
 
   const dirty = useMemo(() => {
     if (!editing) return true
     return (
       announcementImage != null ||
-      JSON.stringify(announcement) !== JSON.stringify(initialDraftRef.current) ||
-      JSON.stringify(area) !== JSON.stringify(initialAreaRef.current)
+      announcement.is_published !== published ||
+      announcement.is_pinned !== isPinned ||
+      JSON.stringify(announcement) !== JSON.stringify(initialDraft) ||
+      JSON.stringify(area) !== JSON.stringify(initialArea)
     )
-  }, [announcement, area, announcementImage, editing])
+  }, [announcement, area, announcementImage, editing, initialArea, initialDraft, isPinned, published])
 
   const hasContent = announcement.title.trim() !== "" && announcement.body.trim() !== ""
-
-  useEffect(() => {
-    setAnnouncement((v) => ({ ...v, is_published: published, is_pinned: isPinned }))
-  }, [published, isPinned])
 
   useEffect(() => {
     if (!tagMenuOpen && !audienceOpen) return
@@ -460,6 +444,8 @@ export function ContentComposer({
     try {
       const payload = {
         ...announcement,
+        is_published: published,
+        is_pinned: isPinned,
         starts_at: announcement.starts_at ? new Date(announcement.starts_at).toISOString() : null,
         expires_at: announcement.expires_at ? new Date(announcement.expires_at).toISOString() : null,
         affected_streets: area.streets,

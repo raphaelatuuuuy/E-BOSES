@@ -8,8 +8,13 @@ import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import { commentPlaceLabel } from "@/features/dashboard/components/home/home-style"
 import { renderCommentBody } from "@/features/dashboard/components/comment-mentions"
 import type { UnifiedComment } from "./comment-types"
+import {
+  AuthenticatedMediaImage,
+  AuthenticatedMediaVideo,
+} from "@/features/dashboard/components/authenticated-media"
 
-const AVATAR = "!size-8 !text-[13px] leading-none !bg-slate-soft !text-navy-muted"
+const AVATAR =
+  "!size-8 !text-[13px] leading-none !bg-slate-soft !text-navy-muted"
 
 /**
  * The reply connector runs *avatar to avatar*: a trunk descending from the
@@ -48,19 +53,28 @@ export function CommentAvatar({
   return (
     <span className="relative inline-flex shrink-0">
       {comment.author.user ? (
-        <UserAvatar user={comment.author.user} size="sm" className={cn(AVATAR, className)} />
+        <UserAvatar
+          user={comment.author.user}
+          size="sm"
+          className={cn(AVATAR, className)}
+        />
       ) : (
         <span
           className={cn(
             "inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[13px] font-semibold text-navy-muted",
-            className,
+            className
           )}
         >
-          {(comment.author.label[0] || "?").toUpperCase()}
+          {(comment.author.label[0] || "U").toUpperCase()}
         </span>
       )}
       {badge ? (
-        <span className={cn("absolute -bottom-0.5 -right-0.5 flex size-3 items-center justify-center rounded-full ring-1 ring-white", badge)}>
+        <span
+          className={cn(
+            "absolute -right-0.5 -bottom-0.5 flex size-3 items-center justify-center rounded-full ring-1 ring-white",
+            badge
+          )}
+        >
           <ShieldUserIcon className="size-1.5 text-white" strokeWidth={2.5} />
         </span>
       ) : null}
@@ -83,11 +97,15 @@ export function CommentMeta({
   comment: UnifiedComment
   extra?: ReactNode
 }) {
-  const place = comment.author.user ? commentPlaceLabel(comment.author.user) : null
+  const place = comment.author.user
+    ? commentPlaceLabel(comment.author.user)
+    : null
   return (
     <div className="flex items-center justify-between gap-x-2 text-[13px] leading-snug text-neutral-400">
       <div className="flex min-w-0 flex-wrap items-center gap-x-1.5">
-        <span className="font-semibold text-neutral-900">{comment.author.label}</span>
+        <span className="font-semibold text-neutral-900">
+          {comment.author.label}
+        </span>
         {comment.author.isOfficial ? <OfficialBadge /> : null}
         <span>· {timeAgo(comment.createdAt)}</span>
         {place ? <span>· {place}</span> : null}
@@ -109,9 +127,10 @@ export function CommentBody({ comment }: { comment: UnifiedComment }) {
 
   return (
     <>
-      <p className="m-0 whitespace-pre-wrap break-words text-[15px] leading-[1.35] text-neutral-800">
+      <p className="m-0 text-[15px] leading-[1.35] break-words whitespace-pre-wrap text-neutral-800">
         {renderCommentBody(comment.body)}
       </p>
+      <CommentAttachment attachment={comment.attachment} />
       {canShowOriginal ? (
         <button
           type="button"
@@ -123,13 +142,46 @@ export function CommentBody({ comment }: { comment: UnifiedComment }) {
       ) : null}
       {canShowOriginal && showOriginal ? (
         <div className="mt-1.5 rounded-lg bg-neutral-50 px-2.5 py-1.5 ring-1 ring-neutral-100">
-          <p className="m-0 whitespace-pre-wrap break-words text-[14px] leading-snug text-neutral-600">
+          <p className="m-0 text-[14px] leading-snug break-words whitespace-pre-wrap text-neutral-600">
             {renderCommentBody(comment.originalBody)}
           </p>
         </div>
       ) : null}
     </>
   )
+}
+
+export function CommentAttachment({
+  attachment,
+}: {
+  attachment: UnifiedComment["attachment"]
+}) {
+  return attachment ? (
+    <div className="mt-2 max-w-sm overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50">
+      {attachment.kind === "video" ? (
+        <AuthenticatedMediaVideo
+          src={attachment.raw_url}
+          className="max-h-72 w-full"
+        />
+      ) : (
+        <AuthenticatedMediaImage
+          src={attachment.preview_url}
+          alt={attachment.original_filename || "Comment attachment"}
+          className="max-h-72 w-full object-cover"
+        />
+      )}
+      <div className="flex flex-wrap gap-x-2 px-2.5 py-1.5 text-[11px] text-neutral-500">
+        <span>
+          {attachment.analysis_status === "complete"
+            ? "Media checked"
+            : "Media needs review"}
+        </span>
+        {attachment.street_imagery_status === "checked" ? (
+          <span>Location compared with street imagery</span>
+        ) : null}
+      </div>
+    </div>
+  ) : null
 }
 
 export function CommentRow({
@@ -154,13 +206,17 @@ export function CommentRow({
     <div className={cn("flex items-stretch gap-2.5", className)}>
       <div className="flex w-8 shrink-0 flex-col items-center">
         <CommentAvatar comment={comment} />
-        {trunk ? <span aria-hidden className="mt-1.5 w-px flex-1 bg-neutral-200" /> : null}
+        {trunk ? (
+          <span aria-hidden className="mt-1.5 w-px flex-1 bg-neutral-200" />
+        ) : null}
       </div>
       <div className="min-w-0 flex-1">
         <CommentMeta comment={comment} extra={meta} />
         {children ?? <CommentBody comment={comment} />}
         {actions ? (
-          <div className="mt-2 flex flex-wrap items-center gap-3 leading-none">{actions}</div>
+          <div className="mt-2 flex flex-wrap items-center gap-3 leading-none">
+            {actions}
+          </div>
         ) : null}
       </div>
       {trailing ? <div className="-mt-0.5 shrink-0">{trailing}</div> : null}

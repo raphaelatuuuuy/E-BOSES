@@ -4,8 +4,13 @@ import type leaflet from "leaflet"
 export type MapTip = {
   image?: string | null
   title?: string | null
+  /** Compact facts line, such as category and assessed severity. */
+  meta?: string | null
   excerpt?: string | null
-  centered?: boolean
+  /** Optional source label, e.g. "Report description" or "Report note". */
+  excerptLabel?: string | null
+  /** ISO timestamp shown as a compact, exact submitted date/time. */
+  date?: string | null
 }
 
 function escapeHtml(value: string) {
@@ -19,8 +24,35 @@ function escapeHtml(value: string) {
 /** Empty when the tip carries nothing, so callers can skip binding entirely. */
 export function mapTipKey(tip: MapTip | null | undefined) {
   if (!tip) return ""
-  const parts = [tip.image, tip.title, tip.excerpt].map((part) => part?.trim() ?? "")
+  const parts = [
+    tip.image,
+    tip.title,
+    tip.meta,
+    tip.excerpt,
+    tip.excerptLabel,
+    tip.date,
+  ].map((part) => part?.trim() ?? "")
   return parts.some(Boolean) ? parts.join("|") : ""
+}
+
+function formatTipDate(value: string) {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return new Intl.DateTimeFormat("en-PH", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed)
+}
+
+function normaliseCopy(value: string) {
+  return value
+    .replace(/[“”‘’"']/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
 }
 
 /** The one card markup — Street View's mini map and every hover map share it. */
@@ -31,13 +63,24 @@ export function mapCardHtml(tip: MapTip) {
   const title = tip.title?.trim()
     ? `<p class="eboses-sv-pop__title">${escapeHtml(tip.title.trim())}</p>`
     : ""
-  const excerpt = tip.excerpt?.trim()
-    ? `<p class="eboses-sv-pop__desc">${escapeHtml(tip.excerpt.trim())}</p>`
+  const meta = tip.meta?.trim()
+    ? `<p class="eboses-sv-pop__meta">${escapeHtml(tip.meta.trim())}</p>`
     : ""
-  const bodyClass = tip.centered
-    ? "eboses-sv-pop__body eboses-sv-pop__body--centered"
-    : "eboses-sv-pop__body"
-  return `<div class="${bodyClass}">${image}${title}${excerpt}</div>`
+  const date = tip.date?.trim()
+    ? `<p class="eboses-sv-pop__date">${escapeHtml(formatTipDate(tip.date.trim()))}</p>`
+    : ""
+  const sameAsTitle =
+    Boolean(tip.title?.trim() && tip.excerpt?.trim()) &&
+    normaliseCopy(tip.title!.trim()) === normaliseCopy(tip.excerpt!.trim())
+  const excerptLabel =
+    !sameAsTitle && tip.excerptLabel?.trim()
+      ? `<p class="eboses-sv-pop__label">${escapeHtml(tip.excerptLabel.trim())}</p>`
+      : ""
+  const excerpt =
+    !sameAsTitle && tip.excerpt?.trim()
+      ? `<p class="eboses-sv-pop__desc">${escapeHtml(tip.excerpt.trim())}</p>`
+      : ""
+  return `<div class="eboses-sv-pop__body" style="text-align:left">${image}${title}${meta}${date}${excerptLabel}${excerpt}</div>`
 }
 
 function hoverCard(L: typeof leaflet, pinSize: number) {
@@ -56,14 +99,18 @@ function hoverCard(L: typeof leaflet, pinSize: number) {
 export function makeHoverCard(
   L: typeof leaflet,
   tip: MapTip | null | undefined,
-  pinSize: number,
+  pinSize: number
 ) {
   if (!tip || !mapTipKey(tip)) return null
   return hoverCard(L, pinSize).setContent(mapCardHtml(tip))
 }
 
 /** Brings the hovered pin to the middle of the view, then opens its card. */
-export function openHoverCard(map: leaflet.Map, card: leaflet.Popup, marker: leaflet.Marker) {
+export function openHoverCard(
+  map: leaflet.Map,
+  card: leaflet.Popup,
+  marker: leaflet.Marker
+) {
   const at = marker.getLatLng()
   card.setLatLng(at)
   map.panTo(at, { animate: true, duration: 0.25 })
@@ -80,7 +127,7 @@ export function bindHoverCard(
   map: leaflet.Map,
   marker: leaflet.Marker,
   tip: MapTip | null | undefined,
-  pinSize: number,
+  pinSize: number
 ) {
   marker.off("mouseover")
   const card = makeHoverCard(L, tip, pinSize)

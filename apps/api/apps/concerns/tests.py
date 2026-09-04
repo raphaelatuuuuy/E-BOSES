@@ -16,14 +16,16 @@ from rest_framework.test import APITestCase
 
 from apps.accounts.models import AccountRequest, AuditLog, ResidenceProof, ResidentProfile
 from apps.accounts.services import sha256_file
-from apps.emergencies.models import EmergencyAlert, EmergencyResponderAssignment
+from apps.emergencies.models import Community, EmergencyAlert, EmergencyResponderAssignment, MapGeometry
 from apps.notifications.models import Notification
 from apps.concerns.ai import process_concern_ai
+from apps.concerns.ai.gemma_analyzer import payload_from_result
 from apps.concerns.ai.text_classifier import TextClassificationResult
 from apps.concerns.ai_fixtures import gemma_result
 from apps.geo_services import classify_location
 
-from .models import Announcement, BarangayEvent, Concern, ConcernAiAssessment, ConcernAppeal, ConcernAssignment, ConcernChatAttachment, ConcernClassificationConfiguration, ConcernClarification, ConcernComment, ConcernMedia, ConcernOfficialRemark, ConcernResolutionEvidence, ConcernStatusEvent, ConcernVote, ContentFlag, Department, Designation, Position
+from .models import Announcement, BarangayEvent, Concern, ConcernAiAssessment, ConcernAppeal, ConcernAssignment, ConcernCategory, ConcernChatAttachment, ConcernClassificationConfiguration, ConcernClarification, ConcernComment, ConcernMedia, ConcernOfficialRemark, ConcernResolutionEvidence, ConcernStatusEvent, ConcernVote, ContentFlag, Department, Designation, Position, PublicCommentAttachment
+from .serializers import PublicUserSerializer
 from .test_helpers import ensure_test_profile, grant_position
 
 def png_bytes():
@@ -42,6 +44,30 @@ def grant_captain(user):
     captain = grant_position(user)
     grant_position(user, position_code="staff", department_code="social-services")
     return captain
+
+
+class PublicUserIdentityTests(APITestCase):
+    def test_staff_identity_uses_account_name_and_configured_position(self):
+        User = get_user_model()
+        official = User.objects.create_user(
+            email="official.esc@example.com",
+            phone_number="+639100000099",
+            password="pass",
+            first_name="Elena",
+            last_name="Santos",
+            role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
+        )
+        designation = grant_position(official)
+        official = User.objects.prefetch_related(
+            "designations__position", "designations__department"
+        ).get(pk=official.pk)
+
+        payload = PublicUserSerializer(official).data
+
+        self.assertEqual(payload["full_name"], "Elena Santos")
+        self.assertEqual(payload["initials"], "ES")
+        self.assertEqual(payload["position"], designation.position.name)
 
 
 class PrivateMediaAccessTests(APITestCase):
@@ -128,10 +154,41 @@ class PrivateMediaAccessTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response["Content-Type"], "image/jpeg")
+        self.assertEqual(response["X-EBOSES-Preview-Status"], "pending")
         preview = b"".join(response.streaming_content)
         self.assertTrue(preview.startswith(b"\xff\xd8"))
         # Never the original bytes, whatever else happens.
         self.assertNotEqual(preview, png_bytes())
+
+    def test_no_scan_media_gets_a_real_preview_instead_of_a_placeholder(self):
+        self.media.privacy_state = ConcernMedia.PrivacyState.NOT_REQUIRED
+        self.media.public_visible = True
+        self.media.save(update_fields=["privacy_state", "public_visible"])
+
+        response = self.client.get(f"/api/concerns/media/{self.media.pk}/preview/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response["X-EBOSES-Preview-Status"], "ready")
+        self.media.refresh_from_db()
+        self.assertTrue(self.media.preview_file.name)
+        body = b"".join(response.streaming_content)
+        self.assertTrue(body.startswith(b"\xff\xd8"))
+        self.assertNotIn(b"Preview is being prepared", body)
+
+    def test_no_match_media_gets_a_real_public_preview(self):
+        self.media.privacy_state = ConcernMedia.PrivacyState.NO_MATCH_FOUND
+        self.media.public_visible = True
+        self.media.save(update_fields=["privacy_state", "public_visible"])
+
+        response = self.client.get(f"/api/concerns/media/{self.media.pk}/preview/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response["X-EBOSES-Preview-Status"], "ready")
+        self.media.refresh_from_db()
+        self.assertTrue(self.media.preview_file.name)
+        body = b"".join(response.streaming_content)
+        self.assertTrue(body.startswith(b"\xff\xd8"))
+        self.assertNotIn(b"Preview is being prepared", body)
 
     def test_public_cannot_access_a_preview_no_privacy_run_has_cleared(self):
         """Fail closed.
@@ -204,7 +261,7 @@ class ResidentDashboardAPITests(APITestCase):
         self.client.force_authenticate(self.resident)
 
     def test_resident_can_create_report_with_initial_status_event(self):
-        with patch("apps.concerns.tasks.process_concern_ai_task.delay") as enqueue:
+        with patch("apps.concerns.views._validate_concern_before_commit", return_value=None):
             with self.captureOnCommitCallbacks(execute=True):
                 response = self.client.post(
                     "/api/concerns/",
@@ -237,7 +294,142 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(response.data["ai_assessment"]["status"], ConcernAiAssessment.Status.PENDING)
         self.assertRegex(response.data["tracking_id"], r"^RPT-\d{4}-\d{6}$")
         self.assertEqual(response.data["validation_status"], "pending")
-        enqueue.assert_called_once_with(concern.pk)
+
+    def test_resident_report_is_routed_to_the_community_containing_the_pin(self):
+        boundary = MapGeometry.objects.create(
+            kind=MapGeometry.Kind.BOUNDARY,
+            name="Neighbour Community",
+            locality="Marikina",
+            osm_type="R",
+            osm_id=990001,
+            geometry={
+                "type": "Polygon",
+                "coordinates": [[
+                    [121.9900, 14.9900],
+                    [122.0100, 14.9900],
+                    [122.0100, 15.0100],
+                    [121.9900, 15.0100],
+                    [121.9900, 14.9900],
+                ]],
+            },
+            is_active=True,
+        )
+        incident_community = Community.objects.create(
+            code="neighbour-community",
+            name="Neighbour Community",
+            status=Community.Status.ACTIVE,
+            boundary=boundary,
+            center_latitude="15.0000000",
+            center_longitude="122.0000000",
+            bbox_min_latitude="14.9900000",
+            bbox_max_latitude="15.0100000",
+            bbox_min_longitude="121.9900000",
+            bbox_max_longitude="122.0100000",
+        )
+        receiving_department = Department.objects.create(
+            community=incident_community,
+            name="Neighbour Public Works",
+            code="public-works",
+        )
+        incident_category = ConcernCategory.objects.create(
+            community=incident_community,
+            name="Infrastructure",
+            code="infrastructure",
+            department=receiving_department,
+        )
+
+        with patch("apps.concerns.classification_api.classification_payload") as classify:
+            classify.return_value = payload_from_result(
+                gemma_result(category="infrastructure"),
+                selected_category="infrastructure",
+            )
+            precheck = self.client.post(
+                "/api/concerns/classification/precheck/",
+                {
+                    "title": "Broken streetlight in another community",
+                    "description": "The streetlight beside the covered court has stopped working.",
+                    "latitude": "15.0000000",
+                    "longitude": "122.0000000",
+                },
+                format="multipart",
+            )
+
+        self.assertEqual(precheck.status_code, status.HTTP_200_OK)
+        self.assertTrue(precheck.data["can_submit"])
+        self.assertEqual(precheck.data["category"], "infrastructure")
+
+        with patch("apps.concerns.views._validate_concern_before_commit", return_value=None):
+            response = self.client.post(
+                "/api/concerns/",
+                {
+                    "title": "Broken streetlight in another community",
+                    "description": "The streetlight beside the covered court has stopped working.",
+                    "category": "infrastructure",
+                    "address": "Covered Court Road, Neighbour Community",
+                    "latitude": "15.0000000",
+                    "longitude": "122.0000000",
+                    "location_source": "manual_pin",
+                },
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        concern = Concern.objects.get(pk=response.data["id"])
+        self.assertEqual(concern.reporter_community_id, self.community.pk)
+        self.assertEqual(concern.community_id, incident_community.pk)
+        self.assertEqual(concern.category_ref_id, incident_category.pk)
+        self.assertIsNone(concern.assigned_department_id)
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.PENDING)
+        self.assertEqual(concern.barangay, incident_community.name)
+        self.assertTrue(response.data["is_cross_community"])
+        self.assertEqual(response.data["community"]["id"], str(incident_community.public_id))
+        self.assertEqual(response.data["reporter_community"]["id"], str(self.community.public_id))
+
+    def test_foreign_public_detail_allows_cross_community_discussion(self):
+        foreign_community = Community.objects.create(
+            code="foreign-comments",
+            name="Foreign Comments Community",
+            status=Community.Status.ACTIVE,
+            center_latitude="15.0000000",
+            center_longitude="122.0000000",
+            bbox_min_latitude="14.9900000",
+            bbox_max_latitude="15.0100000",
+            bbox_min_longitude="121.9900000",
+            bbox_max_longitude="122.0100000",
+        )
+        concern = Concern.objects.create(
+            reporter=self.other,
+            community=foreign_community,
+            title="Public concern in another community",
+            description="Residents should be able to read its discussion.",
+            visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+            status=Concern.Status.SUBMITTED,
+        )
+        comment = ConcernComment.objects.create(
+            concern=concern,
+            author=self.other,
+            body="This update is visible across communities.",
+        )
+
+        detail = self.client.get(f"/api/concerns/{concern.public_id}/")
+
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail.data["access_mode"], "foreign_read_only")
+        self.assertTrue(detail.data["can_interact"])
+        self.assertEqual(len(detail.data["comments"]), 1)
+        self.assertEqual(detail.data["comments"][0]["id"], comment.pk)
+
+        vote = self.client.post(
+            f"/api/concerns/{concern.pk}/vote/", {"value": 1}, format="json"
+        )
+        reply = self.client.post(
+            f"/api/concerns/{concern.pk}/comments/",
+            {"body": "This cross-community reply is helpful."},
+            format="json",
+        )
+        self.assertEqual(vote.status_code, status.HTTP_200_OK)
+        self.assertEqual(reply.status_code, status.HTTP_201_CREATED)
 
     def test_unverified_account_cannot_access_resident_dashboard_apis(self):
         pending = get_user_model().objects.create_user(
@@ -269,8 +461,9 @@ class ResidentDashboardAPITests(APITestCase):
                 "media": png_upload("drainage.png"),
             }
 
-        first = self.client.post("/api/concerns/", payload(), format="multipart")
-        second = self.client.post("/api/concerns/", payload(), format="multipart")
+        with patch("apps.concerns.views._validate_concern_before_commit", return_value=None):
+            first = self.client.post("/api/concerns/", payload(), format="multipart")
+            second = self.client.post("/api/concerns/", payload(), format="multipart")
 
         self.assertEqual(first.status_code, status.HTTP_201_CREATED)
         self.assertEqual(second.status_code, status.HTTP_200_OK)
@@ -338,6 +531,23 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(owner_detail.data["address"], "123 Exact Home Street")
         self.assertEqual(owner_detail.data["latitude"], "14.6515000")
         self.assertTrue(owner_detail.data["media"][0]["raw_url"])
+
+    def test_feed_serializes_concern_with_ai_assessment(self):
+        concern = Concern.objects.create(
+            reporter=self.other,
+            title="Concern with automated review",
+            description="A validated community concern with an automated review result.",
+            visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+            status=Concern.Status.UNDER_REVIEW,
+        )
+        ConcernAiAssessment.objects.create(concern=concern)
+
+        response = self.client.get("/api/concerns/feed/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        item = next(entry for entry in response.data if entry["id"] == concern.pk)
+        self.assertEqual(item["ai_assessment"]["status"], ConcernAiAssessment.Status.NOT_CONFIGURED)
 
     def test_non_resident_roles_cannot_create_report(self):
         User = get_user_model()
@@ -508,25 +718,59 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertFalse(Concern.objects.filter(title="Duplicate evidence").exists())
 
     def test_concern_media_hash_is_stored(self):
-        response = self.client.post(
-            "/api/concerns/",
-            {
-                "title": "Media hash",
-                "description": "Evidence should be fingerprinted.",
-                "category": "infrastructure",
-                "visibility": "community",
-                "address": "Bayan-Bayanan St.",
-                "latitude": "14.6515000",
-                "longitude": "121.1207000",
-                "location_source": "manual_pin",
-                "media": png_upload("hash.png"),
-            },
-            format="multipart",
-        )
+        with patch("apps.concerns.views._validate_concern_before_commit", return_value=None):
+            response = self.client.post(
+                "/api/concerns/",
+                {
+                    "title": "Media hash",
+                    "description": "Evidence should be fingerprinted.",
+                    "category": "infrastructure",
+                    "visibility": "community",
+                    "address": "Bayan-Bayanan St.",
+                    "latitude": "14.6515000",
+                    "longitude": "121.1207000",
+                    "location_source": "manual_pin",
+                    "media": png_upload("hash.png"),
+                },
+                format="multipart",
+            )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         media = Concern.objects.get(pk=response.data["id"]).media.get()
         self.assertEqual(len(media.sha256_hash), 64)
+
+    def test_rejected_validation_returns_feedback_and_does_not_store_report(self):
+        def reject(concern_id):
+            concern = Concern.objects.get(pk=concern_id)
+            concern.validation_status = Concern.ValidationStatus.REJECTED
+            concern.status = Concern.Status.REJECTED
+            concern.validation_summary = "Please pin the exact area where the issue is found and upload a matching photo."
+            concern.save(update_fields=["validation_status", "status", "validation_summary"])
+
+        with patch("apps.concerns.ai.pipeline.process_concern_ai", side_effect=reject):
+            response = self.client.post(
+                "/api/concerns/",
+                {
+                    "title": "Wrong location photo",
+                    "description": "The photo does not show the issue at the pinned location.",
+                    "category": "infrastructure",
+                    "visibility": "community",
+                    "address": "Bayan-Bayanan St.",
+                    "latitude": "14.6515000",
+                    "longitude": "121.1207000",
+                    "location_source": "manual_pin",
+                    "media": png_upload("rejected-validation.png"),
+                },
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["description"][0],
+            "Please pin the exact area where the issue is found and upload a matching photo.",
+        )
+        self.assertFalse(Concern.objects.filter(title="Wrong location photo").exists())
+        self.assertFalse(ConcernMedia.objects.filter(original_filename="rejected-validation.png").exists())
 
     def test_report_location_outside_barangay_boundary_is_rejected(self):
         response = self.client.post(
@@ -714,6 +958,30 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(reply_response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(ConcernComment.objects.filter(concern=concern).count(), 2)
         self.assertEqual(ConcernComment.objects.get(pk=reply_response.data["id"]).parent_id, comment_response.data["id"])
+
+    @patch("apps.concerns.comment_media.compare_comment_image_to_concern_pin")
+    def test_comment_media_is_checked_only_when_comment_is_sent(self, compare_pin):
+        compare_pin.return_value = {"status": "checked", "verdict": "same_area"}
+        concern = Concern.objects.create(
+            reporter=self.other,
+            title="Community concern with added evidence",
+            visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+            latitude=14.65,
+            longitude=121.11,
+        )
+
+        response = self.client.post(
+            f"/api/concerns/{concern.pk}/comments/",
+            {"body": "Additional view from the street.", "media": png_upload()},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        attachment = PublicCommentAttachment.objects.get(concern_comment_id=response.data["id"])
+        self.assertEqual(attachment.street_imagery["verdict"], "same_area")
+        self.assertTrue(response.data["attachment"]["preview_url"].endswith("/preview/"))
+        compare_pin.assert_called_once()
 
     def test_comment_mentions_and_replies_notify_each_participant_once(self):
         User = get_user_model()

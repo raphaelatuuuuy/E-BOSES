@@ -24,12 +24,16 @@ def _coerce_confirmed_ongoing(value):
     return None
 
 
-def _emergency_type_label(matched_emergency_type: str) -> str:
+def _emergency_type_label(matched_emergency_type: str, community=None) -> str:
     from apps.emergencies.models import EmergencyCategory
 
     if not matched_emergency_type:
         return ""
-    category = EmergencyCategory.objects.filter(code=matched_emergency_type, is_active=True).first()
+    category = EmergencyCategory.objects.filter(
+        code=matched_emergency_type,
+        community=community,
+        is_active=True,
+    ).first()
     if category:
         return category.label
     return matched_emergency_type.replace("_", " ").title()
@@ -127,7 +131,13 @@ class EmergencySimulationView(APIView):
             user=request.user,
         )
 
-        config = ConcernClassificationConfiguration.current()
+        incident_community = location_resolution.community
+        if not incident_community:
+            return Response(
+                {"detail": "The selected location is outside active communities."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        config = ConcernClassificationConfiguration.current(incident_community)
         uploaded = _first_uploaded(request)
         image, image_error = _prepared_image_from_upload(uploaded)
         result = classification_payload(
@@ -171,6 +181,7 @@ class EmergencySimulationView(APIView):
                     image_uploaded=bool(uploaded),
                     title=title,
                     description=description,
+                    community=incident_community,
                 ),
                 "location": location_resolution.payload(),
             }
@@ -187,6 +198,7 @@ class EmergencySimulationView(APIView):
                     image_uploaded=bool(uploaded),
                     title=title,
                     description=description,
+                    community=incident_community,
                 ),
                 "location": location_resolution.payload(),
             }

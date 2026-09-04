@@ -129,7 +129,7 @@ def ensure_emergency_media_preview(media):
     protected = None
     try:
         from PIL import Image, ImageOps
-        from apps.concerns.ai.privacy.masks import blur_regions, parse_regions
+        from apps.concerns.ai.privacy.masks import blur_regions, parse_regions, privacy_sensitive_regions
         from apps.concerns.ai.privacy.sam3_client import run_segmentation
 
         suffix = os.path.splitext(getattr(media, "original_filename", "") or "")[1] or ".jpg"
@@ -137,7 +137,7 @@ def ensure_emergency_media_preview(media):
             temporary.write(raw)
             temp_path = temporary.name
         try:
-            payload = run_segmentation(temp_path, ["face", "person", "license plate"])
+            payload = run_segmentation(temp_path, ["face", "license plate"])
         finally:
             try:
                 os.unlink(temp_path)
@@ -147,11 +147,10 @@ def ensure_emergency_media_preview(media):
             image = ImageOps.exif_transpose(source).convert("RGB")
             image.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
             image.load()
-        regions = parse_regions(payload, image_width=image.width, image_height=image.height)
-        if regions:
-            output = BytesIO()
-            blur_regions(image, regions).save(output, format="JPEG", quality=84, optimize=True)
-            protected = output.getvalue()
+        regions = privacy_sensitive_regions(parse_regions(payload, image_width=image.width, image_height=image.height))
+        output = BytesIO()
+        blur_regions(image, regions).save(output, format="JPEG", quality=84, optimize=True)
+        protected = output.getvalue()
     except Exception:
         protected = None
     if protected is None:
@@ -174,7 +173,7 @@ def user_can_access_emergency_media(user, media):
         return True
     if user.status != user.Status.VERIFIED:
         return False
-    if user.is_staff or user.role == user.Role.BARANGAY_OFFICIAL:
+    if user.is_superuser or user.role == user.Role.BARANGAY_OFFICIAL:
         return True
     return media.alert.reporter_id == user.pk or media.alert.assignments.filter(
         responder=user,

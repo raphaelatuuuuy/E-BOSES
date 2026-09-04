@@ -5,6 +5,7 @@ from difflib import SequenceMatcher
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Count, Q
+from django.db.models.functions import TruncDate
 from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -19,7 +20,7 @@ from apps.concerns.ai.classification import (
     BASE_TEXT_MODEL,
     classification_payload,
 )
-from apps.concerns.ai.duplicate_detector import report_fingerprints
+from apps.concerns.ai.duplicate_detector import find_duplicate_concern, report_fingerprints
 from apps.concerns.ai.gemma_analyzer import (
     INTEGRITY_FLAGGED_VERDICTS,
     compare_photo_duplicates,
@@ -76,7 +77,10 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "updated_by", "updated_at")
 
     def _categories_payload(self, obj):
-        categories = list(ConcernCategory.objects.filter(is_active=True).order_by("name"))
+        category_queryset = ConcernCategory.objects.filter(is_active=True)
+        if obj.community_id:
+            category_queryset = category_queryset.filter(community_id=obj.community_id)
+        categories = list(category_queryset.order_by("name"))
         if not categories:
             labels = dict(Concern.Category.choices)
             return [
@@ -115,9 +119,10 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
             # that have created real categories use those codes, not the legacy
             # fixed enum, so validating against the enum alone silently dropped
             # every real category's enabled/disabled choice on save.
-            real_codes = set(
-                ConcernCategory.objects.filter(is_active=True).values_list("code", flat=True)
-            )
+            category_queryset = ConcernCategory.objects.filter(is_active=True)
+            if instance.community_id:
+                category_queryset = category_queryset.filter(community_id=instance.community_id)
+            real_codes = set(category_queryset.values_list("code", flat=True))
             valid_codes = real_codes or set(Concern.Category.values)
             enabled = [
                 str(item.get("key"))
@@ -236,10 +241,20 @@ class OfficialClassificationView(APIView):
     parser_classes = [JSONParser]
 
     def get(self, request):
-        return Response(ClassificationConfigurationSerializer(ConcernClassificationConfiguration.current_fresh()).data)
+        from apps.community_scope import selected_community
+
+        community = selected_community(request.user, request.query_params.get("community_id"))
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
+        return Response(ClassificationConfigurationSerializer(ConcernClassificationConfiguration.current_fresh(community)).data)
 
     def patch(self, request):
-        config = ConcernClassificationConfiguration.current_fresh()
+        from apps.community_scope import selected_community
+
+        community = selected_community(request.user, request.data.get("community_id"))
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
+        config = ConcernClassificationConfiguration.current_fresh(community)
         serializer = ClassificationConfigurationSerializer(config, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save(updated_by=request.user)
@@ -252,11 +267,21 @@ class OfficialClassificationStatsView(APIView):
     required_capability = CONFIGURE_CLASSIFICATION
 
     def get(self, request):
+        from apps.community_scope import selected_community
+
+        community = selected_community(request.user, request.query_params.get("community_id"))
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
         since = timezone.now() - timedelta(days=30)
-        assessments = ConcernAiAssessment.objects.filter(updated_at__gte=since)
+        assessments = ConcernAiAssessment.objects.filter(concern__community=community, updated_at__gte=since)
         completed = assessments.filter(status=ConcernAiAssessment.Status.COMPLETED)
         flagged = completed.filter(category_match=False).count() + assessments.exclude(status=ConcernAiAssessment.Status.COMPLETED).count()
-        daily = list(assessments.extra(select={"day": "DATE(updated_at)"}).values("day").annotate(total=Count("id")).order_by("day"))
+        daily = list(
+            assessments.annotate(day=TruncDate("updated_at"))
+            .values("day")
+            .annotate(total=Count("id"))
+            .order_by("day")
+        )
         return Response({
             "active_categories": len(Concern.Category.choices),
             "processed": assessments.count(),
@@ -275,11 +300,17 @@ class OfficialClassificationActivityView(APIView):
     required_capability = CONFIGURE_CLASSIFICATION
 
     def get(self, request):
+        from apps.community_scope import selected_community
+
+        community = selected_community(request.user, request.query_params.get("community_id"))
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
         days = int(request.query_params.get("days", 30))
         category = request.query_params.get("category", "")
         since = timezone.now() - timedelta(days=days)
 
         concern_filter = {
+            "community": community,
             "created_at__gte": since,
             "validation_status__in": [
                 Concern.ValidationStatus.ACCEPTED,
@@ -321,7 +352,7 @@ class OfficialClassificationActivityView(APIView):
             })
 
         since_stats = timezone.now() - timedelta(days=days)
-        base = Concern.objects.filter(created_at__gte=since_stats)
+        base = Concern.objects.filter(community=community, created_at__gte=since_stats)
         if category:
             base = base.filter(category=category)
 
@@ -345,10 +376,15 @@ class OfficialClassificationResetView(APIView):
     required_capability = CONFIGURE_CLASSIFICATION
 
     def post(self, request):
-        ConcernClassificationConfiguration.objects.filter(pk=1).delete()
+        from apps.community_scope import selected_community
+
+        community = selected_community(request.user, request.data.get("community_id"))
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
+        ConcernClassificationConfiguration.objects.filter(community=community).delete()
         # Fresh fetch: current() may hand back the just-deleted cached row,
         # whose update_fields save would affect zero rows.
-        config = ConcernClassificationConfiguration.current_fresh()
+        config = ConcernClassificationConfiguration.current_fresh(community)
         config.updated_by = request.user
         config.save(update_fields=["updated_by", "updated_at"])
         return Response(ClassificationConfigurationSerializer(config).data)
@@ -360,17 +396,22 @@ class OfficialClassificationTextTestView(APIView):
     required_capability = CONFIGURE_CLASSIFICATION
 
     def post(self, request):
+        from apps.community_scope import selected_community
+
+        incident_community = selected_community(request.user, request.data.get("community_id"))
+        if not incident_community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
         title = str(request.data.get("title", ""))[:160]
         description = str(request.data.get("description", ""))[:5000]
         category = str(request.data.get("category", ""))
         if category not in Concern.Category.values:
             return Response({"category": ["Choose a valid concern category."]}, status=status.HTTP_400_BAD_REQUEST)
-        config = ConcernClassificationConfiguration.current()
+        config = ConcernClassificationConfiguration.current(incident_community)
         result = classification_payload(title=title, description=description, selected_category=category, configuration=config)
         candidate = f"{title} {description}".strip().lower()
         duplicate_similarity = 0.0
         if config.duplicate_detection_enabled and candidate:
-            for existing in Concern.objects.exclude(description="").only("title", "description").order_by("-created_at")[:200]:
+            for existing in Concern.objects.filter(community=incident_community).exclude(description="").only("title", "description").order_by("-created_at")[:200]:
                 existing_text = f"{existing.title} {existing.description}".strip().lower()
                 duplicate_similarity = max(duplicate_similarity, SequenceMatcher(None, candidate, existing_text).ratio())
         duplicate = duplicate_similarity >= config.duplicate_threshold
@@ -385,7 +426,7 @@ class OfficialClassificationTextTestView(APIView):
             "explanation": result["notice"],
             "image_uploaded": False,
             "image_error": "",
-            **_review_details(result, selected_category=category, image_uploaded=False, title=title, description=description),
+            **_review_details(result, selected_category=category, image_uploaded=False, title=title, description=description, community=config.community),
         })
 
 
@@ -463,7 +504,7 @@ def _photo_dedup_llm_preview(config, *, category: str, latitude, longitude, imag
     limit = max(1, int(config.photo_duplicate_candidate_limit))
     since = timezone.now() - timedelta(days=config.report_duplicate_lookback_days)
     pool = (
-        Concern.objects.filter(category=category, created_at__gte=since)
+        Concern.objects.filter(community=config.community, category=category, created_at__gte=since)
         .exclude(status=Concern.Status.REJECTED)
         .prefetch_related("media")
         .order_by("-created_at")[:200]
@@ -538,6 +579,11 @@ class OfficialClassificationSubmissionTestView(APIView):
     parser_classes = [MultiPartParser]
 
     def post(self, request):
+        from apps.community_scope import selected_community
+
+        community = selected_community(request.user, request.data.get("community_id"))
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
         selected_category = str(request.data.get("category", ""))
         if selected_category not in Concern.Category.values:
             return Response({"category": ["Choose a valid concern category."]}, status=status.HTTP_400_BAD_REQUEST)
@@ -546,7 +592,7 @@ class OfficialClassificationSubmissionTestView(APIView):
         if not description.strip():
             return Response({"description": ["Enter a sample description."]}, status=status.HTTP_400_BAD_REQUEST)
 
-        config = ConcernClassificationConfiguration.current()
+        config = ConcernClassificationConfiguration.current(community)
         # A sample can carry several photos (the tester allows up to three) —
         # every one of them is prepared and sent, not just the first, so
         # classification, street imagery, and photo dedup all see the whole set.
@@ -584,7 +630,7 @@ class OfficialClassificationSubmissionTestView(APIView):
             "media_integrity": _media_integrity_preview(config, details=details, images=images),
             "street_imagery": _street_imagery_preview(config, category=selected_category, latitude=latitude, longitude=longitude, images=images),
             "photo_duplicate_llm": _photo_dedup_llm_preview(config, category=selected_category, latitude=latitude, longitude=longitude, images=images),
-            **_review_details(result, selected_category=selected_category, image_uploaded=bool(uploaded_files), title=title, description=description),
+            **_review_details(result, selected_category=selected_category, image_uploaded=bool(uploaded_files), title=title, description=description, community=config.community),
         })
 
 
@@ -614,6 +660,11 @@ class OfficialClassificationSampleGeneratorView(APIView):
     }
 
     def post(self, request):
+        from apps.community_scope import selected_community
+
+        community = selected_community(request.user, request.data.get("community_id"))
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
         domain = str(request.data.get("domain", "concern"))
         language = str(request.data.get("language", "filipino"))
 
@@ -654,7 +705,8 @@ class OfficialClassificationSampleGeneratorView(APIView):
                 mode=mode,
                 language=language,
                 image=image,
-                minimum_length=ConcernClassificationConfiguration.current().minimum_description_length,
+                minimum_length=ConcernClassificationConfiguration.current(community).minimum_description_length,
+                community_name=community.name,
             )
         except Exception as exc:
             logger.warning("Sample generation failed: %s", exc.__class__.__name__)
@@ -662,7 +714,7 @@ class OfficialClassificationSampleGeneratorView(APIView):
         return Response({"description": description})
 
 
-def _generate_sample_description(*, category: str, mode: str, language: str, image, minimum_length) -> str:
+def _generate_sample_description(*, category: str, mode: str, language: str, image, minimum_length, community_name: str) -> str:
     """Ask Gemma to write one resident-style sample report. Plain text, not JSON."""
     from ollama import Client
 
@@ -681,7 +733,7 @@ def _generate_sample_description(*, category: str, mode: str, language: str, ima
     photo_note = " Describe only issues consistent with what you can actually see in the attached photo." if image is not None else ""
     prompt = (
         "You write sample test reports for E-Boses, a barangay civic concern system in the Philippines.\n"
-        "Write the text exactly as a resident of Marikina Heights would type it into the app.\n"
+        f"Write the text exactly as a resident of {community_name} would type it into the app.\n"
         f"Category the report will be filed under: {category_label}\n"
         f"Scenario: {scenario}.\n"
         f"Write it in {language_label}.\n"
@@ -777,9 +829,19 @@ class ResidentConcernPrecheckView(APIView):
             return Response({"detail": "Only residents can check reports."}, status=status.HTTP_403_FORBIDDEN)
         selected_category = str(request.data.get("category", ""))
         resident_community = getattr(getattr(request.user, "resident_profile", None), "community", None)
+        incident_community = resident_community
+        location_review = _location_dry_run(request)
+        if location_review and location_review.get("community_id"):
+            from apps.emergencies.models import Community
+
+            incident_community = Community.objects.filter(
+                pk=location_review["community_id"], status=Community.Status.ACTIVE
+            ).first()
+        if location_review and location_review.get("accepted") is False:
+            return Response({"location": [location_review.get("message") or "Choose a served location."]}, status=status.HTTP_400_BAD_REQUEST)
         category_queryset = ConcernCategory.objects.filter(code=selected_category, is_active=True)
-        if resident_community is not None:
-            category_queryset = category_queryset.filter(Q(community=resident_community) | Q(community__isnull=True))
+        if incident_community is not None:
+            category_queryset = category_queryset.filter(Q(community=incident_community) | Q(community__isnull=True))
         category_ref = category_queryset.first()
         if selected_category and not category_ref and selected_category not in Concern.Category.values:
             return Response({"category": ["Choose a valid concern category."]}, status=status.HTTP_400_BAD_REQUEST)
@@ -795,7 +857,9 @@ class ResidentConcernPrecheckView(APIView):
         if category_ref and category_ref.location_required and (request.data.get("latitude") is None or request.data.get("longitude") is None):
             return Response({"address": ["Pin where the issue is located."]}, status=status.HTTP_400_BAD_REQUEST)
 
-        config = ConcernClassificationConfiguration.current()
+        if not incident_community:
+            return Response({"location": ["Choose a location inside an active community."]}, status=status.HTTP_400_BAD_REQUEST)
+        config = ConcernClassificationConfiguration.current(incident_community)
         images, image_errors, prepared_indices = _prepared_images_from_uploads(uploaded_files)
         # Text analysis only, on a short budget: the resident is waiting on
         # this response. Photos are validated locally (so rejected/unreadable
@@ -820,8 +884,9 @@ class ResidentConcernPrecheckView(APIView):
         )
         inferred_category = str(details.get("primary_category") or selected_category or fallback_category)
         inferred_category_queryset = ConcernCategory.objects.filter(code=inferred_category, is_active=True)
-        if resident_community is not None:
-            inferred_category_queryset = inferred_category_queryset.filter(Q(community=resident_community) | Q(community__isnull=True))
+        inferred_category_queryset = inferred_category_queryset.filter(
+            Q(community=incident_community) | Q(community__isnull=True)
+        )
         inferred_category_ref = inferred_category_queryset.select_related("department").first() or category_ref
         # Category-specific requirements are evaluated after the model has
         # selected the category. This is what allows the resident form to omit
@@ -931,7 +996,7 @@ def _privacy_dry_run(uploaded, details: dict) -> dict:
 
     from PIL import Image, ImageOps
 
-    from apps.concerns.ai.privacy.masks import blur_regions, detected_classes, parse_regions
+    from apps.concerns.ai.privacy.masks import blur_regions, detected_classes, parse_regions, privacy_sensitive_regions
     from apps.concerns.ai.privacy.sam3_client import Sam3NotConfigured, Sam3Unavailable, run_segmentation
 
     path = ""
@@ -950,14 +1015,18 @@ def _privacy_dry_run(uploaded, details: dict) -> dict:
             image.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
             image.load()
         regions = parse_regions(payload, image_width=image.size[0], image_height=image.size[1])
-        found = detected_classes(regions)
-        blurrable = [region for region in regions if "blood" not in (region.label or "")]
+        sensitive_regions = privacy_sensitive_regions(regions)
+        found = detected_classes(sensitive_regions)
+        blood_found = any("blood" in (region.label or "") for region in regions)
+        if blood_found:
+            found = sorted(set(found + ["blood"]))
+        blurrable = sensitive_regions
 
         output = BytesIO()
         blur_regions(image, blurrable).save(output, format="JPEG", quality=84, optimize=True)
         encoded = base64.b64encode(output.getvalue()).decode("ascii")
 
-        if any("blood" in (region.label or "") for region in regions):
+        if blood_found:
             state = "sensitive_review_required"
         elif blurrable:
             # Blurred is blurred, whether Gemma asked for the scan or we ran it
@@ -1045,7 +1114,7 @@ def _report_duplicate_feedback(config, *, request, selected_category: str, title
     if not config.report_duplicate_detection_enabled:
         return {"found": False}
     fingerprints = report_fingerprints(
-        barangay=getattr(getattr(request.user, "resident_profile", None), "barangay", "") or "Marikina Heights",
+        barangay=config.community.name,
         category=selected_category,
         title=title,
         description=description,
@@ -1053,9 +1122,31 @@ def _report_duplicate_feedback(config, *, request, selected_category: str, title
         longitude=request.data.get("longitude"),
         precision=config.report_duplicate_location_precision,
     )
-    match = None
-    if fingerprints["report_fingerprint"]:
-        match = Concern.objects.filter(report_fingerprint=fingerprints["report_fingerprint"]).exclude(status=Concern.Status.REJECTED).order_by("-created_at").first()
+    candidate = Concern(
+        community=config.community,
+        barangay=config.community.name,
+        category=selected_category,
+        title=title,
+        description=description,
+        latitude=request.data.get("latitude"),
+        longitude=request.data.get("longitude"),
+        report_fingerprint=fingerprints["report_fingerprint"],
+        report_text_fingerprint=fingerprints["report_text_fingerprint"],
+        report_location_bucket=fingerprints["report_location_bucket"],
+    )
+    duplicate = find_duplicate_concern(
+        candidate,
+        enabled=True,
+        threshold=getattr(config, "report_duplicate_similarity_threshold", config.duplicate_threshold),
+        lookback_days=getattr(config, "report_duplicate_lookback_days", 180),
+        distance_meters=getattr(config, "report_duplicate_distance_meters", 1000),
+    )
+    if not duplicate.possible_duplicate or not duplicate.matched_concern_id:
+        return {"found": False}
+    match = Concern.objects.filter(
+        pk=duplicate.matched_concern_id,
+        community=config.community,
+    ).exclude(status=Concern.Status.REJECTED).first()
     if not match:
         return {"found": False}
     return {
@@ -1068,7 +1159,7 @@ def _report_duplicate_feedback(config, *, request, selected_category: str, title
         "summary": match.summary or match.description[:160],
         "reporter_count": 1 + Concern.objects.filter(duplicate_of_id=match.pk).count(),
         "status": match.status,
-        "distance_meters": None,
+        "distance_meters": duplicate.distance_meters,
     }
 
 
@@ -1128,13 +1219,26 @@ def _resident_feedback(
     field_errors = {}
     can_submit = True
     needs_revision = False
+    if not details.get("failure_type") and result.get("outcome") == "irrelevant":
+        field_errors["description"] = "This report does not describe a valid community issue."
+        can_submit = False
+        needs_revision = True
     if not details.get("failure_type") and result.get("outcome") == "needs_review" and not primary:
         field_errors["description"] = "Add a clearer description of the issue."
         can_submit = False
         needs_revision = True
     if primary and primary != selected_category:
         needs_revision = True
-    if relationship in {"contradicts_report", "no_useful_image_evidence"}:
+    photo_evidence_contradicted = relationship == "contradicts_report" or any(
+        isinstance(item, dict)
+        and str(item.get("relevance") or "").lower() == "contradicts_report"
+        for item in details.get("photo_verdicts") or []
+    )
+    if photo_evidence_contradicted:
+        field_errors["media"] = "The photo contradicts the issue described. Upload a matching photo."
+        can_submit = False
+        needs_revision = True
+    elif relationship == "no_useful_image_evidence":
         needs_revision = True
     if duplicate_feedback and duplicate_feedback.get("found"):
         action = duplicate_feedback.get("action")
@@ -1180,14 +1284,31 @@ def _photo_verdict_payload(details: dict, *, photo_count: int, image_errors: dic
     """One frontend verdict per attached photo, in file order.
 
     A verdict per photo comes from the model only for the images that were
-    actually sent; a photo that could not be prepared is "unsupported" and one
-    that was sent but never reviewed is "unclear" — both non-blocking.
+    actually sent; a photo that could not be prepared is "unsupported". The
+    resident precheck intentionally defers vision review, so an uploaded photo
+    with no review result has no verdict yet and must not be presented as an
+    error. The post-submit pipeline still returns real verdicts when review
+    completes.
     """
     if photo_count <= 0:
         return []
     relationship = details.get("evidence_relationship") or ""
     review_failed = details.get("image_review_succeeded") is False
-    model_verdicts = {item["index"]: item for item in details.get("photo_verdicts") or []}
+    raw_model_verdicts = details.get("photo_verdicts") or []
+    model_verdicts = {item["index"]: item for item in raw_model_verdicts}
+
+    # The resident precheck validates files locally but deliberately does not
+    # send them to the vision model. `image_unavailable` here means “review is
+    # deferred”, not “the image is unrelated”. Returning no rows keeps the
+    # dialog from showing a false red border/message before submission.
+    if (
+        not image_errors
+        and not review_failed
+        and details.get("image_review_succeeded") is None
+        and not raw_model_verdicts
+    ):
+        return []
+
     relevance_to_state = {
         "supports_report": "relevant",
         "contradicts_report": "unrelated",
@@ -1197,8 +1318,8 @@ def _photo_verdict_payload(details: dict, *, photo_count: int, image_errors: dic
     unclear_message = "The photo does not clearly show the issue described."
     review_failed_message = "Your photo could not be checked automatically. An official will review it."
     integrity_message = (
-        "This photo could not be confirmed as an original camera photo. "
-        "Use a photo taken directly from your camera."
+        "This photo appears to be AI-generated or edited. "
+        "Please upload a genuine photo taken with your camera."
     )
     # Only flagged verdicts land here — the parser has already dropped anything
     # below the confidence floor to "inconclusive", and an inconclusive photo
@@ -1226,6 +1347,12 @@ def _photo_verdict_payload(details: dict, *, photo_count: int, image_errors: dic
             continue
         verdict = model_verdicts.get(model_index) if model_index is not None else None
         if verdict is None:
+            # A mixed upload can contain one locally unreadable file while the
+            # remaining files are valid but still waiting for post-submit vision
+            # review. Keep the valid files neutral instead of borrowing the
+            # unrelated fallback message from the reviewed path.
+            if not review_failed and details.get("image_review_succeeded") is None:
+                continue
             state = "unrelated" if relationship == "contradicts_report" else "unclear"
             payload.append({"index": index, "state": state, "message": unclear_message})
             continue
@@ -1261,7 +1388,11 @@ def _precheck_extras(request, result, *, selected_category, category_ref, config
 
     primary = details.get("primary_category") or ""
     if primary and primary != selected_category:
-        category = ConcernCategory.objects.filter(code=primary, is_active=True).first()
+        category = ConcernCategory.objects.filter(
+            community=config.community,
+            code=primary,
+            is_active=True,
+        ).first()
         label = category.name if category else dict(Concern.Category.choices).get(primary, primary.replace("_", " ").title())
         payload["suggested_category_label"] = label
         payload["category_confirm_required"] = True
@@ -1396,7 +1527,10 @@ def _resolved_address(latitude, longitude, *, local_only=False) -> dict | None:
         primary = f"{house_number} {street}".strip()
     elif street:
         primary = street
-    secondary = "Marikina Heights, Marikina" if address else ""
+    from apps.geo_services import active_community_for_point
+
+    community = active_community_for_point(lat, lng)
+    secondary = community.name if community and address else ""
     if not primary:
         primary = "Pinned location"
     return {
@@ -1419,7 +1553,7 @@ def _formatted_title_preview(title, description, details) -> dict:
     return {"official_title": official_title, "summary": summary}
 
 
-def _review_details(result: dict, *, selected_category: str, image_uploaded: bool, title: str = "", description: str = "") -> dict:
+def _review_details(result: dict, *, selected_category: str, image_uploaded: bool, title: str = "", description: str = "", community=None) -> dict:
     """The sample-test payload, mirroring the fields the real assistant shows.
 
     No model name, no provider, no confidence number. What an official sees when
@@ -1427,7 +1561,7 @@ def _review_details(result: dict, *, selected_category: str, image_uploaded: boo
     """
     details = result.get("details") or {}
     category_ref = (
-        ConcernCategory.objects.filter(code=selected_category, is_active=True).first()
+        ConcernCategory.objects.filter(code=selected_category, community=community, is_active=True).first()
         if selected_category
         else None
     )
@@ -1470,10 +1604,19 @@ class LlmDecisionLogListView(APIView):
     required_capability = CONFIGURE_CLASSIFICATION
 
     def get(self, request):
+        from apps.community_scope import selected_community
+
+        community = selected_community(request.user, request.query_params.get("community_id"))
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
         qs = LlmDecisionLog.objects.select_related("assigned_department", "concern").prefetch_related(
             "concern__media",
             "concern__ai_assessment",
             "concern__escalated_emergencies",
+        )
+        qs = qs.filter(
+            Q(concern__community=community)
+            | Q(concern__isnull=True, assigned_department__community=community)
         )
 
         domain = request.query_params.get("domain", "")
@@ -1540,6 +1683,8 @@ def _decision_source(rejection_code: str, *, has_emergency: bool = False) -> str
     return {
         "automated_street_imagery": "Street-view location check",
         "automated_street_imagery_resubmit": "Street-view location check",
+        "automated_street_imagery_inconclusive": "Street-view location check",
+        "automated_street_imagery_inconclusive_resubmit": "Street-view location check",
         "automated_media_integrity": "Photo authenticity check",
         "automated_media_integrity_resubmit": "Photo authenticity check",
         "automated_category_mismatch": "Category check",
@@ -1664,7 +1809,12 @@ class LlmDecisionLogStreetImageryView(APIView):
 
     def post(self, request, pk):
         row = (
-            LlmDecisionLog.objects.select_related("concern")
+            LlmDecisionLog.objects.select_related(
+                "concern",
+                "concern__community",
+                "assigned_department",
+                "assigned_department__community",
+            )
             .prefetch_related("concern__media")
             .filter(pk=pk)
             .first()
@@ -1673,6 +1823,41 @@ class LlmDecisionLogStreetImageryView(APIView):
             return Response({"detail": "This log entry has no concern evidence to retry."}, status=status.HTTP_404_NOT_FOUND)
 
         concern = row.concern
+        # The audit row is the source of truth for the incident's community.
+        # Do not rely on a request-local variable here: this retry endpoint is
+        # called independently from the original classification request.
+        incident_community = concern.community or getattr(row.assigned_department, "community", None)
+        if incident_community is None:
+            # Legacy audit rows can predate community assignment. Prefer the
+            # explicitly selected community, then the first active community
+            # in this official's scope. This keeps the fallback data-driven
+            # (and avoids coupling it to a community name such as a seed row).
+            from apps.community_scope import community_ids_for_user, selected_community
+            from apps.emergencies.models import Community
+
+            incident_community = selected_community(
+                request.user,
+                request.query_params.get("community_id"),
+            )
+            if incident_community is None:
+                allowed_communities = Community.objects.filter(
+                    pk__in=community_ids_for_user(request.user),
+                    status=Community.Status.ACTIVE,
+                )
+                # Match the legacy barangay text to the existing community
+                # record before using a deterministic first-active fallback.
+                # This resolves seeded rows such as Marikina Heights without
+                # embedding that community name in the retry logic.
+                barangay = (getattr(concern, "barangay", "") or "").strip()
+                if barangay:
+                    incident_community = allowed_communities.filter(name__iexact=barangay).first()
+                if incident_community is None:
+                    incident_community = allowed_communities.order_by("name").first()
+        if incident_community is None:
+            return Response(
+                {"detail": "This concern is not assigned to a community."},
+                status=status.HTTP_409_CONFLICT,
+            )
         media = [item for item in concern.media.all() if item.mime_type.startswith("image/")]
         prepared_images = []
         for item in media:
@@ -1685,7 +1870,7 @@ class LlmDecisionLogStreetImageryView(APIView):
             if prepared is not None:
                 prepared_images.append(prepared)
 
-        config = ConcernClassificationConfiguration.current()
+        config = ConcernClassificationConfiguration.current(incident_community)
         result = _street_imagery_preview(
             config,
             category=concern.category,

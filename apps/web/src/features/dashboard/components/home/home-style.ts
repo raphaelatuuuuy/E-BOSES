@@ -28,7 +28,7 @@ export const STROKE = 1.5
 
 export const RAIL_CHEVRON = "size-7 shrink-0"
 
-export const BARANGAY = "Marikina Heights"
+export const BARANGAY = "Your community"
 
 function lon2tile(lon: number, zoom: number) {
   return Math.floor(((lon + 180) / 360) * 2 ** zoom)

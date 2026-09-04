@@ -11,8 +11,7 @@ import { ResponderNotificationsPanel } from "@/features/dashboard/components/res
 import { NotificationViewActions } from "@/features/dashboard/components/notifications/notifications-panel"
 import { useNotificationsPopGate } from "@/features/dashboard/components/notifications/notifications-event"
 
-const RESPONDER_DIALOG_THEME =
-  "staff-dark border-nav-border bg-nav-bg text-nav-text-active [&_.text-neutral-950]:text-nav-text-active [&_.text-neutral-900]:text-nav-text-active [&_.text-neutral-800]:text-nav-text [&_.text-neutral-700]:text-nav-muted [&_.text-neutral-600]:text-nav-muted [&_.text-neutral-500]:text-nav-muted [&_.text-neutral-400]:text-nav-muted [&_.bg-white]:bg-nav-raised [&_.bg-neutral-50]:bg-nav-raised [&_.bg-neutral-100]:bg-nav-active [&_.bg-neutral-100]:text-nav-text-active [&_.bg-neutral-200]:bg-nav-raised [&_.border-neutral-200]:border-nav-border [&_[data-notification-actions]]:!bg-nav-raised [&_[data-slot=sheet-icon-button]:hover]:bg-brand-orange/10 [&_[data-slot=sheet-icon-button]:hover]:text-brand-orange"
+const RESPONDER_DIALOG_THEME = "bg-white text-neutral-900"
 
 /**
  * The responder's personal surfaces. Profile and Notifications both open as
@@ -22,7 +21,7 @@ const RESPONDER_DIALOG_THEME =
  */
 
 /**
- * The responder's Notifications entry point, rendered in the dark mobile
+ * The responder's Notifications entry point, rendered in the light mobile
  * header. Opens the full notification panel as a full-screen sheet (over the
  * top and bottom nav) with a Back button — the same panel the sidebar account
  * block opens as a dialog on desktop.
@@ -45,9 +44,9 @@ export function ResponderNotificationsButton() {
         type="button"
         onClick={() => setOpen(true)}
         aria-label={ariaLabel}
-        className="group relative flex size-10 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-nav-raised"
+        className="group relative flex size-10 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-neutral-100"
       >
-        <InboxIcon className="size-6 text-nav-muted group-hover:text-nav-text-active" />
+        <InboxIcon className="size-6 text-neutral-700 group-hover:text-neutral-900" />
         {unreadCount > 0 ? (
           <span
             className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full bg-brand-orange"
@@ -56,7 +55,7 @@ export function ResponderNotificationsButton() {
         ) : null}
       </button>
       {open ? (
-        <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => setOpen(false)} title="Dispatch updates" size="wide" actions={<NotificationViewActions dark />}>
+        <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => setOpen(false)} title="Dispatch updates" size="wide" actions={<NotificationViewActions />}>
           <ResponderNotificationsPanel
             variant="sheet"
             onClose={() => setOpen(false)}
@@ -87,7 +86,7 @@ export function ResponderNotificationsDialog({
   if (!open) return null
 
   return (
-    <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => onOpenChange(false)} title="Dispatch updates" size="wide" actions={<NotificationViewActions dark initialView={initialFilter === "archived" ? "archived" : "inbox"} />}>
+    <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => onOpenChange(false)} title="Dispatch updates" size="wide" actions={<NotificationViewActions initialView={initialFilter === "archived" ? "archived" : "inbox"} />}>
       <ResponderNotificationsPanel
         variant="sheet"
         onClose={() => onOpenChange(false)}

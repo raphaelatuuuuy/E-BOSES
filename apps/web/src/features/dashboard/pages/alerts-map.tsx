@@ -1,11 +1,4 @@
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   AlertTriangleIcon,
@@ -16,15 +9,23 @@ import {
   MegaphoneIcon,
   SearchIcon,
   ShieldCheckIcon,
+  SignalHighIcon,
+  SignalIcon,
+  SignalLowIcon,
+  SignalMediumIcon,
   TrafficConeIcon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import {
   getOfficialLiveMap,
   type ConcernCategory,
+  type LiveMapConcern,
   type LiveMapEmergency,
+  type ResidentMapConcern,
+  type ResidentMapEmergency,
   type LiveMapSnapshot,
   type LiveMapUpdate,
 } from "@/features/dashboard/api"
@@ -39,24 +40,20 @@ import { responderUnitLabel } from "@/features/dashboard/lib/people"
 import { concernCategoryLabel } from "@/features/dashboard/components/concerns/concern-display"
 import { advisoryLabel } from "@/features/dashboard/components/community-content/advisory-tags"
 import {
-  MapWeatherCard,
   MapWeatherIcon,
   useMapWeather,
-  type MapWeatherState,
 } from "@/features/dashboard/components/map-weather"
+import { MapFilterChips } from "@/features/dashboard/components/map/filter-chips"
 import {
-  MapFilterChips,
-  type MapFilterChip,
-} from "@/features/dashboard/components/map/filter-chips"
+  ALERT_FEED_CHIPS,
+  AlertsFeed,
+  type AlertFeedRow,
+} from "@/features/dashboard/components/alerts-map/alerts-feed"
 
 import { AlertsLeafletMap } from "@/features/dashboard/components/alerts-map/leaflet-map"
 import { DetailPanel } from "@/features/dashboard/components/alerts-map/detail-panel"
 import {
-  AlertCard,
-  type AlertCardModel,
-} from "@/features/dashboard/components/alerts-map/alert-card"
-import {
-  isActiveConcern,
+  isMapDrawableConcern,
   isResolvedRecord,
   isActiveEmergency,
   defaultLayers,
@@ -72,134 +69,257 @@ import {
  */
 const PENDING_SNAPSHOT = emptyLiveMapSnapshot()
 
-const FEED_CHIPS: MapFilterChip[] = [
-  { key: "all", label: "All" },
-  { key: "emergencies", label: "Emergencies" },
-  { key: "concerns", label: "Concerns" },
-  { key: "announcements", label: "Announcements" },
-  { key: "resolved", label: "Resolved" },
-]
+function publicConcernAsLive(concern: ResidentMapConcern): LiveMapConcern {
+  return {
+    id: concern.id,
+    tracking_id: concern.tracking_id,
+    title: concern.title,
+    notification_subject: concern.notification_subject,
+    description: concern.description,
+    summary: concern.summary,
+    category: concern.category,
+    category_ref: concern.category_ref,
+    status: concern.status,
+    address: concern.address,
+    barangay: concern.barangay,
+    latitude: concern.latitude,
+    longitude: concern.longitude,
+    reporter: {
+      id: concern.reporter.id,
+      full_name: concern.reporter.full_name,
+      role: concern.reporter.role as "resident",
+      barangay: concern.reporter.barangay,
+      address: "",
+      responder_unit: "",
+      is_on_duty: false,
+      latitude: null,
+      longitude: null,
+      location_updated_at: null,
+    },
+    created_at: concern.created_at,
+    updated_at: concern.updated_at,
+    priority: concern.priority,
+    severity: concern.severity,
+    severity_assessed: concern.severity_assessed,
+    preview_url: concern.preview_url ?? "",
+    media_count: concern.preview_url ? 1 : 0,
+  }
+}
+
+function publicEmergencyAsLive(
+  emergency: ResidentMapEmergency
+): LiveMapEmergency {
+  return {
+    id: emergency.id,
+    type: emergency.type,
+    note: emergency.note,
+    display_description: emergency.display_description,
+    ai_summary: emergency.ai_summary,
+    ai_assist_status: emergency.ai_assist_status,
+    status: emergency.status,
+    address: emergency.address,
+    barangay: emergency.barangay,
+    latitude: emergency.latitude,
+    longitude: emergency.longitude,
+    reporter: {
+      id: 0,
+      full_name: "Resident",
+      role: "resident",
+      barangay: emergency.barangay,
+      address: "",
+      responder_unit: "",
+      is_on_duty: false,
+      latitude: null,
+      longitude: null,
+      location_updated_at: null,
+    },
+    current_assignment: null,
+    created_at: emergency.created_at,
+    updated_at: emergency.updated_at,
+    resolved_at: null,
+    preview_url: null,
+  }
+}
+
+function withPublicRecords(
+  snapshot: LiveMapSnapshot,
+  includePublic = true
+): LiveMapSnapshot {
+  if (!includePublic) return snapshot
+  const concernIds = new Set(
+    snapshot.operational.concerns.map((item) => item.id)
+  )
+  const emergencyIds = new Set(
+    snapshot.operational.emergencies.map((item) => item.id)
+  )
+  return {
+    ...snapshot,
+    concerns: [
+      ...snapshot.operational.concerns,
+      ...snapshot.public_concerns
+        .filter((item) => !concernIds.has(item.id))
+        .map(publicConcernAsLive),
+    ],
+    emergencies: [
+      ...snapshot.operational.emergencies,
+      ...snapshot.public_emergencies
+        .filter((item) => !emergencyIds.has(item.id))
+        .map(publicEmergencyAsLive),
+    ],
+  }
+}
 
 const SELECTION_LABEL: Record<"emergency" | "concern", string> = {
   emergency: "Emergency",
   concern: "Concern",
 }
 
-function ConcernIcon({ category, className }: { category: ConcernCategory; className?: string }) {
-  if (category === "infrastructure") return <TrafficConeIcon className={className} strokeWidth={1.9} />
-  if (category === "environment") return <LeafIcon className={className} strokeWidth={1.9} />
-  if (category === "public_safety") return <ShieldCheckIcon className={className} strokeWidth={1.9} />
+function ConcernIcon({
+  category,
+  className,
+}: {
+  category: ConcernCategory
+  className?: string
+}) {
+  if (category === "infrastructure")
+    return <TrafficConeIcon className={className} strokeWidth={1.9} />
+  if (category === "environment")
+    return <LeafIcon className={className} strokeWidth={1.9} />
+  if (category === "public_safety")
+    return <ShieldCheckIcon className={className} strokeWidth={1.9} />
   return <SearchIcon className={className} strokeWidth={1.9} />
 }
 
 function titleCase(value: string) {
-  return value.replace(/_/g, " ").trim()
+  const words = value.replace(/_/g, " ").trim()
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : ""
 }
 
-type FeedRow = {
-  key: string
-  selection?: Selection
-  model: AlertCardModel
-  icon: ReactNode
-  onAction?: () => void
+function readableSeverity(value?: string | null) {
+  if (!value) return ""
+  return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
-const AlertsFeed = memo(function AlertsFeed({
-  areaName,
-  total,
-  rows,
-  onSelect,
-  weatherMode = false,
-  weatherToggle,
-  weather,
-}: {
-  areaName: string
-  total: number
-  rows: FeedRow[]
-  onSelect: (selection: Selection) => void
-  weatherMode?: boolean
-  weatherToggle?: ReactNode
-  weather?: MapWeatherState
+function priorityBadge(value?: string | null) {
+  const severity = (value || "").toLowerCase()
+  if (!(severity in { critical: true, high: true, moderate: true, low: true }))
+    return null
+  const Icon = {
+    critical: SignalIcon,
+    high: SignalHighIcon,
+    moderate: SignalMediumIcon,
+    low: SignalLowIcon,
+  }[severity as "critical" | "high" | "moderate" | "low"]
+  const tone = {
+    critical: "text-severity-critical-ink",
+    high: "text-severity-high-ink",
+    moderate: "text-severity-moderate-ink",
+    low: "text-severity-low-ink",
+  }[severity as "critical" | "high" | "moderate" | "low"]
+  return {
+    label: `${readableSeverity(severity)} priority`,
+    icon: <Icon className="size-3.5 shrink-0" strokeWidth={2} />,
+    className: tone,
+  }
+}
+
+/** Highest-severity concerns should lead the queue in every concern view. */
+function concernPriorityRank(value?: string | null) {
+  switch ((value || "low").toLowerCase()) {
+    case "critical":
+      return 3
+    case "high":
+      return 2
+    case "moderate":
+    case "medium":
+      return 1
+    default:
+      return 0
+  }
+}
+
+function normaliseMapCopy(value: string) {
+  return value
+    .replace(/[“”‘’"']/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+}
+
+function concernMapCopy(concern: {
+  title: string
+  notification_subject?: string
+  summary?: string
+  description?: string
 }) {
-  const asOf = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-  return (
-    <>
-      <div className="shrink-0 bg-white px-4 pb-2 pt-3 sm:pt-4">
-        <div className="flex items-center gap-2.5">
-          <div className="min-w-0 flex-1">
-            <h1 className="text-[18px] font-bold leading-tight tracking-tight text-neutral-900 sm:text-[20px]">
-              {weatherMode ? "Weather in" : "Alerts in"}{" "}
-              <span className="text-brand-orange" style={{ color: "var(--color-brand-orange)" }}>
-                {areaName}
-              </span>
-            </h1>
-            <p className="mt-0.5 text-[12px] text-neutral-500">
-              {weatherMode ? `As of ${asOf}` : `${total} on the map`}
-            </p>
-          </div>
-          {!weatherMode && weatherToggle}
-        </div>
-      </div>
-
-      <div
-        className={cn(
-          "scrollbar-hide relative min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4",
-          weatherMode ? "px-4" : "px-3",
-        )}
-      >
-        {weatherMode && weather ? (
-          <MapWeatherCard weather={weather} framed={false} />
-        ) : rows.length === 0 ? (
-          <div className="px-3 py-10 text-center">
-            <p className="text-[14px] font-semibold text-neutral-800 sm:text-[15px]">
-              Nothing active right now
-            </p>
-            <p className="mt-1 text-[12px] text-neutral-500 sm:text-[13px]">
-              New concerns and emergencies appear here the moment they are filed.
-            </p>
-          </div>
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {rows.map((row) => (
-              <li key={row.key}>
-                <AlertCard
-                  model={row.model}
-                  icon={row.icon}
-                  expanded={false}
-                  onOpen={() => (row.selection ? onSelect(row.selection) : row.onAction?.())}
-                  onAction={row.onAction}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </>
-  )
-})
+  const title = (
+    concern.notification_subject ||
+    concern.title ||
+    "Report"
+  ).trim()
+  const summary = (concern.summary || concern.description || "").trim()
+  const duplicate =
+    Boolean(summary) && normaliseMapCopy(title) === normaliseMapCopy(summary)
+  return {
+    title,
+    snippet: duplicate ? "" : summary,
+    snippetLabel: duplicate
+      ? null
+      : concern.summary
+        ? null
+        : summary
+          ? "Report description"
+          : null,
+  }
+}
 
 export default function AlertsMapPage() {
   usePageTitle("Alerts Map")
   const { user } = useAuthSession()
+  const isOfficial = isOfficialUser(user)
+  const isResponder = isResponderUser(user)
   const isDesktop = useIsDesktop()
   const navigate = useNavigate()
   const [snapshot, setSnapshot] = useState<LiveMapSnapshot | null>(null)
+  const [homeCommunityId, setHomeCommunityId] = useState<string | null>(null)
+  const [communityBoundaryVisible, setCommunityBoundaryVisible] =
+    useState(false)
   const [layers, setLayers] = useState(defaultLayers)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [selected, setSelected] = useState<Selection>(() => {
-    const alertId = Number(new URLSearchParams(window.location.search).get("alert"))
-    return Number.isInteger(alertId) && alertId > 0 ? { kind: "emergency", id: alertId } : null
+    const alertId = Number(
+      new URLSearchParams(window.location.search).get("alert")
+    )
+    return Number.isInteger(alertId) && alertId > 0
+      ? { kind: "emergency", id: alertId }
+      : null
   })
   const [feedChip, setFeedChip] = useState<string>("all")
   const [weatherOpen, setWeatherOpen] = useState(false)
+  const [communityFilter, setCommunityFilter] = useState("all")
+  const [weatherReady, setWeatherReady] = useState(false)
 
   const sheet = useBottomSheetSnap({ enabled: !isDesktop })
 
-  const weatherBase = snapshot ?? PENDING_SNAPSHOT
+  const weatherCommunityId =
+    communityFilter === "all" ? homeCommunityId : communityFilter
+  const weatherCommunity = snapshot?.communities.find(
+    (community) => community.id === weatherCommunityId
+  )
   const weather = useMapWeather(
-    weatherBase.map.center.latitude,
-    weatherBase.map.center.longitude,
-    weatherBase.map.boundary.name,
+    weatherReady
+      ? (weatherCommunity?.center.latitude ??
+          snapshot?.map.center.latitude ??
+          null)
+      : null,
+    weatherReady
+      ? (weatherCommunity?.center.longitude ??
+          snapshot?.map.center.longitude ??
+          null)
+      : null,
+    weatherReady
+      ? (weatherCommunity?.name ?? snapshot?.map.boundary.name ?? "")
+      : ""
   )
 
   const weatherButton = (
@@ -209,10 +329,12 @@ export default function AlertsMapPage() {
         setFeedChip("all")
         setWeatherOpen((value) => !value)
       }}
-      aria-label={weatherOpen ? "Show the alerts list" : "Show the weather details"}
+      aria-label={
+        weatherOpen ? "Show the alerts list" : "Show the weather details"
+      }
       aria-expanded={weatherOpen}
       title="Weather"
-      className="flex shrink-0 items-center gap-1.5 text-[18px] font-bold leading-tight tracking-tight text-neutral-900 transition-opacity hover:opacity-70 sm:text-[20px]"
+      className="flex shrink-0 items-center gap-1.5 text-[18px] leading-tight font-bold tracking-tight text-neutral-900 transition-opacity hover:opacity-70 sm:text-[20px]"
     >
       {weather.loading && weather.temperature == null ? (
         <CloudSunIcon className="size-5 shrink-0" />
@@ -220,7 +342,9 @@ export default function AlertsMapPage() {
         <MapWeatherIcon code={weather.code} className="size-5 shrink-0" />
       )}
       <span className="tabular-nums">
-        {weather.temperature != null ? `${Math.round(weather.temperature)}°C` : "—"}
+        {weather.temperature != null
+          ? `${Math.round(weather.temperature)}°C`
+          : "—"}
       </span>
     </button>
   )
@@ -230,20 +354,39 @@ export default function AlertsMapPage() {
     sheet.snapTo("hidden")
   }, [isDesktop, sheet])
 
-  async function load() {
-    try {
-      setSnapshot(await getOfficialLiveMap())
-    } catch {
-      setSnapshot((current) => current ?? PENDING_SNAPSHOT)
-    }
-  }
+  const load = useCallback(
+    async (communityId?: string) => {
+      try {
+        const nextSnapshot = withPublicRecords(
+          await getOfficialLiveMap(communityId),
+          !isResponder
+        )
+        const nextHomeCommunityId =
+          nextSnapshot.home_community_id ??
+          nextSnapshot.operational.community_id ??
+          null
+        setHomeCommunityId((current) => current ?? nextHomeCommunityId)
+        // Open on the signed-in official's community. Switching communities is
+        // explicit through the map control, so foreign pins stay hidden by default.
+        setCommunityFilter((current) =>
+          current === "all" ? (nextHomeCommunityId ?? "all") : current
+        )
+        setSnapshot(nextSnapshot)
+        setWeatherReady(true)
+      } catch {
+        setSnapshot((current) => current ?? PENDING_SNAPSHOT)
+        setWeatherReady(false)
+      }
+    },
+    [isResponder]
+  )
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void load(), 0)
     return () => {
       window.clearTimeout(initialLoad)
     }
-  }, [])
+  }, [load])
 
   useEffect(() => {
     let socket: WebSocket | null = null
@@ -258,7 +401,9 @@ export default function AlertsMapPage() {
       if (!pending.length) return
       const batch = pending
       pending = []
-      setSnapshot((current) => (current ? batch.reduce(mergeUpdate, current) : current))
+      setSnapshot((current) =>
+        current ? batch.reduce(mergeUpdate, current) : current
+      )
     }
 
     const reconnectDelay = () => {
@@ -272,11 +417,16 @@ export default function AlertsMapPage() {
         const ticket = await websocketTicket()
         if (closed) return
         socket = new WebSocket(
-          websocketUrl(`/ws/dashboard/live-map/?ticket=${encodeURIComponent(ticket)}`),
+          websocketUrl(
+            `/ws/dashboard/live-map/?ticket=${encodeURIComponent(ticket)}`
+          )
         )
       } catch {
         if (!closed) {
-          reconnectTimer = window.setTimeout(() => void connect(), reconnectDelay())
+          reconnectTimer = window.setTimeout(
+            () => void connect(),
+            reconnectDelay()
+          )
         }
         return
       }
@@ -286,8 +436,11 @@ export default function AlertsMapPage() {
           if (message.type === "concern.ai_assessment.updated") {
             window.dispatchEvent(
               new CustomEvent("eboses:concern-updated", {
-                detail: { concernId: message.payload.concern_id, source: "ai_assessment" },
-              }),
+                detail: {
+                  concernId: message.payload.concern_id,
+                  source: "ai_assessment",
+                },
+              })
             )
           }
           pending.push(message)
@@ -303,7 +456,10 @@ export default function AlertsMapPage() {
       }
       socket.onclose = () => {
         if (!closed) {
-          reconnectTimer = window.setTimeout(() => void connect(), reconnectDelay())
+          reconnectTimer = window.setTimeout(
+            () => void connect(),
+            reconnectDelay()
+          )
         }
       }
       socket.onerror = () => socket?.close()
@@ -322,19 +478,57 @@ export default function AlertsMapPage() {
   // identity to the two useMemos below and stopping either from ever hitting.
   const resolvedRecords = useMemo(
     () => ({
-      concerns: snapshot?.concerns.filter(isResolvedRecord) ?? [],
-      emergencies: snapshot?.emergencies.filter((emergency) => !isActiveEmergency(emergency)) ?? [],
+      emergencies:
+        snapshot?.emergencies.filter(
+          (emergency) => !isActiveEmergency(emergency)
+        ) ?? [],
     }),
-    [snapshot],
+    [snapshot]
   )
   const visibleConcerns = useMemo(() => {
-    const active = snapshot?.concerns.filter(isActiveConcern) ?? []
-    return layers.resolved ? [...active, ...resolvedRecords.concerns] : active
-  }, [snapshot, layers.resolved, resolvedRecords])
+    if (!snapshot) return []
+    // Match the resident map: newly submitted public reports get a pin too,
+    // while resolved reports remain visible in a neutral tone.
+    const rows = snapshot.concerns.filter(isMapDrawableConcern)
+    // The map opens on the official's current community. Treat the legacy
+    // "all" state as unresolved until that home id is known; otherwise the
+    // first paint briefly exposes every accessible community's pins.
+    const selectedCommunityId =
+      communityFilter === "all" ? homeCommunityId : communityFilter
+    if (!selectedCommunityId) return []
+    const ids = new Set(
+      snapshot.public_concerns
+        .filter((item) => item.community.id === selectedCommunityId)
+        .map((item) => item.id)
+    )
+    return rows.filter(
+      (item) =>
+        ids.has(item.id) ||
+        (snapshot.operational.community_id === selectedCommunityId &&
+          snapshot.operational.concerns.some((entry) => entry.id === item.id))
+    )
+  }, [snapshot, communityFilter, homeCommunityId])
   const visibleEmergencies = useMemo(() => {
     const active = snapshot?.emergencies.filter(isActiveEmergency) ?? []
-    return layers.resolved ? [...active, ...resolvedRecords.emergencies] : active
-  }, [snapshot, layers.resolved, resolvedRecords])
+    const rows = [...active, ...resolvedRecords.emergencies]
+    if (!snapshot) return []
+    const selectedCommunityId =
+      communityFilter === "all" ? homeCommunityId : communityFilter
+    if (!selectedCommunityId) return []
+    const ids = new Set(
+      snapshot.public_emergencies
+        .filter((item) => item.community.id === selectedCommunityId)
+        .map((item) => item.id)
+    )
+    return rows.filter(
+      (item) =>
+        ids.has(item.id) ||
+        (snapshot.operational.community_id === selectedCommunityId &&
+          snapshot.operational.emergencies.some(
+            (entry) => entry.id === item.id
+          ))
+    )
+  }, [snapshot, resolvedRecords, communityFilter, homeCommunityId])
   const mapSelectedStreetNames = useMemo(() => new Set<string>(), [])
 
   const toggleLayer = useCallback((key: LayerKey) => {
@@ -343,24 +537,118 @@ export default function AlertsMapPage() {
 
   const resetLayers = useCallback(() => setLayers(defaultLayers), [])
 
-  const selectOnMap = useCallback((next: Selection) => {
-    setPanelCollapsed(false)
-    setSelected(next)
-  }, [])
+  const selectOnMap = useCallback(
+    (next: Selection) => {
+      const concern =
+        next?.kind === "concern"
+          ? snapshot?.concerns.find((item) => item.id === next.id)
+          : null
+      const emergency =
+        next?.kind === "emergency"
+          ? snapshot?.emergencies.find((item) => item.id === next.id)
+          : null
+      const active =
+        (concern &&
+          isMapDrawableConcern(concern) &&
+          !isResolvedRecord(concern)) ||
+        (emergency && isActiveEmergency(emergency))
+      if (
+        (isOfficial || isResponder) &&
+        next &&
+        (active ||
+          (next.kind === "concern"
+            ? snapshot?.operational.concerns.some((item) => item.id === next.id)
+            : snapshot?.operational.emergencies.some(
+                (item) => item.id === next.id
+              )))
+      ) {
+        navigate(
+          next.kind === "concern"
+            ? `/dashboard/reports/${next.id}`
+            : `/dashboard/reports?alert=${next.id}`
+        )
+        return
+      }
+      setPanelCollapsed(false)
+      setSelected(next)
+    },
+    [isOfficial, isResponder, navigate, snapshot]
+  )
+
+  const filteredSnapshot = useMemo(() => {
+    if (!snapshot) return PENDING_SNAPSHOT
+    const emergencyIds = new Set(visibleEmergencies.map((item) => item.id))
+    return {
+      ...snapshot,
+      concerns: visibleConcerns,
+      emergencies: visibleEmergencies,
+      routes: snapshot.routes.filter((route) =>
+        emergencyIds.has(route.alert_id)
+      ),
+    }
+  }, [snapshot, visibleConcerns, visibleEmergencies])
+
+  function changeCommunity(id: string) {
+    setCommunityBoundaryVisible((visible) =>
+      id === communityFilter ? !visible : true
+    )
+    setCommunityFilter(id)
+    setSelected(null)
+    if (id !== "all") void load(id)
+  }
 
   const clearSelection = useCallback(() => setSelected(null), [])
 
   const updateEmergency = useCallback((next: LiveMapEmergency) => {
-    setSnapshot((current) => current ? { ...current, emergencies: current.emergencies.map((item) => item.id === next.id ? next : item) } : current)
+    setSnapshot((current) =>
+      current
+        ? {
+            ...current,
+            emergencies: current.emergencies.map((item) =>
+              item.id === next.id ? next : item
+            ),
+          }
+        : current
+    )
   }, [])
 
-  const feedRows = useMemo<FeedRow[]>(() => {
-    if (!snapshot) return []
-    const rows: Array<FeedRow & { rank: number; time: number }> = []
-    const streetOf = (record: { address?: string | null; barangay?: string | null }) =>
-      streetOnly(record.address?.trim()) || (record.barangay ? `In ${record.barangay}` : "")
+  const concernCommunities = useMemo(
+    () =>
+      new Map(
+        snapshot?.public_concerns.map((item) => [
+          item.id,
+          item.community.name,
+        ]) ?? []
+      ),
+    [snapshot]
+  )
+  const emergencyCommunities = useMemo(
+    () =>
+      new Map(
+        snapshot?.public_emergencies.map((item) => [
+          item.id,
+          item.community.name,
+        ]) ?? []
+      ),
+    [snapshot]
+  )
 
-    if (feedChip === "all" || feedChip === "emergencies") {
+  const feedRows = useMemo<AlertFeedRow[]>(() => {
+    if (!snapshot) return []
+    const rows: Array<
+      AlertFeedRow & { rank: number; priorityRank: number; time: number }
+    > = []
+    const streetOf = (record: {
+      address?: string | null
+      barangay?: string | null
+    }) =>
+      streetOnly(record.address?.trim()) ||
+      (record.barangay ? `In ${record.barangay}` : "")
+
+    // Concerns is the operational reports view. It includes both routine
+    // concerns and critical/emergency reports so staff never have to inspect
+    // a second panel to find an active incident.
+    if (feedChip === "all" || feedChip === "concerns") {
       for (const emergency of visibleEmergencies) {
         const live = isActiveEmergency(emergency)
         const street = streetOf(emergency)
@@ -370,28 +658,43 @@ export default function AlertsMapPage() {
           key: `emergency-${emergency.id}`,
           selection: { kind: "emergency", id: emergency.id },
           icon: <AlertTriangleIcon className="size-5" strokeWidth={1.9} />,
-          rank: live ? (assignment ? 1 : 0) : 2,
+          rank: live ? 0 : 1,
+          priorityRank: live ? 3 : 0,
           time: new Date(emergency.created_at).getTime(),
           model: {
             kind: "emergency",
             id: emergency.id,
             live,
             closed: !live,
-            title: live
-              ? `Ongoing ${titleCase(emergency.type)}${street ? ` around ${street}` : ""}`
-              : `${titleCase(emergency.type)} emergency`,
-            meta: [street, timeAgo(emergency.created_at)].filter(Boolean).join(" · "),
+            resolved: ["resolved", "closed"].includes(emergency.status),
+            title: `${titleCase(emergency.type)} emergency${
+              emergency.address?.trim() || emergency.barangay?.trim()
+                ? ` around ${emergency.address?.trim() || emergency.barangay.trim()}`
+                : ""
+            }`,
+            meta: [
+              emergencyCommunities.get(emergency.id),
+              street,
+              timeAgo(emergency.created_at),
+            ]
+              .filter(Boolean)
+              .join(" · "),
             status: assignment
-              ? [assignment.responder.full_name, unit, titleCase(assignment.status)]
+              ? [
+                  assignment.responder.full_name,
+                  unit,
+                  titleCase(assignment.status),
+                ]
                   .filter(Boolean)
                   .join(" · ")
-              : "Unassigned",
-            snippet: emergency.note || "",
-            actionLabel: assignment ? "Open in Emergency Ops" : "Assign a responder",
+              : null,
+            priority: live
+              ? (priorityBadge("critical") ?? undefined)
+              : undefined,
+            snippet: emergency.display_description || emergency.note || "",
+            actionLabel: "Open full report",
           },
-          onAction: assignment
-            ? () => navigate(`/dashboard/emergencies?alert=${emergency.id}`)
-            : () => selectOnMap({ kind: "emergency", id: emergency.id }),
+          onAction: () => navigate(`/dashboard/reports?alert=${emergency.id}`),
         })
       }
     }
@@ -400,28 +703,37 @@ export default function AlertsMapPage() {
       for (const concern of visibleConcerns) {
         const closed = isResolvedRecord(concern)
         const street = streetOf(concern)
+        const copy = concernMapCopy(concern)
         rows.push({
           key: `concern-${concern.id}`,
           selection: { kind: "concern", id: concern.id },
           icon: <ConcernIcon category={concern.category} className="size-5" />,
-          rank: 3,
+          rank: closed ? 1 : 0,
+          priorityRank: concernPriorityRank(
+            concern.severity ?? concern.priority
+          ),
           time: new Date(concern.created_at).getTime(),
           model: {
             kind: "concern",
             id: concern.id,
             live: false,
             closed,
-            title: concern.title,
-            meta: [concernCategoryLabel(concern), street, timeAgo(concern.created_at)]
-              .filter(Boolean)
-              .join(" · "),
-            status: [
-              concern.priority === "high" ? "High priority" : null,
-              concern.reporter.full_name,
+            title: copy.title,
+            meta: [
+              concernCommunities.get(concern.id),
+              concernCategoryLabel(concern),
+              street,
+              timeAgo(concern.created_at),
             ]
               .filter(Boolean)
               .join(" · "),
-            snippet: concern.description || "",
+            status: concern.reporter.full_name,
+            priority:
+              concern.severity_assessed && concern.severity
+                ? (priorityBadge(concern.severity) ?? undefined)
+                : undefined,
+            snippet: copy.snippet,
+            snippetLabel: copy.snippetLabel,
             actionLabel: "Open full report",
           },
           onAction: () => navigate(`/dashboard/reports/${concern.id}`),
@@ -436,6 +748,7 @@ export default function AlertsMapPage() {
           key: `advisory-${advisory.id}`,
           icon: <MegaphoneIcon className="size-5" strokeWidth={1.9} />,
           rank: 4,
+          priorityRank: 0,
           time: startsAt ? new Date(startsAt).getTime() : 0,
           model: {
             kind: "advisory",
@@ -461,93 +774,59 @@ export default function AlertsMapPage() {
       }
     }
 
-    if (feedChip === "resolved") {
-      for (const emergency of snapshot.emergencies) {
-        if (isActiveEmergency(emergency)) continue
-        const street = streetOf(emergency)
-        rows.push({
-          key: `emergency-${emergency.id}`,
-          selection: { kind: "emergency", id: emergency.id },
-          icon: <AlertTriangleIcon className="size-5" strokeWidth={1.9} />,
-          rank: 2,
-          time: new Date(emergency.updated_at || emergency.created_at).getTime(),
-          model: {
-            kind: "emergency",
-            id: emergency.id,
-            live: false,
-            closed: true,
-            title: `${titleCase(emergency.type)} emergency`,
-            meta: [street, timeAgo(emergency.updated_at || emergency.created_at)]
-              .filter(Boolean)
-              .join(" · "),
-            status: null,
-            snippet: emergency.note || "",
-            actionLabel: "Open in Emergency Ops",
-          },
-          onAction: () => navigate(`/dashboard/emergencies?alert=${emergency.id}`),
-        })
-      }
-      for (const concern of snapshot.concerns) {
-        if (!isResolvedRecord(concern)) continue
-        const street = streetOf(concern)
-        rows.push({
-          key: `concern-${concern.id}`,
-          selection: { kind: "concern", id: concern.id },
-          icon: <ConcernIcon category={concern.category} className="size-5" />,
-          rank: 3,
-          time: new Date(concern.updated_at || concern.created_at).getTime(),
-          model: {
-            kind: "concern",
-            id: concern.id,
-            live: false,
-            closed: true,
-            title: concern.title,
-            meta: [concernCategoryLabel(concern), street, timeAgo(concern.updated_at || concern.created_at)]
-              .filter(Boolean)
-              .join(" · "),
-            status: null,
-            snippet: concern.description || "",
-            actionLabel: "Open full report",
-          },
-          onAction: () => navigate(`/dashboard/reports/${concern.id}`),
-        })
-      }
-    }
-
-    rows.sort((a, b) => a.rank - b.rank || b.time - a.time)
+    rows.sort(
+      (a, b) =>
+        a.rank - b.rank || b.priorityRank - a.priorityRank || b.time - a.time
+    )
     return rows.slice(0, 50)
-  }, [snapshot, visibleEmergencies, visibleConcerns, feedChip, navigate, selectOnMap])
+  }, [
+    snapshot,
+    visibleEmergencies,
+    visibleConcerns,
+    feedChip,
+    navigate,
+    concernCommunities,
+    emergencyCommunities,
+  ])
 
   const mapCounts = useMemo(() => {
     return {
-      emergencies: visibleEmergencies.length,
-      concerns: visibleConcerns.length,
+      concerns: visibleConcerns.length + visibleEmergencies.length,
       advisories: (snapshot?.advisories ?? []).length,
     }
   }, [snapshot, visibleConcerns, visibleEmergencies])
 
-  const areaName = snapshot?.map.boundary.name || "your coverage area"
+  const areaName =
+    snapshot?.map.boundary.name ||
+    snapshot?.communities.find(
+      (community) => community.id === snapshot?.home_community_id
+    )?.name ||
+    snapshot?.communities[0]?.name ||
+    ""
 
   // The resident alerts panel, exactly: one white pane, one 40px header row,
   // and the list swapped for the record in place.
   const panelBody = (
     <div className="flex h-full min-h-0 flex-col bg-white text-neutral-900">
-      <div className="shrink-0 bg-white px-3 pb-2 pt-2">
+      <div className="shrink-0 bg-white px-3 pt-2 pb-2">
         <MapFilterChips
           className="min-w-0"
           tone="light"
-          chips={FEED_CHIPS}
+          chips={ALERT_FEED_CHIPS}
           chip={weatherOpen ? "" : feedChip}
           onSelect={(key) => {
             setFeedChip(key)
             setWeatherOpen(false)
+            // A filter choice is a request for the matching list, not a
+            // request to keep showing the previously opened alert detail.
+            clearSelection()
           }}
           label="Alert types"
         />
       </div>
       {selected ? (
         <>
-          <div className="flex shrink-0 items-center gap-1 px-2 pb-1 pt-3">
+          <div className="flex shrink-0 items-center gap-1 px-2 pt-3 pb-1">
             <button
               type="button"
               onClick={clearSelection}
@@ -564,7 +843,9 @@ export default function AlertsMapPage() {
             {snapshot ? (
               <DetailPanel
                 selected={selected}
-                snapshot={snapshot}
+                snapshot={filteredSnapshot}
+                audience={isResponder ? "responder" : "official"}
+                viewerId={user?.id ?? null}
                 onEmergencyUpdated={updateEmergency}
               />
             ) : null}
@@ -593,12 +874,12 @@ export default function AlertsMapPage() {
     //             nothing to resolve against and `flex-1` wins instead.
     // Shipping only one of them collapses the map to zero height on the other
     // breakpoint, which is what rendered the map area as blank.
-    <div className="relative h-full min-h-0 w-full flex-1 overflow-hidden bg-nav-bg">
+    <div className="relative h-full min-h-0 w-full flex-1 overflow-hidden bg-white">
       {/* Mounted before the fetch resolves: tiles, controls and the legend are
           the map's own chrome and do not need a single record to be useful.
           The snapshot only fills them in. */}
       <AlertsLeafletMap
-        snapshot={snapshot ?? PENDING_SNAPSHOT}
+        snapshot={filteredSnapshot}
         layers={layers}
         selected={selected}
         selectedStreetNames={mapSelectedStreetNames}
@@ -607,6 +888,15 @@ export default function AlertsMapPage() {
         onResetLayers={resetLayers}
         onMapInteract={collapseSheetForMap}
         counts={mapCounts}
+        communities={snapshot?.communities ?? []}
+        currentCommunityId={
+          homeCommunityId ??
+          snapshot?.home_community_id ??
+          snapshot?.operational.community_id ??
+          null
+        }
+        boundaryVisible={communityBoundaryVisible}
+        onCommunitySelect={changeCommunity}
       />
 
       {/* Desktop: the feed floats over the map instead of cutting a rail. */}
@@ -616,14 +906,20 @@ export default function AlertsMapPage() {
           onClick={() => setPanelCollapsed(false)}
           aria-label="Open alerts"
           title="Open alerts"
-          className="absolute left-4 top-4 z-[600] hidden size-10 items-center justify-center rounded-lg border border-neutral-200 bg-white shadow-md lg:flex"
+          className="absolute top-4 left-4 z-[600] hidden size-10 items-center justify-center rounded-lg border border-neutral-200 bg-white shadow-md lg:flex"
         >
-          <CircleAlertIcon className="size-5 shrink-0 text-neutral-800" strokeWidth={2.25} />
+          <CircleAlertIcon
+            className="size-5 shrink-0 text-neutral-800"
+            strokeWidth={2.25}
+          />
         </button>
       ) : (
-        <aside className="absolute left-4 top-4 z-[600] hidden max-h-[min(72vh,620px)] w-[min(100%,380px)] flex-col overflow-hidden rounded-2xl bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)] lg:flex">
+        <aside className="absolute top-4 left-4 z-[600] hidden max-h-[min(72vh,620px)] w-[min(100%,380px)] flex-col overflow-hidden rounded-2xl bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)] lg:flex">
           <div className="flex h-10 shrink-0 items-center gap-2 px-3">
-            <CircleAlertIcon className="size-5 shrink-0 text-neutral-800" strokeWidth={2.25} />
+            <CircleAlertIcon
+              className="size-5 shrink-0 text-neutral-800"
+              strokeWidth={2.25}
+            />
             <button
               type="button"
               onClick={() => setPanelCollapsed(true)}
@@ -642,9 +938,11 @@ export default function AlertsMapPage() {
           this route hides so the map can run full-bleed. */}
       <button
         type="button"
-        onClick={() => navigate("/dashboard/overview")}
-        aria-label="Back to the overview"
-        className="absolute left-3 top-3 z-[600] flex size-10 items-center justify-center rounded-xl border border-neutral-200 bg-white/95 text-neutral-900 shadow-md backdrop-blur transition-colors hover:bg-neutral-100 lg:hidden"
+        onClick={() =>
+          navigate(isResponder ? "/dashboard/reports" : "/dashboard/overview")
+        }
+        aria-label={isResponder ? "Back to reports" : "Back to the overview"}
+        className="absolute top-3 left-3 z-[600] flex size-10 items-center justify-center rounded-xl border border-neutral-200 bg-white/95 text-neutral-900 shadow-md backdrop-blur transition-colors hover:bg-neutral-100 lg:hidden"
       >
         <ChevronLeftIcon className="size-5" strokeWidth={2.2} />
       </button>
@@ -655,10 +953,10 @@ export default function AlertsMapPage() {
           on where the incident is. */}
       <div
         className={cn(
-          "absolute bottom-0 left-0 right-0 z-[600] flex flex-col overflow-hidden rounded-t-3xl border border-neutral-200 border-b-0 bg-white shadow-[0_-10px_36px_rgba(15,23,42,.18)] lg:hidden",
+          "absolute right-0 bottom-0 left-0 z-[600] flex flex-col overflow-hidden rounded-t-3xl border border-b-0 border-neutral-200 bg-white shadow-[0_-10px_36px_rgba(15,23,42,.18)] lg:hidden",
           // Only animate on a snap; during a drag the height must track the
           // finger exactly or it feels like it is lagging behind.
-          !sheet.dragging && "transition-[height] duration-200 ease-out",
+          !sheet.dragging && "transition-[height] duration-200 ease-out"
         )}
         style={{ height: sheet.height, maxHeight: "92svh" }}
         role="dialog"
@@ -670,7 +968,7 @@ export default function AlertsMapPage() {
           onPointerUp={sheet.onHandlePointerUp}
           onPointerCancel={sheet.onHandlePointerUp}
           aria-label="Drag sheet"
-          className="flex shrink-0 touch-none cursor-grab flex-col items-center bg-white px-3 pb-1 pt-2 active:cursor-grabbing"
+          className="flex shrink-0 cursor-grab touch-none flex-col items-center bg-white px-3 pt-2 pb-1 active:cursor-grabbing"
         >
           <span className="mb-1 h-1.5 w-11 rounded-full bg-neutral-300" />
           {sheet.height <= sheet.snaps().hidden + 8 ? (
@@ -684,7 +982,8 @@ export default function AlertsMapPage() {
         <div
           className={cn(
             "flex min-h-0 flex-1 flex-col overflow-hidden bg-white",
-            sheet.height <= sheet.snaps().hidden + 14 && "pointer-events-none opacity-0",
+            sheet.height <= sheet.snaps().hidden + 14 &&
+              "pointer-events-none opacity-0"
           )}
         >
           {!isDesktop ? panelBody : null}

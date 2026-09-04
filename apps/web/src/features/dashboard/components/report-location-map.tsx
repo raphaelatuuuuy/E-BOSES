@@ -6,7 +6,6 @@ import type leaflet from "leaflet"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
-import { matchMarikinaHeightsStreet } from "@/features/auth/lib/marikina-heights-streets"
 import { reverseGeocodeToMarikinaStreet } from "@/features/auth/lib/reverse-geocode"
 import { reverseGeocode, searchGeocode } from "@/lib/geocode"
 import {
@@ -30,8 +29,14 @@ function looksLikeCoordOrPlaceholder(value?: string | null) {
   if (!value?.trim()) return true
   const v = value.trim().toLowerCase()
   if (v === "pending") return true
-  if (v === "marikina heights" || v === "marikina" || v === "marikina city") return true
-  if (v === "pinned location" || v === "selected location" || v === "street unavailable") return true
+  if (v === "marikina heights" || v === "marikina" || v === "marikina city")
+    return true
+  if (
+    v === "pinned location" ||
+    v === "selected location" ||
+    v === "street unavailable"
+  )
+    return true
   if (/^lat\b/.test(v) || /\blng\b/.test(v)) return true
   if (/^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(v)) return true
   return false
@@ -41,7 +46,12 @@ function isUsableReportAddress(value?: string | null) {
   return !looksLikeCoordOrPlaceholder(value)
 }
 
-function haversineMeters(aLat: number, aLng: number, bLat: number, bLng: number) {
+function haversineMeters(
+  aLat: number,
+  aLng: number,
+  bLat: number,
+  bLng: number
+) {
   const R = 6371000
   const toRad = (d: number) => (d * Math.PI) / 180
   const dLat = toRad(bLat - aLat)
@@ -58,7 +68,11 @@ type NamedRoad = { name: string; lat: number; lng: number; distance: number }
  * When the exact pin sits on an unnamed residential way, find the nearest
  * named highway within ~150m (Overpass) so the label matches map labels.
  */
-async function nearestNamedRoads(lat: number, lng: number, radiusM = 150): Promise<NamedRoad[]> {
+async function nearestNamedRoads(
+  lat: number,
+  lng: number,
+  radiusM = 150
+): Promise<NamedRoad[]> {
   const query = `
     [out:json][timeout:12];
     way["highway"]["name"](around:${radiusM},${lat},${lng});
@@ -136,9 +150,7 @@ async function reverseGeocodeStreet(lat: number, lng: number): Promise<string> {
         ""
       ).trim()
       if (nominatimRoad) {
-        const curated = matchMarikinaHeightsStreet(nominatimRoad)
-        const label = curated || nominatimRoad
-        return house ? `${house} ${label}` : label
+        return house ? `${house} ${nominatimRoad}` : nominatimRoad
       }
     }
   } catch {
@@ -148,8 +160,7 @@ async function reverseGeocodeStreet(lat: number, lng: number): Promise<string> {
   // 3) Nearest named OSM roads around the pin (fixes unnamed residential ways)
   const nearby = await nearestNamedRoads(lat, lng, 150)
   for (const road of nearby) {
-    const curated = matchMarikinaHeightsStreet(road.name)
-    if (curated) return curated
+    if (road.name) return road.name
   }
   if (nearby[0]?.name) return nearby[0].name
 
@@ -229,7 +240,11 @@ export function ReportLocationMap({
 
   // No pin on file — resolve the stored address into approximate coordinates
   // so the card still shows a map instead of a dead end.
-  const [geocoded, setGeocoded] = useState<{ address: string; lat: number; lng: number } | null>(null)
+  const [geocoded, setGeocoded] = useState<{
+    address: string
+    lat: number
+    lng: number
+  } | null>(null)
   const resolvedGeocoded = geocoded?.address === streetAddress ? geocoded : null
   useEffect(() => {
     if (hasPinnedCoords || !streetAddress) return
@@ -242,7 +257,7 @@ export function ReportLocationMap({
       setGeocoded(
         Number.isFinite(lat) && Number.isFinite(lng)
           ? { address: streetAddress, lat, lng }
-          : null,
+          : null
       )
     })
     return () => {
@@ -265,7 +280,9 @@ export function ReportLocationMap({
       await import("leaflet/dist/leaflet.css")
       if (cancelled || !containerRef.current) return
 
-      const el = containerRef.current as HTMLDivElement & { _leaflet_id?: number }
+      const el = containerRef.current as HTMLDivElement & {
+        _leaflet_id?: number
+      }
       if (el._leaflet_id) {
         try {
           mapRef.current?.remove()
@@ -280,11 +297,12 @@ export function ReportLocationMap({
         zoom: 18,
         zoomControl: false,
         attributionControl: false,
-        dragging: false,
-        scrollWheelZoom: false,
-        doubleClickZoom: false,
-        boxZoom: false,
-        keyboard: false,
+        dragging: true,
+        scrollWheelZoom: true,
+        touchZoom: true,
+        doubleClickZoom: true,
+        boxZoom: true,
+        keyboard: true,
       })
 
       addBaseTiles(L, map, "light", {
@@ -304,7 +322,7 @@ export function ReportLocationMap({
               iconKey,
               status: status ?? "",
               selected: pinSelected,
-            },
+            }
           )}</div>`,
           iconSize: [pinSize, pinSize],
           iconAnchor: [pinSize / 2, pinSize / 2],
@@ -364,7 +382,7 @@ export function ReportLocationMap({
         className={cn(
           "flex items-center justify-center rounded-[16px] bg-neutral-100 text-[13px] text-neutral-400",
           heightClassName,
-          className,
+          className
         )}
       >
         No map location
@@ -377,10 +395,13 @@ export function ReportLocationMap({
       className={cn(
         "relative overflow-hidden rounded-xl bg-tint",
         heightClassName,
-        className,
+        className
       )}
     >
-      <div ref={containerRef} className="eboses-report-map pointer-events-none absolute inset-0 z-0 h-full w-full" />
+      <div
+        ref={containerRef}
+        className="eboses-report-map pointer-events-auto absolute inset-0 z-0 h-full w-full"
+      />
       <style>{`
         .eboses-report-map.leaflet-container {
           width: 100%;
@@ -448,17 +469,19 @@ export function ReportLocationAddress({
   latitude?: number | string | null
   longitude?: number | string | null
 }) {
-  const street = useReportStreetAddress({ address, barangay, latitude, longitude })
+  const street = useReportStreetAddress({
+    address,
+    barangay,
+    latitude,
+    longitude,
+  })
 
   return (
     <div className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3.5 py-3">
       <MapPinIcon className="size-6 shrink-0 text-neutral-500" />
-      <p className="min-w-0 truncate text-[15px] font-medium leading-snug text-neutral-900">
+      <p className="min-w-0 truncate text-[15px] leading-snug font-medium text-neutral-900">
         {street}
       </p>
     </div>
   )
 }
-
-
-

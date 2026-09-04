@@ -22,6 +22,9 @@ export function roleLabelOf(role?: string | null): string {
 
 export function roleLabel(user?: PublicUser | null): string {
   if (!user) return ""
+  if (user.position?.trim()) {
+    return user.position.trim()
+  }
   if (user.role === "first_responder" && user.responder_unit) {
     return responderUnitLabel(user.responder_unit)
   }

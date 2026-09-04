@@ -87,9 +87,10 @@ def _official(request):
         and user.is_authenticated
         and user.is_active
         and (
-            user.is_staff
-            or user.is_superuser
+            user.is_superuser
             or (
+                user.role == user.Role.BARANGAY_OFFICIAL
+                and
                 user_has_role_permission(user, "accounts.verify_residents")
                 and user_has_capability(user, MANAGE_USERS)
             )
@@ -98,17 +99,11 @@ def _official(request):
 
 
 def _official_community(request):
-    from apps.emergencies.models import Community
+    from apps.community_scope import selected_community
 
     requested = request.data.get("community_id") if hasattr(request, "data") else None
     requested = requested or request.query_params.get("community_id")
-    if request.user.is_superuser and requested:
-        return Community.objects.filter(public_id=requested, status=Community.Status.ACTIVE).first()
-    community_id = request.user.designations.filter(
-        is_active=True,
-        department__community__status=Community.Status.ACTIVE,
-    ).values_list("department__community_id", flat=True).first()
-    return Community.objects.filter(pk=community_id).first() if community_id else None
+    return selected_community(request.user, requested)
 
 
 def _normalize_extraction_hints(raw) -> dict:
@@ -888,13 +883,47 @@ class OCRDraftConfigurationView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [JSONParser]
 
+    def _ensure_draft(self, community, actor):
+        """Return this community's draft, creating an empty one when needed.
+
+        Communities are allowed to exist before an official publishes any
+        residence-proof document. Starting from an empty draft keeps the OCR
+        editor community-scoped without copying the global/Marikina catalog.
+        """
+        draft = draft_configuration(community=community)
+        if draft is not None:
+            return draft
+        scoped = OCRConfigurationVersion.objects.filter(
+            community=community,
+            scope="residence_proof",
+        )
+        latest = scoped.filter(status=OCRConfigurationVersion.Status.PUBLISHED).order_by("-version").first()
+        if latest is not None:
+            return _clone_configuration(
+                latest,
+                version=scoped.order_by("-version").first().version + 1,
+                status=OCRConfigurationVersion.Status.DRAFT,
+                based_on=latest,
+            )
+        next_version = (scoped.order_by("-version").values_list("version", flat=True).first() or 0) + 1
+        return OCRConfigurationVersion.objects.create(
+            community=community,
+            scope="residence_proof",
+            version=next_version,
+            status=OCRConfigurationVersion.Status.DRAFT,
+            revision=1,
+            settings={},
+            notes="No residence-proof documents configured yet.",
+            created_by=actor,
+        )
+
     def get(self, request):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
         community = _official_community(request)
         if not community:
             return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
-        return Response(_configuration_payload(draft_configuration(community=community)))
+        return Response(_configuration_payload(self._ensure_draft(community, request.user)))
 
     def patch(self, request):
         if not _official(request):
@@ -903,7 +932,7 @@ class OCRDraftConfigurationView(APIView):
             community = _official_community(request)
             if not community:
                 return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
-            configuration = _apply_draft_payload(draft_configuration(community=community), request.data)
+            configuration = _apply_draft_payload(self._ensure_draft(community, request.user), request.data)
         except (ValidationError, TypeError, ValueError) as exc:
             detail = getattr(exc, "message_dict", None) or getattr(exc, "messages", None) or str(exc)
             return Response(detail, status=status.HTTP_400_BAD_REQUEST)
@@ -1006,7 +1035,13 @@ class OCRAuditView(APIView):
     def get(self, request):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        entries = AuditLog.objects.select_related("actor").filter(action__startswith="ocr.").order_by("-created_at", "-id")[:100]
+        community = _official_community(request)
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
+        entries = AuditLog.objects.select_related("actor").filter(
+            action__startswith="ocr.",
+            community=community,
+        ).order_by("-created_at", "-id")[:100]
         return Response({
             "results": [
                 {
@@ -1408,7 +1443,10 @@ class VerificationCaseListView(APIView):
     def get(self, request):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        queryset = ResidenceVerificationCase.objects.select_related(
+        from apps.community_scope import scope_user_queryset
+
+        users = scope_user_queryset(User.objects.all(), request.user)
+        queryset = ResidenceVerificationCase.objects.filter(user__in=users).select_related(
             "user", "user__resident_profile", "configuration", "document_type"
         ).prefetch_related("proofs", "checks")
         requested_status = request.query_params.get("status")
@@ -1423,7 +1461,10 @@ class VerificationCaseDetailView(APIView):
     def get(self, request, pk):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        case = ResidenceVerificationCase.objects.select_related(
+        from apps.community_scope import scope_user_queryset
+
+        users = scope_user_queryset(User.objects.all(), request.user)
+        case = ResidenceVerificationCase.objects.filter(user__in=users).select_related(
             "user", "user__resident_profile", "configuration", "document_type"
         ).prefetch_related("proofs", "checks").filter(pk=pk).first()
         if not case:
@@ -1438,6 +1479,11 @@ class VerificationCaseDecisionView(APIView):
     def post(self, request, pk):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
+        from apps.community_scope import scope_user_queryset
+
+        users = scope_user_queryset(User.objects.all(), request.user)
+        if not ResidenceVerificationCase.objects.filter(pk=pk, user__in=users).exists():
+            return Response({"detail": "Verification case not found."}, status=status.HTTP_404_NOT_FOUND)
         approve = request.data.get("decision") == "approve"
         if request.data.get("decision") not in {"approve", "reject"}:
             return Response({"decision": ["Use approve or reject."]}, status=status.HTTP_400_BAD_REQUEST)
@@ -1461,6 +1507,11 @@ class VerificationCaseRetryView(APIView):
     def post(self, request, pk):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
+        from apps.community_scope import scope_user_queryset
+
+        users = scope_user_queryset(User.objects.all(), request.user)
+        if not ResidenceVerificationCase.objects.filter(pk=pk, user__in=users).exists():
+            return Response({"detail": "Verification case not found."}, status=status.HTTP_404_NOT_FOUND)
         try:
             case = retry_case(pk)
             from .ocr_runtime import enqueue_case

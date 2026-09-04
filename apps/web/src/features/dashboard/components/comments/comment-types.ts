@@ -1,4 +1,8 @@
-import type { AnnouncementComment, ConcernComment, PublicUser } from "@/features/dashboard/api"
+import type {
+  AnnouncementComment,
+  ConcernComment,
+  PublicUser,
+} from "@/features/dashboard/api"
 import type { EmergencyCommunityComment } from "@/features/dashboard/emergency-api"
 import type { MentionUser } from "@/features/dashboard/components/comment-mentions"
 
@@ -16,12 +20,13 @@ export interface UnifiedComment {
   isMine: boolean
   isEdited: boolean
   originalBody: string
+  attachment: import("@/features/dashboard/api").PublicCommentAttachment | null
   replies: UnifiedComment[]
 }
 
 export function fromConcernComment(
   comment: ConcernComment,
-  sessionUser: PublicUser | null,
+  sessionUser: PublicUser | null
 ): UnifiedComment {
   return {
     id: comment.id,
@@ -35,7 +40,10 @@ export function fromConcernComment(
     isMine: sessionUser != null && comment.author.id === sessionUser.id,
     isEdited: Boolean(comment.is_edited),
     originalBody: (comment.original_body || "").trim(),
-    replies: (comment.replies ?? []).map((reply) => fromConcernComment(reply, sessionUser)),
+    attachment: comment.attachment ?? null,
+    replies: (comment.replies ?? []).map((reply) =>
+      fromConcernComment(reply, sessionUser)
+    ),
   }
 }
 
@@ -44,7 +52,10 @@ export function fromConcernComment(
  * profile. Widening it to a PublicUser is what lets those threads use the same
  * avatar and the same @-mention list as concern threads.
  */
-function maskedAuthor(author: { id: number; full_name: string } | undefined, label: string) {
+function maskedAuthor(
+  author: { id: number; full_name: string } | undefined,
+  label: string
+) {
   if (!author?.id) return null
   const name = author.full_name || label
   const parts = name.split(/\s+/).filter(Boolean)
@@ -53,13 +64,15 @@ function maskedAuthor(author: { id: number; full_name: string } | undefined, lab
     full_name: name,
     role: "resident",
     initials:
-      `${parts[0]?.[0] ?? ""}${parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : ""}`
-        .toUpperCase() || "?",
+      `${parts[0]?.[0] ?? ""}${parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : ""}`.toUpperCase() ||
+      "U",
     last_seen_at: null,
   } as PublicUser
 }
 
-export function fromAnnouncementComment(comment: AnnouncementComment): UnifiedComment {
+export function fromAnnouncementComment(
+  comment: AnnouncementComment
+): UnifiedComment {
   return {
     id: comment.id,
     author: {
@@ -72,13 +85,16 @@ export function fromAnnouncementComment(comment: AnnouncementComment): UnifiedCo
     isMine: comment.is_mine,
     isEdited: false,
     originalBody: "",
+    attachment: comment.attachment ?? null,
     replies: (comment.replies ?? [])
       .filter((reply) => reply.status === "visible")
       .map(fromAnnouncementComment),
   }
 }
 
-export function fromEmergencyComment(comment: EmergencyCommunityComment): UnifiedComment {
+export function fromEmergencyComment(
+  comment: EmergencyCommunityComment
+): UnifiedComment {
   return {
     id: comment.id,
     author: {
@@ -91,6 +107,7 @@ export function fromEmergencyComment(comment: EmergencyCommunityComment): Unifie
     isMine: comment.is_mine,
     isEdited: false,
     originalBody: "",
+    attachment: comment.attachment ?? null,
     replies: (comment.replies ?? [])
       .filter((reply) => reply.status === "visible")
       .map(fromEmergencyComment),
@@ -102,7 +119,8 @@ export function mentionUsersOf(comments: UnifiedComment[]): MentionUser[] {
   const walk = (list: UnifiedComment[]) => {
     for (const comment of list) {
       const user = comment.author.user
-      if (user?.id && user.full_name) map.set(user.id, { id: user.id, full_name: user.full_name })
+      if (user?.id && user.full_name)
+        map.set(user.id, { id: user.id, full_name: user.full_name })
       walk(comment.replies)
     }
   }

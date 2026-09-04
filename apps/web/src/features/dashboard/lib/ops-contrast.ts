@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react"
  * Sunlight contrast mode for the responder console.
  *
  * Toggles `data-ops-contrast="high"` on <html>; globals.css restates the
- * staff-dark token ladder with stronger text, hairline and surface steps so
+ * shared light token ladder with stronger text, hairline and surface steps so
  * the console stays readable under direct glare. Per device, persisted.
  */
 const STORAGE_KEY = "eboses:ops-contrast"

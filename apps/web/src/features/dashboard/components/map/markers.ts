@@ -75,17 +75,25 @@ export function concernGlyph(category: string): readonly string[] {
  */
 const LUCIDE_SVG_CACHE = new Map<string, string>()
 
-export function lucideIconSvgHtml(iconKey: string | undefined | null): string | null {
+export function lucideIconSvgHtml(
+  iconKey: string | undefined | null
+): string | null {
   if (!iconKey) return null
   const cached = LUCIDE_SVG_CACHE.get(iconKey)
   if (cached !== undefined) return cached || null
 
   let html = ""
   try {
-    const icon = (lucideIcons as unknown as Record<string, ComponentType<{ size?: number; strokeWidth?: number }>>)[
-      iconKey
-    ]
-    if (icon) html = renderToStaticMarkup(createElement(icon, { size: 16, strokeWidth: 2.2 }))
+    const icon = (
+      lucideIcons as unknown as Record<
+        string,
+        ComponentType<{ size?: number; strokeWidth?: number }>
+      >
+    )[iconKey]
+    if (icon)
+      html = renderToStaticMarkup(
+        createElement(icon, { size: 16, strokeWidth: 2.2 })
+      )
   } catch {
     html = ""
   }
@@ -102,7 +110,7 @@ function svg(paths: readonly string[], strokeWidth = 2.2, box = 26) {
   const inner = paths
     .map(
       (d) =>
-        `<path d="${d}" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/>`,
+        `<path d="${d}" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/>`
     )
     .join("")
   const iconPx = Math.round(box * 0.54)
@@ -135,6 +143,7 @@ export interface GlyphPinOptions {
   flat?: boolean
   /** Extra class(es) appended to the pin, for a one-off scoped CSS override. */
   className?: string
+  label?: string
 }
 
 /**
@@ -155,6 +164,7 @@ export function glyphPinHtml({
   hoverGrow = false,
   flat = false,
   className = "",
+  label,
 }: GlyphPinOptions) {
   const box = selected ? Math.round(size * 1.3) : size
   const ring = selected ? 3 : 2
@@ -163,11 +173,28 @@ export function glyphPinHtml({
   const tintClass = tint ? " is-tint" : ""
   const flatClass = flat ? " is-flat" : ""
   const extraClass = className ? ` ${className}` : ""
+  const labelMarkup = label
+    ? `<span class="eboses-pin__label-icon">${content ?? svg(paths, strokeWidth, box)}</span><span class="eboses-pin__label">${escapePinText(label)}</span>`
+    : (content ?? svg(paths, strokeWidth, box))
   return `<span class="eboses-pin eboses-pin--glyph${live ? " is-live" : ""}${
     selected ? " is-selected" : ""
   }${tone === "dark" ? " is-dark" : ""}${tintClass}${neutralClass}${hoverGrowClass}${flatClass}${extraClass}" style="--pin:${color};--size:${box}px;--ring:${ring}px">${
     live ? '<span class="eboses-pin__halo"></span>' : ""
-  }<span class="eboses-pin__disc">${content ?? svg(paths, strokeWidth, box)}</span></span>`
+  }<span class="eboses-pin__disc${label ? " eboses-pin__disc--labeled" : ""}">${labelMarkup}</span></span>`
+}
+
+function escapePinText(value: string) {
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[character] ?? character
+  )
 }
 
 export function glyphPinSize(size = 26, selected = false) {
@@ -203,6 +230,10 @@ export function dotPinHtml({
  * People are context, not records: they stay plain dots so a glyph pin always
  * means "something was reported here".
  */
-export function personDotHtml(color: string, focused = false, tone: MarkerTone = "light") {
+export function personDotHtml(
+  color: string,
+  focused = false,
+  tone: MarkerTone = "light"
+) {
   return dotPinHtml({ color, size: focused ? 13 : 10, live: focused, tone })
 }

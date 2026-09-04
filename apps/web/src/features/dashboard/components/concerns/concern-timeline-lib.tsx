@@ -1,6 +1,13 @@
 import type { ReactNode } from "react"
 
-import type { Concern, ConcernAssignment, ConcernStatusEvent, ConcernTimelineRecord, PublicUser } from "@/features/dashboard/api"
+import type {
+  Concern,
+  ConcernAssignment,
+  ConcernStatusEvent,
+  ConcernResolutionEvidence,
+  ConcernTimelineRecord,
+  PublicUser,
+} from "@/features/dashboard/api"
 import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
 import {
   toMediaPreviewItem,
@@ -43,9 +50,12 @@ export type ConcernTimelineEntry = {
   actorUser?: PublicUser | null
 }
 
-const STATUS_META: Record<string, { label: string; accent: ConcernTimelineAccent; icon: ConcernTimelineIcon }> = {
+const STATUS_META: Record<
+  string,
+  { label: string; accent: ConcernTimelineAccent; icon: ConcernTimelineIcon }
+> = {
   submitted: { label: "Received", accent: "info", icon: "inbox" },
-  under_review: { label: "Being handled", accent: "brand", icon: "clock" },
+  under_review: { label: "Being handled", accent: "neutral", icon: "clock" },
   assigned: { label: "Assigned", accent: "info", icon: "network" },
   in_progress: { label: "Being handled", accent: "warning", icon: "clock" },
   resolved: { label: "Resolved", accent: "success", icon: "check" },
@@ -66,11 +76,15 @@ export function formatTimelineTime(value: string) {
 }
 
 export function concernTimelineStatusLabel(status: string) {
-  return STATUS_META[status]?.label
-    ?? status.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+  return (
+    STATUS_META[status]?.label ??
+    status.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+  )
 }
 
-export function concernTimelineStatusAccent(status: string): ConcernTimelineAccent {
+export function concernTimelineStatusAccent(
+  status: string
+): ConcernTimelineAccent {
   return STATUS_META[status]?.accent ?? "neutral"
 }
 
@@ -92,11 +106,11 @@ export function concernTimelineStatusTextClass(status: string) {
 function actorLabel(
   actor: PublicUser | null,
   fallback: PublicUser | null = null,
-  emptyLabel = "System",
+  emptyLabel = "System"
 ): string {
   const person = actor?.full_name ? actor : fallback
   if (!person?.full_name) return emptyLabel
-  return `${person.full_name} ${roleLabelOf(person)}`
+  return `${person.full_name} · ${person.position?.trim() || roleLabelOf(person)}`
 }
 
 function roleLabelOf(actor: PublicUser) {
@@ -109,51 +123,118 @@ function roleLabelOf(actor: PublicUser) {
   return roleLabels[actor.role] || "User"
 }
 
-type TimelineAvatarMember = Pick<PublicUser, "id" | "full_name" | "initials" | "role">
+type TimelineAvatarMember = Pick<
+  PublicUser,
+  "id" | "full_name" | "initials" | "role"
+>
 
 function memberAvatarGroup(members: TimelineAvatarMember[]) {
   if (!members.length) return null
   return (
-    <div className="flex shrink-0 items-center pl-2" aria-label={`${members.length} assigned member${members.length === 1 ? "" : "s"}`}>
+    <div
+      className="flex shrink-0 items-center pl-2"
+      aria-label={`${members.length} assigned member${members.length === 1 ? "" : "s"}`}
+    >
       {members.slice(0, 4).map((member, index) => (
         <span
           key={member.id}
           className={`inline-flex size-6 items-center justify-center rounded-full border-2 border-white bg-slate-soft text-[8px] font-bold text-navy-muted ${index ? "-ml-1.5" : ""}`}
           title={`${member.full_name} · ${member.role.replace(/_/g, " ")}`}
         >
-          {(member.initials || member.full_name || "?").charAt(0).toUpperCase()}
+          {(member.initials || member.full_name || "U").charAt(0).toUpperCase()}
         </span>
       ))}
-      {members.length > 4 ? <span className="-ml-1.5 inline-flex size-6 items-center justify-center rounded-full border-2 border-white bg-neutral-100 text-[8px] font-semibold text-neutral-500">+{members.length - 4}</span> : null}
+      {members.length > 4 ? (
+        <span className="-ml-1.5 inline-flex size-6 items-center justify-center rounded-full border-2 border-white bg-neutral-100 text-[8px] font-semibold text-neutral-500">
+          +{members.length - 4}
+        </span>
+      ) : null}
     </div>
   )
 }
 
-function noteBlock(text: string, members: TimelineAvatarMember[] = [], unitBadge = "") {
+function noteBlock(
+  text: string,
+  members: TimelineAvatarMember[] = [],
+  unitBadge = ""
+) {
   return (
-    <div className="mt-1 flex items-center justify-between gap-2 rounded-[10px] bg-neutral-100 px-2.5 py-1.5 text-[11px] leading-relaxed text-neutral-600 whitespace-pre-wrap">
+    <div className="mt-1 flex items-center justify-between gap-2 rounded-[10px] bg-neutral-100 px-2.5 py-1.5 text-[11px] leading-relaxed whitespace-pre-wrap text-neutral-600">
       <span className="min-w-0">{text}</span>
       {unitBadge ? (
         <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[7px] font-bold text-navy-muted">
           {unitBadge}
         </span>
-      ) : memberAvatarGroup(members)}
+      ) : (
+        memberAvatarGroup(members)
+      )}
     </div>
   )
 }
 
-function assignmentUnitBadge(unit: { short_name?: string; code?: string } | null | undefined) {
+/** Resolved rows: the resolver's avatars lead the statement on the left and
+ * any proof photos sit inside the same container, under the text. */
+function resolvedNoteBlock({
+  text,
+  members,
+  proof,
+  proofPreview,
+  onOpenProof,
+}: {
+  text: string
+  members: TimelineAvatarMember[]
+  proof: ConcernResolutionEvidence[]
+  proofPreview: MediaPreviewItem[]
+  onOpenProof?: (items: MediaPreviewItem[], index: number) => void
+}) {
+  return (
+    <div className="mt-1 rounded-[10px] bg-neutral-100 px-2.5 py-1.5 text-[11px] leading-relaxed text-neutral-600">
+      <div className="flex items-center gap-2">
+        {memberAvatarGroup(members) ?? (
+          <span className="shrink-0" aria-hidden />
+        )}
+        <span className="min-w-0 flex-1">{text}</span>
+      </div>
+      {proof.length ? (
+        <div className="mt-1.5 grid grid-cols-2 gap-2">
+          {proof.map((item, proofIndex) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onOpenProof?.(proofPreview, proofIndex)}
+              className="overflow-hidden rounded-control border border-card-line bg-canvas text-left"
+              title={item.original_filename}
+            >
+              <AuthenticatedMediaImage
+                src={item.preview_url || item.raw_url}
+                alt={item.original_filename}
+                className="h-24 w-full object-cover"
+              />
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function assignmentUnitBadge(
+  unit: { short_name?: string; code?: string } | null | undefined
+) {
   return (unit?.short_name || unit?.code || "").trim()
 }
 
 function assignmentMembersFor(
   event: ConcernStatusEvent,
   report: Concern,
-  assignmentEntries: ConcernTimelineRecord[],
+  assignmentEntries: ConcernTimelineRecord[]
 ) {
   const eventTime = new Date(event.created_at).getTime()
   const matchingEntry = assignmentEntries
-    .map((entry) => ({ entry, distance: Math.abs(new Date(entry.created_at).getTime() - eventTime) }))
+    .map((entry) => ({
+      entry,
+      distance: Math.abs(new Date(entry.created_at).getTime() - eventTime),
+    }))
     .sort((a, b) => a.distance - b.distance)
     .find(({ distance }) => distance <= 30_000)?.entry
   const metadataIds = matchingEntry?.metadata.assignee_ids
@@ -164,36 +245,53 @@ function assignmentMembersFor(
       : []
   if (ids.length) {
     return (report.assignments ?? [])
-      .filter((assignment) => assignment.assignee && ids.includes(assignment.assignee.id))
+      .filter(
+        (assignment) =>
+          assignment.assignee && ids.includes(assignment.assignee.id)
+      )
       .map((assignment) => assignment.assignee!)
   }
-  const departmentId = typeof matchingEntry?.metadata.department_id === "number"
-    ? matchingEntry.metadata.department_id
-    : null
+  const departmentId =
+    typeof matchingEntry?.metadata.department_id === "number"
+      ? matchingEntry.metadata.department_id
+      : null
   return (report.assignments ?? [])
-    .filter((assignment) => assignment.assignee && (!departmentId || assignment.department?.id === departmentId))
+    .filter(
+      (assignment) =>
+        assignment.assignee &&
+        (!departmentId || assignment.department?.id === departmentId)
+    )
     .map((assignment) => assignment.assignee!)
-    .filter((member, index, list) => list.findIndex((item) => item.id === member.id) === index)
+    .filter(
+      (member, index, list) =>
+        list.findIndex((item) => item.id === member.id) === index
+    )
 }
 
 function assignmentUnitName(
   event: ConcernStatusEvent,
   report: Concern,
   assignmentEntries: ConcernTimelineRecord[],
-  usedAssignmentIds: Set<number>,
+  usedAssignmentIds: Set<number>
 ) {
   const eventTime = new Date(event.created_at).getTime()
   const matchingEntry = assignmentEntries
     .filter((entry) => !usedAssignmentIds.has(entry.id))
-    .map((entry) => ({ entry, distance: Math.abs(new Date(entry.created_at).getTime() - eventTime) }))
+    .map((entry) => ({
+      entry,
+      distance: Math.abs(new Date(entry.created_at).getTime() - eventTime),
+    }))
     .sort((a, b) => a.distance - b.distance)
     .find(({ distance }) => distance <= 30_000)?.entry
 
   if (matchingEntry) {
     usedAssignmentIds.add(matchingEntry.id)
     const metadataName = matchingEntry.metadata.department_name
-    if (typeof metadataName === "string" && metadataName.trim()) return metadataName.trim()
-    const messageName = matchingEntry.message.match(/^(?:Reassigned|Assigned) to\\s+(.+?)[.]?$/i)?.[1]?.trim()
+    if (typeof metadataName === "string" && metadataName.trim())
+      return metadataName.trim()
+    const messageName = matchingEntry.message
+      .match(/^(?:Reassigned|Assigned) to\\s+(.+?)[.]?$/i)?.[1]
+      ?.trim()
     if (messageName) return messageName
   }
 
@@ -203,18 +301,31 @@ function assignmentUnitName(
 export function buildConcernTimelineEntries(
   report: Concern,
   onOpenProof?: (items: MediaPreviewItem[], index: number) => void,
-  viewer?: PublicUser | null,
+  viewer?: PublicUser | null
 ): ConcernTimelineEntry[] {
   const events = [...(report.status_events ?? [])].sort(
-    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    (a, b) =>
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   )
+  const canShowAssignment = report.validation_status === "accepted"
   // “Received” is an intake state, not a resident-facing progress update.
   // The activity stream always starts with the unit that owns the report.
-  const lifecycleEvents = events.filter((event) => event.status !== "submitted")
-  const hasHandlingEvent = lifecycleEvents.some(
-    (event) => event.status === "under_review" || event.status === "in_progress",
+  const lifecycleEvents = events.filter(
+    (event) =>
+      event.status !== "submitted" &&
+      (canShowAssignment || event.status !== "assigned")
   )
-  if (!hasHandlingEvent) {
+  const recordedViewers = (report.viewers ?? []).filter(
+    (member) => member.role !== "resident"
+  )
+  const hasHandlingEvent = lifecycleEvents.some(
+    (event) => event.status === "under_review" || event.status === "in_progress"
+  )
+  // A handling row is meaningful only after a real status transition or a
+  // recorded official view. Do not manufacture one for every newly submitted
+  // report; that made residents see “An official has viewed your report” even
+  // when nobody had opened it.
+  if (!hasHandlingEvent && recordedViewers.length > 0) {
     lifecycleEvents.unshift({
       id: -report.id,
       status: report.status === "in_progress" ? "in_progress" : "under_review",
@@ -223,35 +334,60 @@ export function buildConcernTimelineEntries(
       created_at: report.created_at,
     })
   }
-  const departmentName = report.assigned_department?.name ?? ""
+  const departmentName = canShowAssignment
+    ? (report.assigned_department?.name ?? "")
+    : ""
   const assignmentEntries = (report.timeline ?? [])
-    .filter((entry) => entry.event_type === "assignment" && entry.status === "assigned")
-    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+    .filter(
+      (entry) =>
+        canShowAssignment &&
+        entry.event_type === "assignment" &&
+        entry.status === "assigned"
+    )
+    .sort(
+      (a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    )
   const assignments = [...(report.assignments ?? [])].sort(
-    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    (a, b) =>
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   )
   const firstAssignment: ConcernAssignment | undefined = assignments[0]
-  const assignedUnit = report.assigned_department ?? firstAssignment?.department ?? null
+  const assignedUnit = canShowAssignment
+    ? (report.assigned_department ?? firstAssignment?.department ?? null)
+    : null
   const firstAssignmentEntry = assignmentEntries[0]
-  const assignmentMessageName = firstAssignmentEntry?.message.match(/^(?:Reassigned|Assigned) to\s+(.+?)[.]?$/i)?.[1]?.trim()
-  const assignmentName = departmentName || assignmentMessageName || firstAssignment?.office || "the barangay response team"
+  const assignmentMessageName = firstAssignmentEntry?.message
+    .match(/^(?:Reassigned|Assigned) to\s+(.+?)[.]?$/i)?.[1]
+    ?.trim()
+  const assignmentName =
+    departmentName ||
+    assignmentMessageName ||
+    firstAssignment?.office ||
+    "the barangay response team"
   const usedAssignmentIds = new Set<number>()
   let assignedEventCount = 0
   const proof = (report.resolution_evidence ?? []).filter((item) =>
-    item.mime_type.startsWith("image/"),
+    item.mime_type.startsWith("image/")
   )
   const proofPreview = proof.map((item) =>
-    toMediaPreviewItem(item.preview_url || item.raw_url, item.original_filename, item.mime_type),
+    toMediaPreviewItem(
+      item.preview_url || item.raw_url,
+      item.original_filename,
+      item.mime_type
+    )
   )
 
   const officialChatMembers = Array.from(
     new Map(
       (report.conversation ?? [])
-        .filter((item) => item.kind === "chat" && item.actor && item.actor.role !== "resident")
-        .map((item) => [item.actor!.id, item.actor!]),
-    ).values(),
+        .filter(
+          (item) =>
+            item.kind === "chat" && item.actor && item.actor.role !== "resident"
+        )
+        .map((item) => [item.actor!.id, item.actor!])
+    ).values()
   )
-  const recordedViewers = (report.viewers ?? []).filter((member) => member.role !== "resident")
   const assignmentBadge = assignmentUnitBadge(assignedUnit)
   // `viewer` only ever names the official currently looking at this screen —
   // a resident never has one, so without the actual assignees the "Being
@@ -259,7 +395,12 @@ export function buildConcernTimelineEntries(
   // roster is who is really handling it, and is visible to anyone who can
   // already see this timeline (owner, assignee, or official).
   const activeAssignees = assignments
-    .filter((assignment) => assignment.status === "active" && assignment.assignee)
+    .filter(
+      (assignment) =>
+        canShowAssignment &&
+        assignment.status === "active" &&
+        assignment.assignee
+    )
     .map((assignment) => assignment.assignee!)
   const handledMembers = Array.from(
     new Map(
@@ -268,109 +409,117 @@ export function buildConcernTimelineEntries(
         ...recordedViewers,
         ...officialChatMembers,
         ...activeAssignees,
-      ].map((member) => [member.id, member]),
-    ).values(),
+      ].map((member) => [member.id, member])
+    ).values()
   )
 
-  const statusEntries: ConcernTimelineEntry[] = lifecycleEvents.map((event, index, list) => {
-    const meta = STATUS_META[event.status]
-    const note = event.note.trim()
-    const prev = index > 0 ? list[index - 1] : null
-    const isClarificationReply = note === CLARIFICATION_REPLY_NOTE
-    const isClarificationRequest = !isClarificationReply && Boolean(prev) && prev!.status === event.status
+  const statusEntries: ConcernTimelineEntry[] = lifecycleEvents.map(
+    (event, index, list) => {
+      const meta = STATUS_META[event.status]
+      const note = event.note.trim()
+      const prev = index > 0 ? list[index - 1] : null
+      const isClarificationReply = note === CLARIFICATION_REPLY_NOTE
+      const isClarificationRequest =
+        !isClarificationReply && Boolean(prev) && prev!.status === event.status
 
-    let badge = meta?.label ?? concernTimelineStatusLabel(event.status)
-    let icon = meta?.icon ?? "message"
-    let accent = meta?.accent ?? "neutral"
-    const residentActorIsValid = isClarificationReply || event.status === "appealed"
-    const eventActor = event.actor?.role === "resident" && !residentActorIsValid
-      ? null
-      : event.actor
-    let actorUser = eventActor
-    let actor = actorLabel(actorUser)
-    const isBeingHandled = event.status === "under_review" || event.status === "in_progress"
-    // The badge/wording for this row stays impersonal ("System" / "An
-    // official has viewed your report") even though we know exactly which
-    // official triggered it — `eventActor` is real backend data (whoever
-    // called the status-update endpoint), unlike `handledMembers`, which
-    // only ever reflects the official currently viewing the screen. Using
-    // it here is what lets a resident — who never has a "viewer" — see who
-    // is actually handling their report.
-    const beingHandledMembers = isBeingHandled
-      ? Array.from(new Map([...(eventActor ? [eventActor] : []), ...handledMembers].map((member) => [member.id, member])).values())
-      : []
-    if (isBeingHandled) {
-      actorUser = null
-      actor = "System"
-    }
-    let assignmentMembers: PublicUser[] = []
-    const currentUpdate = event.status === report.status ? (report.update_text || "").trim() : ""
-    let statement =
-      note || currentUpdate ||
-      `Status updated to ${concernTimelineStatusLabel(event.status).toLowerCase()}.`
-    if (isBeingHandled) statement = "An official has viewed your report."
+      let badge = meta?.label ?? concernTimelineStatusLabel(event.status)
+      let icon = meta?.icon ?? "message"
+      let accent = meta?.accent ?? "neutral"
+      // Status events written by an authenticated action carry the real user
+      // from the API. Preserve that identity for every status; "System" is
+      // reserved for automated and legacy events whose actor is genuinely null.
+      const eventActor = event.actor
+      const actorUser = eventActor
+      const actor = actorLabel(actorUser)
+      const isBeingHandled =
+        event.status === "under_review" || event.status === "in_progress"
+      const beingHandledMembers = isBeingHandled
+        ? Array.from(
+            new Map(
+              [...(eventActor ? [eventActor] : []), ...handledMembers].map(
+                (member) => [member.id, member]
+              )
+            ).values()
+          )
+        : []
+      let assignmentMembers: PublicUser[] = []
+      const currentUpdate =
+        event.status === report.status ? (report.update_text || "").trim() : ""
+      let statement =
+        note ||
+        currentUpdate ||
+        `Status updated to ${concernTimelineStatusLabel(event.status).toLowerCase()}.`
+      if (isBeingHandled) statement = "An official has viewed your report."
 
-    if (isClarificationReply) {
-      badge = "Clarification answered"
-      icon = "message"
-      accent = "neutral"
-      statement = "The resident answered the clarification request."
-    } else if (isClarificationRequest) {
-      badge = "Clarification requested"
-      icon = "question"
-      accent = "neutral"
-      statement = note || currentUpdate || "More details were requested for this report."
-    } else if (event.status === "assigned") {
-      const unitName = assignmentUnitName(event, report, assignmentEntries, usedAssignmentIds) || departmentName
-      assignmentMembers = assignmentMembersFor(event, report, assignmentEntries)
-      const isReassignment = assignedEventCount > 0
-      assignedEventCount += 1
-      badge = "Assigned unit"
-      actorUser = null
-      actor = "System"
-      statement = unitName
-        ? `${isReassignment ? "Reassigned to" : "Assigned to"} ${unitName}.`
-        : note || currentUpdate || "Assigned to the response team."
-    }
+      if (isClarificationReply) {
+        badge = "Clarification answered"
+        icon = "message"
+        accent = "neutral"
+        statement = "The resident answered the clarification request."
+      } else if (isClarificationRequest) {
+        badge = "Clarification requested"
+        icon = "question"
+        accent = "neutral"
+        statement =
+          note ||
+          currentUpdate ||
+          "More details were requested for this report."
+      } else if (event.status === "assigned") {
+        const unitName =
+          assignmentUnitName(
+            event,
+            report,
+            assignmentEntries,
+            usedAssignmentIds
+          ) || departmentName
+        assignmentMembers = assignmentMembersFor(
+          event,
+          report,
+          assignmentEntries
+        )
+        const isReassignment = assignedEventCount > 0
+        assignedEventCount += 1
+        badge = "Assigned unit"
+        statement = unitName
+          ? `${isReassignment ? "Reassigned to" : "Assigned to"} ${unitName}.`
+          : note || currentUpdate || "Assigned to the response team."
+      }
 
-    return {
-      id: String(event.id),
-      badge,
-      time: event.created_at,
-      accent,
-      icon,
-      actor,
-      actorUser,
-      content: (
-        <>
-          {noteBlock(
-            statement,
-            event.status === "assigned" ? assignmentMembers : isBeingHandled ? beingHandledMembers : [],
-            event.status === "assigned" ? assignmentBadge : undefined,
-          )}
-          {event.status === "resolved" && proof.length ? (
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              {proof.map((item, proofIndex) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => onOpenProof?.(proofPreview, proofIndex)}
-                  className="overflow-hidden rounded-control border border-card-line bg-canvas text-left"
-                  title={item.original_filename}
-                >
-                  <AuthenticatedMediaImage
-                    src={item.preview_url || item.raw_url}
-                    alt={item.original_filename}
-                    className="h-24 w-full object-cover"
-                  />
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </>
-      ),
+      return {
+        id: String(event.id),
+        badge,
+        time: event.created_at,
+        accent,
+        icon,
+        actor,
+        actorUser,
+        content:
+          event.status === "resolved" ? (
+            resolvedNoteBlock({
+              text: statement,
+              // The resolver roster, shown as a leading avatar group the same
+              // way "Being handled" rows surface the officials on the report.
+              members: activeAssignees,
+              proof,
+              proofPreview,
+              onOpenProof,
+            })
+          ) : (
+            <>
+              {noteBlock(
+                statement,
+                event.status === "assigned"
+                  ? assignmentMembers
+                  : isBeingHandled
+                    ? beingHandledMembers
+                    : [],
+                event.status === "assigned" ? assignmentBadge : undefined
+              )}
+            </>
+          ),
+      }
     }
-  })
+  )
 
   const entries: ConcernTimelineEntry[] = statusEntries
 
@@ -378,11 +527,17 @@ export function buildConcernTimelineEntries(
   // `assigned` status event. Add the real assignment as the first visible
   // lifecycle row; never add a fake “Received” row. Assignments delegated by
   // the system intentionally use the System actor.
-  if (!lifecycleEvents.some((event) => event.status === "assigned")) {
+  if (
+    canShowAssignment &&
+    !lifecycleEvents.some((event) => event.status === "assigned")
+  ) {
     entries.unshift({
       id: `assignment-${firstAssignment?.id ?? report.id}`,
       badge: "Assigned unit",
-      time: firstAssignmentEntry?.created_at ?? firstAssignment?.created_at ?? report.created_at,
+      time:
+        firstAssignmentEntry?.created_at ??
+        firstAssignment?.created_at ??
+        report.created_at,
       accent: "info",
       icon: "network",
       actor: "System",
@@ -400,7 +555,9 @@ export function buildConcernTimelineEntries(
 
   // Keep Assigned unit as the first row even when old timestamps were written
   // out of order.
-  const firstAssignmentIndex = ordered.findIndex((entry) => entry.badge === "Assigned unit")
+  const firstAssignmentIndex = ordered.findIndex(
+    (entry) => entry.badge === "Assigned unit"
+  )
   if (firstAssignmentIndex > 0) {
     const [assigned] = ordered.splice(firstAssignmentIndex, 1)
     ordered.unshift(assigned)
@@ -409,9 +566,12 @@ export function buildConcernTimelineEntries(
   if (ordered.length > 0) {
     return ordered.map((entry, index) => ({
       ...entry,
-       state: index === ordered.length - 1 ? ("current" as const) : ("done" as const),
+      state:
+        index === ordered.length - 1 ? ("current" as const) : ("done" as const),
     }))
   }
+
+  if (!canShowAssignment) return []
 
   return [
     {

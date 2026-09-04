@@ -456,7 +456,7 @@ export function ProofStep({
         ) : proofOptions.length === 0 ? (
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Document choices are loading. If nothing appears, go back and try again in a moment.
+              No identity documents are configured for {values.communityMatch?.name ?? "this community"} yet. A barangay official must publish the community&apos;s residence-proof setup before registration can continue.
             </p>
             <Button
               type="button"

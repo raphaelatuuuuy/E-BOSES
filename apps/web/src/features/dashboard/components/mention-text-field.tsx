@@ -57,7 +57,9 @@ export function MentionTextField({
   const [highlight, setHighlight] = useState(0)
 
   const [display, setDisplay] = useState(() => storageToDisplay(value))
-  const [stack, setStack] = useState<MentionRef[]>(() => extractMentionStack(value))
+  const [stack, setStack] = useState<MentionRef[]>(() =>
+    extractMentionStack(value)
+  )
 
   // Parent reset / reply prefill (storage tokens → short display). Adjusted
   // during render when `value` changes instead of via a sync setState effect.
@@ -76,7 +78,7 @@ export function MentionTextField({
 
   const active = useMemo(
     () => findActiveMention(display, cursor, stack),
-    [display, cursor, stack],
+    [display, cursor, stack]
   )
 
   // Drop stale remote results as soon as the mention query dissolves (render-adjust
@@ -91,22 +93,25 @@ export function MentionTextField({
   useEffect(() => {
     if (!active) return
     const q = active.query
-    const t = window.setTimeout(() => {
-      void searchResidentsForMention(q || undefined)
-        .then((rows) => {
-          setRemoteUsers(
-            rows.map((r) =>
-              toMentionUser({
-                id: r.id,
-                full_name: r.full_name,
-                firstName: r.firstName,
-                lastName: r.lastName,
-              }),
-            ),
-          )
-        })
-        .catch(() => setRemoteUsers([]))
-    }, q ? 180 : 0)
+    const t = window.setTimeout(
+      () => {
+        void searchResidentsForMention(q || undefined)
+          .then((rows) => {
+            setRemoteUsers(
+              rows.map((r) =>
+                toMentionUser({
+                  id: r.id,
+                  full_name: r.full_name,
+                  firstName: r.firstName,
+                  lastName: r.lastName,
+                })
+              )
+            )
+          })
+          .catch(() => setRemoteUsers([]))
+      },
+      q ? 180 : 0
+    )
     return () => window.clearTimeout(t)
   }, [active])
 
@@ -142,7 +147,8 @@ export function MentionTextField({
     if (!active) return
     const name = firstNameOf(user.full_name)
     const insert = `@${name} `
-    const nextDisplay = display.slice(0, active.start) + insert + display.slice(cursor)
+    const nextDisplay =
+      display.slice(0, active.start) + insert + display.slice(cursor)
 
     const beforePart = display.slice(0, active.start)
     const afterPart = display.slice(cursor)
@@ -187,7 +193,7 @@ export function MentionTextField({
             "flex items-center whitespace-pre",
             padClass,
             heightClass,
-            !display && "invisible",
+            !display && "invisible"
           )}
         >
           <span className="block w-full truncate text-neutral-900">
@@ -219,7 +225,9 @@ export function MentionTextField({
             }
             if (e.key === "ArrowUp") {
               e.preventDefault()
-              setHighlight((h) => (h - 1 + suggestions.length) % suggestions.length)
+              setHighlight(
+                (h) => (h - 1 + suggestions.length) % suggestions.length
+              )
               return
             }
             if (e.key === "Enter" || e.key === "Tab") {
@@ -248,7 +256,7 @@ export function MentionTextField({
           hasMentions
             ? "bg-transparent text-transparent caret-neutral-900"
             : "bg-white text-neutral-900",
-          inputClassName,
+          inputClassName
         )}
       />
 
@@ -265,7 +273,7 @@ export function MentionTextField({
                 aria-selected={i === highlight}
                 className={cn(
                   "flex w-full items-center gap-2 px-3 py-2 text-left text-[14px]",
-                  i === highlight ? "bg-neutral-100" : "hover:bg-neutral-50",
+                  i === highlight ? "bg-neutral-100" : "hover:bg-neutral-50"
                 )}
                 onMouseDown={(e) => {
                   e.preventDefault()
@@ -273,7 +281,7 @@ export function MentionTextField({
                 }}
               >
                 <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[12px] font-semibold text-navy-muted">
-                  {firstNameOf(u.full_name)[0]?.toUpperCase() ?? "?"}
+                  {firstNameOf(u.full_name)[0]?.toUpperCase() ?? "U"}
                 </span>
                 <span className="min-w-0">
                   <span className="block font-semibold text-neutral-900">
@@ -292,7 +300,10 @@ export function MentionTextField({
   )
 }
 
-function renderDisplayHighlight(display: string, stack: MentionRef[]): ReactNode {
+function renderDisplayHighlight(
+  display: string,
+  stack: MentionRef[]
+): ReactNode {
   if (!display) return "\u00a0"
   const pending = [...stack]
   const parts: Array<{ kind: "text" | "mention"; value: string }> = []
@@ -300,7 +311,8 @@ function renderDisplayHighlight(display: string, stack: MentionRef[]): ReactNode
   const re = /@([^\s@]+)/g
   let m: RegExpExecArray | null
   while ((m = re.exec(display)) !== null) {
-    if (m.index > last) parts.push({ kind: "text", value: display.slice(last, m.index) })
+    if (m.index > last)
+      parts.push({ kind: "text", value: display.slice(last, m.index) })
     const name = m[1]!
     const idx = pending.findIndex((x) => x.name === name)
     if (idx >= 0) {
@@ -311,18 +323,19 @@ function renderDisplayHighlight(display: string, stack: MentionRef[]): ReactNode
     }
     last = m.index + m[0].length
   }
-  if (last < display.length) parts.push({ kind: "text", value: display.slice(last) })
+  if (last < display.length)
+    parts.push({ kind: "text", value: display.slice(last) })
   if (parts.length === 0) return display
   return parts.map((part, index) =>
     part.kind === "mention" ? (
       <span
         key={`m-${index}`}
-        className="font-semibold text-neutral-900 underline underline-offset-2 decoration-neutral-900"
+        className="font-semibold text-neutral-900 underline decoration-neutral-900 underline-offset-2"
       >
         @{part.value}
       </span>
     ) : (
       <span key={`t-${index}`}>{part.value}</span>
-    ),
+    )
   )
 }

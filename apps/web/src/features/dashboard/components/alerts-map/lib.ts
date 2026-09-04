@@ -10,16 +10,17 @@ import {
   isEmergencyActive,
 } from "@/features/dashboard/components/record/status"
 import { formatTime as formatDateTime } from "@/features/dashboard/components/emergencies/lib"
-import { MAP_COLORS as BASE_MAP_COLORS, personDotHtml } from "@/features/dashboard/components/map/markers"
+import {
+  MAP_COLORS as BASE_MAP_COLORS,
+  personDotHtml,
+} from "@/features/dashboard/components/map/markers"
 import type { MapLegendRow } from "@/features/dashboard/components/map/map-legend"
 
 export type LayerKey =
   | "boundary"
   | "streets"
   | "concerns"
-  | "emergencies"
   | "advisories"
-  | "resolved"
   | "acceptance_zone"
 
 export type Selection = { kind: "concern" | "emergency"; id: number } | null
@@ -27,34 +28,26 @@ export type Selection = { kind: "concern" | "emergency"; id: number } | null
 export type StreetLine = { name: string; line: leaflet.LatLngTuple[] }
 
 export const defaultLayers: Record<LayerKey, boolean> = {
-  boundary: false,
+  boundary: true,
   streets: false,
   concerns: true,
-  emergencies: true,
   advisories: true,
-  resolved: true,
   acceptance_zone: false,
 }
 
 export type AlertLayerCounts = {
-  emergencies: number
   concerns: number
   advisories: number
 }
 
-export function alertLayerRows(counts: AlertLayerCounts): MapLegendRow<LayerKey>[] {
+export function alertLayerRows(
+  counts: AlertLayerCounts
+): MapLegendRow<LayerKey>[] {
   return [
-    {
-      key: "emergencies",
-      label: "Emergencies",
-      hint: "Live incidents and their routes",
-      count: counts.emergencies,
-      tone: OFFICIAL_MAP_COLORS.emergency,
-    },
     {
       key: "concerns",
       label: "Concerns",
-      hint: "Reports neighbours have filed",
+      hint: "Community reports by residents",
       count: counts.concerns,
       tone: OFFICIAL_MAP_COLORS.concern,
     },
@@ -75,16 +68,18 @@ export function alertLayerRows(counts: AlertLayerCounts): MapLegendRow<LayerKey>
  */
 export function emptyLiveMapSnapshot(): LiveMapSnapshot {
   return {
+    home_community_id: null,
+    communities: [],
     map: {
       provider: "OpenStreetMap",
-      center: { latitude: 14.6507, longitude: 121.1133, zoom: 15 },
+      center: { latitude: 14.5995, longitude: 120.9842, zoom: 12 },
       boundary: { osm_relation_id: 0, name: "", geometry: null },
       streets: { streets: [], groups: {} },
       dispatch_policy: {
         id: null,
         barangay: "",
-        acceptance_center_latitude: 14.6507,
-        acceptance_center_longitude: 121.1133,
+        acceptance_center_latitude: 14.5995,
+        acceptance_center_longitude: 120.9842,
         acceptance_radius_meters: 800,
         acceptance_geometry: null,
         out_of_zone_action: "review",
@@ -97,6 +92,14 @@ export function emptyLiveMapSnapshot(): LiveMapSnapshot {
     people: [],
     concerns: [],
     emergencies: [],
+    public_concerns: [],
+    public_emergencies: [],
+    operational: {
+      community_id: null,
+      concerns: [],
+      emergencies: [],
+      routes: [],
+    },
     routes: [],
     advisories: [],
     summary: {
@@ -118,6 +121,23 @@ export const activeEmergencyStatuses = {
 
 export function isActiveConcern(concern: { status: string }) {
   return activeConcernStatuses.has(concern.status)
+}
+
+/**
+ * Statuses that get a pin on the alerts map. Wider than the operational
+ * ACTIVE_CONCERN_STATUSES on purpose: the public/resident snapshot also
+ * carries just-filed "submitted" reports, and the resident map pins them.
+ * Filtering those out here is why other communities' concerns showed rows
+ * in some views but never drew their pins on this map.
+ */
+export const mapDrawableConcernStatuses = new Set<string>([
+  ...ACTIVE_CONCERN_STATUSES,
+  "submitted",
+  "resolved",
+])
+
+export function isMapDrawableConcern(concern: { status: string }) {
+  return mapDrawableConcernStatuses.has(concern.status)
 }
 
 export function isResolvedRecord(record: { status: string }) {
@@ -167,14 +187,21 @@ export function lineCoordinates(coordinates: unknown): leaflet.LatLngTuple[] {
   })
 }
 
-export function geoJsonToLines(geometry?: LiveMapGeometry | null): leaflet.LatLngTuple[][] {
+export function geoJsonToLines(
+  geometry?: LiveMapGeometry | null
+): leaflet.LatLngTuple[][] {
   if (!geometry) return []
   if (geometry.type === "LineString") {
     const line = lineCoordinates(geometry.coordinates)
     return line.length > 1 ? [line] : []
   }
-  if (geometry.type === "MultiLineString" && Array.isArray(geometry.coordinates)) {
-    return geometry.coordinates.map(lineCoordinates).filter((line) => line.length > 1)
+  if (
+    geometry.type === "MultiLineString" &&
+    Array.isArray(geometry.coordinates)
+  ) {
+    return geometry.coordinates
+      .map(lineCoordinates)
+      .filter((line) => line.length > 1)
   }
   return []
 }
@@ -195,37 +222,61 @@ export function markerDotHtml(color: string, pulse = false) {
   return personDotHtml(color, pulse, "light")
 }
 
-export function mergeUpdate(snapshot: LiveMapSnapshot, message: LiveMapUpdate): LiveMapSnapshot {
+export function mergeUpdate(
+  snapshot: LiveMapSnapshot,
+  message: LiveMapUpdate
+): LiveMapSnapshot {
   if (message.type === "location.updated") {
     const person = message.payload.person
     const people = snapshot.people.some((item) => item.id === person.id)
-      ? snapshot.people.map((item) => item.id === person.id ? person : item)
+      ? snapshot.people.map((item) => (item.id === person.id ? person : item))
       : [...snapshot.people, person]
     return { ...snapshot, people }
   }
-  if (message.type === "concern.created" || message.type === "concern.updated") {
+  if (
+    message.type === "concern.created" ||
+    message.type === "concern.updated"
+  ) {
     const concern = message.payload.concern
     const concerns = snapshot.concerns.some((item) => item.id === concern.id)
-      ? snapshot.concerns.map((item) => item.id === concern.id ? concern : item)
+      ? snapshot.concerns.map((item) =>
+          item.id === concern.id ? concern : item
+        )
       : [concern, ...snapshot.concerns]
     return { ...snapshot, concerns }
   }
-  if (message.type === "emergency.created" || message.type === "emergency.updated") {
+  if (
+    message.type === "emergency.created" ||
+    message.type === "emergency.updated"
+  ) {
     const emergency = message.payload.emergency
-    const emergencies = snapshot.emergencies.some((item) => item.id === emergency.id)
-      ? snapshot.emergencies.map((item) => item.id === emergency.id ? emergency : item)
+    const emergencies = snapshot.emergencies.some(
+      (item) => item.id === emergency.id
+    )
+      ? snapshot.emergencies.map((item) =>
+          item.id === emergency.id ? emergency : item
+        )
       : [emergency, ...snapshot.emergencies]
-    const incoming = message.payload.routes ?? (message.payload.route ? [message.payload.route] : [])
-    const routes = [
-      ...snapshot.routes.filter((item) => item.alert_id !== emergency.id),
-      ...incoming,
-    ]
+    const incoming =
+      message.payload.routes ??
+      (message.payload.route ? [message.payload.route] : [])
+    const routes =
+      !isActiveEmergency(emergency) && incoming.length === 0
+        ? snapshot.routes
+        : [
+            ...snapshot.routes.filter((item) => item.alert_id !== emergency.id),
+            ...incoming,
+          ]
     return { ...snapshot, emergencies, routes }
   }
   if (message.type === "route.updated") {
     const route = message.payload.route
-    const routes = snapshot.routes.some((item) => item.assignment_id === route.assignment_id)
-      ? snapshot.routes.map((item) => item.assignment_id === route.assignment_id ? route : item)
+    const routes = snapshot.routes.some(
+      (item) => item.assignment_id === route.assignment_id
+    )
+      ? snapshot.routes.map((item) =>
+          item.assignment_id === route.assignment_id ? route : item
+        )
       : [...snapshot.routes, route]
     return { ...snapshot, routes }
   }
@@ -233,7 +284,11 @@ export function mergeUpdate(snapshot: LiveMapSnapshot, message: LiveMapUpdate): 
     const { alert_id, assignment_id } = message.payload
     return {
       ...snapshot,
-      routes: snapshot.routes.filter((route) => assignment_id ? route.assignment_id !== assignment_id : route.alert_id !== alert_id),
+      routes: snapshot.routes.filter((route) =>
+        assignment_id
+          ? route.assignment_id !== assignment_id
+          : route.alert_id !== alert_id
+      ),
     }
   }
   return snapshot

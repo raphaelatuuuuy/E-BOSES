@@ -41,7 +41,6 @@ export function OverviewMasthead({
   const { user } = useAuthSession()
   const community = (user?.barangay || "Community").replace(/^Barangay\s+/i, "")
 
-  const live = analytics?.emergencies.active ?? 0
   const responders = analytics?.emergencies.responders_on_duty ?? 0
 
   return (
@@ -62,22 +61,7 @@ export function OverviewMasthead({
             <span className="text-faint-foreground"> · </span>
             {responders} {responders === 1 ? "responder" : "responders"} on duty
           </p>
-          <div className="mt-3">
-            {loading ? (
-              <span className="text-meta font-medium text-foreground">Checking the barangay</span>
-            ) : (
-              <span
-                className={cn(
-                  "text-meta font-medium",
-                  live > 0 ? "text-foreground" : "text-neutral-500",
-                )}
-              >
-                {live > 0
-                  ? `${live} ${live === 1 ? "emergency" : "emergencies"} active right now`
-                  : "All clear"}
-              </span>
-            )}
-          </div>
+
         </div>
 
         <div className="flex min-w-0 divide-x divide-card-line">

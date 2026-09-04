@@ -109,9 +109,7 @@ export function ConfigShell({
     // (#f6f7f9) behind every page, which is so close to white that a
     // configuration screen read as neither one thing nor the other.
     <div className="min-h-full bg-white">
-      {/* pb-40 on a phone clears the floating bottom nav, which was sitting on
-          top of the last row and the pager. */}
-      <div className={cn("mx-auto w-full max-w-[1100px] px-6 pt-10 pb-40 sm:px-10 sm:pb-28", className)}>
+      <div className={cn("mx-auto w-full max-w-[1100px] px-6 pt-10 pb-6 sm:px-10 lg:pb-28", className)}>
         <ConfigBreadcrumb
           trail={[
             { label: "Configuration", to: "/dashboard/configuration" },

@@ -10,9 +10,15 @@ import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 
 import { Button } from "@workspace/ui/components/button"
-import type { LiveMapEmergency, LiveMapPerson, LiveMapSnapshot } from "@/features/dashboard/api"
+import type {
+  LiveMapEmergency,
+  LiveMapPerson,
+  LiveMapSnapshot,
+} from "@/features/dashboard/api"
 import { EmergencyCommunityComments } from "@/features/dashboard/components/emergencies/community-comments"
-import { EmergencyTimeline } from "@/features/dashboard/components/emergencies/emergency-timeline"
+import { EmergencyTimelineCard } from "@/features/dashboard/components/emergencies/emergency-timeline-card"
+import { buildEmergencyTimeline } from "@/features/dashboard/components/emergencies/emergency-timeline-lib"
+import { emergencyResponderAssignments } from "@/features/dashboard/components/emergencies/lib"
 
 import {
   getEmergency,
@@ -33,9 +39,13 @@ import {
   type MediaPreviewItem,
 } from "@/features/dashboard/lib/authenticated-media"
 import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
+import { IncidentMap } from "@/features/dashboard/components/emergencies/incident-board"
 import { RecordDetail } from "@/features/dashboard/components/record/record-detail"
 import { toEmergencyRecordView } from "@/features/dashboard/components/record/emergency-adapter"
-import type { RecordAction, RecordSection } from "@/features/dashboard/components/record/types"
+import type {
+  RecordAction,
+  RecordSection,
+} from "@/features/dashboard/components/record/types"
 import { concernCategoryLabel } from "@/features/dashboard/components/concerns/concern-display"
 import { looksLikeCoordinates } from "@/features/dashboard/lib/location-text"
 import { PanelShell, InfoRow } from "./panel-shell"
@@ -48,7 +58,10 @@ import { formatDistance, formatEta, formatTime, type Selection } from "./lib"
  * heading; "In Marikina Heights" reads as where the thing is. A specific street
  * address always wins over the contextual fallback.
  */
-function locationLabel(address: string | null | undefined, barangay: string | null | undefined) {
+function locationLabel(
+  address: string | null | undefined,
+  barangay: string | null | undefined
+) {
   const street = address?.trim()
   // Never a coordinate string: "Pinned coordinates: 14.6, 121.1" is not a place.
   if (street && !looksLikeCoordinates(street)) return street
@@ -56,37 +69,75 @@ function locationLabel(address: string | null | undefined, barangay: string | nu
   return area ? `In ${area}` : null
 }
 
+function severityLabel(value?: string | null) {
+  if (!value) return "Pending"
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+function reporterLabel(name: string, community: string | null | undefined) {
+  return [name.trim(), community?.trim()].filter(Boolean).join(" · ")
+}
+
 export function DetailPanel({
   selected,
   snapshot,
+  audience = "official",
+  viewerId = null,
   onEmergencyUpdated,
 }: {
   selected: Selection
   snapshot: LiveMapSnapshot
+  audience?: "official" | "responder"
+  viewerId?: number | null
   onEmergencyUpdated: (emergency: LiveMapEmergency) => void
 }) {
+  const isResponder = audience === "responder"
   const navigate = useNavigate()
-  const [emergencyDetail, setEmergencyDetail] = useState<EmergencyAlert | null>(null)
+  const [emergencyDetail, setEmergencyDetail] = useState<EmergencyAlert | null>(
+    null
+  )
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState("")
   const [detailRefreshKey, setDetailRefreshKey] = useState(0)
   // Severity depends on elapsed time, so the panel needs a clock rather than
   // a render-time Date.now(). 30s is well under the tightest ack target (2min).
   const [now, setNow] = useState(() => Date.now())
-  const [evidencePreview, setEvidencePreview] = useState<{ items: MediaPreviewItem[]; index: number } | null>(null)
-  const selectedEmergency = selected?.kind === "emergency"
-    ? snapshot.emergencies.find((item) => item.id === selected.id) ?? null
-    : null
+  const [evidencePreview, setEvidencePreview] = useState<{
+    items: MediaPreviewItem[]
+    index: number
+  } | null>(null)
+  const selectedEmergency =
+    selected?.kind === "emergency"
+      ? (snapshot.emergencies.find((item) => item.id === selected.id) ?? null)
+      : null
+  const foreignConcern =
+    selected?.kind === "concern"
+      ? (snapshot.public_concerns.find((item) => item.id === selected.id) ??
+        null)
+      : null
+  const foreignEmergency =
+    selected?.kind === "emergency"
+      ? (snapshot.public_emergencies.find((item) => item.id === selected.id) ??
+        null)
+      : null
+  const operationalConcern =
+    selected?.kind === "concern"
+      ? snapshot.operational.concerns.some((item) => item.id === selected.id)
+      : false
+  const operationalEmergency =
+    selected?.kind === "emergency"
+      ? snapshot.operational.emergencies.some((item) => item.id === selected.id)
+      : false
   const selectedEmergencyId = selectedEmergency?.id ?? null
   const selectedEmergencyUpdatedAt = selectedEmergency?.updated_at ?? null
   // Only an open emergency needs a clock, and severity moves on the minute, so
   // this used to re-render the whole panel — timeline, chat and all — twice a
   // minute for a person or concern that has no elapsed-time reading at all.
   useEffect(() => {
-    if (!selectedEmergencyId) return
+    if (!selectedEmergencyId || !operationalEmergency) return
     const timer = window.setInterval(() => setNow(Date.now()), 60_000)
     return () => window.clearInterval(timer)
-  }, [selectedEmergencyId])
+  }, [selectedEmergencyId, operationalEmergency])
 
   // A responder in motion republishes the emergency every 15s, which bumps
   // `updated_at` and used to trigger a full detail refetch each time. The delay
@@ -95,7 +146,7 @@ export function DetailPanel({
   useEffect(() => {
     let cancelled = false
     const timer = window.setTimeout(() => {
-      if (!selectedEmergencyId) {
+      if (!selectedEmergencyId || !operationalEmergency) {
         setEmergencyDetail(null)
         setDetailError("")
         setDetailLoading(false)
@@ -110,7 +161,11 @@ export function DetailPanel({
         .catch((error) => {
           if (!cancelled) {
             setEmergencyDetail(null)
-            setDetailError(error instanceof Error ? error.message : "Could not load complete incident details.")
+            setDetailError(
+              error instanceof Error
+                ? error.message
+                : "Could not load complete incident details."
+            )
           }
         })
         .finally(() => {
@@ -125,10 +180,28 @@ export function DetailPanel({
     // window once the first load has landed; including it would refire the
     // effect from inside its own result.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedEmergencyId, selectedEmergencyUpdatedAt, detailRefreshKey])
+  }, [
+    selectedEmergencyId,
+    selectedEmergencyUpdatedAt,
+    detailRefreshKey,
+    operationalEmergency,
+  ])
 
   if (!selected) return null
   if (selected.kind === "concern") {
+    if (foreignConcern && !operationalConcern) {
+      return (
+        <PanelShell title={foreignConcern.title}>
+          <Button
+            type="button"
+            onClick={() => navigate(`/dashboard/reports/${foreignConcern.id}`)}
+            className="w-full border border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50"
+          >
+            Open full report
+          </Button>
+        </PanelShell>
+      )
+    }
     const concern = snapshot.concerns.find((item) => item.id === selected.id)
     if (!concern) return null
     // Labels, not raw enums: the resident-facing status word and the category
@@ -136,21 +209,52 @@ export function DetailPanel({
     // same report rather than showing "public_safety" / "in_progress".
     return (
       <PanelShell title={concern.title}>
-        <InfoRow icon={<UserIcon className="size-4" />} label="Reported by" value={concern.reporter.full_name} />
-        <InfoRow icon={<AlertTriangleIcon className="size-4" />} label="Category" value={concernCategoryLabel(concern)} />
+        <InfoRow
+          icon={<UserIcon className="size-4" />}
+          label="Reported by"
+          value={reporterLabel(
+            concern.reporter.full_name,
+            concern.barangay || snapshot.map.boundary.name
+          )}
+        />
+        <InfoRow
+          icon={<AlertTriangleIcon className="size-4" />}
+          label="Category"
+          value={concernCategoryLabel(concern)}
+        />
         <InfoRow
           icon={<AlertTriangleIcon className="size-4" />}
           label="Priority"
-          value={concern.priority === "high" ? "High" : "Normal"}
+          value={
+            concern.severity_assessed
+              ? severityLabel(concern.severity)
+              : "Pending review"
+          }
         />
-        <InfoRow icon={<MapPinIcon className="size-4" />} label="Location" value={locationLabel(concern.address, concern.barangay)} />
-        <p className="text-xs font-semibold leading-5 text-foreground">{concern.description || "No description provided."}</p>
+        <InfoRow
+          icon={<MapPinIcon className="size-4" />}
+          label="Location"
+          value={locationLabel(concern.address, concern.barangay)}
+        />
+        <div>
+          <p className="text-xs leading-5 font-semibold text-foreground">
+            {concern.summary ||
+              concern.description ||
+              "No description provided."}
+          </p>
+        </div>
         {concern.preview_url ? (
           <button
             type="button"
             onClick={() =>
               setEvidencePreview({
-                items: [toMediaPreviewItem(concern.preview_url, concern.title, "image/jpeg")],
+                items: [
+                  toMediaPreviewItem(
+                    concern.preview_url,
+                    concern.title,
+                    "image/jpeg"
+                  ),
+                ],
                 index: 0,
               })
             }
@@ -163,39 +267,85 @@ export function DetailPanel({
             />
           </button>
         ) : null}
-        <Button type="button" onClick={() => navigate(`/dashboard/reports/${concern.id}`)} className="w-full bg-brand-navy text-white hover:bg-brand-navy/90">View full details</Button>
+        <Button
+          type="button"
+          onClick={() => navigate(`/dashboard/reports/${concern.id}`)}
+          className="w-full border border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50"
+        >
+          Open full report
+        </Button>
+      </PanelShell>
+    )
+  }
+  if (foreignEmergency && !operationalEmergency) {
+    return (
+      <PanelShell title={`${foreignEmergency.type_label} emergency`}>
+        <InfoRow
+          icon={<AlertTriangleIcon className="size-4" />}
+          label="Community"
+          value={foreignEmergency.community.name}
+        />
+        <InfoRow
+          icon={<AlertTriangleIcon className="size-4" />}
+          label="Status"
+          value={foreignEmergency.status.replace(/_/g, " ")}
+        />
+        <InfoRow
+          icon={<MapPinIcon className="size-4" />}
+          label="Location"
+          value={locationLabel(
+            foreignEmergency.address,
+            foreignEmergency.barangay
+          )}
+        />
+        <p className="text-xs leading-5 font-semibold text-foreground">
+          {foreignEmergency.display_description ||
+            foreignEmergency.note ||
+            "No public update available."}
+        </p>
+        <p className="rounded-control bg-canvas px-3 py-2 text-xs font-semibold text-muted-foreground">
+          You can only view this alert. Reporter details, evidence, routes,
+          responders, chat, and operational history are private.
+        </p>
       </PanelShell>
     )
   }
   const emergency = snapshot.emergencies.find((item) => item.id === selected.id)
   if (!emergency) return null
   const currentEmergency = emergency
-  const fullEmergency = emergencyDetail?.id === emergency.id ? emergencyDetail : null
-  const activeTeamAssignments = (fullEmergency?.assignments ?? []).filter(
-    (assignment) => !["cancelled", "declined", "resolved"].includes(assignment.status),
-  ) ?? []
+  const fullEmergency =
+    emergencyDetail?.id === emergency.id ? emergencyDetail : null
+  const responseAssignments = fullEmergency
+    ? emergencyResponderAssignments(fullEmergency)
+    : []
   const route = snapshot.routes.find((item) => item.alert_id === emergency.id)
   const availableResponders = snapshot.people.filter(
-    (person) => person.role === "first_responder" && person.is_on_duty,
+    (person) => person.role === "first_responder" && (person.is_online ?? true)
   )
-  function patchFromEmergencyAlert(next: EmergencyAlert, responder?: LiveMapPerson) {
+  function patchFromEmergencyAlert(
+    next: EmergencyAlert,
+    responder?: LiveMapPerson
+  ) {
     setEmergencyDetail(next)
     const assignment = next.current_assignment
     const liveResponder =
       responder ??
       (assignment
-        ? snapshot.people.find((person) => person.id === assignment.responder.id) ?? {
+        ? (snapshot.people.find(
+            (person) => person.id === assignment.responder.id
+          ) ?? {
             id: assignment.responder.id,
             full_name: assignment.responder.full_name,
             role: "first_responder" as const,
-            barangay: assignment.responder.barangay || currentEmergency.barangay,
+            barangay:
+              assignment.responder.barangay || currentEmergency.barangay,
             address: assignment.responder.street || "",
             responder_unit: assignment.responder.responder_unit || "",
             is_on_duty: Boolean(assignment.responder.is_on_duty),
             latitude: null,
             longitude: null,
             location_updated_at: assignment.responder.last_seen_at,
-          }
+          })
         : null)
     onEmergencyUpdated({
       ...currentEmergency,
@@ -226,11 +376,16 @@ export function DetailPanel({
 
   async function resolveSelected() {
     try {
-      const next = await resolveEmergency(currentEmergency.id, "Marked resolved from Alerts Map.")
+      const next = await resolveEmergency(
+        currentEmergency.id,
+        "Marked resolved from Alerts Map."
+      )
       patchFromEmergencyAlert(next)
       toast.success("Emergency marked resolved")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not mark resolved.")
+      toast.error(
+        error instanceof Error ? error.message : "Could not mark resolved."
+      )
     }
   }
   async function copySummary() {
@@ -241,7 +396,9 @@ export function DetailPanel({
       `Responder: ${currentEmergency.current_assignment?.responder.full_name || "Unassigned"}`,
       `Location: ${currentEmergency.address || currentEmergency.barangay}`,
       currentEmergency.note ? `Note: ${currentEmergency.note}` : "",
-    ].filter(Boolean).join("\n")
+    ]
+      .filter(Boolean)
+      .join("\n")
     await navigator.clipboard?.writeText(summary)
     toast.success("Emergency summary copied")
   }
@@ -250,20 +407,23 @@ export function DetailPanel({
   if (fullEmergency) {
     const emergencyMedia = fullEmergency.media ?? []
     const emergencyEscalations = fullEmergency.escalations ?? []
-    sections.push({
-      key: "emergency-team",
-      title: "Response team",
-      badge: String(activeTeamAssignments.length),
-      defaultOpen: true,
-      content: (
-        <ResponderAssignment
-          alert={fullEmergency}
-          responders={availableResponders.map(toAssignable)}
-          onChanged={patchFromEmergencyAlert}
-          maxResponders={4}
-        />
-      ),
-    })
+    const emergencyTimeline = buildEmergencyTimeline(fullEmergency)
+    if (!isResponder) {
+      sections.push({
+        key: "emergency-team",
+        title: "Response team",
+        badge: String(responseAssignments.length),
+        defaultOpen: true,
+        content: (
+          <ResponderAssignment
+            alert={fullEmergency}
+            responders={availableResponders.map(toAssignable)}
+            onChanged={patchFromEmergencyAlert}
+            maxResponders={4}
+          />
+        ),
+      })
+    }
 
     sections.push({
       key: "emergency-community",
@@ -272,7 +432,8 @@ export function DetailPanel({
         <EmergencyCommunityComments
           alertId={fullEmergency.id}
           acceptsComments={
-            fullEmergency.status !== "cancelled" && fullEmergency.status !== "false_alarm"
+            fullEmergency.status !== "cancelled" &&
+            fullEmergency.status !== "false_alarm"
           }
         />
       ),
@@ -281,13 +442,17 @@ export function DetailPanel({
     sections.push({
       key: "emergency-timeline",
       title: "Status and Timeline",
-      badge: String(fullEmergency.timeline?.length ?? 0),
-      content: <EmergencyTimeline entries={fullEmergency.timeline ?? []} showNotes />,
+      badge: String(emergencyTimeline.length),
+      content: <EmergencyTimelineCard items={emergencyTimeline} />,
     })
 
     if (emergencyMedia.length) {
       const evidenceItems: MediaPreviewItem[] = emergencyMedia.map((media) =>
-        toMediaPreviewItem(mediaDisplaySource(media), media.original_filename, media.mime_type),
+        toMediaPreviewItem(
+          mediaDisplaySource(media),
+          media.original_filename,
+          media.mime_type
+        )
       )
       sections.push({
         key: "emergency-evidence",
@@ -299,7 +464,12 @@ export function DetailPanel({
               <button
                 key={media.id}
                 type="button"
-                onClick={() => setEvidencePreview({ items: evidenceItems, index: mediaIndex })}
+                onClick={() =>
+                  setEvidencePreview({
+                    items: evidenceItems,
+                    index: mediaIndex,
+                  })
+                }
                 className="overflow-hidden rounded-control border border-card-line bg-canvas text-left"
               >
                 {media.mime_type.startsWith("image/") ? (
@@ -321,6 +491,17 @@ export function DetailPanel({
       })
     }
 
+    sections.push({
+      key: "emergency-location",
+      title: "Location and route",
+      defaultOpen: true,
+      content: (
+        <div className="h-56 overflow-hidden rounded-control border border-card-line bg-tint">
+          <IncidentMap alert={fullEmergency} viewerId={viewerId} />
+        </div>
+      ),
+    })
+
     if (emergencyEscalations.length) {
       sections.push({
         key: "emergency-escalations",
@@ -332,18 +513,21 @@ export function DetailPanel({
             {emergencyEscalations.map((escalation) => (
               <div
                 key={escalation.id}
-                className="text-xs font-semibold leading-5 text-severity-moderate-ink"
+                className="text-xs leading-5 font-semibold text-severity-moderate-ink"
               >
-                <span className="font-bold">{formatTime(escalation.created_at)}</span> ·{" "}
-                {escalation.reason}
-                {escalation.escalated_to ? ` · Routed to ${escalation.escalated_to.full_name}` : ""}
+                <span className="font-bold">
+                  {formatTime(escalation.created_at)}
+                </span>{" "}
+                · {escalation.reason}
+                {escalation.escalated_to
+                  ? ` · Routed to ${escalation.escalated_to.full_name}`
+                  : ""}
               </div>
             ))}
           </div>
         ),
       })
     }
-
   }
 
   sections.push({
@@ -368,32 +552,50 @@ export function DetailPanel({
 
   // Ordered so the first entry is the single thing to do next: assign when
   // nobody has it, close it out when somebody does.
-  const actions: RecordAction[] = [
-    emergency.current_assignment
-      ? {
-          key: "resolve",
-          label: "Mark resolved",
+  const actions: RecordAction[] = isResponder
+    ? [
+        {
+          key: "respond",
+          label: "Respond to incident",
           tone: "primary",
-          onSelect: () => void resolveSelected(),
-        }
-      : {
-          key: "assign",
-          label: "Assign a responder",
-          tone: "primary",
-          disabled: availableResponders.length === 0,
-          disabledReason: "No on-duty responders are available right now",
-          onSelect: () =>
-            document
-              .getElementById("record-section-emergency-team")
-              ?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
+          onSelect: () => navigate(`/dashboard/reports?alert=${emergency.id}`),
         },
-    {
-      key: "open-ops",
-      label: "Open in Emergency Ops",
-      onSelect: () => navigate(`/dashboard/emergencies?alert=${emergency.id}`),
-    },
-    { key: "copy", label: "Copy summary", onSelect: () => void copySummary() },
-  ]
+        {
+          key: "open-report",
+          label: "Open full report",
+          onSelect: () => navigate(`/dashboard/reports?alert=${emergency.id}`),
+        },
+      ]
+    : [
+        emergency.current_assignment
+          ? {
+              key: "resolve",
+              label: "Mark resolved",
+              tone: "primary",
+              onSelect: () => void resolveSelected(),
+            }
+          : {
+              key: "assign",
+              label: "Assign a responder",
+              tone: "primary",
+              disabled: availableResponders.length === 0,
+              disabledReason: "No eligible responders are online right now",
+              onSelect: () =>
+                document
+                  .getElementById("record-section-emergency-team")
+                  ?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
+            },
+        {
+          key: "open-report",
+          label: "Open full report",
+          onSelect: () => navigate(`/dashboard/reports?alert=${emergency.id}`),
+        },
+        {
+          key: "copy",
+          label: "Copy summary",
+          onSelect: () => void copySummary(),
+        },
+      ]
 
   // The live-map row carries only a subset of EmergencyAlert, so the full
   // record is preferred once it loads — it is what supplies assignments, media
@@ -420,17 +622,21 @@ export function DetailPanel({
 
   const record = toEmergencyRecordView(source, {
     now,
-    distanceLabel: route ? `${formatDistance(route.distance_meters ?? null)} away` : null,
+    distanceLabel: route
+      ? `${formatDistance(route.distance_meters ?? null)} away`
+      : null,
     etaLabel: route ? formatEta(route.eta_seconds ?? null) : null,
     actions,
     sections,
   })
 
   return (
-    <div className="space-y-3 px-3 pb-3 pt-2">
+    <div className="space-y-3 px-3 pt-2 pb-3">
       {detailError ? (
         <div className="rounded-panel border border-severity-critical bg-severity-critical-surface p-3">
-          <p className="text-xs font-bold text-severity-critical-ink">{detailError}</p>
+          <p className="text-xs font-bold text-severity-critical-ink">
+            {detailError}
+          </p>
           <Button
             type="button"
             variant="outline"

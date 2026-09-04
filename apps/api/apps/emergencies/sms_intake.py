@@ -46,18 +46,21 @@ class SmsIntakeResult:
         return bool(self.alert) and not self.duplicate
 
 
-def resolve_category_code(code: str) -> str:
+def resolve_category_code(code: str, community=None) -> str:
     """Map a parsed code onto an active category, falling back to `other`.
 
     An unconfigured category must never lose an emergency. If the barangay has
     not set up "Dangerous Animal" yet, the alert still lands as "Other
     Emergency" and reaches the general review team.
     """
-    if code and EmergencyCategory.objects.filter(code=code, is_active=True).exists():
+    queryset = EmergencyCategory.objects.filter(is_active=True)
+    if community is not None:
+        queryset = queryset.filter(community=community)
+    if code and queryset.filter(code=code).exists():
         return code
-    if EmergencyCategory.objects.filter(code="other", is_active=True).exists():
+    if queryset.filter(code="other").exists():
         return "other"
-    fallback = EmergencyCategory.objects.filter(is_active=True).order_by("sort_order", "id").first()
+    fallback = queryset.order_by("sort_order", "id").first()
     return fallback.code if fallback else (code or "other")
 
 
@@ -137,13 +140,13 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
     if existing:
         return SmsIntakeResult(alert=existing, duplicate=True, reason="active_alert_exists")
 
-    category_code = resolve_category_code(parsed.category_code)
     resolution = resolve_incident_location(
         latitude=parsed.latitude,
         longitude=parsed.longitude,
         message_area=parsed.reported_area,
         match=match,
     )
+    category_code = resolve_category_code(parsed.category_code, resolution.community)
     evidence = resolution.payload()
 
     alert = EmergencyAlert(
@@ -188,11 +191,13 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
         except Exception:
             logger.exception("Auto-routing failed for SMS alert %s; alert remains active.", alert.pk)
     else:
-        reason = "Manual dispatch required: emergency community is unknown or ambiguous."
-        EmergencyEscalation.objects.get_or_create(alert=alert, reason=reason)
-        alert.status = EmergencyAlert.Status.ESCALATION_REQUIRED
+        # Keep location-ambiguous SMS alerts in the automatic routing queue.
+        # Location recovery can attach a community later; the periodic dispatch
+        # sweep will then route the alert without official intervention.
+        reason = "Automatically resolving the emergency community before routing."
+        alert.status = EmergencyAlert.Status.ROUTING
         alert.save(update_fields=["status", "updated_at"])
-        create_status_event(alert, alert.status, None, note=reason, event_key="no_responder")
+        create_status_event(alert, alert.status, None, note=reason, event_key="responder_searching")
 
     # Step 3 onwards: everything that may fail or block, none of it load-bearing.
     if alert.location_confidence == EmergencyAlert.LocationConfidence.OUTSIDE_AREA:
@@ -244,6 +249,15 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
 
     _broadcast_created(alert)
     _enqueue_ai_assist(alert)
+    # Keep SMS-created emergencies on the same responder-facing description
+    # path as SOS submissions. The model combines the note and parsed answers;
+    # routing has already happened, so this can never delay dispatch.
+    try:
+        from .tasks import enqueue_emergency_description
+
+        enqueue_emergency_description(alert.pk)
+    except Exception:
+        logger.debug("Emergency description not scheduled for SMS alert %s.", alert.pk, exc_info=True)
     return SmsIntakeResult(alert=alert, responder=responder)
 
 

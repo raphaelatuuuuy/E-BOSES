@@ -11,23 +11,29 @@ import {
   type CoverageInput,
 } from "@/features/dashboard/components/map/coverage-layer"
 import { loadCoverageContext } from "@/features/dashboard/lib/use-coverage"
-import { dotPinHtml, MAP_COLORS } from "@/features/dashboard/components/map/markers"
-import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import {
-  formatNominatimParts,
-  reverseGeocode,
-} from "@/lib/geocode"
+  dotPinHtml,
+  MAP_COLORS,
+} from "@/features/dashboard/components/map/markers"
+import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
+import { formatNominatimParts, reverseGeocode } from "@/lib/geocode"
 
-const DEFAULT_CENTER: [number, number] = [14.6507, 121.1133]
+const DEFAULT_CENTER: [number, number] = [14.5995, 120.9842]
 
 async function describePin(lat: number, lng: number) {
   if (!navigator.onLine) {
-    return { address: "Pinned location on map", addressPrimary: "Pinned location" }
+    return {
+      address: "Pinned location on map",
+      addressPrimary: "Pinned location",
+    }
   }
   try {
     const data = await reverseGeocode(lat, lng)
     if (!data) {
-      return { address: "Pinned location on map", addressPrimary: "Pinned location" }
+      return {
+        address: "Pinned location on map",
+        addressPrimary: "Pinned location",
+      }
     }
     const parts = formatNominatimParts(data)
     return {
@@ -35,7 +41,10 @@ async function describePin(lat: number, lng: number) {
       addressPrimary: parts.primary,
     }
   } catch {
-    return { address: "Pinned location on map", addressPrimary: "Pinned location" }
+    return {
+      address: "Pinned location on map",
+      addressPrimary: "Pinned location",
+    }
   }
 }
 
@@ -54,10 +63,16 @@ export type SosLocationCheck = {
   status: string
   zone: string
   message: string
-  acceptance_zone?: { within: boolean; distance_meters?: number; radius_meters?: number }
+  acceptance_zone?: {
+    within: boolean
+    distance_meters?: number
+    radius_meters?: number
+  }
 }
 
-export function friendlyLocationMessage(check: SosLocationCheck | null | undefined) {
+export function friendlyLocationMessage(
+  check: SosLocationCheck | null | undefined
+) {
   if (!check) return "Checking your location…"
   if (check.accepted && check.acceptance_zone?.within) {
     return ""
@@ -96,10 +111,13 @@ export function SosLocationStep({
   async function validatePin(lat: number, lng: number) {
     const requestId = ++validationRequestRef.current
     try {
-      const result = await apiRequest<SosLocationCheck>("/locations/validate/", {
-        method: "POST",
-        body: JSON.stringify({ latitude: lat, longitude: lng }),
-      })
+      const result = await apiRequest<SosLocationCheck>(
+        "/locations/validate/",
+        {
+          method: "POST",
+          body: JSON.stringify({ latitude: lat, longitude: lng }),
+        }
+      )
       return requestId === validationRequestRef.current ? result : null
     } catch {
       return requestId === validationRequestRef.current ? null : null
@@ -108,7 +126,9 @@ export function SosLocationStep({
 
   async function locateCurrentUser() {
     if (!navigator.geolocation) {
-      setGpsNotice("Location services are unavailable. Drag the map to place the emergency pin.")
+      setGpsNotice(
+        "Location services are unavailable. Drag the map to place the emergency pin."
+      )
       return
     }
     setGpsBusy(true)
@@ -135,7 +155,9 @@ export function SosLocationStep({
         const map = mapRef.current
         if (map) {
           ignoreMove.current = true
-          map.setView([lat, lng], Math.max(map.getZoom(), 17), { animate: true })
+          map.setView([lat, lng], Math.max(map.getZoom(), 17), {
+            animate: true,
+          })
           window.setTimeout(() => {
             ignoreMove.current = false
           }, 500)
@@ -143,9 +165,11 @@ export function SosLocationStep({
       },
       () => {
         setGpsBusy(false)
-        setGpsNotice("We could not get your GPS location. Drag the map to place the emergency pin.")
+        setGpsNotice(
+          "We could not get your GPS location. Drag the map to place the emergency pin."
+        )
       },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 }
     )
   }
 
@@ -176,7 +200,9 @@ export function SosLocationStep({
     const startTimer = window.setTimeout(() => {
       if (cancelled) return
       if (!navigator.geolocation) {
-        setGpsNotice("Location services are unavailable. Drag the map to place the emergency pin.")
+        setGpsNotice(
+          "Location services are unavailable. Drag the map to place the emergency pin."
+        )
         return
       }
       setGpsBusy(true)
@@ -213,7 +239,9 @@ export function SosLocationStep({
         () => {
           if (cancelled) return
           setGpsBusy(false)
-          setGpsNotice("We could not get your GPS location. Drag the map to place the emergency pin.")
+          setGpsNotice(
+            "We could not get your GPS location. Drag the map to place the emergency pin."
+          )
         },
         { enableHighAccuracy: true, timeout: 12_000 }
       )
@@ -282,7 +310,12 @@ export function SosLocationStep({
         zoom: 16,
         zoomControl: false,
         attributionControl: false,
+        dragging: true,
         scrollWheelZoom: true,
+        touchZoom: true,
+        doubleClickZoom: true,
+        boxZoom: true,
+        keyboard: true,
       })
       addBaseTiles(L, map, "light", { maxZoom: 19 })
 
@@ -378,7 +411,7 @@ export function SosLocationStep({
           ref={containerRef}
           className={cn(
             "sos-loc-map absolute inset-0 z-0 h-full w-full",
-            outOfScope && "is-blocked",
+            outOfScope && "is-blocked"
           )}
           aria-label="Emergency location map. Drag the map to move the centered pin."
         />
@@ -388,13 +421,17 @@ export function SosLocationStep({
           disabled={gpsBusy}
           aria-label="Use my current location"
           title="Use my current location"
-          className="absolute right-2 top-2 z-[600] flex size-[38px] items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-700 shadow-sm transition-colors hover:bg-neutral-50 disabled:opacity-60"
+          className="absolute top-2 right-2 z-[600] flex size-[38px] items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-700 shadow-sm transition-colors hover:bg-neutral-50 disabled:opacity-60"
         >
-          {gpsBusy ? <Loader2Icon className="size-4 animate-spin" /> : <LocateFixedIcon className="size-4" />}
+          {gpsBusy ? (
+            <Loader2Icon className="size-4 animate-spin" />
+          ) : (
+            <LocateFixedIcon className="size-4" />
+          )}
         </button>
         {outOfScope ? (
           <div
-            className="absolute left-1/2 top-1/2 z-[600] w-[min(320px,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[28px] bg-white px-6 py-4 text-center shadow-[0_18px_50px_rgba(15,23,42,0.25)]"
+            className="absolute top-1/2 left-1/2 z-[600] w-[min(320px,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[28px] bg-white px-6 py-4 text-center shadow-[0_18px_50px_rgba(15,23,42,0.25)]"
             role="status"
             aria-live="polite"
           >
@@ -424,7 +461,8 @@ export function SosLocationStep({
             />
           </div>
         ) : null}
-        <style>{`
+        <style>
+          {`
           .sos-loc-map.is-blocked.leaflet-container,
           .sos-loc-map.is-blocked .leaflet-grab { cursor: not-allowed !important; }
           .sos-loc-map.is-blocked::after {
@@ -435,10 +473,15 @@ export function SosLocationStep({
             pointer-events: none;
             background: rgba(220, 38, 38, 0.08);
           }
-        `}        </style>
+        `}{" "}
+        </style>
       </div>
       {gpsNotice ? (
-        <p className="text-[13px] font-medium leading-5 text-white/75" role="status" aria-live="polite">
+        <p
+          className="text-[13px] leading-5 font-medium text-white/75"
+          role="status"
+          aria-live="polite"
+        >
           {gpsNotice}
         </p>
       ) : null}

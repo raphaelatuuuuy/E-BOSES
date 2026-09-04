@@ -32,6 +32,7 @@ export function concernMarkerHtml({
   status,
   selected,
   tone = "light",
+  hoverGrow = false,
 }: {
   category: string
   iconKey?: string
@@ -40,6 +41,7 @@ export function concernMarkerHtml({
   status: string
   selected: boolean
   tone?: MarkerTone
+  hoverGrow?: boolean
 }) {
   const resolved = isResolvedStatus(status)
   const box = selected ? Math.round(BASE_SIZE * 1.3) : BASE_SIZE
@@ -60,6 +62,7 @@ export function concernMarkerHtml({
     tone,
     tint: resolved,
     idleNeutral: false,
+    hoverGrow,
   })
 }
 

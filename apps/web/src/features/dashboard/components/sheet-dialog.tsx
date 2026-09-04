@@ -84,8 +84,8 @@ export function SheetDialog({
         aria-labelledby={titleId}
         className={cn(
           "relative z-10 flex w-full flex-col overflow-hidden bg-white shadow-2xl",
-          "max-h-[min(720px,92vh)] rounded-t-[28px] sm:rounded-[28px]",
-          size === "wide" ? "max-w-2xl" : "max-w-[440px]",
+          "max-h-[min(720px,92dvh)] rounded-t-[28px] sm:rounded-[28px]",
+          size === "wide" ? "sm:max-w-2xl" : "sm:max-w-[440px]",
           className,
         )}
       >
@@ -119,7 +119,7 @@ export function SheetDialog({
           </div>
         </div>
 
-        <div className={cn("scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-6", bodyClassName)}>
+        <div className={cn("scrollbar-hide min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] [-webkit-overflow-scrolling:touch]", bodyClassName)}>
           {children}
         </div>
 

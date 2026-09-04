@@ -36,12 +36,20 @@ class Concern(models.Model):
     client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
     tracking_number = models.CharField(max_length=32, null=True, blank=True, unique=True)
     reporter = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="concerns")
+    is_anonymous = models.BooleanField(default=False, db_index=True)
     community = models.ForeignKey(
         "emergencies.Community",
         null=True,
         blank=True,
         on_delete=models.PROTECT,
         related_name="concerns",
+    )
+    reporter_community = models.ForeignKey(
+        "emergencies.Community",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="reported_concerns",
     )
     category_ref = models.ForeignKey(
         "ConcernCategory",
@@ -139,8 +147,18 @@ class Concern(models.Model):
             ).select_related("department").first()
             if category:
                 self.category_ref = category
-        if self.category_ref_id and not self.assigned_department_id:
+        assigned_department_was_set = False
+        if (
+            self.category_ref_id
+            and not self.assigned_department_id
+            and self.validation_status == self.ValidationStatus.ACCEPTED
+        ):
             self.assigned_department_id = self.category_ref.department_id
+            assigned_department_was_set = True
+        if assigned_department_was_set and kwargs.get("update_fields") is not None:
+            update_fields = set(kwargs["update_fields"])
+            update_fields.add("assigned_department")
+            kwargs["update_fields"] = update_fields
         super().save(*args, **kwargs)
 
 
@@ -148,10 +166,10 @@ class ConcernMedia(models.Model):
     class PrivacyState(models.TextChoices):
         """Where this image is in the Gemma → SAM3 → OpenCV privacy pipeline.
 
-        Only NOT_REQUIRED and PROTECTED are safe-to-publish terminal states.
-        Everything else means the public copy must not be served, which is what
-        `public_visible` enforces — the two are set together so a half-finished
-        run can never leak the original.
+        NOT_REQUIRED, PROTECTED, and NO_MATCH_FOUND are safe-to-publish terminal
+        states. Everything else means the public copy must not be served, which
+        is what `public_visible` enforces — the state and flag are set together
+        so a half-finished run can never leak the original.
         """
 
         NOT_REQUIRED = "not_required", "No privacy scan required"
@@ -165,7 +183,9 @@ class ConcernMedia(models.Model):
     concern = models.ForeignKey(Concern, on_delete=models.CASCADE, related_name="media")
     file = models.FileField(storage=PrivateMediaStorage(), upload_to="raw/concern-media/%Y/%m/")
     # The protected, public-facing copy. Never a byte-for-byte copy of `file`:
-    # every write path re-encodes and strips EXIF, and blur is baked in.
+    # every write path re-encodes and strips EXIF, and any required blur is
+    # baked in. A completed no-match result is also safe to publish because it
+    # has been re-encoded without any detected face or license plate.
     preview_file = models.FileField(storage=PublicMediaStorage(), upload_to="previews/concern-media/%Y/%m/", blank=True)
     original_filename = models.CharField(max_length=255)
     mime_type = models.CharField(max_length=120, blank=True)
@@ -777,6 +797,13 @@ class ConcernClassificationConfiguration(models.Model):
         FLAG_NOTIFY = "flag_notify", "Accept & flag for the responder"
         HOLD = "hold", "Hold for review"
 
+    community = models.OneToOneField(
+        "emergencies.Community",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="classification_configuration",
+    )
     nlp_provider = models.CharField(max_length=32, default="ollama_cloud")
     nlp_model = models.CharField(max_length=120, default="gemma4:31b")
     relevance_threshold = models.FloatField(default=0.65)
@@ -818,7 +845,7 @@ class ConcernClassificationConfiguration(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
-    CLASSIFICATION_CONFIG_CACHE_KEY = "concerns:classification-config:v1"
+    CLASSIFICATION_CONFIG_CACHE_KEY = "concerns:classification-config:v2"
     CAREFUL_REVIEW_VALUES = {
         "relevance_threshold": 0.8,
         "duplicate_threshold": 0.78,
@@ -842,7 +869,20 @@ class ConcernClassificationConfiguration(models.Model):
         }
 
     @classmethod
-    def current(cls):
+    def _community(cls, community=None):
+        if community is not None:
+            return community
+        from apps.emergencies.models import Community
+
+        active = list(Community.objects.filter(status=Community.Status.ACTIVE).order_by("name")[:2])
+        if len(active) == 1:
+            return active[0]
+        if len(active) > 1:
+            raise ValueError("Community is required when more than one community is active.")
+        return None
+
+    @classmethod
+    def current(cls, community=None):
         """The singleton configuration, cached briefly.
 
         Serializers call this several times per concern row; uncached it was
@@ -852,24 +892,27 @@ class ConcernClassificationConfiguration(models.Model):
         """
         from django.core.cache import cache
 
-        cached = cache.get(cls.CLASSIFICATION_CONFIG_CACHE_KEY)
+        community = cls._community(community)
+        cache_key = f"{cls.CLASSIFICATION_CONFIG_CACHE_KEY}:{getattr(community, 'pk', 'none')}"
+        cached = cache.get(cache_key)
         if isinstance(cached, cls):
             return cached
-        obj, _ = cls.objects.get_or_create(pk=1, defaults=cls._config_defaults())
+        obj, _ = cls.objects.get_or_create(community=community, defaults=cls._config_defaults())
         for field, value in cls.CAREFUL_REVIEW_VALUES.items():
             setattr(obj, field, value)
-        cache.set(cls.CLASSIFICATION_CONFIG_CACHE_KEY, obj, 60)
+        cache.set(cache_key, obj, 60)
         return obj
 
     @classmethod
-    def current_fresh(cls):
+    def current_fresh(cls, community=None):
         """Uncached twin of current() for read/modify/write flows.
 
         Mutating a cached instance breaks when the row was recreated elsewhere
         (save(update_fields) hits zero rows); officials' config endpoints are
         low-traffic, so they take the extra query.
         """
-        obj, _ = cls.objects.get_or_create(pk=1, defaults=cls._config_defaults())
+        community = cls._community(community)
+        obj, _ = cls.objects.get_or_create(community=community, defaults=cls._config_defaults())
         for field, value in cls.CAREFUL_REVIEW_VALUES.items():
             setattr(obj, field, value)
         return obj
@@ -883,11 +926,12 @@ class ConcernClassificationConfiguration(models.Model):
         self._bust_cache()
         return result
 
-    @staticmethod
-    def _bust_cache():
+    def _bust_cache(self):
         from django.core.cache import cache
 
-        cache.delete(ConcernClassificationConfiguration.CLASSIFICATION_CONFIG_CACHE_KEY)
+        cache.delete(
+            f"{ConcernClassificationConfiguration.CLASSIFICATION_CONFIG_CACHE_KEY}:{self.community_id or 'none'}"
+        )
 
 class ConcernView(models.Model):
     """One row per official who has opened a concern's detail view.
@@ -1111,6 +1155,60 @@ class AnnouncementComment(models.Model):
 
     def __str__(self):
         return f"Comment {self.pk} on announcement {self.announcement_id}"
+
+
+class PublicCommentAttachment(models.Model):
+    """One public image/video attached to a concern, alert, or announcement comment."""
+
+    class Kind(models.TextChoices):
+        IMAGE = "image", "Image"
+        VIDEO = "video", "Video"
+
+    class AnalysisStatus(models.TextChoices):
+        COMPLETE = "complete", "Complete"
+        REVIEW_REQUIRED = "review_required", "Review required"
+        UNAVAILABLE = "unavailable", "Unavailable"
+
+    concern_comment = models.OneToOneField(
+        ConcernComment, null=True, blank=True, on_delete=models.CASCADE, related_name="attachment"
+    )
+    announcement_comment = models.OneToOneField(
+        AnnouncementComment, null=True, blank=True, on_delete=models.CASCADE, related_name="attachment"
+    )
+    emergency_comment = models.OneToOneField(
+        "emergencies.EmergencyCommunityComment",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="attachment",
+    )
+    file = models.FileField(
+        storage=PrivateMediaStorage(), upload_to="raw/public-comments/%Y/%m/"
+    )
+    preview_file = models.FileField(
+        storage=PublicMediaStorage(), upload_to="previews/public-comments/%Y/%m/", blank=True
+    )
+    original_filename = models.CharField(max_length=255)
+    mime_type = models.CharField(max_length=120)
+    kind = models.CharField(max_length=12, choices=Kind.choices)
+    file_size = models.PositiveIntegerField(default=0)
+    authenticity_status = models.CharField(max_length=24, choices=AnalysisStatus.choices)
+    authenticity_detail = models.CharField(max_length=255, blank=True)
+    street_imagery = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(concern_comment__isnull=False, announcement_comment__isnull=True, emergency_comment__isnull=True)
+                    | models.Q(concern_comment__isnull=True, announcement_comment__isnull=False, emergency_comment__isnull=True)
+                    | models.Q(concern_comment__isnull=True, announcement_comment__isnull=True, emergency_comment__isnull=False)
+                ),
+                name="public_comment_attachment_one_parent",
+            )
+        ]
 
 
 class ConcernMergeSuggestion(models.Model):

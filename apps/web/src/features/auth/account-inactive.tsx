@@ -70,7 +70,7 @@ export default function AccountInactivePage() {
         <div className="mt-5 max-w-2xl space-y-4 text-[15px] leading-relaxed text-neutral-600">
           <p>
             Your account is currently inactive. If you&apos;d like to reactivate
-            your account and join your neighbors on E-Boses Marikina Heights,
+            your account and join your neighbors on E-Boses,
             click the button below. If you need help,{" "}
             <a href="mailto:support@eboses.local" className="underline underline-offset-2">
               contact us

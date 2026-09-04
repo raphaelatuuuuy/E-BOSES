@@ -324,23 +324,27 @@ def _assistant():
 
 
 def _map_data():
-    from apps.geo_services import get_active_boundary_geometry, point_in_geojson
-    from apps.emergencies.models import MapGeometry, MapDispatchPolicy
+    from apps.geo_services import point_in_geojson
+    from apps.emergencies.models import Community, MapGeometry, MapDispatchPolicy
 
     count = MapGeometry.objects.filter(is_active=True).count()
     if not count:
         return DEGRADED, "no geometry imported"
-    geometry = get_active_boundary_geometry()
-    if not geometry or geometry.get("type") not in {"Polygon", "MultiPolygon"}:
-        return DOWN, "active boundary geometry is invalid"
-    policy = MapDispatchPolicy.current()
-    inside = point_in_geojson(
-        float(policy.acceptance_center_longitude),
-        float(policy.acceptance_center_latitude),
-        geometry,
-    )
-    if inside is not True:
-        return DEGRADED, "barangay center is outside the active boundary"
+    communities = Community.objects.filter(status=Community.Status.ACTIVE).select_related("boundary")
+    if not communities.exists():
+        return DOWN, "no active community"
+    for community in communities:
+        geometry = community.boundary.geometry if community.boundary else None
+        if not geometry or geometry.get("type") not in {"Polygon", "MultiPolygon"}:
+            return DOWN, f"{community.name} boundary geometry is invalid"
+        policy = MapDispatchPolicy.current(community)
+        inside = point_in_geojson(
+            float(policy.acceptance_center_longitude),
+            float(policy.acceptance_center_latitude),
+            geometry,
+        )
+        if inside is not True:
+            return DEGRADED, f"{community.name} center is outside its active boundary"
     return OPERATIONAL, f"{count} valid active geometries"
 
 

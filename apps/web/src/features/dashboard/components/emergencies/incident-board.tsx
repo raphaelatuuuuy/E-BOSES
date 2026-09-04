@@ -1,14 +1,30 @@
-import { useEffect, useRef, useState } from "react"
-import { FileIcon, LoaderCircleIcon, PhoneIcon, PlayIcon, ShieldCheckIcon, UserCheckIcon } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import {
+  FileIcon,
+  LocateFixedIcon,
+  LoaderCircleIcon,
+  PhoneIcon,
+  PlayIcon,
+  ShieldCheckIcon,
+  UserCheckIcon,
+} from "lucide-react"
 
 import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
 import { fullTimestamp } from "@/features/dashboard/components/record/emergency-adapter"
 import { isActiveEmergency } from "@/features/dashboard/components/alerts-map/lib"
-import { dotPinHtml, MAP_COLORS } from "@/features/dashboard/components/map/markers"
-import { glyphPinHtml, glyphPinSize } from "@/features/dashboard/components/map/markers"
+import {
+  GLYPHS,
+  glyphPinHtml,
+  glyphPinSize,
+  MAP_COLORS,
+} from "@/features/dashboard/components/map/markers"
 import { lucideIconPaths } from "@/features/dashboard/components/map/lucide-glyphs"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
-import { drawRoute, routeRenderGeometry } from "@/features/dashboard/lib/route-line"
+import {
+  drawRoute,
+  routeRenderGeometry,
+  type RouteLayers,
+} from "@/features/dashboard/lib/route-line"
 import {
   AuthenticatedMediaImage,
   MediaLightbox,
@@ -22,10 +38,26 @@ import { useReporterPhone } from "@/features/dashboard/lib/use-reporter-phone"
 import { OpsTabs } from "@/features/dashboard/components/workspace/ops-tabs"
 import { EmergencyTimeline } from "@/features/dashboard/components/emergencies/emergency-timeline"
 import { formatEventMoment } from "@/features/dashboard/lib/emergency-timeline-format"
-import { Band, Fact, FactRow, Surface } from "@/features/dashboard/components/workspace/band"
-import type { EmergencyAlert } from "@/features/dashboard/emergency-api"
+import {
+  Band,
+  Fact,
+  FactRow,
+  Surface,
+} from "@/features/dashboard/components/workspace/band"
+import {
+  getEmergencyRoute,
+  sendEmergencyLocationPing,
+  type EmergencyAlert,
+} from "@/features/dashboard/emergency-api"
 import type leaflet from "leaflet"
-import { formatTime, readableLocation, responderName, unitLabel } from "./lib"
+import {
+  formatTime,
+  emergencyResponderAssignments,
+  readableLocation,
+  responderName,
+  unitLabel,
+} from "./lib"
+
 import { streetOnly } from "@/features/dashboard/lib/location-text"
 
 function coord(lat?: string | number | null, lng?: string | number | null) {
@@ -35,34 +67,82 @@ function coord(lat?: string | number | null, lng?: string | number | null) {
   return [latitude, longitude] as leaflet.LatLngTuple
 }
 
-export function IncidentMap({ alert }: { alert: EmergencyAlert }) {
+function readCurrentPosition() {
+  return new Promise<GeolocationPosition>((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 12000,
+    })
+  })
+}
+
+export function IncidentMap({
+  alert,
+  viewerId = null,
+}: {
+  alert: EmergencyAlert
+  viewerId?: number | null
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const resizeRef = useRef<ResizeObserver | null>(null)
+  const mapRef = useRef<leaflet.Map | null>(null)
+  const leafletRef = useRef<typeof leaflet | null>(null)
+  const boundsPointsRef = useRef<leaflet.LatLngTuple[]>([])
+  const routeLayersRef = useRef<RouteLayers[]>([])
+  const responderMarkerRef = useRef<leaflet.Marker | null>(null)
+  const [routeBusy, setRouteBusy] = useState(false)
   const assignment = alert.current_assignment
-  const route = assignment?.route ?? alert.route ?? null
+  const settled = !isActiveEmergency(alert)
+  const responderAssignments = useMemo(
+    () => emergencyResponderAssignments(alert),
+    [alert]
+  )
+  const mapAssignments = useMemo(
+    () =>
+      settled
+        ? responderAssignments
+        : assignment
+          ? [assignment]
+          : responderAssignments.slice(0, 1),
+    [assignment, responderAssignments, settled]
+  )
+  const primaryAssignment = mapAssignments[0] ?? null
   const incident = coord(alert.latitude, alert.longitude)
-  const responder = coord(assignment?.last_location?.latitude, assignment?.last_location?.longitude)
+  const responder = coord(
+    primaryAssignment?.last_location?.latitude,
+    primaryAssignment?.last_location?.longitude
+  )
 
   const routeIsLive = isActiveEmergency(alert)
 
-  const locationLabel = streetOnly(
-    readableLocation(
-      alert.display_location,
-      alert.resolved_location,
-      alert.reported_area,
-      alert.address,
-      alert.barangay,
-    ),
-  ) || "Location pinned on the map"
+  const locationLabel =
+    streetOnly(
+      readableLocation(
+        alert.display_location,
+        alert.resolved_location,
+        alert.reported_area,
+        alert.address,
+        alert.barangay
+      )
+    ) || "Location pinned on the map"
 
   const signature = [
     alert.latitude,
     alert.longitude,
     locationLabel,
-    assignment?.last_location?.latitude ?? "",
-    assignment?.last_location?.longitude ?? "",
-    route?.status ?? "",
-    assignment?.location_history?.length ?? 0,
+    mapAssignments
+      .map((item) =>
+        [
+          item.id,
+          item.last_location?.latitude ?? "",
+          item.last_location?.longitude ?? "",
+          item.route?.status ?? "",
+          item.route?.summary ?? "",
+          item.location_history?.length ?? 0,
+        ].join(":")
+      )
+      .join(";"),
   ].join("|")
 
   useEffect(() => {
@@ -74,18 +154,21 @@ export function IncidentMap({ alert }: { alert: EmergencyAlert }) {
       const L = await import("leaflet")
       await import("leaflet/dist/leaflet.css")
       if (cancelled || !containerRef.current || !incident) return
+      leafletRef.current = L
 
       map = L.map(containerRef.current, {
         center: incident,
         zoom: 18,
         zoomControl: false,
         attributionControl: false,
-        scrollWheelZoom: false,
-        dragging: false,
-        doubleClickZoom: false,
-        boxZoom: false,
-        keyboard: false,
+        dragging: true,
+        scrollWheelZoom: true,
+        touchZoom: true,
+        doubleClickZoom: true,
+        boxZoom: true,
+        keyboard: true,
       })
+      mapRef.current = map
       containerRef.current.classList.add("eboses-emergency-map")
 
       addBaseTiles(L, map, "light", {
@@ -93,28 +176,8 @@ export function IncidentMap({ alert }: { alert: EmergencyAlert }) {
         className: "eboses-emergency-map-tiles",
       })
 
-      const history = (assignment?.location_history ?? [])
-        .map((ping) => coord(ping.latitude, ping.longitude))
-        .filter((point): point is leaflet.LatLngTuple => point != null)
-      if (history.length > 1) {
-        L.polyline(history, {
-          color: "var(--color-map-trail)",
-          weight: 2,
-          opacity: 0.5,
-          interactive: false,
-        }).addTo(map)
-      }
-
-      if (route && route.status !== "unavailable" && route.geometry) {
-        const { road, approach, connectors } = routeRenderGeometry(route, {
-          origin: responder,
-          destination: incident,
-        })
-        drawRoute(L, map, { road, approach, connectors, live: routeIsLive })
-      }
-
       const BASE_SIZE = 26
-      const pinSize = glyphPinSize(BASE_SIZE, true)
+      const pinSize = glyphPinSize(BASE_SIZE, !settled)
       const emergencyPaths = lucideIconPaths("triangle-alert") ?? [
         "M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z",
         "M12 9v4",
@@ -123,16 +186,19 @@ export function IncidentMap({ alert }: { alert: EmergencyAlert }) {
       L.marker(incident, {
         icon: L.divIcon({
           className: "eboses-emergency-pin",
-          html: `<div style="position:relative;width:${pinSize}px;height:${pinSize}px">${glyphPinHtml({
-            paths: emergencyPaths,
-            content: undefined,
-            color: "#dc2626",
-            size: BASE_SIZE,
-            selected: true,
-            tone: "light",
-            tint: false,
-            idleNeutral: false,
-          })}</div>`,
+          html: `<div style="position:relative;width:${pinSize}px;height:${pinSize}px">${glyphPinHtml(
+            {
+              paths: emergencyPaths,
+              content: undefined,
+              color: settled ? MAP_COLORS.resolved : "#dc2626",
+              size: BASE_SIZE,
+              selected: !settled,
+              tone: "light",
+              tint: settled,
+              idleNeutral: settled,
+              className: settled ? "is-settled" : undefined,
+            }
+          )}</div>`,
           iconSize: [pinSize, pinSize],
           iconAnchor: [pinSize / 2, pinSize / 2],
         }),
@@ -140,19 +206,89 @@ export function IncidentMap({ alert }: { alert: EmergencyAlert }) {
         zIndexOffset: 900,
       }).addTo(map)
 
-      if (responder) {
-        L.marker(responder, {
+      // Fit the view to whatever is on screen: incident + responder + the
+      // drawn route. Centring on the incident at a fixed zoom clipped any
+      // route longer than a couple of blocks, which made it look broken.
+      const routePoints: leaflet.LatLngTuple[] = []
+      for (const mapAssignment of mapAssignments) {
+        const assignmentResponder = coord(
+          mapAssignment.last_location?.latitude,
+          mapAssignment.last_location?.longitude
+        )
+        const history = (mapAssignment.location_history ?? [])
+          .map((ping) => coord(ping.latitude, ping.longitude))
+          .filter((point): point is leaflet.LatLngTuple => point != null)
+        if (history.length > 1) {
+          L.polyline(history, {
+            color: settled
+              ? "var(--color-map-route-idle)"
+              : "var(--color-map-trail)",
+            weight: settled ? 2.5 : 2,
+            opacity: settled ? 0.7 : 0.5,
+            interactive: false,
+          }).addTo(map)
+        }
+
+        const assignmentRoute =
+          mapAssignment.route ??
+          (mapAssignment.id === assignment?.id ? alert.route : null)
+        if (
+          assignmentRoute &&
+          assignmentRoute.status !== "unavailable" &&
+          assignmentRoute.geometry
+        ) {
+          const { road, approach, connectors } = routeRenderGeometry(
+            assignmentRoute,
+            { origin: assignmentResponder, destination: incident }
+          )
+          const layers = drawRoute(L, map, {
+            road,
+            approach,
+            connectors,
+            live: routeIsLive,
+          })
+          if (layers) {
+            routeLayersRef.current.push(layers)
+            routePoints.push(...layers.points)
+          }
+        }
+
+        if (!assignmentResponder || !mapAssignment.responder) continue
+        const responderPinSize = 26
+        const marker = L.marker(assignmentResponder, {
           icon: L.divIcon({
             className: "eboses-emergency-pin",
-            iconSize: [13, 13],
-            iconAnchor: [6.5, 6.5],
-            html: dotPinHtml({ color: MAP_COLORS.responder, size: 13, live: false }),
+            iconSize: [responderPinSize, responderPinSize],
+            iconAnchor: [responderPinSize / 2, responderPinSize / 2],
+            html: glyphPinHtml({
+              paths: GLYPHS.userResponder,
+              color: MAP_COLORS.responder,
+              size: responderPinSize,
+              label:
+                viewerId != null && mapAssignment.responder.id === viewerId
+                  ? "You"
+                  : undefined,
+            }),
           }),
-          title: responderName(assignment?.responder),
         }).addTo(map)
+        if (mapAssignment.id === primaryAssignment?.id) {
+          responderMarkerRef.current = marker
+        }
+        routePoints.push(assignmentResponder)
       }
-
-      map.setView(incident, 18)
+      const boundsPoints = [incident, responder, ...routePoints].filter(
+        (point): point is leaflet.LatLngTuple => point != null
+      )
+      boundsPointsRef.current = boundsPoints
+      if (boundsPoints.length > 1) {
+        map.fitBounds(L.latLngBounds(boundsPoints), {
+          padding: [28, 28],
+          maxZoom: 17,
+          animate: false,
+        })
+      } else {
+        map.setView(incident, 18)
+      }
 
       const observer = new ResizeObserver(() => {
         const box = containerRef.current?.getBoundingClientRect()
@@ -169,19 +305,139 @@ export function IncidentMap({ alert }: { alert: EmergencyAlert }) {
       cancelled = true
       resizeRef.current?.disconnect()
       resizeRef.current = null
+      routeLayersRef.current.forEach((layer) => layer.remove())
+      routeLayersRef.current = []
+      responderMarkerRef.current = null
+      mapRef.current = null
+      leafletRef.current = null
+      boundsPointsRef.current = []
       map?.remove()
     }
-
   }, [
     signature,
-    assignment?.location_history,
-    assignment?.responder,
+    alert.route,
+    assignment?.id,
+    mapAssignments,
     incident,
     locationLabel,
+    primaryAssignment?.id,
     responder,
-    route,
     routeIsLive,
+    settled,
+    viewerId,
   ])
+
+  const reroute = () => {
+    const map = mapRef.current
+    if (map && boundsPointsRef.current.length > 1) {
+      map.fitBounds(boundsPointsRef.current, {
+        padding: [28, 28],
+        maxZoom: 17,
+        animate: true,
+      })
+    } else if (map && incident) {
+      map.setView(incident, 18, { animate: true })
+    }
+    if (routeBusy || !primaryAssignment) return
+    setRouteBusy(true)
+    void (async () => {
+      const isAssignedViewer =
+        viewerId != null && primaryAssignment.responder?.id === viewerId
+      let currentResponder = responder
+      try {
+        if (isAssignedViewer && navigator.geolocation) {
+          try {
+            const position = await readCurrentPosition()
+            currentResponder = [
+              position.coords.latitude,
+              position.coords.longitude,
+            ]
+            await sendEmergencyLocationPing(alert.id, {
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+              accuracy: position.coords.accuracy,
+              timestamp: position.timestamp,
+            }).catch(() => {})
+          } catch {
+            currentResponder = responder
+          }
+        }
+
+        const next = await getEmergencyRoute(alert.id, {
+          refresh: isAssignedViewer,
+        })
+        const currentMap = mapRef.current
+        const L = leafletRef.current
+        if (!currentMap || !L || !incident) return
+
+        if (currentResponder && primaryAssignment.responder) {
+          const responderPinSize = 26
+          const icon = L.divIcon({
+            className: "eboses-emergency-pin",
+            iconSize: [responderPinSize, responderPinSize],
+            iconAnchor: [responderPinSize / 2, responderPinSize / 2],
+            html: glyphPinHtml({
+              paths: GLYPHS.userResponder,
+              color: MAP_COLORS.responder,
+              size: responderPinSize,
+              label: isAssignedViewer ? "You" : undefined,
+            }),
+          })
+          if (responderMarkerRef.current) {
+            responderMarkerRef.current.setLatLng(currentResponder)
+            responderMarkerRef.current.setIcon(icon)
+          } else {
+            responderMarkerRef.current = L.marker(currentResponder, {
+              icon,
+            }).addTo(currentMap)
+          }
+        }
+
+        if (!next?.geometry) {
+          const points = [incident, currentResponder].filter(
+            (point): point is leaflet.LatLngTuple => point != null
+          )
+          boundsPointsRef.current = points
+          if (points.length > 1) {
+            currentMap.fitBounds(points, {
+              padding: [28, 28],
+              maxZoom: 17,
+              animate: true,
+            })
+          }
+          return
+        }
+
+        const geometry = routeRenderGeometry(next, {
+          origin: currentResponder,
+          destination: incident,
+        })
+        routeLayersRef.current.forEach((layer) => layer.remove())
+        const layers = drawRoute(L, currentMap, {
+          ...geometry,
+          live: routeIsLive,
+        })
+        routeLayersRef.current = layers ? [layers] : []
+        const points = [
+          incident,
+          currentResponder,
+          ...(layers?.points ?? []),
+        ].filter((point): point is leaflet.LatLngTuple => point != null)
+        boundsPointsRef.current = points
+        if (points.length > 1) {
+          currentMap.fitBounds(points, {
+            padding: [28, 28],
+            maxZoom: 17,
+            animate: true,
+          })
+        }
+      } catch {
+        return
+      } finally {
+        setRouteBusy(false)
+      }
+    })()
+  }
 
   if (!incident) {
     return (
@@ -193,7 +449,24 @@ export function IncidentMap({ alert }: { alert: EmergencyAlert }) {
 
   return (
     <div className="relative h-full w-full overflow-hidden rounded-[16px] bg-tint">
-      <div ref={containerRef} className="eboses-emergency-map pointer-events-none absolute inset-0 z-0 h-full w-full" />
+      <div
+        ref={containerRef}
+        className="eboses-emergency-map pointer-events-auto absolute inset-0 z-0 h-full w-full"
+      />
+      <button
+        type="button"
+        onClick={reroute}
+        disabled={routeBusy}
+        title="Follow responder route"
+        aria-label="Follow responder route"
+        className="absolute top-3 right-3 z-10 flex size-9 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-700 shadow-md transition-colors hover:bg-neutral-50 hover:text-neutral-900 focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:outline-none disabled:cursor-wait disabled:opacity-60"
+      >
+        {routeBusy ? (
+          <LoaderCircleIcon className="size-4 animate-spin" />
+        ) : (
+          <LocateFixedIcon className="size-4.5" strokeWidth={1.9} />
+        )}
+      </button>
       <style>{`
         .eboses-emergency-map.leaflet-container {
           width: 100%;
@@ -218,6 +491,12 @@ export function IncidentMap({ alert }: { alert: EmergencyAlert }) {
           border: 2px solid #fff !important;
           box-shadow: 0 2px 8px rgba(15, 23, 42, 0.15) !important;
         }
+        .eboses-emergency-map .eboses-pin--glyph.is-settled .eboses-pin__disc {
+          background: #eef1f4 !important;
+          color: #6b7280 !important;
+          border-color: #fff !important;
+          box-shadow: 0 2px 7px rgba(71, 85, 105, 0.14) !important;
+        }
         .eboses-emergency-map .eboses-pin__disc svg {
           display: block;
         }
@@ -238,9 +517,17 @@ function formatDuration(seconds: number | null) {
 
 function routeLabel(alert: EmergencyAlert) {
   const route = alert.current_assignment?.route ?? alert.route
-  if (!route || route.status !== "ok") return "Route unavailable"
-  const distance = route.distance_meters == null ? "unknown distance" : route.distance_meters < 1000 ? `${Math.round(route.distance_meters)} m` : `${(route.distance_meters / 1000).toFixed(1)} km`
-  const eta = route.eta_seconds == null ? "ETA unavailable" : `${Math.max(1, Math.round(route.eta_seconds / 60))} min ETA`
+  if (!route || route.status === "unavailable") return "Route unavailable"
+  const distance =
+    route.distance_meters == null
+      ? "unknown distance"
+      : route.distance_meters < 1000
+        ? `${Math.round(route.distance_meters)} m`
+        : `${(route.distance_meters / 1000).toFixed(1)} km`
+  const eta =
+    route.eta_seconds == null
+      ? "ETA unavailable"
+      : `${Math.max(1, Math.round(route.eta_seconds / 60))} min ETA`
   return `${distance} · ${eta}`
 }
 
@@ -251,10 +538,18 @@ function elapsedSince(iso: string | null | undefined, now: number) {
   const minutes = Math.floor(ms / 60_000)
   if (minutes < 60) return `${minutes}m`
   const hours = Math.floor(minutes / 60)
-  return hours < 24 ? `${hours}h ${minutes % 60}m` : `${Math.floor(hours / 24)}d ${hours % 24}h`
+  return hours < 24
+    ? `${hours}h ${minutes % 60}m`
+    : `${Math.floor(hours / 24)}d ${hours % 24}h`
 }
 
-function ResponseBand({ alert, team }: { alert: EmergencyAlert; team: EmergencyAlert["assignments"] }) {
+function ResponseBand({
+  alert,
+  team,
+}: {
+  alert: EmergencyAlert
+  team: EmergencyAlert["assignments"]
+}) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000)
@@ -265,13 +560,19 @@ function ResponseBand({ alert, team }: { alert: EmergencyAlert; team: EmergencyA
   const hasContact = Boolean(alert.reporter_phone?.trim())
 
   const { busy: dialBusy, call: callResident } = useReporterPhone(alert)
-  const unacknowledged = roster.filter((assignment) => !assignment.acknowledged_at)
+  const unacknowledged = roster.filter(
+    (assignment) => !assignment.acknowledged_at
+  )
   const waiting = elapsedSince(alert.routed_at, now)
   const pings = alert.current_assignment?.location_history?.length ?? 0
 
   return (
     <Band
-      label={roster.length > 0 ? `Response · ${roster.length} unit${roster.length === 1 ? "" : "s"}` : "Response"}
+      label={
+        roster.length > 0
+          ? `Response · ${roster.length} unit${roster.length === 1 ? "" : "s"}`
+          : "Response"
+      }
       action={
         hasContact ? (
           <button
@@ -280,11 +581,17 @@ function ResponseBand({ alert, team }: { alert: EmergencyAlert; team: EmergencyA
             disabled={dialBusy}
             className="inline-flex items-center gap-1.5 rounded-control bg-brand-orange px-2.5 py-1 text-[12px] font-semibold text-brand-orange-ink transition-colors hover:bg-brand-orange-strong disabled:opacity-60"
           >
-            {dialBusy ? <LoaderCircleIcon className="size-3.5 animate-spin" aria-hidden /> : <PhoneIcon className="size-3.5" aria-hidden />}
+            {dialBusy ? (
+              <LoaderCircleIcon className="size-3.5 animate-spin" aria-hidden />
+            ) : (
+              <PhoneIcon className="size-3.5" aria-hidden />
+            )}
             {dialBusy ? "Opening…" : "Call resident"}
           </button>
         ) : (
-          <span className="text-[12px] text-subtle-foreground">Contact withheld</span>
+          <span className="text-[12px] text-subtle-foreground">
+            Contact withheld
+          </span>
         )
       }
     >
@@ -301,8 +608,14 @@ function ResponseBand({ alert, team }: { alert: EmergencyAlert; team: EmergencyA
             const ack = assignment.acknowledged_at
             const arrived = assignment.arrived_at
             return (
-              <li key={assignment.id} className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                <UserCheckIcon className="size-4 shrink-0 text-subtle-foreground" aria-hidden />
+              <li
+                key={assignment.id}
+                className="flex flex-wrap items-center gap-x-2.5 gap-y-1"
+              >
+                <UserCheckIcon
+                  className="size-4 shrink-0 text-subtle-foreground"
+                  aria-hidden
+                />
                 <span className="text-sm font-semibold text-foreground">
                   {responderName(assignment.responder)}
                 </span>
@@ -312,10 +625,16 @@ function ResponseBand({ alert, team }: { alert: EmergencyAlert; team: EmergencyA
                   {assignment.source === "escalation" ? " · escalated" : ""}
                 </span>
                 <span
-                  className="ml-auto text-[12px] font-semibold tabular-nums text-muted-foreground"
-                  title={fullTimestamp(arrived ?? ack ?? assignment.assigned_at)}
+                  className="ml-auto text-[12px] font-semibold text-muted-foreground tabular-nums"
+                  title={fullTimestamp(
+                    arrived ?? ack ?? assignment.assigned_at
+                  )}
                 >
-                  {arrived ? formatTime(arrived) : ack ? formatTime(ack) : elapsedSince(assignment.assigned_at, now) ?? ""}
+                  {arrived
+                    ? formatTime(arrived)
+                    : ack
+                      ? formatTime(ack)
+                      : (elapsedSince(assignment.assigned_at, now) ?? "")}
                 </span>
               </li>
             )
@@ -325,7 +644,8 @@ function ResponseBand({ alert, team }: { alert: EmergencyAlert; team: EmergencyA
 
       {roster.length > 0 && unacknowledged.length > 0 ? (
         <p className="mt-2 text-[12px] font-semibold text-severity-critical">
-          {unacknowledged.length} unit{unacknowledged.length === 1 ? "" : "s"} have not acknowledged.
+          {unacknowledged.length} unit{unacknowledged.length === 1 ? "" : "s"}{" "}
+          have not acknowledged.
         </p>
       ) : null}
 
@@ -333,12 +653,20 @@ function ResponseBand({ alert, team }: { alert: EmergencyAlert; team: EmergencyA
         <Fact
           label="Road route"
           value={routeLabel(alert)}
-          hint={pings ? `${pings} responder pings saved` : "Waiting for responder GPS"}
+          hint={
+            pings
+              ? `${pings} responder pings saved`
+              : "Waiting for responder GPS"
+          }
         />
         <Fact
           label="Response time"
           value={formatDuration(alert.response_duration_seconds)}
-          hint={alert.resolved_at ? `Closed ${formatTime(alert.resolved_at)}` : "Stops on final disposition"}
+          hint={
+            alert.resolved_at
+              ? `Closed ${formatTime(alert.resolved_at)}`
+              : "Stops on final disposition"
+          }
         />
       </FactRow>
     </Band>
@@ -353,7 +681,11 @@ function IncidentChronology({ alert }: { alert: EmergencyAlert }) {
 
   return (
     <Band label="Status and Timeline">
-      <EmergencyTimeline entries={alert.timeline ?? []} showControls showNotes />
+      <EmergencyTimeline
+        entries={alert.timeline ?? []}
+        showControls
+        showNotes
+      />
 
       {logs.length ? (
         <div className="mt-4 border-t border-card-line pt-3">
@@ -363,18 +695,26 @@ function IncidentChronology({ alert }: { alert: EmergencyAlert }) {
             aria-expanded={showInternal}
             className="text-micro font-semibold text-subtle-foreground transition-colors hover:text-foreground"
           >
-            {showInternal ? "Hide" : "Show"} internal dispatch log ({logs.length})
+            {showInternal ? "Hide" : "Show"} internal dispatch log (
+            {logs.length})
           </button>
           {showInternal ? (
             <ul className="mt-2 space-y-1.5">
               {logs.map((log) => (
-                <li key={log.id} className="text-[12px] leading-5 text-subtle-foreground">
+                <li
+                  key={log.id}
+                  className="text-[12px] leading-5 text-subtle-foreground"
+                >
                   <span className="font-semibold text-muted-foreground">
                     {internalActionLabel(log.action)}
                   </span>
-                  {log.responder?.full_name ? ` — ${log.responder.full_name}` : ""}
+                  {log.responder?.full_name
+                    ? ` — ${log.responder.full_name}`
+                    : ""}
                   {log.note ? ` — ${log.note}` : ""}
-                  <span className="block text-faint-foreground">{formatEventMoment(log.created_at)}</span>
+                  <span className="block text-faint-foreground">
+                    {formatEventMoment(log.created_at)}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -390,11 +730,22 @@ function internalActionLabel(action: string) {
   return words.charAt(0).toUpperCase() + words.slice(1)
 }
 
-function EmergencyMediaGrid({ media: alertMedia }: { media: EmergencyAlert["media"] }) {
-  const [lightbox, setLightbox] = useState<{ items: MediaPreviewItem[]; index: number } | null>(null)
+function EmergencyMediaGrid({
+  media: alertMedia,
+}: {
+  media: EmergencyAlert["media"]
+}) {
+  const [lightbox, setLightbox] = useState<{
+    items: MediaPreviewItem[]
+    index: number
+  } | null>(null)
   const media = alertMedia ?? []
   const items: MediaPreviewItem[] = media.map((item) =>
-    toMediaPreviewItem(mediaDisplaySource(item), item.original_filename, item.mime_type),
+    toMediaPreviewItem(
+      mediaDisplaySource(item),
+      item.original_filename,
+      item.mime_type
+    )
   )
 
   if (!media.length) {
@@ -438,7 +789,7 @@ function EmergencyMediaGrid({ media: alertMedia }: { media: EmergencyAlert["medi
               </>
             )}
           </button>
-        ),
+        )
       )}
       {lightbox ? (
         <MediaLightbox
@@ -454,13 +805,19 @@ function EmergencyMediaGrid({ media: alertMedia }: { media: EmergencyAlert["medi
 const IDENTITY_CAUTION: Record<string, string> = {
   unverified:
     "This number is not registered to any resident account, so the caller's identity is unconfirmed.",
-  needs_review: "The number partly matches a resident account. Confirm who you are speaking to.",
+  needs_review:
+    "The number partly matches a resident account. Confirm who you are speaking to.",
 }
 
 function ReporterBand({ alert }: { alert: EmergencyAlert }) {
-  const bySms = alert.location_source === "sms" || alert.location_source === "sms_landmark"
+  const bySms =
+    alert.location_source === "sms" || alert.location_source === "sms_landmark"
 
-  const name = alert.reporter_display || (alert.reporter_is_anonymous_intake ? "Unidentified caller" : "Unknown reporter")
+  const name =
+    alert.reporter_display ||
+    (alert.reporter_is_anonymous_intake
+      ? "Unidentified caller"
+      : "Unknown reporter")
   const caution = IDENTITY_CAUTION[alert.reporter_verification ?? ""]
 
   return (
@@ -480,7 +837,8 @@ function IncidentBand({ alert }: { alert: EmergencyAlert }) {
 
   return (
     <Band label="Location">
-      {alert.location_confidence && alert.location_confidence !== "confirmed" ? (
+      {alert.location_confidence &&
+      alert.location_confidence !== "confirmed" ? (
         <p className="text-[12px] text-severity-moderate-ink">
           {alert.location_confidence === "outside_area"
             ? "This location is outside the barangay service area."
@@ -511,16 +869,22 @@ export function IncidentBoard({ alert }: { alert: EmergencyAlert | null }) {
       <section className="flex min-h-[520px] items-center justify-center rounded-panel border border-dashed border-card-line bg-card p-8 text-center">
         <div>
           <ShieldCheckIcon className="mx-auto size-10 text-brand-navy" />
-          <p className="mt-3 text-sm font-semibold text-brand-navy">Select an emergency</p>
-          <p className="mt-1 text-xs text-subtle-foreground">Review location, timeline, assignment, and response status.</p>
+          <p className="mt-3 text-sm font-semibold text-brand-navy">
+            Select an emergency
+          </p>
+          <p className="mt-1 text-xs text-subtle-foreground">
+            Review location, timeline, assignment, and response status.
+          </p>
         </div>
       </section>
     )
   }
 
-  const activeTeam = alert.assignments?.filter(
-    (assignment) => !["cancelled", "declined", "resolved"].includes(assignment.status),
-  ) ?? []
+  const activeTeam =
+    alert.assignments?.filter(
+      (assignment) =>
+        !["cancelled", "declined", "resolved"].includes(assignment.status)
+    ) ?? []
 
   const detailsContent = (
     <div className="space-y-4">
@@ -554,7 +918,12 @@ export function IncidentBoard({ alert }: { alert: EmergencyAlert | null }) {
         tabs={[
           { id: "details", label: "Details", content: detailsContent },
           { id: "chat", label: "Chat", content: chatContent },
-          { id: "photos", label: "Photos", count: (alert.media ?? []).length, content: <EmergencyMediaGrid media={alert.media} /> },
+          {
+            id: "photos",
+            label: "Photos",
+            count: (alert.media ?? []).length,
+            content: <EmergencyMediaGrid media={alert.media} />,
+          },
         ]}
       />
     </section>

@@ -79,7 +79,11 @@ export function humanizeProofError(message: string, _side?: ProofSide | null): s
   if (/duplicate proof|document has already been used|already attached|same image/i.test(text)) {
     return "This document was already used; please submit a different one."
   }
-  if (/AI-generated media|edited or manipulated media|digitally manipulated|media authenticity|C2PA/i.test(text)) {
+  if (
+    /AI-generated|edited or digitally altered|digitally altered|digitally manipulated|edited or manipulated media|media authenticity|C2PA/i.test(
+      text,
+    )
+  ) {
     return "Please upload a clear photo of the original document."
   }
 

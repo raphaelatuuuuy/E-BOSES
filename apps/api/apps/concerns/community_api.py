@@ -1,10 +1,13 @@
 from datetime import timedelta
 
 from django.db import transaction
+from django.core.exceptions import ValidationError
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.response import Response
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated
@@ -28,8 +31,7 @@ def is_official(user):
         user
         and user.is_authenticated
         and (
-            user.is_staff
-            or user.is_superuser
+            user.is_superuser
             or user_has_role_permission(user, "concerns.manage")
         )
     )
@@ -41,6 +43,17 @@ def can_moderate_community(user):
 
 def can_resolve_concerns(user):
     return is_official(user) and user_has_capability(user, RESOLVE_CONCERNS)
+
+
+def community_content_allowed(user, community_id):
+    if user and user.is_superuser:
+        return True
+    from apps.community_scope import community_ids_for_user
+
+    ids = community_ids_for_user(user)
+    if community_id:
+        return community_id in ids
+    return len(ids) <= 1
 
 
 def display_name(user):
@@ -59,8 +72,15 @@ def author_label(user):
 
 
 class CommentBodySerializer(serializers.Serializer):
-    body = serializers.CharField(max_length=MAX_COMMENT_LENGTH, trim_whitespace=True)
+    body = serializers.CharField(max_length=MAX_COMMENT_LENGTH, trim_whitespace=True, required=False, allow_blank=True, default="")
     parent = serializers.IntegerField(required=False, allow_null=True)
+    media = serializers.FileField(required=False, write_only=True, allow_empty_file=False)
+
+    def validate(self, attrs):
+        attrs["body"] = (attrs.get("body") or "").strip()
+        if not attrs["body"] and not attrs.get("media"):
+            raise serializers.ValidationError("Comment text or an image/video attachment is required.")
+        return attrs
 
 
 class CommentRemovalSerializer(serializers.Serializer):
@@ -68,6 +88,8 @@ class CommentRemovalSerializer(serializers.Serializer):
 
 
 def serialize_comment(comment, request_user, include_replies=True):
+    from .comment_media import serialize_public_comment_attachment
+
     payload = {
         "id": comment.pk,
         "announcement": comment.announcement_id,
@@ -79,6 +101,9 @@ def serialize_comment(comment, request_user, include_replies=True):
         "author": {"id": comment.author_id, "full_name": display_name(comment.author)},
         "is_mine": bool(request_user and comment.author_id == request_user.pk),
         "created_at": comment.created_at,
+        "attachment": serialize_public_comment_attachment(
+            getattr(comment, "attachment", None), None
+        ),
     }
     if include_replies:
         payload["replies"] = [
@@ -91,15 +116,19 @@ def serialize_comment(comment, request_user, include_replies=True):
 
 class AnnouncementCommentListCreateView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get(self, request, announcement_id):
         announcement = get_object_or_404(Announcement, pk=announcement_id)
+        if not community_content_allowed(request.user, announcement.community_id):
+            return Response({"detail": "This announcement belongs to another community."}, status=status.HTTP_404_NOT_FOUND)
         comments = (
             announcement.comments.filter(
                 parent__isnull=True, status=AnnouncementComment.Status.VISIBLE
             )
             .select_related("author", "author__resident_profile")
             .prefetch_related("replies__author__resident_profile")
+            .prefetch_related("attachment", "replies__attachment")
         )
         return Response(
             [serialize_comment(comment, request.user) for comment in comments]
@@ -107,6 +136,8 @@ class AnnouncementCommentListCreateView(APIView):
 
     def post(self, request, announcement_id):
         announcement = get_object_or_404(Announcement, pk=announcement_id)
+        if not community_content_allowed(request.user, announcement.community_id):
+            return Response({"detail": "This announcement belongs to another community."}, status=status.HTTP_404_NOT_FOUND)
         serializer = CommentBodySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -120,13 +151,27 @@ class AnnouncementCommentListCreateView(APIView):
 
             parent = parent.parent or parent
 
-        comment = AnnouncementComment.objects.create(
-            announcement=announcement,
-            author=request.user,
-            parent=parent,
-            body=serializer.validated_data["body"],
-            is_official_reply=is_official(request.user),
-        )
+        try:
+            with transaction.atomic():
+                comment = AnnouncementComment.objects.create(
+                    announcement=announcement,
+                    author=request.user,
+                    parent=parent,
+                    body=serializer.validated_data["body"],
+                    is_official_reply=is_official(request.user),
+                )
+                uploaded_file = serializer.validated_data.get("media")
+                if uploaded_file:
+                    from .comment_media import create_public_comment_attachment
+
+                    create_public_comment_attachment(
+                        uploaded_file=uploaded_file,
+                        parent_field="announcement_comment",
+                        parent=comment,
+                    )
+        except ValidationError as exc:
+            detail = getattr(exc, "message_dict", None) or getattr(exc, "messages", [str(exc)])
+            return Response({"media": detail}, status=status.HTTP_400_BAD_REQUEST)
         return Response(
             serialize_comment(comment, request.user), status=status.HTTP_201_CREATED
         )
@@ -139,6 +184,8 @@ class AnnouncementCommentDetailView(APIView):
         comment = get_object_or_404(
             AnnouncementComment, pk=comment_id, announcement_id=announcement_id
         )
+        if not community_content_allowed(request.user, comment.announcement.community_id):
+            return Response({"detail": "This announcement belongs to another community."}, status=status.HTTP_404_NOT_FOUND)
         if comment.author_id != request.user.pk and not can_moderate_community(request.user):
             return Response(
                 {"detail": "You can only remove your own comment."},
@@ -165,6 +212,8 @@ class AnnouncementCommentFlagCreateView(APIView):
     def post(self, request, comment_id):
         touch_last_seen(request.user)
         comment = get_object_or_404(AnnouncementComment, pk=comment_id)
+        if not community_content_allowed(request.user, comment.announcement.community_id):
+            return Response({"detail": "This announcement belongs to another community."}, status=status.HTTP_404_NOT_FOUND)
         serializer = ContentFlagSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         flag = ContentFlag.objects.create(
@@ -216,9 +265,16 @@ class BarangayEventCalendarView(APIView):
             days = 60
         days = max(1, min(days, MAX_CALENDAR_DAYS))
 
+        from apps.community_scope import community_ids_for_user
+
         now = timezone.now()
+        event_scope = Q(community_id__in=community_ids_for_user(request.user))
+        if len(community_ids_for_user(request.user)) <= 1:
+            event_scope |= Q(community_id__isnull=True)
         events = BarangayEvent.objects.filter(
             is_published=True,
+        ).filter(event_scope)
+        events = events.filter(
             starts_at__gte=now - timedelta(days=1),
             starts_at__lte=now + timedelta(days=days),
         ).order_by("starts_at", "id")

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { CircleCheckIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -11,7 +12,14 @@ export type AlertCardModel = {
   meta: string
   status: string | null
   snippet: string
+  snippetLabel?: string | null
+  priority?: {
+    label: string
+    icon: ReactNode
+    className?: string
+  }
   actionLabel: string | null
+  resolved?: boolean
 }
 
 export function AlertCard({
@@ -33,46 +41,89 @@ export function AlertCard({
     <div
       className={cn(
         "rounded-2xl border bg-white transition-colors",
-        expanded ? "border-neutral-300 bg-neutral-50 shadow-sm" : "border-neutral-200",
+        expanded
+          ? "border-neutral-300 bg-neutral-50 shadow-sm"
+          : "border-neutral-200"
       )}
     >
-      <button type="button" onClick={onOpen} className="w-full px-3 py-3 text-left sm:px-3.5">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="w-full px-3 py-3 text-left sm:px-3.5"
+      >
         <div className="flex items-start gap-2.5 sm:gap-3">
           <span
             className={cn(
               "flex size-9 shrink-0 items-center justify-center rounded-full",
               closed
-                ? "bg-neutral-100 text-neutral-400"
-                : model.kind === "emergency"
-                  ? "bg-severity-critical-surface text-sos"
-                  : "bg-brand-orange-soft text-accent",
+                ? "bg-neutral-100 text-neutral-500"
+                  : model.kind === "emergency"
+                    ? "bg-severity-critical-surface text-sos"
+                    : "bg-brand-orange-soft text-accent"
             )}
           >
-            {icon}
+            {closed ? (
+              <CircleCheckIcon className="size-5" strokeWidth={1.9} />
+            ) : (
+              icon
+            )}
           </span>
           <div className="min-w-0 flex-1 overflow-hidden">
             <div className="flex items-start justify-between gap-2">
-              <p className="min-w-0 flex-1 break-words text-[13px] font-bold leading-snug text-neutral-900 sm:text-[14px]">
+              <p className="min-w-0 flex-1 text-[13px] leading-snug font-bold break-words text-neutral-900 sm:text-[14px]">
                 {model.title}
               </p>
-              {closed ? (
+              {model.priority ? (
+                <span
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold sm:text-[12px]",
+                    model.priority.className
+                  )}
+                  title={model.priority.label}
+                >
+                  {model.priority.icon}
+                  {model.priority.label}
+                </span>
+              ) : closed ? (
                 <span className="inline-flex shrink-0 items-center text-[11px] font-semibold text-neutral-500 sm:text-[12px]">
                   Resolved
                 </span>
               ) : null}
             </div>
-            <p className="mt-1 truncate text-[11px] text-neutral-500 sm:text-[12px]">
+            <p
+              className={cn(
+                "mt-1 text-[11px] text-neutral-500 sm:text-[12px]",
+                !expanded && "truncate"
+              )}
+            >
               {model.meta}
             </p>
             {model.status ? (
-              <p className="mt-0.5 truncate text-[11px] font-semibold text-neutral-700 sm:text-[12px]">
+              <p
+                className={cn(
+                  "mt-0.5 text-[11px] font-semibold text-neutral-700 sm:text-[12px]",
+                  !expanded && "truncate"
+                )}
+              >
                 {model.status}
               </p>
             ) : null}
             {model.snippet ? (
-              <p className="mt-1.5 line-clamp-2 break-words text-[12px] leading-snug text-neutral-600 sm:text-[13px]">
-                {model.snippet}
-              </p>
+              <div className="mt-1.5">
+                {model.snippetLabel ? (
+                  <p className="mb-0.5 text-[10px] font-bold tracking-[0.06em] text-neutral-400 uppercase">
+                    {model.snippetLabel}
+                  </p>
+                ) : null}
+                <p
+                  className={cn(
+                    "text-[12px] leading-snug break-words text-neutral-600 sm:text-[13px]",
+                    !expanded && "line-clamp-2"
+                  )}
+                >
+                  {model.snippet}
+                </p>
+              </div>
             ) : null}
           </div>
         </div>

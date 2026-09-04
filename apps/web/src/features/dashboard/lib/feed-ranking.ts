@@ -1,5 +1,5 @@
 import type { Concern } from "@/features/dashboard/api"
-import { BARANGAY_CENTER, haversineMeters } from "@/features/dashboard/lib/resident-map-utils"
+import { haversineMeters } from "@/features/dashboard/lib/resident-map-utils"
 import { isConcernActive } from "@/features/dashboard/lib/status-vocabulary"
 
 export const NEARBY_RADIUS_METERS = 1500
@@ -7,6 +7,10 @@ export const NEARBY_RADIUS_METERS = 1500
 export type FeedOrigin = { lat: number; lng: number }
 
 export function concernDistanceMeters(concern: Concern, origin: FeedOrigin) {
+  // Server-computed distance (feed API) takes precedence — the concern's
+  // exact coordinates are hidden in feed responses for privacy, so the
+  // client-side haversine below is only a fallback for non-feed concerns.
+  if (typeof concern.distance_meters === "number") return concern.distance_meters
   const lat = Number(concern.latitude)
   const lng = Number(concern.longitude)
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
@@ -34,7 +38,6 @@ export function relevanceScore(concern: Concern, origin: FeedOrigin) {
 }
 
 export function rankFeed(concerns: Concern[], tab: string, origin: FeedOrigin | null) {
-  const from = origin ?? BARANGAY_CENTER
   const list = [...concerns]
 
   if (tab === "trending") {
@@ -42,8 +45,9 @@ export function rankFeed(concerns: Concern[], tab: string, origin: FeedOrigin | 
   }
 
   if (tab === "nearby") {
+    if (!origin) return []
     return list
-      .map((concern) => ({ concern, distance: concernDistanceMeters(concern, from) }))
+      .map((concern) => ({ concern, distance: concernDistanceMeters(concern, origin) }))
       .filter((entry) => entry.distance != null && entry.distance <= NEARBY_RADIUS_METERS)
       .sort((a, b) => (a.distance as number) - (b.distance as number))
       .map((entry) => entry.concern)
@@ -59,5 +63,6 @@ export function rankFeed(concerns: Concern[], tab: string, origin: FeedOrigin | 
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
   }
 
-  return list.sort((a, b) => relevanceScore(b, from) - relevanceScore(a, from))
+  if (!origin) return list.sort((a, b) => hoursSince(a.created_at) - hoursSince(b.created_at))
+  return list.sort((a, b) => relevanceScore(b, origin) - relevanceScore(a, origin))
 }

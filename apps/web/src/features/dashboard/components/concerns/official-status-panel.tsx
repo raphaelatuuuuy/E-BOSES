@@ -1,12 +1,34 @@
 import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
-import { CameraIcon, ChevronDownIcon, ChevronUpIcon, CircleCheck, ClockIcon, CircleXIcon, ScaleIcon, SendIcon, MessageSquareIcon, UsersIcon, XIcon } from "lucide-react"
+import {
+  CameraIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  CircleCheck,
+  ClockIcon,
+  CircleXIcon,
+  ScaleIcon,
+  SendIcon,
+  MessageSquareIcon,
+  UsersIcon,
+  XIcon,
+} from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 
-import { listBarangayUnitMembers, listBarangayUnits, updateConcernStatus, type BarangayUnit, type Concern, type PublicUser } from "@/features/dashboard/api"
+import {
+  listBarangayUnitMembers,
+  listBarangayUnits,
+  updateConcernStatus,
+  type BarangayUnit,
+  type Concern,
+  type PublicUser,
+} from "@/features/dashboard/api"
 import { Band, Surface } from "@/features/dashboard/components/workspace/band"
-import { SheetPrimaryButton, SheetSecondaryButton } from "@/features/dashboard/components/sheet-dialog"
+import {
+  SheetPrimaryButton,
+  SheetSecondaryButton,
+} from "@/features/dashboard/components/sheet-dialog"
 import { MediaLightbox } from "@/features/dashboard/components/authenticated-media"
 import type { MediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
 import {
@@ -20,13 +42,40 @@ import {
 /** The sentinel value the dropdown uses for the "Custom status…" entry. */
 const CUSTOM_STATUS_OPTION = "__custom__"
 
-const statusMeta: Record<string, { icon: typeof ClockIcon; bg: string; subtext: string }> = {
-  under_review: { icon: ClockIcon, bg: "bg-brand-navy", subtext: "Assigned for checking" },
-  assigned: { icon: UsersIcon, bg: "bg-blue-500", subtext: "Forwarded to a unit" },
-  in_progress: { icon: ClockIcon, bg: "bg-amber-500", subtext: "Work is ongoing" },
-  resolved: { icon: CircleCheck, bg: "bg-emerald-600", subtext: "Case is closed" },
-  rejected: { icon: CircleXIcon, bg: "bg-red-500", subtext: "Denied by the barangay" },
-  appealed: { icon: ScaleIcon, bg: "bg-purple-500", subtext: "Resident filed an appeal" },
+const statusMeta: Record<
+  string,
+  { icon: typeof ClockIcon; bg: string; subtext: string }
+> = {
+  under_review: {
+    icon: ClockIcon,
+    bg: "bg-brand-navy",
+    subtext: "Assigned for checking",
+  },
+  assigned: {
+    icon: UsersIcon,
+    bg: "bg-blue-500",
+    subtext: "Forwarded to a unit",
+  },
+  in_progress: {
+    icon: ClockIcon,
+    bg: "bg-amber-500",
+    subtext: "Work is ongoing",
+  },
+  resolved: {
+    icon: CircleCheck,
+    bg: "bg-emerald-600",
+    subtext: "Case is closed",
+  },
+  rejected: {
+    icon: CircleXIcon,
+    bg: "bg-red-500",
+    subtext: "Denied by the barangay",
+  },
+  appealed: {
+    icon: ScaleIcon,
+    bg: "bg-purple-500",
+    subtext: "Resident filed an appeal",
+  },
 }
 
 function StatusDropdown({
@@ -51,7 +100,9 @@ function StatusDropdown({
   }, [])
 
   const isCustom = !options.includes(value)
-  const displayLabel = isCustom ? statusLabel(value) || "Custom status" : statusLabel(value)
+  const displayLabel = isCustom
+    ? statusLabel(value) || "Custom status"
+    : statusLabel(value)
 
   function select(next: string) {
     onChange(next)
@@ -59,17 +110,28 @@ function StatusDropdown({
   }
 
   return (
-    <div ref={ref} className="relative">            <span className="text-[13px] font-normal text-neutral-500">Status</span>
+    <div ref={ref} className="relative">
+      {" "}
+      <span className="text-[13px] font-normal text-neutral-500">Status</span>
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="mt-1.5 flex h-11 w-full items-center gap-3 rounded-[12px] border-[1.5px] border-neutral-300 bg-white px-4 text-left text-[14px] text-neutral-900 outline-none transition-colors hover:border-neutral-400 focus:border-neutral-500"
+        className="mt-1.5 flex h-11 w-full items-center gap-3 rounded-[12px] border-[1.5px] border-neutral-300 bg-white px-4 text-left text-[14px] text-neutral-900 transition-colors outline-none hover:border-neutral-400 focus:border-neutral-500"
       >
-        <span className="flex-1 truncate text-[14px] text-neutral-700">{displayLabel}</span>
-        {open ? <ChevronUpIcon className="size-4 shrink-0 text-neutral-400" /> : <ChevronDownIcon className="size-4 shrink-0 text-neutral-400" />}
+        <span className="flex-1 truncate text-[14px] text-neutral-700">
+          {displayLabel}
+        </span>
+        {open ? (
+          <ChevronUpIcon className="size-4 shrink-0 text-neutral-400" />
+        ) : (
+          <ChevronDownIcon className="size-4 shrink-0 text-neutral-400" />
+        )}
       </button>
       {open && (
-        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white p-1 shadow-lg [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" style={{ maxHeight: '280px', overflowY: 'auto' }}>
+        <div
+          className="absolute z-50 mt-1 w-full [scrollbar-width:none] overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white p-1 shadow-lg [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+          style={{ maxHeight: "280px", overflowY: "auto" }}
+        >
           {options.map((option) => {
             const meta = statusMeta[option]
             const Icon = meta?.icon
@@ -82,15 +144,28 @@ function StatusDropdown({
                 className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[14px] transition hover:bg-neutral-50"
               >
                 {meta ? (
-                  <span className={`flex size-7 shrink-0 items-center justify-center rounded-md text-white ${meta.bg}`}>
+                  <span
+                    className={`flex size-7 shrink-0 items-center justify-center rounded-md text-white ${meta.bg}`}
+                  >
                     <Icon className="size-3.5" strokeWidth={1.7} />
                   </span>
                 ) : null}
-                <span className="flex-1 min-w-0">
-                  <span className="block text-[14px] text-neutral-900">{statusLabel(option)}</span>
-                  {meta ? <span className="block text-[11px] text-neutral-400">{meta.subtext}</span> : null}
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[14px] text-neutral-900">
+                    {statusLabel(option)}
+                  </span>
+                  {meta ? (
+                    <span className="block text-[11px] text-neutral-400">
+                      {meta.subtext}
+                    </span>
+                  ) : null}
                 </span>
-                {isSelected && <CircleCheck className="size-4 shrink-0 text-green-600" strokeWidth={2} />}
+                {isSelected && (
+                  <CircleCheck
+                    className="size-4 shrink-0 text-green-600"
+                    strokeWidth={2}
+                  />
+                )}
               </button>
             )
           })}
@@ -102,11 +177,20 @@ function StatusDropdown({
             <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-neutral-700 text-white">
               <MessageSquareIcon className="size-3.5" strokeWidth={1.7} />
             </span>
-            <span className="flex-1 min-w-0">
-              <span className="block text-[14px] text-neutral-900">Custom status…</span>
-              <span className="block text-[11px] text-neutral-400">Type your own label</span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[14px] text-neutral-900">
+                Custom status…
+              </span>
+              <span className="block text-[11px] text-neutral-400">
+                Type your own label
+              </span>
             </span>
-            {isCustom && <CircleCheck className="size-4 shrink-0 text-green-600" strokeWidth={2} />}
+            {isCustom && (
+              <CircleCheck
+                className="size-4 shrink-0 text-green-600"
+                strokeWidth={2}
+              />
+            )}
           </button>
         </div>
       )}
@@ -133,7 +217,8 @@ function UnitDropdown({
 
   useEffect(() => {
     const handler = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)
+      if (ref.current && !ref.current.contains(event.target as Node))
+        setOpen(false)
     }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
@@ -146,15 +231,25 @@ function UnitDropdown({
         type="button"
         disabled={loading}
         onClick={() => setOpen(!open)}
-        className="mt-1.5 flex h-11 w-full items-center gap-3 rounded-[12px] border-[1.5px] border-neutral-300 bg-white px-4 text-left text-[14px] text-neutral-900 outline-none transition-colors hover:border-neutral-400 focus:border-neutral-500 disabled:cursor-wait disabled:bg-neutral-50"
+        className="mt-1.5 flex h-11 w-full items-center gap-3 rounded-[12px] border-[1.5px] border-neutral-300 bg-white px-4 text-left text-[14px] text-neutral-900 transition-colors outline-none hover:border-neutral-400 focus:border-neutral-500 disabled:cursor-wait disabled:bg-neutral-50"
       >
-        <span className={selectedUnit ? "flex-1 truncate text-[14px] text-neutral-900" : "flex-1 truncate text-[14px] text-neutral-400"}>
+        <span
+          className={
+            selectedUnit
+              ? "flex-1 truncate text-[14px] text-neutral-900"
+              : "flex-1 truncate text-[14px] text-neutral-400"
+          }
+        >
           {loading ? "Loading units…" : selectedUnit?.name || "Choose a unit…"}
         </span>
-        {open ? <ChevronUpIcon className="size-4 shrink-0 text-neutral-400" /> : <ChevronDownIcon className="size-4 shrink-0 text-neutral-400" />}
+        {open ? (
+          <ChevronUpIcon className="size-4 shrink-0 text-neutral-400" />
+        ) : (
+          <ChevronDownIcon className="size-4 shrink-0 text-neutral-400" />
+        )}
       </button>
       {open ? (
-        <div className="scrollbar-hide absolute z-50 mt-1 max-h-[260px] w-full overflow-y-auto rounded-[14px] border-[1.5px] border-neutral-200 bg-white p-1 shadow-lg [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="scrollbar-hide absolute z-50 mt-1 max-h-[260px] w-full [scrollbar-width:none] overflow-y-auto rounded-[14px] border-[1.5px] border-neutral-200 bg-white p-1 shadow-lg [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
           {units.length ? (
             units.map((unit) => (
               <button
@@ -167,19 +262,32 @@ function UnitDropdown({
                 className="flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5 text-left transition hover:bg-neutral-50"
               >
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[14px] text-neutral-900">{unit.name}</span>
-                  {unit.description ? <span className="block truncate text-[11px] text-neutral-400">{unit.description}</span> : null}
+                  <span className="block truncate text-[14px] text-neutral-900">
+                    {unit.name}
+                  </span>
+                  {unit.description ? (
+                    <span className="block truncate text-[11px] text-neutral-400">
+                      {unit.description}
+                    </span>
+                  ) : null}
                   {membersByUnit[unit.id]?.length ? (
                     <span className="mt-1 block">
                       <UnitMemberAvatarGroup members={membersByUnit[unit.id]} />
                     </span>
                   ) : null}
                 </span>
-                {value === unit.id ? <CircleCheck className="size-4 shrink-0 text-green-600" strokeWidth={2} /> : null}
+                {value === unit.id ? (
+                  <CircleCheck
+                    className="size-4 shrink-0 text-green-600"
+                    strokeWidth={2}
+                  />
+                ) : null}
               </button>
             ))
           ) : (
-            <p className="px-3 py-3 text-[13px] text-neutral-400">No units configured yet.</p>
+            <p className="px-3 py-3 text-[13px] text-neutral-400">
+              No units configured yet.
+            </p>
           )}
         </div>
       ) : null}
@@ -189,17 +297,24 @@ function UnitDropdown({
 
 function UnitMemberAvatarGroup({ members }: { members: PublicUser[] }) {
   return (
-    <span className="flex items-center" aria-label={`${members.length} unit member${members.length === 1 ? "" : "s"}`}>
+    <span
+      className="flex items-center"
+      aria-label={`${members.length} unit member${members.length === 1 ? "" : "s"}`}
+    >
       {members.slice(0, 5).map((member, index) => (
         <span
           key={member.id}
           className={`inline-flex size-5 items-center justify-center rounded-full border-2 border-white bg-slate-soft text-[8px] font-bold text-navy-muted ${index ? "-ml-1.5" : ""}`}
           title={`${member.full_name} · ${member.role.replace(/_/g, " ")}`}
         >
-          {(member.initials || member.full_name || "?").charAt(0).toUpperCase()}
+          {(member.initials || member.full_name || "U").charAt(0).toUpperCase()}
         </span>
       ))}
-      {members.length > 5 ? <span className="-ml-1.5 inline-flex size-5 items-center justify-center rounded-full border-2 border-white bg-neutral-100 text-[8px] font-semibold text-neutral-500">+{members.length - 5}</span> : null}
+      {members.length > 5 ? (
+        <span className="-ml-1.5 inline-flex size-5 items-center justify-center rounded-full border-2 border-white bg-neutral-100 text-[8px] font-semibold text-neutral-500">
+          +{members.length - 5}
+        </span>
+      ) : null}
     </span>
   )
 }
@@ -232,21 +347,34 @@ export function OfficialStatusPanel({
   onDismiss?: () => void
 }) {
   const {
-    status, setStatus,
-    note, setNote,
-    internalNote, setInternalNote,
-    resolutionFiles, setResolutionFiles,
+    status,
+    setStatus,
+    note,
+    setNote,
+    internalNote,
+    setInternalNote,
+    resolutionFiles,
+    setResolutionFiles,
   } = draft
   const [busy, setBusy] = useState("")
-  const [previewFiles, setPreviewFiles] = useState<{ items: MediaPreviewItem[]; index: number } | null>(null)
-  const [unitId, setUnitId] = useState<number | "">(report.assigned_department?.id ?? "")
+  const [previewFiles, setPreviewFiles] = useState<{
+    items: MediaPreviewItem[]
+    index: number
+  } | null>(null)
+  const [unitId, setUnitId] = useState<number | "">(
+    report.assigned_department?.id ?? ""
+  )
   const [units, setUnits] = useState<BarangayUnit[]>([])
-  const [unitMembers, setUnitMembers] = useState<Record<number, PublicUser[]>>({})
+  const [unitMembers, setUnitMembers] = useState<Record<number, PublicUser[]>>(
+    {}
+  )
   const [unitsLoaded, setUnitsLoaded] = useState(false)
   const [previousReportId, setPreviousReportId] = useState(report.id)
 
   const editingNewReport = previousReportId !== report.id
-  const activeUnitId = editingNewReport ? (report.assigned_department?.id ?? "") : unitId
+  const activeUnitId = editingNewReport
+    ? (report.assigned_department?.id ?? "")
+    : unitId
 
   function startEditingCurrentReport() {
     if (!editingNewReport) return
@@ -254,7 +382,9 @@ export function OfficialStatusPanel({
     setUnitId(report.assigned_department?.id ?? "")
   }
 
-  const statusOptions = statusOptionsFor().filter((s) => s !== "submitted" && s !== "appealed" && s !== "in_progress")
+  const statusOptions = statusOptionsFor().filter(
+    (s) => s !== "submitted" && s !== "appealed" && s !== "in_progress"
+  )
   const displayStatus = status === "in_progress" ? "under_review" : status
   const statusIsCustom = !statusOptions.includes(displayStatus)
   const selectValue = statusIsCustom ? CUSTOM_STATUS_OPTION : displayStatus
@@ -266,13 +396,15 @@ export function OfficialStatusPanel({
       .then((rows) => {
         const activeUnits = rows.filter((unit) => unit.is_active)
         if (!cancelled) setUnits(activeUnits)
-        return Promise.all(activeUnits.map(async (unit) => {
-          try {
-            return [unit.id, await listBarangayUnitMembers(unit.id)] as const
-          } catch {
-            return [unit.id, []] as const
-          }
-        }))
+        return Promise.all(
+          activeUnits.map(async (unit) => {
+            try {
+              return [unit.id, await listBarangayUnitMembers(unit.id)] as const
+            } catch {
+              return [unit.id, []] as const
+            }
+          })
+        )
       })
       .then((entries) => {
         if (!cancelled) setUnitMembers(Object.fromEntries(entries))
@@ -292,15 +424,21 @@ export function OfficialStatusPanel({
 
   const selectedUnit = units.find((unit) => unit.id === activeUnitId)
   const unitsLoading = status === "assigned" && !unitsLoaded
-  const unitChanged = status === "assigned" && Boolean(activeUnitId) && activeUnitId !== (report.assigned_department?.id ?? "")
+  const unitChanged =
+    status === "assigned" &&
+    Boolean(activeUnitId) &&
+    activeUnitId !== (report.assigned_department?.id ?? "")
   const statusChanged = status !== report.status
   // "Save update" moves the report or resolves it. "Post update" only tells
   // the resident something, leaving the status where it is — the thing an
   // official could not do before without faking a status change.
   const isStatusSave = statusChanged || status === "resolved" || unitChanged
 
-  const hasResolutionEvidence = Boolean(report.resolution_evidence?.length || resolutionFiles.length)
-  const needsResolutionEvidence = status === "resolved" && !hasResolutionEvidence
+  const hasResolutionEvidence = Boolean(
+    report.resolution_evidence?.length || resolutionFiles.length
+  )
+  const needsResolutionEvidence =
+    status === "resolved" && !hasResolutionEvidence
   // Resolution photos are valid final evidence. The API still requires a
   // note, so saveUpdate supplies a neutral note when the official submits
   // photo evidence without typing an additional message.
@@ -309,24 +447,36 @@ export function OfficialStatusPanel({
   async function saveUpdate() {
     setBusy("update")
     try {
-      const updateNote = status === "resolved" && !note.trim()
-        ? "Resolution completed with photo evidence."
-        : note
+      const updateNote =
+        status === "resolved" && !note.trim()
+          ? "Resolution completed with photo evidence."
+          : note
       const next = await updateConcernStatus(report.id, {
         status,
-        note: status === "assigned" && selectedUnit ? note.trim() || `Assigned to ${selectedUnit.name}.` : updateNote,
+        note:
+          status === "assigned" && selectedUnit
+            ? note.trim() || `Assigned to ${selectedUnit.name}.`
+            : updateNote,
         status_version: report.status_version,
-        resolution_evidence: status === "resolved" ? resolutionFiles : undefined,
-        department_id: status === "assigned" && activeUnitId ? Number(activeUnitId) : undefined,
+        resolution_evidence:
+          status === "resolved" ? resolutionFiles : undefined,
+        department_id:
+          status === "assigned" && activeUnitId
+            ? Number(activeUnitId)
+            : undefined,
         internal_note: internalNote.trim() || undefined,
       })
       onUpdated(next)
       setInternalNote("")
       await onRefresh?.()
-      toast.success(statusChanged || unitChanged ? "Status updated" : "Report updated")
+      toast.success(
+        statusChanged || unitChanged ? "Status updated" : "Report updated"
+      )
       if (variant === "dialog") onDismiss?.()
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update report.")
+      toast.error(
+        error instanceof Error ? error.message : "Could not update report."
+      )
     } finally {
       setBusy("")
     }
@@ -347,7 +497,9 @@ export function OfficialStatusPanel({
       toast.success("Update posted to the resident")
       if (variant === "dialog") onDismiss?.()
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not post the update.")
+      toast.error(
+        error instanceof Error ? error.message : "Could not post the update."
+      )
     } finally {
       setBusy("")
     }
@@ -357,7 +509,9 @@ export function OfficialStatusPanel({
     if (!files) return
     const selected = Array.from(files).slice(0, 5)
     const invalid = selected.find(
-      (file) => !["image/jpeg", "image/png"].includes(file.type) || file.size > 2 * 1024 * 1024,
+      (file) =>
+        !["image/jpeg", "image/png"].includes(file.type) ||
+        file.size > 2 * 1024 * 1024
     )
     if (invalid) {
       toast.error(`${invalid.name}: use JPG or PNG up to 2 MB.`)
@@ -366,7 +520,13 @@ export function OfficialStatusPanel({
     setResolutionFiles(selected)
   }
 
-  const primaryDisabled = Boolean(busy) || !status || (status !== "assigned" && !note.trim()) || (status === "assigned" && !activeUnitId) || needsResolutionEvidence || needsFinalReason
+  const primaryDisabled =
+    Boolean(busy) ||
+    !status ||
+    (status !== "assigned" && !note.trim()) ||
+    (status === "assigned" && !activeUnitId) ||
+    needsResolutionEvidence ||
+    needsFinalReason
   const primaryLabel = busy ? (
     "Saving…"
   ) : isStatusSave ? (
@@ -394,16 +554,16 @@ export function OfficialStatusPanel({
 
       {status === "assigned" ? (
         <div className="space-y-1">
-           <UnitDropdown
-             units={units}
-             membersByUnit={unitMembers}
-             value={activeUnitId}
-             loading={unitsLoading}
-             onChange={(next) => {
-               startEditingCurrentReport()
-               setUnitId(next)
-             }}
-           />
+          <UnitDropdown
+            units={units}
+            membersByUnit={unitMembers}
+            value={activeUnitId}
+            loading={unitsLoading}
+            onChange={(next) => {
+              startEditingCurrentReport()
+              setUnitId(next)
+            }}
+          />
           <p className="text-[11px] leading-4 text-neutral-400">
             Choose the unit that should own this report. Members are optional.
           </p>
@@ -419,10 +579,11 @@ export function OfficialStatusPanel({
             autoFocus
             onChange={(event) => setStatus(slugifyStatus(event.target.value))}
             placeholder="e.g. schedule, awaiting parts"
-            className="h-11 w-full rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 text-[15px] font-normal text-neutral-900 outline-none transition-colors placeholder:text-neutral-400 focus:border-neutral-500"
+            className="h-11 w-full rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 text-[15px] font-normal text-neutral-900 transition-colors outline-none placeholder:text-neutral-400 focus:border-neutral-500"
           />
           <p className="text-[11px] leading-4 text-neutral-400">
-            Saved as "{statusLabel(status) || "your custom status"}" and shown to the resident.
+            Saved as "{statusLabel(status) || "your custom status"}" and shown
+            to the resident.
           </p>
         </label>
       ) : null}
@@ -433,8 +594,12 @@ export function OfficialStatusPanel({
           value={note}
           onChange={(event) => setNote(event.target.value)}
           rows={3}
-          placeholder={status === "assigned" ? "Optional note for the resident" : "e.g. Tanod inspected the site this morning. Repair is scheduled Friday."}
-          className="w-full resize-none rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[15px] font-normal text-neutral-900 outline-none transition-colors placeholder:text-neutral-400 focus:border-neutral-500"
+          placeholder={
+            status === "assigned"
+              ? "Optional note for the resident"
+              : "e.g. Tanod inspected the site this morning. Repair is scheduled Friday."
+          }
+          className="w-full resize-none rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[15px] font-normal text-neutral-900 transition-colors outline-none placeholder:text-neutral-400 focus:border-neutral-500"
         />
       </label>
 
@@ -445,21 +610,27 @@ export function OfficialStatusPanel({
           onChange={(event) => setInternalNote(event.target.value)}
           rows={2}
           placeholder="The resident never sees this."
-          className="w-full resize-none rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[15px] font-normal text-neutral-900 outline-none transition-colors placeholder:text-neutral-400 focus:border-neutral-500"
+          className="w-full resize-none rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[15px] font-normal text-neutral-900 transition-colors outline-none placeholder:text-neutral-400 focus:border-neutral-500"
         />
       </label>
 
       {status === "resolved" ? (
         <div className="rounded-[14px] border-[1.5px] border-neutral-200 bg-white p-4">
-          <p className="text-[12px] text-neutral-700">Photos of the finished work</p>
+          <p className="text-[12px] text-neutral-700">
+            Photos of the finished work
+          </p>
           <p className="mt-0.5 text-[10px] text-neutral-400">
-            Up to 5 photos. Only the resident and barangay officials can see them.
+            Up to 5 photos. Only the resident and barangay officials can see
+            them.
           </p>
           {resolutionFiles.length ? (
             <div className="mt-3">
               <div className="grid grid-cols-3 gap-2">
                 {resolutionFiles.slice(0, 3).map((file) => (
-                  <div key={`${file.name}-${file.lastModified}`} className="relative aspect-square overflow-hidden rounded-[10px]">
+                  <div
+                    key={`${file.name}-${file.lastModified}`}
+                    className="relative aspect-square overflow-hidden rounded-[10px]"
+                  >
                     <img
                       src={URL.createObjectURL(file)}
                       alt={file.name}
@@ -467,8 +638,12 @@ export function OfficialStatusPanel({
                     />
                     <button
                       type="button"
-                      onClick={() => setResolutionFiles(resolutionFiles.filter((f) => f !== file))}
-                      className="absolute right-0.5 top-0.5 flex size-4 items-center justify-center rounded-full bg-black/50 text-white"
+                      onClick={() =>
+                        setResolutionFiles(
+                          resolutionFiles.filter((f) => f !== file)
+                        )
+                      }
+                      className="absolute top-0.5 right-0.5 flex size-4 items-center justify-center rounded-full bg-black/50 text-white"
                     >
                       <XIcon className="size-2.5" />
                     </button>
@@ -478,11 +653,13 @@ export function OfficialStatusPanel({
                   <button
                     type="button"
                     onClick={() => {
-                      const items: MediaPreviewItem[] = resolutionFiles.map((f) => ({
-                        src: URL.createObjectURL(f),
-                        filename: f.name,
-                        kind: "image" as const,
-                      }))
+                      const items: MediaPreviewItem[] = resolutionFiles.map(
+                        (f) => ({
+                          src: URL.createObjectURL(f),
+                          filename: f.name,
+                          kind: "image" as const,
+                        })
+                      )
                       setPreviewFiles({ items, index: 3 })
                     }}
                     className="relative flex aspect-square items-center justify-center overflow-hidden rounded-[10px] bg-neutral-100 text-[14px] font-medium text-neutral-500"
@@ -492,7 +669,9 @@ export function OfficialStatusPanel({
                       alt=""
                       className="absolute inset-0 size-full object-cover opacity-40"
                     />
-                    <span className="relative">+{resolutionFiles.length - 3}</span>
+                    <span className="relative">
+                      +{resolutionFiles.length - 3}
+                    </span>
                   </button>
                 ) : null}
               </div>
@@ -589,6 +768,11 @@ export function OfficialStatusPanelWithDraft({
 }) {
   const draft = useDecisionDraft(report)
   return (
-    <OfficialStatusPanel report={report} draft={draft} onUpdated={onUpdated} onRefresh={onRefresh} />
+    <OfficialStatusPanel
+      report={report}
+      draft={draft}
+      onUpdated={onUpdated}
+      onRefresh={onRefresh}
+    />
   )
 }

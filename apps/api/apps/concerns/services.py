@@ -5,12 +5,13 @@ from django.core.files.base import ContentFile
 from .models import ConcernAssignment, ConcernMedia
 
 
-# States in which the protected copy may be served to the public. Everything
-# else means a privacy run did not finish, or finished with something a person
-# has to look at, and the media stays behind an authorised request.
+# States in which the protected copy may be served to the public. A completed
+# scan with no matching sensitive region is also publishable: its re-encoded
+# preview contains no automatic blur, but it is not the raw upload.
 PUBLICLY_DISPLAYABLE_STATES = {
     ConcernMedia.PrivacyState.NOT_REQUIRED,
     ConcernMedia.PrivacyState.PROTECTED,
+    ConcernMedia.PrivacyState.NO_MATCH_FOUND,
 }
 
 
@@ -43,9 +44,20 @@ def ensure_concern_media_preview(media):
     """
     if media.preview_file and media.preview_file.name:
         return media.preview_file
+    source = media.file
+    # The AI image-review stage may have opened and closed this FieldFile. A
+    # closed FieldFile still has a name, but calling tell()/read() on it raises
+    # ValueError instead of transparently reopening storage.
+    if hasattr(source, "open"):
+        source.open("rb")
+    try:
+        preview_bytes = build_sanitized_preview_bytes(source, media.mime_type)
+    finally:
+        if hasattr(source, "close"):
+            source.close()
     media.preview_file.save(
         f"protected-{media.pk}.jpg",
-        ContentFile(build_sanitized_preview_bytes(media.file, media.mime_type)),
+        ContentFile(preview_bytes),
         save=True,
     )
     return media.preview_file

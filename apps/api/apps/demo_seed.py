@@ -227,9 +227,12 @@ def image_hashes(content_file):
 
 def acceptance_zone():
     """The barangay's configured acceptance zone. Never hardcoded."""
-    from apps.emergencies.models import MapDispatchPolicy
+    from apps.emergencies.models import Community, MapDispatchPolicy
 
-    policy = MapDispatchPolicy.current()
+    community = Community.objects.filter(code="marikina-heights", status=Community.Status.ACTIVE).first()
+    if not community:
+        raise RuntimeError("The Marikina Heights demo community is not active.")
+    policy = MapDispatchPolicy.current(community)
     return {
         "latitude": float(policy.acceptance_center_latitude),
         "longitude": float(policy.acceptance_center_longitude),

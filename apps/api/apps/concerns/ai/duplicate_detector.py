@@ -75,31 +75,36 @@ def find_duplicate_concern(concern: Concern, *, enabled: bool, threshold: float,
         return DuplicateMatch(possible_duplicate=False)
 
     safe_threshold = min(1.0, max(0.0, float(threshold)))
+    def without_candidate(queryset):
+        # The precheck uses an unsaved Concern-shaped candidate.  Calling
+        # exclude(pk=None) is easy to misread and can produce backend-specific
+        # SQL, so only exclude a row when this is a persisted concern.
+        return queryset.exclude(pk=concern.pk) if concern.pk is not None else queryset
+
     if concern.report_fingerprint:
-        exact = Concern.objects.filter(report_fingerprint=concern.report_fingerprint).exclude(pk=concern.pk).exclude(status=Concern.Status.REJECTED).order_by("-created_at").first()
+        exact = without_candidate(
+            Concern.objects.filter(report_fingerprint=concern.report_fingerprint)
+        ).exclude(status=Concern.Status.REJECTED).order_by("-created_at").first()
         if exact:
             return DuplicateMatch(True, 1.0, 0, exact.pk, exact.tracking_id, "exact_fingerprint")
     if concern.report_text_fingerprint and concern.report_location_bucket:
-        same_text = Concern.objects.filter(
-            barangay=concern.barangay,
-            category=concern.category,
-            report_text_fingerprint=concern.report_text_fingerprint,
-            report_location_bucket=concern.report_location_bucket,
-        ).exclude(pk=concern.pk).exclude(status=Concern.Status.REJECTED).order_by("-created_at").first()
+        same_text = without_candidate(
+            Concern.objects.filter(
+                barangay=concern.barangay,
+                category=concern.category,
+                report_text_fingerprint=concern.report_text_fingerprint,
+                report_location_bucket=concern.report_location_bucket,
+            )
+        ).exclude(status=Concern.Status.REJECTED).order_by("-created_at").first()
         if same_text:
             return DuplicateMatch(True, 1.0, None, same_text.pk, same_text.tracking_id, "same_text_nearby")
-    candidates = (
+    candidates = without_candidate(
         Concern.objects.filter(
             barangay=concern.barangay,
             category=concern.category,
             created_at__gte=timezone.now() - timedelta(days=max(1, int(lookback_days))),
         )
-        .exclude(pk=concern.pk)
-        .exclude(status=Concern.Status.REJECTED)
-        .exclude(latitude__isnull=True)
-        .exclude(longitude__isnull=True)
-        .order_by("-created_at")[:200]
-    )
+    ).exclude(status=Concern.Status.REJECTED).exclude(latitude__isnull=True).exclude(longitude__isnull=True).order_by("-created_at")[:200]
 
     best: tuple[float, float, Concern] | None = None
     for candidate in candidates:

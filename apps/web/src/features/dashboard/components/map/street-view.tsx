@@ -32,17 +32,44 @@ const FOOTPRINT_PATHS = [
 ]
 
 function esc(text: string) {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
 }
 
 function popupHtml(point: StreetViewMapPoint) {
-  const image = point.image ? `<img class="eboses-sv-pop__img" src="${esc(point.image)}" alt="" />` : ""
+  const image = point.image
+    ? `<img class="eboses-sv-pop__img" src="${esc(point.image)}" alt="" />`
+    : ""
   return `<div class="eboses-sv-pop__body">${image}<p class="eboses-sv-pop__title">${esc(point.title)}</p><p class="eboses-sv-pop__desc">${esc(point.excerpt ?? point.meta ?? "")}</p></div>`
 }
 
+const EMBED_KEY = (
+  import.meta.env.VITE_GOOGLE_MAPS_EMBED_KEY as string | undefined
+)?.trim()
+
+/**
+ * When a Maps Embed API key is configured we use the official street-view
+ * embed — the only variant whose panorama responds to touch drags on mobile.
+ * Without a key we fall back to the legacy `output=svembed` URL, which is
+ * desktop-oriented: on phones Google serves a page that ignores swipes, so
+ * panning around requires the desktop site or opening Maps itself.
+ */
 export function streetViewEmbedUrl(coord: StreetViewCoord, heading = 0) {
   const lat = coord.lat.toFixed(6)
   const lng = coord.lng.toFixed(6)
+  if (EMBED_KEY) {
+    const params = new URLSearchParams({
+      key: EMBED_KEY,
+      location: `${lat},${lng}`,
+      heading: String(Math.round(heading)),
+      pitch: "0",
+      fov: "90",
+    })
+    return `https://www.google.com/maps/embed/v1/streetview?${params.toString()}`
+  }
   return `https://maps.google.com/maps?layer=c&cbll=${lat},${lng}&cbp=11,${heading},0,0,0&output=svembed`
 }
 
@@ -77,7 +104,12 @@ function StreetViewMiniMap({
       const map = L.map(elRef.current, {
         zoomControl: false,
         attributionControl: false,
-        doubleClickZoom: false,
+        dragging: true,
+        scrollWheelZoom: true,
+        touchZoom: true,
+        doubleClickZoom: true,
+        boxZoom: true,
+        keyboard: true,
         center: [coord.lat, coord.lng],
         zoom: 16,
       })
@@ -86,7 +118,11 @@ function StreetViewMiniMap({
       const here = L.marker([coord.lat, coord.lng], {
         icon: L.divIcon({
           className: "",
-          html: glyphPinHtml({ paths: FOOTPRINT_PATHS, color: MAP_COLORS.route, size: 26 }),
+          html: glyphPinHtml({
+            paths: FOOTPRINT_PATHS,
+            color: MAP_COLORS.route,
+            size: 26,
+          }),
           iconSize: [26, 26],
           iconAnchor: [13, 13],
         }),
@@ -98,9 +134,13 @@ function StreetViewMiniMap({
       const host = elRef.current
       const closePopup = () => map.closePopup()
       host.addEventListener("mouseleave", closePopup)
-      cleanupRef.current = () => host.removeEventListener("mouseleave", closePopup)
+      cleanupRef.current = () =>
+        host.removeEventListener("mouseleave", closePopup)
       map.on("dblclick", (event: import("leaflet").LeafletMouseEvent) => {
-        onMoveRef.current?.({ lat: event.latlng.wrap().lat, lng: event.latlng.wrap().lng })
+        onMoveRef.current?.({
+          lat: event.latlng.wrap().lat,
+          lng: event.latlng.wrap().lng,
+        })
       })
       LRef.current = L
       mapRef.current = map
@@ -122,7 +162,10 @@ function StreetViewMiniMap({
   useEffect(() => {
     if (!ready) return
     hereRef.current?.setLatLng([coord.lat, coord.lng])
-    mapRef.current?.setView([coord.lat, coord.lng], Math.max(mapRef.current.getZoom(), 15))
+    mapRef.current?.setView(
+      [coord.lat, coord.lng],
+      Math.max(mapRef.current.getZoom(), 15)
+    )
   }, [ready, coord.lat, coord.lng])
 
   useEffect(() => {
@@ -199,17 +242,27 @@ export function StreetViewModal({
   const pickMode = mode === "pick"
   const outOfScope = useMemo(
     () => Boolean(coverage && !insideCoverage(coord.lat, coord.lng, coverage)),
-    [coord.lat, coord.lng, coverage],
+    [coord.lat, coord.lng, coverage]
   )
   const [mapSize, setMapSize] = useState<{ w: number; h: number } | null>(null)
   const mapPanelRef = useRef<HTMLDivElement>(null)
-  const mapResizeStartRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null)
+  const mapResizeStartRef = useRef<{
+    x: number
+    y: number
+    w: number
+    h: number
+  } | null>(null)
   const [mapResizing, setMapResizing] = useState(false)
 
   function onMapResizeStart(event: React.PointerEvent<HTMLDivElement>) {
     const rect = mapPanelRef.current?.getBoundingClientRect()
     if (!rect) return
-    mapResizeStartRef.current = { x: event.clientX, y: event.clientY, w: rect.width, h: rect.height }
+    mapResizeStartRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      w: rect.width,
+      h: rect.height,
+    }
     setMapResizing(true)
     event.currentTarget.setPointerCapture(event.pointerId)
   }
@@ -217,8 +270,14 @@ export function StreetViewModal({
     const start = mapResizeStartRef.current
     if (!start) return
     setMapSize({
-      w: Math.min(560, Math.max(220, Math.round(start.w + (event.clientX - start.x)))),
-      h: Math.min(Math.round(window.innerHeight * 0.6), Math.max(180, Math.round(start.h - (event.clientY - start.y)))),
+      w: Math.min(
+        560,
+        Math.max(220, Math.round(start.w + (event.clientX - start.x)))
+      ),
+      h: Math.min(
+        Math.round(window.innerHeight * 0.6),
+        Math.max(180, Math.round(start.h - (event.clientY - start.y)))
+      ),
     })
   }
   function onMapResizeEnd(event: React.PointerEvent<HTMLDivElement>) {
@@ -273,7 +332,7 @@ export function StreetViewModal({
       <div
         className={cn(
           "absolute inset-0",
-          pickMode && outOfScope && "eboses-map-blocked",
+          pickMode && outOfScope && "eboses-map-blocked"
         )}
       >
         <iframe
@@ -286,12 +345,17 @@ export function StreetViewModal({
         />
       </div>
 
-      <div className="absolute right-2 top-2 z-20">
+      <div className="absolute top-2 right-2 z-20">
         <MapControlStack tone="light">
-          <MapControlButton tone="light" label="Exit Street View" onClick={onClose} className="size-11">
+          <MapControlButton
+            tone="light"
+            label="Exit Street View"
+            onClick={onClose}
+            className="size-11"
+          >
             <span
               aria-hidden
-              className="material-symbols-outlined select-none leading-none"
+              className="material-symbols-outlined leading-none select-none"
               style={{ fontSize: "20px" }}
             >
               directions_run
@@ -321,9 +385,11 @@ export function StreetViewModal({
             className={cn(
               "relative overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-lg",
               !mapResizing && "transition-[width,height] duration-150 ease-out",
-              !mapSize && "h-72 w-80 max-w-[calc(100vw-1.5rem)]",
+              !mapSize && "h-72 w-80 max-w-[calc(100vw-1.5rem)]"
             )}
-            style={mapSize ? { width: mapSize.w, height: mapSize.h } : undefined}
+            style={
+              mapSize ? { width: mapSize.w, height: mapSize.h } : undefined
+            }
           >
             <StreetViewMiniMap
               coord={coord}
@@ -331,7 +397,7 @@ export function StreetViewModal({
               resizeSignal={mapSize ? `${mapSize.w}x${mapSize.h}` : "fixed"}
               onMove={onMove}
             />
-            <div className="absolute right-2 top-2 z-[810] flex flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-md">
+            <div className="absolute top-2 right-2 z-[810] flex flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-md">
               <button
                 type="button"
                 onClick={() => setMiniOpen(false)}
@@ -347,7 +413,7 @@ export function StreetViewModal({
               onPointerMove={onMapResizeMove}
               onPointerUp={onMapResizeEnd}
               onPointerCancel={onMapResizeEnd}
-              className="absolute right-0 top-0 z-[820] size-4 cursor-nwse-resize touch-none"
+              className="absolute top-0 right-0 z-[820] size-4 cursor-nwse-resize touch-none"
               aria-hidden
             />
           </div>
@@ -363,7 +429,7 @@ export function StreetViewModal({
           >
             <span
               aria-hidden
-              className="material-symbols-outlined select-none leading-none"
+              className="material-symbols-outlined leading-none select-none"
               style={{ fontSize: "20px" }}
             >
               map
@@ -380,13 +446,17 @@ export function startStreetViewPick(
   handlers: {
     onPick: (coord: StreetViewCoord) => void
     onCancel: () => void
-  },
+  }
 ) {
   const container = map.getContainer()
   container.classList.add("eboses-sv-pick")
 
   function resolve(clientX: number, clientY: number) {
-    const fakeEvent = new MouseEvent("click", { clientX, clientY, bubbles: true })
+    const fakeEvent = new MouseEvent("click", {
+      clientX,
+      clientY,
+      bubbles: true,
+    })
     try {
       const point = map.mouseEventToLatLng(fakeEvent)
       if (point) handlers.onPick({ lat: point.lat, lng: point.lng })

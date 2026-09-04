@@ -324,9 +324,7 @@ function MobileSheetLayout({
     snapTo(detailOpen ? "expanded" : "hidden")
   }, [detailOpen, snapTo])
 
-  React.useEffect(() => {
-    if (asideOpen) setSheetTab("aside")
-  }, [asideOpen])
+  const visibleSheetTab = asideOpen ? "aside" : sheetTab
 
   const sheetShown = Boolean(detail) && detailOpen
   React.useEffect(() => {
@@ -341,7 +339,10 @@ function MobileSheetLayout({
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <div className="ops-pane min-h-0 flex-1">{list?.node}</div>
+      {/* The queue pane owns scrolling on mobile. Keeping an overflow-y-auto
+          host here creates a nested scroll container and traps touch/wheel
+          gestures before the queue can reach its bottom. */}
+      <div className="min-h-0 flex-1 overflow-hidden">{list?.node}</div>
 
       {detail && detailOpen ? (
         <div
@@ -351,7 +352,7 @@ function MobileSheetLayout({
           )}
           style={{
             height: `calc(${Math.min(height, snaps().max)}px + env(safe-area-inset-bottom))`,
-            maxHeight: "calc(80svh + env(safe-area-inset-bottom))",
+            maxHeight: "calc(88dvh + env(safe-area-inset-bottom))",
           }}
           role="dialog"
           aria-label={detail.label ?? "Details"}
@@ -367,21 +368,21 @@ function MobileSheetLayout({
             <span className="h-1.5 w-11 rounded-full bg-neutral-300" />
           </div>
 
-          {contentVisible ? (
-            <div className="flex shrink-0 items-center gap-2 px-5 pb-3 pt-2">
-              <h2 className="min-w-0 flex-1 truncate text-[22px] font-bold leading-[1.2] tracking-tight text-neutral-900">
-                Report detail
+           {contentVisible ? (
+             <div className="flex shrink-0 items-center gap-2 px-5 pb-3 pt-2">
+               <h2 className="min-w-0 flex-1 truncate text-[22px] font-bold leading-[1.2] tracking-tight text-neutral-900">
+                 {detail.label ?? "Report detail"}
               </h2>
               {aside ? (
                 <div className="flex shrink-0 items-center gap-1 rounded-full bg-neutral-100 p-1">
                   <button
                     type="button"
                     aria-label={detail.label ?? "Conversation"}
-                    aria-pressed={sheetTab === "detail"}
+                    aria-pressed={visibleSheetTab === "detail"}
                     onClick={() => setSheetTab("detail")}
                     className={cn(
                       "flex size-9 items-center justify-center rounded-full transition-colors",
-                      sheetTab === "detail"
+                      visibleSheetTab === "detail"
                         ? "bg-white text-neutral-900 shadow-sm"
                         : "text-neutral-500 hover:text-neutral-800",
                     )}
@@ -391,11 +392,11 @@ function MobileSheetLayout({
                   <button
                     type="button"
                     aria-label={aside.label ?? "Info"}
-                    aria-pressed={sheetTab === "aside"}
+                    aria-pressed={visibleSheetTab === "aside"}
                     onClick={() => setSheetTab("aside")}
                     className={cn(
                       "flex size-9 items-center justify-center rounded-full transition-colors",
-                      sheetTab === "aside"
+                      visibleSheetTab === "aside"
                         ? "bg-white text-neutral-900 shadow-sm"
                         : "text-neutral-500 hover:text-neutral-800",
                     )}
@@ -421,7 +422,7 @@ function MobileSheetLayout({
               contentVisible ? "opacity-100" : "pointer-events-none opacity-0",
             )}
           >
-            {contentVisible ? (sheetTab === "aside" && aside ? aside.node : detail.node) : null}
+            {contentVisible ? (visibleSheetTab === "aside" && aside ? aside.node : detail.node) : null}
           </div>
         </div>
       ) : null}
@@ -533,7 +534,7 @@ export function OpsWorkspace({
 
   if (tier === "mobile") {
     return (
-      <div className={cn("flex min-h-0 w-full flex-1 flex-col bg-canvas", className)}>
+      <div className={cn("flex min-h-[calc(100dvh-4.5rem)] w-full flex-1 flex-col bg-white", className)}>
         {bar}
         <MobileSheetLayout
           list={list}

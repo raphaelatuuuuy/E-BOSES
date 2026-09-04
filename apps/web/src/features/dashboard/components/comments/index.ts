@@ -4,10 +4,15 @@ export {
   type CommentThreadAnchor,
   type CommentThreadProps,
 } from "./comment-thread"
-export { CommentComposer, COMMENT_MIN_LENGTH } from "./comment-composer"
+export {
+  CommentComposer,
+  LocalAttachmentPreview,
+  COMMENT_MIN_LENGTH,
+} from "./comment-composer"
 export {
   CommentAction,
   CommentAvatar,
+  CommentAttachment,
   CommentBody,
   CommentMeta,
   CommentRow,
@@ -24,3 +29,4 @@ export {
   type CommentAuthor,
   type UnifiedComment,
 } from "./comment-types"
+export { ResolutionBanner } from "./resolution-banner"

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react"
 import {
   CircleCheck,
   MapPinned,
@@ -37,7 +44,7 @@ const inputClass =
 
 const labelClass = "grid gap-1 text-[13px] font-semibold text-neutral-500"
 
-const MARIKINA_CENTER: [number, number] = [14.6507, 121.1133]
+const NETWORK_FALLBACK_CENTER: [number, number] = [14.5995, 120.9842]
 /** Click radius, in screen pixels, for snapping onto an existing vertex. */
 const SNAP_PX = 14
 
@@ -57,12 +64,18 @@ function hintFor(tool: Tool, draftLength: number): string {
     if (draftLength === 0) return "Click to place the first point."
     return "Click last point to finish this line."
   }
-  if (tool === "edit") return "Drag a handle to reshape. Click a small dot to add a point."
+  if (tool === "edit")
+    return "Drag a handle to reshape. Click a small dot to add a point."
   if (tool === "delete") return "Click a shape to remove it."
   return ""
 }
 
-function handleIcon(L: typeof leaflet, size: number, color: string, faded: boolean) {
+function handleIcon(
+  L: typeof leaflet,
+  size: number,
+  color: string,
+  faded: boolean
+) {
   return L.divIcon({
     className: "",
     html: `<div style="width:${size}px;height:${size}px;border-radius:999px;background:${color};opacity:${
@@ -142,7 +155,10 @@ export function AreaPicker({
     shapesRef.current = shapes
   }, [shapes])
 
-  const streets = useMemo<LiveMapStreet[]>(() => context?.streets.streets ?? [], [context])
+  const streets = useMemo<LiveMapStreet[]>(
+    () => context?.streets.streets ?? [],
+    [context]
+  )
   const boundary = useMemo(() => context?.boundary ?? null, [context])
   const accent = advisoryMeta(tag).color
   const accentRef = useRef(accent)
@@ -165,7 +181,7 @@ export function AreaPicker({
         onChangeRef.current({ streets: next, geometry: corridor, mode: "auto" })
       })
     },
-    [streets],
+    [streets]
   )
 
   const toggleStreet = useCallback(
@@ -175,7 +191,7 @@ export function AreaPicker({
       else next.add(name)
       applyStreets([...next])
     },
-    [applyStreets],
+    [applyStreets]
   )
 
   const commitShapes = useCallback((next: DrawnShape[]) => {
@@ -187,8 +203,13 @@ export function AreaPicker({
     const points = draftRef.current
     const active = toolRef.current
     if (active !== "polygon" && active !== "line") return
-    const enough = active === "polygon" ? points.length >= 3 : points.length >= 2
-    if (enough) commitShapes([...shapesRef.current, { id: newId(), kind: active, points }])
+    const enough =
+      active === "polygon" ? points.length >= 3 : points.length >= 2
+    if (enough)
+      commitShapes([
+        ...shapesRef.current,
+        { id: newId(), kind: active, points },
+      ])
     setDraft([])
   }, [commitShapes])
 
@@ -225,7 +246,11 @@ export function AreaPicker({
     }
     void shapesToPolygon(drawn).then((geometry) => {
       if (seq !== geometrySeqRef.current) return
-      onChangeRef.current({ streets: valueRef.current.streets, geometry, mode: "manual" })
+      onChangeRef.current({
+        streets: valueRef.current.streets,
+        geometry,
+        mode: "manual",
+      })
     })
   }, [drawn, applyStreets])
 
@@ -237,7 +262,10 @@ export function AreaPicker({
       const L = (await import("leaflet")).default
       await import("leaflet/dist/leaflet.css")
       if (cancelled || !containerRef.current || mapRef.current) return
-      if ((containerRef.current as HTMLDivElement & { _leaflet_id?: number })._leaflet_id) {
+      if (
+        (containerRef.current as HTMLDivElement & { _leaflet_id?: number })
+          ._leaflet_id
+      ) {
         containerRef.current.innerHTML = ""
       }
       LRef.current = L
@@ -285,11 +313,16 @@ export function AreaPicker({
       document.head.appendChild(styleEl)
 
       const map = L.map(containerRef.current, {
-        center: MARIKINA_CENTER,
+        center: NETWORK_FALLBACK_CENTER,
         zoom: 14,
         zoomControl: false,
         attributionControl: false,
-        doubleClickZoom: false,
+        dragging: true,
+        scrollWheelZoom: true,
+        touchZoom: true,
+        doubleClickZoom: true,
+        boxZoom: true,
+        keyboard: true,
         preferCanvas: false,
       })
 
@@ -330,7 +363,8 @@ export function AreaPicker({
       })
 
       map.on("dblclick", () => {
-        if (toolRef.current === "line" || toolRef.current === "polygon") finishDraft()
+        if (toolRef.current === "line" || toolRef.current === "polygon")
+          finishDraft()
       })
 
       map.on("mousemove", (event: leaflet.LeafletMouseEvent) => {
@@ -344,7 +378,10 @@ export function AreaPicker({
         const points = draftRef.current
         const last = points[points.length - 1]
         if (!last) return
-        const trail: [number, number][] = [last, [event.latlng.lat, event.latlng.lng]]
+        const trail: [number, number][] = [
+          last,
+          [event.latlng.lat, event.latlng.lng],
+        ]
         if (hintLineRef.current) {
           hintLineRef.current.setLatLngs(trail)
           hintLineRef.current.setStyle({ color: accentRef.current })
@@ -398,8 +435,8 @@ export function AreaPicker({
             (item) =>
               item.area_geometry ||
               (item.street_geometries?.length ?? 0) > 0 ||
-              (item.affected_streets?.length ?? 0) > 0,
-          ),
+              (item.affected_streets?.length ?? 0) > 0
+          )
         )
       })
       .catch(() => undefined)
@@ -432,7 +469,8 @@ export function AreaPicker({
   useEffect(() => {
     const L = LRef.current
     const map = mapRef.current
-    if (!L || !map || !mapReady || fittedRef.current || !boundary?.geometry) return
+    if (!L || !map || !mapReady || fittedRef.current || !boundary?.geometry)
+      return
     try {
       const bounds = L.geoJSON(boundary.geometry as never).getBounds()
       if (!bounds.isValid()) return
@@ -512,7 +550,9 @@ export function AreaPicker({
       const named = new Set(announcement.affected_streets ?? [])
       const lines = [
         ...(announcement.street_geometries ?? []),
-        ...streets.filter((street) => named.has(street.name)).flatMap((s) => s.geometries ?? []),
+        ...streets
+          .filter((street) => named.has(street.name))
+          .flatMap((s) => s.geometries ?? []),
       ].flatMap((geometry) => geoJsonToLines(geometry))
       if (lines.length === 0) continue
       L.polyline(lines, {
@@ -529,7 +569,9 @@ export function AreaPicker({
 
     const selected = new Set(value.streets)
     for (const street of streets) {
-      const lines = (street.geometries ?? []).flatMap((geometry) => geoJsonToLines(geometry))
+      const lines = (street.geometries ?? []).flatMap((geometry) =>
+        geoJsonToLines(geometry)
+      )
       if (lines.length === 0) continue
       const on = selected.has(street.name)
 
@@ -544,7 +586,11 @@ export function AreaPicker({
       })
       if (tool === null) {
         target.on("click", () => toggleStreet(street.name))
-        target.bindTooltip(street.name, { sticky: true, direction: "top", opacity: 1 })
+        target.bindTooltip(street.name, {
+          sticky: true,
+          direction: "top",
+          opacity: 1,
+        })
       }
       target.addTo(layer)
 
@@ -618,7 +664,10 @@ export function AreaPicker({
         }
         clearAll()
       })
-      pin.bindTooltip("Drag to move · click to clear", { direction: "top", opacity: 1 })
+      pin.bindTooltip("Drag to move · click to clear", {
+        direction: "top",
+        opacity: 1,
+      })
       pin.addTo(layer)
     }
   }, [
@@ -667,7 +716,9 @@ export function AreaPicker({
               interactive: removable,
             })
       if (removable) {
-        drawn.on("click", () => commitShapes(shapesRef.current.filter((s) => s.id !== shape.id)))
+        drawn.on("click", () =>
+          commitShapes(shapesRef.current.filter((s) => s.id !== shape.id))
+        )
         drawn.bindTooltip("Remove", { direction: "top", opacity: 1 })
       }
       drawn.addTo(layer)
@@ -675,7 +726,10 @@ export function AreaPicker({
       if (tool !== "edit") continue
 
       shape.points.forEach((point, index) => {
-        const handle = L.marker(point, { icon: handleIcon(L, 12, accent, false), draggable: true })
+        const handle = L.marker(point, {
+          icon: handleIcon(L, 12, accent, false),
+          draggable: true,
+        })
         handle.on("drag", (event: leaflet.LeafletEvent) => {
           const position = (event.target as leaflet.Marker).getLatLng()
           const next = [...shape.points]
@@ -687,18 +741,27 @@ export function AreaPicker({
           const next = [...shape.points]
           next[index] = [position.lat, position.lng]
           commitShapes(
-            shapesRef.current.map((s) => (s.id === shape.id ? { ...s, points: next } : s)),
+            shapesRef.current.map((s) =>
+              s.id === shape.id ? { ...s, points: next } : s
+            )
           )
         })
         handle.addTo(layer)
       })
 
-      const segments = shape.kind === "polygon" ? shape.points.length : shape.points.length - 1
+      const segments =
+        shape.kind === "polygon" ? shape.points.length : shape.points.length - 1
       for (let index = 0; index < segments; index++) {
         const from = shape.points[index]!
         const to = shape.points[(index + 1) % shape.points.length]!
-        const middle: [number, number] = [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2]
-        const dot = L.marker(middle, { icon: handleIcon(L, 9, accent, true), draggable: true })
+        const middle: [number, number] = [
+          (from[0] + to[0]) / 2,
+          (from[1] + to[1]) / 2,
+        ]
+        const dot = L.marker(middle, {
+          icon: handleIcon(L, 9, accent, true),
+          draggable: true,
+        })
         // Dragging a midpoint turns it into a real vertex, the way Geoman does.
         dot.on("drag", (event: leaflet.LeafletEvent) => {
           const position = (event.target as leaflet.Marker).getLatLng()
@@ -711,14 +774,18 @@ export function AreaPicker({
           const next = [...shape.points]
           next.splice(index + 1, 0, [position.lat, position.lng])
           commitShapes(
-            shapesRef.current.map((s) => (s.id === shape.id ? { ...s, points: next } : s)),
+            shapesRef.current.map((s) =>
+              s.id === shape.id ? { ...s, points: next } : s
+            )
           )
         })
         dot.on("click", () => {
           const next = [...shape.points]
           next.splice(index + 1, 0, middle)
           commitShapes(
-            shapesRef.current.map((s) => (s.id === shape.id ? { ...s, points: next } : s)),
+            shapesRef.current.map((s) =>
+              s.id === shape.id ? { ...s, points: next } : s
+            )
           )
         })
         dot.addTo(layer)
@@ -771,11 +838,17 @@ export function AreaPicker({
   const searchResults = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return []
-    return streets.filter((street) => street.name.toLowerCase().includes(q)).slice(0, 8)
+    return streets
+      .filter((street) => street.name.toLowerCase().includes(q))
+      .slice(0, 8)
   }, [search, streets])
 
   const hint = hintFor(tool, draft.length)
-  const tools: Array<{ id: Exclude<Tool, null>; label: string; icon: typeof Spline }> = [
+  const tools: Array<{
+    id: Exclude<Tool, null>
+    label: string
+    icon: typeof Spline
+  }> = [
     { id: "line", label: "Draw a line", icon: Spline },
     { id: "polygon", label: "Draw a shape", icon: Pentagon },
     { id: "edit", label: "Edit shape", icon: Pencil },
@@ -789,7 +862,7 @@ export function AreaPicker({
       </label>
 
       <div className="relative">
-        <SearchIcon className="pointer-events-none absolute left-3.5 top-1/2 size-5 -translate-y-1/2 text-neutral-400" />
+        <SearchIcon className="pointer-events-none absolute top-1/2 left-3.5 size-5 -translate-y-1/2 text-neutral-400" />
         <input
           id="area-search"
           type="text"
@@ -799,7 +872,7 @@ export function AreaPicker({
           className={cn(inputClass, "pl-11 font-normal")}
         />
         {searchResults.length > 0 ? (
-          <div className="absolute left-0 right-0 top-full z-[1200] mt-1 overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white py-1 shadow-lg">
+          <div className="absolute top-full right-0 left-0 z-[1200] mt-1 overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white py-1 shadow-lg">
             {searchResults.map((street) => {
               const on = value.streets.includes(street.name)
               return (
@@ -811,10 +884,15 @@ export function AreaPicker({
                 >
                   <span className="min-w-0 flex-1 truncate">{street.name}</span>
                   {street.type ? (
-                    <span className="text-[12px] text-neutral-400">{street.type}</span>
+                    <span className="text-[12px] text-neutral-400">
+                      {street.type}
+                    </span>
                   ) : null}
                   {on ? (
-                    <CircleCheck className="size-4 shrink-0 text-green-600" strokeWidth={2} />
+                    <CircleCheck
+                      className="size-4 shrink-0 text-green-600"
+                      strokeWidth={2}
+                    />
                   ) : null}
                 </button>
               )
@@ -826,13 +904,13 @@ export function AreaPicker({
       <div
         className={cn(
           "relative h-80 overflow-hidden rounded-2xl border-[1.5px] border-neutral-300 bg-ink",
-          className,
+          className
         )}
         style={{ "--eboses-accent": accent } as CSSProperties}
       >
         <div ref={containerRef} className="eboses-area-map h-full w-full" />
 
-        <div className="absolute left-3 top-1/2 z-[1000] flex -translate-y-1/2 flex-col gap-1">
+        <div className="absolute top-1/2 left-3 z-[1000] flex -translate-y-1/2 flex-col gap-1">
           {tools.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
@@ -845,7 +923,7 @@ export function AreaPicker({
                 "flex h-9 w-9 items-center justify-center rounded-xl transition-colors",
                 tool === id
                   ? "bg-white text-neutral-900"
-                  : "text-white/70 hover:bg-white/10 hover:text-white",
+                  : "text-white/70 hover:bg-white/10 hover:text-white"
               )}
             >
               <Icon className="size-[18px]" strokeWidth={1.8} />
@@ -874,8 +952,8 @@ export function AreaPicker({
         <div
           ref={tooltipRef}
           className={cn(
-            "pointer-events-none absolute left-0 top-0 z-[1000] whitespace-nowrap rounded-lg bg-white px-3 py-2 text-[13px] font-semibold text-neutral-900 shadow-[0_6px_20px_rgba(0,0,0,.35)]",
-            hint && pointerOnMap ? "opacity-100" : "opacity-0",
+            "pointer-events-none absolute top-0 left-0 z-[1000] rounded-lg bg-white px-3 py-2 text-[13px] font-semibold whitespace-nowrap text-neutral-900 shadow-[0_6px_20px_rgba(0,0,0,.35)]",
+            hint && pointerOnMap ? "opacity-100" : "opacity-0"
           )}
         >
           {hint}

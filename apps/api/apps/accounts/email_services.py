@@ -37,7 +37,7 @@ def _html_email(title, message):
         '<div style="font-family:Segoe UI,Arial,sans-serif;color:#1c1c1c;max-width:520px;margin:auto;padding:32px 24px">'
         f'<h1 style="font-size:24px;line-height:1.3;margin:0 0 16px">{html.escape(title)}</h1>'
         f'<p style="font-size:16px;line-height:1.6;margin:0 0 24px">{html.escape(message)}</p>'
-        '<p style="font-size:13px;color:#6b6b6b;margin:0">E-Boses · Barangay Marikina Heights</p>'
+        '<p style="font-size:13px;color:#6b6b6b;margin:0">E-Boses community network</p>'
         "</div>"
     )
 

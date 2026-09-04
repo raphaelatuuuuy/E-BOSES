@@ -155,7 +155,10 @@ def configured_concern_categories(config) -> list[dict]:
     Reads the rows officials actually maintain in the Categories screen, falling
     back to the legacy enum when that table is empty (fresh install, tests).
     """
-    categories = list(ConcernCategory.objects.filter(is_active=True).order_by("name"))
+    category_queryset = ConcernCategory.objects.filter(is_active=True)
+    if getattr(config, "community_id", None):
+        category_queryset = category_queryset.filter(community_id=config.community_id)
+    categories = list(category_queryset.order_by("name"))
     enabled = set(getattr(config, "enabled_categories", None) or [])
     labels = dict(Concern.Category.choices)
     if categories:
@@ -171,9 +174,74 @@ def configured_concern_categories(config) -> list[dict]:
     ]
 
 
-def configured_emergency_types() -> list[dict]:
-    categories = EmergencyCategory.objects.filter(is_active=True).order_by("sort_order", "label")
+def configured_emergency_types(configuration=None) -> list[dict]:
+    categories = EmergencyCategory.objects.filter(is_active=True)
+    community_id = getattr(configuration, "community_id", None)
+    if community_id:
+        categories = categories.filter(community_id=community_id)
+    categories = categories.order_by("sort_order", "label")
     return [{"key": category.code, "label": category.label} for category in categories]
+
+
+# A concern can be urgent without being one of the emergency types. These are
+# deliberately concrete signals: generic words such as "danger", "disaster",
+# "ongoing", and "could hurt someone" must never create an emergency match.
+# Keeping this allow-list here gives the LLM a strict semantic backstop before
+# its output can reach the automatic escalation path.
+_EMERGENCY_EVIDENCE_TERMS = {
+    "fire": (
+        "fire", "smoke", "flame", "flames", "burning", "sunog", "usok", "apoy", "nasusunog",
+    ),
+    "medical": (
+        "medical emergency", "injured", "injury", "bleeding", "not breathing", "unconscious",
+        "collapsed", "seizure", "heart attack", "electric shock", "electrocuted", "nahimatay",
+        "nasugatan", "hindi makahinga", "walang malay", "nakuryente",
+    ),
+    "flood": (
+        "flood", "flooding", "floodwater", "rising water", "water entering", "baha", "binabaha",
+        "rumaragasang tubig",
+    ),
+    "crime": (
+        "crime", "robbery", "robbed", "theft", "stolen", "stealing", "fight", "assault", "shooting",
+        "shot", "stabbing", "stabbed", "hold up", "nakawan", "ninakaw", "nanakaw", "nakikipag-away",
+        "sinuntok", "sinaksak", "barilan", "pagnanakaw",
+    ),
+    "domestic_violence": (
+        "domestic violence", "family violence", "partner violence", "battered", "abused at home",
+        "violence at home", "vawc", "karahasan sa tahanan", "sinaktan ng asawa", "sinaktan sa bahay",
+    ),
+    "child_protection": (
+        "child abuse", "abused child", "missing child", "neglected child", "abandoned child",
+        "child exploitation", "pang aabuso sa bata", "inaabuso ang bata", "nawawalang bata",
+    ),
+    "dangerous_animal": (
+        "animal attack", "dog attack", "dog bite", "bitten by", "snake", "ahas", "rabid",
+        "dangerous animal", "aggressive dog", "kagat ng aso", "sinugod ng aso",
+    ),
+    "disaster": (
+        "earthquake", "lindol", "landslide", "mudslide", "pagguho", "typhoon", "bagyo", "storm",
+        "tropical storm", "tsunami", "volcanic eruption", "eruption", "building collapse",
+        "collapsed building", "gumuho", "gumuhong gusali", "tornado", "storm surge",
+    ),
+    "drug_related": (
+        "drug", "drugs", "illegal drugs", "shabu", "meth", "narcotics", "droga", "bentahan ng droga",
+        "tulak ng droga",
+    ),
+}
+
+
+def has_concrete_emergency_evidence(emergency_type: str, report_text: str) -> bool:
+    """Return whether report text contains evidence for this exact emergency type.
+
+    This is intentionally conservative. A high-severity civic hazard such as a
+    hanging electrical wire remains a normal concern unless the report also
+    describes a configured emergency event, such as an electrocution or fire.
+    """
+    terms = _EMERGENCY_EVIDENCE_TERMS.get(str(emergency_type or "").strip().lower(), ())
+    if not terms:
+        return False
+    text = re.sub(r"[^a-z0-9]+", " ", str(report_text or "").lower())
+    return any(re.search(rf"\b{re.escape(term)}\b", text) for term in terms)
 
 
 def empty_details() -> dict:
@@ -481,7 +549,7 @@ def build_prompt(
 ) -> str:
     payload = {
         "configured_concern_categories": configured_concern_categories(configuration),
-        "configured_emergency_types": configured_emergency_types(),
+        "configured_emergency_types": configured_emergency_types(configuration),
         "resident_selected_category": selected_category,
         "resident_title": title,
         "resident_description": description,
@@ -530,8 +598,18 @@ def build_prompt(
         "sentence in emergency_routing_reason naming which configured emergency type and why. Do this "
         "independently of primary_category — a report can match both a concern category and an emergency "
         "type.\n"
+        "9a. Be strict: an emergency type requires concrete event evidence in the report, not just a high "
+        "severity, an ongoing hazard, or words such as danger, disaster, urgent, or could hurt someone. "
+        "A hanging or exposed wire, cable, broken streetlight, pothole, garbage, drainage issue, fallen "
+        "tree, or blocked road is a normal civic concern and must leave matched_emergency_type empty unless "
+        "the report separately describes a configured emergency such as fire, flood, electrocution/injury, "
+        "assault, or a named natural disaster. Never use disaster as a generic label for a dangerous concern.\n"
         "10. evidence_relationship must be supports_report, partially_supports_report, contradicts_report, "
         "no_useful_image_evidence, or image_unavailable when no image is attached.\n"
+        "10a. If evidence_relationship is contradicts_report, or any photo_verdicts item has "
+        "relevance contradicts_report, recommended_action must be request_more_information. "
+        "Never accept a report when the photo contradicts the description, even if the selected "
+        "category or reported area matches.\n"
         "10. A category mismatch is corrected automatically. Never use reject_as_irrelevant for a "
         "category mismatch on its own.\n"
         "11. Decide severity in this order: first write severity_reason, then pick the severity that "
@@ -572,8 +650,9 @@ def build_prompt(
         "be public. In suspected_sensitive_classes, name each one as a SHORT CONCRETE OBJECT of one or "
         "two words — the words a person would use to point at it in the photo. These are passed to an "
         "image segmenter that can only find things it can see.\n"
-        "    Good: face, license plate, blood, id card, house number, phone screen, name tag, signature, "
-        "street sign, tattoo, receipt.\n"
+        "    Good: face or license plate. These are the only objects the automatic "
+        "public blur is allowed to cover. Never request a street sign, house number, "
+        "sidewalk, cable, wire, document, or other readable civic evidence.\n"
         "    Bad (never use these): injury, personal information, privacy, sensitive content, identity, "
         "victim, evidence, medical detail. A segmenter cannot find a concept, and an empty result would "
         "be mistaken for 'nothing sensitive here'.\n"
@@ -748,6 +827,11 @@ def parse_gemma_result(
     if not image_attached or image_review_succeeded is False:
         photo_verdicts = []
 
+    if relationship == "contradicts_report" or any(
+        item.get("relevance") == "contradicts_report" for item in photo_verdicts
+    ):
+        action = "request_more_information"
+
     min_integrity_confidence = float(
         getattr(configuration, "media_integrity_min_confidence", None) or 0.70
     )
@@ -779,12 +863,20 @@ def parse_gemma_result(
 
     uncertain = bool(data.get("ai_result_uncertain")) or image_review_succeeded is False
 
-    allowed_emergency_types = {item["key"] for item in configured_emergency_types()}
+    allowed_emergency_types = {item["key"] for item in configured_emergency_types(configuration)}
     matched_emergency_type = str(data.get("matched_emergency_type") or "")
     if matched_emergency_type not in allowed_emergency_types:
         matched_emergency_type = ""
 
     emergency_routing_reason = _clean_text(data.get("emergency_routing_reason"))
+    if matched_emergency_type and not has_concrete_emergency_evidence(matched_emergency_type, report_text):
+        # Do not let a model infer an emergency type from severity alone. This
+        # is the final guard before the precheck can authorize auto-escalation.
+        matched_emergency_type = ""
+        urgent = False
+        emergency_routing_reason = ""
+        if action == "escalate_as_emergency":
+            action = "accept"
     inferred_timing, inferred_reason = infer_incident_timing(report_text)
     model_timing = normalise_incident_timing(data.get("incident_timing"))
     incident_timing = inferred_timing if inferred_timing != "unclear" else model_timing
@@ -1067,7 +1159,9 @@ def low_information_reason(text: str) -> str:
         return "Description needs more detail."
     if re.fullmatch(r"(.)\1{7,}", cleaned.replace(" ", "")):
         return "Description appears to be repeated characters."
-    if letters and len(set(letters)) <= 2 and len(letters) >= 5:
+    if letters and len(set(letters)) <= 2 and (
+        len(letters) >= 5 or any(letters.count(word) >= 3 for word in set(letters))
+    ):
         return "Description appears to repeat the same words."
     if re.search(r"\b(asdf|qwerty|test test|12345)\b", cleaned):
         return "Description appears to be test text or keyboard spam."
@@ -1085,6 +1179,7 @@ def low_information_result(*, model_version: str, reason: str, image_attached: b
         "evidence_relationship": "no_useful_image_evidence" if image_attached else "image_unavailable",
         "missing_information": ["a clear description of what happened"],
         "ai_result_uncertain": True,
+        "low_information": True,
         "recommended_action": "request_more_information",
         "short_explanation": (
             "The description does not give enough detail to understand the issue. "

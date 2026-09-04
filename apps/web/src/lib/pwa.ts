@@ -1,7 +1,11 @@
 let lastServiceWorkerError = ""
 
 export function pwaSupported() {
-  return typeof window !== "undefined" && "serviceWorker" in navigator && window.isSecureContext
+  return (
+    typeof window !== "undefined" &&
+    "serviceWorker" in navigator &&
+    window.isSecureContext
+  )
 }
 
 /** Unregister any stale service worker — call once on app boot to clean up
@@ -13,10 +17,16 @@ export async function unregisterStaleServiceWorker() {
     await Promise.all(
       registrations
         .filter((registration) => {
-          const scriptUrl = registration.active?.scriptURL || registration.waiting?.scriptURL || registration.installing?.scriptURL || ""
-          return scriptUrl === new URL("/eboses-sw.js", window.location.origin).href
+          const scriptUrl =
+            registration.active?.scriptURL ||
+            registration.waiting?.scriptURL ||
+            registration.installing?.scriptURL ||
+            ""
+          return (
+            scriptUrl === new URL("/eboses-sw.js", window.location.origin).href
+          )
         })
-        .map((registration) => registration.unregister()),
+        .map((registration) => registration.unregister())
     )
   } catch {
     // best-effort
@@ -26,20 +36,29 @@ export async function unregisterStaleServiceWorker() {
 export async function registerAppServiceWorker() {
   lastServiceWorkerError = ""
   if (!pwaSupported()) {
-    lastServiceWorkerError = typeof window !== "undefined" && !window.isSecureContext
-      ? "This page is not a secure context. Mobile service workers require trusted HTTPS."
-      : "This browser does not support service workers."
+    lastServiceWorkerError =
+      typeof window !== "undefined" && !window.isSecureContext
+        ? "This page is not a secure context. Mobile service workers require trusted HTTPS."
+        : "This browser does not support service workers."
     return null
   }
   try {
-    const registration = await navigator.serviceWorker.register("/eboses-sw.js", { scope: "/" })
+    const registration = await navigator.serviceWorker.register(
+      "/eboses-sw.js",
+      {
+        scope: "/",
+        // Never let HTTP cache keep an older background push handler alive.
+        updateViaCache: "none",
+      }
+    )
     // Ask the browser to check for a changed worker immediately. This prevents
     // an old cached worker from keeping the previous notification bundle alive
     // after a local rebuild or deployment.
     await registration.update().catch(() => undefined)
     return registration
   } catch (error) {
-    lastServiceWorkerError = error instanceof Error ? error.message : String(error)
+    lastServiceWorkerError =
+      error instanceof Error ? error.message : String(error)
     return null
   }
 }
@@ -60,5 +79,8 @@ export function getLastServiceWorkerError() {
 
 export function appInstalledStandalone() {
   if (typeof window === "undefined") return false
-  return window.matchMedia?.("(display-mode: standalone)").matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
+  return (
+    window.matchMedia?.("(display-mode: standalone)").matches ||
+    Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
+  )
 }

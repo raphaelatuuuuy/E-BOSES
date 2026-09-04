@@ -321,7 +321,7 @@ DEFAULT_HOTLINES = [
 def outside_service_area(alert) -> str:
     return "\n".join([
         f"{BRAND}: We received your emergency ({reference(alert)}) but the",
-        "location appears to be outside Barangay Marikina Heights.",
+        "location appears to be outside all active E-Boses community boundaries.",
         "",
         "It has been passed to the coordination desk for referral.",
         "For the fastest help please also call 161 or 911.",

@@ -37,7 +37,10 @@ export function AreaPreview({
       const L = (await import("leaflet")).default
       await import("leaflet/dist/leaflet.css")
       if (cancelled || !containerRef.current || created.map) return
-      if ((containerRef.current as HTMLDivElement & { _leaflet_id?: number })._leaflet_id) {
+      if (
+        (containerRef.current as HTMLDivElement & { _leaflet_id?: number })
+          ._leaflet_id
+      ) {
         containerRef.current.innerHTML = ""
       }
 
@@ -69,20 +72,20 @@ export function AreaPreview({
           z-index: auto;
         }
         .eboses-area-preview-map .leaflet-control-attribution { display: none; }
-      `;
+      `
       document.head.appendChild(styleEl)
 
       const map = L.map(containerRef.current, {
-        center: [14.6507, 121.1133],
+        center: [14.5995, 120.9842],
         zoom: 15,
         zoomControl: false,
         attributionControl: false,
-        scrollWheelZoom: false,
-        dragging: false,
-        touchZoom: false,
-        doubleClickZoom: false,
-        boxZoom: false,
-        keyboard: false,
+        scrollWheelZoom: true,
+        dragging: true,
+        touchZoom: true,
+        doubleClickZoom: true,
+        boxZoom: true,
+        keyboard: true,
         preferCanvas: true,
       })
       created.map = map
@@ -103,7 +106,13 @@ export function AreaPreview({
       // Boundary for context (thin, faint).
       if (boundary?.geometry) {
         L.geoJSON(boundary.geometry as never, {
-          style: { color: ADVISORY_COLOR, weight: 1, fillColor: ADVISORY_COLOR, fillOpacity: 0.03, opacity: 0.3 },
+          style: {
+            color: ADVISORY_COLOR,
+            weight: 1,
+            fillColor: ADVISORY_COLOR,
+            fillOpacity: 0.03,
+            opacity: 0.3,
+          },
         }).addTo(map)
       }
 
@@ -111,14 +120,25 @@ export function AreaPreview({
       for (const street of streets) {
         for (const geometry of street.geometries ?? []) {
           for (const line of geoJsonToLines(geometry as never)) {
-            L.polyline(line, { color: STREET_COLOR, weight: 1.1, opacity: 0.5, interactive: false }).addTo(map)
+            L.polyline(line, {
+              color: STREET_COLOR,
+              weight: 1.1,
+              opacity: 0.5,
+              interactive: false,
+            }).addTo(map)
           }
         }
       }
 
       // The area itself: advisory-colored fill, no strong border.
       const area = L.geoJSON(geometry as never, {
-        style: { color: ADVISORY_COLOR, weight: 0, fillColor: ADVISORY_COLOR, fillOpacity: 0.2, interactive: false },
+        style: {
+          color: ADVISORY_COLOR,
+          weight: 0,
+          fillColor: ADVISORY_COLOR,
+          fillOpacity: 0.2,
+          interactive: false,
+        },
       }).addTo(map)
 
       // Advisory icon marker at the centroid, so the type reads at a glance.
@@ -137,7 +157,8 @@ export function AreaPreview({
       }
       try {
         const bounds = area.getBounds()
-        if (bounds.isValid()) map.fitBounds(bounds, { padding: [16, 16], maxZoom: 17 })
+        if (bounds.isValid())
+          map.fitBounds(bounds, { padding: [16, 16], maxZoom: 17 })
       } catch {
         /* ignore */
       }
@@ -154,7 +175,9 @@ export function AreaPreview({
   }, [geometry, boundary, streets, tag])
 
   return (
-    <div className={`pointer-events-none overflow-hidden rounded-xl border border-line-tint ${className}`}>
+    <div
+      className={`pointer-events-auto overflow-hidden rounded-xl border border-line-tint ${className}`}
+    >
       <div ref={containerRef} className="eboses-area-preview-map h-40 w-full" />
     </div>
   )

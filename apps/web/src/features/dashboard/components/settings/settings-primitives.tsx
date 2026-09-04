@@ -20,7 +20,7 @@ export type SettingKey =
 
 export function SettingsSkeleton() {
   return (
-    <div className="min-w-0 flex-1 bg-white px-4 pb-[calc(7.5rem+env(safe-area-inset-bottom))] pt-4 md:px-8 md:pb-12 md:pt-6">
+    <div className="min-w-0 flex-1 bg-white px-4 pb-6 pt-4 md:px-8 md:pb-12 md:pt-6">
       <div className="mx-auto max-w-lg">
         <Skeleton className="mx-auto h-6 w-28 bg-neutral-100" />
         <div className="mt-8 space-y-0">

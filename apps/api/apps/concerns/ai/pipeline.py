@@ -50,6 +50,7 @@ from .gemma_analyzer import (
     verify_street_context,
 )
 from .image_prep import PreparedImage, prepare_image_for_gemma
+from .privacy.masks import is_privacy_sensitive_label
 from .street_imagery import fetch_latest_street_imagery
 from .text_classifier import TextClassifierNotConfigured
 
@@ -69,7 +70,14 @@ def sam3_classes_for(gemma_result: dict) -> list[str]:
     good at. `sensitive_classes_from` is what keeps them usable: short concrete
     nouns only, no abstractions a segmenter cannot find.
     """
-    return sensitive_classes_from(gemma_result.get("suspected_sensitive_classes") or [])
+    candidates = sensitive_classes_from(gemma_result.get("suspected_sensitive_classes") or [])
+    # Public automatic blur is limited to directly identifying faces and
+    # plates. Blood remains a review-only signal handled by the privacy task.
+    return [
+        name
+        for name in candidates
+        if is_privacy_sensitive_label(name) or name == "blood"
+    ]
 
 
 def should_run_sam3(*, image_uploaded: bool, gemma_image_review_succeeded: bool, gemma_result: dict) -> bool:
@@ -246,16 +254,23 @@ def _street_imagery_check(config, *, concern: Concern, prepared_images: list[Pre
     """Fetch the newest street panorama near the pin and verify the photo(s).
 
     Runs only when enabled AND the report's category was ticked in the config —
-    categories that never need a photo are simply never ticked. Any failure or
-    gap degrades to a skip status; this check can never block on its own
-    unavailability. Every attached photo is sent, not just the first, so a
-    wider shot with more surroundings can still confirm the place even when
-    other photos are tight close-ups of just the issue.
+    categories that never need a photo are simply never ticked. Any provider
+    failure, missing coverage, or missing input degrades to a skip status; this
+    check can never block on its own unavailability. A checked but inconclusive
+    comparison is different: it means the resident needs to submit a wider
+    contextual photo when the configured policy requires resubmission. Every
+    attached photo is sent, not just the first, so a wider shot with more
+    surroundings can still confirm the place even when other photos are tight
+    close-ups of just the issue.
     """
+    # Keep an explicit outcome in the audit payload even when the optional
+    # check is not applicable. Previously ``None`` made an accepted report
+    # look as if Street View had crashed or been forgotten, which made it
+    # impossible for an official to tell a valid skip from a failed run.
     if not config.street_imagery_enabled:
-        return None
+        return {"status": "disabled"}
     if concern.category not in (config.street_imagery_categories or []):
-        return None
+        return {"status": "not_applicable", "reason": "category_not_enabled"}
     if not prepared_images or concern.latitude is None or concern.longitude is None:
         return {"status": "skipped", "reason": "missing_photo_or_location"}
 
@@ -330,7 +345,7 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         defaults={"status": ConcernAiAssessment.Status.PENDING},
     )
 
-    config = ConcernClassificationConfiguration.current()
+    config = ConcernClassificationConfiguration.current(concern.community)
     image_media_list = [media for media in concern.media.all() if media.mime_type.startswith("image/")]
     image_uploaded = bool(image_media_list)
     # Every attached photo is decoded and sent together, not just the first —
@@ -407,6 +422,9 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
     )
     details["media_integrity"] = integrity_check["findings"]
     details["media_integrity_overall"] = integrity_check["overall"]
+    photo_evidence_contradicted = _photo_evidence_contradicted(details)
+    if photo_evidence_contradicted:
+        details["recommended_action"] = "request_more_information"
 
     category_match = details.get("selected_category_match")
     if category_match is None:
@@ -453,12 +471,18 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         urgent_attention=bool(details.get("urgent_attention")),
         integrity_check=integrity_check,
     )
-    if street_check and street_check.get("status") == "checked" and street_check.get("verdict") == "area_mismatch":
-        # Street imagery only ever checks whether the pin sits in the same
-        # place as the photo, never whether the specific issue is visible in
-        # a passing car's panorama — that is a coverage lottery, not evidence
-        # of anything wrong. "inconclusive" is the expected everyday outcome
-        # and must never flag a report for review.
+    if photo_evidence_contradicted:
+        flag_reasons.append({"reason": "photo_description_mismatch"})
+    if (
+        street_check
+        and street_check.get("status") == "checked"
+        and street_check.get("verdict") in {"area_mismatch", "inconclusive"}
+    ):
+        # Both outcomes need to remain visible in the official audit trail.
+        # A mismatch is strong evidence of a wrong pin; an inconclusive result
+        # means the submitted photo did not provide enough surrounding context
+        # to verify the pin. Neither should be silently treated as a clean
+        # location check.
         flag_reasons.append({
             "reason": f"street_imagery_{street_check['verdict']}",
             "pano_date": street_check.get("captured_date"),
@@ -535,11 +559,12 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         )
 
         if media_to_queue:
-            from apps.concerns.tasks import enqueue_concern_media_privacy
-
             for media_id in media_to_queue:
                 transaction.on_commit(
-                    lambda media_id=media_id: enqueue_concern_media_privacy(media_id)
+                    lambda media_id=media_id, concern_id=concern.pk: _enqueue_media_privacy_if_present(
+                        media_id,
+                        concern_id,
+                    )
                 )
     return current
 
@@ -586,6 +611,8 @@ def _record_decision_log(concern, *, details, integrity_check, street_check, mod
     rejection_source = {
         "automated_street_imagery": "Street-view location check",
         "automated_street_imagery_resubmit": "Street-view location check",
+        "automated_street_imagery_inconclusive": "Street-view location check",
+        "automated_street_imagery_inconclusive_resubmit": "Street-view location check",
         "automated_media_integrity": "Photo authenticity check",
         "automated_media_integrity_resubmit": "Photo authenticity check",
         "automated_category_mismatch": "Category check",
@@ -635,7 +662,45 @@ def _record_decision_log(concern, *, details, integrity_check, street_check, mod
         logger.warning("Could not write the LLM decision log for concern_id=%s", concern.pk, exc_info=True)
 
 
+def _notify_validated_and_routed_concern(concern_id: int) -> None:
+    from apps.notifications.models import Notification
+    from apps.notifications.services import (
+        notify_status_change,
+        notify_validated_anonymous_concern_staff,
+    )
+    # Absolute import: this function runs from a transaction.on_commit
+    # callback in the report-intake request. A relative `from .models` here
+    # resolved to apps.concerns.ai.models, which does not exist — the
+    # ModuleNotFoundError fired AFTER the concern had already committed, so
+    # residents saw "Request failed." even though the report was created,
+    # assigned a unit, and the success dialog never opened.
+    from apps.concerns.models import Concern
+
+    concern = Concern.objects.select_related(
+        "reporter",
+        "community",
+        "assigned_department",
+    ).get(pk=concern_id)
+    if (
+        concern.validation_status != Concern.ValidationStatus.ACCEPTED
+        or not concern.assigned_department_id
+    ):
+        return
+    if concern.is_anonymous:
+        notify_validated_anonymous_concern_staff(concern)
+        return
+    if Notification.objects.filter(
+        concern=concern,
+        recipient=concern.reporter,
+        type=Notification.Type.SUBMITTED,
+    ).exists():
+        return
+    notify_status_change(concern)
+
+
 def _reject_concern(concern: Concern, *, rejection_code: str, summary: str) -> None:
+    concern.assigned_department = None
+    concern.assignments.filter(status="active").update(status="cancelled")
     concern.validation_status = Concern.ValidationStatus.REJECTED
     concern.status = Concern.Status.REJECTED
     concern.status_version += 1
@@ -662,7 +727,12 @@ def _reject_concern(concern: Concern, *, rejection_code: str, summary: str) -> N
     def publish_rejection():
         from apps.notifications.services import notify_status_change
 
-        notify_status_change(concern)
+        # A resident-facing validation rejection is removed by the intake
+        # transaction before it commits. Do not emit a notification for a row
+        # that no longer exists.
+        current = Concern.objects.filter(pk=concern.pk).first()
+        if current is not None:
+            notify_status_change(current)
 
     transaction.on_commit(publish_rejection)
 
@@ -679,12 +749,39 @@ def _apply_automated_validation(
     integrity_check: dict | None = None,
 ) -> None:
     """Finish validation without creating an AI-review task for an official."""
-    uncertain = run_status != ConcernAiAssessment.Status.COMPLETED or bool(details.get("ai_result_uncertain"))
+    uncertain = run_status != ConcernAiAssessment.Status.COMPLETED or (
+        bool(details.get("ai_result_uncertain")) and not bool(details.get("low_information"))
+    )
     relevance = str(details.get("relevance") or "").upper()
     action = str(details.get("recommended_action") or "")
+    concern.assigned_department = None
 
     if duplicate_match.possible_duplicate and duplicate_match.matched_concern_id:
         concern.duplicate_of_id = duplicate_match.matched_concern_id
+
+    if uncertain:
+        concern.validation_status = Concern.ValidationStatus.PENDING
+        concern.validation_summary = (
+            "Automated review could not be completed. Your report has not been assigned "
+            "to a unit yet and is waiting for review."
+        )
+        concern.update_text = "Waiting for validation before routing."
+        concern.save(update_fields=[
+            "category", "category_ref", "assigned_department", "duplicate_of",
+            "validation_status", "validation_summary", "update_text", "updated_at",
+        ])
+        return
+
+    if _photo_evidence_contradicted(details):
+        _reject_concern(
+            concern,
+            rejection_code="automated_photo_mismatch",
+            summary=(
+                "The photo contradicts the issue described in the report. Please submit a photo "
+                "that shows the reported issue."
+            ),
+        )
+        return
 
     category_mismatch = not uncertain and bool(suggested_category) and suggested_category != concern.category
     if category_mismatch:
@@ -728,9 +825,9 @@ def _apply_automated_validation(
                 concern,
                 rejection_code="automated_media_integrity",
                 summary=(
-                    "The photo could not be confirmed as an original camera photo, so the "
-                    "report was turned down automatically. Please submit again with a photo "
-                    "taken directly from your camera."
+                    "The photo appears to be AI-generated or edited, so the "
+                    "report was turned down automatically. Please submit again "
+                    "with a genuine photo taken with your camera."
                 ),
             )
             return
@@ -739,12 +836,13 @@ def _apply_automated_validation(
                 concern,
                 rejection_code="automated_media_integrity_resubmit",
                 summary=(
-                    "The photo could not be confirmed as an original camera photo. Please "
-                    "submit again with a photo taken directly from your camera."
+                    "The photo appears to be AI-generated or edited. Please "
+                    "submit again with a genuine photo taken with your camera."
                 ),
             )
             return
         if integrity_action == Actions.HOLD:
+            concern.assigned_department = None
             concern.validation_status = Concern.ValidationStatus.PENDING
             concern.validation_summary = (
                 "The photo needs a check by an official before this report is routed."
@@ -758,7 +856,7 @@ def _apply_automated_validation(
         # FLAG_NOTIFY falls through: the finding is already on the assessment
         # and in flag_reasons, and the report routes normally.
 
-    reject_irrelevant = not uncertain and relevance == "IRRELEVANT" and action == "reject_as_irrelevant"
+    reject_irrelevant = not uncertain and relevance == "IRRELEVANT"
     request_resubmission = not uncertain and action == "request_more_information"
 
     if reject_irrelevant or request_resubmission:
@@ -773,61 +871,98 @@ def _apply_automated_validation(
         )
         return
 
-    # Street imagery only ever checks whether the pin is in the same place as
-    # the photo — never whether the specific issue is visible in a passing
-    # car's panorama, since that is a coverage lottery any legitimate report
-    # can lose. Only a genuine area_mismatch (a clearly different place) acts;
-    # "inconclusive" is the ordinary outcome and must never block a real
-    # concern, same as skips and no-coverage.
-    if street_check and street_check.get("status") == "checked" and street_check.get("verdict") == "area_mismatch":
-        street_action = config.street_imagery_action
-        if street_action == ConcernClassificationConfiguration.StreetImageryAction.REJECT:
-            _reject_concern(
-                concern,
-                rejection_code="automated_street_imagery",
-                summary=(
-                    "Current street imagery of the reported location does not match the location "
-                    "described, so the report was rejected automatically."
-                ),
-            )
-            return
-        if street_action == ConcernClassificationConfiguration.StreetImageryAction.RESUBMIT:
-            _reject_concern(
-                concern,
-                rejection_code="automated_street_imagery_resubmit",
-                summary=(
-                    "Current street imagery of the reported location does not match the location "
-                    "described. Please double-check the location and photo, then resubmit."
-                ),
-            )
-            return
+    # Street imagery checks whether the pin and submitted photo show the same
+    # general place, never whether a passing panorama happens to contain the
+    # reported pothole or other transient issue. A clear mismatch is acted on
+    # immediately. An inconclusive result is also acted on when the configured
+    # policy is resubmission/rejection: the resident needs to provide a wider
+    # contextual photo before the report is allowed into the queue.
+    if street_check and street_check.get("status") == "checked":
+        street_verdict = street_check.get("verdict")
+        if street_verdict in {"area_mismatch", "inconclusive"}:
+            street_action = config.street_imagery_action
+            Actions = ConcernClassificationConfiguration.StreetImageryAction
+            if street_verdict == "inconclusive":
+                reject_code = (
+                    "automated_street_imagery_inconclusive"
+                    if street_action == Actions.REJECT
+                    else "automated_street_imagery_inconclusive_resubmit"
+                )
+                summary = (
+                    "The submitted photo does not show enough surrounding landmarks to verify the "
+                    "reported location. Please recapture a wider photo showing the road and nearby "
+                    "buildings, signs, or other landmarks, then resubmit."
+                )
+            else:
+                reject_code = (
+                    "automated_street_imagery"
+                    if street_action == Actions.REJECT
+                    else "automated_street_imagery_resubmit"
+                )
+                summary = (
+                    "Please pin the exact area where the issue is found and upload a matching photo."
+                )
+
+            if street_action in {Actions.REJECT, Actions.RESUBMIT}:
+                _reject_concern(
+                    concern,
+                    rejection_code=reject_code,
+                    summary=summary,
+                )
+                return
 
     # A configured location-policy review remains separate from AI validation.
     location_hold = concern.validation_status == Concern.ValidationStatus.PENDING and concern.validation_summary.startswith("Location ")
     if not location_hold:
         concern.validation_status = Concern.ValidationStatus.ACCEPTED
         concern.validation_summary = (
-            "Required intake checks passed; automated model validation was unavailable."
-            if uncertain
-            else "Automated validation passed."
+            "Automated validation passed."
         )
         concern.update_text = "Report is ready for routing."
+        concern.assigned_department = _routing_department_for_concern(concern)
+    else:
+        concern.assigned_department = None
     concern.save(update_fields=[
         "category", "category_ref", "assigned_department", "duplicate_of",
         "validation_status", "validation_summary", "update_text", "updated_at",
     ])
+    if concern.validation_status == Concern.ValidationStatus.ACCEPTED and concern.assigned_department_id:
+        transaction.on_commit(
+            lambda concern_id=concern.pk: _notify_validated_and_routed_concern(concern_id)
+        )
 
 
 def _apply_suggested_category(concern: Concern, suggested_category: str) -> None:
-    category = ConcernCategory.objects.filter(code=suggested_category, is_active=True).select_related("department").first()
+    category = ConcernCategory.objects.filter(
+        code=suggested_category,
+        community=concern.community,
+        is_active=True,
+    ).select_related("department").first()
     if not category:
         if suggested_category in Concern.Category.values:
             concern.category = suggested_category
         return
-    rule = category.routing_rules.filter(is_active=True).select_related("department").first()
     concern.category = suggested_category
     concern.category_ref = category
-    concern.assigned_department = rule.department if rule else category.department
+
+
+def _photo_evidence_contradicted(details: dict) -> bool:
+    relationship = str(details.get("evidence_relationship") or "").lower()
+    if relationship == "contradicts_report":
+        return True
+    return any(
+        isinstance(item, dict)
+        and str(item.get("relevance") or "").lower() == "contradicts_report"
+        for item in details.get("photo_verdicts") or []
+    )
+
+
+def _routing_department_for_concern(concern: Concern):
+    category = concern.category_ref
+    if not category:
+        return None
+    rule = category.routing_rules.filter(is_active=True).select_related("department").first()
+    return rule.department if rule else category.department
 
 
 def _stage_media_privacy(image_media, *, run_sam3: bool, sam3_classes: list[str], image_review_succeeded) -> list[int]:
@@ -868,7 +1003,23 @@ def _stage_media_privacy(image_media, *, run_sam3: bool, sam3_classes: list[str]
                 "privacy_failure",
             ]
         )
+        if image_review_succeeded is True and not sam3_classes:
+            # A no-scan result is already publishable. Create its sanitized
+            # preview during the AI run so the first feed request never gets a
+            # placeholder that has no task capable of replacing it.
+            from ..services import ensure_concern_media_preview
+
+            ensure_concern_media_preview(media)
     return queued
+
+
+def _enqueue_media_privacy_if_present(media_id: int, concern_id: int) -> None:
+    """Do not queue privacy work for a validation-rejected concern."""
+    if not ConcernMedia.objects.filter(pk=media_id, concern_id=concern_id).exists():
+        return
+    from apps.concerns.tasks import enqueue_concern_media_privacy
+
+    enqueue_concern_media_privacy(media_id)
 
 
 def _flag_reasons(

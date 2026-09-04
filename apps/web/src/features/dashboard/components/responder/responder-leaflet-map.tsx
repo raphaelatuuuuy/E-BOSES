@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react"
-import { LocateFixedIcon, MinusIcon, NavigationIcon, PlusIcon } from "lucide-react"
+import {
+  LocateFixedIcon,
+  MinusIcon,
+  NavigationIcon,
+  PlusIcon,
+} from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { isActiveEmergency } from "@/features/dashboard/components/alerts-map/lib"
@@ -28,18 +33,25 @@ import { drawCoverage } from "@/features/dashboard/components/map/coverage-layer
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import { useCoverageContext } from "@/features/dashboard/lib/use-coverage"
 import type { Concern } from "@/features/dashboard/api"
-import type { EmergencyAlert, EmergencyRoute } from "@/features/dashboard/emergency-api"
+import type {
+  EmergencyAlert,
+  EmergencyRoute,
+} from "@/features/dashboard/emergency-api"
 
 import type leaflet from "leaflet"
 
-const BARANGAY_CENTER: leaflet.LatLngTuple = [14.6507, 121.1133]
+const NETWORK_FALLBACK_CENTER: leaflet.LatLngTuple = [14.5995, 120.9842]
 
-function validCoord(lat?: string | number | null, lng?: string | number | null) {
+function validCoord(
+  lat?: string | number | null,
+  lng?: string | number | null
+) {
   if (lat == null || lng == null || lat === "" || lng === "") return null
   const latitude = Number(lat)
   const longitude = Number(lng)
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
-  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180)
+    return null
   return [latitude, longitude] as leaflet.LatLngTuple
 }
 
@@ -56,7 +68,7 @@ function incidentPinHtml(active = false) {
     size: INCIDENT_PIN,
     selected: active,
     live: true,
-    tone: "dark",
+    tone: "light",
   })
 }
 
@@ -70,9 +82,9 @@ const RESPONDER_PIN = 24
 function responderDotHtml(stale: boolean) {
   return glyphPinHtml({
     paths: GLYPHS.userResponder,
-    color: stale ? "#9aa4bf" : "#0a0a0a",
+    color: stale ? "#94a3b8" : MAP_COLORS.responder,
     size: RESPONDER_PIN,
-    tone: "dark",
+    tone: "light",
     className: "is-you",
   })
 }
@@ -165,16 +177,22 @@ export function ResponderLeafletMap({
       document.head.appendChild(styleEl)
 
       map = L.map(containerRef.current, {
-        center: BARANGAY_CENTER,
+        center: NETWORK_FALLBACK_CENTER,
         zoom: 15,
         zoomControl: false,
+        dragging: true,
+        scrollWheelZoom: true,
+        touchZoom: true,
+        doubleClickZoom: true,
+        boxZoom: true,
+        keyboard: true,
         // Every other map in the app suppresses the credit strip; this one was
         // the outlier, and it sat under the dispatch panel on phones.
         attributionControl: false,
       })
       mapRef.current = map
 
-      addBaseTiles(L, map, "dark", { keepBuffer: 6 })
+      addBaseTiles(L, map, "light", { keepBuffer: 6 })
 
       // Leaflet measures its container once, at construction. This map mounts
       // inside a panel that is still resolving its height, so without a
@@ -234,7 +252,8 @@ export function ResponderLeafletMap({
     }
 
     const bounds: leaflet.LatLngTuple[] = []
-    const selected = alerts.find((alert) => alert.id === selectedId) ?? alerts[0] ?? null
+    const selected =
+      alerts.find((alert) => alert.id === selectedId) ?? alerts[0] ?? null
 
     for (const alert of alerts) {
       const coord = validCoord(alert.latitude, alert.longitude)
@@ -281,7 +300,9 @@ export function ResponderLeafletMap({
       })
         .addTo(layer)
         .on("click", () => onSelectConcern(concern.id))
-        .bindTooltip(`${concern.title} · community concern`, { direction: "top" })
+        .bindTooltip(`${concern.title} · community concern`, {
+          direction: "top",
+        })
     }
 
     let origin: leaflet.LatLngTuple | null = null
@@ -309,8 +330,13 @@ export function ResponderLeafletMap({
     // planned leg off the screen with it. The route starts at the last ping
     // the server received, so the dash to the dot closes whatever gap is left.
     const routeIsLive = selected ? isActiveEmergency(selected) : false
-    const destination = selected ? validCoord(selected.latitude, selected.longitude) : null
-    const { road, approach, connectors } = routeRenderGeometry(route, { origin, destination })
+    const destination = selected
+      ? validCoord(selected.latitude, selected.longitude)
+      : null
+    const { road, approach, connectors } = routeRenderGeometry(route, {
+      origin,
+      destination,
+    })
     routeRef.current = drawRoute(L, map, {
       road,
       approach,
@@ -337,11 +363,14 @@ export function ResponderLeafletMap({
       lastFitRef.current = fitKey
     } else if (lastFitRef.current !== fitKey) {
       if (bounds.length > 1) {
-        map.fitBounds(L.latLngBounds(bounds), { padding: [42, 42], maxZoom: 17 })
+        map.fitBounds(L.latLngBounds(bounds), {
+          padding: [42, 42],
+          maxZoom: 17,
+        })
       } else if (bounds.length === 1) {
         map.setView(bounds[0], 16)
       } else {
-        map.setView(BARANGAY_CENTER, 15)
+        map.setView(NETWORK_FALLBACK_CENTER, 15)
       }
       lastFitRef.current = fitKey
     }
@@ -361,16 +390,31 @@ export function ResponderLeafletMap({
   useEffect(() => {
     const map = mapRef.current
     if (!follow || !position || !map) return
-    map.setView([position.latitude, position.longitude], Math.max(map.getZoom(), 16), {
-      animate: true,
-    })
+    map.setView(
+      [position.latitude, position.longitude],
+      Math.max(map.getZoom(), 16),
+      {
+        animate: true,
+      }
+    )
   }, [follow, position])
 
   return (
-    <div className={cn("responder-map-scope relative isolate z-0 h-full min-h-0 overflow-hidden bg-ink", className)}>
-      <div ref={containerRef} className="eboses-map-dark absolute inset-0" aria-label="Responder assignment map" />
-      {selectedId && route?.status === "ok" && (route.distance_meters ?? Infinity) <= 5 ? (
-        <div className="pointer-events-none absolute left-3 top-3 z-[600] rounded-lg bg-nav-bg/90 px-3 py-2 text-xs font-semibold text-white shadow-lg backdrop-blur-md">
+    <div
+      className={cn(
+        "responder-map-scope relative isolate z-0 h-full min-h-0 overflow-hidden bg-neutral-100",
+        className
+      )}
+    >
+      <div
+        ref={containerRef}
+        className="eboses-map-light absolute inset-0"
+        aria-label="Responder assignment map"
+      />
+      {selectedId &&
+      route?.status === "ok" &&
+      (route.distance_meters ?? Infinity) <= 5 ? (
+        <div className="pointer-events-none absolute top-3 left-3 z-[600] rounded-lg bg-white/95 px-3 py-2 text-xs font-semibold text-neutral-800 shadow-lg ring-1 ring-neutral-200 backdrop-blur-md">
           You are at the incident location
         </div>
       ) : null}
@@ -393,28 +437,28 @@ export function ResponderLeafletMap({
         .responder-map-scope .eboses-responder-tip::before {
           border-top-color: #ffffff;
         }
-        .responder-map-scope .eboses-map-dark .eboses-pin--glyph .eboses-pin__disc {
+        .responder-map-scope .eboses-map-light .eboses-pin--glyph .eboses-pin__disc {
           background: #ffffff;
           border-color: rgb(255 255 255 / 0.28);
           color: #14203c;
         }
-        .responder-map-scope .eboses-map-dark .eboses-pin--glyph.is-you .eboses-pin__disc {
-          background: #0a0a0a;
-          border-color: rgb(255 255 255 / 0.28);
-          color: #ffffff;
+        .responder-map-scope .eboses-map-light .eboses-pin--glyph.is-you .eboses-pin__disc {
+          background: #ffffff;
+          border-color: rgb(37 99 235 / 0.35);
+          color: #2563eb;
         }
-        .responder-map-scope .eboses-map-dark .eboses-pin--glyph.is-selected .eboses-pin__disc {
+        .responder-map-scope .eboses-map-light .eboses-pin--glyph.is-selected .eboses-pin__disc {
           border-color: #ff6a1a;
           box-shadow: 0 0 0 4px rgb(255 106 26 / 0.35);
         }
-        .responder-map-scope .eboses-map-dark .eboses-pin__halo {
+        .responder-map-scope .eboses-map-light .eboses-pin__halo {
           display: block;
         }
-        .responder-map-scope .eboses-map-dark .eboses-pin--dot .eboses-pin__core {
+        .responder-map-scope .eboses-map-light .eboses-pin--dot .eboses-pin__core {
           background: var(--pin);
           border-color: rgb(255 255 255 / 0.85);
         }
-        .responder-map-scope .eboses-map-dark .eboses-pin--dot.is-live .eboses-pin__core {
+        .responder-map-scope .eboses-map-light .eboses-pin--dot.is-live .eboses-pin__core {
           animation: eboses-pin-blink 1.8s ease-in-out infinite;
         }
       `}</style>
@@ -429,25 +473,37 @@ export function ResponderLeafletMap({
           Bottom-right below `sm`: on a phone held one-handed the top corners
           are the hardest place to reach, and these are the controls a
           responder uses while moving. */}
-      <div className="absolute bottom-3 right-3 z-[600] flex flex-col items-end gap-2 sm:bottom-auto sm:right-4 sm:top-4">
+      <div className="absolute right-3 bottom-3 z-[600] flex flex-col items-end gap-2 sm:top-4 sm:right-4 sm:bottom-auto">
         <MapControlStack>
-          <MapStackButton label="My location" onClick={onLocateMe} loading={locating}>
+          <MapStackButton
+            label="My location"
+            onClick={onLocateMe}
+            loading={locating}
+          >
             <LocateFixedIcon className="size-5" />
           </MapStackButton>
           <MapStackDivider />
           <MapStackButton
-            label={follow ? "Stop following your location" : "Follow your location"}
+            label={
+              follow ? "Stop following your location" : "Follow your location"
+            }
             active={follow}
             onClick={() => setFollow((current) => !current)}
           >
             <NavigationIcon className="size-5" />
           </MapStackButton>
           <MapStackDivider />
-          <MapStackButton label="Zoom in" onClick={() => mapRef.current?.zoomIn()}>
+          <MapStackButton
+            label="Zoom in"
+            onClick={() => mapRef.current?.zoomIn()}
+          >
             <PlusIcon className="size-5" />
           </MapStackButton>
           <MapStackDivider />
-          <MapStackButton label="Zoom out" onClick={() => mapRef.current?.zoomOut()}>
+          <MapStackButton
+            label="Zoom out"
+            onClick={() => mapRef.current?.zoomOut()}
+          >
             <MinusIcon className="size-5" />
           </MapStackButton>
         </MapControlStack>

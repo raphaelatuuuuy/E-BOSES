@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.test import SimpleTestCase, TestCase
 
 from django.core.cache import cache
@@ -30,6 +32,10 @@ class CommunityBoundaryTests(SimpleTestCase):
     def test_multipolygon_is_supported(self):
         geometry = {"type": "MultiPolygon", "coordinates": [self.polygon["coordinates"]]}
         self.assertTrue(point_in_geojson_inclusive(2, 2, geometry))
+
+    def test_decimal_coordinates_are_supported(self):
+        self.assertTrue(point_in_geojson_inclusive(Decimal("2"), Decimal("2"), self.polygon))
+        self.assertFalse(point_in_geojson_inclusive(Decimal("-0.000001"), Decimal("5"), self.polygon))
 
 
 class CommunityBoundaryRevisionTests(TestCase):

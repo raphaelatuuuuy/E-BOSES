@@ -43,7 +43,7 @@ export function ResidentProfilePanel() {
   // DB default is often "Pending" — always show the barangay area for this product.
   const rawBarangay = (user?.barangay || "").trim()
   const barangay =
-    !rawBarangay || rawBarangay.toLowerCase() === "pending" ? "Marikina Heights" : rawBarangay
+    !rawBarangay || rawBarangay.toLowerCase() === "pending" ? "Your community" : rawBarangay
 
   return (
     <div className="flex min-w-0 flex-col">

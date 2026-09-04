@@ -37,6 +37,7 @@ import {
 import { type MediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
 import { VoiceNoteBubble } from "@/features/dashboard/components/voice-note-bubble"
 import { useVoiceRecorder, formatVoiceTime } from "@/features/dashboard/lib/use-voice-recorder"
+import { LocalAttachmentPreview } from "@/features/dashboard/components/comments"
 
 function formatChatTime(value: string) {
   return new Intl.DateTimeFormat("en", {
@@ -92,6 +93,8 @@ export function ReportChatPanel({
   const [draft, setDraft] = useState("")
   const [attachment, setAttachment] = useState<File | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [checkingAttachment, setCheckingAttachment] = useState(false)
+  const [sendFeedback, setSendFeedback] = useState<string | null>(null)
   const [previewMedia, setPreviewMedia] = useState<MediaPreviewItem | null>(null)
   const [loading, setLoading] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
@@ -231,8 +234,9 @@ export function ReportChatPanel({
 
   async function handleSend() {
     const body = draft.trim()
-    if ((!body && !attachment) || sending || disabled) return
+    if ((!body && !attachment) || sending || checkingAttachment || disabled) return
     setSending(true)
+    setSendFeedback(null)
     try {
       const created = await sendConcernChat(concernId, body, attachment)
       setDraft("")
@@ -242,12 +246,17 @@ export function ReportChatPanel({
         if (prev.some((m) => m.id === created.id)) return prev
         return [...prev, created]
       })
+      if (attachment) {
+        setSendFeedback("Attachment sent")
+        window.setTimeout(() => setSendFeedback(null), 2200)
+      }
       await onMessageSent?.()
       scrollToBottom()
     } catch (error) {
       const message = error instanceof ApiError && error.status === 403
         ? "You do not have permission to send messages in this report."
         : error instanceof Error ? error.message : "Could not send message."
+      setSendFeedback(attachment ? "Message not sent. Your attachment is still here." : "Message not sent. Please try again.")
       toast.error(message)
     } finally {
       setSending(false)
@@ -304,16 +313,19 @@ export function ReportChatPanel({
       setAttachmentError("Attachments must be 25MB or smaller.")
       return
     }
+    setAttachment(file)
+    setAttachmentError(null)
+    setCheckingAttachment(true)
     try {
       const checkData = new FormData()
       checkData.append("media", file)
       await checkConcernMedia(checkData)
-      setAttachment(file)
-      setAttachmentError(null)
     } catch (error) {
       setAttachment(null)
       setAttachmentError(error instanceof Error ? error.message : "This media failed authenticity checks and cannot be attached.")
       toast.error(error instanceof Error ? error.message : "This media failed authenticity checks and cannot be attached.")
+    } finally {
+      setCheckingAttachment(false)
     }
   }
 
@@ -445,7 +457,7 @@ export function ReportChatPanel({
               className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 px-3 py-1.5 text-[12px] font-semibold text-neutral-600 transition-colors hover:border-neutral-400 hover:text-neutral-900 disabled:opacity-60"
             >
               {loadingOlder ? <Loader2Icon className="size-3.5 animate-spin" /> : <ChevronUpIcon className="size-3.5" />}
-              {loadingOlder ? "Loading..." : "Load previous messages"}
+              {loadingOlder ? "Loading…" : "Load previous messages"}
             </button>
           </div>
         ) : null}
@@ -456,7 +468,7 @@ export function ReportChatPanel({
               <button type="button" onClick={() => void load()} className="mt-3 rounded-full border border-neutral-200 px-3 py-1.5 text-xs font-bold text-neutral-700 hover:bg-neutral-50">Try again</button>
             </div>
           ) : plain ? (
-            <p className="py-8 text-center text-[13px] leading-5 text-neutral-400">{emptyMessage}</p>
+            <p className="py-8 text-center text-[13px] leading-5 text-neutral-600">{emptyMessage}</p>
           ) : (
             <Marker role="status"><MarkerContent>{emptyMessage}</MarkerContent></Marker>
           )
@@ -529,11 +541,10 @@ export function ReportChatPanel({
           const name = msg.sender?.full_name || "User"
           const role = roleLabel(msg.sender)
           const footer = [formatChatTime(msg.created_at), name, role].filter(Boolean).join(" · ")
-          if (!msg.body && msg.attachment && msg.attachment.authenticity_status !== "clear") return null
           const attachment = msg.attachment
-          const attachmentVisible = Boolean(
-            attachment && (attachment.authenticity_status === "clear" || attachment.kind === "audio"),
-          )
+          // Keep an uploaded image visible while authenticity analysis is
+          // pending; the server still controls access to its media endpoint.
+          const attachmentVisible = Boolean(attachment)
           const mediaBlock = attachmentVisible ? (
             <div className={cn(msg.body ? "mt-2" : undefined, "space-y-1")}>
               {attachment!.kind === "image" ? (
@@ -599,33 +610,9 @@ export function ReportChatPanel({
 
       {!disabled ? (
         <div className="px-4 pb-4 pt-1">
-          {attachment && !recording && !readyFile ? (
-            <div className="mb-2 flex items-center gap-2">
-              {attachment.type.startsWith("image/") ? (
-                <div className="relative shrink-0">
-                  <img
-                    src={URL.createObjectURL(attachment)}
-                    alt={attachment.name}
-                    className="h-20 w-20 rounded-xl object-cover"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setAttachment(null)}
-                    className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
-                    aria-label="Remove attachment"
-                  >
-                    <XIcon className="size-3" />
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center justify-between gap-2 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-medium text-neutral-600">
-                  <span className="flex min-w-0 items-center gap-2 truncate"><PaperclipIcon className="size-3.5 shrink-0" />{attachment.name}</span>
-                  <button type="button" onClick={() => setAttachment(null)} className="rounded-full p-0.5 hover:bg-neutral-200" aria-label="Remove attachment"><XIcon className="size-3.5" /></button>
-                </div>
-              )}
-            </div>
-          ) : null}
           {attachmentError ? <p className="mb-2 text-[11px] font-medium text-red-500">{attachmentError}</p> : null}
+          {checkingAttachment ? <p role="status" className="mb-2 text-[11px] font-medium text-neutral-500">Checking attachment…</p> : null}
+          {sendFeedback ? <p role="status" className={cn("mb-2 text-[11px] font-medium", sendFeedback.startsWith("Message") ? "text-red-500" : "text-neutral-500")}>{sendFeedback}</p> : null}
           {recording || readyFile ? (
             <div className="mx-auto flex w-fit items-center gap-2.5 rounded-full border border-transparent bg-neutral-100 py-2 pl-4 pr-2">
               {recording ? (
@@ -637,7 +624,7 @@ export function ReportChatPanel({
                   return (
                     <span
                       key={i}
-                      className="w-[2.5px] shrink-0 rounded-full bg-neutral-900"
+                      className="w-[2.5px] shrink-0 rounded-full bg-brand-orange"
                       style={{ height: `${4 + level * 14}px` }}
                     />
                   )
@@ -652,7 +639,7 @@ export function ReportChatPanel({
                     type="button"
                     onClick={() => void stopRecording()}
                     aria-label="Stop recording"
-                    className="flex size-8 items-center justify-center rounded-full bg-neutral-900 text-white hover:bg-neutral-800"
+                    className="flex size-8 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong"
                   >
                     <SquareIcon className="size-3" fill="currentColor" />
                   </button>
@@ -662,7 +649,7 @@ export function ReportChatPanel({
                     disabled={sending}
                     onClick={() => void sendReadyVoiceNote()}
                     aria-label="Send voice note"
-                    className="flex size-8 items-center justify-center rounded-full bg-neutral-900 text-white hover:bg-neutral-800 disabled:opacity-50"
+                    className="flex size-8 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
                   >
                     {sending ? <Loader2Icon className="size-3 animate-spin" /> : <ArrowUpIcon className="size-3" strokeWidth={2.4} />}
                   </button>
@@ -671,7 +658,7 @@ export function ReportChatPanel({
                   type="button"
                   onClick={() => (recording ? cancelRecording() : discardRecording())}
                   aria-label="Cancel voice note"
-                  className="flex size-8 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
+                  className="flex size-8 items-center justify-center rounded-full text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2"
                 >
                   <XIcon className="size-3.5" />
                 </button>
@@ -684,14 +671,15 @@ export function ReportChatPanel({
                 onClick={() => void startRecording()}
                 disabled={sending}
                 aria-label="Record a voice note"
-                className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-50"
+                className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 disabled:opacity-50"
               >
                 <MicIcon className="size-4" />
               </button>
-              <label className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600" aria-label="Attach image or video">
+              <label className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900 focus-within:outline-none focus-within:ring-2 focus-within:ring-neutral-500 focus-within:ring-offset-2" aria-label="Attach image or video">
                 <PaperclipIcon className="size-4" />
                 <input type="file" accept="image/*,video/mp4,video/webm,video/quicktime" className="sr-only" onChange={(event) => { void chooseAttachment(event.target.files?.[0]); event.currentTarget.value = "" }} />
               </label>
+              {attachment ? <LocalAttachmentPreview file={attachment} compact onRemove={() => setAttachment(null)} /> : null}
               <input
                 type="text"
                 value={draft}
@@ -702,17 +690,21 @@ export function ReportChatPanel({
                     void handleSend()
                   }
                 }}
-                placeholder="Ask a follow-up..."
-                className="h-10 min-w-0 flex-1 bg-transparent text-[14px] text-neutral-900 outline-none placeholder:text-neutral-400"
+                placeholder={
+                  user?.role === "resident"
+                    ? "Message your responder…"
+                    : "Ask a follow-up…"
+                }
+                className="h-10 min-w-0 flex-1 bg-transparent text-[14px] text-neutral-900 outline-none placeholder:text-neutral-500"
               />
               <button
                 type="button"
-                disabled={sending || recording || (!draft.trim() && !attachment)}
+                disabled={sending || checkingAttachment || recording || (!draft.trim() && !attachment)}
                 onClick={() => void handleSend()}
                 className={cn(
-                  "flex size-10 shrink-0 items-center justify-center rounded-full transition-all duration-150",
+                  "flex size-10 shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform,opacity] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2",
                   (draft.trim() || attachment)
-                    ? "bg-neutral-900 text-white hover:bg-neutral-800"
+                    ? "bg-brand-orange text-white hover:bg-brand-orange-strong"
                     : "bg-neutral-100 text-neutral-300",
                 )}
                 aria-label="Send message"
@@ -725,13 +717,13 @@ export function ReportChatPanel({
               </button>
             </div>
           )}
-          <p className="mt-2.5 text-center text-[11px] leading-normal text-neutral-400">
+          <p className="mt-2.5 text-center text-[11px] leading-normal text-neutral-500">
             Please be kind and respectful to your neighbours.
           </p>
         </div>
       ) : (
         <div className="px-4 pb-4 pt-1">
-          <p className="py-1.5 text-center text-[12px] text-neutral-400">
+            <p className="py-1.5 text-center text-[12px] text-neutral-600">
             Chat is closed for this report.
           </p>
           {pendingAppeal ? (
@@ -765,34 +757,17 @@ export function ReportChatPanel({
               />
               {appealMedia ? (
                 <div className="mt-2 flex items-center gap-2">
-                  {appealMedia.type.startsWith("image/") ? (
-                    <div className="relative shrink-0">
-                      <img
-                        src={URL.createObjectURL(appealMedia)}
-                        alt={appealMedia.name}
-                        className="size-16 rounded-lg object-cover"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setAppealMedia(null)}
-                        className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
-                        aria-label="Remove evidence"
-                      >
-                        <XIcon className="size-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-lg border border-violet-200 bg-white px-3 py-2 text-[11px] font-medium text-neutral-600">
-                      <span className="flex min-w-0 items-center gap-2 truncate"><PaperclipIcon className="size-3.5 shrink-0" />{appealMedia.name}</span>
-                      <button type="button" onClick={() => setAppealMedia(null)} className="rounded-full p-0.5 hover:bg-neutral-100" aria-label="Remove evidence"><XIcon className="size-3.5" /></button>
-                    </div>
-                  )}
+                  <LocalAttachmentPreview
+                    file={appealMedia}
+                    className="!size-16 rounded-lg"
+                    onRemove={() => setAppealMedia(null)}
+                  />
                 </div>
               ) : null}
               {appealMediaError ? <p className="mt-2 text-[11px] font-medium text-red-500">{appealMediaError}</p> : null}
               <div className="mt-2 flex items-center justify-between gap-2">
                 <label
-                  className="flex size-8 cursor-pointer items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-white hover:text-neutral-600"
+                  className="flex size-8 cursor-pointer items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-white hover:text-neutral-900 focus-within:outline-none focus-within:ring-2 focus-within:ring-neutral-500 focus-within:ring-offset-2"
                   aria-label="Attach image or video as evidence"
                 >
                   <PaperclipIcon className="size-4" />

@@ -28,6 +28,7 @@ export interface NotificationItem {
   action_label?: string
   tag?: string
   icon_url?: string
+  badge_url?: string
   image_url?: string | null
   images?: Array<{
     url: string

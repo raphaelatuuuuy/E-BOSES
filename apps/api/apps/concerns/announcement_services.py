@@ -89,6 +89,14 @@ def _deliver_after_commit(notification_ids) -> None:
     def _deliver():
         from django.conf import settings
 
+        # Match individual notification delivery: a local API may have Redis
+        # and only the ``heavy`` worker running. In that setup ``delay()``
+        # succeeds but no worker consumes the default notification queue.
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) and not getattr(
+            settings, "IS_TEST_RUN", False
+        ):
+            deliver_notifications_batch_task.run(notification_ids)
+            return
         try:
             deliver_notifications_batch_task.delay(notification_ids)
         except Exception as exc:

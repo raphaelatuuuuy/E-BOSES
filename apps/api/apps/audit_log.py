@@ -151,6 +151,10 @@ class AuditLogView(APIView):
         queryset = AuditLog.objects.select_related(
             "actor", "actor__resident_profile", "target_user", "target_user__resident_profile"
         )
+        if not request.user.is_superuser:
+            from apps.community_scope import community_ids_for_user
+
+            queryset = queryset.filter(community_id__in=community_ids_for_user(request.user))
 
         category = (request.query_params.get("category") or "all").strip().lower()
         if category != "all":

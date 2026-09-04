@@ -66,7 +66,7 @@ function roleLabel(role: string) {
 function ActorLine({ label, user }: { label?: string | null; user?: PublicUser | null }) {
   if (!label) return null
   const displayName = user?.full_name || label
-  const role = user ? roleLabel(user.role) : ""
+  const role = user?.position?.trim() || (user ? roleLabel(user.role) : "")
   const displayText = role ? `${displayName} · ${role}` : displayName
 
   return (

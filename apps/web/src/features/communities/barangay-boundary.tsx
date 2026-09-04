@@ -17,12 +17,19 @@ interface Shape {
 }
 
 function project(geometry: CommunityBoundary["geometry"]): Shape | null {
-  const outer = geometry?.coordinates?.[0]
+  const polygons: number[][][][] = geometry.type === "MultiPolygon"
+    ? geometry.coordinates as number[][][][]
+    : [geometry.coordinates as number[][][]]
+  const rings: number[][][] = polygons.flatMap((polygon) => polygon)
+  const outer: number[][] = rings.reduce<number[][]>(
+    (largest, ring) => (ring.length > largest.length ? ring : largest),
+    [],
+  )
   if (!outer || outer.length < 3) return null
 
-  const raw = outer[0][0] === outer[outer.length - 1][0] && outer[0][1] === outer[outer.length - 1][1]
+  const raw: Point[] = (outer[0]![0] === outer[outer.length - 1]![0] && outer[0]![1] === outer[outer.length - 1]![1]
     ? outer.slice(0, -1)
-    : outer
+    : outer).map((point) => [point[0]!, point[1]!] as Point)
 
   const lats = raw.map((p) => p[1])
   const lngs = raw.map((p) => p[0])
@@ -121,5 +128,3 @@ export function BarangayBoundary({ name, geometry, loading = false }: Props) {
     </div>
   )
 }
-
-

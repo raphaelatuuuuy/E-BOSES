@@ -1,17 +1,8 @@
-import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { toast } from "sonner"
-
-import { Skeleton } from "@workspace/ui/components/skeleton"
 
 import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { useResponderUnit } from "@/features/dashboard/hooks/use-responder-unit"
-import {
-  getActiveResponderShift,
-  type ResponderShift,
-} from "@/features/dashboard/emergency-api"
-import { State } from "@/features/dashboard/components/responder/dispatch-surface"
 import {
   SheetFactRow,
   SheetList,
@@ -21,61 +12,16 @@ import {
 
 /**
  * Who the responder is, and nothing else. One identity strip, one details
- * list, one action. Operational content lives on Map and Shift.
+ * list, one action. Operational content lives on Alerts and Concerns.
  */
 
 export function ResponderProfilePanel() {
   const navigate = useNavigate()
-  const { user, loading, signOut } = useAuthSession()
+  const { user, signOut } = useAuthSession()
   const unit = useResponderUnit()
-  const [activeShift, setActiveShift] = useState<ResponderShift | null>(null)
-  const [loaded, setLoaded] = useState(false)
-
-  useEffect(() => {
-    if (loading) return
-    let cancelled = false
-    const timer = window.setTimeout(() => {
-      void getActiveResponderShift()
-        .then((nextShift) => {
-          if (cancelled) return
-          setActiveShift(nextShift)
-        })
-        .catch((error) => {
-          toast.error(
-            error instanceof Error ? error.message : "Responder profile could not be loaded.",
-          )
-        })
-        .finally(() => {
-          if (!cancelled) setLoaded(true)
-        })
-    }, 0)
-    return () => {
-      cancelled = true
-      window.clearTimeout(timer)
-    }
-  }, [loading])
 
   const fullName =
     user?.full_name || `${user?.firstName ?? ""} ${user?.lastName ?? ""}`.trim() || "Responder"
-  const onDuty = Boolean(activeShift || unit.summary?.is_on_duty || user?.is_on_duty)
-
-  if (!loaded) {
-    return (
-      <div className="space-y-6">
-        <div className="flex items-center gap-4">
-          <Skeleton className="size-20 rounded-full" />
-          <div className="min-w-0 flex-1 space-y-2.5">
-            <Skeleton className="h-3 w-24" />
-            <Skeleton className="h-6 w-48" />
-            <Skeleton className="h-4 w-64" />
-          </div>
-        </div>
-        <Skeleton className="h-16" />
-        <Skeleton className="h-40" />
-      </div>
-    )
-  }
-
   const details = [
     { label: "Email", value: user?.email || "Not recorded" },
     { label: "Phone", value: user?.phone_number || "Not recorded" },
@@ -100,7 +46,7 @@ export function ResponderProfilePanel() {
             {fullName}
           </h3>
           <p className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1">
-            <State label={onDuty ? "On duty" : "Off duty"} tone={onDuty ? "settled" : "idle"} />
+            <span className="text-[13px] font-semibold text-neutral-600">Responder</span>
             <span className="text-[15px] text-neutral-500">{unit.name}</span>
           </p>
         </div>

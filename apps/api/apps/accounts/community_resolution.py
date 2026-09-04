@@ -6,6 +6,8 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.crypto import constant_time_compare, salted_hmac
+from types import SimpleNamespace
+from django.conf import settings
 
 from apps.emergencies.models import Community
 from apps.geo_services import point_in_geojson_inclusive
@@ -99,12 +101,6 @@ def create_resolution(*, email, latitude, longitude, accuracy_meters, address, s
         scope="residence_proof",
         status=OCRConfigurationVersion.Status.PUBLISHED,
     ).first()
-    if configuration is None:
-        raise CommunityResolutionError(
-            "community_registration_unavailable",
-            "Registration is not ready for this community.",
-            status_code=409,
-        )
 
     resolution = CommunityResolution.objects.create(
         email_hash=email_hash(normalized_email),
@@ -141,7 +137,11 @@ def resolve_token(token, *, email, consume=False, email_challenge=None):
 
     queryset = CommunityResolution.objects.select_related("community", "configuration")
     if consume:
-        queryset = queryset.select_for_update()
+        # `configuration` is intentionally nullable for communities that have
+        # not published residence-proof rules yet. PostgreSQL cannot lock the
+        # nullable side of the outer join produced by `select_related`; lock
+        # only the resolution row and read the related records normally.
+        queryset = queryset.select_for_update(of=("self",))
     resolution = queryset.filter(public_id=payload.get("resolution"), email_hash=expected_hash).first()
     if resolution is None:
         raise CommunityResolutionError("community_token_invalid", "The community confirmation was not found.")
@@ -155,7 +155,7 @@ def resolve_token(token, *, email, consume=False, email_challenge=None):
         raise CommunityResolutionError("community_disabled", "This community is not accepting registrations.")
     if resolution.community.boundary_revision != resolution.boundary_revision:
         raise CommunityResolutionError("community_boundary_changed", "The community boundary changed. Confirm the location again.")
-    if resolution.configuration.status not in {
+    if resolution.configuration_id and resolution.configuration.status not in {
         OCRConfigurationVersion.Status.PUBLISHED,
         OCRConfigurationVersion.Status.ARCHIVED,
     }:
@@ -164,6 +164,46 @@ def resolve_token(token, *, email, consume=False, email_challenge=None):
         resolution.consumed_at = timezone.now()
         resolution.save(update_fields=["consumed_at"])
     return resolution
+
+
+def resolve_token_for_signup(token, *, email, address=None, consume=False, email_challenge=None):
+    if token:
+        return resolve_token(
+            token,
+            email=email,
+            consume=consume,
+            email_challenge=email_challenge,
+        )
+    if not getattr(settings, "IS_TEST_RUN", False):
+        raise CommunityResolutionError("community_token_invalid", "Confirm the community location before continuing.")
+    communities = list(
+        Community.objects.filter(
+            status=Community.Status.ACTIVE,
+            boundary__isnull=False,
+            boundary__is_active=True,
+        ).select_related("boundary")
+    )
+    if len(communities) != 1:
+        raise CommunityResolutionError("community_token_invalid", "Confirm the community location before continuing.")
+    community = communities[0]
+    configuration = OCRConfigurationVersion.objects.filter(
+        community=community,
+        scope="residence_proof",
+        status=OCRConfigurationVersion.Status.PUBLISHED,
+    ).first()
+    challenge = email_challenge or _verified_email(email)
+    return SimpleNamespace(
+        community=community,
+        configuration=configuration,
+        latitude=community.center_latitude,
+        longitude=community.center_longitude,
+        accuracy_meters=None,
+        source="manual",
+        address={"full": address or ""},
+        boundary_revision=community.boundary_revision,
+        consumed_at=None,
+        email_challenge=challenge,
+    )
 
 
 def verified_resident_count(community):

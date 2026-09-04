@@ -37,6 +37,17 @@ def _deliver_notification_after_commit(notification) -> None:
     from .tasks import deliver_notification_task
 
     def _deliver():
+        # Local development commonly runs the API and the slow ``heavy``
+        # worker without a worker for the default ``eboses`` queue. Redis will
+        # still accept ``delay()``, so the old exception fallback never ran and
+        # browser pushes remained queued indefinitely. Deliver immediately in
+        # local runtime so subscribed browsers receive notifications even when
+        # every E-Boses tab is closed. Tests keep exercising the queued path.
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) and not getattr(
+            settings, "IS_TEST_RUN", False
+        ):
+            deliver_notification_task.run(notification.pk)
+            return
         try:
             deliver_notification_task.delay(notification.pk)
         except Exception as exc:
@@ -411,6 +422,10 @@ def notification_category(notification) -> str:
     type_value = notification.type or ""
     if type_value == "announcement":
         return "announcement"
+    # Emergency chat belongs to the conversation stream. It may be attached
+    # to an emergency record, but it is not itself a critical alert.
+    if type_value == "chat_message":
+        return "chat"
     if type_value == "witness_alert" or type_value.startswith("emergency"):
         return "emergency"
     if "appeal" in type_value:
@@ -447,21 +462,43 @@ def notification_priority(notification) -> str:
 
 
 def notification_icon_url(notification) -> str:
-    metadata = _safe_metadata(notification)
-    if _safe_url(metadata.get("icon_url")):
-        return _safe_url(metadata.get("icon_url"))
+    # Keep browser notification artwork on the reviewed Lucide-derived icon
+    # catalog. Legacy metadata may contain the old app logo, so it must not
+    # override the purpose-specific notification icon.
     if notification.type == "announcement":
-        return "/contents/announcements.png"
+        return "/icons/notification-announcement.svg"
+    if notification.type == "witness_alert":
+        return "/icons/notification-critical.svg"
+    if notification.type == "chat_message":
+        return "/icons/notification-chat.svg"
+    if notification.type == "emergency_updated":
+        return "/icons/notification-info.svg"
+    if "appeal" in (notification.type or ""):
+        return "/icons/notification-appeal.svg"
+    if notification.type in {"flag_dismissed", "post_taken_down", "comment_taken_down"}:
+        return "/icons/notification-moderation.svg"
+    if notification.type == "submitted":
+        return "/icons/notification-report.svg"
+    if notification.type == "under_review":
+        return "/icons/notification-review.svg"
+    if notification.type == "assigned":
+        return "/icons/notification-assigned.svg"
+    if notification.type == "in_progress":
+        return "/icons/notification-progress.svg"
+    if notification.type == "resolved":
+        return "/icons/notification-resolved.svg"
+    if notification.type == "rejected":
+        return "/icons/notification-decision.svg"
     if notification.type == "witness_alert" or notification.type.startswith("emergency"):
         alert = getattr(notification, "emergency", None)
         emergency_type = getattr(alert, "type", "")
         return {
-            "medical": "/contents/medical.png",
-            "fire": "/contents/fire.png",
-            "crime": "/contents/crime.png",
-            "disaster": "/contents/disaster.png",
-            "other": "/contents/alerts.png",
-        }.get(emergency_type, "/contents/alerts.png")
+            "medical": "/icons/notification-medical.svg",
+            "fire": "/icons/notification-fire.svg",
+            "crime": "/icons/notification-crime.svg",
+            "disaster": "/icons/notification-disaster.svg",
+            "other": "/icons/notification-emergency.svg",
+        }.get(emergency_type, "/icons/notification-emergency.svg")
     if notification.type in {
         "concern_comment",
         "concern_mention",
@@ -469,17 +506,21 @@ def notification_icon_url(notification) -> str:
         "clarification_replied",
         "chat_message",
     }:
-        return "/contents/chat-comment.png"
-    if "appeal" in (notification.type or ""):
-        return "/contents/reports.png"
+        return "/icons/notification-chat.svg"
     concern = getattr(notification, "concern", None)
     category = getattr(concern, "category", "")
     return {
-        "infrastructure": "/contents/infrastructure.png",
-        "environment": "/contents/environment.png",
-        "public_safety": "/contents/public-safety.png",
-        "others": "/contents/others.png",
-    }.get(category, "/contents/notifications.png")
+        "infrastructure": "/icons/notification-infrastructure.svg",
+        "environment": "/icons/notification-environment.svg",
+        "public_safety": "/icons/notification-safety.svg",
+        "others": "/icons/notification-report.svg",
+    }.get(category, "/icons/notification-system.svg")
+
+
+def notification_badge_url(notification) -> str:
+    # Badges are monochrome system glyphs; keep them consistent across every
+    # notification and prevent legacy custom artwork from leaking into pushes.
+    return "/icons/notification-badge.svg"
 
 
 def notification_image_url(notification) -> str:
@@ -529,11 +570,12 @@ def notification_tag(notification) -> str:
     metadata = _safe_metadata(notification)
     tag = _clean_text(metadata.get("tag_key") or metadata.get("tag"))
     if tag:
-        return f"eboses-{tag.lower().replace(' ', '-')[:48]}"
+        base = f"eboses-{tag.lower().replace(' ', '-')[:48]}"
+        return f"{base}-{notification.pk}"
     if notification.emergency_id and notification.type != "witness_alert":
-        return f"eboses-emergency-{notification.emergency_id}"
+        return f"eboses-emergency-{notification.emergency_id}-{notification.pk}"
     if notification.concern_id:
-        return f"eboses-concern-{notification.concern_id}"
+        return f"eboses-concern-{notification.concern_id}-{notification.pk}"
     return f"eboses-{notification.type or 'notification'}-{notification.pk}"
 
 
@@ -697,7 +739,7 @@ def notification_display(notification) -> tuple[str, str]:
         return _truncate(custom_title, 90), _with_greeting(notification, custom_body)
     if notification.type == "announcement":
         title, body = _display_announcement_notification(notification)
-    elif notification.emergency_id:
+    elif notification.emergency_id and notification.type != "chat_message":
         title, body = _display_emergency_notification(notification)
     elif notification.concern_id:
         title, body = _display_concern_notification(notification)
@@ -718,7 +760,11 @@ def notification_actions(notification) -> list[dict]:
             action = _clean_text(item.get("action")) or "open"
             title = _clean_text(item.get("title")) or "Open"
             url = _safe_url(item.get("url")) or notification_url(notification)
-            actions.append({"action": action[:32], "title": title[:32], "url": url})
+            entry = {"action": action[:32], "title": title[:32], "url": url}
+            icon = _safe_url(item.get("icon"))
+            if icon:
+                entry["icon"] = icon
+            actions.append(entry)
         if actions:
             return actions
     url = notification_url(notification)
@@ -726,6 +772,8 @@ def notification_actions(notification) -> list[dict]:
         return [{"action": "open", "title": "Open E-Boses", "url": url}]
     if notification.type == "announcement":
         return [{"action": "open", "title": "View announcement", "url": url}]
+    if notification.type == "chat_message" and notification.emergency_id:
+        return [{"action": "open", "title": "Open emergency chat", "url": url}]
     if notification.emergency_id:
         label = "Open dispatch" if getattr(notification.recipient, "role", "") == getattr(notification.recipient.Role, "FIRST_RESPONDER", "first_responder") else "Track emergency"
         if getattr(notification.recipient, "role", "") == getattr(notification.recipient.Role, "BARANGAY_OFFICIAL", "barangay_official"):
@@ -740,6 +788,14 @@ def notification_actions(notification) -> list[dict]:
 
 
 def notification_display_payload(notification, serialized: dict | None = None) -> dict:
+    """Build the compact payload sent through the browser push provider.
+
+    Web Push providers cap the encrypted request at roughly 4 KiB. The REST
+    serializer and context used to be embedded multiple times, which made an
+    ordinary chat notification exceed that limit. The service worker only
+    needs display fields, navigation URL, and record identifiers; it can fetch
+    the full notification after the user opens E-Boses.
+    """
     display_title, display_body = notification_display(notification)
     context = notification_context(notification)
     metadata = _safe_metadata(notification)
@@ -753,48 +809,38 @@ def notification_display_payload(notification, serialized: dict | None = None) -
         "category": notification_category(notification),
         "priority": priority,
         "icon": notification_icon_url(notification),
-        "badge": "/contents/logo.png",
+        "badge": notification_badge_url(notification),
         "image": notification_image_url(notification),
         "actions": notification_actions(notification),
         "requireInteraction": priority == "urgent",
-        "renotify": priority in {"urgent", "important"},
+        # Every persisted notification must produce a visible system alert.
+        # Reusing a concern/emergency tag with renotify disabled made browsers
+        # silently replace an older notification, which looked like background
+        # delivery had stopped when the app was closed.
+        "renotify": True,
         "timestamp": (notification.created_at or timezone.now()).isoformat(),
-        "notification": serialized or {},
         "context": context,
         "data": {
             "notification_id": notification.pk,
             "type": notification.type,
             "concern_id": notification.concern_id,
             "emergency_id": None if notification.type == "witness_alert" else notification.emergency_id,
-            "context": context,
         },
     }
-    if notification.emergency_id and notification.type != "witness_alert":
-        alert = notification.emergency
-        payload["data"]["location"] = {
-            "latitude": str(getattr(alert, "latitude", "")),
-            "longitude": str(getattr(alert, "longitude", "")),
-            "address": _clean_text(getattr(alert, "address", "")),
-            "barangay": _clean_text(getattr(alert, "barangay", "")),
-        }
-    if notification.concern_id:
-        concern = notification.concern
-        payload["data"]["location"] = {
-            "latitude": str(getattr(concern, "latitude", "") or ""),
-            "longitude": str(getattr(concern, "longitude", "") or ""),
-            "address": _clean_text(getattr(concern, "address", "")),
-            "barangay": _clean_text(getattr(concern, "barangay", "")),
-        }
     return payload
 
 
 def browser_push_extra_headers(endpoint: str) -> dict:
+    # Chromium on Android can defer normal-urgency Web Push until the browser
+    # is foregrounded, especially while the device is idle. High urgency asks
+    # FCM/Android to wake the service worker for a user-visible notification.
+    headers = {"Urgency": "high"}
     host = (urlparse(endpoint).netloc or "").lower()
     if "notify.windows.com" in host:
         # Microsoft Edge/Windows Notification Service rejects encrypted Web
         # Push requests without a WNS type header on some Windows builds.
-        return {"X-WNS-Type": "wns/raw"}
-    return {}
+        headers["X-WNS-Type"] = "wns/raw"
+    return headers
 
 
 def browser_push_service_label(endpoint: str) -> str:
@@ -861,9 +907,12 @@ def notification_url(notification) -> str:
         return "/dashboard/notifications?type=announcements"
     if notification.emergency_id:
         if notification.recipient.role == notification.recipient.Role.RESIDENT:
-            return f"/dashboard/emergency-history?alert={notification.emergency.public_id}"
+            source_concern = getattr(notification.emergency, "source_concern", None)
+            if source_concern:
+                return f"/dashboard/reports/{source_concern.public_id}"
+            return "/dashboard/home"
         if notification.recipient.role == notification.recipient.Role.FIRST_RESPONDER:
-            return f"/dashboard/responders/map?alert={notification.emergency_id}"
+            return f"/dashboard/responders/dispatch?alert={notification.emergency_id}"
         return f"/dashboard/alerts-map?alert={notification.emergency_id}"
     if notification.concern_id:
         if notification.recipient.role == notification.recipient.Role.FIRST_RESPONDER:
@@ -929,7 +978,10 @@ def send_browser_push(notification, payload: dict | None = None) -> dict:
                 "vapid_private_key": private_key,
                 "vapid_claims": claims,
                 "headers": browser_push_extra_headers(subscription.endpoint),
-                "ttl": 3600,
+                # Keep notifications available through a full day offline;
+                # the unique notification tag prevents later pushes from
+                # replacing earlier ones when the device reconnects.
+                "ttl": 86400,
                 "timeout": 15,
             }
             for attempt in range(2):
@@ -1034,6 +1086,7 @@ def _resident_group_for_barangay(barangay: str | None) -> str:
 
 def _broadcast_resident_map_event(message_type: str, payload: dict) -> None:
     """Fan out only community-safe map events to matching barangay groups."""
+    from apps.community_access import concern_is_public, emergency_is_public
     from apps.concerns.models import Concern
     from apps.emergencies.models import EmergencyAlert
     from apps.live_map import resident_concern_payload, resident_emergency_payload
@@ -1046,16 +1099,21 @@ def _broadcast_resident_map_event(message_type: str, payload: dict) -> None:
         concern = Concern.objects.filter(pk=resource_id).select_related("reporter", "reporter__resident_profile").first()
         if not concern:
             return
-        event_payload = {"concern": resident_concern_payload(concern)} if concern.visibility == Concern.Visibility.COMMUNITY and concern.validation_status == Concern.ValidationStatus.ACCEPTED else {"concern": {"id": concern.pk, "status": Concern.Status.REJECTED}, "removed": True}
+        event_payload = {"concern": resident_concern_payload(concern)} if concern_is_public(concern) else {"concern": {"id": concern.pk, "status": Concern.Status.REJECTED}, "removed": True}
         barangay = str(concern.community_id or concern.barangay)
     else:
         alert = EmergencyAlert.objects.filter(pk=resource_id).select_related("reporter", "reporter__resident_profile").first()
         if not alert:
             return
-        event_payload = {"emergency": resident_emergency_payload(alert)}
+        event_payload = {"emergency": resident_emergency_payload(alert)} if emergency_is_public(alert) else {"emergency": {"id": alert.pk, "status": alert.status}, "removed": True}
         barangay = str(alert.community_id or alert.barangay)
     group = _resident_group_for_barangay(barangay)
     _broadcast(group, "resident_live_map.update", {"type": message_type, "payload": event_payload})
+    _broadcast(
+        "network_public_live_map",
+        "network_public.update",
+        {"type": message_type, "payload": event_payload},
+    )
 
 
 def _broadcast_reporter_emergency_map_event(alert_id: int) -> None:
@@ -1191,8 +1249,121 @@ def notify_emergency_status(alert, *, type: str, body: str = "") -> None:
     }
     notification_type = type_map.get(type)
     if notification_type:
-        create_emergency_notification(alert=alert, type=notification_type, body=body)
+        # Status events are persisted immediately before this hook in the
+        # emergency state machine.  Use their id as an idempotency key so a
+        # retry (or websocket reconnect) cannot create duplicate pushes.
+        event = (
+            alert.status_events.filter(status=type)
+            .order_by("-created_at", "-id")
+            .first()
+        )
+        event_key = (
+            f"emergency:{alert.pk}:status:{event.pk}:recipient:{alert.reporter_id}"
+            if event
+            else ""
+        )
+        if not event_key or not Notification.objects.filter(
+            recipient_id=alert.reporter_id, event_key=event_key
+        ).exists():
+            create_emergency_notification(
+                alert=alert,
+                type=notification_type,
+                body=body,
+                event_key=event_key,
+            )
     broadcast_emergency_update(alert)
+
+
+def replay_emergency_notifications(alert, *, recipient_ids=None) -> dict:
+    """Backfill and deliver push/in-app notifications for an alert's history.
+
+    Notifications are normally emitted when each status transition happens.
+    This helper is intentionally idempotent so an official can repair a
+    historical alert (or a deployment where the worker was offline) without
+    sending duplicate pushes.  The event id is part of the unique key.
+    """
+    from django.contrib.auth import get_user_model
+    from .models import Notification
+
+    type_map = {
+        "submitted": Notification.Type.EMERGENCY_SUBMITTED,
+        "routed": Notification.Type.EMERGENCY_ROUTED,
+        "acknowledged": Notification.Type.EMERGENCY_ACKNOWLEDGED,
+        "en_route": Notification.Type.EMERGENCY_EN_ROUTE,
+        "nearby": Notification.Type.EMERGENCY_NEARBY,
+        "arrived": Notification.Type.EMERGENCY_ARRIVED,
+        "resolved": Notification.Type.EMERGENCY_RESOLVED,
+        "cancelled": Notification.Type.EMERGENCY_CANCELLED,
+        "escalation_required": Notification.Type.EMERGENCY_ESCALATED,
+    }
+    events = list(alert.status_events.select_related("actor").order_by("created_at", "id"))
+    assignment_rows = list(
+        alert.assignments.select_related("responder").order_by("assigned_at", "id")
+    )
+    user_model = get_user_model()
+    allowed = set(recipient_ids or [])
+    recipients = {alert.reporter_id}
+    for assignment in assignment_rows:
+        recipients.add(assignment.responder_id)
+    for event in events:
+        if event.actor_id:
+            recipients.add(event.actor_id)
+    if allowed:
+        recipients &= allowed
+    users = {
+        user.pk: user
+        for user in user_model.objects.filter(pk__in=recipients, is_active=True)
+    }
+    created = 0
+    queued = 0
+    skipped = 0
+    for event in events:
+        notification_type = type_map.get(event.status)
+        if not notification_type:
+            continue
+        event_recipients = set(users)
+        # An event only goes to participants who were already involved at the
+        # time it happened, preventing a newly added responder from receiving
+        # an unrelated old alert history.
+        event_recipients = {
+            user_id
+            for user_id in event_recipients
+            if user_id == alert.reporter_id
+            or user_id == event.actor_id
+            or any(
+                assignment.responder_id == user_id
+                and assignment.assigned_at <= event.created_at
+                for assignment in assignment_rows
+            )
+        }
+        for user_id in event_recipients:
+            recipient = users[user_id]
+            event_key = f"emergency:{alert.pk}:status:{event.pk}:recipient:{recipient.pk}"
+            if Notification.objects.filter(recipient=recipient, event_key=event_key).exists():
+                skipped += 1
+                continue
+            assignment = next(
+                (
+                    item
+                    for item in assignment_rows
+                    if item.responder_id == recipient.pk and item.assigned_at <= event.created_at
+                ),
+                None,
+            )
+            notification = create_emergency_notification(
+                alert=alert,
+                recipient=recipient,
+                type=notification_type,
+                title=event.label or f"Emergency {event.status.replace('_', ' ')}",
+                body=event.note or f"Emergency status updated to {event.status.replace('_', ' ')}.",
+                assignment=assignment,
+                metadata={"replayed": True, "status_event_id": event.pk},
+                event_key=event_key,
+            )
+            if notification:
+                created += 1
+                queued += 1
+    return {"events": len(events), "created": created, "queued": queued, "skipped": skipped}
 
 
 def notify_flag_review_dismissed(*, flag_reporter, concern: Concern, staff_note: str) -> None:
@@ -1225,3 +1396,41 @@ def notify_status_change(concern: Concern) -> None:
     notif_type = type_map.get(concern.status)
     if notif_type:
         create_notification(concern=concern, type=notif_type)
+
+
+def notify_validated_anonymous_concern_staff(concern: Concern) -> None:
+    if (
+        not concern.is_anonymous
+        or concern.validation_status != Concern.ValidationStatus.ACCEPTED
+        or not concern.assigned_department_id
+    ):
+        return
+
+    from django.contrib.auth import get_user_model
+    from .models import Notification
+
+    event_key = f"anonymous-concern:{concern.pk}"
+    if Notification.objects.filter(event_key=event_key).exists():
+        return
+    User = get_user_model()
+    recipients = (
+        User.objects.filter(
+            is_active=True,
+            status=User.Status.VERIFIED,
+            role__in=[User.Role.BARANGAY_OFFICIAL, User.Role.FIRST_RESPONDER],
+            designations__is_active=True,
+            designations__department_id=concern.assigned_department_id,
+        )
+        .distinct()
+    )
+    for recipient in recipients:
+        create_user_notification(
+            recipient=recipient,
+            concern=concern,
+            type=Notification.Type.SUBMITTED,
+            title="New anonymous report",
+            body=f"A new issue report was submitted in {concern.community.name}.",
+            community=concern.community,
+            department=concern.assigned_department,
+            event_key=event_key,
+        )

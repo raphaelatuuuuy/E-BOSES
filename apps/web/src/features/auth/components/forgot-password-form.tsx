@@ -52,13 +52,12 @@ export function ForgotPasswordForm({
           </FieldError>
         ) : null}
         <p className="mt-4 text-center text-sm text-muted-foreground">
-          Remember your password?{" "}
           <button
             type="button"
             onClick={onBack}
-            className="font-semibold text-foreground underline underline-offset-2 decoration-1 transition-all hover:text-primary hover:decoration-2"
+            className="font-semibold text-foreground transition-all hover:text-primary"
           >
-            Sign in
+            Remember your password?
           </button>
         </p>
       </form>

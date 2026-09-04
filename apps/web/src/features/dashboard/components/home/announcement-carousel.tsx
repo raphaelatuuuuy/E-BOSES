@@ -5,12 +5,17 @@ import { cn } from "@workspace/ui/lib/utils"
 import type { Announcement } from "@/features/dashboard/api"
 import { advisoryMeta } from "@/features/dashboard/components/community-content/advisory-tags"
 import { AnnouncementComments } from "@/features/dashboard/components/home/announcement-comments"
+import { MediaLightbox } from "@/features/dashboard/components/authenticated-media"
 
 export function AnnouncementCarousel({ announcements }: { announcements: Announcement[] }) {
   const trackRef = useRef<HTMLDivElement>(null)
   const slideRefs = useRef<(HTMLElement | null)[]>([])
   const [index, setIndex] = useState(0)
   const [trackHeight, setTrackHeight] = useState<number>()
+  const [previewImage, setPreviewImage] = useState<{
+    src: string
+    alt: string
+  } | null>(null)
 
   const count = announcements.length
   const active = count === 0 ? 0 : Math.min(index, count - 1)
@@ -104,12 +109,24 @@ export function AnnouncementCarousel({ announcements }: { announcements: Announc
               </div>
 
               {announcement.image_url ? (
-                <img
-                  src={announcement.image_url}
-                  alt={announcement.image_alt || ""}
-                  loading="lazy"
-                  className="max-h-80 w-full border-y border-neutral-300 object-cover"
-                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPreviewImage({
+                      src: announcement.image_url!,
+                      alt: announcement.image_alt || "",
+                    })
+                  }
+                  aria-label="Preview image"
+                  className="block w-full"
+                >
+                  <img
+                    src={announcement.image_url}
+                    alt={announcement.image_alt || ""}
+                    loading="lazy"
+                    className="h-auto w-full object-contain"
+                  />
+                </button>
               ) : null}
 
               <div className="px-3.5 pb-3 pt-2.5">
@@ -156,6 +173,20 @@ export function AnnouncementCarousel({ announcements }: { announcements: Announc
             <ChevronRightIcon className="size-4.5" strokeWidth={2.2} />
           </button>
         </footer>
+      ) : null}
+
+      {previewImage ? (
+        <MediaLightbox
+          items={[
+            {
+              src: previewImage.src,
+              filename: previewImage.alt || "Announcement image",
+              kind: "image",
+            },
+          ]}
+          index={0}
+          onClose={() => setPreviewImage(null)}
+        />
       ) : null}
     </article>
   )

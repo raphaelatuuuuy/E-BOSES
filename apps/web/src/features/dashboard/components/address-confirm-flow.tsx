@@ -13,17 +13,12 @@ import { cn } from "@workspace/ui/lib/utils"
 import { FloatingLabelInput } from "@/features/auth/components/floating-label-input"
 import { NeighborhoodPeekCards } from "@/features/auth/components/sign-up-steps/verified-peek-step"
 import { parseStoredAddress } from "@/features/dashboard/lib/address-parse"
+import { getCurrentPosition } from "@/features/auth/lib/reverse-geocode"
 import {
-  filterMarikinaHeightsStreets,
-  formatStreetAddress,
-  isKnownMarikinaHeightsStreet,
-  matchMarikinaHeightsStreet,
-} from "@/features/auth/lib/marikina-heights-streets"
-import {
-  getCurrentPosition,
-  reverseGeocodeToMarikinaStreet,
-} from "@/features/auth/lib/reverse-geocode"
-import { updateMe } from "@/features/auth/api"
+  lookupRegistrationPinAddress,
+  searchRegistrationStreets,
+  updateMe,
+} from "@/features/auth/api"
 import { Field, FieldError } from "@workspace/ui/components/field"
 import {
   SheetDialog,
@@ -32,8 +27,6 @@ import {
 } from "@/features/dashboard/components/sheet-dialog"
 
 type FlowStep = "confirm" | "edit" | "peek"
-
-const STREET_SUBTEXT = "Marikina Heights, Marikina City"
 
 function LocationPlaneIcon({
   className,
@@ -79,6 +72,7 @@ interface AddressConfirmFlowProps {
   open: boolean
   onClose: () => void
   onSaved: (address: string) => void
+  communityName?: string
 }
 
 export function AddressConfirmFlow({
@@ -86,6 +80,7 @@ export function AddressConfirmFlow({
   open,
   onClose,
   onSaved,
+  communityName = "Your community",
 }: AddressConfirmFlowProps) {
   const parsed = React.useMemo(
     () => parseStoredAddress(initialAddress),
@@ -108,10 +103,33 @@ export function AddressConfirmFlow({
   const listRef = React.useRef<HTMLDivElement>(null)
 
   const hasQuery = query.trim().length > 0
-  const streets = React.useMemo(
-    () => (hasQuery ? filterMarikinaHeightsStreets(query, 50) : []),
-    [query, hasQuery],
-  )
+  const [streetOptions, setStreetOptions] = React.useState<string[]>([])
+
+  React.useEffect(() => {
+    const needle = query.trim()
+    if (!needle) {
+      return
+    }
+    let cancelled = false
+    void searchRegistrationStreets(needle, 50)
+      .then((result) => {
+        if (cancelled) return
+        setStreetOptions(
+          (result.results ?? [])
+            .filter((item) => !communityName || item.community === communityName)
+            .map((item) => item.name)
+            .filter((name, index, values) => values.indexOf(name) === index),
+        )
+      })
+      .catch(() => {
+        if (!cancelled) setStreetOptions([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [communityName, query])
+
+  const streets = hasQuery ? streetOptions : []
 
   const streetOnly = displayStreetOnly(street, houseNumber)
 
@@ -150,27 +168,27 @@ export function AddressConfirmFlow({
     setOpenList(false)
     try {
       const position = await getCurrentPosition()
-      const result = await reverseGeocodeToMarikinaStreet(
+      const result = await lookupRegistrationPinAddress(
         position.coords.latitude,
         position.coords.longitude,
       )
 
-      if (!result || !result.street) {
+      if (!result.inside_community || !result.street) {
         showLocationToast(
-          "Could not determine your street from GPS. Please select it from the list.",
+          `Your location is outside ${communityName}. Please choose a street inside the community.`,
         )
         return
       }
-      if (!isKnownMarikinaHeightsStreet(result.street)) {
+      if (communityName && result.community !== communityName) {
         showLocationToast(
-          `Your location is outside Marikina Heights (${result.street}). Please choose a street inside the barangay.`,
+          `Your location is in ${result.community}, not ${communityName}. Please choose a street inside your community.`,
         )
         return
       }
       setStreet(result.street)
       setQuery(result.street)
       setStreetError(null)
-      if (result.houseNumber) setHouseNumber(result.houseNumber)
+      if (result.house_number) setHouseNumber(result.house_number)
     } catch (error: unknown) {
       showLocationToast(locationErrorMessage(error))
     } finally {
@@ -189,14 +207,14 @@ export function AddressConfirmFlow({
   }
 
   async function handleConfirm() {
-    const matched = matchMarikinaHeightsStreet(street)
+    const matched = street.trim()
     if (!matched) {
       setStreetError("Please choose a street from the list.")
       return
     }
     setSaving(true)
     try {
-      const value = formatStreetAddress(matched, houseNumber)
+      const value = `${houseNumber?.trim() ? `${houseNumber.trim()} ` : ""}${matched}, ${communityName}`
       await updateMe({ address: value })
       onSaved(value)
       onClose()
@@ -208,7 +226,7 @@ export function AddressConfirmFlow({
   }
 
   function handleEditContinue() {
-    const matched = matchMarikinaHeightsStreet(street)
+    const matched = street.trim()
     if (!matched) {
       setStreetError("Please choose a street from the list.")
       return
@@ -275,7 +293,7 @@ export function AddressConfirmFlow({
         {step === "confirm" ? (
           <>
             <p className="text-[14px] leading-relaxed text-neutral-500">
-              Your address is in Marikina Heights. You can update it when you
+              Your address is in {communityName}. You can update it when you
               move within the barangay.
             </p>
 
@@ -306,7 +324,7 @@ export function AddressConfirmFlow({
         {step === "edit" ? (
           <>
             <p className="text-[14px] leading-relaxed text-neutral-500">
-              Choose a street in Barangay Marikina Heights only.
+              Choose a street in {communityName} only.
             </p>
 
             <div className="space-y-3" ref={listRef}>
@@ -377,7 +395,7 @@ export function AddressConfirmFlow({
                       ) : streets.length === 0 ? (
                         <>
                           <p className="px-4 py-3 text-[14px] text-neutral-500">
-                            No matching streets in Marikina Heights.
+                             No matching streets in {communityName}.
                           </p>
                           <DropdownAction
                             icon={
@@ -410,7 +428,7 @@ export function AddressConfirmFlow({
                                   {item}
                                 </span>
                                 <span className="mt-0.5 block text-[13px] leading-snug text-neutral-500">
-                                  {STREET_SUBTEXT}
+                                  {communityName}
                                 </span>
                               </span>
                             </button>
@@ -436,7 +454,7 @@ export function AddressConfirmFlow({
                   strokeWidth={2}
                 />
                 <span>
-                  Your address is only used to connect you to Marikina Heights.
+                  Your address is only used to connect you to {communityName}.
                 </span>
               </p>
 
@@ -470,7 +488,7 @@ export function AddressConfirmFlow({
         {step === "peek" ? (
           <>
             <p className="text-[14px] leading-relaxed text-neutral-500">
-              Here&apos;s a peek at Marikina Heights.
+              Here&apos;s a peek at {communityName}.
             </p>
             <NeighborhoodPeekCards street={street} houseNumber={houseNumber} />
           </>
@@ -485,11 +503,13 @@ function LocationDialog({
   onOpenChange,
   onUseLocation,
   onTypeAddress,
+  communityName = "your community",
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
   onUseLocation: () => void
   onTypeAddress: () => void
+  communityName?: string
 }) {
   return (
     <SheetDialog
@@ -514,7 +534,7 @@ function LocationDialog({
       }
     >
       <p className="text-[14px] leading-relaxed text-neutral-500">
-        E-Boses uses your location to place you in Marikina Heights,
+        E-Boses uses your location to place you in {communityName},
         and if you&apos;re at home, to verify your account. You will
         need to enable your location permissions.
       </p>

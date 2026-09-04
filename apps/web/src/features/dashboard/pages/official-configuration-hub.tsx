@@ -257,7 +257,7 @@ export default function OfficialConfigurationHubPage() {
 
   return (
     <div className="min-h-full bg-white">
-      <div className="mx-auto w-full max-w-[1100px] px-6 pt-12 pb-40 sm:px-10 sm:pb-28">
+      <div className="mx-auto w-full max-w-[1100px] px-6 pt-12 pb-6 sm:px-10 lg:pb-28">
         <PageHeader
           title="Configuration"
           subtitle="How this barangay routes concerns, dispatches responders and verifies residents."

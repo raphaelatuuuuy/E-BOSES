@@ -187,7 +187,7 @@ export default function OfficialAuditLogPage() {
 
   return (
     <div className="min-h-full bg-white">
-      <div className="mx-auto w-full max-w-[1100px] px-6 pt-10 pb-40 sm:px-10 sm:pb-28">
+      <div className="mx-auto w-full max-w-[1100px] px-6 pt-10 pb-6 sm:px-10 lg:pb-28">
         <ConfigBreadcrumb
           trail={[
             { label: "Configuration", to: "/dashboard/configuration" },

@@ -1,3 +1,4 @@
+import { createElement } from "react"
 import { TagsIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -61,7 +62,7 @@ export function ReportIcon({
         size === "sm" ? "size-9" : "size-10",
       )}
     >
-      <ResolvedIcon className={size === "sm" ? "size-4" : "size-5"} strokeWidth={2} />
+      {createElement(ResolvedIcon, { className: size === "sm" ? "size-4" : "size-5", strokeWidth: 2 })}
     </span>
   )
 }

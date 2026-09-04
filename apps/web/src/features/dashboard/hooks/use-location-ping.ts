@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react"
 
 import type { AuthUser } from "@/features/auth/api"
 import { sendLocationPing } from "@/features/dashboard/api"
+import { isFreshGeolocationPosition } from "@/features/dashboard/lib/last-known-position"
 
 function metersBetween(a: GeolocationCoordinates, b: GeolocationCoordinates) {
   const rad = Math.PI / 180
@@ -15,13 +16,15 @@ function metersBetween(a: GeolocationCoordinates, b: GeolocationCoordinates) {
 
 export function useLocationPing(user: AuthUser | null) {
   const lastSentRef = useRef<{ coords: GeolocationCoordinates; sentAt: number } | null>(null)
-  const deniedRef = useRef(false)
 
   useEffect(() => {
+    lastSentRef.current = null
     if (!user || user.status !== "verified" || !navigator.geolocation) return
 
     let cancelled = false
     let timer: number | undefined
+    let denied = false
+    let inFlight = false
 
     function shouldSend(coords: GeolocationCoordinates) {
       const last = lastSentRef.current
@@ -30,45 +33,77 @@ export function useLocationPing(user: AuthUser | null) {
       return metersBetween(last.coords, coords) >= 20
     }
 
-    function ping() {
-      if (cancelled || deniedRef.current || document.visibilityState === "hidden") return
+    function ping(force = false) {
+      if (
+        cancelled ||
+        denied ||
+        inFlight ||
+        document.visibilityState === "hidden"
+      )
+        return
+      inFlight = true
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          if (cancelled || !shouldSend(position.coords)) return
+          if (cancelled || !isFreshGeolocationPosition(position)) {
+            inFlight = false
+            window.dispatchEvent(new CustomEvent("eboses:location-sync-failed"))
+            return
+          }
+          if (!force && !shouldSend(position.coords)) {
+            inFlight = false
+            return
+          }
           void sendLocationPing({
             latitude: position.coords.latitude,
             longitude: position.coords.longitude,
             accuracy: position.coords.accuracy,
             source: "active_session",
+            timestamp: position.timestamp,
           }).then((result) => {
             if (!result.accepted) throw new Error("The server did not accept this location.")
             lastSentRef.current = { coords: position.coords, sentAt: Date.now() }
             window.dispatchEvent(new CustomEvent("eboses:location-synced"))
           }).catch(() => {
             window.dispatchEvent(new CustomEvent("eboses:location-sync-failed"))
+          }).finally(() => {
+            inFlight = false
           })
         },
         (error) => {
-          if (error.code === error.PERMISSION_DENIED) deniedRef.current = true
+          inFlight = false
+          if (error.code === error.PERMISSION_DENIED) denied = true
         },
-        { enableHighAccuracy: true, maximumAge: 30000, timeout: 10000 },
+        { enableHighAccuracy: true, maximumAge: force ? 0 : 10000, timeout: 20000 },
       )
     }
 
-    function schedule() {
+    function schedule(force = false) {
       window.clearInterval(timer)
       if (document.visibilityState === "visible") {
-        ping()
-        timer = window.setInterval(ping, 30000)
+        ping(force)
+        timer = window.setInterval(() => ping(false), 30000)
       }
     }
 
-    schedule()
-    document.addEventListener("visibilitychange", schedule)
+    function handleFocus() {
+      if (document.visibilityState === "visible") {
+        denied = false
+        ping(true)
+      }
+    }
+
+    function handleVisibilityChange() {
+      schedule(true)
+    }
+
+    schedule(true)
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    window.addEventListener("focus", handleFocus)
     return () => {
       cancelled = true
       window.clearInterval(timer)
-      document.removeEventListener("visibilitychange", schedule)
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+      window.removeEventListener("focus", handleFocus)
     }
   }, [user])
 }

@@ -4,8 +4,15 @@ import { useEffect, useRef } from "react"
 import type leaflet from "leaflet"
 
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
-import { GLYPHS, MAP_COLORS, glyphPinHtml } from "@/features/dashboard/components/map/markers"
-import { drawRoute, routeRenderGeometry } from "@/features/dashboard/lib/route-line"
+import {
+  GLYPHS,
+  MAP_COLORS,
+  glyphPinHtml,
+} from "@/features/dashboard/components/map/markers"
+import {
+  drawRoute,
+  routeRenderGeometry,
+} from "@/features/dashboard/lib/route-line"
 
 import type { LocationResolution, RoutePreview } from "./api"
 import { routePreviewState } from "./route-preview-map-state"
@@ -19,7 +26,13 @@ type RoutingMapData = {
 const INCIDENT_PIN = 26
 const RESPONDER_PIN = 24
 
-export function RoutePreviewMap({ location, routing }: { location: LocationResolution; routing: RoutingMapData }) {
+export function RoutePreviewMap({
+  location,
+  routing,
+}: {
+  location: LocationResolution
+  routing: RoutingMapData
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
 
@@ -48,10 +61,19 @@ export function RoutePreviewMap({ location, routing }: { location: LocationResol
       document.head.appendChild(styleEl)
 
       const map = L.map(containerRef.current, {
-        center: [14.6507, 121.1133],
+        center:
+          location.latitude != null && location.longitude != null
+            ? [location.latitude, location.longitude]
+            : [14.5995, 120.9842],
         zoom: 15,
         zoomControl: false,
         attributionControl: false,
+        dragging: true,
+        scrollWheelZoom: true,
+        touchZoom: true,
+        doubleClickZoom: true,
+        boxZoom: true,
+        keyboard: true,
       })
       mapRef.current = map
       addBaseTiles(L, map, "dark", { keepBuffer: 6 })
@@ -60,11 +82,15 @@ export function RoutePreviewMap({ location, routing }: { location: LocationResol
       const bounds = L.latLngBounds([])
 
       const destination: leaflet.LatLngTuple | null =
-        state.showIncident && location.latitude != null && location.longitude != null
+        state.showIncident &&
+        location.latitude != null &&
+        location.longitude != null
           ? [location.latitude, location.longitude]
           : null
       const origin: leaflet.LatLngTuple | null =
-        state.showResponder && routing.responder?.latitude != null && routing.responder.longitude != null
+        state.showResponder &&
+        routing.responder?.latitude != null &&
+        routing.responder.longitude != null
           ? [routing.responder.latitude, routing.responder.longitude]
           : null
 
@@ -81,7 +107,9 @@ export function RoutePreviewMap({ location, routing }: { location: LocationResol
           iconSize: [INCIDENT_PIN, INCIDENT_PIN],
           iconAnchor: [INCIDENT_PIN / 2, INCIDENT_PIN / 2],
         })
-        L.marker(destination, { icon, zIndexOffset: 800 }).addTo(map).bindTooltip("Incident", { direction: "top" })
+        L.marker(destination, { icon, zIndexOffset: 800 })
+          .addTo(map)
+          .bindTooltip("Incident", { direction: "top" })
         bounds.extend(destination)
       }
 
@@ -98,19 +126,27 @@ export function RoutePreviewMap({ location, routing }: { location: LocationResol
           iconSize: [RESPONDER_PIN, RESPONDER_PIN],
           iconAnchor: [RESPONDER_PIN / 2, RESPONDER_PIN / 2],
         })
-        L.marker(origin, { icon, zIndexOffset: 1000 }).addTo(map).bindTooltip("Responder", { direction: "top" })
+        L.marker(origin, { icon, zIndexOffset: 1000 })
+          .addTo(map)
+          .bindTooltip("Responder", { direction: "top" })
         bounds.extend(origin)
       }
 
       if (state.showRoute) {
-        const geometry = routeRenderGeometry(routing.route, { origin, destination })
+        const geometry = routeRenderGeometry(routing.route, {
+          origin,
+          destination,
+        })
         const route = drawRoute(L, map, { ...geometry, live: true, weight: 6 })
         for (const point of route?.points ?? []) bounds.extend(point)
       }
 
-      if (bounds.isValid()) map.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 })
+      if (bounds.isValid())
+        map.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 })
 
-      observer = new ResizeObserver(() => map.invalidateSize({ animate: false }))
+      observer = new ResizeObserver(() =>
+        map.invalidateSize({ animate: false })
+      )
       observer.observe(containerRef.current)
       requestAnimationFrame(() => map.invalidateSize({ animate: false }))
     })()
@@ -125,7 +161,11 @@ export function RoutePreviewMap({ location, routing }: { location: LocationResol
 
   return (
     <div className="route-preview-map-scope relative isolate h-72 overflow-hidden rounded-[14px] bg-ink">
-      <div ref={containerRef} className="eboses-map-dark absolute inset-0" aria-label="Dispatch route map" />
+      <div
+        ref={containerRef}
+        className="eboses-map-dark absolute inset-0"
+        aria-label="Dispatch route map"
+      />
       <style>{`
         .route-preview-map-scope .eboses-map-dark .eboses-pin--glyph .eboses-pin__disc {
           background: ${MAP_COLORS.emergency};

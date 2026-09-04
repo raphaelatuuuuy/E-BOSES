@@ -2,16 +2,19 @@ import { useMemo, useState } from "react"
 import type { LucideIcon } from "lucide-react"
 import {
   BellRingIcon,
+  CircleCheckIcon,
   CheckIcon,
   MapPinIcon,
   NavigationIcon,
-  ShieldCheckIcon,
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
-import type { EmergencyAlert, EmergencyStatus } from "@/features/dashboard/emergency-api"
+import type {
+  EmergencyAlert,
+  EmergencyStatus,
+} from "@/features/dashboard/emergency-api"
 import {
   buildDispatchTimeline,
   type TimelineEntry,
@@ -23,8 +26,7 @@ import { Empty } from "@/features/dashboard/components/responder/dispatch-surfac
  * in the middle, what already happened below, newest first.
  *
  * Replaces the forward 4-step stepper, which claimed progress without ever
- * showing when anything occurred and rendered white-on-dark inside the
- * `.staff-dark` shell.
+ * showing when anything occurred inside the shared light operations shell.
  *
  * The rail is one colour throughout, as in the reference: the distinction
  * between future and past is carried by line style (solid above, dotted below)
@@ -41,8 +43,8 @@ const STATUS_ICONS: Partial<Record<EmergencyStatus, LucideIcon>> = {
   nearby: NavigationIcon,
   arrived: MapPinIcon,
   in_progress: MapPinIcon,
-  resolved: ShieldCheckIcon,
-  closed: ShieldCheckIcon,
+  resolved: CircleCheckIcon,
+  closed: CircleCheckIcon,
   cancelled: XIcon,
   false_alarm: XIcon,
   invalid: XIcon,
@@ -53,7 +55,10 @@ const dateFormat = new Intl.DateTimeFormat("en", {
   day: "numeric",
   year: "numeric",
 })
-const timeFormat = new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit" })
+const timeFormat = new Intl.DateTimeFormat("en", {
+  hour: "numeric",
+  minute: "2-digit",
+})
 
 /**
  * How many past milestones show before the rail asks to be expanded.
@@ -86,7 +91,7 @@ function Marker({ entry }: { entry: TimelineEntry }) {
       <span
         className={cn(
           "size-2 rounded-pill",
-          entry.state === "upcoming" ? "bg-ice-dim" : "bg-ice",
+          entry.state === "upcoming" ? "bg-ice-dim" : "bg-ice"
         )}
       />
     </span>
@@ -121,7 +126,10 @@ export function DispatchTimeline({
   className?: string
 }) {
   const [expanded, setExpanded] = useState(false)
-  const entries = useMemo(() => buildDispatchTimeline(alert, viewerId), [alert, viewerId])
+  const entries = useMemo(
+    () => buildDispatchTimeline(alert, viewerId),
+    [alert, viewerId]
+  )
 
   if (entries.length === 0) {
     return <Empty>No dispatch activity has been recorded yet.</Empty>
@@ -131,7 +139,8 @@ export function DispatchTimeline({
   const collapsedCount =
     currentIndex >= 0 ? currentIndex + 1 + COLLAPSED_HISTORY : entries.length
   const hiddenCount = Math.max(0, entries.length - collapsedCount)
-  const visible = expanded || hiddenCount === 0 ? entries : entries.slice(0, collapsedCount)
+  const visible =
+    expanded || hiddenCount === 0 ? entries : entries.slice(0, collapsedCount)
 
   return (
     <div className={cn("min-w-0", className)}>
@@ -150,11 +159,18 @@ export function DispatchTimeline({
 
               {/* pt-2.5 centres the first line against the 40px marker, so
                   every row's label sits on its own dot. */}
-              <div className={cn("min-w-0 flex-1 pt-2.5", isLast ? "pb-0" : "pb-4")}>
+              <div
+                className={cn(
+                  "min-w-0 flex-1 pt-2.5",
+                  isLast ? "pb-0" : "pb-4"
+                )}
+              >
                 <p
                   className={cn(
                     "text-heading",
-                    entry.state === "upcoming" ? "text-muted-foreground" : "text-foreground",
+                    entry.state === "upcoming"
+                      ? "text-muted-foreground"
+                      : "text-foreground"
                   )}
                 >
                   {entry.label}
@@ -169,7 +185,9 @@ export function DispatchTimeline({
                     </span>
                   </p>
                 ) : (
-                  <p className="mt-0.5 text-body text-muted-foreground">Not yet reached</p>
+                  <p className="mt-0.5 text-body text-muted-foreground">
+                    Not yet reached
+                  </p>
                 )}
               </div>
             </li>
@@ -182,9 +200,11 @@ export function DispatchTimeline({
           type="button"
           onClick={() => setExpanded((open) => !open)}
           aria-expanded={expanded}
-          className="-ml-3 mt-1 flex h-11 items-center rounded-pill px-3 text-label text-ice transition-colors duration-[--duration-micro] hover:bg-card-raised"
+          className="mt-1 -ml-3 flex h-11 items-center rounded-pill px-3 text-label text-ice transition-colors duration-[--duration-micro] hover:bg-card-raised"
         >
-          {expanded ? "Show less" : `Show ${hiddenCount} earlier step${hiddenCount === 1 ? "" : "s"}`}
+          {expanded
+            ? "Show less"
+            : `Show ${hiddenCount} earlier step${hiddenCount === 1 ? "" : "s"}`}
         </button>
       ) : null}
     </div>

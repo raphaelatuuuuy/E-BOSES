@@ -208,7 +208,8 @@ class DynamicConcernArchitectureTests(APITestCase):
         self.assertEqual(created.status_code, status.HTTP_201_CREATED, created.data)
         concern = Concern.objects.get(pk=created.data["id"])
         self.assertEqual(concern.category_ref_id, category_id)
-        self.assertEqual(concern.assigned_department_id, department_id)
+        self.assertIsNone(concern.assigned_department_id)
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.PENDING)
         self.assertEqual(ConcernFormValue.objects.get(concern=concern, field__field_key="waste_type").value, "Construction")
         self.assertTrue(
             ConcernTimelineEntry.objects.filter(

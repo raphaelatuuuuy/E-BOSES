@@ -278,6 +278,8 @@ class CommunityResolution(models.Model):
     )
     configuration = models.ForeignKey(
         "OCRConfigurationVersion",
+        null=True,
+        blank=True,
         on_delete=models.PROTECT,
         related_name="signup_resolutions",
     )
@@ -1057,6 +1059,13 @@ class OCRTestRun(models.Model):
 
 
 class AuditLog(models.Model):
+    community = models.ForeignKey(
+        "emergencies.Community",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="audit_logs",
+    )
     actor = models.ForeignKey(django_settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="audit_actions")
     target_user = models.ForeignKey(django_settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="audit_events")
     action = models.CharField(max_length=120)

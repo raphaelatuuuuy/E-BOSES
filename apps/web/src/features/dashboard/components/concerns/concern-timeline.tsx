@@ -16,7 +16,6 @@ import {
 import { useState } from "react"
 
 import { cn } from "@workspace/ui/lib/utils"
-import type { PublicUser } from "@/features/dashboard/api"
 
 import {
   type ConcernTimelineAccent,
@@ -55,8 +54,13 @@ function dayLabel(value: string | null) {
   const date = new Date(value)
   const now = new Date()
   if (date.toDateString() === now.toDateString()) return "TODAY"
-  if (new Date(now.getTime() - 86_400_000).toDateString() === date.toDateString()) return "YESTERDAY"
-  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(date).toUpperCase()
+  if (
+    new Date(now.getTime() - 86_400_000).toDateString() === date.toDateString()
+  )
+    return "YESTERDAY"
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric" })
+    .format(date)
+    .toUpperCase()
 }
 
 function formatShortTime(value: string | null) {
@@ -77,20 +81,10 @@ function formatTimeOnly(value: string | null) {
   }).format(new Date(value))
 }
 
-function ActorLine({ label, user }: { label?: string | null; user?: PublicUser | null }) {
+function ActorLine({ label }: { label?: string | null }) {
   if (!label) return null
-  const initials = (user?.initials || user?.full_name || label).charAt(0).toUpperCase()
   return (
-    <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10.5px] text-faint-foreground">
-      {user ? (
-        <span
-          className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[8px] font-bold text-navy-muted"
-          title={`${user.full_name} · ${user.role.replace(/_/g, " ")}`}
-          aria-label={`${user.full_name}, ${user.role.replace(/_/g, " ")}`}
-        >
-          {initials}
-        </span>
-      ) : null}
+    <div className="mt-0.5 min-w-0 text-[12px] text-neutral-500">
       <span className="truncate">{label}</span>
     </div>
   )
@@ -107,14 +101,21 @@ export function ConcernTimeline({
   emptyLabel?: string
   collapsibleHistory?: boolean
 }) {
-  const [expandedTimelineKey, setExpandedTimelineKey] = useState<string | null>(null)
+  const [expandedTimelineKey, setExpandedTimelineKey] = useState<string | null>(
+    null
+  )
   const timelineKey = items.map((item) => item.id).join("|")
   const historyExpanded = expandedTimelineKey === timelineKey
 
   if (items.length === 0) {
     return (
-      <div className={cn("rounded-2xl border border-dashed border-neutral-200 bg-neutral-50 px-6 py-10 text-center", className)}>
-        <p className="text-[13px] font-medium text-neutral-400">{emptyLabel}</p>
+      <div
+        className={cn(
+          "rounded-2xl border border-dashed border-neutral-200 bg-neutral-50 px-6 py-10 text-center",
+          className
+        )}
+      >
+        <p className="text-[13px] font-medium text-neutral-600">{emptyLabel}</p>
       </div>
     )
   }
@@ -124,31 +125,50 @@ export function ConcernTimeline({
   const visibleHistory = collapsibleHistory && !historyExpanded ? [] : history
   const heroCancelled = hero.state === "cancelled"
   const HeroIcon = heroCancelled ? XCircleIcon : ICONS[hero.icon ?? "clock"]
-  const heroColor = heroCancelled ? ACCENT_ICON.danger : ACCENT_ICON[hero.accent ?? "neutral"]
+  const heroColor = heroCancelled
+    ? ACCENT_ICON.danger
+    : ACCENT_ICON[hero.accent ?? "neutral"]
 
   let lastDay = dayLabel(hero.time)
 
   return (
     <div className={cn("space-y-1", className)}>
-      <p className="text-[9px] font-medium tracking-wider text-faint-foreground">{dayLabel(hero.time)}</p>
+      <p className="text-[10px] font-semibold tracking-wider text-neutral-500">
+        {dayLabel(hero.time)}
+      </p>
 
       <div className="relative flex gap-2.5 pt-0.5">
         <div className="relative flex flex-col items-center">
-          <span className={cn("flex size-6 shrink-0 items-center justify-center rounded-full bg-white")}>
-            <HeroIcon className={cn("size-[19px]", heroColor)} strokeWidth={1.8} />
+          <span
+            className={cn(
+              "flex size-6 shrink-0 items-center justify-center rounded-full bg-white"
+            )}
+          >
+            <HeroIcon
+              className={cn("size-[19px]", heroColor)}
+              strokeWidth={1.8}
+            />
           </span>
           {visibleHistory.length ? (
-            <span aria-hidden className="mt-0.5 w-0.5 flex-1 rounded-full bg-neutral-200" />
+            <span
+              aria-hidden
+              className="mt-0.5 w-0.5 flex-1 rounded-full bg-neutral-200"
+            />
           ) : null}
         </div>
         <div className="min-w-0 flex-1 pb-1.5">
           <div className="flex items-baseline justify-between gap-2">
-            <p className="text-[11.5px] font-semibold leading-tight text-foreground">{hero.badge}</p>
-            <span className="shrink-0 text-[9px] tabular-nums text-faint-foreground" title={formatShortTime(hero.time)}>
+            <p className="text-[12.5px] leading-tight font-semibold text-foreground">
+              {hero.badge}
+            </p>
+            <span
+              className="shrink-0 text-[11px] text-neutral-500 tabular-nums"
+              title={formatShortTime(hero.time)}
+            >
               {formatTimeOnly(hero.time)}
             </span>
           </div>
-          <ActorLine label={hero.actor} user={hero.actorUser} />
+          <ActorLine label={hero.actor} />
           {hero.content ? <div className="mt-0.5">{hero.content}</div> : null}
         </div>
       </div>
@@ -173,7 +193,7 @@ export function ConcernTimeline({
         return (
           <div key={item.id}>
             {showDivider ? (
-              <p className="flex items-center gap-2 py-1 pl-0.5 text-[9px] font-medium tracking-wider text-faint-foreground">
+              <p className="flex items-center gap-2 py-1 pl-0.5 text-[10px] font-semibold tracking-wider text-neutral-500">
                 {day}
                 <span aria-hidden className="h-px flex-1 bg-neutral-100" />
               </p>
@@ -181,19 +201,37 @@ export function ConcernTimeline({
             <div className="relative flex gap-2.5">
               <div className="relative flex flex-col items-center">
                 <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-white">
-                  <HistoryIcon className={cn("size-[15px]", ACCENT_ICON[item.accent ?? "neutral"])} strokeWidth={1.8} />
+                  <HistoryIcon
+                    className={cn(
+                      "size-[15px]",
+                      ACCENT_ICON[item.accent ?? "neutral"]
+                    )}
+                    strokeWidth={1.8}
+                  />
                 </span>
-                {!isLast ? <span aria-hidden className="w-0.5 flex-1 rounded-full bg-neutral-200" /> : null}
+                {!isLast ? (
+                  <span
+                    aria-hidden
+                    className="w-0.5 flex-1 rounded-full bg-neutral-200"
+                  />
+                ) : null}
               </div>
               <div className="min-w-0 flex-1 pb-1.5">
                 <div className="flex items-baseline justify-between gap-2">
-                  <p className="text-[11px] font-medium leading-tight text-neutral-800">{item.badge}</p>
-                  <span className="shrink-0 text-[9px] tabular-nums text-faint-foreground" title={formatShortTime(item.time)}>
+                  <p className="text-[12px] leading-tight font-medium text-neutral-800">
+                    {item.badge}
+                  </p>
+                  <span
+                    className="shrink-0 text-[11px] text-neutral-500 tabular-nums"
+                    title={formatShortTime(item.time)}
+                  >
                     {formatTimeOnly(item.time)}
                   </span>
                 </div>
-                <ActorLine label={item.actor} user={item.actorUser} />
-                {item.content ? <div className="mt-0.5">{item.content}</div> : null}
+                <ActorLine label={item.actor} />
+                {item.content ? (
+                  <div className="mt-0.5">{item.content}</div>
+                ) : null}
               </div>
             </div>
           </div>

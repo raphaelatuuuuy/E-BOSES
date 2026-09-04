@@ -9,6 +9,7 @@ import {
   createAccountRequest,
   deactivateAccount,
 } from "@/features/auth/api"
+import { useAuthSession } from "@/features/auth/auth-session"
 import {
   SheetDialog,
   SheetPrimaryButton,
@@ -45,6 +46,8 @@ export function AccountLifecycleFlow({
   onClose,
   onDeactivated,
 }: AccountLifecycleFlowProps) {
+  const { user } = useAuthSession()
+  const communityName = user?.barangay || "your community"
   const [step, setStep] = useState<FlowStep>("reason")
   const [reason, setReason] = useState("")
   const [reasonOpen, setReasonOpen] = useState(false)
@@ -287,7 +290,7 @@ export function AccountLifecycleFlow({
             </li>
             <li>
               You will no longer access barangay events, the alerts map, or
-              other E-Boses services for Marikina Heights.
+              other E-Boses services for {communityName}.
             </li>
           </ul>
 

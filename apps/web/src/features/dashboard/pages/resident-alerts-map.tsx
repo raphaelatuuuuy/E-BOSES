@@ -1,7 +1,7 @@
 /**
  * Resident Alerts Map — Nextdoor structure, feed-backed:
  * - Map pins = community feed posts that have coordinates
- * - List = compact preview (+ “Write about this alert”)
+ * - List = compact preview (+ “View the concern”)
  * - Expand = full feed-style post (reload via getConcern) in the left panel
  */
 import {
@@ -13,10 +13,11 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react"
 import {
-  AlertTriangleIcon,
-  ChevronDownIcon,
+  Building2Icon,
   ChevronLeftIcon,
+  CheckIcon,
   CircleAlertIcon,
+  CircleCheckIcon,
   HomeIcon,
   LeafIcon,
   LoaderCircleIcon,
@@ -26,6 +27,10 @@ import {
   FootprintsIcon,
   PlusIcon,
   SearchIcon,
+  SignalHighIcon,
+  SignalIcon,
+  SignalLowIcon,
+  SignalMediumIcon,
   ShieldCheckIcon,
   TrafficConeIcon,
 } from "lucide-react"
@@ -36,6 +41,7 @@ import { toast } from "sonner"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { isResponderUser } from "@/features/auth/roles"
 import {
   commentOnConcern,
   deleteConcernComment,
@@ -56,8 +62,8 @@ import {
 import { FeedPostCard } from "@/features/dashboard/components/feed-post-card"
 import { EmptyState } from "@/features/dashboard/components/record/empty-state"
 import {
-  categoryLabel,
   concernBodyText,
+  concernTitleText,
   streetLabelFromAddress,
 } from "@/features/dashboard/components/feed-post-text"
 import { advisoryMeta } from "@/features/dashboard/components/community-content/advisory-tags"
@@ -68,11 +74,9 @@ import {
 } from "@/features/dashboard/components/resident-map/emergency-strip"
 import {
   ResidentLeafletMap,
-
   type MapApi,
 } from "@/features/dashboard/components/resident-map/resident-leaflet-map"
 import { useBarangayWeather } from "@/features/dashboard/hooks/use-barangay-weather"
-import { getConcernClassificationConfig } from "@/features/classification/api"
 import {
   MapControlButton,
   MapControlStack,
@@ -81,7 +85,10 @@ import {
   MapWeatherCard,
   MapWeatherIcon,
 } from "@/features/dashboard/components/map-weather"
-import { MapLegend, type MapLegendRow } from "@/features/dashboard/components/map/map-legend"
+import {
+  MapLegend,
+  type MapLegendRow,
+} from "@/features/dashboard/components/map/map-legend"
 import { MapFilterChips } from "@/features/dashboard/components/map/filter-chips"
 import { MAP_COLORS } from "@/features/dashboard/components/alerts-map/lib"
 import {
@@ -90,7 +97,7 @@ import {
 } from "@/features/dashboard/lib/resident-map-layers"
 import { usePageTitle } from "@/hooks/use-page-title"
 import {
-  BARANGAY_CENTER,
+  NETWORK_FALLBACK_CENTER,
   formatDistance,
   haversineMeters,
   hasMapCoords,
@@ -108,25 +115,24 @@ import {
 import { websocketTicket, websocketUrl } from "@/lib/api"
 import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
 
-type ChipKey = "all" | "emergencies" | (string & {})
+type ChipKey = "all" | (string & {})
 type CategoryChip = { key: string; label: string }
-
 const BARANGAY = "Community"
 
 const MODE_CHIPS: CategoryChip[] = [
   { key: "all", label: "All" },
   { key: "posts", label: "Concerns" },
   { key: "announcements", label: "Announcements" },
-  { key: "emergencies", label: "Emergencies" },
 ]
-
-
 
 /**
  * Map badge labels — same groups as My reports filters
  * (Active / Resolved / Rejected / Appealed).
  */
-function statusLabel(status: string): { label: string; tone: "active" | "closed" | "appealed" } {
+function statusLabel(status: string): {
+  label: string
+  tone: "active" | "closed" | "appealed"
+} {
   if (status === "resolved") return { label: "Resolved", tone: "closed" }
   if (status === "rejected") return { label: "Rejected", tone: "closed" }
   if (status === "appealed") return { label: "Appealed", tone: "appealed" }
@@ -134,83 +140,96 @@ function statusLabel(status: string): { label: string; tone: "active" | "closed"
   return { label: "Active", tone: "active" }
 }
 
+/** Keep the resident list ordered by severity without rendering the priority.
+ * Residents see the same urgent concerns first, but not the internal band label.
+ */
+function concernPriorityRank(
+  concern: Pick<Concern, "severity" | "priority_score">
+) {
+  switch ((concern.severity || "").toLowerCase()) {
+    case "critical":
+      return 3
+    case "high":
+      return 2
+    case "moderate":
+    case "medium":
+      return 1
+    default: {
+      // Older feed records may not have a severity string yet. Their score
+      // still carries the persisted 0/1000/2000/3000 severity band.
+      const score = Number(concern.priority_score || 0)
+      if (score >= 3000) return 3
+      if (score >= 2000) return 2
+      if (score >= 1000) return 1
+      return 0
+    }
+  }
+}
+
+function priorityVisual(value?: string | null) {
+  const severity = (value || "").toLowerCase()
+  if (!(severity in { critical: true, high: true, moderate: true, low: true }))
+    return null
+  const icon = {
+    critical: SignalIcon,
+    high: SignalHighIcon,
+    moderate: SignalMediumIcon,
+    low: SignalLowIcon,
+  }[severity as "critical" | "high" | "moderate" | "low"]
+  const tone = {
+    critical: "text-severity-critical-ink",
+    high: "text-severity-high-ink",
+    moderate: "text-severity-moderate-ink",
+    low: "text-severity-low-ink",
+  }[severity as "critical" | "high" | "moderate" | "low"]
+  return {
+    label: `${severity.charAt(0).toUpperCase() + severity.slice(1)} priority`,
+    icon,
+    tone,
+  }
+}
+
 /* eslint-disable react-hooks/static-components -- resolveIconByKey returns a stable module-level Lucide component, never a new one */
-function CategoryIcon({ category, iconKey, className }: { category: ConcernCategory; iconKey?: string; className?: string }) {
+function CategoryIcon({
+  category,
+  iconKey,
+  className,
+}: {
+  category: ConcernCategory
+  iconKey?: string
+  className?: string
+}) {
   const Resolved = resolveIconByKey(iconKey)
   if (Resolved) return <Resolved className={className} />
-  if (category === "infrastructure") return <TrafficConeIcon className={className} />
+  if (category === "infrastructure")
+    return <TrafficConeIcon className={className} />
   if (category === "environment") return <LeafIcon className={className} />
-  if (category === "public_safety") return <ShieldCheckIcon className={className} />
+  if (category === "public_safety")
+    return <ShieldCheckIcon className={className} />
   return <SearchIcon className={className} />
 }
 /* eslint-enable react-hooks/static-components */
 
 function ResidentFilterRows({
   chip,
-  categories,
-  categoriesOpen,
-  onToggleCategories,
   loading,
   onSelect,
 }: {
   chip: string
-  categories: CategoryChip[]
-  categoriesOpen: boolean
-  onToggleCategories: () => void
   loading: boolean
   onSelect: (key: string) => void
 }) {
-  const categoryActive = categories.some((c) => c.key === chip)
   return (
-    <div className="flex min-w-0 flex-col gap-1.5">
-      <div className="flex min-w-0 items-center gap-1.5">
-        <MapFilterChips
-          tone="light"
-          chips={MODE_CHIPS}
-          chip={chip}
-          loading={loading}
-          onSelect={onSelect}
-          className="min-w-0 flex-1"
-        />
-        {categories.length > 0 ? (
-          <button
-            type="button"
-            onClick={onToggleCategories}
-            disabled={loading}
-            aria-expanded={categoriesOpen}
-            className={cn(
-              "flex shrink-0 items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[12px] font-semibold transition-colors sm:text-[13px]",
-              categoriesOpen || categoryActive
-                ? "border-brand-orange bg-brand-orange text-white shadow-sm"
-                : "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:bg-neutral-50",
-              loading && "opacity-70",
-            )}
-          >
-            Categories
-            <ChevronDownIcon
-              className={cn(
-                "size-3.5 shrink-0 transition-transform",
-                categoriesOpen && "rotate-180",
-              )}
-              strokeWidth={2.25}
-            />
-          </button>
-        ) : null}
-      </div>
-      {categoriesOpen && categories.length > 0 ? (
-        <MapFilterChips
-          tone="light"
-          chips={categories}
-          chip={chip}
-          loading={loading}
-          onSelect={onSelect}
-          label="Category filters"
-        />
-      ) : null}
-    </div>
+    <MapFilterChips
+      tone="light"
+      chips={MODE_CHIPS}
+      chip={chip}
+      loading={loading}
+      onSelect={onSelect}
+      className="min-w-0 flex-1"
+    />
   )
 }
-
 
 /** Compact list preview (Nextdoor first part) — category icon, not media image */
 function FeedPreviewCard({
@@ -219,43 +238,86 @@ function FeedPreviewCard({
   expanded,
   onOpen,
   onWrite,
+  showPriority = false,
+  actionLabel = "View the concern",
 }: {
   post: Concern
   distance: number | null
   expanded: boolean
   onOpen: () => void
   onWrite: () => void
+  showPriority?: boolean
+  actionLabel?: string
 }) {
   const st = statusLabel(post.status)
+  const resolved = post.status === "resolved"
   const dist = formatDistance(distance)
   const ago = timeAgo(post.created_at)
-  const snippet = concernBodyText(post)
+  const body = concernBodyText(post).replace(/\s+/g, " ").trim()
+  const title =
+    (post.notification_subject?.trim() || concernTitleText(post))
+      .replace(/\s+/g, " ")
+      .trim() || "Report"
+  const summary = post.summary?.replace(/\s+/g, " ").trim() || ""
+  const normalise = (value: string) =>
+    value
+      .replace(/[“”‘’"']/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase()
+  // A generated summary can be identical to the submitted auto-title/body.
+  // Keep one readable line in the preview instead of printing the same report
+  // twice; the full feed detail still contains both when they differ.
+  const snippet =
+    (summary &&
+    normalise(summary) !== normalise(title) &&
+    normalise(summary) !== normalise(body)
+      ? summary
+      : "") || (normalise(body) !== normalise(title) ? body : "")
+  const snippetLabel = summary ? "" : snippet ? "Report description" : ""
+  const priority = showPriority ? priorityVisual(post.severity ?? null) : null
+  const PriorityIcon = priority?.icon
 
   return (
     <div
       className={cn(
         "rounded-2xl border bg-white transition-colors",
-        expanded ? "border-neutral-300 bg-neutral-50 shadow-sm" : "border-neutral-200",
+        expanded
+          ? "border-neutral-300 bg-neutral-50 shadow-sm"
+          : "border-neutral-200"
       )}
     >
-      <button type="button" onClick={onOpen} className="w-full px-3 py-3 text-left sm:px-3.5">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="w-full px-3 py-3 text-left sm:px-3.5"
+      >
         <div className="flex items-start gap-2.5 sm:gap-3">
-          <span className={cn(
-            "flex size-9 shrink-0 items-center justify-center rounded-full sm:size-10",
-            st.tone === "closed"
-              ? "bg-neutral-100 text-neutral-500"
-              : "bg-orange-50 text-orange-500",
-          )}>
-            <CategoryIcon category={post.category} iconKey={post.category_ref?.icon_key} className="size-5" />
+          <span
+            className={cn(
+              "flex size-9 shrink-0 items-center justify-center rounded-full sm:size-10",
+              st.tone === "closed"
+                ? "bg-neutral-100 text-neutral-500"
+                : "bg-orange-50 text-orange-500"
+            )}
+          >
+            {resolved ? (
+              <CircleCheckIcon className="size-5" strokeWidth={1.9} />
+            ) : (
+              <CategoryIcon
+                category={post.category}
+                iconKey={post.category_ref?.icon_key}
+                className="size-5"
+              />
+            )}
           </span>
           <div className="min-w-0 flex-1 overflow-hidden">
             <div className="flex items-start justify-between gap-2">
               <p className="min-w-0 flex-1 truncate text-[13px] font-bold text-neutral-900 sm:text-[14px]">
                 {(() => {
-                  const body = concernBodyText(post).replace(/\s+/g, " ").trim()
-                  if (!body) return "Report"
-                  if (body.length <= 64) return body
-                  const slice = body.slice(0, 64)
+                  if (!title) return "Report"
+                  if (title.length <= 64) return title
+                  const slice = title.slice(0, 64)
                   const atWord = slice.replace(/\s+\S*$/, "").trim()
                   return `${(atWord.length >= 24 ? atWord : slice).trim()}...`
                 })()}
@@ -265,26 +327,44 @@ function FeedPreviewCard({
                   {st.label}
                 </span>
               ) : st.tone === "appealed" ? (
-                <span className="shrink-0 text-[11px] font-semibold text-neutral-600 sm:text-[12px]">{st.label}</span>
+                <span className="shrink-0 text-[11px] font-semibold text-neutral-600 sm:text-[12px]">
+                  {st.label}
+                </span>
+              ) : priority && PriorityIcon ? (
+                <span
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold sm:text-[12px]",
+                    priority.tone
+                  )}
+                  title={priority.label}
+                >
+                  <PriorityIcon className="size-3.5 shrink-0" strokeWidth={2} />
+                  {priority.label}
+                </span>
               ) : null}
             </div>
             <p className="mt-0.5 flex items-center gap-x-1.5 text-[11px] text-neutral-500 sm:text-[12px]">
-              <span className="text-neutral-500">
-                {categoryLabel(post.category)}
-              </span>
+              <span>{post.community.name}</span>
               <span aria-hidden>·</span>
               <span>{[dist, ago].filter(Boolean).join(" · ")}</span>
             </p>
             {snippet ? (
-              <p className="mt-1.5 line-clamp-2 break-words text-[12px] leading-snug text-neutral-600 sm:text-[13px]">
-                {snippet}
-              </p>
+              <div className="mt-1.5">
+                {snippetLabel ? (
+                  <p className="mb-0.5 text-[10px] font-bold tracking-[0.06em] text-neutral-400 uppercase">
+                    {snippetLabel}
+                  </p>
+                ) : null}
+                <p className="line-clamp-2 text-[12px] leading-snug break-words text-neutral-600 sm:text-[13px]">
+                  {snippet}
+                </p>
+              </div>
             ) : null}
           </div>
         </div>
       </button>
 
-      <div className="border-t border-neutral-100 px-3 py-2 sm:px-3.5 sm:py-2.5">
+      <div className="border-t border-neutral-100 px-3 py-2 text-center sm:px-3.5 sm:py-2.5">
         <button
           type="button"
           onClick={(e) => {
@@ -293,7 +373,7 @@ function FeedPreviewCard({
           }}
           className="flex h-9 w-full items-center justify-center rounded-full border border-neutral-300 bg-white px-3 text-[12px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50 sm:text-[13px]"
         >
-          Write about this alert
+          {actionLabel}
         </button>
       </div>
     </div>
@@ -322,30 +402,38 @@ function AnnouncementListItem({
   const TagIcon = advisoryMeta(announcement.tag).icon
   const place =
     announcement.place_label ||
-    (announcement.affected_streets?.length ? announcement.affected_streets.join(" · ") : "")
+    (announcement.affected_streets?.length
+      ? announcement.affected_streets.join(" · ")
+      : "")
   const ago = timeAgo(announcement.created_at)
 
   return (
     <div
       className={cn(
         "rounded-2xl border bg-white transition-colors",
-        expanded ? "border-neutral-300 bg-neutral-50 shadow-sm" : "border-neutral-200",
+        expanded
+          ? "border-neutral-300 bg-neutral-50 shadow-sm"
+          : "border-neutral-200"
       )}
     >
-      <button type="button" onClick={onOpen} className="w-full px-3 py-3 text-left sm:px-3.5">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="w-full px-3 py-3 text-left sm:px-3.5"
+      >
         <div className="flex items-start gap-2.5 sm:gap-3">
           <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-600 sm:size-10">
             <TagIcon className="size-4 sm:size-5" strokeWidth={1.9} />
           </span>
           <div className="min-w-0 flex-1 overflow-hidden">
-            <p className="break-words text-[13px] font-bold leading-snug text-neutral-900 sm:text-[14px]">
+            <p className="text-[13px] leading-snug font-bold break-words text-neutral-900 sm:text-[14px]">
               {announcement.title}
             </p>
             <p className="mt-1 text-[11px] text-neutral-500 sm:text-[12px]">
               {[place, ago].filter(Boolean).join(" · ")}
             </p>
             {announcement.body ? (
-              <p className="mt-1.5 line-clamp-2 break-words text-[12px] leading-snug text-neutral-600 sm:text-[13px]">
+              <p className="mt-1.5 line-clamp-2 text-[12px] leading-snug break-words text-neutral-600 sm:text-[13px]">
                 {announcement.body}
               </p>
             ) : null}
@@ -362,7 +450,7 @@ function AnnouncementListItem({
           }}
           className="flex h-9 w-full items-center justify-center rounded-full border border-neutral-300 bg-white px-3 text-[12px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50 sm:text-[13px]"
         >
-          Write about this alert
+          View the concern
         </button>
       </div>
     </div>
@@ -382,11 +470,13 @@ function AnnouncementDetailPanel({
   const TagIcon = advisoryMeta(announcement.tag).icon
   const place =
     announcement.place_label ||
-    (announcement.affected_streets?.length ? announcement.affected_streets.join(" · ") : "")
+    (announcement.affected_streets?.length
+      ? announcement.affected_streets.join(" · ")
+      : "")
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-white text-neutral-900">
-      <div className="flex shrink-0 items-center gap-1 px-2 pb-1 pt-3">
+      <div className="flex shrink-0 items-center gap-1 px-2 pt-3 pb-1">
         <button
           type="button"
           onClick={onBack}
@@ -406,14 +496,18 @@ function AnnouncementDetailPanel({
             <TagIcon className="size-6" strokeWidth={1.9} />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-[15px] font-semibold text-neutral-900">Barangay Hall</p>
+            <p className="text-[15px] font-semibold text-neutral-900">
+              Barangay Hall
+            </p>
             <p className="mt-0.5 text-meta text-neutral-500">
               {[announcement.date_label, place].filter(Boolean).join(" · ")}
             </p>
           </div>
         </div>
 
-        <h2 className="mt-5 break-words text-section text-neutral-900">{announcement.title}</h2>
+        <h2 className="mt-5 text-section break-words text-neutral-900">
+          {announcement.title}
+        </h2>
 
         {announcement.image_url ? (
           <img
@@ -424,7 +518,7 @@ function AnnouncementDetailPanel({
         ) : null}
 
         {announcement.body ? (
-          <p className="mt-4 whitespace-pre-wrap break-words text-read leading-relaxed text-neutral-800">
+          <p className="mt-4 text-read leading-relaxed break-words whitespace-pre-wrap text-neutral-800">
             {announcement.body}
           </p>
         ) : null}
@@ -444,40 +538,66 @@ export default function ResidentAlertsMapPage() {
   usePageTitle("Alerts Map")
   const navigate = useNavigate()
   const { user } = useAuthSession()
+  const isResponder = isResponderUser(user)
   const initialCommunityName = (user?.barangay || "").trim()
   const [posts, setPosts] = useState<Concern[]>([])
   const [emergencies, setEmergencies] = useState<ResidentMapEmergency[]>([])
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
+  const [communities, setCommunities] = useState<
+    ResidentAlertsMapSnapshot["communities"]
+  >([])
+  const [homeCommunityId, setHomeCommunityId] = useState<string | null>(null)
+  const [selectedCommunityId, setSelectedCommunityId] = useState<string | null>(
+    null
+  )
+  const [communityBoundaryVisible, setCommunityBoundaryVisible] =
+    useState(false)
   // Mount map immediately with barangay defaults — don't wait on API (slow OSM/POI path)
-  const [mapMeta, setMapMeta] = useState<ResidentAlertsMapSnapshot["map"]>(() => ({
-    provider: "OpenStreetMap",
-    center: {
-      latitude: BARANGAY_CENTER.lat,
-      longitude: BARANGAY_CENTER.lng,
-      zoom: 15,
-    },
-    boundary: {
-      osm_relation_id: 371327,
-      name: initialCommunityName.toLowerCase() === "pending" ? "" : initialCommunityName,
-      geometry: null,
-    },
-  }))
+  const [mapMeta, setMapMeta] = useState<ResidentAlertsMapSnapshot["map"]>(
+    () => ({
+      provider: "OpenStreetMap",
+      center: {
+        latitude: NETWORK_FALLBACK_CENTER.lat,
+        longitude: NETWORK_FALLBACK_CENTER.lng,
+        zoom: 15,
+      },
+      boundary: {
+        osm_relation_id: null,
+        name:
+          initialCommunityName.toLowerCase() === "pending"
+            ? ""
+            : initialCommunityName,
+        geometry: null,
+      },
+    })
+  )
   const [loading, setLoading] = useState(true)
+  // The map can paint immediately with a visual network fallback, but that
+  // fallback is not a valid weather location. Wait for a real community
+  // payload before requesting a forecast so another area's weather never
+  // flashes on first render.
+  const [weatherReady, setWeatherReady] = useState(false)
   const [filterLoading, setFilterLoading] = useState(false)
   const [error, setError] = useState("")
   const [chip, setChip] = useState<ChipKey>("all")
   const [selectedId, setSelectedId] = useState<number | null>(null)
-  const [selectedEmergencyId, setSelectedEmergencyId] = useState<number | null>(null)
-  const [selectedAnnouncementId, setSelectedAnnouncementId] = useState<number | null>(null)
+  const [selectedEmergencyId, setSelectedEmergencyId] = useState<number | null>(
+    null
+  )
+  const [selectedAnnouncementId, setSelectedAnnouncementId] = useState<
+    number | null
+  >(null)
   const [expandedPost, setExpandedPost] = useState<Concern | null>(null)
   const [expandLoading, setExpandLoading] = useState(false)
   const [focusComment, setFocusComment] = useState(false)
-  const [userPos, setUserPos] = useState<{ lat: number; lng: number } | null>(() => {
-    const stored = readLastKnownPosition(user?.id ?? null)
-    if (!stored) return null
-    const seed = { lat: stored.latitude, lng: stored.longitude }
-    return isLocalGps(seed, mapMeta.boundary.geometry) ? seed : null
-  })
+  const [userPos, setUserPos] = useState<{ lat: number; lng: number } | null>(
+    () => {
+      const stored = readLastKnownPosition(user?.id ?? null)
+      if (!stored) return null
+      const seed = { lat: stored.latitude, lng: stored.longitude }
+      return isLocalGps(seed, mapMeta.boundary.geometry) ? seed : null
+    }
+  )
   const mapApiRef = useRef<MapApi | null>(null)
   const isDesktop = useIsDesktop()
   /** Mobile sheet: full list, peek preview bar, or fully tucked while using the map */
@@ -493,23 +613,30 @@ export default function ResidentAlertsMapPage() {
   } = useBottomSheetSnap({
     enabled: !isDesktop,
     initialHeight:
-      typeof window !== "undefined" ? Math.round(Math.min(window.innerHeight * 0.55, 520)) : 420,
+      typeof window !== "undefined"
+        ? Math.round(Math.min(window.innerHeight * 0.55, 520))
+        : 420,
     onSettle: () => mapApiRef.current?.invalidateSize(),
   })
   const [weatherOpen, setWeatherOpen] = useState(false)
+  const [communityListOpen, setCommunityListOpen] = useState(false)
   const [svPick, setSvPick] = useState(false)
   const [locating, setLocating] = useState(false)
-  /** Officially-configured concern categories (filter chips), from the classification config. */
-  const [filterCats, setFilterCats] = useState<CategoryChip[]>([])
-  /** Category filter chips stay collapsed behind the "Categories" toggle. */
-  const [categoriesOpen, setCategoriesOpen] = useState(false)
   /** Desktop left alerts panel collapsed vs open. */
   const [alertsOpen, setAlertsOpen] = useState(true)
   /** Desktop alerts panel size — null until the resident drags the corner. */
-  const [alertsPanelSize, setAlertsPanelSize] = useState<{ width: number; height: number } | null>(null)
+  const [alertsPanelSize, setAlertsPanelSize] = useState<{
+    width: number
+    height: number
+  } | null>(null)
   const alertsPanelRef = useRef<HTMLElement>(null)
   const [alertsPanelResizing, setAlertsPanelResizing] = useState(false)
-  const alertsPanelResizeStartRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null)
+  const alertsPanelResizeStartRef = useRef<{
+    x: number
+    y: number
+    w: number
+    h: number
+  } | null>(null)
   /** Epoch ms of the last stored GPS fix — shown under the user pin. */
   const [userKnownAt, setUserKnownAt] = useState<number | null>(() => {
     const stored = readLastKnownPosition(user?.id ?? null)
@@ -524,9 +651,18 @@ export default function ResidentAlertsMapPage() {
       const start = alertsPanelResizeStartRef.current
       if (!start) return
       const maxWidth = Math.min(640, window.innerWidth - 32)
-      const maxHeight = Math.min(window.innerHeight - 32, Math.round(window.innerHeight * 0.9))
-      const width = Math.min(maxWidth, Math.max(280, start.w + (e.clientX - start.x)))
-      const height = Math.min(maxHeight, Math.max(220, start.h + (e.clientY - start.y)))
+      const maxHeight = Math.min(
+        window.innerHeight - 32,
+        Math.round(window.innerHeight * 0.9)
+      )
+      const width = Math.min(
+        maxWidth,
+        Math.max(280, start.w + (e.clientX - start.x))
+      )
+      const height = Math.min(
+        maxHeight,
+        Math.max(220, start.h + (e.clientY - start.y))
+      )
       setAlertsPanelSize({ width, height })
     }
     function onUp() {
@@ -547,7 +683,12 @@ export default function ResidentAlertsMapPage() {
     e.preventDefault()
     const rect = alertsPanelRef.current?.getBoundingClientRect()
     if (!rect) return
-    alertsPanelResizeStartRef.current = { x: e.clientX, y: e.clientY, w: rect.width, h: rect.height }
+    alertsPanelResizeStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      w: rect.width,
+      h: rect.height,
+    }
     setAlertsPanelResizing(true)
   }
 
@@ -557,10 +698,31 @@ export default function ResidentAlertsMapPage() {
     snapSheetTo("hidden")
   }, [isDesktop, snapSheetTo])
 
-  const weatherLat = mapMeta?.center.latitude ?? BARANGAY_CENTER.lat
-  const weatherLng = mapMeta?.center.longitude ?? BARANGAY_CENTER.lng
+  const selectedCommunity =
+    communities.find((community) => community.id === selectedCommunityId) ??
+    communities.find((community) => community.id === homeCommunityId) ??
+    null
+  const activeCommunityId = selectedCommunity?.id ?? homeCommunityId
+  const communityOptions = useMemo(() => {
+    if (!homeCommunityId) return communities
+    return [...communities].sort((a, b) => {
+      const aIsCurrent = a.id === homeCommunityId ? 1 : 0
+      const bIsCurrent = b.id === homeCommunityId ? 1 : 0
+      return bIsCurrent - aIsCurrent
+    })
+  }, [communities, homeCommunityId])
+  const selectedCenter = useMemo(
+    () =>
+      selectedCommunity
+        ? { ...selectedCommunity.center, zoom: mapMeta.center.zoom }
+        : mapMeta.center,
+    [mapMeta.center, selectedCommunity]
+  )
+  const selectedBoundary = selectedCommunity?.boundary ?? mapMeta.boundary
+  const weatherLat = weatherReady ? selectedCenter.latitude : null
+  const weatherLng = weatherReady ? selectedCenter.longitude : null
   const weatherPlace = (() => {
-    const fromMap = mapMeta?.boundary?.name?.trim()
+    const fromMap = selectedBoundary?.name?.trim()
     if (fromMap) return fromMap
     const fromUser = (user?.barangay || "").trim()
     if (fromUser && fromUser.toLowerCase() !== "pending") return fromUser
@@ -568,52 +730,48 @@ export default function ResidentAlertsMapPage() {
   })()
   const weather = useBarangayWeather(weatherLat, weatherLng, weatherPlace)
 
-  // Filter chips come from the classification config officials maintain, not a hardcoded list
-  useEffect(() => {
-    let mounted = true
-    getConcernClassificationConfig()
-      .then((config) => {
-        if (!mounted) return
-        setFilterCats(
-          (config.categories ?? [])
-            .filter((c) => c.enabled)
-            .map((c) => ({ key: c.key, label: c.label })),
-        )
-      })
-      .catch(() => {
-        /* keep the static All / Emergencies chips if the config fetch fails */
-      })
-    return () => {
-      mounted = false
-    }
-  }, [])
-
   const load = useCallback(async (soft = false) => {
     if (!soft) setError("")
     try {
       // Parallel: map snapshot has public pin coords; feed has votes/comments but masks lat/lng
       const mapSnapPromise = getResidentAlertsMap()
         .then((mapSnap) => {
-          if (mapSnap?.map) setMapMeta(mapSnap.map)
+          if (mapSnap?.map) {
+            setMapMeta(mapSnap.map)
+            setCommunities(mapSnap.communities ?? [])
+            setHomeCommunityId(mapSnap.home_community_id)
+            setSelectedCommunityId(
+              (current) => current ?? mapSnap.home_community_id
+            )
+            setWeatherReady(true)
+          }
           return mapSnap
         })
         .catch(() => null)
       const feedPromise = listFeedConcerns("all").catch(() => [] as Concern[])
-      const announcementsPromise = listAnnouncements().catch(() => [] as Announcement[])
+      const announcementsPromise = listAnnouncements().catch(
+        () => [] as Announcement[]
+      )
 
       const [mapSnap, feed, nextAnnouncements] = await Promise.all([
         mapSnapPromise,
         feedPromise,
         announcementsPromise,
       ])
-      const withPins = mergeFeedWithMapCoords(feed, mapSnap?.concerns)
+      const withPins = mergeFeedWithMapCoords(
+        feed,
+        mapSnap?.concerns,
+        mapSnap?.home_community_id
+      )
       setPosts(withPins)
       // Keep every published advisory: the list shows them all, and the map
       // skips the ones without a drawn area (the map already guards on
       // `area_geometry`), so a barangay-wide notice still belongs in the feed.
       setAnnouncements(nextAnnouncements.filter((item) => item.is_published))
       setEmergencies(
-        (mapSnap?.emergencies ?? []).filter((em) => validCoord(em.latitude, em.longitude)),
+        (mapSnap?.emergencies ?? []).filter((em) =>
+          validCoord(em.latitude, em.longitude)
+        )
       )
     } catch {
       setError("Could not load feed alerts.")
@@ -625,8 +783,13 @@ export default function ResidentAlertsMapPage() {
 
   async function applyChip(next: ChipKey) {
     if (next === chip && !filterLoading) return
-    closePost()
+    setSelectedId(null)
+    setExpandedPost(null)
+    setFocusComment(false)
     setSelectedEmergencyId(null)
+    setSelectedAnnouncementId(null)
+    setAlertsOpen(true)
+    if (!isDesktop) snapSheetTo("expanded")
     setChip(next)
     setFilterLoading(true)
     try {
@@ -639,7 +802,6 @@ export default function ResidentAlertsMapPage() {
 
   function toggleWeather() {
     void applyChip("all")
-    setCategoriesOpen(false)
     setWeatherOpen((value) => !value)
   }
 
@@ -647,10 +809,12 @@ export default function ResidentAlertsMapPage() {
     <button
       type="button"
       onClick={toggleWeather}
-      aria-label={weatherOpen ? "Show the alerts list" : "Show the weather details"}
+      aria-label={
+        weatherOpen ? "Show the alerts list" : "Show the weather details"
+      }
       aria-expanded={weatherOpen}
       title="Weather"
-      className="flex shrink-0 items-center gap-1.5 text-[18px] font-bold leading-tight tracking-tight text-neutral-900 transition-opacity hover:opacity-70 sm:text-[20px]"
+      className="flex shrink-0 items-center gap-1.5 text-[18px] leading-tight font-bold tracking-tight text-neutral-900 transition-opacity hover:opacity-70 sm:text-[20px]"
     >
       {weather.loading && weather.temperature == null ? (
         <LoaderCircleIcon className="size-5 shrink-0 animate-spin text-neutral-400" />
@@ -658,7 +822,9 @@ export default function ResidentAlertsMapPage() {
         <MapWeatherIcon code={weather.code} className="size-5 shrink-0" />
       )}
       <span className="tabular-nums">
-        {weather.temperature != null ? `${Math.round(weather.temperature)}°C` : "—"}
+        {weather.temperature != null
+          ? `${Math.round(weather.temperature)}°C`
+          : "—"}
       </span>
     </button>
   )
@@ -692,12 +858,17 @@ export default function ResidentAlertsMapPage() {
         const ticket = await websocketTicket()
         if (closed) return
         socket = new WebSocket(
-          websocketUrl(`/ws/dashboard/resident-live-map/?ticket=${encodeURIComponent(ticket)}`),
+          websocketUrl(
+            `/ws/dashboard/resident-live-map/?ticket=${encodeURIComponent(ticket)}`
+          )
         )
       } catch {
         if (!closed) {
           attempts += 1
-          reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** attempts))
+          reconnectTimer = window.setTimeout(
+            () => void connect(),
+            Math.min(30_000, 1500 * 2 ** attempts)
+          )
         }
         return
       }
@@ -708,29 +879,49 @@ export default function ResidentAlertsMapPage() {
         try {
           const message = JSON.parse(event.data) as {
             type?: string
-            payload?: { concern?: ResidentMapConcern; emergency?: ResidentMapEmergency; removed?: boolean }
+            payload?: {
+              concern?: ResidentMapConcern
+              emergency?: ResidentMapEmergency
+              removed?: boolean
+            }
           }
-          if (message.type !== "concern.created" && message.type !== "concern.updated" && message.type !== "emergency.created" && message.type !== "emergency.updated") return
-          const resource = message.payload?.concern ?? message.payload?.emergency
+          if (
+            message.type !== "concern.created" &&
+            message.type !== "concern.updated" &&
+            message.type !== "emergency.created" &&
+            message.type !== "emergency.updated"
+          )
+            return
+          const resource =
+            message.payload?.concern ?? message.payload?.emergency
           if (!resource?.id) return
           const key = `${message.type}:${resource.id}:${"updated_at" in resource ? resource.updated_at : ""}:${"status" in resource ? resource.status : ""}`
           if (seen.has(key)) return
           seen.add(key)
           if (seen.size > 200) seen.delete(seen.values().next().value as string)
           if (message.payload?.concern) {
-            if (message.payload.removed || message.payload.concern.status === "rejected") {
-              setPosts((current) => current.filter((post) => post.id !== resource.id))
+            if (
+              message.payload.removed ||
+              message.payload.concern.status === "rejected"
+            ) {
+              setPosts((current) =>
+                current.filter((post) => post.id !== resource.id)
+              )
             } else {
               scheduleReload()
             }
           } else if (message.payload?.emergency) {
             const emergency = message.payload.emergency
             const active = isEmergencyActive(emergency.status)
-            setEmergencies((current) => active
-              ? current.some((item) => item.id === emergency.id)
-                ? current.map((item) => item.id === emergency.id ? emergency : item)
-                : [emergency, ...current]
-              : current.filter((item) => item.id !== emergency.id))
+            setEmergencies((current) =>
+              active
+                ? current.some((item) => item.id === emergency.id)
+                  ? current.map((item) =>
+                      item.id === emergency.id ? emergency : item
+                    )
+                  : [emergency, ...current]
+                : current.filter((item) => item.id !== emergency.id)
+            )
           }
         } catch {
           // REST refresh remains the recovery path for malformed events.
@@ -739,7 +930,10 @@ export default function ResidentAlertsMapPage() {
       socket.onclose = () => {
         if (!closed) {
           attempts += 1
-          reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** attempts))
+          reconnectTimer = window.setTimeout(
+            () => void connect(),
+            Math.min(30_000, 1500 * 2 ** attempts)
+          )
         }
       }
       socket.onerror = () => socket?.close()
@@ -771,46 +965,87 @@ export default function ResidentAlertsMapPage() {
       // Keep whatever was seeded from the last stored fix; dropping the pin
       // on a failed read is what made distances fall back to barangay centre.
       () => {},
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60_000 },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60_000 }
     )
   }, [user?.id])
 
   // Distance origin: local GPS when near MH, else barangay center (never far-away device GPS)
   const origin = useMemo(() => {
-    if (userPos && isLocalGps(userPos, mapMeta.boundary.geometry)) return userPos
-    if (mapMeta?.center) {
-      return { lat: mapMeta.center.latitude, lng: mapMeta.center.longitude }
-    }
-    return { ...BARANGAY_CENTER }
-  }, [userPos, mapMeta])
+    if (userPos && isLocalGps(userPos, selectedBoundary.geometry))
+      return userPos
+    return { lat: selectedCenter.latitude, lng: selectedCenter.longitude }
+  }, [userPos, selectedBoundary, selectedCenter])
 
   const [layers, setLayers] = useState<ResidentMapLayers>(defaultResidentLayers)
 
   const filtered = useMemo(() => {
     if (!layers.concerns) return [] as Concern[]
-    if (chip === "emergencies" || chip === "announcements") return [] as Concern[]
-    const base =
-      chip === "all" || chip === "posts" ? posts : posts.filter((p) => p.category === chip)
+    if (chip === "announcements") return [] as Concern[]
+    if (!activeCommunityId) return [] as Concern[]
+    // Chip can only be All or Concerns now that the category dropdown is gone.
+    const base = posts
     // Drop posts with invalid / out-of-area coordinates (no random far pins)
-    return base.filter((p) => hasMapCoords(p))
-  }, [posts, chip, layers.concerns])
+    return base.filter(
+      (post) => hasMapCoords(post) && post.community.id === activeCommunityId
+    )
+  }, [posts, chip, layers.concerns, activeCommunityId])
 
   const filteredEmergencies = useMemo(() => {
-    if (!layers.emergencies) return [] as ResidentMapEmergency[]
-    if (chip !== "all" && chip !== "emergencies") return [] as ResidentMapEmergency[]
-    return emergencies
-  }, [emergencies, chip, layers.emergencies])
+    if (!layers.concerns) return [] as ResidentMapEmergency[]
+    // “Concerns” is the complete report queue. Keep emergency/critical SOS
+    // rows in this view alongside ordinary resident concerns.
+    if (chip !== "all" && chip !== "posts") return [] as ResidentMapEmergency[]
+    if (!activeCommunityId) return [] as ResidentMapEmergency[]
+    return emergencies.filter(
+      (emergency) => emergency.community.id === activeCommunityId
+    )
+  }, [emergencies, chip, layers.concerns, activeCommunityId])
 
   // Advisories show under the default view and the dedicated Announcements
-  // chip — the Emergencies / Posts / category chips are about reports, so a
+  // chip — the Posts / category chips are about reports, so a
   // water-outage notice should not leak into those.
   const visibleAnnouncements = useMemo(
     () =>
-      layers.advisories && (chip === "all" || chip === "announcements")
-        ? announcements
+      layers.advisories &&
+      (chip === "all" || chip === "announcements") &&
+      selectedCommunity?.name
+        ? announcements.filter(
+            (announcement) =>
+              announcement.barangay.trim().toLowerCase() ===
+              selectedCommunity.name.trim().toLowerCase()
+          )
         : ([] as Announcement[]),
-    [chip, announcements, layers.advisories],
+    [chip, announcements, layers.advisories, selectedCommunity]
   )
+
+  const orderedAlerts = useMemo(() => {
+    const rows = [
+      ...filteredEmergencies.map((item) => ({
+        kind: "emergency" as const,
+        item,
+        group: isEmergencyActive(item.status) ? 0 : 1,
+        priority: 3,
+        time: new Date(item.created_at).getTime(),
+      })),
+      ...filtered.map((item) => ({
+        kind: "concern" as const,
+        item,
+        group: ["resolved", "rejected"].includes(item.status) ? 1 : 0,
+        priority: concernPriorityRank(item),
+        time: new Date(item.created_at).getTime(),
+      })),
+      ...visibleAnnouncements.map((item) => ({
+        kind: "announcement" as const,
+        item,
+        group: 2,
+        priority: 0,
+        time: new Date(item.created_at).getTime(),
+      })),
+    ]
+    return rows.sort(
+      (a, b) => a.group - b.group || b.priority - a.priority || b.time - a.time
+    )
+  }, [filtered, filteredEmergencies, visibleAnnouncements])
 
   const distanceFor = useCallback(
     (post: Concern) => {
@@ -818,7 +1053,7 @@ export default function ResidentAlertsMapPage() {
       if (!pos) return null
       return haversineMeters(origin.lat, origin.lng, pos[0], pos[1])
     },
-    [origin],
+    [origin]
   )
 
   const distanceForEmergency = useCallback(
@@ -827,7 +1062,7 @@ export default function ResidentAlertsMapPage() {
       if (!pos) return null
       return haversineMeters(origin.lat, origin.lng, pos[0], pos[1])
     },
-    [origin],
+    [origin]
   )
 
   function openAnnouncement(id: number, write = false) {
@@ -842,6 +1077,11 @@ export default function ResidentAlertsMapPage() {
   }
 
   async function openPost(id: number, write = false) {
+    if (isResponder) {
+      clearSelection()
+      navigate(`/dashboard/reports/${id}`)
+      return
+    }
     setSelectedEmergencyId(null)
     setSelectedAnnouncementId(null)
     setSelectedId(id)
@@ -857,10 +1097,14 @@ export default function ResidentAlertsMapPage() {
       const streetAddress = posts.find((p) => p.id === id)?.address || null
       // Reload full feed post (comments, votes, media) into the left panel
       const full = await getConcern(id)
-      const detailed = streetAddress ? { ...full, address: streetAddress } : full
+      const detailed = streetAddress
+        ? { ...full, address: streetAddress }
+        : full
       setExpandedPost(detailed)
       // Keep list in sync with lightweight fields
-      setPosts((prev) => prev.map((p) => (p.id === id ? { ...p, ...detailed } : p)))
+      setPosts((prev) =>
+        prev.map((p) => (p.id === id ? { ...p, ...detailed } : p))
+      )
     } catch {
       const fallback = posts.find((p) => p.id === id) ?? null
       setExpandedPost(fallback)
@@ -880,20 +1124,28 @@ export default function ResidentAlertsMapPage() {
 
   function closePost() {
     clearSelection()
-    if (!isDesktop) snapSheetTo("peek")
+    // Back returns to the complete alert list. The map pins are independent
+    // of the selected detail and must remain visible while the list reopens.
+    setAlertsOpen(true)
+    if (!isDesktop) snapSheetTo("expanded")
   }
 
   function toggleOrOpen(alreadySelected: boolean, open: () => void) {
     if (alreadySelected) {
       clearSelection()
-      setAlertsOpen(false)
-      if (!isDesktop) snapSheetTo("peek")
+      setAlertsOpen(true)
+      if (!isDesktop) snapSheetTo("expanded")
       return
     }
     open()
   }
 
   function openEmergency(id: number, write = false) {
+    if (isResponder) {
+      clearSelection()
+      navigate(`/dashboard/reports?alert=${id}`)
+      return
+    }
     setSelectedId(null)
     setExpandedPost(null)
     setFocusComment(write)
@@ -906,7 +1158,8 @@ export default function ResidentAlertsMapPage() {
 
   const selectedAnnouncement =
     selectedAnnouncementId != null
-      ? (announcements.find((item) => item.id === selectedAnnouncementId) ?? null)
+      ? (announcements.find((item) => item.id === selectedAnnouncementId) ??
+        null)
       : null
 
   const selectedEmergency =
@@ -927,6 +1180,26 @@ export default function ResidentAlertsMapPage() {
     }, 100)
   }
 
+  function selectCommunity(id: string) {
+    const target = communities.find((community) => community.id === id)
+    if (!target) return
+    const isAlreadySelected = activeCommunityId === id
+    if (isAlreadySelected) {
+      setCommunityBoundaryVisible((visible) => !visible)
+    } else {
+      setSelectedCommunityId(id)
+      setCommunityBoundaryVisible(true)
+      mapApiRef.current?.flyTo(
+        target.center.latitude,
+        target.center.longitude,
+        15
+      )
+    }
+    setCommunityListOpen(false)
+    clearSelection()
+    setWeatherOpen(false)
+  }
+
   function goMyLocation() {
     if (!navigator.geolocation) {
       toast.error("Location unavailable")
@@ -942,7 +1215,11 @@ export default function ResidentAlertsMapPage() {
         setLocating(false)
         if (!isLocalGps(next, mapMeta.boundary.geometry)) {
           setUserPos(null)
-          toast.error(weatherPlace ? `Your location is outside ${weatherPlace}` : "Your location is outside this community")
+          toast.error(
+            weatherPlace
+              ? `Your location is outside ${weatherPlace}`
+              : "Your location is outside this community"
+          )
           window.setTimeout(() => {
             mapApiRef.current?.invalidateSize()
             mapApiRef.current?.fitBoundary(48)
@@ -960,7 +1237,7 @@ export default function ResidentAlertsMapPage() {
         setLocating(false)
         toast.error("Could not get your location")
       },
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
     )
   }
 
@@ -971,7 +1248,8 @@ export default function ResidentAlertsMapPage() {
           `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "Resident",
         role: user.role,
         initials:
-          `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}`.toUpperCase() || "?",
+          `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}`.toUpperCase() ||
+          "U",
         last_seen_at: null,
         street: streetLabelFromAddress(user.address) ?? undefined,
         barangay: user.barangay || BARANGAY,
@@ -990,13 +1268,16 @@ export default function ResidentAlertsMapPage() {
 
   const nearestPreview = useMemo(() => {
     if (filtered.length === 0) return null
-    return [...filtered].sort((a, b) => (distanceFor(a) ?? 1e9) - (distanceFor(b) ?? 1e9))[0]
+    return [...filtered].sort(
+      (a, b) => (distanceFor(a) ?? 1e9) - (distanceFor(b) ?? 1e9)
+    )[0]
   }, [filtered, distanceFor])
 
   const nearestEmergency = useMemo(() => {
     if (filteredEmergencies.length === 0) return null
     return [...filteredEmergencies].sort(
-      (a, b) => (distanceForEmergency(a) ?? 1e9) - (distanceForEmergency(b) ?? 1e9),
+      (a, b) =>
+        (distanceForEmergency(a) ?? 1e9) - (distanceForEmergency(b) ?? 1e9)
     )[0]
   }, [filteredEmergencies, distanceForEmergency])
 
@@ -1012,17 +1293,11 @@ export default function ResidentAlertsMapPage() {
 
   const legendRows: MapLegendRow<keyof ResidentMapLayers>[] = [
     {
-      key: "emergencies",
-      label: "Ongoing emergencies",
-      hint: "Live incidents responders are handling",
-      count: emergencies.length,
-      tone: MAP_COLORS.emergency,
-    },
-    {
       key: "concerns",
-      label: "Community reports",
-      hint: "Concerns neighbours have filed",
-      count: posts.filter((post) => hasMapCoords(post)).length,
+      label: "Concerns",
+      hint: "Community reports by residents",
+      count:
+        posts.filter((post) => hasMapCoords(post)).length + emergencies.length,
       tone: MAP_COLORS.concern,
     },
     {
@@ -1056,6 +1331,7 @@ export default function ResidentAlertsMapPage() {
           distance={distanceForEmergency(selectedEmergency)}
           onBack={closePost}
           focusComment={focusComment}
+          canInteract={selectedEmergency.community.id === homeCommunityId}
         />
       ) : selectedAnnouncement ? (
         <AnnouncementDetailPanel
@@ -1072,7 +1348,7 @@ export default function ResidentAlertsMapPage() {
           </div>
         ) : expandedPost ? (
           <div className="flex h-full min-h-0 flex-col bg-white text-neutral-900">
-            <div className="flex shrink-0 items-center gap-1 px-2 pb-1 pt-3">
+            <div className="flex shrink-0 items-center gap-1 px-2 pt-3 pb-1">
               <button
                 type="button"
                 onClick={closePost}
@@ -1102,14 +1378,20 @@ export default function ResidentAlertsMapPage() {
                       vote_count: result.vote_count,
                     }
                     setExpandedPost(next)
-                    setPosts((prev) => prev.map((x) => (x.id === p.id ? next : x)))
+                    setPosts((prev) =>
+                      prev.map((x) => (x.id === p.id ? next : x))
+                    )
                   } catch {
                     toast.error("Could not update vote")
                   }
                 }}
-                onComment={async (postId, body, parent) => {
+                onComment={async (postId, body, parent, media) => {
                   try {
-                    await commentOnConcern(postId, { body, parent: parent ?? null })
+                    await commentOnConcern(postId, {
+                      body,
+                      parent: parent ?? null,
+                      media,
+                    })
                     await refreshPost(postId)
                   } catch {
                     toast.error("Could not post comment")
@@ -1138,11 +1420,20 @@ export default function ResidentAlertsMapPage() {
         ) : null
       ) : (
         <>
-          <div className="flex shrink-0 items-center gap-2.5 bg-white px-4 pb-2 pt-3 sm:pt-4">
+          <div className="flex shrink-0 items-center gap-2.5 bg-white px-4 pt-3 pb-2 sm:pt-4">
             <div className="min-w-0 flex-1">
-              <h1 className="text-[18px] font-bold leading-tight tracking-tight text-neutral-900 sm:text-[20px]">
-                {weatherOpen ? (weatherPlace ? "Weather in" : "Local weather") : (weatherPlace ? "Alerts in" : "Local alerts")}{" "}
-                <span className="text-brand-orange" style={{ color: "var(--color-brand-orange)" }}>
+              <h1 className="text-[18px] leading-tight font-bold tracking-tight text-neutral-900 sm:text-[20px]">
+                {weatherOpen
+                  ? weatherPlace
+                    ? "Weather in"
+                    : "Local weather"
+                  : weatherPlace
+                    ? "Alerts in"
+                    : "Local alerts"}{" "}
+                <span
+                  className="text-brand-orange"
+                  style={{ color: "var(--color-brand-orange)" }}
+                >
                   {weatherPlace}
                 </span>
               </h1>
@@ -1158,9 +1449,6 @@ export default function ResidentAlertsMapPage() {
           <div className="relative shrink-0 px-3 pb-2 sm:pb-3">
             <ResidentFilterRows
               chip={weatherOpen ? "" : chip}
-              categories={filterCats}
-              categoriesOpen={categoriesOpen}
-              onToggleCategories={() => setCategoriesOpen((value) => !value)}
               loading={filterLoading}
               onSelect={(key) => void applyChip(key)}
             />
@@ -1169,7 +1457,7 @@ export default function ResidentAlertsMapPage() {
           <div
             className={cn(
               "scrollbar-hide relative min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4",
-              weatherOpen ? "px-4" : "px-3",
+              weatherOpen ? "px-4" : "px-3"
             )}
           >
             {weatherOpen ? (
@@ -1177,86 +1465,78 @@ export default function ResidentAlertsMapPage() {
             ) : filterLoading ? (
               <div className="flex flex-col items-center justify-center gap-2 py-14 sm:py-16">
                 <LoaderCircleIcon className="size-8 animate-spin text-neutral-400" />
-                <p className="text-[13px] font-medium text-neutral-500">Loading…</p>
+                <p className="text-[13px] font-medium text-neutral-500">
+                  Loading…
+                </p>
               </div>
             ) : listEmpty ? (
               <EmptyState
                 icon={
-                  chip === "emergencies" ? (
-                    <AlertTriangleIcon className="size-10" />
-                  ) : chip === "announcements" ? (
+                  chip === "announcements" ? (
                     <MegaphoneIcon className="size-10" />
                   ) : (
                     <MapPinIcon className="size-10" />
                   )
                 }
                 title={
-                  chip === "emergencies"
-                    ? "No ongoing emergencies"
-                    : chip === "announcements"
-                      ? "No announcements yet"
-                      : "No concerns on the map"
+                  chip === "announcements"
+                    ? "No announcements yet"
+                    : "No concerns on the map"
                 }
                 body={
-                  chip === "emergencies"
-                    ? `Active SOS alerts${weatherPlace ? ` in ${weatherPlace}` : ""} will show here.`
-                    : chip === "announcements"
-                      ? "Official barangay advisories will appear here."
-                      : "Concerns with a location appear here."
+                  chip === "announcements"
+                    ? "Official barangay advisories will appear here."
+                    : "Concerns with a location appear here."
                 }
               />
             ) : (
               <ul className="flex flex-col gap-2">
-                {/* Emergencies first when All / Emergencies filter */}
-                {[...filteredEmergencies]
-                  .sort((a, b) => {
-                    // Resolved/closed at the bottom
-                    const aResolved = ["resolved", "closed", "cancelled"].includes(a.status)
-                    const bResolved = ["resolved", "closed", "cancelled"].includes(b.status)
-                    if (aResolved !== bResolved) return aResolved ? 1 : -1
-                    return (distanceForEmergency(a) ?? 1e9) - (distanceForEmergency(b) ?? 1e9)
-                  })
-                  .map((em) => (
-                    <li key={`em-${em.id}`}>
-                      <EmergencyPreviewCard
-                        emergency={em}
-                        distance={distanceForEmergency(em)}
-                        expanded={selectedEmergencyId === em.id}
-                        onOpen={() => openEmergency(em.id)}
-                        onWrite={() => openEmergency(em.id, true)}
+                {orderedAlerts.map((row) => {
+                  if (row.kind === "emergency") {
+                    return (
+                      <li key={`em-${row.item.id}`}>
+                        <EmergencyPreviewCard
+                          emergency={row.item}
+                          distance={distanceForEmergency(row.item)}
+                          expanded={selectedEmergencyId === row.item.id}
+                          onOpen={() => openEmergency(row.item.id)}
+                          onWrite={() => openEmergency(row.item.id)}
+                          showPriority={isResponder}
+                          actionLabel={
+                            isResponder ? "Open full report" : undefined
+                          }
+                        />
+                      </li>
+                    )
+                  }
+                  if (row.kind === "concern") {
+                    return (
+                      <li key={row.item.id}>
+                        <FeedPreviewCard
+                          post={row.item}
+                          distance={distanceFor(row.item)}
+                          expanded={selectedId === row.item.id}
+                          onOpen={() => void openPost(row.item.id, false)}
+                          onWrite={() => void openPost(row.item.id, false)}
+                          showPriority={isResponder}
+                          actionLabel={
+                            isResponder ? "Open full report" : undefined
+                          }
+                        />
+                      </li>
+                    )
+                  }
+                  return (
+                    <li key={`ann-${row.item.id}`}>
+                      <AnnouncementListItem
+                        announcement={row.item}
+                        expanded={selectedAnnouncementId === row.item.id}
+                        onOpen={() => openAnnouncement(row.item.id, false)}
+                        onWrite={() => openAnnouncement(row.item.id, false)}
                       />
                     </li>
-                  ))}
-                {/* Official advisories under All and the Announcements filter */}
-                {visibleAnnouncements.map((announcement) => (
-                  <li key={`ann-${announcement.id}`}>
-                    <AnnouncementListItem
-                      announcement={announcement}
-                      expanded={selectedAnnouncementId === announcement.id}
-                      onOpen={() => openAnnouncement(announcement.id, false)}
-                      onWrite={() => openAnnouncement(announcement.id, true)}
-                    />
-                  </li>
-                ))}
-                {[...filtered]
-                  .sort((a, b) => {
-                    // Resolved/rejected at the bottom
-                    const aClosed = ["resolved", "rejected"].includes(a.status)
-                    const bClosed = ["resolved", "rejected"].includes(b.status)
-                    if (aClosed !== bClosed) return aClosed ? 1 : -1
-                    return (distanceFor(a) ?? 1e9) - (distanceFor(b) ?? 1e9)
-                  })
-                  .map((post) => (
-                    <li key={post.id}>
-                      <FeedPreviewCard
-                        post={post}
-                        distance={distanceFor(post)}
-                        expanded={selectedId === post.id}
-                        onOpen={() => void openPost(post.id, false)}
-                        onWrite={() => void openPost(post.id, true)}
-                      />
-                    </li>
-                  ))}
+                  )
+                })}
               </ul>
             )}
           </div>
@@ -1273,13 +1553,13 @@ export default function ResidentAlertsMapPage() {
         // the map owns the whole viewport. The old `calc(100svh - Xrem)`
         // offsets left a dead strip at the bottom and the sheet's `bottom-0`
         // stopped short of the screen floor.
-        isDesktop ? "h-full" : "h-svh",
+        isDesktop ? "h-full" : "h-svh"
       )}
     >
       {mapMeta ? (
         <ResidentLeafletMap
-          center={mapMeta.center}
-          boundary={mapMeta.boundary}
+          center={selectedCenter}
+          boundary={communityBoundaryVisible ? selectedBoundary : null}
           policy={mapMeta.dispatch_policy}
           posts={filtered}
           emergencies={filteredEmergencies}
@@ -1289,6 +1569,7 @@ export default function ResidentAlertsMapPage() {
           selectedAnnouncementId={selectedAnnouncementId}
           userPos={userPos}
           userPosAt={userKnownAt}
+          viewerIsResponder={isResponder}
           onSelect={(id) => {
             toggleOrOpen(selectedId === id, () => void openPost(id, false))
           }}
@@ -1296,7 +1577,9 @@ export default function ResidentAlertsMapPage() {
             toggleOrOpen(selectedEmergencyId === id, () => openEmergency(id))
           }}
           onSelectAnnouncement={(id) => {
-            toggleOrOpen(selectedAnnouncementId === id, () => openAnnouncement(id, false))
+            toggleOrOpen(selectedAnnouncementId === id, () =>
+              openAnnouncement(id, false)
+            )
           }}
           onMapInteract={collapseSheetForMap}
           onStreetViewPickChange={setSvPick}
@@ -1321,10 +1604,12 @@ export default function ResidentAlertsMapPage() {
 
       {/* Mobile: back button on the left */}
       {!isDesktop ? (
-        <div className="absolute left-3 top-3 z-30">
+        <div className="absolute top-3 left-3 z-30">
           <button
             type="button"
-            onClick={() => navigate("/dashboard/home")}
+            onClick={() =>
+              navigate(isResponder ? "/dashboard/reports" : "/dashboard/home")
+            }
             className="flex size-10 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-800 shadow-md"
             aria-label="Back to home"
           >
@@ -1338,76 +1623,147 @@ export default function ResidentAlertsMapPage() {
       <div
         className={cn(
           "absolute z-30 flex flex-col items-end gap-2",
-          isDesktop ? "right-4 top-4" : "right-3 top-3",
+          isDesktop ? "top-4 right-4" : "top-3 right-3"
         )}
       >
-        <MapControlStack tone="light">
-          <MapControlButton tone="light" label="Frame the barangay" onClick={goHomeOnMap}>
-            <HomeIcon className="size-5" strokeWidth={1.9} />
-          </MapControlButton>
-          <MapControlButton
-            tone="light"
-            divider
-            label="Current location"
-            onClick={goMyLocation}
-            loading={locating}
-          >
-            <MapPinIcon className="size-5" strokeWidth={1.9} />
-          </MapControlButton>
-          <MapControlButton
-            tone="light"
-            divider
-            label="Zoom in"
-            onClick={() => mapApiRef.current?.zoomIn()}
-          >
-            <PlusIcon className="size-5" strokeWidth={2.1} />
-          </MapControlButton>
-          <MapControlButton
-            tone="light"
-            divider
-            label="Zoom out"
-            onClick={() => mapApiRef.current?.zoomOut()}
-          >
-            <MinusIcon className="size-5" strokeWidth={2.1} />
-          </MapControlButton>
-          <MapControlButton
-            tone="light"
-            divider
-            label={svPick ? "Cancel Street View pick" : "Drag me onto the map or click, then pick a spot for Street View"}
-            active={svPick}
-            draggable
-            onDragStart={(event) => {
-              event.dataTransfer.setData("text/plain", "street-view")
-              event.dataTransfer.effectAllowed = "copy"
-              if (!svPick) mapApiRef.current?.toggleStreetViewPick()
-            }}
-            onClick={() => mapApiRef.current?.toggleStreetViewPick()}
-          >
-            <FootprintsIcon className="size-5" strokeWidth={1.9} />
-          </MapControlButton>
-        </MapControlStack>
+        <div className="pointer-events-auto relative">
+          <MapControlStack tone="light">
+            <MapControlButton
+              tone="light"
+              label="Frame the barangay"
+              onClick={goHomeOnMap}
+            >
+              <HomeIcon className="size-5" strokeWidth={1.9} />
+            </MapControlButton>
+            <MapControlButton
+              tone="light"
+              divider
+              label="Current location"
+              onClick={goMyLocation}
+              loading={locating}
+            >
+              <MapPinIcon className="size-5" strokeWidth={1.9} />
+            </MapControlButton>
+            <MapControlButton
+              tone="light"
+              divider
+              label="Zoom in"
+              onClick={() => mapApiRef.current?.zoomIn()}
+            >
+              <PlusIcon className="size-5" strokeWidth={2.1} />
+            </MapControlButton>
+            <MapControlButton
+              tone="light"
+              divider
+              label="Zoom out"
+              onClick={() => mapApiRef.current?.zoomOut()}
+            >
+              <MinusIcon className="size-5" strokeWidth={2.1} />
+            </MapControlButton>
+            <MapControlButton
+              tone="light"
+              divider
+              label={
+                svPick
+                  ? "Cancel Street View pick"
+                  : "Drag me onto the map or click, then pick a spot for Street View"
+              }
+              active={svPick}
+              draggable
+              onDragStart={(event) => {
+                event.dataTransfer.setData("text/plain", "street-view")
+                event.dataTransfer.effectAllowed = "copy"
+                if (!svPick) mapApiRef.current?.toggleStreetViewPick()
+              }}
+              onClick={() => mapApiRef.current?.toggleStreetViewPick()}
+            >
+              <FootprintsIcon className="size-5" strokeWidth={1.9} />
+            </MapControlButton>
+            {communities.length > 1 ? (
+              <MapControlButton
+                tone="light"
+                divider
+                label="See other communities"
+                active={communityListOpen}
+                onClick={() => setCommunityListOpen((value) => !value)}
+              >
+                <Building2Icon className="size-5" strokeWidth={1.9} />
+              </MapControlButton>
+            ) : null}
+          </MapControlStack>
+
+          {communities.length > 1 && communityListOpen ? (
+            <div className="absolute top-[calc(100%+8px)] right-0 z-[70] flex max-h-[min(18rem,calc(100vh-6rem))] w-[min(19rem,calc(100vw-1.5rem))] min-w-0 flex-col overflow-hidden rounded-2xl bg-white shadow-[0_8px_28px_rgba(15,23,42,0.18)]">
+              <p className="shrink-0 border-b border-neutral-100 px-4 py-3 text-[13px] font-semibold text-neutral-900">
+                See other communities
+              </p>
+              <div className="min-h-0 flex-1 overflow-y-auto py-1">
+                {communityOptions.map((community) => {
+                  const isCurrent = community.id === homeCommunityId
+                  const isSelected = community.id === activeCommunityId
+                  return (
+                    <button
+                      key={community.id}
+                      type="button"
+                      onClick={() => selectCommunity(community.id)}
+                      className={cn(
+                        "flex w-full items-start gap-2 px-4 py-2.5 text-left text-[14px] font-medium text-neutral-800 transition-colors hover:bg-neutral-50",
+                        isSelected && "bg-orange-50 text-neutral-950"
+                      )}
+                      aria-current={isSelected ? "true" : undefined}
+                    >
+                      {isSelected ? (
+                        <CheckIcon
+                          className="size-4 shrink-0 text-brand-orange"
+                          strokeWidth={2.25}
+                        />
+                      ) : (
+                        <Building2Icon
+                          className="size-4 shrink-0 text-neutral-500"
+                          strokeWidth={1.8}
+                        />
+                      )}
+                      <span className="min-w-0 flex-1 leading-snug break-words whitespace-normal">
+                        {community.name}
+                        {isCurrent ? (
+                          <span className="mt-0.5 block text-[11px] font-medium text-neutral-500">
+                            Your community
+                          </span>
+                        ) : null}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ) : null}
+        </div>
 
         {svPick ? (
-          <div className="pointer-events-none absolute right-0 top-[calc(100%+8px)] w-max max-w-[min(15rem,calc(100vw-1.5rem))] rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-neutral-700 shadow-md">
+          <div className="pointer-events-none absolute top-[calc(100%+8px)] right-0 w-max max-w-[min(15rem,calc(100vw-1.5rem))] rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-neutral-700 shadow-md">
             Click the map to start Street View · Esc cancels
           </div>
         ) : null}
       </div>
 
-      {/* Below the map, clear of the control column, so the legend never covers
-          the barangay. Collapsed it is one icon. */}
+      {/* Below the map, clear of the control column, so the layer legend never
+          covers the barangay. */}
       {mapMeta ? (
         <div
           className={cn(
             "absolute z-30 flex flex-col items-end",
-            isDesktop ? "bottom-4 right-4" : "bottom-[calc(56px+0.75rem)] right-3",
+            isDesktop
+              ? "right-4 bottom-4"
+              : "right-3 bottom-[calc(56px+0.75rem)]"
           )}
         >
           <MapLegend
             tone="light"
             rows={legendRows}
             active={layers}
-            onToggle={(key) => setLayers((current) => ({ ...current, [key]: !current[key] }))}
+            onToggle={(key) =>
+              setLayers((current) => ({ ...current, [key]: !current[key] }))
+            }
           />
         </div>
       ) : null}
@@ -1416,15 +1772,21 @@ export default function ResidentAlertsMapPage() {
         alertsOpen ? (
           <aside
             ref={alertsPanelRef}
-            className="absolute left-4 top-4 z-20 flex w-[min(100%,380px)] max-h-[min(72vh,620px)] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)]"
+            className="absolute top-4 left-4 z-20 flex max-h-[min(72vh,620px)] w-[min(100%,380px)] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)]"
             style={
               alertsPanelSize
-                ? { width: alertsPanelSize.width, maxHeight: alertsPanelSize.height }
+                ? {
+                    width: alertsPanelSize.width,
+                    maxHeight: alertsPanelSize.height,
+                  }
                 : undefined
             }
           >
             <div className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-100 px-3">
-              <CircleAlertIcon className="size-5 shrink-0 text-neutral-800" strokeWidth={2.25} />
+              <CircleAlertIcon
+                className="size-5 shrink-0 text-neutral-800"
+                strokeWidth={2.25}
+              />
               <button
                 type="button"
                 onClick={() => setAlertsOpen(false)}
@@ -1439,7 +1801,7 @@ export default function ResidentAlertsMapPage() {
             {/* Corner resize hit zone — no visible grip by design. */}
             <div
               onPointerDown={onAlertsPanelResizeStart}
-              className="absolute bottom-0 right-0 size-4 touch-none cursor-nwse-resize"
+              className="absolute right-0 bottom-0 size-4 cursor-nwse-resize touch-none"
               aria-hidden
             />
           </aside>
@@ -1447,19 +1809,22 @@ export default function ResidentAlertsMapPage() {
           <button
             type="button"
             onClick={() => setAlertsOpen(true)}
-            className="absolute left-4 top-4 z-20 flex size-10 items-center justify-center rounded-lg border border-neutral-200 bg-white shadow-md"
+            className="absolute top-4 left-4 z-20 flex size-10 items-center justify-center rounded-lg border border-neutral-200 bg-white shadow-md"
             aria-label="Open alerts"
             title="Open alerts"
           >
-            <CircleAlertIcon className="size-5 shrink-0 text-neutral-800" strokeWidth={2.25} />
+            <CircleAlertIcon
+              className="size-5 shrink-0 text-neutral-800"
+              strokeWidth={2.25}
+            />
           </button>
         )
       ) : (
         /* Mobile draggable sheet — solid white so map content never shows through */
         <div
           className={cn(
-            "absolute bottom-0 left-0 right-0 z-40 flex flex-col overflow-hidden rounded-t-3xl border border-neutral-200 border-b-0 bg-white shadow-[0_-10px_36px_rgba(15,23,42,.18)]",
-            !sheetDragging && "transition-[height] duration-200 ease-out",
+            "absolute right-0 bottom-0 left-0 z-40 flex flex-col overflow-hidden rounded-t-3xl border border-b-0 border-neutral-200 bg-white shadow-[0_-10px_36px_rgba(15,23,42,.18)]",
+            !sheetDragging && "transition-[height] duration-200 ease-out"
           )}
           style={{ height: sheetHeight, maxHeight: "92svh" }}
           role="dialog"
@@ -1467,7 +1832,7 @@ export default function ResidentAlertsMapPage() {
         >
           {/* Drag handle — pointer capture for smooth drag */}
           <div
-            className="flex shrink-0 touch-none cursor-grab flex-col items-center bg-white px-3 pb-1 pt-2 active:cursor-grabbing"
+            className="flex shrink-0 cursor-grab touch-none flex-col items-center bg-white px-3 pt-2 pb-1 active:cursor-grabbing"
             onPointerDown={onSheetHandlePointerDown}
             onPointerMove={onSheetHandlePointerMove}
             onPointerUp={onSheetHandlePointerUp}
@@ -1475,7 +1840,8 @@ export default function ResidentAlertsMapPage() {
             aria-label="Drag sheet"
           >
             <span className="mb-1 h-1.5 w-11 rounded-full bg-neutral-300" />
-            {sheetMode === "hidden" || sheetHeight <= sheetSnaps().hidden + 8 ? (
+            {sheetMode === "hidden" ||
+            sheetHeight <= sheetSnaps().hidden + 8 ? (
               <p className="pb-1 text-[13px] font-semibold text-neutral-700">
                 {weatherPlace ? `Alerts in ${weatherPlace}` : "Local alerts"}
                 {mapItemCount > 0 ? ` · ${mapItemCount}` : ""}
@@ -1499,12 +1865,12 @@ export default function ResidentAlertsMapPage() {
               <div
                 className={cn(
                   "flex min-h-0 flex-1 flex-col overflow-hidden bg-white",
-                  !contentVisible && "pointer-events-none opacity-0",
+                  !contentVisible && "pointer-events-none opacity-0"
                 )}
               >
                 {/* Filters always visible in preview + list (not on expanded detail) */}
                 {!showDetail ? (
-                  <div className="shrink-0 bg-white px-3 pb-2 pt-0.5">
+                  <div className="shrink-0 bg-white px-3 pt-0.5 pb-2">
                     <div className="mb-2 flex items-center gap-2.5">
                       <button
                         type="button"
@@ -1512,8 +1878,17 @@ export default function ResidentAlertsMapPage() {
                         onClick={() => snapSheetTo("expanded")}
                       >
                         <p className="text-[15px] font-bold text-neutral-900">
-                          {weatherOpen ? (weatherPlace ? "Weather in" : "Local weather") : (weatherPlace ? "Alerts in" : "Local alerts")}{" "}
-                          <span className="text-brand-orange" style={{ color: "var(--color-brand-orange)" }}>
+                          {weatherOpen
+                            ? weatherPlace
+                              ? "Weather in"
+                              : "Local weather"
+                            : weatherPlace
+                              ? "Alerts in"
+                              : "Local alerts"}{" "}
+                          <span
+                            className="text-brand-orange"
+                            style={{ color: "var(--color-brand-orange)" }}
+                          >
                             {weatherPlace}
                           </span>
                         </p>
@@ -1527,9 +1902,6 @@ export default function ResidentAlertsMapPage() {
                     </div>
                     <ResidentFilterRows
                       chip={weatherOpen ? "" : chip}
-                      categories={filterCats}
-                      categoriesOpen={categoriesOpen}
-                      onToggleCategories={() => setCategoriesOpen((value) => !value)}
                       loading={filterLoading}
                       onSelect={(key) => void applyChip(key)}
                     />
@@ -1539,8 +1911,8 @@ export default function ResidentAlertsMapPage() {
                 {!showFull ? (
                   <div
                     className={cn(
-                      "scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white pb-3 pt-2",
-                      weatherOpen ? "px-4" : "px-3",
+                      "scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white pt-2 pb-3",
+                      weatherOpen ? "px-4" : "px-3"
                     )}
                   >
                     {weatherOpen ? (
@@ -1548,7 +1920,9 @@ export default function ResidentAlertsMapPage() {
                     ) : filterLoading ? (
                       <div className="flex flex-col items-center justify-center gap-2 py-8">
                         <LoaderCircleIcon className="size-7 animate-spin text-neutral-400" />
-                        <p className="text-[13px] font-medium text-neutral-500">Loading…</p>
+                        <p className="text-[13px] font-medium text-neutral-500">
+                          Loading…
+                        </p>
                       </div>
                     ) : nearestEmergency ? (
                       <EmergencyPreviewCard
@@ -1556,13 +1930,22 @@ export default function ResidentAlertsMapPage() {
                         distance={distanceForEmergency(nearestEmergency)}
                         expanded={false}
                         onOpen={() => openEmergency(nearestEmergency.id)}
+                        onWrite={() => openEmergency(nearestEmergency.id)}
+                        showPriority={isResponder}
+                        actionLabel={
+                          isResponder ? "Open full report" : undefined
+                        }
                       />
                     ) : nearestAnnouncement ? (
                       <AnnouncementListItem
                         announcement={nearestAnnouncement}
                         expanded={false}
-                        onOpen={() => openAnnouncement(nearestAnnouncement.id, false)}
-                        onWrite={() => openAnnouncement(nearestAnnouncement.id, true)}
+                        onOpen={() =>
+                          openAnnouncement(nearestAnnouncement.id, false)
+                        }
+                        onWrite={() =>
+                          openAnnouncement(nearestAnnouncement.id, false)
+                        }
                       />
                     ) : nearestPreview ? (
                       <FeedPreviewCard
@@ -1570,26 +1953,30 @@ export default function ResidentAlertsMapPage() {
                         distance={distanceFor(nearestPreview)}
                         expanded={false}
                         onOpen={() => void openPost(nearestPreview.id, false)}
-                        onWrite={() => void openPost(nearestPreview.id, true)}
+                        onWrite={() => void openPost(nearestPreview.id, false)}
+                        showPriority={isResponder}
+                        actionLabel={
+                          isResponder ? "Open full report" : undefined
+                        }
                       />
                     ) : (
                       <p className="pb-3 text-center text-[13px] text-neutral-500">
-                        {chip === "emergencies"
-                          ? "No ongoing emergencies"
-                          : chip === "announcements"
-                            ? "No announcements yet"
-                            : "No alerts with a location"}
+                        {chip === "announcements"
+                          ? "No announcements yet"
+                          : "No alerts with a location"}
                       </p>
                     )}
                   </div>
                 ) : showDetail ? (
-                  <div className="h-full min-h-0 overflow-hidden bg-white">{panelBody}</div>
+                  <div className="h-full min-h-0 overflow-hidden bg-white">
+                    {panelBody}
+                  </div>
                 ) : (
                   /* Expanded list: filters already shown above — list only */
                   <div
                     className={cn(
-                      "scrollbar-hide relative min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4 pt-2",
-                      weatherOpen ? "px-4" : "px-3",
+                      "scrollbar-hide relative min-h-0 flex-1 overflow-y-auto overscroll-contain pt-2 pb-4",
+                      weatherOpen ? "px-4" : "px-3"
                     )}
                   >
                     {weatherOpen ? (
@@ -1597,79 +1984,88 @@ export default function ResidentAlertsMapPage() {
                     ) : filterLoading ? (
                       <div className="flex flex-col items-center justify-center gap-2 py-14">
                         <LoaderCircleIcon className="size-8 animate-spin text-neutral-400" />
-                        <p className="text-[13px] font-medium text-neutral-500">Loading…</p>
+                        <p className="text-[13px] font-medium text-neutral-500">
+                          Loading…
+                        </p>
                       </div>
                     ) : listEmpty ? (
                       <EmptyState
                         icon={
-                          chip === "emergencies" ? (
-                            <AlertTriangleIcon className="size-10" />
-                          ) : chip === "announcements" ? (
+                          chip === "announcements" ? (
                             <MegaphoneIcon className="size-10" />
                           ) : (
                             <MapPinIcon className="size-10" />
                           )
                         }
                         title={
-                          chip === "emergencies"
-                            ? "No ongoing emergencies"
-                            : chip === "announcements"
-                              ? "No announcements yet"
-                              : "No concerns on the map"
+                          chip === "announcements"
+                            ? "No announcements yet"
+                            : "No concerns on the map"
                         }
                         body={
-                          chip === "emergencies"
-                            ? `Active SOS alerts${weatherPlace ? ` in ${weatherPlace}` : ""} will show here.`
-                            : chip === "announcements"
-                              ? "Official barangay advisories will appear here."
-                              : "Concerns with a location appear here."
+                          chip === "announcements"
+                            ? "Official barangay advisories will appear here."
+                            : "Concerns with a location appear here."
                         }
                       />
                     ) : (
                       <ul className="flex flex-col gap-2">
-                        {[...filteredEmergencies]
-                          .sort(
-                            (a, b) =>
-                              (distanceForEmergency(a) ?? 1e9) -
-                              (distanceForEmergency(b) ?? 1e9),
-                          )
-                          .map((em) => (
-                            <li key={`em-${em.id}`}>
-                              <EmergencyPreviewCard
-                                emergency={em}
-                                distance={distanceForEmergency(em)}
-                                expanded={selectedEmergencyId === em.id}
-                                onOpen={() => openEmergency(em.id)}
+                        {orderedAlerts.map((row) => {
+                          if (row.kind === "emergency") {
+                            return (
+                              <li key={`em-${row.item.id}`}>
+                                <EmergencyPreviewCard
+                                  emergency={row.item}
+                                  distance={distanceForEmergency(row.item)}
+                                  expanded={selectedEmergencyId === row.item.id}
+                                  onOpen={() => openEmergency(row.item.id)}
+                                  onWrite={() => openEmergency(row.item.id)}
+                                  showPriority={isResponder}
+                                  actionLabel={
+                                    isResponder ? "Open full report" : undefined
+                                  }
+                                />
+                              </li>
+                            )
+                          }
+                          if (row.kind === "concern") {
+                            return (
+                              <li key={row.item.id}>
+                                <FeedPreviewCard
+                                  post={row.item}
+                                  distance={distanceFor(row.item)}
+                                  expanded={selectedId === row.item.id}
+                                  onOpen={() =>
+                                    void openPost(row.item.id, false)
+                                  }
+                                  onWrite={() =>
+                                    void openPost(row.item.id, false)
+                                  }
+                                  showPriority={isResponder}
+                                  actionLabel={
+                                    isResponder ? "Open full report" : undefined
+                                  }
+                                />
+                              </li>
+                            )
+                          }
+                          return (
+                            <li key={`ann-${row.item.id}`}>
+                              <AnnouncementListItem
+                                announcement={row.item}
+                                expanded={
+                                  selectedAnnouncementId === row.item.id
+                                }
+                                onOpen={() =>
+                                  openAnnouncement(row.item.id, false)
+                                }
+                                onWrite={() =>
+                                  openAnnouncement(row.item.id, false)
+                                }
                               />
                             </li>
-                          ))}
-                        {/* Official advisories under All and the Announcements filter */}
-                        {visibleAnnouncements.map((announcement) => (
-                          <li key={`ann-${announcement.id}`}>
-                            <AnnouncementListItem
-                              announcement={announcement}
-                              expanded={selectedAnnouncementId === announcement.id}
-                              onOpen={() => openAnnouncement(announcement.id, false)}
-                              onWrite={() => openAnnouncement(announcement.id, true)}
-                            />
-                          </li>
-                        ))}
-                        {[...filtered]
-                          .sort(
-                            (a, b) =>
-                              (distanceFor(a) ?? 1e9) - (distanceFor(b) ?? 1e9),
                           )
-                          .map((post) => (
-                            <li key={post.id}>
-                              <FeedPreviewCard
-                                post={post}
-                                distance={distanceFor(post)}
-                                expanded={selectedId === post.id}
-                                onOpen={() => void openPost(post.id, false)}
-                                onWrite={() => void openPost(post.id, true)}
-                              />
-                            </li>
-                          ))}
+                        })}
                       </ul>
                     )}
                   </div>

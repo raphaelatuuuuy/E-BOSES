@@ -1,24 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { toast } from "sonner"
-import {
-  AlertTriangleIcon,
-  ChevronRightIcon,
-  CheckIcon,
-} from "lucide-react"
+import { AlertTriangleIcon, ChevronRightIcon, CheckIcon } from "lucide-react"
 
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { useAuthSession } from "@/features/auth/auth-session"
 import { useDebouncedCallback } from "@/hooks/use-debounced-callback"
-import {
-  geocodeMarikinaStreet,
-  MARIKINA_HEIGHTS_CENTER,
-} from "@/features/auth/lib/forward-geocode"
+import { geocodeCommunityStreet } from "@/features/auth/lib/forward-geocode"
 import {
   commentOnConcern,
   deleteConcernComment,
+  getResidentAlertsMap,
   getResidentDashboardSummary,
   listAnnouncements,
   listFeedConcerns,
@@ -35,10 +29,7 @@ import { CreateReportDialog } from "@/features/dashboard/components/create-repor
 import { ComposerCard } from "@/features/dashboard/components/home/composer-card"
 import { HomeRail } from "@/features/dashboard/components/home/home-rail"
 import { FeedPostCard } from "@/features/dashboard/components/feed-post-card"
-import {
-  BARANGAY,
-  railLiveMapSrc,
-} from "@/features/dashboard/components/home/home-style"
+import { railLiveMapSrc } from "@/features/dashboard/components/home/home-style"
 import {
   ResidentNotificationsButton,
   ResidentProfileDialog,
@@ -50,7 +41,10 @@ import {
   RESIDENT_DESKTOP_MIN_PX,
 } from "@/features/dashboard/components/resident-top-bar"
 import { FEED_MAX, RAIL_W } from "@/features/dashboard/lib/shell"
-import { rankFeed, type FeedOrigin } from "@/features/dashboard/lib/feed-ranking"
+import {
+  rankFeed,
+  type FeedOrigin,
+} from "@/features/dashboard/lib/feed-ranking"
 import { AnnouncementCarousel } from "@/features/dashboard/components/home/announcement-carousel"
 import { usePageTitle } from "@/hooks/use-page-title"
 
@@ -59,6 +53,7 @@ const FEED_TABS = [
   { id: "nearby", label: "Nearby" },
   { id: "trending", label: "Trending" },
   { id: "resolved", label: "Resolved" },
+  { id: "other", label: "Other communities" },
 ] as const
 
 type FeedTab = (typeof FEED_TABS)[number]["id"]
@@ -70,6 +65,9 @@ export default function HomePage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [feedTab, setFeedTab] = useState<FeedTab>("recent")
   const [origin, setOrigin] = useState<FeedOrigin | null>(null)
+  /** True when we could not determine any position (geolocation denied / no
+      geocoder hit) — drives the Nearby tab's empty-state wording. */
+  const [nearbyUnavailable, setNearbyUnavailable] = useState(false)
   const [feedFilterOpen, setFeedFilterOpen] = useState(false)
 
   const [profileOpen, setProfileOpen] = useState(false)
@@ -78,7 +76,10 @@ export default function HomePage() {
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [events, setEvents] = useState<BarangayEvent[]>([])
   const [concerns, setConcerns] = useState<Concern[]>([])
-  const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set())
+  const [foreignConcerns, setForeignConcerns] = useState<Concern[]>([])
+  const [expandedComments, setExpandedComments] = useState<Set<number>>(
+    new Set()
+  )
   const [barangayActiveEmergencies, setBarangayActiveEmergencies] = useState(0)
 
   const displayName = user
@@ -86,46 +87,43 @@ export default function HomePage() {
     : "Resident"
 
   const hasOngoingAlerts = barangayActiveEmergencies > 0
+  const communityName = user?.barangay || "Your community"
+
+  /** True when there is nothing at all to show in any tab — drives the
+      "Nothing in the feed yet" onboarding card instead of a filter miss. */
+  const feedTotallyEmpty =
+    announcements.length === 0 &&
+    concerns.length === 0 &&
+    foreignConcerns.length === 0
 
   const streetLabel = streetLabelFromAddress(user?.address)
 
   /** Live rail map — real OSM (same embed style as report maps), street when known */
   const [railMap, setRailMap] = useState<{ lat: number; lng: number }>({
-    lat: MARIKINA_HEIGHTS_CENTER.lat,
-    lng: MARIKINA_HEIGHTS_CENTER.lng,
+    lat: 14.5995,
+    lng: 120.9842,
   })
   const railMapSrc = useMemo(
     () => railLiveMapSrc(railMap.lat, railMap.lng),
-    [railMap.lat, railMap.lng],
+    [railMap.lat, railMap.lng]
   )
 
   useEffect(() => {
     let cancelled = false
     async function resolveRailMap() {
-      if (!streetLabel) {
-        setRailMap({
-          lat: MARIKINA_HEIGHTS_CENTER.lat,
-          lng: MARIKINA_HEIGHTS_CENTER.lng,
-        })
-        return
-      }
+      if (!streetLabel) return
       // streetLabel may be "123 Champaca Street" — geocode as full street line
-      const hit = await geocodeMarikinaStreet(streetLabel)
+      const hit = await geocodeCommunityStreet(streetLabel, communityName)
       if (cancelled) return
       if (hit) {
         setRailMap({ lat: hit.lat, lng: hit.lng })
-      } else {
-        setRailMap({
-          lat: MARIKINA_HEIGHTS_CENTER.lat,
-          lng: MARIKINA_HEIGHTS_CENTER.lng,
-        })
       }
     }
     void resolveRailMap()
     return () => {
       cancelled = true
     }
-  }, [streetLabel])
+  }, [communityName, streetLabel])
 
   const sessionUserAsPublic: PublicUser | null = user
     ? {
@@ -133,25 +131,56 @@ export default function HomePage() {
         full_name: displayName,
         role: user.role,
         initials:
-          `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}`.toUpperCase() || "?",
+          `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}`.toUpperCase() ||
+          "U",
         last_seen_at: null,
         street: streetLabel ?? undefined,
-        barangay: user.barangay || BARANGAY,
+        barangay: communityName,
       }
     : null
 
   async function loadHome() {
     setError("")
     try {
-      const [nextAnnouncements, nextConcerns, nextEvents, summary] = await Promise.all([
+      const [
+        nextAnnouncements,
+        nextConcerns,
+        nextForeignConcerns,
+        nextEvents,
+        summary,
+        mapSnapshot,
+      ] = await Promise.all([
         listAnnouncements(),
-        listFeedConcerns("all"),
+        listFeedConcerns(
+          "all",
+          undefined,
+          undefined,
+          undefined,
+          "home",
+          origin
+        ),
+        listFeedConcerns(
+          "all",
+          undefined,
+          undefined,
+          undefined,
+          "other",
+          origin
+        ),
         listBarangayEventCalendar(),
         getResidentDashboardSummary().catch(() => null),
+        getResidentAlertsMap().catch(() => null),
       ])
       setAnnouncements(nextAnnouncements)
       setConcerns(nextConcerns)
+      setForeignConcerns(nextForeignConcerns)
       setEvents(nextEvents)
+      if (mapSnapshot) {
+        setRailMap({
+          lat: mapSnapshot.map.center.latitude,
+          lng: mapSnapshot.map.center.longitude,
+        })
+      }
       const count =
         summary?.barangay_active_emergencies ??
         (summary?.has_ongoing_emergencies ? 1 : 0)
@@ -169,7 +198,18 @@ export default function HomePage() {
     loadHomeRef.current = loadHome
   })
 
-  const eventRefresh = useDebouncedCallback(() => void loadHomeRef.current(), 3000)
+  // The feed is first fetched without a position; once the viewer's location
+  // resolves (geolocation or street-geocode fallback) refetch so the API can
+  // attach per-concern distances for the Nearby tab.
+  useEffect(() => {
+    if (!origin) return
+    void loadHomeRef.current()
+  }, [origin])
+
+  const eventRefresh = useDebouncedCallback(
+    () => void loadHomeRef.current(),
+    3000
+  )
 
   useEffect(() => {
     if (authLoading) return
@@ -191,28 +231,46 @@ export default function HomePage() {
     setConcerns((items) =>
       items.map((item) =>
         item.id === post.id
-          ? { ...item, user_vote: result.user_vote, vote_count: result.vote_count }
-          : item,
-      ),
+          ? {
+              ...item,
+              user_vote: result.user_vote,
+              vote_count: result.vote_count,
+            }
+          : item
+      )
     )
   }
 
-  async function submitComment(postId: number, body: string, parentId?: number | null) {
+  async function submitComment(
+    postId: number,
+    body: string,
+    parentId?: number | null,
+    media?: File | null
+  ): Promise<boolean> {
     const trimmed = body.trim()
-    if (!trimmed) return
+    if (!trimmed && !media) return false
     try {
       await commentOnConcern(postId, {
         body: trimmed,
         parent: parentId ?? null,
+        media,
       })
       await loadHome()
       setExpandedComments((current) => new Set(current).add(postId))
+      return true
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not post comment.")
+      toast.error(
+        err instanceof Error ? err.message : "Could not post comment."
+      )
+      return false
     }
   }
 
-  async function saveCommentEdit(postId: number, commentId: number, body: string) {
+  async function saveCommentEdit(
+    postId: number,
+    commentId: number,
+    body: string
+  ) {
     const trimmed = body.trim()
     if (!trimmed) {
       toast.error("Comment cannot be empty.")
@@ -223,7 +281,9 @@ export default function HomePage() {
       await loadHome()
       toast.success("Comment updated")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not update comment.")
+      toast.error(
+        err instanceof Error ? err.message : "Could not update comment."
+      )
     }
   }
 
@@ -234,31 +294,65 @@ export default function HomePage() {
       await loadHome()
       toast.success("Comment deleted")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not delete comment.")
+      toast.error(
+        err instanceof Error ? err.message : "Could not delete comment."
+      )
     }
   }
 
   useEffect(() => {
     if (feedTab !== "nearby") return
-    if (origin || !navigator.geolocation) return
+    if (origin) return
+
     let cancelled = false
+
+    // GPS denied / timed out / unsupported → approximate the viewer's
+    // position from their registered street so Nearby still has an origin.
+    function fallbackToStreet() {
+      if (cancelled) return
+      if (!streetLabel) {
+        setNearbyUnavailable(true)
+        return
+      }
+      void geocodeCommunityStreet(streetLabel, communityName).then((hit) => {
+        if (cancelled) return
+        if (hit) setOrigin({ lat: hit.lat, lng: hit.lng })
+        else setNearbyUnavailable(true)
+      })
+    }
+
+    if (!navigator.geolocation) {
+      fallbackToStreet()
+      return () => {
+        cancelled = true
+      }
+    }
+
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        if (!cancelled) {
-          setOrigin({ lat: position.coords.latitude, lng: position.coords.longitude })
-        }
+        if (cancelled) return
+        setNearbyUnavailable(false)
+        setOrigin({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        })
       },
-      () => void 0,
-      { maximumAge: 300_000, timeout: 8_000 },
+      fallbackToStreet,
+      { maximumAge: 300_000, timeout: 8_000 }
     )
     return () => {
       cancelled = true
     }
-  }, [feedTab, origin])
+  }, [feedTab, origin, streetLabel, communityName])
 
   const sortedConcerns = useMemo(
-    () => rankFeed(concerns, feedTab, origin),
-    [concerns, feedTab, origin],
+    () =>
+      rankFeed(
+        feedTab === "other" ? foreignConcerns : concerns,
+        feedTab === "other" ? "recent" : feedTab,
+        origin
+      ),
+    [concerns, foreignConcerns, feedTab, origin]
   )
 
   if (!loaded) {
@@ -385,7 +479,7 @@ export default function HomePage() {
           .rail-live-dot__ring { animation: none; opacity: 0.3; transform: scale(1.4); }
         }
       `}</style>
-      {/* Mobile top: map+status dot · Marikina Heights · notif · avatar */}
+      {/* Mobile top: map+status dot · community · notif · avatar */}
       <header className="resident-mobile-top sticky top-0 z-30 bg-white">
         <div className="flex h-12 items-center gap-2 px-4">
           <Link
@@ -394,7 +488,7 @@ export default function HomePage() {
             aria-label={
               hasOngoingAlerts
                 ? `Live map — ${barangayActiveEmergencies} ongoing alert${barangayActiveEmergencies === 1 ? "" : "s"}`
-                : "Live map — Marikina Heights"
+                : `Live map — ${user?.barangay || "your community"}`
             }
             title="Open alerts map"
           >
@@ -405,38 +499,37 @@ export default function HomePage() {
               <span
                 className={cn(
                   "rail-live-dot__ring",
-                  hasOngoingAlerts && "rail-live-dot__ring--alert",
+                  hasOngoingAlerts && "rail-live-dot__ring--alert"
                 )}
                 aria-hidden
               />
               <span
                 className={cn(
                   "rail-live-dot__ring rail-live-dot__ring--delay",
-                  hasOngoingAlerts && "rail-live-dot__ring--alert",
+                  hasOngoingAlerts && "rail-live-dot__ring--alert"
                 )}
                 aria-hidden
               />
               <span
                 className={cn(
                   "rail-live-dot__status",
-                  hasOngoingAlerts && "rail-live-dot__status--alert",
+                  hasOngoingAlerts && "rail-live-dot__status--alert"
                 )}
                 aria-hidden
               />
             </span>
           </Link>
           <p className="min-w-0 flex-1 truncate text-[16px] font-bold tracking-tight text-neutral-900">
-            {BARANGAY}
+            {communityName}
           </p>
 
           <ResidentNotificationsButton />
           <ProfileAccountMenu
-            placeLabel={BARANGAY}
+            placeLabel={communityName}
             onOpenProfile={() => setProfileOpen(true)}
             onOpenSettings={() => openSettingsDialog()}
           />
         </div>
-
       </header>
       <ResidentProfileDialog
         open={profileOpen}
@@ -450,11 +543,9 @@ export default function HomePage() {
       {/*
         Mobile: padded feed · Desktop: same grid as top bar
       */}
-      <ResidentContentGrid className="resident-home-desktop-grid min-w-0 flex-1 pb-[calc(7.5rem+env(safe-area-inset-bottom))] pt-3 max-lg:pt-3.5 lg:pb-8 lg:pt-3">
+      <ResidentContentGrid className="resident-home-desktop-grid min-w-0 flex-1 pt-3 pb-6 max-lg:pt-3.5 lg:pt-3 lg:pb-8">
         {/* CENTER feed column */}
-        <div className="min-w-0 w-full max-lg:px-3.5">
-
-
+        <div className="w-full min-w-0 max-lg:px-3.5">
           {/* Composer — mobile: rounded pill (avatar→Report); filter sits beside outside */}
           <ComposerCard
             user={sessionUserAsPublic}
@@ -476,7 +567,7 @@ export default function HomePage() {
                     "border-neutral-300 focus-visible:border-neutral-400 focus-visible:text-brand-navy",
                     active
                       ? "bg-neutral-100 text-brand-navy"
-                      : "bg-white text-neutral-600 hover:bg-neutral-50 hover:text-brand-navy",
+                      : "bg-white text-neutral-600 hover:bg-neutral-50 hover:text-brand-navy"
                   )}
                 >
                   {tab.label}
@@ -485,12 +576,14 @@ export default function HomePage() {
             })}
           </div>
 
-          {error ? <p className="mb-3 text-[15px] text-destructive">{error}</p> : null}
+          {error ? (
+            <p className="mb-3 text-[15px] text-destructive">{error}</p>
+          ) : null}
 
           {hasOngoingAlerts ? (
             <Link
               to="/dashboard/alerts-map"
-              className="mb-3 flex items-center gap-3 rounded-2xl border border-neutral-300 bg-sos/10 px-3.5 py-3 no-underline transition-colors hover:bg-sos/10/80 lg:mb-2.5 lg:rounded-lg"
+              className="hover:bg-sos/10/80 mb-3 flex items-center gap-3 rounded-2xl border border-neutral-300 bg-sos/10 px-3.5 py-3 no-underline transition-colors lg:mb-2.5 lg:rounded-lg"
             >
               <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-sos/10 text-sos">
                 <AlertTriangleIcon className="size-5" strokeWidth={2.25} />
@@ -498,13 +591,17 @@ export default function HomePage() {
               <span className="min-w-0 flex-1">
                 <span className="block text-[15px] font-bold text-sos">
                   {barangayActiveEmergencies} ongoing alert
-                  {barangayActiveEmergencies === 1 ? "" : "s"} in {BARANGAY}
+                  {barangayActiveEmergencies === 1 ? "" : "s"} in{" "}
+                  {communityName}
                 </span>
                 <span className="mt-0.5 block text-[13px] font-medium text-sos/90">
                   See concerns, emergencies, and announcements on the map
                 </span>
               </span>
-              <ChevronRightIcon className="size-5 shrink-0 text-sos" strokeWidth={2} />
+              <ChevronRightIcon
+                className="size-5 shrink-0 text-sos"
+                strokeWidth={2}
+              />
             </Link>
           ) : null}
 
@@ -534,12 +631,16 @@ export default function HomePage() {
               />
             ))}
 
-            {sortedConcerns.length === 0 && concerns.length > 0 && !error ? (
+            {sortedConcerns.length === 0 && !error && !feedTotallyEmpty ? (
               <div className="rounded-lg border border-neutral-300 bg-white px-5 py-8 text-center">
                 <p className="text-[15px] font-semibold text-neutral-700">
                   {feedTab === "nearby"
-                    ? "Nothing reported within 1.5 km of you."
-                    : "No posts match this filter."}
+                    ? nearbyUnavailable
+                      ? "Location unavailable — allow location access to see posts near you."
+                      : "Nothing reported within 1.5 km of you."
+                    : feedTab === "other"
+                      ? "No concerns from other communities yet."
+                      : "No posts match this filter."}
                 </p>
                 <button
                   type="button"
@@ -551,16 +652,18 @@ export default function HomePage() {
               </div>
             ) : null}
 
-            {announcements.length === 0 && concerns.length === 0 && !error ? (
+            {feedTotallyEmpty && !error ? (
               <div className="flex flex-col items-center rounded-lg border border-neutral-300 bg-white px-6 py-10 text-center">
                 <img
                   src="/contents/feed-header.webp"
                   alt=""
                   className="mb-4 h-44 w-auto max-w-[90%] object-contain opacity-95 sm:h-52"
                 />
-                <p className="text-[15px] font-semibold text-neutral-700">Nothing in the feed yet.</p>
+                <p className="text-[15px] font-semibold text-neutral-700">
+                  Nothing in the feed yet.
+                </p>
                 <p className="mt-1 text-[14px] text-neutral-500">
-                  Be the first to post in {BARANGAY}.
+                  Be the first to post in {communityName}.
                 </p>
               </div>
             ) : null}
@@ -592,7 +695,7 @@ export default function HomePage() {
             aria-label="Dismiss filters"
             onClick={() => setFeedFilterOpen(false)}
           />
-          <div className="rounded-t-3xl border border-neutral-200 border-b-0 bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 shadow-[0_-12px_40px_rgba(15,23,42,0.14)]">
+          <div className="rounded-t-3xl border border-b-0 border-neutral-200 bg-white px-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-[0_-12px_40px_rgba(15,23,42,0.14)]">
             <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-neutral-300" />
             <h2 className="mb-2 px-1 text-[20px] font-bold tracking-tight text-neutral-900">
               Filter by
@@ -610,7 +713,11 @@ export default function HomePage() {
                       }}
                       className="flex min-h-12 w-full items-center justify-between px-1 py-3 text-left text-[16px] text-neutral-800 transition-colors hover:bg-neutral-50"
                     >
-                      <span className={cn(active && "font-semibold text-neutral-900")}>
+                      <span
+                        className={cn(
+                          active && "font-semibold text-neutral-900"
+                        )}
+                      >
                         {tab.label}
                       </span>
                       {active ? (

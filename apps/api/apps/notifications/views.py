@@ -1,4 +1,5 @@
 import time
+from importlib import import_module
 
 from django.conf import settings
 from rest_framework import status
@@ -175,7 +176,7 @@ class BrowserPushSubscriptionView(APIView):
         # Subscribing from the notifications panel is an explicit opt-in. If a
         # resident previously disabled push, turn the preference back on so a
         # valid browser subscription is not silently ignored by delivery.
-        from apps.accounts.models import ResidentSettings
+        ResidentSettings = import_module("apps.accounts.models").ResidentSettings
 
         ResidentSettings.objects.filter(user=request.user).update(push_alerts=True)
         return Response({"id": subscription.pk, "is_active": subscription.is_active}, status=status.HTTP_201_CREATED)

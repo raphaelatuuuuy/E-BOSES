@@ -29,7 +29,7 @@ export function routeCasingStyle({
   dim = false,
 }: RouteLineOptions): leaflet.PolylineOptions {
   return {
-    color: "var(--color-map-route-casing)",
+    color: live ? "var(--color-map-route-casing)" : "#e5e7eb",
     weight: weight + 4,
     opacity: (live ? 0.45 : 0.25) * (dim ? DIM_FACTOR : 1),
     lineCap: "round",
@@ -44,7 +44,7 @@ export function routeLineStyle({
   dim = false,
 }: RouteLineOptions): leaflet.PolylineOptions {
   return {
-    color: live ? "var(--color-map-responder)" : "var(--color-map-route-idle)",
+    color: live ? "var(--color-map-responder)" : "#9ca3af",
     weight,
     opacity: (live ? 1 : 0.5) * (dim ? DIM_FACTOR : 1),
     lineCap: "round",
@@ -55,7 +55,7 @@ export function routeLineStyle({
 
 export function approachLineStyle(dim = false): leaflet.PolylineOptions {
   return {
-    color: "var(--color-map-route-idle)",
+    color: "#9ca3af",
     weight: 4,
     opacity: dim ? 0.85 * DIM_FACTOR : 0.85,
     dashArray: "1 8",
@@ -67,7 +67,7 @@ export function approachLineStyle(dim = false): leaflet.PolylineOptions {
 
 export function connectorLineStyle(dim = false): leaflet.PolylineOptions {
   return {
-    color: "var(--color-map-route-idle)",
+    color: "#9ca3af",
     weight: 3,
     opacity: dim ? 0.9 * DIM_FACTOR : 0.9,
     dashArray: "1 7",
@@ -84,14 +84,24 @@ export function latLngsFromGeoJson(geometry: unknown): leaflet.LatLngTuple[] {
     if (!Array.isArray(point) || point.length < 2) return []
     const lng = Number(point[0])
     const lat = Number(point[1])
-    return Number.isFinite(lat) && Number.isFinite(lng) ? [[lat, lng] as leaflet.LatLngTuple] : []
+    return Number.isFinite(lat) && Number.isFinite(lng)
+      ? [[lat, lng] as leaflet.LatLngTuple]
+      : []
   })
 }
 
 export interface RouteGeometrySource {
   geometry?: unknown
-  origin_snap?: { latitude: number; longitude: number; meters: number | null } | null
-  destination_snap?: { latitude: number; longitude: number; meters: number | null } | null
+  origin_snap?: {
+    latitude: number
+    longitude: number
+    meters: number | null
+  } | null
+  destination_snap?: {
+    latitude: number
+    longitude: number
+    meters: number | null
+  } | null
   approach?: { geometry?: unknown } | null
 }
 
@@ -103,12 +113,13 @@ export interface RouteRenderGeometry {
 
 function apart(a: leaflet.LatLngTuple, b: leaflet.LatLngTuple) {
   return (
-    Math.abs(a[0] - b[0]) > GAP_EPSILON_DEGREES || Math.abs(a[1] - b[1]) > GAP_EPSILON_DEGREES
+    Math.abs(a[0] - b[0]) > GAP_EPSILON_DEGREES ||
+    Math.abs(a[1] - b[1]) > GAP_EPSILON_DEGREES
   )
 }
 
 function snapPoint(
-  snap: { latitude: number; longitude: number } | null | undefined,
+  snap: { latitude: number; longitude: number } | null | undefined
 ): leaflet.LatLngTuple | null {
   if (!snap) return null
   const lat = Number(snap.latitude)
@@ -127,7 +138,7 @@ export function routeRenderGeometry(
   endpoints: {
     origin?: leaflet.LatLngTuple | null
     destination?: leaflet.LatLngTuple | null
-  } = {},
+  } = {}
 ): RouteRenderGeometry {
   const road = latLngsFromGeoJson(route?.geometry)
   const rawApproach = latLngsFromGeoJson(route?.approach?.geometry)
@@ -168,7 +179,7 @@ export interface RouteLayers {
 export function drawRoute(
   L: typeof leaflet,
   target: leaflet.Map | leaflet.LayerGroup,
-  { road, approach, connectors, live, weight, dim }: DrawRouteOptions,
+  { road, approach, connectors, live, weight, dim }: DrawRouteOptions
 ): RouteLayers | null {
   const layers: leaflet.Polyline[] = []
   const points: leaflet.LatLngTuple[] = []

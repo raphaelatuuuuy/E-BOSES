@@ -8,6 +8,6 @@ export function isOfficialUser(user?: AuthUser | null) {
   return Boolean(
     user &&
       !isResponderUser(user) &&
-      (user.role === "barangay_official" || user.is_staff || user.is_superuser),
+      (user.role === "barangay_official" || user.is_superuser),
   )
 }

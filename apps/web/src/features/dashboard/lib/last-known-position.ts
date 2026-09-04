@@ -30,6 +30,25 @@ export interface KnownPosition {
   at: number
 }
 
+export const GPS_FIX_MAX_AGE_MS = 60_000
+export const GPS_FIX_MAX_ACCURACY_METERS = 1_000
+
+export function isFreshGeolocationPosition(
+  position: GeolocationPosition,
+  now = Date.now(),
+) {
+  const timestamp = Number(position.timestamp)
+  const age = timestamp > 0 ? now - timestamp : 0
+  const accuracy = Number(position.coords.accuracy)
+  return (
+    age >= -5_000 &&
+    age <= GPS_FIX_MAX_AGE_MS &&
+    Number.isFinite(accuracy) &&
+    accuracy >= 0 &&
+    accuracy <= GPS_FIX_MAX_ACCURACY_METERS
+  )
+}
+
 function isUsable(value: unknown): value is KnownPosition {
   if (!value || typeof value !== "object") return false
   const candidate = value as Partial<KnownPosition>

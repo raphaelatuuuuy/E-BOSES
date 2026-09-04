@@ -27,11 +27,14 @@ LEGACY_UNIT_BY_DEPARTMENT_CODE = {
 DEFAULT_RESPONDER_POSITION = "staff"
 
 
-def department_for_responder_unit(unit: str):
+def department_for_responder_unit(unit: str, community=None):
     code = RESPONDER_UNIT_TO_DEPARTMENT.get((unit or "").strip())
     if not code:
         return None
-    return Department.objects.filter(code=code).first()
+    queryset = Department.objects.filter(code=code)
+    if community is not None:
+        queryset = queryset.filter(community=community)
+    return queryset.first()
 
 
 # --- Selectors for other apps ---------------------------------------------

@@ -43,6 +43,7 @@ class Community(models.Model):
 
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     code = models.SlugField(max_length=80, unique=True)
+    psgc_code = models.CharField(max_length=12, null=True, blank=True, unique=True)
     name = models.CharField(max_length=120, unique=True)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT, db_index=True)
     boundary = models.OneToOneField(
@@ -199,8 +200,21 @@ class MapDispatchPolicy(models.Model):
         verbose_name_plural = "Map dispatch policies"
 
     @classmethod
-    def current(cls):
-        obj, _ = cls.objects.get_or_create(pk=1, defaults={"barangay": "Marikina Heights"})
+    def current(cls, community=None):
+        if community is None:
+            communities = list(Community.objects.filter(status=Community.Status.ACTIVE)[:2])
+            if len(communities) != 1:
+                raise ValueError("An active community is required for dispatch policy lookup.")
+            community = communities[0]
+        obj, _ = cls.objects.get_or_create(
+            community=community,
+            defaults={
+                "barangay": community.name,
+                "acceptance_center_latitude": community.center_latitude,
+                "acceptance_center_longitude": community.center_longitude,
+                "hotlines": [],
+            },
+        )
         return obj
 
     def as_payload(self):
@@ -218,7 +232,7 @@ class MapDispatchPolicy(models.Model):
             "emergency_sms_number": self.emergency_sms_number,
             "duty_hours_start": self.duty_hours_start.strftime("%H:%M") if self.duty_hours_start else None,
             "duty_hours_end": self.duty_hours_end.strftime("%H:%M") if self.duty_hours_end else None,
-            "hotlines": self.hotlines or DEFAULT_HOTLINES,
+            "hotlines": self.hotlines or [],
             "updated_at": self.updated_at,
         }
 
@@ -540,6 +554,23 @@ class EmergencyMedia(models.Model):
     sha256_hash = models.CharField(max_length=64, blank=True, db_index=True)
     phash = models.CharField(max_length=16, blank=True, db_index=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
+
+
+class EmergencyResolutionEvidence(models.Model):
+    """Private photos submitted by a responder when closing an emergency."""
+
+    alert = models.ForeignKey(EmergencyAlert, on_delete=models.CASCADE, related_name="resolution_evidence")
+    file = models.FileField(storage=PrivateMediaStorage(), upload_to="raw/emergency-resolution-evidence/%Y/%m/")
+    preview_file = models.FileField(storage=PublicMediaStorage(), upload_to="previews/emergency-resolution-evidence/%Y/%m/", blank=True)
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="emergency_resolution_evidence")
+    original_filename = models.CharField(max_length=255)
+    mime_type = models.CharField(max_length=120, blank=True)
+    file_size = models.PositiveIntegerField(default=0)
+    note = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
 
 
 class EmergencyTypeRoleMap(models.Model):

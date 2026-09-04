@@ -22,7 +22,8 @@ EVENTS: dict[str, tuple[str, str]] = {
     "routing": ("Finding a responder", "Looking for an available responder in the right unit."),
     "responder_assigned": ("Responder assigned", "A responder was automatically assigned."),
     "responder_reassigned": ("Responder changed", "Another responder took over."),
-    "no_responder": ("No responder available", "Escalated to an official for manual dispatch."),
+    "no_responder": ("Finding another responder", "Automatic dispatch is checking available response units."),
+    "responder_searching": ("Finding a responder", "Automatic dispatch is checking available response units."),
 
     # Response
     "responder_confirmed": ("Responder confirmed", "The responder acknowledged the assignment."),

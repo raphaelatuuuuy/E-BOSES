@@ -1,6 +1,5 @@
 import { SettingsIcon } from "lucide-react"
 
-import { MOBILE_BAR_CLEARANCE } from "@/features/dashboard/lib/shell"
 import { ResidentProfilePanel } from "@/features/dashboard/components/resident/resident-profile-panel"
 import { openSettingsDialog } from "@/features/dashboard/components/settings/settings-event"
 import { usePageTitle } from "@/hooks/use-page-title"
@@ -17,8 +16,7 @@ export default function ProfilePage() {
 
   return (
     <main
-      className="min-h-full flex-1 bg-canvas p-4 md:p-6"
-      style={{ paddingBottom: `calc(${MOBILE_BAR_CLEARANCE} + 1.5rem)` }}
+      className="min-h-full flex-1 bg-canvas p-4 pb-6 md:p-6 md:pb-8"
     >
       <div className="mx-auto max-w-3xl">
         <div className="mb-4 flex items-center justify-between border-b border-card-line pb-3">

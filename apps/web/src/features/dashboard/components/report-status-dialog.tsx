@@ -5,6 +5,7 @@ import {
   CopyIcon,
   PencilLineIcon,
   SearchIcon,
+  Share2Icon,
   XIcon,
 } from "lucide-react"
 
@@ -19,11 +20,20 @@ import {
   DialogTitle,
 } from "@/features/dashboard/components/dialog"
 import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
-import type { Concern, ConcernStatus, ConcernStatusEvent, PublicUser } from "@/features/dashboard/api"
+import type {
+  Concern,
+  ConcernStatus,
+  ConcernStatusEvent,
+  PublicUser,
+} from "@/features/dashboard/api"
 import {
   statusModeFromReport,
   type StatusDialogMode,
 } from "@/features/dashboard/components/report-status-mode"
+import {
+  canShareConcern,
+  shareConcernReport,
+} from "@/features/dashboard/lib/share-report"
 
 const STATUS_STEPS: Array<{ key: ConcernStatus; label: string }> = [
   { key: "submitted", label: "Submitted" },
@@ -43,27 +53,32 @@ const MODE_CONFIG: Record<
 > = {
   submitted: {
     statusLabel: "Submitted",
-    statusClass: "bg-brand-orange-soft text-brand-orange-strong ring-brand-orange/20",
+    statusClass:
+      "bg-brand-orange-soft text-brand-orange-strong ring-brand-orange/20",
     title: "Report received",
-    subtitle: "Your report was received and is being reviewed by the barangay team.",
+    subtitle:
+      "Your report was received and is being reviewed by the barangay team.",
   },
   assigned: {
     statusLabel: "Assigned",
     statusClass: "bg-tint text-brand-navy ring-line-tint",
     title: "Report assigned",
-    subtitle: "Your report has been assigned to a barangay staff member for action.",
+    subtitle:
+      "Your report has been assigned to a barangay staff member for action.",
   },
   rejected: {
     statusLabel: "Rejected",
     statusClass: "bg-sos/10 text-sos ring-sos/30",
     title: "Report not approved",
-    subtitle: "Your report was reviewed but needs changes or more detail before it can proceed.",
+    subtitle:
+      "Your report was reviewed but needs changes or more detail before it can proceed.",
   },
   resolved: {
     statusLabel: "Resolved",
     statusClass: "bg-neutral-100 text-neutral-600 ring-neutral-200",
     title: "Report resolved",
-    subtitle: "Your report has been resolved. Here’s a summary of what was done.",
+    subtitle:
+      "Your report has been resolved. Here’s a summary of what was done.",
   },
 }
 
@@ -83,11 +98,17 @@ function statusEvents(report: Concern): ConcernStatusEvent[] {
   return Array.isArray(report.status_events) ? report.status_events : []
 }
 
-function findEvent(report: Concern, status: ConcernStatus): ConcernStatusEvent | undefined {
+function findEvent(
+  report: Concern,
+  status: ConcernStatus
+): ConcernStatusEvent | undefined {
   return statusEvents(report).find((event) => event.status === status)
 }
 
-function latestEvent(report: Concern, mode: StatusDialogMode): ConcernStatusEvent | undefined {
+function latestEvent(
+  report: Concern,
+  mode: StatusDialogMode
+): ConcernStatusEvent | undefined {
   const status: ConcernStatus =
     mode === "assigned"
       ? report.status === "assigned"
@@ -97,14 +118,15 @@ function latestEvent(report: Concern, mode: StatusDialogMode): ConcernStatusEven
         ? report.status
         : mode
   return (
-    [...statusEvents(report)].reverse().find((event) => event.status === status) ??
-    statusEvents(report).at(-1)
+    [...statusEvents(report)]
+      .reverse()
+      .find((event) => event.status === status) ?? statusEvents(report).at(-1)
   )
 }
 
 function pickActor(
   report: Concern,
-  mode: StatusDialogMode,
+  mode: StatusDialogMode
 ): { actor: PublicUser; time: string } | null {
   const status =
     mode === "assigned"
@@ -126,60 +148,88 @@ function activeIndex(report: Concern, mode: StatusDialogMode) {
   if (mode === "submitted") return 0
   return Math.max(
     0,
-    STATUS_STEPS.findIndex((step) => step.key === report.status),
+    STATUS_STEPS.findIndex((step) => step.key === report.status)
   )
 }
 
 function stepEvent(report: Concern, key: ConcernStatus) {
-  if (key === "submitted") return findEvent(report, "submitted")?.created_at ?? report.created_at
+  if (key === "submitted")
+    return findEvent(report, "submitted")?.created_at ?? report.created_at
   return findEvent(report, key)?.created_at ?? null
 }
 
 function extractActions(report: Concern): string[] {
   const actions = statusEvents(report)
     .map((event) => event.note)
-    .filter((note) => note && note !== "Report submitted." && note !== "Your report was received.")
-  if (report.update_text && !actions.includes(report.update_text)) actions.push(report.update_text)
+    .filter(
+      (note) =>
+        note &&
+        note !== "Report submitted." &&
+        note !== "Your report was received."
+    )
+  if (report.update_text && !actions.includes(report.update_text))
+    actions.push(report.update_text)
   return actions.length > 0 ? actions : ["Report received and logged."]
 }
 
-function cleanDetailText(report: Concern, event: ConcernStatusEvent | undefined, fallback: string) {
-  const trivialNotes = new Set(["Report submitted.", "Your report was received."])
+function cleanDetailText(
+  report: Concern,
+  event: ConcernStatusEvent | undefined,
+  fallback: string
+) {
+  const trivialNotes = new Set([
+    "Report submitted.",
+    "Your report was received.",
+  ])
   if (event?.note && !trivialNotes.has(event.note)) return event.note
   return report.update_text || fallback
 }
 
-function StatusLine({ report, mode }: { report: Concern; mode: StatusDialogMode }) {
+function StatusLine({
+  report,
+  mode,
+}: {
+  report: Concern
+  mode: StatusDialogMode
+}) {
   const currentIdx = activeIndex(report, mode)
 
   return (
     <div className="rounded-2xl border border-neutral-200 bg-canvas px-3 py-5 sm:px-5">
       <div className="relative grid grid-cols-4 gap-1 sm:gap-2">
-        <div className="absolute left-[12%] right-[12%] top-[18px] h-[3px] rounded-full bg-neutral-200" />
-        <div className="absolute left-[12%] right-[12%] top-[18px] h-[3px] rounded-full">
+        <div className="absolute top-[18px] right-[12%] left-[12%] h-[3px] rounded-full bg-neutral-200" />
+        <div className="absolute top-[18px] right-[12%] left-[12%] h-[3px] rounded-full">
           <div
             className={cn(
               "h-full rounded-full transition-all",
-              mode === "rejected" ? "bg-sos" : "bg-brand-orange",
+              mode === "rejected" ? "bg-sos" : "bg-brand-orange"
             )}
             style={{ width: `${(Math.min(currentIdx, 3) / 3) * 100}%` }}
           />
         </div>
         {STATUS_STEPS.map((step, index) => {
-          const done = index < currentIdx || (mode === "resolved" && index === currentIdx)
+          const done =
+            index < currentIdx || (mode === "resolved" && index === currentIdx)
           const current = index === currentIdx && !done
           const rejectedCurrent = mode === "rejected" && current
           const date = stepEvent(report, step.key)
 
           return (
-            <div key={step.key} className="relative z-10 flex flex-col items-center text-center">
+            <div
+              key={step.key}
+              className="relative z-10 flex flex-col items-center text-center"
+            >
               <div
                 className={cn(
                   "flex size-9 items-center justify-center rounded-full border-2 text-[13px] font-bold sm:size-10 sm:text-[14px]",
                   done && "border-brand-navy bg-brand-navy text-white",
-                  current && !rejectedCurrent && "border-brand-orange bg-brand-orange text-white shadow-[0_0_0_4px_rgba(255,106,26,0.18)]",
+                  current &&
+                    !rejectedCurrent &&
+                    "border-brand-orange bg-brand-orange text-white shadow-[0_0_0_4px_rgba(255,106,26,0.18)]",
                   rejectedCurrent && "border-sos bg-sos text-white",
-                  !done && !current && "border-neutral-200 bg-white text-neutral-400",
+                  !done &&
+                    !current &&
+                    "border-neutral-200 bg-white text-neutral-400"
                 )}
               >
                 {done ? (
@@ -192,13 +242,13 @@ function StatusLine({ report, mode }: { report: Concern; mode: StatusDialogMode 
               </div>
               <p
                 className={cn(
-                  "mt-2.5 text-[12px] font-bold leading-tight sm:text-[13px]",
-                  done || current ? "text-neutral-900" : "text-neutral-400",
+                  "mt-2.5 text-[12px] leading-tight font-bold sm:text-[13px]",
+                  done || current ? "text-neutral-900" : "text-neutral-400"
                 )}
               >
                 {step.label}
               </p>
-              <p className="mt-1 text-[11px] font-medium leading-4 text-neutral-500 sm:text-[12px]">
+              <p className="mt-1 text-[11px] leading-4 font-medium text-neutral-500 sm:text-[12px]">
                 {date && (done || current) ? (
                   <>
                     {formatDate(date)}
@@ -227,7 +277,7 @@ function ActorCard({
   const letter = (
     actor.actor.full_name?.[0] ||
     actor.actor.initials?.[0] ||
-    "?"
+    "U"
   ).toUpperCase()
 
   return (
@@ -236,9 +286,7 @@ function ActorCard({
         {letter}
       </div>
       <div className="min-w-0">
-        <p className="text-[12px] font-semibold text-neutral-500">
-          {label}
-        </p>
+        <p className="text-[12px] font-semibold text-neutral-500">{label}</p>
         <p className="truncate text-[16px] font-semibold text-neutral-900">
           {actor.actor.full_name}
         </p>
@@ -264,9 +312,11 @@ export function ReportStatusDialog({
   onTrack?: () => void
 }) {
   const [copied, setCopied] = useState(false)
+  const [shared, setShared] = useState(false)
   const resolvedMode = mode ?? statusModeFromReport(report)
   const config = MODE_CONFIG[resolvedMode]
-  const isInProgress = resolvedMode === "assigned" && report.status === "in_progress"
+  const isInProgress =
+    resolvedMode === "assigned" && report.status === "in_progress"
   const statusTitle = isInProgress ? "Report in progress" : config.title
   const statusSubtitle = isInProgress
     ? "The assigned barangay team is currently working on your report."
@@ -297,8 +347,21 @@ export function ReportStatusDialog({
     onTrack?.()
   }
 
+  async function handleShare() {
+    const didShare = await shareConcernReport(report)
+    if (didShare) {
+      setShared(true)
+      window.setTimeout(() => setShared(false), 1800)
+    }
+  }
+
   return (
-    <Dialog open={open} onClose={handleClose} maxW="max-w-xl" containerClassName="z-[300]">
+    <Dialog
+      open={open}
+      onClose={handleClose}
+      maxW="max-w-xl"
+      containerClassName="z-[300]"
+    >
       {/* Clean Nextdoor-style header — white, bold type, large close */}
       <DialogHeader className="border-b border-neutral-200 bg-white px-5 py-4 sm:px-6">
         <div className="flex items-center justify-between gap-3">
@@ -320,19 +383,19 @@ export function ReportStatusDialog({
         {/* Hero text — no illustration */}
         <div className="space-y-2">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <h3 className="text-[22px] font-bold leading-tight tracking-tight text-neutral-900 sm:text-[24px]">
+            <h3 className="text-[22px] leading-tight font-bold tracking-tight text-neutral-900 sm:text-[24px]">
               {statusTitle}
             </h3>
             <span
               className={cn(
                 "inline-flex shrink-0 items-center rounded-full px-3.5 py-1.5 text-[13px] font-bold ring-1 ring-inset sm:text-[14px]",
-                statusClass,
+                statusClass
               )}
             >
               {statusLabel}
             </span>
           </div>
-          <p className="max-w-xl text-[15px] font-medium leading-6 text-neutral-600 sm:text-[16px] sm:leading-7">
+          <p className="max-w-xl text-[15px] leading-6 font-medium text-neutral-600 sm:text-[16px] sm:leading-7">
             {statusSubtitle}
           </p>
         </div>
@@ -353,7 +416,10 @@ export function ReportStatusDialog({
               className="flex size-10 items-center justify-center rounded-full bg-neutral-100 text-neutral-700 transition-colors hover:bg-neutral-200"
             >
               {copied ? (
-                <CheckIcon className="size-5 text-neutral-600" strokeWidth={2.5} />
+                <CheckIcon
+                  className="size-5 text-neutral-600"
+                  strokeWidth={2.5}
+                />
               ) : (
                 <CopyIcon className="size-5" strokeWidth={2} />
               )}
@@ -378,8 +444,11 @@ export function ReportStatusDialog({
 
         {resolvedMode === "rejected" ? (
           <div className="flex items-start gap-3 rounded-2xl border border-sos/30 bg-sos/10 px-4 py-4 text-sos sm:px-5">
-            <AlertTriangleIcon className="mt-0.5 size-6 shrink-0 text-sos" strokeWidth={2} />
-            <p className="text-[15px] font-medium leading-6">
+            <AlertTriangleIcon
+              className="mt-0.5 size-6 shrink-0 text-sos"
+              strokeWidth={2}
+            />
+            <p className="text-[15px] leading-6 font-medium">
               <span className="font-bold">Reason: </span>
               {detailText}
             </p>
@@ -393,22 +462,25 @@ export function ReportStatusDialog({
                   ? "Current update"
                   : "Review note"}
             </p>
-            <p className="mt-2 text-[15px] font-medium leading-6 text-neutral-700 sm:text-[16px]">
+            <p className="mt-2 text-[15px] leading-6 font-medium text-neutral-700 sm:text-[16px]">
               {detailText}
             </p>
           </div>
         ) : null}
 
-        {(resolvedMode === "assigned" || resolvedMode === "resolved") && actions.length > 0 ? (
+        {(resolvedMode === "assigned" || resolvedMode === "resolved") &&
+        actions.length > 0 ? (
           <div className="rounded-2xl border border-neutral-200 bg-white px-4 py-4 sm:px-5">
             <p className="text-[12px] font-bold text-neutral-500 sm:text-[13px]">
-              {resolvedMode === "resolved" ? "Actions taken" : "Pending actions"}
+              {resolvedMode === "resolved"
+                ? "Actions taken"
+                : "Pending actions"}
             </p>
             <ul className="mt-3 space-y-2.5">
               {actions.map((action, index) => (
                 <li
                   key={index}
-                  className="flex items-start gap-2.5 text-[15px] font-medium leading-6 text-neutral-700"
+                  className="flex items-start gap-2.5 text-[15px] leading-6 font-medium text-neutral-700"
                 >
                   <span className="mt-2 size-2 shrink-0 rounded-full bg-brand-orange" />
                   {action}
@@ -433,7 +505,7 @@ export function ReportStatusDialog({
                     alt={media.original_filename}
                     className="h-32 w-full rounded-xl border border-neutral-200 object-cover"
                   />
-                ) : null,
+                ) : null
               )}
             </div>
           </div>
@@ -469,6 +541,16 @@ export function ReportStatusDialog({
             >
               Done
             </button>
+            {canShareConcern(report) ? (
+              <button
+                type="button"
+                onClick={() => void handleShare()}
+                className="inline-flex h-12 items-center justify-center gap-2 rounded-full border border-neutral-300 bg-white px-6 text-[15px] font-bold text-neutral-900 transition-colors hover:bg-neutral-50 sm:h-14 sm:px-7 sm:text-[16px]"
+              >
+                <Share2Icon className="size-5" strokeWidth={2.25} />
+                {shared ? "Link ready" : "Share report"}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={handleTrack}

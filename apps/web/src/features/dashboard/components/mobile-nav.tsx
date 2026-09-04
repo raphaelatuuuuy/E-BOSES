@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { Link, useLocation } from "react-router-dom"
-import { type LucideIcon } from "lucide-react"
+import { TriangleAlert, type LucideIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@workspace/ui/components/sheet"
@@ -8,7 +8,7 @@ import { useAuthSession } from "@/features/auth/auth-session"
 import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import { getActiveEmergency } from "@/features/dashboard/emergency-api"
 import { getRoleNav } from "@/features/dashboard/lib/navigation"
-import { hasCapability } from "@/features/dashboard/lib/capabilities"
+import { CAPABILITIES, hasCapability } from "@/features/dashboard/lib/capabilities"
 import { useAssignedDispatches } from "@/features/dashboard/hooks/use-assigned-dispatches"
 import { useOfficialBadges } from "@/features/dashboard/hooks/use-official-badges"
 import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/record/status"
@@ -57,7 +57,7 @@ function SosTab() {
       aria-haspopup="dialog"
       aria-expanded={shellOpen}
       className={cn(
-        "flex h-12 w-12 shrink-0 items-center justify-center rounded-full transition-all duration-200",
+        "flex h-12 w-12 shrink-0 items-center justify-center rounded-full transition-[background-color,color,box-shadow,transform,opacity] duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2",
         hot
           ? cn(
               "bg-gradient-to-b from-sos-bright to-sos text-white shadow-[0_6px_20px_rgba(242,59,53,0.38)]",
@@ -91,47 +91,23 @@ function ResponderBar() {
         <nav
           aria-label="Primary"
           className={cn(
-            "pointer-events-auto flex h-[3.75rem] w-auto shrink-0 items-center gap-1 rounded-full border border-nav-border bg-nav-raised px-2 shadow-[0_10px_32px_rgba(15,23,42,0.18)]",
+            "pointer-events-auto flex h-[3.75rem] w-auto shrink-0 items-center gap-1 rounded-full border border-neutral-300 bg-white px-2 shadow-[0_10px_32px_rgba(15,23,42,0.14)]",
           )}
         >
           {navItems.map((item) => {
             const active = item.isActive(location.pathname)
-            const Icon = item.icon
-            const alarmed = item.key === "dispatch" && liveCount > 0
-
+            const alarmed = item.key === "concerns" && liveCount > 0
             return (
-              <Link
+              <PillTab
                 key={item.key}
+                label={item.label}
+                icon={alarmed ? TriangleAlert : item.icon}
                 to={item.to}
-                aria-current={active ? "page" : undefined}
-                aria-label={item.label}
-                className={cn(
-                  "flex h-12 shrink-0 items-center justify-center rounded-full transition-all duration-200",
-                  active ? "gap-1.5 px-4" : "w-12",
-                  alarmed
-                    ? cn(
-                        "bg-gradient-to-b from-sos-bright to-sos text-white shadow-[0_6px_20px_rgba(242,59,53,0.38)]",
-                        "animate-sos-glow-blink",
-                      )
-                    : active
-                      ? "bg-nav-active text-nav-text-active"
-                      : "bg-card-raised text-nav-muted hover:bg-nav-active hover:text-nav-text-active",
-                )}
-              >
-                <Icon
-                  className="size-5 shrink-0"
-                  strokeWidth={active || alarmed ? 2.4 : 1.8}
-                  fill="none"
-                />
-                <span
-                  className={cn(
-                    "overflow-hidden whitespace-nowrap text-[10.5px] font-bold leading-none transition-all duration-200",
-                    active ? "max-w-24 opacity-100" : "max-w-0 opacity-0",
-                  )}
-                >
-                  {item.label}
-                </span>
-              </Link>
+                active={active}
+                compact
+                alarmed={alarmed}
+                staffStyle
+              />
             )
           })}
         </nav>
@@ -164,7 +140,7 @@ function PillTab({
   staffStyle?: boolean
 }) {
   const className = cn(
-    "flex h-12 shrink-0 items-center justify-center rounded-full transition-all duration-300 ease-out",
+    "flex h-12 shrink-0 items-center justify-center rounded-full transition-[width,padding,gap,background-color,color,box-shadow,transform,opacity] duration-300 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2",
     staffStyle
       ? alarmed
         ? "gap-1.5 px-4 text-sos"
@@ -198,7 +174,7 @@ function PillTab({
         aria-label={ariaLabel ?? label}
         className={className}
       >
-        <Icon className={cn("size-5 shrink-0", alarmed && staffStyle && "animate-sos-icon-blink")} strokeWidth={active || alarmed ? 2.4 : 1.8} fill="none" />
+        <Icon className={cn("size-5 shrink-0", alarmed && staffStyle && "animate-sos-icon-blink")} strokeWidth={active || alarmed ? 2.4 : 1.8} fill="none" aria-hidden="true" />
         {labelSpan}
       </Link>
     )
@@ -212,7 +188,7 @@ function PillTab({
       aria-label={ariaLabel ?? label}
       className={className}
     >
-      <Icon className="size-5 shrink-0" strokeWidth={active || alarmed ? 2.4 : 1.8} fill="none" />
+      <Icon className="size-5 shrink-0" strokeWidth={active || alarmed ? 2.4 : 1.8} fill="none" aria-hidden="true" />
       {labelSpan}
     </button>
   )
@@ -245,22 +221,35 @@ export function MobileNav() {
         <div className="pointer-events-none flex items-end justify-center px-4 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))]">
 
           <nav
-            className="pointer-events-auto flex h-[3.75rem] items-center gap-1 rounded-full bg-chart-grid px-2 shadow-[0_10px_32px_rgba(15,23,42,0.18)]"
+            className="pointer-events-auto flex h-[3.75rem] items-center gap-1 rounded-full border border-neutral-300 bg-white px-2 shadow-[0_10px_32px_rgba(15,23,42,0.14)]"
             aria-label="Primary"
           >
             {navItems.map((item) => {
               const active = item.isActive(location.pathname)
-              const isEmergencies = item.key === "emergencies" && isOfficialRole
-              const hasActiveEmergency = isEmergencies && activeEmergencies > 0
+              // Concerns owns the emergency queue in the official nav. Keep
+              // the mobile tab in lockstep with the sidebar when a live
+              // emergency is present.
+              const emergencyConcernLive =
+                isOfficialRole &&
+                item.key === "concerns" &&
+                // Only blink when this account's Concerns queue can actually
+                // show the emergencies — the queue endpoint requires the
+                // dispatch capability, and without it "Urgent cases" is
+                // always empty even though the summary counts them.
+                hasCapability(
+                  user?.capabilities,
+                  CAPABILITIES.dispatchEmergencies
+                ) &&
+                activeEmergencies > 0
               return (
                 <PillTab
                   key={item.key}
                   label={item.label}
-                  icon={item.icon}
+                  icon={emergencyConcernLive ? TriangleAlert : item.icon}
                   to={item.to}
                   active={active}
                   compact
-                  alarmed={hasActiveEmergency}
+                  alarmed={emergencyConcernLive}
                   staffStyle
                 />
               )

@@ -24,6 +24,7 @@ from .models import (
     EmergencyLocationPing,
     MapDispatchPolicy,
     EmergencyMedia,
+    EmergencyResolutionEvidence,
     EmergencyResponderAssignment,
     EmergencyStatusEvent,
     EmergencyTypeRoleMap,
@@ -49,6 +50,29 @@ class EmergencyMediaUploadSerializer(serializers.Serializer):
 
     def validate_media(self, value):
         return validate_emergency_media_file(value)
+
+
+class EmergencyResolutionEvidenceSerializer(serializers.ModelSerializer):
+    uploaded_by = PublicUserSerializer(read_only=True)
+    raw_url = serializers.SerializerMethodField()
+    preview_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EmergencyResolutionEvidence
+        fields = (
+            "id", "uploaded_by", "original_filename", "mime_type", "file_size",
+            "note", "raw_url", "preview_url", "created_at",
+        )
+
+    def get_raw_url(self, obj):
+        path = f"/api/emergencies/resolution-evidence/{obj.pk}/raw/"
+        request = self.context.get("request")
+        return request.build_absolute_uri(path) if request else path
+
+    def get_preview_url(self, obj):
+        path = f"/api/emergencies/resolution-evidence/{obj.pk}/preview/"
+        request = self.context.get("request")
+        return request.build_absolute_uri(path) if request else path
 
 
 class EmergencyCategorySerializer(serializers.ModelSerializer):
@@ -82,7 +106,7 @@ class EmergencyCategorySerializer(serializers.ModelSerializer):
         return request.build_absolute_uri(obj.icon_image.url) if request else obj.icon_image.url
 
     def get_is_covered(self, obj):
-        return emergency_category_is_covered(obj.code)
+        return emergency_category_is_covered(obj.code, obj.community)
 
     def validate_code(self, value):
         code = (value or "").strip().lower().replace("-", "_")
@@ -164,12 +188,6 @@ class EmergencyCreateSerializer(serializers.Serializer):
     triage = serializers.JSONField(required=False)
 
     def validate(self, attrs):
-        category = EmergencyCategory.objects.filter(code=attrs.get("type"), is_active=True).first()
-        if not category:
-            raise serializers.ValidationError({"type": ["Choose an active emergency category."]})
-        if not emergency_category_is_covered(category.code):
-            raise serializers.ValidationError({"type": ["This emergency category has no responding unit configured."]})
-
         latitude = attrs.get("latitude")
         longitude = attrs.get("longitude")
         if (latitude is None) != (longitude is None):
@@ -234,10 +252,15 @@ class EmergencyLocationPingSerializer(serializers.ModelSerializer):
 LEGACY_UNIT_BY_DEPARTMENT_CODE = {code: unit for unit, code in RESPONDER_UNIT_TO_DEPARTMENT.items()}
 
 
-def emergency_category_is_covered(code):
+def emergency_category_is_covered(code, community=None):
     if not code:
         return False
-    return EmergencyTypeRoleMap.objects.filter(emergency_type=code, is_active=True, department__isnull=False).exists()
+    queryset = EmergencyTypeRoleMap.objects.filter(
+        emergency_type=code, is_active=True, department__isnull=False
+    )
+    if community is not None:
+        queryset = queryset.filter(community=community)
+    return queryset.exists()
 
 
 class EmergencyTypeRoleMapSerializer(serializers.ModelSerializer):
@@ -290,15 +313,11 @@ class EmergencyTypeRoleMapSerializer(serializers.ModelSerializer):
         """
         attrs = super().to_internal_value(data)
 
-        category_code = attrs.get("emergency_type") or getattr(self.instance, "emergency_type", "")
-        if category_code and not EmergencyCategory.objects.filter(code=category_code, is_active=True).exists():
-            raise serializers.ValidationError({"emergency_type": ["Choose an active emergency category."]})
-
         department = attrs.get("department") or getattr(self.instance, "department", None)
         unit = attrs.get("responder_unit") or getattr(self.instance, "responder_unit", "")
 
         if department is None and unit:
-            department = department_for_responder_unit(unit)
+            department = department_for_responder_unit(unit, self.context.get("community"))
             if department is None:
                 raise serializers.ValidationError(
                     {"responder_unit": [f"No barangay unit is mapped to “{unit}”. Choose a unit instead."]}
@@ -309,6 +328,12 @@ class EmergencyTypeRoleMapSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"department": ["Select the unit that answers this emergency type."]}
             )
+
+        category_code = attrs.get("emergency_type") or getattr(self.instance, "emergency_type", "")
+        category_queryset = EmergencyCategory.objects.filter(code=category_code, is_active=True)
+        category_queryset = category_queryset.filter(community=department.community)
+        if category_code and not category_queryset.exists():
+            raise serializers.ValidationError({"emergency_type": ["Choose an active emergency category in this community."]})
 
         # Keep the legacy column populated so older serializers and the
         # responder-availability index keep working during the transition.
@@ -378,6 +403,17 @@ class EmergencyResponderAssignmentSerializer(serializers.ModelSerializer):
         }
 
     def get_last_location(self, obj):
+        if obj.status in {
+            "assigned",
+            "acknowledged",
+            "en_route",
+            "nearby",
+            "arrived",
+            "assisting",
+        }:
+            from apps.live_map import assignment_last_location
+
+            return assignment_last_location(obj, fresh_only=True)
         pings = list(obj.location_pings.all())
         if not pings:
             return None
@@ -415,6 +451,9 @@ class EmergencyEscalationSerializer(serializers.ModelSerializer):
 
 
 class EmergencyAlertSerializer(serializers.ModelSerializer):
+    community = serializers.SerializerMethodField()
+    access_mode = serializers.SerializerMethodField()
+    can_interact = serializers.SerializerMethodField()
     reporter = PublicUserSerializer(read_only=True)
     # Masked for every reader. The full number is available only from
     # GET /api/emergencies/{pk}/reporter-contact/, which checks the caller is
@@ -437,16 +476,23 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
     witness_notification_summary = serializers.SerializerMethodField()
     response_duration_seconds = serializers.SerializerMethodField()
     disposition_reason = serializers.SerializerMethodField()
+    display_description = serializers.SerializerMethodField()
+    resolution_evidence = EmergencyResolutionEvidenceSerializer(many=True, read_only=True)
 
     class Meta:
         model = EmergencyAlert
         fields = (
             "id",
             "public_id",
+            "community",
+            "access_mode",
+            "can_interact",
             "reporter",
             "reporter_phone",
             "type",
             "note",
+            "display_description",
+            "resolution_evidence",
             "status",
             "barangay",
             "latitude",
@@ -498,10 +544,116 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
         number = (obj.reporter_contact_number or "").strip() or getattr(obj.reporter, "phone_number", "")
         return mask_ph_mobile(number) if number else ""
 
+    def get_community(self, obj):
+        from apps.community_access import community_summary
+
+        return community_summary(obj.community)
+
+    def get_access_mode(self, obj):
+        from apps.community_access import emergency_access_mode
+
+        request = self.context.get("request")
+        return emergency_access_mode(getattr(request, "user", None), obj)
+
+    def get_can_interact(self, obj):
+        return self.get_access_mode(obj) in {"owner", "operational", "local_public"}
+
+    def to_representation(self, instance):
+        payload = super().to_representation(instance)
+        # A few alerts created before actor auditing was enabled have a
+        # resolved status event with actor=NULL.  Keep those historical rows
+        # attributable by using the matching dispatch audit entry (or the
+        # responder whose assignment was closed) when the status event is
+        # serialized.  New events always carry actor and are unchanged.
+        if payload.get("status_events"):
+            events = list(instance.status_events.all())
+            logs = list(instance.assignment_logs.all())
+            resolved_statuses = {
+                EmergencyAlert.Status.RESOLVED,
+                EmergencyAlert.Status.CLOSED,
+            }
+            fallback_logs = sorted(
+                [
+                    log
+                    for log in logs
+                    if log.new_status == EmergencyResponderAssignment.Status.RESOLVED
+                    or log.action == "disposition"
+                ],
+                key=lambda log: (log.created_at, log.pk),
+                reverse=True,
+            )
+            fallback_actor = None
+            if fallback_logs:
+                fallback_actor = fallback_logs[0].actor or fallback_logs[0].responder
+            if fallback_actor is None:
+                resolved_assignments = [
+                    assignment
+                    for assignment in instance.assignments.all()
+                    if assignment.status == EmergencyResponderAssignment.Status.RESOLVED
+                ]
+                resolved_assignments.sort(
+                    key=lambda assignment: (assignment.assigned_at, assignment.pk),
+                    reverse=True,
+                )
+                fallback_actor = resolved_assignments[0].responder if resolved_assignments else None
+            if fallback_actor is not None:
+                actor_payload = PublicUserSerializer(
+                    fallback_actor,
+                    context=self.context,
+                ).data
+                for event, event_payload in zip(events, payload["status_events"]):
+                    if (
+                        event_payload.get("actor") is None
+                        and event.status in resolved_statuses
+                    ):
+                        event_payload["actor"] = actor_payload
+        public_access = payload.get("access_mode") in {"local_public", "foreign_read_only"}
+        settled_public_alert = instance.status in {
+            EmergencyAlert.Status.RESOLVED,
+            EmergencyAlert.Status.CLOSED,
+        }
+        if public_access:
+            payload.update(
+                reporter=None,
+                reporter_phone="",
+                note="",
+                reported_area="",
+                resolution_report="",
+                media_warnings=[],
+                media=[],
+                # A resolved public alert may show its safe response history.
+                # Live assignments and precise responder locations remain
+                # private, but settled responders, their route history, and the
+                # audited status timeline are useful to residents reviewing a
+                # completed emergency.
+                assignments=payload.get("assignments", []) if settled_public_alert else [],
+                active_assignments=[],
+                current_assignment=None,
+                responding_unit=None,
+                route=None,
+                status_events=payload.get("status_events", []) if settled_public_alert else [],
+                appeals=[],
+                escalations=[],
+                assignment_logs=[],
+                resolution_evidence=payload.get("resolution_evidence", []) if settled_public_alert else [],
+                witness_notification_summary=None,
+                triage={},
+                unresolved_fields=[],
+                location_evidence={},
+                media_integrity={},
+                reporter_verification="",
+            )
+        return payload
+
     def get_display_location(self, obj):
         from .location_services import display_location
 
         return display_location(obj)
+
+    def get_display_description(self, obj):
+        from .description import description_for_display
+
+        return description_for_display(obj)
 
     def _active_assignments(self, obj):
         # Python-filter over the prefetched relation: chaining .filter() on
@@ -562,12 +714,12 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
             cache["public_types"] = set(
                 EmergencyCategory.objects.filter(
                     is_active=True, visible_to_residents=True
-                ).values_list("code", flat=True)
+                ).values_list("community_id", "code")
             )
         return cache["public_types"]
 
     def get_is_public(self, obj) -> bool:
-        return obj.type in self._public_types()
+        return (obj.community_id, obj.type) in self._public_types()
 
     def get_comment_count(self, obj) -> int:
         # Annotated by alert_queryset() so a page of alerts costs no extra
@@ -652,7 +804,7 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
         user = getattr(request, "user", None)
         if not user or not user.is_authenticated:
             return None
-        if not (user.is_staff or user.is_superuser or user.role == user.Role.BARANGAY_OFFICIAL):
+        if not (user.is_superuser or user.role == user.Role.BARANGAY_OFFICIAL):
             return None
         rows = sorted(obj.witness_notifications.all(), key=lambda item: item.sent_at)
         records = [
@@ -766,8 +918,15 @@ class EmergencyLocationPingCreateSerializer(serializers.Serializer):
     latitude = BrowserGPSDecimalField(max_digits=10, decimal_places=7)
     longitude = BrowserGPSDecimalField(max_digits=10, decimal_places=7)
     accuracy = serializers.FloatField(required=False, allow_null=True)
+    timestamp = serializers.IntegerField(required=False, min_value=1)
 
     def validate(self, attrs):
+        from apps.live_map import validate_client_gps_timestamp
+
+        try:
+            validate_client_gps_timestamp(attrs.get("timestamp"))
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"timestamp": exc.messages}) from exc
         try:
             validate_location_pair(
                 attrs.get("latitude"),
@@ -782,6 +941,7 @@ class EmergencyLocationPingCreateSerializer(serializers.Serializer):
 
 class EmergencyNoteSerializer(serializers.Serializer):
     note = serializers.CharField(max_length=2000, allow_blank=True, required=False)
+    internal_note = serializers.CharField(max_length=2000, allow_blank=True, required=False)
     status_version = serializers.IntegerField(required=False, min_value=0)
 
 

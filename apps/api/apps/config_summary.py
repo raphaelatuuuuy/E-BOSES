@@ -14,6 +14,7 @@ opening anything.
 from __future__ import annotations
 
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -41,10 +42,11 @@ def _plural(count: int, singular: str, plural: str | None = None) -> str:
     return f"{count} {singular if count == 1 else (plural or singular + 's')}"
 
 
-def _units():
-    total = Department.objects.filter(is_active=True).count()
-    inactive = Department.objects.filter(is_active=False).count()
-    responding = Department.objects.filter(is_active=True, responds_to_emergencies=True).count()
+def _units(community):
+    rows = Department.objects.filter(community=community)
+    total = rows.filter(is_active=True).count()
+    inactive = rows.filter(is_active=False).count()
+    responding = rows.filter(is_active=True, responds_to_emergencies=True).count()
     status = _plural(total, "unit")
     if inactive:
         status += f" · {inactive} inactive"
@@ -56,9 +58,14 @@ def _units():
     }
 
 
-def _roles():
-    total = Position.objects.filter(is_active=True).count()
-    unconfigured = [p for p in Position.objects.filter(is_active=True) if not p.permissions]
+def _roles(community):
+    positions = Position.objects.filter(
+        is_active=True,
+        designations__is_active=True,
+        designations__department__community=community,
+    ).distinct()
+    total = positions.count()
+    unconfigured = [p for p in positions if not p.permissions]
     return {
         "status": _plural(total, "position"),
         "detail": (
@@ -68,10 +75,14 @@ def _roles():
     }
 
 
-def _users():
+def _users(community):
     User_ = get_user_model()
-    total = User_.objects.filter(is_active=True).count()
-    pending = User_.objects.filter(status=User.Status.PENDING_VERIFICATION).count()
+    rows = User_.objects.filter(
+        Q(resident_profile__community=community)
+        | Q(designations__is_active=True, designations__department__community=community)
+    ).distinct()
+    total = rows.filter(is_active=True).count()
+    pending = rows.filter(status=User.Status.PENDING_VERIFICATION).count()
     return {
         "status": _plural(total, "account"),
         "detail": f"{pending} pending verification" if pending else "None pending",
@@ -79,12 +90,12 @@ def _users():
     }
 
 
-def _categories():
+def _categories(community):
     """Categories and their routing are one card: a category with no unit is a
     category whose concerns reach nobody, which is the thing worth surfacing."""
-    categories = list(ConcernCategory.objects.filter(is_active=True))
+    categories = list(ConcernCategory.objects.filter(is_active=True, community=community))
     routed_ids = set(
-        RoutingRule.objects.filter(is_active=True).values_list("category_id", flat=True)
+        RoutingRule.objects.filter(is_active=True, category__community=community).values_list("category_id", flat=True)
     )
     unrouted = [c for c in categories if c.pk not in routed_ids and c.department_id is None]
     return {
@@ -107,10 +118,10 @@ def _strictness_label(relevance: float) -> str:
     return "Letting most through"
 
 
-def _classification():
+def _classification(community):
     from apps.concerns.models import ConcernClassificationConfiguration
 
-    config = ConcernClassificationConfiguration.current()
+    config = ConcernClassificationConfiguration.current(community)
     held = []
     if config.flag_suspicious:
         held.append("junk")
@@ -130,11 +141,12 @@ def _classification():
     }
 
 
-def _dispatch():
-    categories = list(EmergencyCategory.objects.filter(is_active=True).values_list("code", "label"))
+def _dispatch(community):
+    categories = list(EmergencyCategory.objects.filter(is_active=True, community=community).values_list("code", "label"))
     types = [code for code, _ in categories]
     mapped = set(
         EmergencyTypeRoleMap.objects.filter(
+            community=community,
             is_active=True,
             department__isnull=False,
             department__is_active=True,
@@ -162,13 +174,13 @@ def _dispatch():
     }
 
 
-def _coverage():
+def _coverage(community):
     """The coverage area card: the barangay and the acceptance zone.
 
     This is geography — which area a station answers for — not the emergency
     types it routes (that is the dispatch card).
     """
-    policy = MapDispatchPolicy.current()
+    policy = MapDispatchPolicy.current(community)
     zone = (
         f"{policy.acceptance_radius_meters} m radius"
         if not policy.acceptance_geometry
@@ -181,7 +193,7 @@ def _coverage():
     }
 
 
-def _verification():
+def _verification(community=None):
     # ID checks are automatic and there is no verification queue screen — it was
     # removed on purpose, because cases needing a human surface through normal
     # account review instead.
@@ -195,10 +207,13 @@ def _verification():
     from django.conf import settings
     from django.utils import timezone
 
-    resident_action = ResidenceVerificationCase.objects.filter(
+    cases = ResidenceVerificationCase.objects.all()
+    if community is not None:
+        cases = cases.filter(user__resident_profile__community=community)
+    resident_action = cases.filter(
         status=ResidenceVerificationCase.Status.MANUAL_REVIEW
     ).count()
-    in_flight = ResidenceVerificationCase.objects.filter(
+    in_flight = cases.filter(
         status__in=[
             ResidenceVerificationCase.Status.QUEUED,
             ResidenceVerificationCase.Status.PROCESSING,
@@ -231,7 +246,7 @@ def _verification():
     }
 
 
-def _audit():
+def _audit(community):
     """The audit card counts activity, never "work to do".
 
     A log is a record, not a queue. Nothing here should ever ask for attention,
@@ -244,7 +259,7 @@ def _audit():
     from apps.accounts.models import AuditLog
 
     since = timezone.now() - timedelta(days=7)
-    recent = AuditLog.objects.filter(created_at__gte=since)
+    recent = AuditLog.objects.filter(created_at__gte=since, community=community)
     total = recent.count()
     private = recent.filter(action__in=SENSITIVE_ACTIONS).count()
 
@@ -257,7 +272,7 @@ def _audit():
     }
 
 
-def _privacy():
+def _privacy(community):
     # Data exports complete themselves, so only deletions reach an official.
     # The type filter used to be missing, so a resident's own export — which no
     # official ever has to touch — sat on this card as "1 open request" that
@@ -266,6 +281,7 @@ def _privacy():
     # REVIEWED is counted too: nothing else finishes a reviewed request, and
     # leaving it out meant a half-actioned deletion dropped off the board.
     open_requests = AccountRequest.objects.filter(
+        user__resident_profile__community=community,
         type=AccountRequest.Type.DELETION,
         status__in=[AccountRequest.Status.SUBMITTED, AccountRequest.Status.REVIEWED],
     ).count()
@@ -298,16 +314,21 @@ class ConfigurationSummaryView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from apps.community_scope import selected_community
+
         granted = capabilities_for(request.user)
         if not granted:
             return Response({"sections": {}, "capabilities": []})
 
+        community = selected_community(request.user, request.query_params.get("community_id"))
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=403)
         sections = {}
         for key, (capability, build) in SECTIONS.items():
             if capability not in granted:
                 continue
             try:
-                sections[key] = build()
+                sections[key] = build(community)
             except Exception:
                 # One broken summary must not take down Configuration itself —
                 # the card renders with its label and no status instead.

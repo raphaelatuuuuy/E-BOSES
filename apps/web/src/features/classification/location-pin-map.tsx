@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type leaflet from "leaflet"
 import { FootprintsIcon, HomeIcon, LocateFixedIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -20,9 +20,12 @@ import {
   MapStackButton,
   MapStackDivider,
 } from "@/features/dashboard/components/map-control-stack"
-import { StreetViewModal, type StreetViewCoord } from "@/features/dashboard/components/map/street-view"
+import {
+  StreetViewModal,
+  type StreetViewCoord,
+} from "@/features/dashboard/components/map/street-view"
 
-const DEFAULT_CENTER: [number, number] = [14.6507, 121.1133]
+const DEFAULT_CENTER: [number, number] = [14.5995, 120.9842]
 
 export type LocationPin = { lat: number; lng: number }
 
@@ -71,13 +74,20 @@ export function LocationPinMap({
   const fittedRef = useRef(false)
   const observerRef = useRef<ResizeObserver | null>(null)
   const reverseTimer = useRef<number | null>(null)
-  const resizeDragRef = useRef<{ startY: number; startHeight: number } | null>(null)
+  const resizeDragRef = useRef<{ startY: number; startHeight: number } | null>(
+    null
+  )
   const [mapReady, setMapReady] = useState(false)
   const [outOfScope, setOutOfScope] = useState(false)
   const [height, setHeight] = useState(224)
   const [street, setStreet] = useState("")
   const [geocoding, setGeocoding] = useState(false)
   const [svCoord, setSvCoord] = useState<StreetViewCoord | null>(null)
+  const coverage = useMemo<CoverageInput>(() => {
+    const boundary = (context?.boundary?.geometry ??
+      null) as CoverageInput["boundary"]
+    return { boundary, policy: context?.dispatch_policy ?? null }
+  }, [context])
   const [svPicking, setSvPicking] = useState(false)
 
   function scheduleStreetLookup(lat: number, lng: number) {
@@ -99,7 +109,10 @@ export function LocationPinMap({
       const L = (await import("leaflet")).default
       await import("leaflet/dist/leaflet.css")
       if (cancelled || !containerRef.current || mapRef.current) return
-      if ((containerRef.current as HTMLDivElement & { _leaflet_id?: number })._leaflet_id) {
+      if (
+        (containerRef.current as HTMLDivElement & { _leaflet_id?: number })
+          ._leaflet_id
+      ) {
         containerRef.current.innerHTML = ""
       }
 
@@ -214,6 +227,12 @@ export function LocationPinMap({
         zoom: 15,
         zoomControl: false,
         attributionControl: false,
+        dragging: true,
+        scrollWheelZoom: true,
+        touchZoom: true,
+        doubleClickZoom: true,
+        boxZoom: true,
+        keyboard: true,
         preferCanvas: false,
       })
 
@@ -298,7 +317,11 @@ export function LocationPinMap({
           iconSize: [176, 150],
           iconAnchor: [88, 146],
         })
-        L.marker([marker.lat, marker.lng], { icon, interactive: false, keyboard: false }).addTo(group)
+        L.marker([marker.lat, marker.lng], {
+          icon,
+          interactive: false,
+          keyboard: false,
+        }).addTo(group)
       }
     })
   }, [mapReady, markers])
@@ -307,16 +330,24 @@ export function LocationPinMap({
     const map = mapRef.current
     const group = coverageLayerRef.current
     if (!mapReady || !map || !group || !context) return
-    const boundary = (context.boundary?.geometry ?? null) as never
-    coverageRef.current = { boundary, policy: context.dispatch_policy }
+    const { boundary, policy } = coverage
+    coverageRef.current = coverage
     void import("leaflet").then((L) => {
       if (!coverageLayerRef.current) return
       group.clearLayers()
-      drawCoverage(L, group, { boundary, policy: context.dispatch_policy, showBoundary: false, showZone: false })
+      drawCoverage(L, group, {
+        boundary,
+        policy,
+        showBoundary: false,
+        showZone: false,
+      })
       if (boundary && !fittedRef.current) {
         fittedRef.current = true
         try {
-          map.fitBounds(L.geoJSON(boundary).getBounds(), { padding: [18, 18], maxZoom: 16 })
+          map.fitBounds(L.geoJSON(boundary as never).getBounds(), {
+            padding: [18, 18],
+            maxZoom: 16,
+          })
         } catch {
           /* ignore */
         }
@@ -327,7 +358,7 @@ export function LocationPinMap({
       onPinChange(inside ? { lat: c.lat, lng: c.lng } : null)
       if (inside) scheduleStreetLookup(c.lat, c.lng)
     })
-  }, [mapReady, context, onPinChange])
+  }, [mapReady, context, coverage, onPinChange])
 
   function recenter() {
     const map = mapRef.current
@@ -336,7 +367,10 @@ export function LocationPinMap({
     if (boundary) {
       void import("leaflet").then((L) => {
         try {
-          map.fitBounds(L.geoJSON(boundary as never).getBounds(), { padding: [18, 18], maxZoom: 16 })
+          map.fitBounds(L.geoJSON(boundary as never).getBounds(), {
+            padding: [18, 18],
+            maxZoom: 16,
+          })
         } catch {
           map.setView(DEFAULT_CENTER, 15)
         }
@@ -354,9 +388,10 @@ export function LocationPinMap({
       return
     }
     navigator.geolocation.getCurrentPosition(
-      (position) => map.setView([position.coords.latitude, position.coords.longitude], 16),
+      (position) =>
+        map.setView([position.coords.latitude, position.coords.longitude], 16),
       () => toast.error("Could not get your current location."),
-      { enableHighAccuracy: true, timeout: 10000 },
+      { enableHighAccuracy: true, timeout: 10000 }
     )
   }
 
@@ -374,7 +409,10 @@ export function LocationPinMap({
         return
       }
       setSvPicking(false)
-      mapRef.current?.setView([lat, lng], Math.max(mapRef.current.getZoom(), 16))
+      mapRef.current?.setView(
+        [lat, lng],
+        Math.max(mapRef.current.getZoom(), 16)
+      )
       setSvCoord({ lat, lng })
     }
     function onKey(event: KeyboardEvent) {
@@ -394,14 +432,17 @@ export function LocationPinMap({
       <div
         className={cn(
           "relative overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-ink",
-          outOfScope && "eboses-map-blocked",
+          outOfScope && "eboses-map-blocked"
         )}
         style={{ height }}
       >
-        <div ref={containerRef} className="eboses-pin-map absolute inset-0 z-0" />
+        <div
+          ref={containerRef}
+          className="eboses-pin-map absolute inset-0 z-0"
+        />
 
         {mapReady && !svCoord ? (
-          <MapControlStack className="absolute right-3 top-3 z-[1100] border-0 bg-white">
+          <MapControlStack className="absolute top-3 right-3 z-[1100] border-0 bg-white">
             <MapStackButton
               className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
               label="Recenter to the barangay"
@@ -415,16 +456,28 @@ export function LocationPinMap({
               label="Use my current location"
               onClick={locate}
             >
-              <LocateFixedIcon className="size-5" strokeWidth={1.8} aria-hidden />
+              <LocateFixedIcon
+                className="size-5"
+                strokeWidth={1.8}
+                aria-hidden
+              />
             </MapStackButton>
             <MapStackDivider className="bg-neutral-200" />
             <MapStackButton
               className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
               active={svPicking}
-              label={svPicking ? "Cancel Street View pick" : "Click the map, then open Street View there"}
+              label={
+                svPicking
+                  ? "Cancel Street View pick"
+                  : "Click the map, then open Street View there"
+              }
               onClick={() => setSvPicking((value) => !value)}
             >
-              <FootprintsIcon className="size-5" strokeWidth={1.9} aria-hidden />
+              <FootprintsIcon
+                className="size-5"
+                strokeWidth={1.9}
+                aria-hidden
+              />
             </MapStackButton>
           </MapControlStack>
         ) : null}
@@ -442,59 +495,76 @@ export function LocationPinMap({
             coord={svCoord}
             mode="pick"
             onMove={(next) => {
-              mapRef.current?.setView([next.lat, next.lng], Math.max(mapRef.current.getZoom(), 16))
+              mapRef.current?.setView(
+                [next.lat, next.lng],
+                Math.max(mapRef.current.getZoom(), 16)
+              )
               setSvCoord(next)
             }}
-            coverage={coverageRef.current}
+            coverage={coverage}
             onClose={() => setSvCoord(null)}
           />
         ) : null}
 
         {mapReady && !outOfScope && pin ? (
           <span
-            className="eboses-pin-pulse absolute left-1/2 top-1/2 size-3 rounded-full bg-white"
-            style={{ marginLeft: -6, marginTop: -6, boxShadow: "0 1px 4px rgba(0,0,0,0.35)" }}
+            className="eboses-pin-pulse absolute top-1/2 left-1/2 size-3 rounded-full bg-white"
+            style={{
+              marginLeft: -6,
+              marginTop: -6,
+              boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
+            }}
           />
         ) : null}
 
         {!svCoord && !svPicking ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-3 z-[1100] flex flex-col items-center gap-2 px-4">
-          {outOfScope ? (
-            <p
-              role="status"
-              className="flex max-w-[min(100%,320px)] flex-col items-center rounded-full bg-white px-5 py-2.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
-            >
-              <span className="text-[13px] font-semibold leading-none text-neutral-900">
-                {OUT_OF_SCOPE_MESSAGE}
-              </span>
-              <span className="mt-1 text-[12px] font-medium leading-snug text-neutral-500">
-                Move the map back to a covered area.
-              </span>
-            </p>
-          ) : (
-            <div className="flex max-w-[min(100%,320px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-5 py-2.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
-              <span className="text-[14px] font-semibold leading-none text-neutral-900">
-                Use this location
-              </span>
-              <span className="mt-1 line-clamp-1 text-[12.5px] font-medium leading-snug text-neutral-500">
-                {geocoding ? "Finding street…" : street || "Move the map to adjust"}
-              </span>
-            </div>
-          )}
-        </div>
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 z-[1100] flex flex-col items-center gap-2 px-4">
+            {outOfScope ? (
+              <p
+                role="status"
+                className="flex max-w-[min(100%,320px)] flex-col items-center rounded-full bg-white px-5 py-2.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
+              >
+                <span className="text-[13px] leading-none font-semibold text-neutral-900">
+                  {OUT_OF_SCOPE_MESSAGE}
+                </span>
+                <span className="mt-1 text-[12px] leading-snug font-medium text-neutral-500">
+                  Move the map back to a covered area.
+                </span>
+              </p>
+            ) : (
+              <div className="flex max-w-[min(100%,320px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-5 py-2.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
+                <span className="text-[14px] leading-none font-semibold text-neutral-900">
+                  Use this location
+                </span>
+                <span className="mt-1 line-clamp-1 text-[12.5px] leading-snug font-medium text-neutral-500">
+                  {geocoding
+                    ? "Finding street…"
+                    : street || "Move the map to adjust"}
+                </span>
+              </div>
+            )}
+          </div>
         ) : null}
 
         <div
           aria-hidden
           className="absolute inset-x-0 bottom-0 z-[1200] h-1.5 cursor-ns-resize touch-none"
           onPointerDown={(event) => {
-            resizeDragRef.current = { startY: event.clientY, startHeight: height }
+            resizeDragRef.current = {
+              startY: event.clientY,
+              startHeight: height,
+            }
             event.currentTarget.setPointerCapture(event.pointerId)
           }}
           onPointerMove={(event) => {
             const drag = resizeDragRef.current
             if (!drag) return
-            setHeight(Math.min(520, Math.max(160, drag.startHeight + (event.clientY - drag.startY))))
+            setHeight(
+              Math.min(
+                520,
+                Math.max(160, drag.startHeight + (event.clientY - drag.startY))
+              )
+            )
           }}
           onPointerUp={() => {
             resizeDragRef.current = null

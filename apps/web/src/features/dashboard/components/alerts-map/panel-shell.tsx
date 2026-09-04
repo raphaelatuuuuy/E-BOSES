@@ -6,10 +6,9 @@ import { type ReactNode } from "react"
  * Badges were removed from the shell entirely: no severity rule, no severity
  * or status chip, and no eyebrow over the title. The title carries the panel.
  *
- * Everything here reads from the theme tokens, so the panel inherits whichever
- * surface it is mounted on. On the alert map that is the `staff-dark` scope, so
- * it sits on the navy glass instead of drawing a second white card inside it —
- * a card inside a panel is what made this read as cramped.
+ * Everything here reads from the light workspace tokens, so the panel remains
+ * consistent with the shared official/responder surface instead of drawing a
+ * second contrasting card inside it.
  */
 
 export function PanelShell({

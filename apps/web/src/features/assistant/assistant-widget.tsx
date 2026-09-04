@@ -139,6 +139,7 @@ function todayLabel() {
 
 export default function AssistantWidget({ onDark = false }: { onDark?: boolean }) {
   const [open, setOpen] = useState(false)
+  const [suppressed, setSuppressed] = useState(false)
   const [greeting, setGreeting] = useState(OPENING_GREETING)
   const [chips, setChips] = useState<AssistantChip[]>(OPENING_CHIPS)
   const [bubbles, setBubbles] = useState<Bubble[]>([])
@@ -172,6 +173,24 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
     document.addEventListener("keydown", onKeyDown)
     return () => document.removeEventListener("keydown", onKeyDown)
   }, [open])
+
+  /**
+   * The landing hamburger menu (and any other overlay) can ask the assistant
+   * to step aside while it is open.
+   */
+  useEffect(() => {
+    const onNavMenu = (event: Event) => {
+      const detail = (event as CustomEvent<{ open: boolean }>).detail
+      if (detail?.open) {
+        setSuppressed(true)
+        setOpen(false)
+      } else {
+        setSuppressed(false)
+      }
+    }
+    window.addEventListener("eb:nav-menu", onNavMenu)
+    return () => window.removeEventListener("eb:nav-menu", onNavMenu)
+  }, [])
 
   useEffect(() => {
     if (bubbles.length === 0) return
@@ -240,6 +259,10 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
     scrollRef.current?.scrollTo({ top: 0 })
   }
 
+  if (suppressed) {
+    return null
+  }
+
   if (!open) {
     return (
       <>
@@ -250,7 +273,7 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
           aria-label="Open the E-Boses Assistant"
           style={{ position: "fixed", right: "1.5rem", bottom: "1.5rem" }}
           className={cn(
-            "group z-[60] flex h-14 items-center rounded-full transition-[background-color,box-shadow] duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+            "group z-[1000] flex h-14 items-center rounded-full transition-[background-color,box-shadow] duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
             onDark
               ? "bg-white text-brand-navy shadow-[0_8px_28px_rgba(0,0,0,0.5)] hover:bg-neutral-100"
               : "bg-nav-bg text-white shadow-[0_8px_28px_rgba(5,13,51,0.4)] ring-1 ring-white/15 hover:bg-brand-navy",
@@ -276,7 +299,7 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
         role="dialog"
         aria-label="E-Boses Assistant"
         style={{ position: "fixed", right: "1.5rem", bottom: "1.5rem" }}
-        className="eb-assistant-panel z-[60] flex h-[min(38rem,calc(100dvh-3rem))] w-[min(25rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-3xl border border-black/5 bg-white shadow-[0_24px_64px_rgba(5,13,51,0.28)]"
+        className="eb-assistant-panel z-[1000] flex h-[min(38rem,calc(100dvh-3rem))] w-[min(25rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-3xl border border-black/5 bg-white shadow-[0_24px_64px_rgba(5,13,51,0.28)]"
       >
         <header className="flex items-center justify-end gap-2 bg-white px-4 pb-1 pt-3">
           <button

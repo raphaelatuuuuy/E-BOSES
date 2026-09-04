@@ -23,8 +23,7 @@ def can_manage_merges(user):
         user
         and user.is_authenticated
         and (
-            user.is_staff
-            or user.is_superuser
+            user.is_superuser
             or user_has_role_permission(user, "concerns.manage")
         )
         and user_has_capability(user, RESOLVE_CONCERNS)

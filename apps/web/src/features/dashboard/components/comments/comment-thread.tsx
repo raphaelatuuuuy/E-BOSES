@@ -30,22 +30,27 @@ export function CommentToggleButton({
   onClick: () => void
   label?: string
 }) {
+  // Same footer affordance as the concern feed card — small icon plus
+  // "N comments" text — minus the upvote part, which announcements do
+  // not have. Right-aligned on its own, matching the feed card footer.
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-expanded={active}
-      aria-label={label}
-      className={cn(
-        "inline-flex h-9 min-w-9 items-center justify-center gap-1.5 rounded-full px-2.5 transition-colors",
-        active ? "bg-neutral-200/90" : "bg-neutral-100 hover:bg-neutral-200/70",
-      )}
-    >
-      <MessageCircleIcon className="size-6 text-neutral-700" strokeWidth={1.8} />
-      {count > 0 ? (
-        <span className="text-[13px] font-semibold tabular-nums text-neutral-700">{count}</span>
-      ) : null}
-    </button>
+    <div className="flex items-center justify-end">
+      <button
+        type="button"
+        onClick={onClick}
+        aria-expanded={active}
+        aria-label={label}
+        className={cn(
+          "flex shrink-0 items-center gap-1 text-[11px] font-medium transition-colors",
+          active
+            ? "text-neutral-800"
+            : "text-neutral-500 hover:text-neutral-800"
+        )}
+      >
+        <MessageCircleIcon className="size-3.5 shrink-0" strokeWidth={2} />
+        <span>{count > 0 ? `${count} comments` : "Add a Comment"}</span>
+      </button>
+    </div>
   )
 }
 
@@ -76,7 +81,11 @@ export interface CommentThreadProps {
   /** Controlled composer text. Omit to let the thread own its own draft. */
   value?: string
   onValueChange?: (next: string) => void
-  onSubmit: (body: string, parentId: number | null) => Promise<void> | void
+  onSubmit: (
+    body: string,
+    parentId: number | null,
+    media?: File | null
+  ) => Promise<boolean | void> | boolean | void
   onEdit?: (commentId: number, body: string) => Promise<void> | void
   onDelete?: (commentId: number) => Promise<void> | void
   /** Moderation removal, distinct from an author deleting their own comment. */
@@ -84,6 +93,8 @@ export interface CommentThreadProps {
   /** A resident flagging someone else's comment for staff review. */
   onReport?: (commentId: number) => void
   allowReplies?: boolean
+  /** Render the root comment composer. Disable for read-only discussions. */
+  showComposer?: boolean
   renderTrailing?: (comment: UnifiedComment) => ReactNode
   className?: string
 }
@@ -108,6 +119,7 @@ export function CommentThread({
   onRemove,
   onReport,
   allowReplies = false,
+  showComposer = true,
   renderTrailing,
   className,
 }: CommentThreadProps) {
@@ -145,34 +157,45 @@ export function CommentThread({
 
   const hiddenCount = collapseToLatest ? Math.max(0, comments.length - 1) : 0
   const visible =
-    collapseToLatest && !showAll && comments.length > 1 ? comments.slice(-1) : comments
+    collapseToLatest && !showAll && comments.length > 1
+      ? comments.slice(-1)
+      : comments
 
-  async function run(action: () => Promise<void> | void) {
-    if (busy) return
+  async function run(
+    action: () => Promise<boolean | void> | boolean | void
+  ): Promise<boolean> {
+    if (busy) return false
     setBusy(true)
     try {
-      await action()
+      return (await action()) !== false
     } finally {
       setBusy(false)
     }
   }
 
-  async function submitRoot() {
+  async function submitRoot(media: File | null = null): Promise<boolean> {
     const body = draft.trim()
-    if (body.length < COMMENT_MIN_LENGTH) return
-    await run(async () => {
-      await onSubmit(body, null)
+    if (body.length < COMMENT_MIN_LENGTH && !media) return false
+    return run(async () => {
+      const result = await onSubmit(body, null, media)
+      if (result === false) return false
       setDraft("")
+      return true
     })
   }
 
-  async function submitReply(parentId: number) {
+  async function submitReply(
+    parentId: number,
+    media: File | null = null
+  ): Promise<boolean> {
     const body = replyDraft.trim()
-    if (body.length < COMMENT_MIN_LENGTH) return
-    await run(async () => {
-      await onSubmit(body, parentId)
+    if (body.length < COMMENT_MIN_LENGTH && !media) return false
+    return run(async () => {
+      const result = await onSubmit(body, parentId, media)
+      if (result === false) return false
       setReplyDraft("")
       setReplyOpenId(null)
+      return true
     })
   }
 
@@ -186,7 +209,11 @@ export function CommentThread({
     })
   }
 
-  function renderComment(comment: UnifiedComment, rootId: number, isReply: boolean) {
+  function renderComment(
+    comment: UnifiedComment,
+    rootId: number,
+    isReply: boolean
+  ) {
     const isEditing = editingId === comment.id
     const isReplying = replyOpenId === comment.id
 
@@ -203,7 +230,11 @@ export function CommentThread({
           aria-haspopup="menu"
           aria-expanded={openMenuId === comment.id}
           title="Comment actions"
-          onClick={() => setOpenMenuId((current) => (current === comment.id ? null : comment.id))}
+          onClick={() =>
+            setOpenMenuId((current) =>
+              current === comment.id ? null : comment.id
+            )
+          }
           className="-my-1 inline-flex size-7 items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-800"
         >
           <MoreHorizontalIcon className="size-4" strokeWidth={2} />
@@ -211,7 +242,7 @@ export function CommentThread({
         {openMenuId === comment.id ? (
           <div
             role="menu"
-            className="absolute right-0 top-full z-20 mt-1 min-w-32 rounded-xl border border-neutral-200 bg-white p-1 shadow-lg"
+            className="absolute top-full right-0 z-20 mt-1 min-w-32 rounded-xl border border-neutral-200 bg-white p-1 shadow-lg"
           >
             {allowReplies ? (
               <button
@@ -227,7 +258,7 @@ export function CommentThread({
                   setReplyDraft(
                     opening && isReply && comment.author.user
                       ? `${mentionToken(toMentionUser(comment.author.user))} `
-                      : "",
+                      : ""
                   )
                 }}
               >
@@ -295,7 +326,8 @@ export function CommentThread({
     const replyCount =
       !isReply && comment.replies.length > 0 ? (
         <span className="text-[12px] font-medium text-neutral-400">
-          {comment.replies.length} {comment.replies.length === 1 ? "reply" : "replies"}
+          {comment.replies.length}{" "}
+          {comment.replies.length === 1 ? "reply" : "replies"}
         </span>
       ) : null
 
@@ -312,7 +344,9 @@ export function CommentThread({
             <div className="mt-1 space-y-2">
               <textarea
                 value={editDraft}
-                onChange={(event) => setEditDraft(event.target.value.slice(0, 1000))}
+                onChange={(event) =>
+                  setEditDraft(event.target.value.slice(0, 1000))
+                }
                 rows={2}
                 autoFocus
                 className="w-full resize-none rounded-xl border border-neutral-200 bg-white px-3 py-2 text-[15px] text-neutral-900 outline-none focus:border-neutral-300 focus:ring-2 focus:ring-neutral-100"
@@ -326,7 +360,7 @@ export function CommentThread({
                     "rounded-full px-3.5 py-1.5 text-[13px] font-semibold",
                     editDraft.trim()
                       ? "bg-neutral-900 text-white hover:bg-neutral-800"
-                      : "cursor-not-allowed bg-neutral-200 text-neutral-400",
+                      : "cursor-not-allowed bg-neutral-200 text-neutral-400"
                   )}
                 >
                   Save
@@ -367,7 +401,7 @@ export function CommentThread({
               autoFocus
               value={replyDraft}
               onChange={setReplyDraft}
-              onSubmit={() => void submitReply(rootId)}
+              onSubmit={(media) => submitReply(rootId, media)}
               placeholder={`Reply to ${firstNameOf(comment.author.label)}…`}
               sessionUser={sessionUser}
               mentionUsers={mentionUsers}
@@ -403,7 +437,9 @@ export function CommentThread({
       ))}
 
       {comments.length === 0 && emptyState ? (
-        <p className="text-[13px] leading-relaxed text-neutral-500">{emptyState}</p>
+        <p className="text-[13px] leading-relaxed text-neutral-500">
+          {emptyState}
+        </p>
       ) : null}
 
       {hiddenCount > 0 ? (
@@ -419,20 +455,22 @@ export function CommentThread({
       ) : null}
 
       {closedNotice ? (
-        <p className="text-[13px] leading-relaxed text-neutral-500">{closedNotice}</p>
-      ) : (
+        <p className="text-[13px] leading-relaxed text-neutral-500">
+          {closedNotice}
+        </p>
+      ) : showComposer ? (
         <CommentComposer
           id={composerId}
           value={draft}
           onChange={setDraft}
-          onSubmit={() => void submitRoot()}
+          onSubmit={submitRoot}
           placeholder={placeholder}
           sessionUser={sessionUser}
           mentionUsers={mentionUsers}
           autoFocus={autoFocusComposer}
           disabled={busy}
         />
-      )}
+      ) : null}
     </div>
   )
 }

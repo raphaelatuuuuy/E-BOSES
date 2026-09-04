@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 import httpx
+from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
@@ -16,14 +17,20 @@ from rest_framework.views import APIView
 from apps.accounts.services import validate_location_pair
 from apps.accounts.views import touch_last_seen
 from apps.concerns.models import Announcement, Concern
-from apps.emergencies.models import EmergencyAlert, EmergencyCategory, MapGeometry
+from apps.emergencies.models import (
+    EmergencyAlert,
+    EmergencyCategory,
+    EmergencyResponderAssignment,
+    MapGeometry,
+)
 from apps.media_urls import concern_media_preview_url, emergency_media_preview_url
 from apps.notifications.services import broadcast_live_map_event
 
-MARIKINA_HEIGHTS_OSM_RELATION_ID = 371327
-MARIKINA_HEIGHTS_CENTER = {"latitude": 14.6507, "longitude": 121.1133, "zoom": 15}
+NETWORK_FALLBACK_CENTER = {"latitude": 14.5995, "longitude": 120.9842, "zoom": 12}
 
 MAP_CONCERN_LIMIT = 300
+GPS_FIX_MAX_AGE_MS = 60_000
+GPS_CLOCK_SKEW_MS = 5_000
 
 CONCERN_ACTIVE = {
     Concern.Status.SUBMITTED,
@@ -31,6 +38,13 @@ CONCERN_ACTIVE = {
     Concern.Status.IN_PROGRESS,
     Concern.Status.APPEALED,
 }
+
+def validate_client_gps_timestamp(timestamp):
+    if timestamp is None:
+        return
+    age_ms = timezone.now().timestamp() * 1000 - float(timestamp)
+    if age_ms > GPS_FIX_MAX_AGE_MS or age_ms < -GPS_CLOCK_SKEW_MS:
+        raise DjangoValidationError("The GPS fix is stale. Request a new fix.")
 
 def _emergency_active_statuses():
     """Single source of truth, so a new status cannot silently drop pins.
@@ -52,6 +66,27 @@ class _LazyActiveStatuses:
 
 
 EMERGENCY_ACTIVE = _LazyActiveStatuses()
+
+SETTLED_EMERGENCY_STATUSES = {
+    EmergencyAlert.Status.RESOLVED,
+    EmergencyAlert.Status.CLOSED,
+    EmergencyAlert.Status.CANCELLED,
+    EmergencyAlert.Status.FALSE_ALARM,
+    EmergencyAlert.Status.INVALID,
+}
+
+ACTIVE_ASSIGNMENT_STATUSES = {
+    EmergencyResponderAssignment.Status.ASSIGNED,
+    EmergencyResponderAssignment.Status.ACKNOWLEDGED,
+    EmergencyResponderAssignment.Status.EN_ROUTE,
+    EmergencyResponderAssignment.Status.ARRIVED,
+    EmergencyResponderAssignment.Status.ASSISTING,
+}
+
+SETTLED_ASSIGNMENT_STATUSES = {
+    EmergencyResponderAssignment.Status.RESOLVED,
+    EmergencyResponderAssignment.Status.CANCELLED,
+}
 
 STREET_CATALOG = [
     {"name": "10th Avenue"}, {"name": "11th Avenue"}, {"name": "2nd Street"}, {"name": "3rd Street"},
@@ -94,7 +129,7 @@ STREET_CATALOG = [
 
 def is_official(user):
     User = get_user_model()
-    return bool(user and user.is_authenticated and (user.is_staff or user.is_superuser or user.role == User.Role.BARANGAY_OFFICIAL))
+    return bool(user and user.is_authenticated and (user.is_superuser or user.role == User.Role.BARANGAY_OFFICIAL))
 
 
 def _group_streets(streets):
@@ -127,7 +162,8 @@ def static_map_payload(community=None):
         community = Community.objects.filter(pk=community, status=Community.Status.ACTIVE).select_related("boundary").first()
     if community is None:
         community = Community.objects.filter(status=Community.Status.ACTIVE).select_related("boundary").order_by("name").first()
-    cache_key = f"{STATIC_MAP_CACHE_KEY}:{community.pk}:{community.boundary_revision}" if community else f"{STATIC_MAP_CACHE_KEY}:none"
+    map_version = cache.get(f"community-map-cache-version:{community.pk}", 1) if community else 1
+    cache_key = f"{STATIC_MAP_CACHE_KEY}:{community.pk}:{community.boundary_revision}:{map_version}" if community else f"{STATIC_MAP_CACHE_KEY}:none"
     cached = cache.get(cache_key)
     if cached:
         return cached
@@ -163,7 +199,7 @@ def static_map_payload(community=None):
             "geometry": boundary.geometry,
         }
     if not street_rows:
-        streets = street_catalog_payload() if community and community.code == "marikina-heights" else _group_streets([])
+        streets = _group_streets([])
         payload = {"boundary": boundary_payload, "streets": streets}
         cache.set(cache_key, payload, 300)
         return payload
@@ -185,6 +221,34 @@ def static_map_payload(community=None):
     payload = {"boundary": boundary_payload, "streets": _group_streets(streets)}
     cache.set(cache_key, payload, 300)
     return payload
+
+
+def active_community_map_payloads():
+    from apps.community_access import community_summary
+    from apps.emergencies.models import Community
+
+    rows = []
+    for community in Community.objects.filter(
+        status=Community.Status.ACTIVE,
+        boundary__isnull=False,
+        boundary__is_active=True,
+    ).select_related("boundary").order_by("name"):
+        payload = static_map_payload(community)
+        rows.append({
+            **community_summary(community),
+            "center": {
+                "latitude": float(community.center_latitude),
+                "longitude": float(community.center_longitude),
+            },
+            "bbox": {
+                "min_latitude": community.bbox_min_latitude,
+                "max_latitude": community.bbox_max_latitude,
+                "min_longitude": community.bbox_min_longitude,
+                "max_longitude": community.bbox_max_longitude,
+            },
+            "boundary": payload["boundary"],
+        })
+    return rows
 
 
 def _representative_street_point(geometries, boundary_geometry):
@@ -382,6 +446,20 @@ def decimal_string(value):
 
 
 def person_payload(user):
+    if getattr(user, "is_anonymous_intake", False) or str(getattr(user, "email", "")).endswith("@eboses.invalid"):
+        return {
+            "id": 0,
+            "full_name": "Anonymous",
+            "role": "resident",
+            "barangay": "",
+            "address": "",
+            "responder_unit": "",
+            "is_on_duty": False,
+            "is_online": False,
+            "latitude": None,
+            "longitude": None,
+            "location_updated_at": None,
+        }
     profile = getattr(user, "resident_profile", None)
     full_name = f"{profile.first_name} {profile.last_name}".strip() if profile else user.email.split("@")[0]
     return {
@@ -392,6 +470,11 @@ def person_payload(user):
         "address": getattr(profile, "address", ""),
         "responder_unit": user.responder_unit,
         "is_on_duty": user.is_on_duty,
+        "is_online": bool(
+            user.role == user.Role.FIRST_RESPONDER
+            and user.status == user.Status.VERIFIED
+            and user.is_active
+        ) or bool(user.last_seen_at and user.last_seen_at >= timezone.now() - timedelta(minutes=5)),
         "latitude": decimal_string(user.current_latitude),
         "longitude": decimal_string(user.current_longitude),
         "location_updated_at": user.location_updated_at,
@@ -424,13 +507,22 @@ def category_ref_payload(concern, request=None):
 
 def concern_payload(concern, request=None):
     media = list(concern.media.all()) if hasattr(concern, "media") else []
+    # Keep the map's readable copy and severity in lockstep with the Concerns
+    # feed. The previous payload only carried the submitted description and a
+    # category-based high/normal flag, so the map looked stale after the LLM
+    # produced a summary or a critical assessment.
+    from apps.concerns.severity import severity_label, severity_level
+
+    _severity_level, severity_assessed = severity_level(concern)
     return {
         "id": concern.pk,
         "preview_url": concern_media_preview_url(media[0].pk) if media else None,
         "media_count": len(media),
         "tracking_id": f"RPT-{concern.created_at.year}-{concern.pk:06d}" if concern.created_at else f"RPT-0-{concern.pk:06d}",
         "title": concern.title,
+        "notification_subject": (getattr(concern, "notification_subject", "") or "").strip(),
         "description": concern.description,
+        "summary": (concern.summary or "").strip(),
         "category": concern.category,
         "category_ref": category_ref_payload(concern, request=request),
         "status": concern.status,
@@ -441,31 +533,59 @@ def concern_payload(concern, request=None):
         "reporter": person_payload(concern.reporter),
         "created_at": concern.created_at,
         "updated_at": concern.updated_at,
-        "priority": "high" if concern.category == Concern.Category.PUBLIC_SAFETY else "normal",
+        "severity": severity_label(concern),
+        "severity_assessed": severity_assessed,
+        "priority": severity_label(concern),
     }
 
 
-def assignment_last_location(assignment):
+def assignment_last_location(assignment, *, fresh_only=False):
+    """Return the last known responder point with an explicit freshness flag.
+
+    A historical ping is useful context on a resolved incident, but it must
+    never be used to draw a *live* route.  Previously the newest row was used
+    unconditionally, which made an old GPS point look like the responder's
+    current position (and produced misleading distance/ETA values).
+    """
+    now = timezone.now()
+    max_age = int(getattr(settings, "EMERGENCY_ROUTE_LOCATION_MAX_AGE_SECONDS", 300))
+    max_accuracy = float(getattr(settings, "EMERGENCY_ROUTE_MAX_ACCURACY_METERS", 1000))
+
     ping = assignment.location_pings.order_by("-created_at", "-id").first()
     if ping:
-        return {
-            "latitude": decimal_string(ping.latitude),
-            "longitude": decimal_string(ping.longitude),
-            "accuracy": ping.accuracy,
-            "created_at": ping.created_at,
-        }
+        age = max(0, int((now - ping.created_at).total_seconds()))
+        accurate = ping.accuracy is None or float(ping.accuracy) <= max_accuracy
+        fresh = age <= max_age and accurate
+        if fresh or not fresh_only:
+            return {
+                "latitude": decimal_string(ping.latitude),
+                "longitude": decimal_string(ping.longitude),
+                "accuracy": ping.accuracy,
+                "created_at": ping.created_at,
+                "age_seconds": age,
+                "is_fresh": fresh,
+            }
+
     responder = assignment.responder
-    if responder.current_latitude is None or responder.current_longitude is None:
+    updated = getattr(responder, "location_updated_at", None)
+    if responder.current_latitude is None or responder.current_longitude is None or not updated:
+        return None
+    age = max(0, int((now - updated).total_seconds()))
+    fresh = age <= max_age
+    if fresh_only and not fresh:
         return None
     return {
         "latitude": decimal_string(responder.current_latitude),
         "longitude": decimal_string(responder.current_longitude),
         "accuracy": None,
-        "created_at": responder.location_updated_at,
+        "created_at": updated,
+        "age_seconds": age,
+        "is_fresh": fresh,
     }
 
 
 def emergency_payload(alert):
+    active = alert.status in _emergency_active_statuses()
     assignments = list(alert.assignments.filter(
         status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting"]
     ).select_related("responder", "responder__resident_profile").order_by("assigned_at", "id"))
@@ -474,16 +594,24 @@ def emergency_payload(alert):
             "id": assignment.pk,
             "responder": person_payload(assignment.responder),
             "status": assignment.status,
-            "last_location": assignment_last_location(assignment),
+            "last_location": assignment_last_location(assignment, fresh_only=active),
         }
         for assignment in assignments
     ]
     media = list(alert.media.all()) if hasattr(alert, "media") else []
+    from apps.emergencies.description import fallback_description
+    ai_assist = alert.ai_assist or {}
+    display_description = str(ai_assist.get("description") or "").strip()[:320] or fallback_description(alert)
     return {
         "id": alert.pk,
         "preview_url": emergency_media_preview_url(media[0].pk) if media else None,
         "type": alert.type,
         "note": alert.note,
+        "display_description": display_description,
+        # Compatibility for older clients; the UI reads display_description
+        # and never presents this as an AI-labelled field.
+        "ai_summary": display_description,
+        "ai_assist_status": str(ai_assist.get("status") or ""),
         "status": alert.status,
         "address": alert.resolved_location or alert.address or "",
         "barangay": alert.barangay,
@@ -586,8 +714,71 @@ def route_for_responder_assignment(alert, assignment, *, refresh=False, include_
     # route to until reverse geocoding or the reporter supplies coordinates.
     if alert.latitude is None or alert.longitude is None:
         return None
-    origin = assignment_last_location(assignment)
+    # Once an emergency is resolved, never ask the routing provider for a new
+    # route from a responder's current position.  Reuse the route captured for
+    # the assignment so public history can describe the route that was used at
+    # dispatch time without turning a settled incident back into live tracking.
+    if alert.status in SETTLED_EMERGENCY_STATUSES or assignment.status in SETTLED_ASSIGNMENT_STATUSES:
+        from apps.emergencies.models import EmergencyAssignmentRoute
+
+        stored = getattr(assignment, "stored_route", None)
+        if stored is None:
+            try:
+                stored = EmergencyAssignmentRoute.objects.get(assignment=assignment)
+            except EmergencyAssignmentRoute.DoesNotExist:
+                stored = None
+        if stored is None:
+            return None
+        return {
+            "status": stored.status,
+            "profile": stored.profile,
+            "distance_meters": stored.distance_meters,
+            "eta_seconds": stored.eta_seconds,
+            "geometry": stored.geometry,
+            "summary": stored.summary,
+            "origin_snap": stored.origin_snap,
+            "destination_snap": stored.destination_snap,
+            "approach": stored.approach,
+            "steps": stored.steps if include_steps else [],
+            "alert_id": alert.pk,
+            "assignment_id": assignment.pk,
+            "responder_id": assignment.responder_id,
+            "assignment_status": assignment.status,
+            "route_revision": stored.route_revision,
+            "updated_at": stored.updated_at,
+        }
+    # Only fresh, reasonably accurate GPS can drive a new live route. A stored
+    # route remains usable for map display while the responder sends a fresh
+    # location.
+    from apps.emergencies.models import EmergencyAssignmentRoute
+
+    origin = assignment_last_location(assignment, fresh_only=True)
     if not origin:
+        stored = getattr(assignment, "stored_route", None)
+        if stored is None:
+            try:
+                stored = EmergencyAssignmentRoute.objects.get(assignment=assignment)
+            except EmergencyAssignmentRoute.DoesNotExist:
+                stored = None
+        if stored is not None and stored.geometry:
+            return {
+                "status": "ok",
+                "profile": stored.profile,
+                "distance_meters": stored.distance_meters,
+                "eta_seconds": stored.eta_seconds,
+                "geometry": stored.geometry,
+                "summary": stored.summary,
+                "origin_snap": stored.origin_snap,
+                "destination_snap": stored.destination_snap,
+                "approach": stored.approach,
+                "steps": stored.steps if include_steps else [],
+                "alert_id": alert.pk,
+                "assignment_id": assignment.pk,
+                "responder_id": assignment.responder_id,
+                "assignment_status": assignment.status,
+                "route_revision": stored.route_revision,
+                "updated_at": stored.updated_at,
+            }
         return None
     profile = assignment.travel_profile or "car"
     cache_key = "live-map-route:%s:%s:%s:%s:%s" % (
@@ -606,8 +797,6 @@ def route_for_responder_assignment(alert, assignment, *, refresh=False, include_
         cache_key=cache_key,
         refresh=refresh,
     )
-    from apps.emergencies.models import EmergencyAssignmentRoute
-
     stored, created = EmergencyAssignmentRoute.objects.get_or_create(assignment=assignment)
     use_stale = (
         route["status"] != "ok"
@@ -691,17 +880,28 @@ def route_preview_for_responder(responder, *, latitude, longitude):
 
 
 def route_for_assignment(alert):
+    assignment_statuses = ACTIVE_ASSIGNMENT_STATUSES
+    if alert.status in SETTLED_EMERGENCY_STATUSES:
+        assignment_statuses = ACTIVE_ASSIGNMENT_STATUSES | SETTLED_ASSIGNMENT_STATUSES
     assignment = alert.assignments.filter(
-        status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting"]
+        status__in=assignment_statuses
     ).select_related("responder").order_by("assigned_at", "id").first()
     return route_for_responder_assignment(alert, assignment)
 
 
 def routes_for_alert(alert):
+    assignment_statuses = ACTIVE_ASSIGNMENT_STATUSES
+    if alert.status in SETTLED_EMERGENCY_STATUSES:
+        assignment_statuses = ACTIVE_ASSIGNMENT_STATUSES | SETTLED_ASSIGNMENT_STATUSES
     assignments = alert.assignments.filter(
-        status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting"]
+        status__in=assignment_statuses
     ).select_related("responder").prefetch_related("location_pings").order_by("assigned_at", "id")
-    return [route for route in (route_for_responder_assignment(alert, item) for item in assignments) if route]
+    routes = []
+    for assignment in assignments:
+        route = route_for_responder_assignment(alert, assignment)
+        if route:
+            routes.append({**route, "responder": person_payload(assignment.responder)})
+    return routes
 
 
 def advisory_payload(announcement, street_index):
@@ -745,6 +945,7 @@ def live_map_snapshot(request=None):
 
     User = get_user_model()
     user = getattr(request, "user", None)
+    is_responder = bool(user and getattr(user, "role", "") == User.Role.FIRST_RESPONDER)
     community_ids = community_ids_for_user(user)
     department_ids = department_ids_for_user(user)
     requested_community = request.query_params.get("community_id") if request else None
@@ -765,7 +966,11 @@ def live_map_snapshot(request=None):
             current_longitude__isnull=False,
         ).filter(
             models.Q(role=User.Role.RESIDENT, resident_profile__community_id__in=community_ids)
-            | models.Q(is_on_duty=True, designations__is_active=True, designations__department__community_id__in=community_ids)
+            | models.Q(
+                role=User.Role.FIRST_RESPONDER,
+                designations__is_active=True,
+                designations__department__community_id__in=community_ids,
+            )
         ).select_related("resident_profile").distinct()
     ]
     # Only what the map can actually draw, newest first and capped. This used to
@@ -791,8 +996,12 @@ def live_map_snapshot(request=None):
                 latitude__isnull=False,
                 longitude__isnull=False,
                 status__in=statuses,
-            ).filter(models.Q(reporter=user) | models.Q(category_ref__department_id__in=department_ids))
-            .select_related("reporter", "reporter__resident_profile", "category_ref")
+            ).filter(
+                models.Q(assignments__assignee=user)
+                if is_responder
+                else models.Q(reporter=user) | models.Q(category_ref__department_id__in=department_ids)
+            )
+            .select_related("reporter", "reporter__resident_profile", "category_ref", "ai_assessment")
             .prefetch_related("media")
             .order_by("-created_at")[:limit]
         )
@@ -805,16 +1014,21 @@ def live_map_snapshot(request=None):
         latitude__isnull=False,
         longitude__isnull=False,
         status__in=map_active_statuses,
-    ).filter(models.Q(reporter=user) | models.Q(category_ref__department_id__in=department_ids)).count()
+    ).filter(
+        models.Q(assignments__assignee=user)
+        if is_responder
+        else models.Q(reporter=user) | models.Q(category_ref__department_id__in=department_ids)
+    ).count()
     # Active alerts plus recently settled ones (resolved, closed, cancelled,
     # false alarm, invalid) — the same "last 7 days" window the resident map
     # uses, so an official can still see how a just-closed incident wrapped up
     # instead of it vanishing from the map the instant it's marked done.
-    from datetime import timedelta
-
     recently_settled_cutoff = timezone.now() - timedelta(days=7)
+    emergency_scope = scope_emergency_queryset(EmergencyAlert.objects.all(), user).filter(community=community)
+    if is_responder:
+        emergency_scope = emergency_scope.filter(assignments__responder=user).distinct()
     alerts = list(
-        scope_emergency_queryset(EmergencyAlert.objects.all(), user).filter(community=community).filter(
+        emergency_scope.filter(
             models.Q(status__in=EMERGENCY_ACTIVE)
             | models.Q(
                 status__in={"resolved", "closed", "cancelled", "false_alarm", "invalid"},
@@ -826,9 +1040,12 @@ def live_map_snapshot(request=None):
     )
     emergencies = [emergency_payload(alert) for alert in alerts]
     routes = [route for alert in alerts for route in routes_for_alert(alert)]
-    active_emergency_count = scope_emergency_queryset(
+    active_emergency_scope = scope_emergency_queryset(
         EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE, community=community), user
-    ).count()
+    )
+    if is_responder:
+        active_emergency_scope = active_emergency_scope.filter(assignments__responder=user).distinct()
+    active_emergency_count = active_emergency_scope.count()
 
     from apps.concerns.announcement_services import announcement_is_active
 
@@ -838,7 +1055,7 @@ def live_map_snapshot(request=None):
         if street.get("geometries")
     }
     announcement_rows = list(
-        Announcement.objects.filter(is_published=True, community_id__in=community_ids)
+        Announcement.objects.filter(is_published=True, community=community)
         .filter(models.Q(target_departments__isnull=True) | models.Q(target_departments__id__in=department_ids))
         .distinct()
         .order_by("-is_pinned", "-published_at", "-created_at")[:50]
@@ -848,14 +1065,17 @@ def live_map_snapshot(request=None):
         for item in announcement_rows
         if announcement_is_active(item)
     ]
+    public_snapshot = resident_alerts_map_snapshot(request=request)
     return {
+        "home_community_id": str(community.public_id) if community else None,
+        "communities": public_snapshot["communities"],
         "map": {
             "provider": "OpenStreetMap",
             "center": {
                 "latitude": float(community.center_latitude),
                 "longitude": float(community.center_longitude),
                 "zoom": 15,
-            } if community else MARIKINA_HEIGHTS_CENTER,
+            } if community else NETWORK_FALLBACK_CENTER,
             "boundary": static_map["boundary"],
             "streets": static_map["streets"],
             "dispatch_policy": dispatch_policy_payload(community),
@@ -863,6 +1083,14 @@ def live_map_snapshot(request=None):
         "people": people,
         "concerns": concerns,
         "emergencies": emergencies,
+        "public_concerns": public_snapshot["concerns"],
+        "public_emergencies": public_snapshot["emergencies"],
+        "operational": {
+            "community_id": str(community.public_id) if community else None,
+            "concerns": concerns,
+            "emergencies": emergencies,
+            "routes": routes,
+        },
         "routes": routes,
         "advisories": advisories,
         "summary": {
@@ -870,15 +1098,20 @@ def live_map_snapshot(request=None):
             "concerns": active_concern_count,
             "emergencies": active_emergency_count,
             "residents": User.objects.filter(role=User.Role.RESIDENT, status=User.Status.VERIFIED, resident_profile__community_id__in=community_ids).count(),
-            # On duty only. This used to count every verified responder, so the
-            # overview reported a full roster as "on duty" even at 3am with
-            # nobody on shift. Matches dashboard_views.responders_on_duty.
+            # A responder is counted when their verified account belongs to a
+            # configured response unit in the selected communities.
             "responders": User.objects.filter(
                 role=User.Role.FIRST_RESPONDER,
                 status=User.Status.VERIFIED,
-                is_on_duty=True,
-            ).count(),
-            "officials": User.objects.filter(role=User.Role.BARANGAY_OFFICIAL, status=User.Status.VERIFIED).count(),
+                designations__is_active=True,
+                designations__department__community_id__in=community_ids,
+            ).distinct().count(),
+            "officials": User.objects.filter(
+                role=User.Role.BARANGAY_OFFICIAL,
+                status=User.Status.VERIFIED,
+                designations__is_active=True,
+                designations__department__community_id__in=community_ids,
+            ).distinct().count(),
         },
         "generated_at": timezone.now(),
     }
@@ -889,6 +1122,7 @@ class LocationPingSerializer(serializers.Serializer):
     longitude = serializers.DecimalField(max_digits=10, decimal_places=7)
     accuracy = serializers.FloatField(required=False, allow_null=True, max_value=10000)
     source = serializers.ChoiceField(choices=["active_session", "pwa_background", "manual", "incident"], default="active_session")
+    timestamp = serializers.IntegerField(required=False, min_value=1)
 
     def validate(self, attrs):
         request = self.context.get("request")
@@ -897,8 +1131,11 @@ class LocationPingSerializer(serializers.Serializer):
             user
             and user.is_authenticated
             and user.role == user.Role.FIRST_RESPONDER
-            and user.is_on_duty
         )
+        try:
+            validate_client_gps_timestamp(attrs.get("timestamp"))
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"timestamp": exc.messages}) from exc
         try:
             validate_location_pair(
                 attrs.get("latitude"),
@@ -916,13 +1153,15 @@ class OfficialLiveMapView(APIView):
 
     def get(self, request):
         touch_last_seen(request.user)
-        if not is_official(request.user):
-            return Response({"detail": "You do not have permission to view the official live map."}, status=status.HTTP_403_FORBIDDEN)
+        if not (is_official(request.user) or request.user.role == request.user.Role.FIRST_RESPONDER):
+            return Response({"detail": "You do not have permission to view the staff live map."}, status=status.HTTP_403_FORBIDDEN)
         return Response(live_map_snapshot(request=request))
 
 
 def public_reporter_payload(user):
     """Community-safe reporter identity (no home address / live GPS)."""
+    if str(getattr(user, "email", "")).endswith("@eboses.invalid"):
+        return {"id": 0, "full_name": "Anonymous", "role": "resident", "barangay": ""}
     profile = getattr(user, "resident_profile", None)
     if profile:
         first_name = (profile.first_name or "").strip()
@@ -945,11 +1184,19 @@ def resident_concern_payload(concern, request=None):
     if media:
         path = concern_media_preview_url(media[0].pk)
         preview_url = request.build_absolute_uri(path) if request else path
+    from apps.concerns.severity import severity_label, severity_level
+
+    _severity_level, severity_assessed = severity_level(concern)
     return {
         "id": concern.pk,
-        "tracking_id": concern.tracking_id,
+        "community": __import__(
+            "apps.community_access", fromlist=["community_summary"]
+        ).community_summary(concern.community),
+        "tracking_id": "" if concern.is_anonymous else concern.tracking_id,
         "title": concern.title,
+        "notification_subject": (getattr(concern, "notification_subject", "") or "").strip(),
         "description": concern.description,
+        "summary": (concern.summary or "").strip(),
         "category": concern.category,
         "category_ref": category_ref_payload(concern, request=request),
         "status": concern.status,
@@ -961,7 +1208,9 @@ def resident_concern_payload(concern, request=None):
         "reporter": public_reporter_payload(concern.reporter),
         "created_at": concern.created_at,
         "updated_at": concern.updated_at,
-        "priority": "high" if concern.category == Concern.Category.PUBLIC_SAFETY else "normal",
+        "severity": severity_label(concern),
+        "severity_assessed": severity_assessed,
+        "priority": severity_label(concern),
         "kind": "concern",
     }
 
@@ -974,6 +1223,8 @@ def resident_emergency_payload(alert, request=None):
     # Media for emergencies is private/ops-only; residents get type + note +
     # location. Only the reporter may see the live position of their assigned
     # responder; other residents receive no responder GPS.
+    viewer = getattr(request, "user", None) if request else None
+    is_owner = bool(viewer and viewer.is_authenticated and alert.reporter_id == viewer.pk)
     responder_location = None
     route = None
     if request and getattr(request, "user", None) and request.user.is_authenticated and alert.reporter_id == request.user.pk:
@@ -987,14 +1238,28 @@ def resident_emergency_payload(alert, request=None):
             .first()
         )
         if assignment:
-            responder_location = assignment_last_location(assignment)
+            responder_location = assignment_last_location(
+                assignment,
+                fresh_only=alert.status in _emergency_active_statuses(),
+            )
             route = route_for_assignment(alert)
     type_label = alert.get_type_display() if hasattr(alert, "get_type_display") else alert.type
+    from apps.emergencies.description import fallback_description
+    ai_assist = alert.ai_assist or {}
+    display_description = ""
+    if is_owner:
+        display_description = str(ai_assist.get("description") or "").strip()[:320] or fallback_description(alert)
     return {
         "id": alert.pk,
+        "community": __import__(
+            "apps.community_access", fromlist=["community_summary"]
+        ).community_summary(alert.community),
         "type": alert.type,
         "type_label": type_label,
-        "note": (alert.note or "")[:280],
+        "note": (alert.note or "")[:280] if is_owner else "",
+        "display_description": display_description,
+        "ai_summary": display_description,
+        "ai_assist_status": str(ai_assist.get("status") or ""),
         "status": alert.status,
         "barangay": alert.barangay,
         "latitude": decimal_string(alert.latitude),
@@ -1037,15 +1302,26 @@ def resident_alerts_map_snapshot(request=None):
         community = Community.objects.filter(status=Community.Status.ACTIVE).order_by("name").first()
     static_map = static_map_payload(community)
 
+    communities = active_community_map_payloads()
+    active_ids = [
+        row.pk for row in Community.objects.filter(status=Community.Status.ACTIVE)
+    ]
     concerns_qs = (
         Concern.objects.filter(
-            community=community,
+            community_id__in=active_ids,
             visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+            status__in={
+                Concern.Status.SUBMITTED,
+                Concern.Status.UNDER_REVIEW,
+                Concern.Status.ASSIGNED,
+                Concern.Status.IN_PROGRESS,
+                Concern.Status.RESOLVED,
+            },
             latitude__isnull=False,
             longitude__isnull=False,
         )
-        .exclude(status=Concern.Status.REJECTED)
-        .select_related("reporter", "reporter__resident_profile", "category_ref")
+        .select_related("community", "reporter", "reporter__resident_profile", "category_ref", "ai_assessment")
         .prefetch_related("media")
         .order_by("-created_at")[:200]
     )
@@ -1053,27 +1329,34 @@ def resident_alerts_map_snapshot(request=None):
 
     # Categories an official has marked private (e.g. domestic violence, child
     # protection) never reach the resident map, regardless of status.
-    hidden_types = set(
-        EmergencyCategory.objects.filter(visible_to_residents=False).values_list("code", flat=True)
+    visible_types = list(
+        EmergencyCategory.objects.filter(
+            community_id__in=active_ids,
+            is_active=True,
+            visible_to_residents=True,
+        ).values_list("community_id", "code")
     )
+    visible_rule = models.Q(pk__in=[])
+    for community_id, category_code in visible_types:
+        visible_rule |= models.Q(community_id=community_id, type=category_code)
     # Include active emergencies plus recently resolved/closed (last 7 days)
-    from datetime import timedelta
     recently_resolved_cutoff = timezone.now() - timedelta(days=7)
     alerts_qs = (
         EmergencyAlert.objects.filter(
             models.Q(status__in=EMERGENCY_ACTIVE)
             | models.Q(status__in={"resolved", "closed", "cancelled"}, updated_at__gte=recently_resolved_cutoff)
-        ).filter(community=community)
-        .exclude(type__in=hidden_types)
+        ).filter(visible_rule)
+        .select_related("community")
         .prefetch_related("media")
         .order_by("-created_at")[:100]
     )
     emergencies = [resident_emergency_payload(a, request=request) for a in alerts_qs]
 
-    pois = [
-        poi for poi in collect_service_pois()
-        if community and active_community_for_point(poi.get("latitude"), poi.get("longitude")) == community
-    ]
+    pois = []
+    for poi in collect_service_pois():
+        located = active_community_for_point(poi.get("latitude"), poi.get("longitude"))
+        if located:
+            pois.append({**poi, "community": located})
     services = [
         {
             "id": p.get("id"),
@@ -1085,6 +1368,9 @@ def resident_alerts_map_snapshot(request=None):
             "longitude": p.get("longitude"),
             "source": p.get("source") or "osm",
             "kind": "service",
+            "community": __import__(
+                "apps.community_access", fromlist=["community_summary"]
+            ).community_summary(p.get("community")),
         }
         for p in pois
     ]
@@ -1093,15 +1379,17 @@ def resident_alerts_map_snapshot(request=None):
     emergency_count = len(emergencies)
 
     return {
+        "home_community_id": str(community.public_id) if community else None,
+        "communities": communities,
         "map": {
             "provider": "OpenStreetMap",
             "center": {
                 "latitude": float(community.center_latitude),
                 "longitude": float(community.center_longitude),
                 "zoom": 15,
-            } if community else MARIKINA_HEIGHTS_CENTER,
+            } if community else NETWORK_FALLBACK_CENTER,
             "boundary": {
-                "osm_relation_id": static_map["boundary"].get("osm_relation_id", MARIKINA_HEIGHTS_OSM_RELATION_ID),
+                "osm_relation_id": static_map["boundary"].get("osm_relation_id"),
                 "name": static_map["boundary"].get("name") or "Community",
                 "geometry": static_map["boundary"].get("geometry"),
             },
@@ -1141,7 +1429,7 @@ class LocationPingView(APIView):
         touch_last_seen(request.user)
         serializer = LocationPingSerializer(data=request.data, context={"request": request})
         if not serializer.is_valid():
-            # Background GPS often reports outside Marikina Heights (VPN, travel,
+            # Background GPS often reports outside the current community (VPN, travel,
             # or GPS drift). Treat as soft reject so browsers don't log 400 spam.
             return Response(
                 {"accepted": False, "errors": serializer.errors},
@@ -1151,7 +1439,7 @@ class LocationPingView(APIView):
         request.user.current_longitude = serializer.validated_data["longitude"]
         request.user.location_updated_at = timezone.now()
         request.user.save(update_fields=["current_latitude", "current_longitude", "location_updated_at", "updated_at"])
-        if request.user.role == request.user.Role.FIRST_RESPONDER and request.user.is_on_duty:
+        if request.user.role == request.user.Role.FIRST_RESPONDER:
             from apps.emergencies.views import retry_waiting_alerts_for_responder
 
             retry_waiting_alerts_for_responder(request.user)
@@ -1176,9 +1464,13 @@ class LocationMapContextView(APIView):
     def get(self, request):
         from apps.emergencies.models import MapDispatchPolicy
         from apps.geo_services import map_context_payload
+        from apps.community_scope import selected_community
 
-        payload = map_context_payload()
-        policy = MapDispatchPolicy.current()
+        community = selected_community(request.user, request.query_params.get("community_id"))
+        if not community:
+            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
+        payload = map_context_payload(community)
+        policy = MapDispatchPolicy.current(community)
         # The SOS screen needs this to offer an SMS fallback when the resident
         # has no data. Serving it here keeps it barangay-configurable instead of
         # frozen into the build.
@@ -1258,12 +1550,17 @@ class GeocodeReverseView(APIView):
         # depends on a third party being reachable.
         local = nearest_known_street(latitude, longitude)
         if local["street"]:
+            from apps.geo_services import active_community_for_point
+
+            community = active_community_for_point(latitude, longitude)
+            community_name = community.name if community else "Community"
+            locality = getattr(getattr(community, "boundary", None), "locality", "") or ""
             house_number = local.get("house_number") or ""
             head = f"{house_number} {local['street']}".strip()
             address = {
                 "road": local["street"],
-                "village": "Marikina Heights",
-                "city": "Marikina",
+                "village": community_name,
+                "city": locality,
             }
             if house_number:
                 address["house_number"] = house_number
@@ -1271,7 +1568,7 @@ class GeocodeReverseView(APIView):
                 "ok": True,
                 "source": "local",
                 "result": {
-                    "display_name": f"{head}, Marikina Heights, Marikina",
+                    "display_name": ", ".join(part for part in (head, community_name, locality) if part),
                     "address": address,
                 },
                 "distance_meters": local["distance_meters"],

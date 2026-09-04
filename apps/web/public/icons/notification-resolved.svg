@@ -1,0 +1,8 @@
+<!-- Lucide icon: CircleCheck. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <circle cx="12" cy="12" r="11" fill="#16a34a"/>
+  <g transform="translate(3 3) scale(.75)" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.25">
+    <circle cx="12" cy="12" r="10"/>
+    <path d="m9 12 2 2 4-4"/>
+  </g>
+</svg>

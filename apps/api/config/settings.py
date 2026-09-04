@@ -586,6 +586,7 @@ frontend_origin = f"{frontend_parts.scheme}://{frontend_parts.netloc}" if fronte
 
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
+CORS_EXPOSE_HEADERS = ["X-EBOSES-Preview-Status"]
 _default_cors_origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",

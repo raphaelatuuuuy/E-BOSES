@@ -37,6 +37,8 @@ interface StaffUser {
   firstName?: string
   middleName?: string
   lastName?: string
+  barangay?: string
+  community?: number | null
   responder_unit?: string
   units?: Unit[]
   last_seen_at?: string | null
@@ -49,6 +51,8 @@ interface StaffUser {
 
 interface Department {
   id: number
+  community: number | null
+  community_name: string
   name: string
   short_name: string
   is_active: boolean
@@ -67,7 +71,7 @@ interface Designation {
   department: number
   position: number
   is_active: boolean
-  department_detail?: { id: number; name: string; short_name: string }
+  department_detail?: { id: number; name: string; short_name: string; community_name?: string }
   position_detail?: { id: number; name: string }
 }
 
@@ -91,6 +95,19 @@ const GENDER_LABEL: Record<string, string> = {
   female: "Female",
   prefer_not_to_say: "Prefer not to say",
   "": "Not specified",
+}
+
+/* Communities that own at least one active unit — the catalog the Users
+   screen may assign someone into. Communities duplicate unit names (every
+   barangay has an "Environmental and Sanitation Committee"), so a unit is
+   only meaningful once its community is chosen. */
+function communitiesOf(departments: Department[]): { value: string; label: string }[] {
+  const seen = new Map<string, string>()
+  for (const d of departments) {
+    if (d.is_active && d.community !== null && d.community_name)
+      seen.set(String(d.community), d.community_name)
+  }
+  return Array.from(seen, ([value, label]) => ({ value, label }))
 }
 
 const FILTERS = [
@@ -347,6 +364,7 @@ function CreateUserDialog({
   const [phoneNumber, setPhoneNumber] = useState("")
   const [password, setPassword] = useState("")
   const [role, setRole] = useState<ManagedRole>("first_responder")
+  const [communityId, setCommunityId] = useState("")
   const [departmentId, setDepartmentId] = useState("")
   const [positionId, setPositionId] = useState("")
   const [busy, setBusy] = useState(false)
@@ -355,9 +373,21 @@ function CreateUserDialog({
   function reset() {
     setFirstName(""); setMiddleName(""); setLastName(""); setGender("")
     setEmail(""); setPhoneNumber(""); setPassword("")
-    setRole("first_responder"); setDepartmentId(""); setPositionId(""); setEditingField(null)
+    setRole("first_responder"); setCommunityId(""); setDepartmentId(""); setPositionId(""); setEditingField(null)
   }
 
+  const communities = useMemo(() => communitiesOf(departments), [departments])
+  // One deployment community: no need to make the admin pick what is already
+  // the only option. Two or more: the choice is required, because every unit
+  // name exists in each of them.
+  useEffect(() => {
+    if (!communityId && communities.length === 1) setCommunityId(communities[0].value)
+  }, [communities, communityId])
+
+  const communityUnits = useMemo(
+    () => departments.filter((d) => d.is_active && String(d.community) === communityId),
+    [departments, communityId]
+  )
   const unitPositions = positions.filter((p) => p.is_active && String(p.department) === departmentId)
 
   const canSubmit =
@@ -535,6 +565,29 @@ function CreateUserDialog({
           {/* Unit + position — officials and responders only */}
           {role !== "resident" && (
             <>
+              {/* Community first: unit names repeat across barangays, so the
+                unit list only means something once the community is fixed. */}
+              <div>
+                <div className="flex items-center gap-3">
+                  <dt className="w-28 shrink-0 text-neutral-500 text-[18px]">Community</dt>
+                  <dd className="flex-1 flex items-center gap-2">
+                    <span className="text-neutral-900 text-[18px]">
+                      {communities.find((c) => c.value === communityId)?.label ?? "Choose community"}
+                    </span>
+                    <button type="button" onClick={() => setEditingField(editingField === "community" ? null : "community")} className="text-neutral-400 hover:text-accent">
+                      <PencilIcon className="size-4" />
+                    </button>
+                  </dd>
+                </div>
+                {editingField === "community" && (
+                  <InlineDropdown
+                    value={communityId}
+                    onChange={(v) => { setCommunityId(v); setDepartmentId(""); setPositionId(""); setEditingField(null) }}
+                    options={communities}
+                  />
+                )}
+              </div>
+
               <div>
                 <div className="flex items-center gap-3">
                   <dt className="w-28 shrink-0 text-neutral-500 text-[18px]">Unit</dt>
@@ -542,16 +595,16 @@ function CreateUserDialog({
                     <span className="text-neutral-900 text-[18px]">
                       {departmentId ? departments.find((d) => String(d.id) === departmentId)?.name ?? "—" : "Not assigned yet"}
                     </span>
-                    <button type="button" onClick={() => setEditingField(editingField === "unit" ? null : "unit")} className="text-neutral-400 hover:text-accent">
+                    <button type="button" disabled={!communityId} onClick={() => { if (communityId) setEditingField(editingField === "unit" ? null : "unit") }} className={cn("text-neutral-400 transition-colors", communityId ? "hover:text-accent" : "cursor-not-allowed opacity-40")}>
                       <PencilIcon className="size-4" />
                     </button>
                   </dd>
                 </div>
-                {editingField === "unit" && (
+                {editingField === "unit" && communityId && (
                   <InlineDropdown
                     value={departmentId}
                     onChange={(v) => { setDepartmentId(v); setPositionId(""); setEditingField(null) }}
-                    options={departments.filter((d) => d.is_active).map((d) => ({ value: String(d.id), label: d.name }))}
+                    options={communityUnits.map((d) => ({ value: String(d.id), label: d.name }))}
                   />
                 )}
               </div>
@@ -614,9 +667,50 @@ function UserManageDialog({
   const [gender, setGender] = useState(user.gender ?? "")
   const [designations, setDesignations] = useState<Designation[]>([])
   const [, setLoading] = useState(true)
+  const [communityId, setCommunityId] = useState("")
   const [departmentId, setDepartmentId] = useState("")
   const [positionId, setPositionId] = useState("")
   const [busy, setBusy] = useState(false)
+
+  const communities = useMemo(() => communitiesOf(departments), [departments])
+
+  // Default the picker to the account's own community. Unit names repeat in
+  // every barangay (each has an "Environmental and Sanitation Committee"),
+  // so an unfiltered unit list once let an admin park a Marikina Heights
+  // official in a Concepcion Dos committee without noticing.
+  const ownCommunityId = useMemo(() => {
+    if (user.community != null) return String(user.community)
+    const byBarangay = user.barangay
+      ? communities.find(
+          (c) => c.label.toLowerCase() === user.barangay!.toLowerCase()
+        )?.value
+      : undefined
+    if (byBarangay) return byBarangay
+    const firstDesignation = designations[0]
+    if (firstDesignation) {
+      const dept = departments.find((d) => d.id === firstDesignation.department)
+      if (dept?.community !== null && dept) return String(dept.community)
+    }
+    return ""
+  }, [communities, user.community, user.barangay, designations, departments])
+
+  useEffect(() => {
+    if (communityId || communities.length === 0) return
+    setCommunityId(ownCommunityId || (communities.length === 1 ? communities[0].value : ""))
+  }, [communityId, ownCommunityId, communities])
+
+  // A resident's community is their barangay on the profile — editable and
+  // saved. For staff the picker only browses unit catalogs per community; it
+  // never moves the profile.
+  const communityChanged =
+    user.role === "resident" &&
+    communityId !== "" &&
+    communityId !== ownCommunityId
+
+  const communityUnits = useMemo(
+    () => departments.filter((d) => d.is_active && String(d.community) === communityId),
+    [departments, communityId]
+  )
 
   const loadDesignations = useCallback(() => {
     apiRequest<Designation[]>("/concerns/admin/designations/")
@@ -632,6 +726,7 @@ function UserManageDialog({
     role !== user.role ||
     accountStatus !== user.status ||
     hasNewAssignment ||
+    communityChanged ||
     firstName !== (user.firstName ?? "") ||
     middleName !== (user.middleName ?? "") ||
     lastName !== (user.lastName ?? "") ||
@@ -643,6 +738,7 @@ function UserManageDialog({
     setBusy(true)
     try {
       const body: Record<string, unknown> = {}
+      if (communityChanged) body.community = Number(communityId)
       if (role !== user.role) body.role = role
       if (accountStatus !== user.status) body.status = accountStatus
       if (firstName !== (user.firstName ?? "")) body.first_name = firstName
@@ -694,7 +790,6 @@ function UserManageDialog({
   const hasChanges = dirty || Boolean(departmentId && positionId)
 
   const unitPositions = positions.filter((p) => p.is_active && String(p.department) === departmentId)
-
   const [editingField, setEditingField] = useState<string | null>(null)
 
   return (
@@ -846,7 +941,33 @@ function UserManageDialog({
             )}
           </div>
 
-          {/* Unit */}
+          {/* Community — residents: their barangay, editable and saved with
+            the profile. Staff: the community whose units the picker below
+            lists; swapping it only browses the other catalog. */}
+          <div>
+            <div className="flex items-center gap-3">
+              <dt className="w-28 shrink-0 text-neutral-500 text-[18px]">Community</dt>
+              <dd className="flex-1 flex items-center gap-2">
+                <span className="text-neutral-900 text-[18px]">
+                  {communities.find((c) => c.value === communityId)?.label
+                    ?? user.barangay
+                    ?? "Choose community"}
+                </span>
+                <button type="button" onClick={() => setEditingField(editingField === "community" ? null : "community")} className="text-neutral-400 hover:text-accent">
+                  <PencilIcon className="size-4" />
+                </button>
+              </dd>
+            </div>
+            {editingField === "community" && (
+              <InlineDropdown
+                value={communityId}
+                onChange={(v) => { setCommunityId(v); setDepartmentId(""); setPositionId(""); setEditingField(null) }}
+                options={communities}
+              />
+            )}
+          </div>
+
+          {/* Unit + position — officials and responders only */}
           {role !== "resident" && (
             <>
               <div>
@@ -860,15 +981,15 @@ function UserManageDialog({
                           ? designations.map((d) => d.department_detail?.name ?? "Unit").join(", ")
                           : "Not assigned yet"}
                     </span>
-                    <button type="button" onClick={() => setEditingField(editingField === "unit" ? null : "unit")} className="text-neutral-400 hover:text-accent">
+                    <button type="button" disabled={!communityId} onClick={() => { if (communityId) setEditingField(editingField === "unit" ? null : "unit") }} className={cn("text-neutral-400 transition-colors", communityId ? "hover:text-accent" : "cursor-not-allowed opacity-40")}>
                       <PencilIcon className="size-4" />
                     </button>
                   </dd>
                 </div>
-                {editingField === "unit" && (
+                {editingField === "unit" && communityId && (
                   <div className="mt-2">
-                    <InlineDropdown value={departmentId} onChange={setDepartmentId}
-                      options={departments.filter((d) => d.is_active).map((d) => ({ value: String(d.id), label: d.name }))} />
+                    <InlineDropdown value={departmentId} onChange={(v) => { setDepartmentId(v); setPositionId(""); setEditingField(null) }}
+                      options={communityUnits.map((d) => ({ value: String(d.id), label: d.name }))} />
                   </div>
                 )}
               </div>
@@ -905,7 +1026,10 @@ function UserManageDialog({
                 <div className="mt-2">
                   {designations.map((d) => (
                     <div key={d.id} className="flex items-center justify-between py-2 border-b border-neutral-100 last:border-b-0">
-                      <span className="text-[18px] text-neutral-900">{d.department_detail?.name ?? "Unit"} · {d.position_detail?.name ?? "Position"}</span>
+                      <span className="text-[18px] text-neutral-900">
+                        {d.department_detail?.name ?? "Unit"}
+                        <span className="text-neutral-400"> · {d.position_detail?.name ?? "Position"}</span>
+                      </span>
                       <button type="button" disabled={busy} onClick={() => void removeDesignation(d.id)} className="text-[16px] text-neutral-500 hover:text-red-600">Remove</button>
                     </div>
                   ))}

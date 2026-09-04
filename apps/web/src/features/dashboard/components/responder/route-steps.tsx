@@ -10,12 +10,14 @@ import {
   NavigationIcon,
   RotateCcwIcon,
   RotateCwIcon,
-  WifiOffIcon,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
-import type { EmergencyRoute, TravelProfile } from "@/features/dashboard/emergency-api"
+import type {
+  EmergencyRoute,
+  TravelProfile,
+} from "@/features/dashboard/emergency-api"
 import { formatEta, formatKm } from "@/features/dashboard/lib/responder-format"
 import {
   formatStepDistance,
@@ -23,7 +25,10 @@ import {
   maneuverGlyph,
   type ManeuverGlyph,
 } from "@/features/dashboard/lib/route-instructions"
-import { Empty, Segmented } from "@/features/dashboard/components/responder/dispatch-surface"
+import {
+  Empty,
+  Segmented,
+} from "@/features/dashboard/components/responder/dispatch-surface"
 import type { StepProgress } from "@/features/dashboard/lib/route-progress"
 
 /** Turn-by-turn for the responder working the dispatch. */
@@ -88,9 +93,9 @@ export function RouteSteps({
               {route.summary || "Fastest route"}
             </p>
           </div>
-          <p className="shrink-0 text-body tabular-nums text-subtle-foreground">
+          <p className="shrink-0 text-body text-subtle-foreground tabular-nums">
             {formatKm(
-              (progress?.metersRemaining ?? route.distance_meters ?? 0) / 1000,
+              (progress?.metersRemaining ?? route.distance_meters ?? 0) / 1000
             )}
             , {formatEta(route.eta_seconds)}
           </p>
@@ -107,10 +112,10 @@ export function RouteSteps({
               return <Icon className="size-4" />
             })()}
           </span>
-          <p className="min-w-0 flex-1 text-body font-semibold leading-5 text-foreground">
+          <p className="min-w-0 flex-1 text-body leading-5 font-semibold text-foreground">
             {instructionText(steps[activeIndex])}
           </p>
-          <span className="shrink-0 text-heading tabular-nums text-ice">
+          <span className="shrink-0 text-heading text-ice tabular-nums">
             {formatStepDistance(progress.metersToNext)}
           </span>
         </div>
@@ -124,13 +129,15 @@ export function RouteSteps({
       ) : !usable ? (
         <div className="mt-4">
           <Empty>
-            No route yet. Directions appear once the router has a position for you and a pin for
-            the incident.
+            No route yet. Directions appear once the router has a position for
+            you and a pin for the incident.
           </Empty>
         </div>
       ) : steps.length === 0 ? (
         <div className="mt-4">
-          <Empty>The router returned this leg without turn-by-turn directions.</Empty>
+          <Empty>
+            The router returned this leg without turn-by-turn directions.
+          </Empty>
         </div>
       ) : (
         <ol className="mt-1">
@@ -149,13 +156,13 @@ export function RouteSteps({
                 aria-current={active ? "step" : undefined}
                 className={cn(
                   "flex items-start gap-3 border-b border-card-line py-3 last:border-b-0",
-                  passed && "opacity-40",
+                  passed && "opacity-40"
                 )}
               >
                 <span
                   className={cn(
                     "mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-lg",
-                    active ? "bg-ice text-ink" : "bg-ice/10 text-ice",
+                    active ? "bg-ice text-ink" : "bg-ice/10 text-ice"
                   )}
                 >
                   <Icon className="size-3.5" />
@@ -163,7 +170,7 @@ export function RouteSteps({
                 <p
                   className={cn(
                     "min-w-0 flex-1 text-body leading-6",
-                    active ? "font-semibold text-foreground" : "text-foreground",
+                    active ? "font-semibold text-foreground" : "text-foreground"
                   )}
                 >
                   {instructionText(step)}
@@ -172,7 +179,7 @@ export function RouteSteps({
                   <span
                     className={cn(
                       "shrink-0 pt-0.5 text-body tabular-nums",
-                      active ? "text-ice" : "text-subtle-foreground",
+                      active ? "text-ice" : "text-subtle-foreground"
                     )}
                   >
                     {distance}
@@ -183,13 +190,6 @@ export function RouteSteps({
           })}
         </ol>
       )}
-
-      {route?.status === "stale" ? (
-        <p className="mt-3 flex items-center gap-1.5 text-micro text-subtle-foreground">
-          <WifiOffIcon className="size-3 shrink-0" />
-          Router offline — these are the directions computed before it went quiet.
-        </p>
-      ) : null}
     </div>
   )
 }

@@ -32,6 +32,7 @@ from .community_resolution import (
     CommunityResolutionError,
     create_resolution,
     resolve_token,
+    resolve_token_for_signup,
     verified_resident_count,
 )
 from .permissions import user_has_role_permission
@@ -110,12 +111,7 @@ LAST_SEEN_WRITE_INTERVAL_SECONDS = 60
 
 
 def touch_last_seen(user):
-    """Record presence without a DB write on every request.
-
-    ActiveResponderListView treats last_seen_at within 5 minutes as "on duty",
-    so a 60-second write throttle keeps that window accurate while removing
-    one UPDATE per authenticated request.
-    """
+    """Record authenticated activity without a DB write on every request."""
     if not (user and user.is_authenticated):
         return
     # cache.add is atomic: only the first caller in the window wins.
@@ -124,13 +120,13 @@ def touch_last_seen(user):
     user.last_seen_at = timezone.now()
     user.save(update_fields=["last_seen_at", "updated_at"])
 
+
 def can_manage_accounts(user):
     return bool(
         user
         and user.is_authenticated
         and (
-            user.is_staff
-            or user.is_superuser
+            user.is_superuser
             or (
                 user_has_role_permission(user, "accounts.verify_residents")
                 and user_has_capability(user, MANAGE_USERS)
@@ -321,7 +317,11 @@ class CommunityResolveView(APIView):
 
         documents = [
             _document_payload(item)
-            for item in resolution.configuration.document_types.filter(enabled=True).order_by("display_order", "id")
+            for item in (
+                resolution.configuration.document_types.filter(enabled=True).order_by("display_order", "id")
+                if resolution.configuration_id
+                else []
+            )
         ]
         community = resolution.community
         response = Response(
@@ -343,7 +343,7 @@ class CommunityResolveView(APIView):
                     "longitude": float(community.center_longitude),
                 },
                 "neighbors": verified_resident_count(community),
-                "ocr_version": resolution.configuration.version,
+                "ocr_version": resolution.configuration.version if resolution.configuration_id else None,
                 "proof_options": documents,
             }
         )
@@ -475,9 +475,10 @@ class ResidenceProofCheckView(APIView):
 
     def post(self, request):
         try:
-            resolution = resolve_token(
+            resolution = resolve_token_for_signup(
                 request.data.get("community_resolution_token") or "",
                 email=request.data.get("email") or "",
+                address=request.data.get("address") or "",
             )
         except CommunityResolutionError as exc:
             return Response({"code": exc.code, "detail": exc.detail}, status=exc.status_code)
@@ -602,9 +603,10 @@ class ResidenceProofDetectView(APIView):
 
     def post(self, request):
         try:
-            resolution = resolve_token(
+            resolution = resolve_token_for_signup(
                 request.data.get("community_resolution_token") or "",
                 email=request.data.get("email") or "",
+                address=request.data.get("address") or "",
             )
         except CommunityResolutionError as exc:
             return Response({"code": exc.code, "detail": exc.detail}, status=exc.status_code)
@@ -901,6 +903,16 @@ class LoginView(APIView):
                 ip_score=ip_meta.get("score"),
             )
         create_audit_log("auth.login_success", actor=user, target_user=user, request_meta=request_meta(request))
+        if user.role == user.Role.FIRST_RESPONDER:
+            from apps.emergencies.views import retry_waiting_alerts_for_responder
+
+            try:
+                retry_waiting_alerts_for_responder(user)
+            except Exception:
+                __import__("logging").getLogger(__name__).exception(
+                    "Responder login routing retry failed for user %s",
+                    user.pk,
+                )
         return token_response(user)
 
 
@@ -1546,7 +1558,11 @@ class AccountRequestManageListView(APIView):
         touch_last_seen(request.user)
         if not can_manage_accounts(request.user):
             return Response({"detail": "You do not have permission to manage account requests."}, status=status.HTTP_403_FORBIDDEN)
-        queryset = AccountRequest.objects.select_related("user", "user__resident_profile")
+        from apps.community_scope import scope_user_queryset
+
+        User = get_user_model()
+        users = scope_user_queryset(User.objects.all(), request.user)
+        queryset = AccountRequest.objects.select_related("user", "user__resident_profile").filter(user__in=users)
         request_status = request.query_params.get("status")
         if request_status and request_status != "all":
             queryset = queryset.filter(status=request_status)
@@ -1566,8 +1582,12 @@ class AccountRequestReviewView(APIView):
         touch_last_seen(request.user)
         if not can_manage_accounts(request.user):
             return Response({"detail": "You do not have permission to review account requests."}, status=status.HTTP_403_FORBIDDEN)
+        from apps.community_scope import scope_user_queryset
+
+        User = get_user_model()
+        users = scope_user_queryset(User.objects.all(), request.user)
         account_request = get_object_or_404(
-            AccountRequest.objects.select_for_update().select_related("user", "user__resident_profile"),
+            AccountRequest.objects.select_for_update(of=("self",)).select_related("user", "user__resident_profile").filter(user__in=users),
             pk=pk,
         )
         serializer = AccountRequestReviewSerializer(data=request.data)
@@ -1645,6 +1665,10 @@ class SensitiveAccessAuditView(APIView):
         ).select_related(
             "actor", "actor__resident_profile", "target_user", "target_user__resident_profile"
         )
+        if not request.user.is_superuser:
+            from apps.community_scope import community_ids_for_user
+
+            queryset = queryset.filter(community_id__in=community_ids_for_user(request.user))
         kind = (request.query_params.get("kind") or "all").strip().lower()
         if kind == "media":
             queryset = queryset.filter(action="media.raw_accessed")
@@ -1674,7 +1698,11 @@ class ResidentDirectoryView(APIView):
         if not can_manage_accounts(request.user):
             return Response({"detail": "You do not have permission to view residents."}, status=status.HTTP_403_FORBIDDEN)
         User = get_user_model()
-        queryset = User.objects.filter(role=User.Role.RESIDENT).select_related("resident_profile")
+        from apps.community_scope import scope_user_queryset
+
+        queryset = scope_user_queryset(
+            User.objects.filter(role=User.Role.RESIDENT).select_related("resident_profile"), request.user
+        )
         status_filter = request.query_params.get("status")
         if status_filter and status_filter != "all":
             queryset = queryset.filter(status=status_filter)
@@ -1703,11 +1731,13 @@ class StaffDirectoryView(APIView):
             return capability_denied(MANAGE_USERS)
 
         User = get_user_model()
-        queryset = (
+        from apps.community_scope import scope_user_queryset
+
+        queryset = scope_user_queryset(
             User.objects.all()
             .select_related("resident_profile")
             .prefetch_related("designations__department", "designations__position")
-        )
+        , request.user)
 
         role = request.query_params.get("role")
         if role and role != "all":
@@ -1743,11 +1773,13 @@ class ResidentMentionSearchView(APIView):
         touch_last_seen(request.user)
         User = get_user_model()
         search = (request.query_params.get("search") or request.query_params.get("q") or "").strip()
-        queryset = (
+        from apps.community_scope import scope_user_queryset
+
+        queryset = scope_user_queryset(
             User.objects.filter(role=User.Role.RESIDENT, status=User.Status.VERIFIED)
             .select_related("resident_profile")
             .order_by("resident_profile__first_name", "resident_profile__last_name", "id")
-        )
+        , request.user)
         if search:
             queryset = queryset.filter(
                 Q(resident_profile__first_name__icontains=search)
@@ -1780,7 +1812,11 @@ class ResidentStatusUpdateView(APIView):
         if not can_manage_accounts(request.user):
             return Response({"detail": "You do not have permission to update residents."}, status=status.HTTP_403_FORBIDDEN)
         User = get_user_model()
-        resident = get_object_or_404(User, pk=pk, role=User.Role.RESIDENT)
+        from apps.community_scope import scope_user_queryset
+
+        resident = get_object_or_404(
+            scope_user_queryset(User.objects.all(), request.user), pk=pk, role=User.Role.RESIDENT
+        )
         serializer = UserStatusUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         resident.status = serializer.validated_data["status"]
@@ -1801,14 +1837,16 @@ class StaffAccountUpdateView(APIView):
             return capability_denied(MANAGE_USERS)
 
         User = get_user_model()
-        target = get_object_or_404(User, pk=pk)
+        from apps.community_scope import scope_user_queryset
+
+        target = get_object_or_404(scope_user_queryset(User.objects.all(), request.user), pk=pk)
 
         # Only a system administrator may mint another official, matching the
         # rule already enforced on account creation.
         if (
             request.data.get("role") == User.Role.BARANGAY_OFFICIAL
             and target.role != User.Role.BARANGAY_OFFICIAL
-            and not (request.user.is_staff or request.user.is_superuser)
+            and not request.user.is_superuser
         ):
             return Response(
                 {"role": ["Only a system administrator can promote someone to official."]},
@@ -1825,6 +1863,20 @@ class StaffAccountUpdateView(APIView):
         serializer = StaffAccountUpdateSerializer(data=request.data)
         serializer.instance = target
         serializer.is_valid(raise_exception=True)
+        validated = dict(serializer.validated_data)
+
+        # Moving an account between communities. The target must be one the
+        # admin already manages, so a single-community official cannot push a
+        # resident into a barangay they have no authority over.
+        community = validated.pop("community", None)
+        if community is not None:
+            from apps.community_scope import community_ids_for_user
+
+            if community.pk not in community_ids_for_user(request.user):
+                return Response(
+                    {"community": ["Choose a community you manage."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         # A resident carries their name/gender on `ResidentProfile`, which
         # `UserSummarySerializer` reads in preference to the bare User
@@ -1833,7 +1885,7 @@ class StaffAccountUpdateView(APIView):
         profile_only_fields = {"middle_name", "gender"}
         profile_fields = []
         fields = []
-        for field, value in serializer.validated_data.items():
+        for field, value in validated.items():
             if profile is not None and field in ({"first_name", "last_name"} | profile_only_fields):
                 setattr(profile, field, value)
                 profile_fields.append(field)
@@ -1847,6 +1899,18 @@ class StaffAccountUpdateView(APIView):
         if target.role != User.Role.FIRST_RESPONDER and target.responder_unit:
             target.responder_unit = ""
             fields.append("responder_unit")
+
+        # A community move rewrites both the FK the scoping follows and the
+        # plain-text barangay every legacy display reads, so they can never
+        # disagree.
+        if (
+            community is not None
+            and profile is not None
+            and profile.community_id != community.pk
+        ):
+            profile.community = community
+            profile.barangay = community.name
+            profile_fields.extend(["community", "barangay"])
 
         if profile_fields:
             profile.save(update_fields=[*dict.fromkeys(profile_fields), "updated_at"])
@@ -1873,7 +1937,11 @@ class ResponderDirectoryView(APIView):
         if not can_manage_accounts(request.user):
             return Response({"detail": "You do not have permission to view responders."}, status=status.HTTP_403_FORBIDDEN)
         User = get_user_model()
-        queryset = User.objects.filter(role=User.Role.FIRST_RESPONDER).select_related("resident_profile")
+        from apps.community_scope import scope_user_queryset
+
+        queryset = scope_user_queryset(
+            User.objects.filter(role=User.Role.FIRST_RESPONDER).select_related("resident_profile"), request.user
+        )
         status_filter = request.query_params.get("status")
         if status_filter and status_filter != "all":
             queryset = queryset.filter(status=status_filter)
@@ -1897,10 +1965,21 @@ class ResponderUpdateView(APIView):
         if not can_manage_accounts(request.user):
             return Response({"detail": "You do not have permission to update responders."}, status=status.HTTP_403_FORBIDDEN)
         User = get_user_model()
+        from apps.community_scope import scope_user_queryset
+
+        # `scope_user_queryset()` uses `.distinct()` for designation joins.
+        # PostgreSQL does not allow `SELECT DISTINCT ... FOR UPDATE`, so keep
+        # the scoped visibility check in a subquery and lock the user row by
+        # primary key in the outer query.
+        visible_ids = scope_user_queryset(
+            User.objects.filter(pk=pk), request.user
+        ).values("pk")
         responder = get_object_or_404(
-            User.objects.select_for_update(),
+            User.objects.select_for_update().filter(
+                pk__in=visible_ids,
+                role=User.Role.FIRST_RESPONDER,
+            ),
             pk=pk,
-            role=User.Role.FIRST_RESPONDER,
         )
         serializer = ResponderUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -2009,7 +2088,7 @@ class AdminCreateUserView(APIView):
         serializer.is_valid(raise_exception=True)
         if (
             serializer.validated_data["role"] == get_user_model().Role.BARANGAY_OFFICIAL
-            and not (request.user.is_staff or request.user.is_superuser)
+            and not request.user.is_superuser
         ):
             return Response(
                 {"role": ["Only a system administrator can create another official account."]},

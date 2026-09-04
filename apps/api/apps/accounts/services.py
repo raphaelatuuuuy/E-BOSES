@@ -722,12 +722,10 @@ def validate_location_pair(latitude, longitude, *, required=False, allow_outside
         raise ValidationError({"longitude": "Longitude must be between -180 and 180."})
     if allow_outside_service_area:
         return
-    bounds = MARIKINA_HEIGHTS_BOUNDS
-    if not (
-        bounds["min_latitude"] <= latitude <= bounds["max_latitude"]
-        and bounds["min_longitude"] <= longitude <= bounds["max_longitude"]
-    ):
-        raise ValidationError("Location must be inside Barangay Marikina Heights.")
+    from apps.geo_services import active_community_for_point
+
+    if active_community_for_point(latitude, longitude) is None:
+        raise ValidationError("Location must be inside one active community boundary.")
 
 
 class OTPVerificationError(Exception):
@@ -738,13 +736,31 @@ class DuplicateProofError(Exception):
     pass
 
 
-def create_audit_log(action, actor=None, target_user=None, metadata=None, request_meta=None):
+def create_audit_log(action, actor=None, target_user=None, metadata=None, request_meta=None, community=None):
     request_meta = request_meta or {}
+    metadata = metadata or {}
+    if community is None and metadata.get("concern_id"):
+        from apps.concerns.models import Concern
+
+        community = Concern.objects.filter(pk=metadata["concern_id"]).values_list("community", flat=True).first()
+    if community is None and metadata.get("alert_id"):
+        from apps.emergencies.models import EmergencyAlert
+
+        community = EmergencyAlert.objects.filter(pk=metadata["alert_id"]).values_list("community", flat=True).first()
+    if community is None:
+        user = target_user or actor
+        profile = getattr(user, "resident_profile", None) if user else None
+        community = getattr(profile, "community_id", None)
+        if community is None and user:
+            community = user.designations.filter(is_active=True).values_list(
+                "department__community_id", flat=True
+            ).first()
     return AuditLog.objects.create(
+        community_id=getattr(community, "pk", community),
         actor=actor,
         target_user=target_user,
         action=action,
-        metadata=metadata or {},
+        metadata=metadata,
         ip_address=request_meta.get("ip_address"),
         user_agent=request_meta.get("user_agent", ""),
     )
@@ -1171,11 +1187,12 @@ def register_resident(validated_data, request_meta=None):
         validated_data["phone_otp_code"],
         allow_verified=True,
     )
-    from .community_resolution import resolve_token
+    from .community_resolution import resolve_token_for_signup
 
-    resolution = resolve_token(
+    resolution = resolve_token_for_signup(
         validated_data["community_resolution_token"],
         email=email,
+        address=validated_data.get("address") or "",
         consume=True,
         email_challenge=email_challenge,
     )

@@ -27,6 +27,7 @@ import {
 import { type MediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
 import { VoiceNoteBubble } from "@/features/dashboard/components/voice-note-bubble"
 import { useVoiceRecorder, formatVoiceTime } from "@/features/dashboard/lib/use-voice-recorder"
+import { LocalAttachmentPreview } from "@/features/dashboard/components/comments"
 import {
   listEmergencyChat,
   sendEmergencyChat,
@@ -48,7 +49,7 @@ export function EmergencyChatPanel({
    disabled,
    incomingMessage,
    realtime = true,
-   theme = "dark",
+   theme = "light",
    scrollable = true,
    bare = false,
    variant = "classic",
@@ -62,7 +63,7 @@ export function EmergencyChatPanel({
    incomingMessage?: EmergencyChatMessage | null
    /** Disable when a parent tracking socket already supplies incomingMessage. */
    realtime?: boolean
-   /** dark = resident SOS dock; light = responder/official ops */
+   /** Light is the shared official/responder workspace; dark remains opt-in for the resident SOS dock. */
    theme?: "dark" | "light"
    /** When false, cap the thread at a fixed 340px with its own scrollbar. */
   scrollable?: boolean
@@ -74,6 +75,12 @@ export function EmergencyChatPanel({
 }) {
   const modern = variant === "modern"
   const { user } = useAuthSession()
+  // "Message your responder…" speaks to the resident who raised the alert;
+  // officials and responders answer, so they get the neutral follow-up prompt.
+  const placeholder =
+    user?.role === "resident"
+      ? "Message your responder…"
+      : "Ask a follow-up…"
   const [messages, setMessages] = useState<EmergencyChatMessage[]>([])
   const [draft, setDraft] = useState("")
   const [loading, setLoading] = useState(false)
@@ -83,6 +90,8 @@ export function EmergencyChatPanel({
   const [sending, setSending] = useState(false)
   const [attachment, setAttachment] = useState<File | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [checkingAttachment, setCheckingAttachment] = useState(false)
+  const [sendFeedback, setSendFeedback] = useState<string | null>(null)
   const [previewMedia, setPreviewMedia] = useState<MediaPreviewItem | null>(null)
   const [socketLive, setSocketLive] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -227,8 +236,9 @@ export function EmergencyChatPanel({
   }, [messages.length, scrollToBottom])
 
   async function sendMessage(bodyText: string, file: File | null): Promise<boolean> {
-    if ((!bodyText.trim() && !file) || sending || disabled) return false
+    if ((!bodyText.trim() && !file) || sending || checkingAttachment || disabled) return false
     setSending(true)
+    setSendFeedback(null)
     try {
       const created = await sendEmergencyChat(alertId, bodyText, file)
       setDraft("")
@@ -239,10 +249,16 @@ export function EmergencyChatPanel({
         if (prev.some((m) => m.id === created.id)) return prev
         return [...prev, created]
       })
+      if (file) {
+        setSendFeedback("Attachment sent")
+        window.setTimeout(() => setSendFeedback(null), 2200)
+      }
       scrollToBottom()
       return true
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not send message.")
+      const message = error instanceof Error ? error.message : "Could not send message."
+      setSendFeedback("Message not sent. Your attachment is still here.")
+      toast.error(message)
       return false
     } finally {
       setSending(false)
@@ -284,17 +300,20 @@ export function EmergencyChatPanel({
       toast.error(message)
       return
     }
+    setAttachment(file)
+    setAttachmentError(null)
+    setCheckingAttachment(true)
     try {
       const checkData = new FormData()
       checkData.append("media", file)
       await checkConcernMedia(checkData)
-      setAttachment(file)
-      setAttachmentError(null)
     } catch (error) {
       setAttachment(null)
       const message = error instanceof Error ? error.message : "This media failed authenticity checks and cannot be sent."
       setAttachmentError(message)
       toast.error(message)
+    } finally {
+      setCheckingAttachment(false)
     }
   }
 
@@ -355,11 +374,11 @@ export function EmergencyChatPanel({
           const name = msg.sender?.full_name || "User"
           const role = roleLabel(msg.sender)
           const footer = [mine ? "You" : name, !mine && role ? role : "", formatChatTime(msg.created_at)].filter(Boolean).join(" · ")
-          if (!msg.body && msg.attachment && msg.attachment.media_type !== "audio" && msg.attachment.authenticity !== "clear") return null
           const attachment = msg.attachment
-          const attachmentVisible = Boolean(
-            attachment && (attachment.authenticity === "clear" || attachment.media_type === "audio"),
-          )
+          // Pending authenticity analysis must not make a successfully sent
+          // image disappear. The protected preview endpoint remains the source
+          // of truth while the review status is shown beneath it.
+          const attachmentVisible = Boolean(attachment)
           const mediaBlock = attachmentVisible ? (
             <div className={cn(msg.body ? "mt-2" : undefined, "space-y-1")}>
               {attachment!.media_type === "image" ? (
@@ -462,44 +481,16 @@ export function EmergencyChatPanel({
       {!disabled ? (
         modern ? (
           <div className="px-1 pb-1 pt-1">
-            {attachment && !recording && !readyFile ? (
-              <div className="mb-2 flex items-center gap-2">
-                {attachment.type.startsWith("image/") ? (
-                  <div className="relative shrink-0">
-                    <img
-                      src={URL.createObjectURL(attachment)}
-                      alt={attachment.name}
-                      className="h-20 w-20 rounded-xl object-cover"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setAttachment(null)}
-                      className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
-                      aria-label="Remove attachment"
-                    >
-                      <XIcon className="size-3" />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex w-full items-center justify-between gap-2 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-medium text-neutral-600">
-                    <span className="flex min-w-0 items-center gap-2 truncate">
-                      <PaperclipIcon className="size-3.5 shrink-0" />
-                      {attachment.name}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setAttachment(null)}
-                      className="rounded-full p-0.5 hover:bg-neutral-200"
-                      aria-label="Remove attachment"
-                    >
-                      <XIcon className="size-3.5" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            ) : null}
             {attachmentError ? (
               <p className="mb-2 text-[11px] font-medium text-red-500">{attachmentError}</p>
+            ) : null}
+            {checkingAttachment ? (
+              <p role="status" className="mb-2 text-[11px] font-medium text-neutral-500">Checking attachment…</p>
+            ) : null}
+            {sendFeedback ? (
+              <p role="status" className={cn("mb-2 text-[11px] font-medium", sendFeedback.startsWith("Message") ? "text-red-500" : "text-neutral-500")}>
+                {sendFeedback}
+              </p>
             ) : null}
             {recording || readyFile ? (
               <div className="mx-auto flex w-fit items-center gap-2.5 rounded-full border border-neutral-200 bg-white py-2 pl-4 pr-2">
@@ -512,7 +503,7 @@ export function EmergencyChatPanel({
                     return (
                       <span
                         key={i}
-                        className="w-[2.5px] shrink-0 rounded-full bg-neutral-900"
+                        className="w-[2.5px] shrink-0 rounded-full bg-brand-orange"
                         style={{ height: `${4 + level * 14}px` }}
                       />
                     )
@@ -527,7 +518,7 @@ export function EmergencyChatPanel({
                       type="button"
                       onClick={() => void stopRecording()}
                       aria-label="Stop recording"
-                      className="flex size-8 items-center justify-center rounded-full bg-neutral-900 text-white hover:bg-neutral-800"
+                      className="flex size-8 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong"
                     >
                       <SquareIcon className="size-3" fill="currentColor" />
                     </button>
@@ -537,7 +528,7 @@ export function EmergencyChatPanel({
                       disabled={sending}
                       onClick={() => void sendReadyVoiceNote()}
                       aria-label="Send voice note"
-                      className="flex size-8 items-center justify-center rounded-full bg-neutral-900 text-white hover:bg-neutral-800 disabled:opacity-50"
+                      className="flex size-8 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
                     >
                       {sending ? <Loader2Icon className="size-3 animate-spin" /> : <ArrowUpIcon className="size-3" strokeWidth={2.4} />}
                     </button>
@@ -553,7 +544,7 @@ export function EmergencyChatPanel({
                 </div>
               </div>
             ) : (
-              <div className="flex items-center gap-2 rounded-full border border-neutral-200 bg-white py-1.5 pl-4 pr-1.5 transition-colors focus-within:border-neutral-300">
+              <div className="relative flex items-center gap-2 rounded-full border border-neutral-200 bg-white py-1.5 pl-4 pr-1.5 transition-colors focus-within:border-neutral-300">
                 <button
                   type="button"
                   onClick={() => void startRecording()}
@@ -578,6 +569,13 @@ export function EmergencyChatPanel({
                     }}
                   />
                 </label>
+                {attachment ? (
+                  <LocalAttachmentPreview
+                    file={attachment}
+                    compact
+                    onRemove={() => setAttachment(null)}
+                  />
+                ) : null}
                 <input
                   type="text"
                   value={draft}
@@ -588,17 +586,17 @@ export function EmergencyChatPanel({
                       void handleSend()
                     }
                   }}
-                  placeholder="Message your responder..."
+                  placeholder={placeholder}
                   className="h-10 min-w-0 flex-1 bg-transparent text-[14px] text-neutral-900 outline-none placeholder:text-neutral-400"
                 />
                 <button
                   type="button"
-                  disabled={sending || recording || (!draft.trim() && !attachment)}
+                  disabled={sending || checkingAttachment || recording || (!draft.trim() && !attachment)}
                   onClick={() => void handleSend()}
                   className={cn(
                     "flex size-10 shrink-0 items-center justify-center rounded-full transition-all duration-150",
                     (draft.trim() || attachment)
-                      ? "bg-neutral-900 text-white hover:bg-neutral-800"
+                      ? "bg-brand-orange text-white hover:bg-brand-orange-strong"
                       : "bg-neutral-100 text-neutral-300",
                   )}
                   aria-label="Send message"
@@ -681,24 +679,32 @@ export function EmergencyChatPanel({
             </>
           ) : (
             <>
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault()
-                void handleSend()
-              }
-            }}
-            rows={1}
-            placeholder="Enter a message"
-            className={cn(
-              "max-h-24 min-h-10 flex-1 resize-none rounded-xl border px-3 py-2.5 text-[13px] outline-none transition-all focus:border-brand-orange focus:ring-2 focus:ring-brand-orange/25",
-              isDark
-                ? "border-white/15 bg-black/25 text-white placeholder:text-white/40"
-                : "border-slate-200 bg-canvas text-brand-navy placeholder:text-slate-400",
-            )}
-          />
+          <div className="relative min-w-0 flex-1">
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault()
+                  void handleSend()
+                }
+              }}
+              rows={1}
+              placeholder={placeholder}
+              className={cn(
+                "max-h-24 min-h-10 w-full resize-none rounded-xl border px-3 py-2.5 text-[13px] outline-none transition-all focus:border-brand-orange focus:ring-2 focus:ring-brand-orange/25",
+                attachment && "pl-12",
+                isDark
+                  ? "border-white/15 bg-black/25 text-white placeholder:text-white/40"
+                  : "border-slate-200 bg-canvas text-brand-navy placeholder:text-slate-400",
+              )}
+            />
+            {attachment ? (
+              <div className="absolute left-2 top-1/2 -translate-y-1/2">
+                <LocalAttachmentPreview file={attachment} compact onRemove={() => setAttachment(null)} />
+              </div>
+            ) : null}
+          </div>
           <button
             type="button"
             onClick={() => void startRecording()}
@@ -732,24 +738,14 @@ export function EmergencyChatPanel({
           >
             <PaperclipIcon className="size-4" />
           </label>
-          {attachment ? (
-            <button
-              type="button"
-              className={cn(
-                "absolute bottom-14 left-3 flex max-w-[70%] items-center gap-1 rounded-md px-2 py-1 text-[11px]",
-                isDark
-                  ? "border border-white/15 bg-white/10 text-white"
-                  : "border border-slate-200 bg-slate-100 text-slate-700",
-              )}
-              onClick={() => setAttachment(null)}
-              aria-label="Remove attachment"
-            >
-              <span className="truncate">{attachment.name}</span> <XIcon className="size-3 shrink-0" />
-            </button>
+          {sendFeedback ? (
+            <span role="status" className={cn("absolute bottom-14 left-3 text-[11px] font-medium", sendFeedback.startsWith("Message") ? "text-red-500" : isDark ? "text-white/70" : "text-slate-500")}>
+              {sendFeedback}
+            </span>
           ) : null}
           <button
             type="button"
-            disabled={sending || recording || (!draft.trim() && !attachment)}
+            disabled={sending || checkingAttachment || recording || (!draft.trim() && !attachment)}
             onClick={() => void handleSend()}
             className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
             aria-label="Send message"

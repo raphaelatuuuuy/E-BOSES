@@ -49,7 +49,7 @@ import {
 } from "@/features/dashboard/lib/offline-gps-queue"
 import {
   isPositionStale,
-  readLastKnownPosition,
+  isFreshGeolocationPosition,
   writeLastKnownPosition,
   type KnownPosition,
 } from "@/features/dashboard/lib/last-known-position"
@@ -62,6 +62,7 @@ import {
 import { ResizableSplit } from "@/features/dashboard/components/workspace/resizable-split"
 import { MOBILE_NAV_CLEARANCE, useIsDesktop } from "@/features/dashboard/lib/shell"
 import { useIncidentActions } from "@/features/dashboard/components/responder/use-incident-actions"
+import { EmergencyResolutionSheet } from "@/features/dashboard/components/responder/emergency-resolution-sheet"
 
 /**
  * The responder dispatch console.
@@ -99,7 +100,7 @@ const LEGEND_ROWS = [
   { label: "Incidents", color: MAP_COLORS.emergency },
   { label: "Concerns", color: MAP_COLORS.concern },
   { label: "Resolved", color: MAP_COLORS.resolved },
-  { label: "You are here", color: "#ffffff" },
+  { label: "You are here", color: "#0f172a" },
 ]
 
 function DispatchMiniLegend({ className }: { className?: string }) {
@@ -108,7 +109,7 @@ function DispatchMiniLegend({ className }: { className?: string }) {
       role="group"
       aria-label="Map legend"
       className={cn(
-        "flex flex-col gap-1 rounded-xl border border-white/10 bg-nav-bg/80 px-2.5 py-2 shadow-lg backdrop-blur-md",
+        "flex flex-col gap-1 rounded-xl border border-neutral-200 bg-white/95 px-2.5 py-2 shadow-lg backdrop-blur-md",
         className,
       )}
     >
@@ -116,10 +117,10 @@ function DispatchMiniLegend({ className }: { className?: string }) {
         <span key={row.label} className="flex items-center gap-2">
           <span
             aria-hidden
-            className="size-2 shrink-0 rounded-full ring-1 ring-white/40"
+            className="size-2 shrink-0 rounded-full ring-1 ring-neutral-300"
             style={{ backgroundColor: row.color }}
           />
-          <span className="whitespace-nowrap text-[11px] font-semibold leading-tight text-white/85">
+          <span className="whitespace-nowrap text-[11px] font-semibold leading-tight text-neutral-700">
             {row.label}
           </span>
         </span>
@@ -140,9 +141,7 @@ export default function ResponderDispatchPage() {
   const [assignedConcerns, setAssignedConcerns] = useState<Concern[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [selectedConcernId, setSelectedConcernId] = useState<number | null>(null)
-  // Seeded from the last stored fix so a responder who opens the console
-  // without a signal still sees where they were, and their route with it.
-  const [userPos, setUserPos] = useState<KnownPosition | null>(() => readLastKnownPosition(viewerId))
+  const [userPos, setUserPos] = useState<KnownPosition | null>(null)
   const [loading, setLoading] = useState(true)
   const [locating, setLocating] = useState(false)
   const [now, setNow] = useState(() => Date.now())
@@ -341,25 +340,28 @@ export default function ResponderDispatchPage() {
   useEffect(() => {
     let cancelled = false
     if (!navigator.geolocation) return
-    // A failed read never clears the position. The last fix is kept and shown
-    // as remembered instead, so losing signal does not blank the map.
+    const applyPosition = (position: GeolocationPosition) => {
+      if (cancelled) return
+      if (!isFreshGeolocationPosition(position)) {
+        setUserPos(null)
+        reportGeoError("Waiting for a fresh, accurate GPS fix. Check device location and try again.")
+        return
+      }
+      setUserPos(writeLastKnownPosition(position, viewerId))
+    }
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        if (!cancelled) setUserPos(writeLastKnownPosition(position, viewerId))
-      },
+      applyPosition,
       (positionError) => {
         if (!cancelled) reportGeoError(locationFailureMessage(positionError))
       },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 },
     )
     const watchId = navigator.geolocation.watchPosition(
-      (position) => {
-        if (!cancelled) setUserPos(writeLastKnownPosition(position, viewerId))
-      },
+      applyPosition,
       (positionError) => {
         if (!cancelled) reportGeoError(locationFailureMessage(positionError))
       },
-      { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 },
     )
     return () => {
       cancelled = true
@@ -431,6 +433,7 @@ export default function ResponderDispatchPage() {
           latitude: userPos.latitude,
           longitude: userPos.longitude,
           accuracy: userPos.accuracy ?? undefined,
+          timestamp: userPos.at,
         }).catch(() => {})
         const next = await getEmergencyRoute(alertId, { steps: true, refresh: true })
         setRouteDetail(next ?? null)
@@ -490,22 +493,23 @@ export default function ResponderDispatchPage() {
       if (autoPingInFlightRef.current || at - (lastAutoPingRef.current[alertId] ?? 0) < 15_000) return
       autoPingInFlightRef.current = true
       try {
-        const next = await sendEmergencyLocationPing(alertId, {
-          latitude: userPos.latitude,
-          longitude: userPos.longitude,
-          accuracy: userPos.accuracy ?? undefined,
-        })
-        if (cancelled) return
-        gpsToastShownRef.current = false
-        // Connection is back: replay any positions buffered while offline so
-        // the server catches up to where the responder travelled.
         for (const ping of drainGpsPings(alertId)) {
+          if (ping.at == null) continue
           await sendEmergencyLocationPing(alertId, {
             latitude: ping.latitude,
             longitude: ping.longitude,
             accuracy: ping.accuracy,
+            timestamp: ping.at,
           }).catch(() => {})
         }
+        const next = await sendEmergencyLocationPing(alertId, {
+          latitude: userPos.latitude,
+          longitude: userPos.longitude,
+          accuracy: userPos.accuracy ?? undefined,
+          timestamp: userPos.at,
+        })
+        if (cancelled) return
+        gpsToastShownRef.current = false
         lastAutoPingRef.current[alertId] = Date.now()
         setAlerts((current) => current.map((alert) => (alert.id === next.id ? next : alert)))
       } catch {
@@ -517,6 +521,7 @@ export default function ResponderDispatchPage() {
             latitude: userPos.latitude,
             longitude: userPos.longitude,
             accuracy: userPos.accuracy ?? undefined,
+            at: userPos.at,
           })
           if (!gpsToastShownRef.current) {
             gpsToastShownRef.current = true
@@ -551,14 +556,18 @@ export default function ResponderDispatchPage() {
           timeout: 20000,
         })
       })
-      setUserPos(writeLastKnownPosition(pos, viewerId))
+      if (!isFreshGeolocationPosition(pos)) {
+        throw new Error("The GPS fix is stale or too inaccurate. Try My location again.")
+      }
       const result = await sendLocationPing({
         latitude: pos.coords.latitude,
         longitude: pos.coords.longitude,
         accuracy: pos.coords.accuracy,
         source: "manual",
+        timestamp: pos.timestamp,
       })
       if (!result.accepted) throw new Error("This location is outside the active service area.")
+      setUserPos(writeLastKnownPosition(pos, viewerId))
       await refresh()
       toast.success("Location updated", { id: "locate" })
     } catch (positionError) {
@@ -602,7 +611,7 @@ export default function ResponderDispatchPage() {
     <div className="mx-auto flex min-h-0 w-full min-w-0 max-w-2xl flex-1 flex-col gap-3 lg:max-w-none">
       <DispatchCard className="shrink-0">
         <div className="flex items-start gap-3">
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white/10 text-white">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-slate-soft text-navy-muted">
             <ShieldCheckIcon className="size-5" />
           </span>
           <div className="min-w-0">
@@ -722,11 +731,13 @@ function DispatchBody({
   mapSurface: React.ReactNode
   onMobileBack: () => void
 }) {
+  const [resolutionOpen, setResolutionOpen] = useState(false)
   const actions = useIncidentActions({
     alert,
     viewerId,
     onChanged: onAlertChanged,
     onRefresh,
+    onResolveRequested: () => setResolutionOpen(true),
   })
 
   const isDesktop = useIsDesktop()
@@ -787,8 +798,10 @@ function DispatchBody({
     </div>
   )
 
-  return isDesktop ? (
-    <div className="flex h-full min-h-0 gap-3">
+  return (
+    <>
+      {isDesktop ? (
+      <div className="flex h-full min-h-0 gap-3">
       {incidentCollapsed ? (
         <>
           <CollapsedStrip label="Incident" onExpand={() => setIncidentCollapsed(false)} />
@@ -808,7 +821,7 @@ function DispatchBody({
         />
       )}
     </div>
-  ) : (
+      ) : (
     <div
       className="fixed inset-x-0 top-14 z-10 flex flex-col bg-canvas"
       style={{ bottom: MOBILE_NAV_CLEARANCE }}
@@ -862,5 +875,16 @@ function DispatchBody({
         ) : null}
       </div>
     </div>
+      )}
+      <EmergencyResolutionSheet
+        alert={alert}
+        open={resolutionOpen}
+        onClose={() => setResolutionOpen(false)}
+        onResolved={(next) => {
+          onAlertChanged(next)
+          void onRefresh()
+        }}
+      />
+    </>
   )
 }

@@ -34,6 +34,7 @@ class Notification(models.Model):
         EMERGENCY_APPEAL_SUBMITTED = "emergency_appeal_submitted", "Emergency Appeal Submitted"
         EMERGENCY_APPEAL_APPROVED = "emergency_appeal_approved", "Emergency Appeal Approved"
         EMERGENCY_APPEAL_DENIED = "emergency_appeal_denied", "Emergency Appeal Denied"
+        EMERGENCY_UPDATED = "emergency_updated", "Emergency Updated"
         WITNESS_ALERT = "witness_alert", "Witness Alert"
 
     recipient = models.ForeignKey(

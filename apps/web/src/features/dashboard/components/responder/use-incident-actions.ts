@@ -40,11 +40,13 @@ export function useIncidentActions({
   viewerId,
   onChanged,
   onRefresh,
+  onResolveRequested,
 }: {
   alert: EmergencyAlert
   viewerId: number | null
   onChanged: (next: EmergencyAlert) => void
   onRefresh: () => Promise<void>
+  onResolveRequested?: () => void
 }) {
   const [busy, setBusy] = useState("")
   const [lastConfirmed, setLastConfirmed] = useState<{ label: string; at: number } | null>(null)
@@ -56,10 +58,11 @@ export function useIncidentActions({
     confirmTimerRef.current = window.setTimeout(() => setLastConfirmed(null), 6000)
   }
 
-  const ownAssignment =
-    (alert.assignments ?? []).find((assignment) => assignment.responder.id === viewerId) ??
-    alert.current_assignment ??
-    null
+  const ownAssignment = viewerId != null
+    ? (alert.assignments ?? []).find((assignment) => assignment.responder.id === viewerId) ??
+      (alert.current_assignment?.responder?.id === viewerId ? alert.current_assignment : null)
+    : alert.current_assignment ?? null
+  const hasOwnAssignment = Boolean(ownAssignment)
 
   const isCancelled = alert.status === "cancelled"
   const acknowledged = Boolean(ownAssignment?.acknowledged_at)
@@ -71,13 +74,16 @@ export function useIncidentActions({
   // parked in `backup_requested` still needs to be able to say "I'm on scene"
   // or "we're done" without waiting for the backup responder to acknowledge.
   const canMarkArrived =
+    hasOwnAssignment &&
     !isCancelled &&
     ["en_route", "nearby", "backup_requested", "backup_assigned"].includes(alert.status)
   const canResolve =
+    hasOwnAssignment &&
     !isCancelled &&
     ["arrived", "in_progress", "backup_requested", "backup_assigned", "en_route", "nearby"].includes(alert.status)
-  const canRequestBackup = !isCancelled && alert.status !== "resolved"
+  const canRequestBackup = hasOwnAssignment && !isCancelled && alert.status !== "resolved"
   const enRoutePending =
+    hasOwnAssignment &&
     !isCancelled &&
     !resolvedReached &&
     !canAcknowledge &&
@@ -85,12 +91,13 @@ export function useIncidentActions({
   // Backup states now expose Arrived/Resolve, so the parked-with-no-actions
   // case shrinks to just transfer/escalation and resident_safe.
   const holding =
+    !hasOwnAssignment || (
     !isCancelled &&
     !resolvedReached &&
     !enRoutePending &&
     !canAcknowledge &&
     !canMarkArrived &&
-    !canResolve
+    !canResolve)
 
   async function handleAcknowledge() {
     if (!canAcknowledge) return
@@ -151,6 +158,10 @@ export function useIncidentActions({
 
   async function handleResolve() {
     if (!canResolve) return
+    if (onResolveRequested) {
+      onResolveRequested()
+      return
+    }
     setBusy("resolve")
     try {
       const next = await resolveEmergency(alert.id, "Incident resolved by responder.")
@@ -193,6 +204,7 @@ export function useIncidentActions({
 
   return {
     busy,
+    hasOwnAssignment,
     lastConfirmed,
     isCancelled,
     resolvedReached,

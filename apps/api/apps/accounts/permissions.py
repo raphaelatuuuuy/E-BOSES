@@ -69,5 +69,5 @@ class IsStaffOrSuperuser(BasePermission):
         return bool(
             user
             and user.is_authenticated
-            and (user.is_staff or user.is_superuser or user_has_role_permission(user, "accounts.create_staff"))
+            and (user.is_superuser or user_has_role_permission(user, "accounts.create_staff"))
         )
